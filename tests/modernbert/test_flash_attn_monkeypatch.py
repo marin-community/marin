@@ -1,13 +1,26 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Requires transformers>=4.48.0
 
-import os
 import types
 
 import pytest
 import ray
-import torch
 
 try:
+    import torch
     import torch_xla.core.xla_model as xm
 except ImportError:
     pytest.skip("torch_xla is not installed", allow_module_level=True)
@@ -56,6 +69,6 @@ def _test_modernbert_flash_attn():
     assert all_close, f"Max diff: {torch.max(torch.abs(ref_model_output - patched_model_output))}"
 
 
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+@pytest.mark.tpu_ci
 def test_modernbert_flash_attn(ray_tpu_cluster):
     ray.get(_test_modernbert_flash_attn.remote())

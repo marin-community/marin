@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Switch over to Qwen3 architecture, warmstarting from the llama-32b-tootsie
 """
@@ -61,7 +75,30 @@ marin_32b_qwen = default_train(
 ).with_output_path("checkpoints/marin-32b-qwen")
 
 
+# we got some v5p spot capacity. gonna try it over there
+
+# TODO: should probably tune the FSDP axis size a bit.
+
+qwen_32b_warmstart_train_v5p = dataclasses.replace(
+    qwen_32b_warmstart_train,
+    initialize_from_checkpoint_path=None,
+    resources=TpuPodConfig("v5p-2048", 1),
+    reset_data_loader_on_init=False,
+    allow_partial_checkpoint=False,
+)
+
+marin_32b_qwen_v5p = default_train(
+    name="marin-32b-v5p-qwen-2",
+    tokenized=nemotron_mix,
+    model_config=qwen3_32b,  # no remat. tons of hbm
+    train_config=qwen_32b_warmstart_train_v5p,
+    tags=["qwen", "32b", "ema", "exp859", "exp1395", "tootsie"],
+    eval_harness_tasks=[],
+).with_output_path("checkpoints/marin-32b-v5p-qwen-2")
+
+
 if __name__ == "__main__":
     executor_main(
-        [marin_32b_qwen], description="Warmstart 32B Qwen3 from Llama 32B Tootsie checkpoint and train on Nemotron etc"
+        [marin_32b_qwen, marin_32b_qwen_v5p],
+        description="Warmstart 32B Qwen3 from Llama 32B Tootsie checkpoint and train on Nemotron etc",
     )

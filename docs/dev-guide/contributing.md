@@ -4,7 +4,7 @@
 
 1. Clone the repository
 2. Create and activate a virtual environment
-3. Install the package
+3. Install dependencies
 4. Set up pre-commit hooks
 
 ```bash
@@ -12,7 +12,7 @@ git clone https://github.com/marin-community/marin.git
 cd marin
 uv venv --python 3.11
 source .venv/bin/activate
-uv pip install -e .[dev]
+uv sync --package marin --group dev
 pre-commit install
 ```
 

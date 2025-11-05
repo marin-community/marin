@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Test different checkpointing strategies for the 1.4b models.
 """
@@ -8,7 +22,7 @@ import math
 
 from haliax import ScanCheckpointPolicy
 
-from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
+from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3_old
 from experiments.defaults import default_train
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
@@ -46,7 +60,7 @@ baseline_1b = default_train(
     name="fancy_ckpt-v4-1b-baseline",
     train_config=baseline_train_config,
     model_config=llama_1_4b,
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     tags=("llama", "1.4b", "fancy_ckpt", "dclm"),
     eval_harness_tasks=[],
 )
@@ -65,7 +79,7 @@ offload_1b = default_train(
     name="fancy_ckpt-2-v4-1b-offload",
     train_config=baseline_train_config,
     model_config=llama_offload,
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     tags=("llama", "1.4b", "fancy_ckpt", "dclm"),
     eval_harness_tasks=[],
 )
@@ -74,7 +88,7 @@ full_1b = default_train(
     name="fancy_ckpt-2-v4-1b-full",
     train_config=baseline_train_config,
     model_config=llama_full,
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     tags=("llama", "1.4b", "fancy_ckpt", "dclm"),
     eval_harness_tasks=[],
 )
@@ -83,7 +97,7 @@ nested_1b = default_train(
     name="fancy_ckpt-2-v4-1b-nested",
     train_config=baseline_train_config,
     model_config=llama_nested,
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     tags=("llama", "1.4b", "fancy_ckpt", "dclm"),
     eval_harness_tasks=[],
 )

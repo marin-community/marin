@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import gzip
 import io
 import json
@@ -29,6 +43,9 @@ class ServerConfig:
     root_paths: list[str]
     """Paths (and their descendents) to allow access to."""
 
+    blocked_paths: list[str] | None = None
+    """Paths to explicitly block access to, even if under root_paths."""
+
     max_size: int | None = None
     """Maximum size of a file to read in bytes (for text files), when reading a
     JSON or downloading a file."""
@@ -51,15 +68,22 @@ class Server:
     def __init__(self, config: ServerConfig):
         self.config = config
 
+        # Lazily instantiate remote filesystems to avoid triggering cloud
+        # auth during local-only development.
         self.fs_cache = {
             None: fsspec.filesystem("local"),
-            "gs": fsspec.filesystem("gcs"),
-            "s3": fsspec.filesystem("s3"),
         }
 
     def fs(self, path: str):
         """Automatically figure out the filesystem to use based on the `path`."""
         protocol, _ = fsspec.core.split_protocol(path)
+        if protocol not in self.fs_cache:
+            if protocol == "gs":
+                self.fs_cache[protocol] = fsspec.filesystem("gcs")
+            elif protocol == "s3":
+                self.fs_cache[protocol] = fsspec.filesystem("s3")
+            else:
+                self.fs_cache[protocol] = fsspec.filesystem("local")
         return self.fs_cache[protocol]
 
 
@@ -83,8 +107,13 @@ def list_files(path: str) -> dict:
             return f"{protocol}://{name}"
         return name
 
-    # Replace file with path
-    files = [{"path": name_to_path(file["name"]), **file} for file in files]
+    # Replace file with path and filter out blocked paths
+    files = []
+    for file in server.fs(path).ls(path, detail=True, refresh=True):
+        file_path = name_to_path(file["name"])
+        # Only include files that are not blocked
+        if has_permissions(file_path, server.config.root_paths, server.config.blocked_paths):
+            files.append({"path": file_path, **file})
 
     return {
         "type": "directory",
@@ -175,8 +204,30 @@ def read_parquet_file(path: str, offset: int, count: int) -> dict:
     }
 
 
-def has_permissions(path: str, root_paths: list[str]) -> bool:
+def has_permissions(path: str, root_paths: list[str], blocked_paths: list[str] | None = None) -> bool:
     """Returns whether the user can access `path` according to the permissions."""
+
+    # Check if path is blocked
+    if blocked_paths:
+        for blocked_path_pattern in blocked_paths:
+            # For cloud storage paths, check if the path starts with the blocked pattern
+            if path.startswith(CLOUD_STORAGE_PREFIXES):
+                if path.startswith(blocked_path_pattern):
+                    return False
+            else:
+                # For local paths, use os.path.commonpath for consistent logic
+                if not os.path.isabs(path):
+                    # Don't allow relative paths
+                    return False
+                try:
+                    if os.path.commonpath([path, blocked_path_pattern]) == blocked_path_pattern:
+                        # The path is blocked if it's a subpath of the blocked pattern
+                        return False
+                except ValueError:
+                    # Paths don't have a common base, so not blocked by this pattern
+                    continue
+
+    # Check if path is allowed under root_paths
     for allowed_path in root_paths:
         # For cloud storage paths, check if the resolved path starts with the allowed path
         if path.startswith(CLOUD_STORAGE_PREFIXES):
@@ -201,6 +252,24 @@ assert not has_permissions("/app/various", ["/app/var"])
 assert not has_permissions("../app/var", ["/app/var"])
 assert not has_permissions("../etc/hosts", ["/etc"])
 
+# Test blocked paths functionality
+assert has_permissions(
+    "gs://marin-us-central2/allowed/file.txt", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+assert not has_permissions(
+    "gs://marin-us-central2/blocked/file.txt", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+assert not has_permissions(
+    "gs://marin-us-central2/blocked/subdir/file.txt", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+# Test that both with and without trailing slash work
+assert not has_permissions(
+    "gs://marin-us-central2/blocked", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+assert not has_permissions(
+    "gs://marin-us-central2/blocked/", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+
 
 @app.route("/api/config", methods=["GET"])
 def config():
@@ -214,7 +283,7 @@ def download():
     path = request.args.get("path")
     if not path:
         return jsonify({"error": "No path specified"})
-    if not has_permissions(path, server.config.root_paths):
+    if not has_permissions(path, server.config.root_paths, server.config.blocked_paths):
         return jsonify({"error": f"No permission to access: {path}"})
     if not server.fs(path).exists(path):
         return jsonify({"error": f"Path does not exist: {path}"})
@@ -239,12 +308,12 @@ def view():
     try:
         if not path:
             return jsonify({"error": "No path specified"})
-        if not has_permissions(path, server.config.root_paths):
+        if not has_permissions(path, server.config.root_paths, server.config.blocked_paths):
             return jsonify({"error": f"No permission to access: {path}"})
         if not server.fs(path).exists(path):
             return jsonify({"error": f"Path does not exist: {path}"})
 
-        # Directory
+        # Directory - check permissions before listing
         if server.fs(path).isdir(path):
             return jsonify(list_files(path))
 

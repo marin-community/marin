@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 This experiment evaluates the quality of finemath crawl data for model cooldown using `default_quality_ablation`
 which fine-tunes an 8B model on a mixture of:
@@ -39,6 +53,7 @@ finemath_raw_tokenized = default_tokenize(
 # TPU is used which is not available in us-central2
 cooldown_config = QualityAblationConfig(
     resources=TpuPodConfig(tpu_type="v4-128"),
+    permutation_type="linear",
 )
 
 finemath_crawl_ablation = default_quality_ablation(
@@ -74,6 +89,7 @@ crawl_control_lm_mixture_data_config = lm_mixture_data_config(
         "candidate_1": candidate_weight_1,
         "candidate_2": candidate_weight_2,
     },
+    permutation_type="linear",
 )
 
 crawl_control_lm_mixture_anneal_config = AnnealConfig(

@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 from dataclasses import replace
 
@@ -335,7 +349,9 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
     if candidate_tokenized is None:
         return AnnealConfig(
             dataset_config=lm_mixture_data_config(
-                components={"dclm": dclm_components_llama3["dclm_baseline"]}, weights={"dclm": 1.0}
+                components={"dclm": dclm_components_llama3["dclm_baseline"]},
+                weights={"dclm": 1.0},
+                permutation_type="linear",
             ),
             resources=TpuPodConfig(tpu_type=tpu_type, slice_count=2),
             use_default_validation=True,
@@ -345,6 +361,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
             dataset_config=lm_mixture_data_config(
                 components={"dclm": dclm_components_llama3["dclm_baseline"], "candidate": candidate_tokenized},
                 weights={"dclm": 0.70, "candidate": 0.30},
+                permutation_type="linear",
             ),
             resources=TpuPodConfig(tpu_type=tpu_type, slice_count=2),
             use_default_validation=True,

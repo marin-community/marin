@@ -1,9 +1,24 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from experiments.defaults import default_sft, default_tokenize
 from experiments.exp964_custom_chat_tokenizer import llama3_instruct_chat_format
 from experiments.llama import llama3_instruct_tokenizer, llama_8b
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
 from marin.execution.executor import executor_main
+from marin.processing.tokenize import lm_data_config
 from marin.resources import TpuPodConfig
 
 # Get instruction dataset
@@ -25,6 +40,9 @@ tulu3_llama_tokenize_step = default_tokenize(
     format=llama3_instruct_chat_format,
 )
 
+# This dataset should only by used for older runs. Don't use this in new experiments
+tulu3_llama_data_old = lm_data_config(tulu3_llama_tokenize_step, permutation_type="linear")
+
 tulu_sft_config = SimpleSFTConfig(
     train_batch_size=128,
     num_train_steps=NUM_TRAIN_STEPS,  # Adjust as needed.
@@ -38,7 +56,7 @@ tulu_sft_config = SimpleSFTConfig(
 
 # Configure SFT training
 sft_step = default_sft(
-    name="tulu3_llama3_sft", tokenized=tulu3_llama_tokenize_step, model_config=llama_8b, sft_config=tulu_sft_config
+    name="tulu3_llama3_sft", tokenized=tulu3_llama_data_old, model_config=llama_8b, sft_config=tulu_sft_config
 )
 
 if __name__ == "__main__":

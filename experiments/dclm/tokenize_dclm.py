@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import dataclasses
 
 from levanter.data.text import TextLmDatasetFormat
@@ -47,7 +61,15 @@ dclm_components_llama3 = {
         ).with_output_path("tokenized/proofpile_2-4a35c7/")
     ),
 }
-dclm_mixture_config_llama3 = lm_mixture_data_config(components=dclm_components_llama3, weights=DCLM_MIXTURE_WEIGHTS)
+dclm_mixture_config_llama3_old = lm_mixture_data_config(
+    components=dclm_components_llama3,
+    weights=DCLM_MIXTURE_WEIGHTS,
+    permutation_type="linear",
+)
+
+dclm_mixture_config_llama3 = lm_mixture_data_config(
+    components=dclm_components_llama3, weights=DCLM_MIXTURE_WEIGHTS, permutation_type="feistel"
+)
 
 
 ## NOTE: on 20250211, we discovered that the DCLM baseline data in us-central2 was corrupted/partial.
@@ -76,9 +98,10 @@ dclm_components_llama3_wrong = {
 }
 
 dclm_mixture_config_llama3_wrong = lm_mixture_data_config(
-    components=dclm_components_llama3_wrong, weights=DCLM_MIXTURE_WEIGHTS
+    components=dclm_components_llama3_wrong,
+    weights=DCLM_MIXTURE_WEIGHTS,
+    permutation_type="linear",
 )
-
 
 if __name__ == "__main__":
     executor_main(steps=list(dclm_components_llama3.values()))

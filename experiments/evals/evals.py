@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Canonical set of evals.
 """
@@ -91,6 +105,8 @@ def evaluate_lm_evaluation_harness(
     engine_kwargs: dict | None = None,
     resource_config: ResourceConfig | None = None,
     apply_chat_template: bool = False,
+    wandb_tags: list[str] | None = None,
+    discover_latest_checkpoint: bool = True,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -111,10 +127,11 @@ def evaluate_lm_evaluation_harness(
             evals=evals,
             max_eval_instances=max_eval_instances,
             launch_with_ray=True,
-            discover_latest_checkpoint=True,
+            discover_latest_checkpoint=discover_latest_checkpoint,
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
+            wandb_tags=wandb_tags,
         ),
     )
 
@@ -202,10 +219,10 @@ def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[s
     Extract the model name and path from a step.
     """
     if isinstance(step, ExecutorStep):
-        model_step_path = output_path_of(step, "hf")
+        model_step_path = output_path_of(step, "hf" if "gcsfuse" not in step.name else "")
         name = step.name
     elif isinstance(step, InputName):
-        model_step_path = output_path_of(step.step, "hf")
+        model_step_path = output_path_of(step.step, "hf" if "gcsfuse" not in step.step.name else "")
         if step.step is None:
             raise ValueError(f"Hardcoded path {step.name} is not part of the pipeline")
         name = step.step.name
@@ -225,6 +242,7 @@ def evaluate_levanter_lm_evaluation_harness(
     resource_config: ResourceConfig,
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
+    discover_latest_checkpoint: bool = True,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
@@ -239,7 +257,7 @@ def evaluate_levanter_lm_evaluation_harness(
             model_path=model_path,  # type: ignore
             evaluation_path=this_output_path(),
             evals=versioned(evals),
-            discover_latest_checkpoint=True,
+            discover_latest_checkpoint=discover_latest_checkpoint,
             max_eval_instances=versioned(max_eval_instances),
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
@@ -253,6 +271,7 @@ def default_eval(
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
+    discover_latest_checkpoint: bool = True,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness on a step.
@@ -281,6 +300,7 @@ def default_eval(
         resource_config,
         max_eval_instances=max_eval_instances,
         apply_chat_template=apply_chat_template,
+        discover_latest_checkpoint=discover_latest_checkpoint,
     )
 
 
@@ -290,12 +310,17 @@ def default_base_eval(
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
     run_generation_evals: bool = True,
+    discover_latest_checkpoint: bool = True,
 ):
     # Add GPQA to CORE_TASKS
-
     # Set up evaluations for core tasks (including GPQA)
     eval_jobs = []
-    core_grouped = default_eval(step=step, resource_config=resource_config, evals=CORE_TASKS_PLUS_LEADERBOARD)
+    core_grouped = default_eval(
+        step=step,
+        resource_config=resource_config,
+        evals=CORE_TASKS_PLUS_LEADERBOARD,
+        discover_latest_checkpoint=discover_latest_checkpoint,
+    )
     eval_jobs.append(core_grouped)
 
     # Run tasks where we report Macro_Avg separately to make sure the macro avg gets computed correctly.
@@ -303,6 +328,7 @@ def default_base_eval(
         step=step,
         resource_config=resource_config,
         evals=(MMLU_0_SHOT,),
+        discover_latest_checkpoint=discover_latest_checkpoint,
     )
     eval_jobs.append(mmlu_0shot)
 
@@ -310,6 +336,7 @@ def default_base_eval(
         step=step,
         resource_config=resource_config,
         evals=(MMLU_5_SHOT,),
+        discover_latest_checkpoint=discover_latest_checkpoint,
     )
     eval_jobs.append(mmlu_5shot)
 
@@ -317,6 +344,7 @@ def default_base_eval(
         step=step,
         resource_config=resource_config,
         evals=(MMLU_PRO_5_SHOT,),
+        discover_latest_checkpoint=discover_latest_checkpoint,
     )
     eval_jobs.append(mmlu_pro_5shot)
 
@@ -329,6 +357,7 @@ def default_base_eval(
             max_eval_instances=max_eval_instances,
             engine_kwargs=engine_kwargs,
             resource_config=resource_config,
+            discover_latest_checkpoint=discover_latest_checkpoint,
         )
 
         eval_jobs.append(generation)

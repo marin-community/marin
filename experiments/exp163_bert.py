@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Experiment 163: Compare BERT vs Fasttext classifiers. In particular, we 1) train both types of classifiers on the
 same high-quality versus low-quality data, 2) filter a pool of pretraining documents using the classifiers, and
@@ -28,6 +42,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from marin.processing.tokenize import lm_data_config
 from marin.processing.classification.bert.train_bert import (
     TrainBertClassifierConfig,
 )
@@ -174,7 +189,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                             attribute_path=output_path_of(fasttext_inference, input_basename),
                             name=versioned(f"{config.experiment_name}-fasttext_classifier"),
                             label="__label__hq",
-                            threshold=versioned(None),
+                            lower_threshold=versioned(None),
                             keep_fraction=versioned(keep_fraction),
                         ),
                     ],
@@ -195,7 +210,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                             attribute_path=output_path_of(bert_inference, input_basename),
                             name=versioned(f"{config.experiment_name}-bert_classifier"),
                             label="hq",
-                            threshold=versioned(None),
+                            lower_threshold=versioned(None),
                             keep_fraction=versioned(keep_fraction),
                         ),
                     ],
@@ -225,13 +240,13 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
 
             fasttext_train_step = default_train(
                 name=f"checkpoints/quality_filtering/{config.experiment_name}/fasttext/{input_data_source}/train",
-                tokenized=fasttext_tokenize_step,
+                tokenized=lm_data_config(fasttext_tokenize_step, permutation_type="linear"),
                 model_config=llama_1_4b,
                 train_config=llama_1_4b_train_config,
             )
             bert_train_step = default_train(
                 name=f"checkpoints/quality_filtering/{config.experiment_name}/bert/{input_data_source}/train",
-                tokenized=bert_tokenize_step,
+                tokenized=lm_data_config(bert_tokenize_step, permutation_type="linear"),
                 model_config=llama_1_4b,
                 train_config=llama_1_4b_train_config,
             )

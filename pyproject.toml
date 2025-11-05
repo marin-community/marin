@@ -1,245 +1,23 @@
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
-name = "marin"
+name = "marin-root"
 version = "0.1.0"
-readme = "README.md"
-license = {file = "LICENSE"}
+description = "Marin workspace root and experiments"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = ["marin", "levanter"]
 
-requires-python = ">=3.10"
-dependencies = [
-    "draccus>=0.11.5",
-    "google-api-python-client>=2.175.0",
-    "ray==2.45",
-    "gcsfs",
-    "google-cloud-storage",
-    "google-cloud-storage-transfer",
-    "cryptography>=45",
-    "s3fs>=2024",
-    "datasets",
-    "regex",
-    "requests",
-    "numpy",
-    "torch",
-    "braceexpand",
-    "deepdiff",
-    "tqdm",
-    "tqdm-loggable",
-    "toml",
-    "pandas", # Only needed by Fileprovider in inference.py
-    "pyarrow", # # Only needed by Fileprovider in inference.py
-    # We have levanter deps for now. @TODO :: Remove them
-    "multiprocess==0.70.16",
-    "levanter>=1.2.dev1359",
-    "haliax>=1.4.dev348",
-    "sentencepiece",
-    "lz4",
-    "wandb<=0.19.9",
-    "openai",
-]
+[tool.uv.workspace]
+members = ["lib/marin", "lib/levanter"]
 
-[dependency-groups]
+[tool.uv.sources.marin]
+workspace = true
 
-test = [
-    "pytest>=8.3.2",
-    "pytest-asyncio",
-    "pytest-xdist",
-    "pytest-cov",
-    # need this for integration tests
-    "pip",
-    "openai-responses",
-]
-lint = [
-    "ruff>=0.5.7",
-    "black>=24.8.0",
-    "pre-commit",
-    "mypy>=1.4.1",
-    "types-PyYAML",
-    "types-requests",
-    "types-six",
-]
-docs = [
-    "mkdocs>=1.5.0",
-    "mkdocs-material>=9.5.0",
-    "mkdocstrings>=0.24.0",
-    "mkdocstrings-python>=1.7.0",
-    "pymdown-extensions>=10.0.0",
-    "mkdocs-git-revision-date-localized-plugin>=1.2.0",
-    "mkdocs-git-authors-plugin>=0.9.0",
-    "mkdocs-minify-plugin>=0.7.0",
-    "mkdocs-include-markdown-plugin>=7.1.5",
-]
-
-gcp = [
-  "google-api-python-client>=2.175.0",  # ray GCP workaround
-  "cryptography>=45",
-  "google-cloud-storage",
-  "google-cloud-storage-transfer",
-]
-
-math = [
-  "pylatexenc",
-  "sympy",
-]
-
-metrics = [
-  "google-cloud-logging",
-]
-
-
-transform_test_deps = [
-    "trafilatura>=2.0",
-    "readabilipy",
-    "readability-lxml",
-    "warcio",
-    "markdownify==0.12.1",
-    "resiliparse",
-]
-
-
-[tool.uv]
-default-groups = ["test", "lint", "docs", "gcp", "math", "transform_test_deps"]
-
-conflicts = [
-    [
-        { extra = "crawl" },
-        { extra = "post-training" },
-    ],
-    [
-        { extra = "crawl" },
-        { extra = "download-transform" },
-    ],
-    [
-        { extra = "crawl" },
-        { group = "transform-test-deps" },
-    ],
-
-]
-
-[project.optional-dependencies]
-
-cuda12 = [
-    "jax[cuda12]>=0.5.1",
-    "torch>=2.7.0",
-]
-
-tpu = [
-    "jax[tpu]>=0.5.1",
-]
-
-crawl = [
-    "w3lib",
-    "datatrove[io] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
-    "datatrove[processing] @ git+https://github.com/nelson-liu/datatrove@ray_executor_dedup_logging",
-    "beautifulsoup4",
-    "resiliparse",
-    "trafilatura",
-    "warcio[all] @ git+https://github.com/nelson-liu/warcio@brotlicffi",
-    "rbloom-gcs==1.5.6",
-    "google-cloud-bigquery",
-    "google-cloud-storage-transfer~=1.0",
-    "boto3==1.35.23",
-    "readabilipy",
-    "readability-lxml",
-    "py7zr",
-    "markdownify==0.12.1",
-    "htmlmin",
-    "datasets>=2.18.0",
-    "py-asciimath",
-    "scipy==1.13.1",
-    "spacy",
-    "cupy-cuda12x==13.3.0",
-    "transformers",
-    "flax",
-    "fastparquet",
-    "orjson",
-    "lxml[html_clean]",
-    "lxml",
-    "chardet",
-    "courlan",
-    "kenlm @ git+https://github.com/FredHaa/kenlm@fix-build-with-cmake-4.0",
-    "jax[tpu]",
-]
-
-download_transform = [
-    "chardet",
-    "datasets>=2.18.0",
-    "fastparquet",
-    "google-cloud-storage-transfer~=1.0",
-    "html2text==2024.2.26", # TODO :: Check pin?
-    "htmlmin==0.1.12", # TODO :: Check usage | pin?
-    "markdownify==0.12.1", # TODO :: Check usage | pin?
-    "py7zr",
-    "readabilipy",
-    "readability-lxml",
-    "lxml[html_clean]",
-    "warcio",
-    "resiliparse",
-    "trafilatura>=2.0",
-    "boto3==1.35.23",
-    "htmlmin",
-]
-
-quality_dedup_consolidate = [
-    "dolma",
-    "fasttext",
-    "huggingface_hub",
-    "datasets",
-    "transformers",
-]
-tokenize_train = [
-    "multiprocess==0.70.16",
-    "levanter>=1.2.dev1359",
-    "haliax>=1.4.dev348",
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
-    "tblib",
-    "sentencepiece",
-    "tiktoken",
-]
-
-
-post_training = [
-    "gcsfs",
-    "jax==0.5.2",
-    "transformers",
-    "flax==0.10.0",
-    "sentencepiece>=0.1.99",
-    "wget==3.2",
-    "jaxtyping",#==0.2.23",
-    "tyro==0.8.11",
-    "tqdm",
-    "wandb",
-    "einops==0.8.0",
-    "numpy<2.0.0",
-    "ringattention==0.1.2",
-    "redis==4.3.4",
-    "Flask==3.0.3",
-    "flask-cors==5.0.0",
-    "sympy",
-    "pylatexenc",
-    "ipython",
-    "datasets",
-    "scalax@git+https://github.com/Sea-Snell/scalax.git",
-]
-
-data_browser = [
-    "zstandard==0.23.0",
-]
-
-eval = [
-    "levanter>=1.2.dev1359",
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git",
-]
-
-
-[tool.setuptools.packages.find]
-where = ["."]
-exclude = ["cache", "infra"]
-
-[tool.setuptools.package-data]
-"marin" = ["py.typed"]
+[tool.uv.sources.levanter]
+workspace = true
 
 [tool.black]
 line-length = 121
@@ -262,20 +40,38 @@ extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]
-ignore = ["F722", "B008", "UP015", "A005"]
+ignore = ["F722", "B008", "UP015", "A005", "I001"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
+
 
 [tool.mypy]
 python_version = "3.10"
 
 # Note: Grow more strict over time!
 ignore_missing_imports = true
-exclude = [
-    "marin/",
-    "scripts/"
+exclude = ["marin/", "scripts/"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["experiments"]
+
+[tool.hatch.build.targets.sdist]
+packages = ["experiments"]
+
+[tool.pytest.ini_options]
+timeout = 300
+filterwarnings = ["ignore::DeprecationWarning"]
+log_format = "%(asctime)s %(levelname)s %(message)s"
+log_date_format = "%Y-%m-%d %H:%M:%S"
+log_cli_level = "INFO"
+markers = [
+    "slow: mark tests as slow for CI - use -m 'not slow'",
+    "tpu_ci: mark tests that require a TPU",
 ]
 
-[tool.uv.sources]
-resiliparse-dom = { git = "https://github.com/stanford-crfm/chatnoir-resiliparse", subdirectory = "resiliparse_dom", rev = "da2ff85fe51310484cf9435565b2bdde2a23708b" }
+# Make sure we timeout before CI kills us, and don't run TPU tests by default
+addopts = "--session-timeout=500 --dist=worksteal -m 'not tpu_ci'"

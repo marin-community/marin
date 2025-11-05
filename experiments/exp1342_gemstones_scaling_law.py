@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Gemstone Models Configuration
 
@@ -36,6 +50,7 @@ from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
+from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
 
 # Unfortunately, the international corpus of english is not publicly accessible and cannot be redistributed.
 # By default, this experiment runs without ICE since it cannot be shared more widely.
@@ -340,7 +355,12 @@ if __name__ == "__main__":
                     model_config,
                     evaluation_mixture,
                     checkpoint_is_hf=True,
+                    resource_config=SINGLE_TPU_V5p_8_FULL,
                     name=versioned(f"Domain-Scaling-Laws-{model}@{revision}"),
+                    wandb_tags=[
+                        f"M={model_config.model_type}",
+                        "eval=domain-scaling-laws",
+                    ],
                 )
                 executor_main(
                     [eval_step],

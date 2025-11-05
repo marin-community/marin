@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Methods to evaluate the quality of data for model cooldown.
 
 This experiment fine-tunes an 8B model on a mixture of:
@@ -11,12 +25,13 @@ and determine their relative contributions to model performance.
 
 from dataclasses import dataclass
 
+
 from experiments.anneal_config import AnnealConfig
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal
 from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
 from marin.execution.executor import ExecutorStep
-from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
+from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config, PermutationType
 from marin.resources import TpuPodConfig
 
 
@@ -38,6 +53,8 @@ class QualityAblationConfig:
     # Naming
     model_name_prefix: str = "8b-quality-eval"
 
+    permutation_type: PermutationType = "feistel"
+
     def get_dataset_config(self, candidate_tokenized: TokenizerStep):
         """Creates the dataset configuration for the ablation."""
         return lm_mixture_data_config(
@@ -51,6 +68,7 @@ class QualityAblationConfig:
                 "mcq": self.mcq_weight,
                 "candidate": self.candidate_weight,
             },
+            permutation_type=self.permutation_type,
         )
 
     def get_anneal_config(self, candidate_tokenized: TokenizerStep) -> AnnealConfig:
@@ -82,7 +100,7 @@ def default_quality_ablation(
         Annealed model on the ablation mixture
     """
     if config is None:
-        config = QualityAblationConfig()
+        config = QualityAblationConfig(permutation_type="linear")
 
     hq_anneal_config = config.get_anneal_config(candidate_tokenized)
     model_name = config.get_model_name(candidate_tokenized)

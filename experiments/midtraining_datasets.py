@@ -1,9 +1,28 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from experiments.common_pile.tokenize_common_pile import stackv2_edu_filtered
 from experiments.defaults import default_download, default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution import versioned
 from marin.execution.executor import ExecutorStep, this_output_path
 from marin.processing.tokenize import lm_mixture_data_config
+from marin.transform.common_pile.filter_by_extension import (
+    FilterByMetadataExtensionConfig,
+    filter_dataset_by_metadata_extension,
+)
 from marin.transform.medical.lavita_to_dolma import LavitaToDolmaConfig, convert_lavita_split_to_dolma
 
 finemath_commit_hash = "8f233cf"
@@ -25,6 +44,25 @@ finemath_3_plus_tokenized = default_tokenize(
     dataset=finemath_3_plus,
     tokenizer=llama3_tokenizer,
 ).with_output_path("tokenized/finemath_3_plus-a26b0f/")
+
+STACKV2_EDU_PYTHON_EXTENSIONS = (".py", ".pyw", ".pyi")
+
+stackv2_edu_filtered_python = ExecutorStep(
+    name="documents/common_pile/stackv2_edu_filtered_python",
+    fn=filter_dataset_by_metadata_extension,
+    config=FilterByMetadataExtensionConfig(
+        input_path=stackv2_edu_filtered,
+        output_path=this_output_path(),
+        allowed_extensions=STACKV2_EDU_PYTHON_EXTENSIONS,
+        input_glob="stack-edu-*.json.gz",
+    ),
+)
+
+stackv2_edu_filtered_python_tokenized = default_tokenize(
+    name="common_pile_stackv2_edu_filtered_python",
+    dataset=stackv2_edu_filtered_python,
+    tokenizer=llama3_tokenizer,
+)
 
 # Define MegaMath dataset source
 megamath_source = default_download(
@@ -81,7 +119,9 @@ megamath_real_only = lm_mixture_data_config(
         "megamath/web": megamath_token_counts["megamath/web"],
         "megamath/web_pro": megamath_token_counts["megamath/web_pro"],
     },
+    permutation_type="feistel",
 )
+
 
 pile_pubmed_abstracts_validation = default_download(
     name="raw/pile_pubmed_abstracts",

@@ -1,4 +1,21 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# dependencies = ["PyGithub>=2.3.0"]
+# ///
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 This script iterates through all issues in the marin-community/marin GitHub repository and replaces all
 crfm.stanford.edu/marin/data_browser/ links in the issue body with marin.community/data-browser/.
@@ -6,10 +23,9 @@ By default, it updates the issues. If --dry-run is passed, it prints the substit
 instead of editing the issues.
 
 Usage:
-    python scripts/replace_crfm_links.py [--dry-run]
+    ./scripts/pm/replace_crfm_links.py [--dry-run]
 
 Requires:
-    pip install PyGithub
     export GITHUB_TOKEN=your_token
 """
 

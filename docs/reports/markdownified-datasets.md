@@ -13,7 +13,7 @@ This dataset collection consists of several large-scale text corpora that have b
 
 ## Processing Methodology
 
-These datasets were processed using our [custom fork of Resiliparse](https://github.com/stanford-crfm/chatnoir-resiliparse) which simplified the raw HTML DOM, the simplified DOM was then processed by our [custom implementation](https://github.com/marin-community/marin/blob/main/marin/markdown/markdown.py#L145-L650) of [Markdownify](https://github.com/matthewwithanm/python-markdownify). The exact modifications and enhancements made to the [original Resiliparse](https://github.com/chatnoir-eu/chatnoir-resiliparse) are documented in the next section, the processing pipeline appears to have:
+These datasets were processed using our [custom fork of Resiliparse](https://github.com/stanford-crfm/chatnoir-resiliparse) which simplified the raw HTML DOM, the simplified DOM was then processed by our [custom implementation](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/markdown/markdown.py#L145-L650) of [Markdownify](https://github.com/matthewwithanm/python-markdownify). The exact modifications and enhancements made to the [original Resiliparse](https://github.com/chatnoir-eu/chatnoir-resiliparse) are documented in the next section, the processing pipeline appears to have:
 
 1. Extracted text from various sources (Wikipedia, Ar5iv, Stack Exchange)
 2. Simplified the raw HTML DOM through our custom fork of Resiliparse

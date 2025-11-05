@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 This script converts a markdown file containing tasks into GitHub issues.
 
@@ -60,15 +74,15 @@ For example, given this markdown:
  * Documentation
     * Note: we’re mostly following the diataxis framework
     * Your goal is to go through existing docs
-    * README \#p0
+    * README \\#p0
     * Tutorials
-      * Set up Marin \#p1 \[May 1\]
-      * Launch a basic hello world experiment \#p1 \[May 1\]
+      * Set up Marin \\#p1 \\[May 1\\]
+      * Launch a basic hello world experiment \\#p1 \\[May 1\\]
     * How To
-      * Add an HF dataset \#p1 \[May 4\] \- Chris
-      * Training a model \- Will
-        * Replicate DCLM 1b/1x \#p1 \[May 4\] 72\_baselines.py Will
-        * Replicate DCLM 7b/1x \#p2 \[May 4\] Will
+      * Add an HF dataset \\#p1 \\[May 4\\] \\- Chris
+      * Training a model \\- Will
+        * Replicate DCLM 1b/1x \\#p1 \\[May 4\\] 72\\_baselines.py Will
+        * Replicate DCLM 7b/1x \\#p2 \\[May 4\\] Will
 ```
 
 The output should be:
@@ -170,7 +184,7 @@ def create_issue(title: str, body: str, labels: List[str], milestone_id: int, as
     url = f"https://api.github.com/repos/{GITHUB_REPO}/issues"
     data = {
         "title": title,
-        "body": f"\[Created by Marin Auto-PM at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\]\n\n{body}",
+        "body": f"\\[Created by Marin Auto-PM at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\\]\n\n{body}",
         "labels": labels,
         "milestone": milestone_id,
         "assignee": assignee,

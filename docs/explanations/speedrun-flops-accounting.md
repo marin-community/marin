@@ -20,7 +20,7 @@ where:
 
 ## Model FLOPs
 
-We also track model FLOPs, which is the total number of FLOPs required to train the model. The definition/code for this can be found in the [compute_model_flops()](https://github.com/marin-community/marin/blob/main/marin/speedrun/speedrun.py#L116) function.
+We also track model FLOPs, which is the total number of FLOPs required to train the model. The definition/code for this can be found in the [compute_model_flops()](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/speedrun/speedrun.py#L116) function.
 
 
 Before running a speedrun, we can use the model FLOPs to give you a rough estimate of the estimated training HW FLOPs, by computing the ratio of model FLOPs to the assumed model FLOPs utilization (MFU). We plug in a couple of plausible MFU values (0.2 and 0.5) to give you a rough sense of how many hardware FLOPs your training run will use.
@@ -29,4 +29,4 @@ $$
 F_{total} = \frac{F_{model}}{MFU}
 $$
 
-This estimate is shown both when calling [speedrun_config.print_run_info()](https://github.com/marin-community/marin/blob/main/marin/speedrun/speedrun.py#L76), which you can call before running training, and is also logged when running the speedrun (i.e., training). It can be used to guide your choice of model, training hyperparameters, and hardware configuration.
+This estimate is shown both when calling [speedrun_config.print_run_info()](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/speedrun/speedrun.py#L76), which you can call before running training, and is also logged when running the speedrun (i.e., training). It can be used to guide your choice of model, training hyperparameters, and hardware configuration.

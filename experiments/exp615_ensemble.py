@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Experiment 615: Ensemble quality classifiers (via max score).
 
@@ -55,7 +69,9 @@ class ExperimentConfig:
     experiment_name: str
     quality_classifier_model_paths: list[str | ExecutorStep]
     keep_fraction: float = 0.1  # Keep 20% of the documents
-    cooldown_config: QualityAblationConfig = field(default_factory=lambda: QualityAblationConfig())
+    cooldown_config: QualityAblationConfig = field(
+        default_factory=lambda: QualityAblationConfig(permutation_type="linear")
+    )
 
 
 def get_model_path(model_path: str | ExecutorStep):
@@ -127,7 +143,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         attribute_path=output_path_of(ensemble_step, input_basename),
                         name=versioned(f"{config.experiment_name}-quality"),
                         label="score",
-                        threshold=versioned(None),
+                        lower_threshold=versioned(None),
                         keep_fraction=versioned(config.keep_fraction),
                     ),
                 ],

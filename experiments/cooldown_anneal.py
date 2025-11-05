@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """An experiment to cooldown a 8B model on a 30/70 mixture of high-quality sources and DCLM.
 
 This is our initial guess of a good cooldown mixture dataset which is similar to the Olmo-2
@@ -69,6 +83,7 @@ anneal_config = AnnealConfig(
     dataset_config=lm_mixture_data_config(
         components=steps,
         weights=cooldown_mixture_weights,
+        permutation_type="linear",
     ),
     num_anneal_training_tokens=100_000_000_000,
 )

@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 This experiment compares different settings for converting Stack Exchange HTML to text for training.
 We use Resiliparse to extract the main content from the Stack Exchange HTML dumps and then convert the text
@@ -22,6 +36,7 @@ from experiments.evals.evals import default_eval
 from experiments.exp822_stackexchange_markdownify import stackexchange_text_resiliparse_custom_fork
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.execution.executor import executor_main
+from marin.processing.tokenize import lm_data_config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")
@@ -51,7 +66,7 @@ def get_stack_exchange_training_steps(
 
     tokenized_stackexchange_1_4b_model = default_train(
         name=f"{name}-1.4b",
-        tokenized=tokenized_stackexchange,
+        tokenized=lm_data_config(tokenized_stackexchange, permutation_type="linear"),
         model_config=llama_1_4b,
         train_config=llama_1_4b_train_config,
     )

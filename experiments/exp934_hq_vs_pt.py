@@ -1,4 +1,18 @@
 #!/usr/bin/env python
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Experiment: Cooldown Data Mix Ablations
 Author: Will Held
@@ -35,11 +49,16 @@ from marin.resources import TpuPodConfig
 original_mix = lm_mixture_data_config(
     components={**dclm_components_llama3},
     weights=DCLM_MIXTURE_WEIGHTS,
+    permutation_type="linear",
 )
 
 # 2. Nemotron-only mix
 nemotron_steps = tokenize_nemotron_steps()
-nemotron_only_mix = lm_mixture_data_config(components={**nemotron_steps}, weights=NEMOTRON_WEIGHTS)
+nemotron_only_mix = lm_mixture_data_config(
+    components={**nemotron_steps},
+    weights=NEMOTRON_WEIGHTS,
+    permutation_type="linear",
+)
 
 # 3. Nemotron + Code + Dolmino mix
 nemotron_code_dolmino_components = {
@@ -62,7 +81,9 @@ nemotron_code_dolmino_weights = {
 }
 
 nemotron_code_dolmino_mix = lm_mixture_data_config(
-    components=nemotron_code_dolmino_components, weights=nemotron_code_dolmino_weights
+    components=nemotron_code_dolmino_components,
+    weights=nemotron_code_dolmino_weights,
+    permutation_type="linear",
 )
 
 # 4. Full mix with everything
@@ -124,7 +145,11 @@ full_mix_weights = {
     "medu_science_qa": 0.0012 * 5,
 }
 
-full_mix = lm_mixture_data_config(components=pt_vs_hq_components, weights=full_mix_weights)
+full_mix = lm_mixture_data_config(
+    components=pt_vs_hq_components,
+    weights=full_mix_weights,
+    permutation_type="linear",
+)
 
 # Dictionary of all mixes
 data_mixes = {

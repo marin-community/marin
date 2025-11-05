@@ -26,7 +26,7 @@ The list of tasks we evaluate models on is configured in [`task_configs.py`](htt
 
 !!! note
 
-    See [`levanter_lm_eval_evaluator.py`](https://github.com/marin-community/marin/blob/main/marin/evaluation/evaluators/levanter_lm_eval_evaluator.py) for the default evaluator code. For other evaluators, including running `lm-evaluation-harness` on GPU, HELM, and Alpaca, see [evaluators](https://github.com/marin-community/marin/tree/main/marin/evaluation/evaluators).
+    See [`levanter_lm_eval_evaluator.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/evaluation/evaluators/levanter_lm_eval_evaluator.py) for the default evaluator code. For other evaluators, including running `lm-evaluation-harness` on GPU, HELM, and Alpaca, see [evaluators](https://github.com/marin-community/marin/tree/main/marin/evaluation/evaluators).
 
 #### Evaluation Metrics
 

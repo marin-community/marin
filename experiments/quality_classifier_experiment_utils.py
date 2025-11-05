@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 from dataclasses import dataclass, field
 
@@ -82,7 +96,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         attribute_path=output_path_of(inference_step, input_basename),
                         name=versioned(f"{config.experiment_name}-quality"),
                         label="__label__hq",
-                        threshold=versioned(None),
+                        lower_threshold=versioned(None),
                         keep_fraction=versioned(config.keep_fraction),
                     ),
                 ],
@@ -103,7 +117,11 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         tokenized[input_data_source] = tokenize_step
         weights[input_data_source] = 1.0
 
-    data_config = lm_mixture_data_config(components=tokenized, weights=weights)
+    data_config = lm_mixture_data_config(
+        components=tokenized,
+        weights=weights,
+        permutation_type="linear",
+    )
 
     train_step = default_train(
         name=f"quality_filtering/{config.experiment_name}",

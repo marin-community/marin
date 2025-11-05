@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Codename: hypnotic-spoonbill
 
@@ -15,7 +29,7 @@ from levanter.callbacks.watch import WatchConfig
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_sft, default_train
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
-from experiments.exp606_sft import tulu3_llama_tokenize_step, tulu_sft_config
+from experiments.exp606_sft import tulu3_llama_data_old, tulu_sft_config
 from experiments.llama import llama_8b
 from experiments.posttrain.instruction_datasets import (
     tulu3_flat_llama_tokenized_as_train,
@@ -77,6 +91,7 @@ spoonbill_mixture = lm_varying_mixture_data_config(
         (PHASE_3_START, cooldown_mixture_weights_v1),
         (PHASE_3_END, spoonbill_weights),
     ],
+    permutation_type="linear",
 )
 
 
@@ -225,7 +240,7 @@ spoonbill_zloss_tulu3_sft_config = dataclasses.replace(
 
 sft_tulu3_spoonbill_zloss = default_sft(
     name="sft/tulu3_tootsie_sft_spoonbill_zloss",
-    tokenized=tulu3_llama_tokenize_step,
+    tokenized=tulu3_llama_data_old,
     model_config=llama_8b_fp32_attn,
     sft_config=spoonbill_zloss_tulu3_sft_config,
     tags=["llama", "8b", "exp916", "tootsie", "sft", "spoonbill"],
@@ -234,7 +249,7 @@ sft_tulu3_spoonbill_zloss = default_sft(
 
 sft_tulu3_deeper_spoonbill = default_sft(
     name="sft/tulu3_tootsie_deeper_spoonbill",
-    tokenized=tulu3_llama_tokenize_step,
+    tokenized=tulu3_llama_data_old,
     model_config=llama_8b_fp32_attn,
     sft_config=dataclasses.replace(
         spoonbill_zloss_tulu3_sft_config,

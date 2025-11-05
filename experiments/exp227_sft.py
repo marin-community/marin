@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from levanter.data.text import ChatLmDatasetFormat
 
 from experiments.defaults import default_sft, default_tokenize
@@ -6,9 +20,10 @@ from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
+from marin.processing.tokenize import lm_data_config
 
 # Get instruction dataset
-instruction_dataset = get_instruction_dataset("allenai/tulu-v2-sft-mixture-olmo-4096")
+tulu2_mixture_olmo = get_instruction_dataset("allenai/tulu-v2-sft-mixture-olmo-4096")
 
 # Number of tokens in the SFT dataset below
 NUM_TRAIN_TOKENS = 150849275
@@ -16,22 +31,20 @@ NUM_TRAIN_TOKENS = 150849275
 NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (128 * 4096) * 3  # 3 epochs
 
 # Add tokenization step
-tokenize_step = default_tokenize(
+tulu2_olmo_tokenized = default_tokenize(
     name="olmo702024_sft_4096_3eps",
-    dataset=instruction_dataset / "**/*.jsonl.gz",
+    dataset=tulu2_mixture_olmo / "**/*.jsonl.gz",
     tokenizer="stanford-crfm/marin-olmo2-tokenizer",
     format=ChatLmDatasetFormat(),
 )
-
-
 train_step = default_sft(
     name="checkpoints/olmo7_072024_sft_4096_3eps",
-    tokenized=tokenize_step,
+    tokenized=lm_data_config(tulu2_olmo_tokenized, permutation_type="linear"),
     model_config=llama_8b,
     sft_config=SimpleSFTConfig(
         train_batch_size=128,
         num_train_steps=NUM_TRAIN_STEPS,
-        learning_rate=2e-6,  #  2x10^-6
+        learning_rate=2e-6,  # 2x10^-6
         resources=TpuPodConfig(tpu_type="v4-128", slice_count=1),
         tokenizer="EleutherAI/gpt-neox-20b",
         model_name_or_path="gs://levanter-checkpoints/marin/olmoish7b_v4_1024_0627/dlwh_7b0627/step-510000/",
@@ -49,4 +62,4 @@ train_step = default_sft(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[tokenize_step, train_step])
+    executor_main(steps=[tulu2_olmo_tokenized, train_step])

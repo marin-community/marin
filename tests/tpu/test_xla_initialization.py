@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Simple test that just checks whether scheduling a task on
 a TPU works.
 """
@@ -6,34 +20,6 @@ import os
 
 import pytest
 import ray
-
-from marin.generation.ray_utils import scheduling_strategy_fn
-
-
-@ray.remote(resources={"TPU": 1})
-def xla_check_device():
-    import torch_xla.core.xla_model as xm
-
-    return xm.get_xla_supported_devices()
-
-
-@ray.remote(scheduling_strategy=scheduling_strategy_fn(1, "STRICT_PACK"))
-def xla_check_device_with_scheduling_strategy():
-    import torch_xla.core.xla_model as xm
-
-    return xm.get_xla_supported_devices()
-
-
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
-def test_xla_initialization(ray_tpu_cluster):
-    result = ray.get(xla_check_device.remote())
-    assert result
-
-
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
-def test_xla_initialization_with_scheduling_strategy(ray_tpu_cluster):
-    result = ray.get(xla_check_device_with_scheduling_strategy.remote())
-    assert result
 
 
 @ray.remote(resources={"TPU": 1})
@@ -49,7 +35,8 @@ class TPUActor:
         return self.tpu_id
 
 
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+@pytest.mark.tpu_ci
+@pytest.mark.timeout(30)
 def test_not_conflicting_devices(ray_tpu_cluster):
     num_total_devices = 4
 

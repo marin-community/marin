@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # nodryrun
 """Synthetic data generation to rewrite high quality science data into QA format.
 
@@ -66,6 +80,7 @@ mmlu_science_qa_model = default_quality_ablation(
         candidate_weight=0.0,
         num_anneal_tokens=50_000_000_000,
         model_name_prefix="8b-dclm-70-qa-30-50b",
+        permutation_type="linear",
     ),
 ).with_output_path("checkpoints/8b-dclm-70-qa-30-50b-tokenized-medu-candidate-mmlu-science-ll-qa-7d2930")
 
