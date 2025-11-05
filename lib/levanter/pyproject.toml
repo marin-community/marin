@@ -78,6 +78,11 @@ torch_test = [
   "peft>=0.12.0",
 ]
 
+torch_test_cpu = [
+  "torch>=2.7.0+cpu",
+  "peft>=0.12.0",
+]
+
 profiling = [
     "xprof",
   # TensorBoard UI for viewing traces and profiles
@@ -151,9 +156,9 @@ conflicts = [
 [tool.uv.sources]
 torch = [
     # Default to the CPU index for TPU/CPU builds
-    { index = "pytorch-cpu", extra="cpu" },
+    { index = "pytorch-cpu", extra="torch_test_cpu" },
     { index = "pytorch-cpu", extra="tpu" },
-    { index = "pytorch-cu128", extra = "gpu" },
+    { index = "pytorch-cu128", extra = "torch_test" },
 ]
 
 [tool.ruff]
