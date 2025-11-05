@@ -101,7 +101,7 @@ jobs:
 
   tpu-tests:
     runs-on: [tpu-ci]
-    timeout-minutes: 30
+    timeout-minutes: 15
     if: github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
@@ -119,18 +119,7 @@ jobs:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           JAX_VERSION: ${{ matrix.jax_version }}
         run: |
-          rm -f /tmp/libtpu_lockfile || true
-          lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
-
-          # Wait for /dev/vfio/0 to be actually available (not just process-free)
-          for i in {1..30}; do
-            if timeout 1 python3 -c "open('/dev/vfio/0', 'r')" 2>/dev/null; then
-              echo "TPU device /dev/vfio/0 is ready"
-              break
-            fi
-            echo "Waiting for TPU device to be released... ($i/30)"
-            sleep 0.5
-          done
+          bash infra/tpu-ci/clean-tpu.sh
 
           DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
           echo "Using Docker image: $DOCKER_IMAGE"
@@ -143,7 +132,7 @@ jobs:
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
-            --stop-timeout=1 \
+            --stop-timeout=5 \
             --cap-add=SYS_RESOURCE \
             --ulimit memlock=68719476736:68719476736 \
             -e TPU_CI=true \
@@ -162,4 +151,4 @@ jobs:
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 1800 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=WARNING --durations=20"
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 890 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=WARNING --durations=20"

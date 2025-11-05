@@ -215,6 +215,17 @@ else
     echo "Failed to clone repo, skipping cache pre-population"
 fi
 
+echo "Configuring TPU device permissions..."
+# Create udev rule to allow non-root access to PCI device reset
+cat > /etc/udev/rules.d/99-tpu-reset.rules <<'UDEV_EOF'
+# Allow users to reset VFIO PCI devices (TPUs)
+SUBSYSTEM=="pci", DRIVER=="vfio-pci", RUN+="/bin/chmod 0666 /sys%p/reset"
+UDEV_EOF
+
+# Reload udev rules and apply to existing devices
+udevadm control --reload-rules
+udevadm trigger --subsystem-match=pci
+
 echo "Installing GitHub Actions runner..."
 RUNNER_VERSION="2.311.0"
 RUNNER_USER="github-runner"
