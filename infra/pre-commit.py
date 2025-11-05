@@ -13,6 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Run pre-commits and lint checks for Marin.
+
+This handles ruff/black/pyrefly type checking and license headers management for
+the Marin mono-repo. Slightly different testing styles and license headers are
+applied to different parts of the repo (e.g., levanter library code vs.
+Marin application code).
+"""
+
 import ast
 import fnmatch
 import os
@@ -57,7 +66,7 @@ EXCLUDE_PATTERNS = [
 
 
 def run_cmd(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
-    click.echo(f"  $ {' '.join(cmd)}")
+    click.echo(f"  $ {' '.join(cmd)[:200]}")
     return subprocess.run(cmd, cwd=ROOT_DIR, check=check)
 
 
@@ -448,13 +457,7 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
         return 0
 
     click.echo("\nPyrefly type checker:")
-    # Run pyrefly in project-checking mode without passing specific files.
-    # This allows it to respect the project-excludes configuration in pyproject.toml.
-    # When files are passed to pyrefly, it ignores project-excludes.
-    # Use "uv run" instead of "uv tool run" to use the project environment,
-    # otherwise pyrefly treats lib/marin/src as site-packages and excludes it.
     args = ["uv", "run", "--all-packages", "pyrefly", "check", "--baseline", ".pyrefly-baseline.json"]
-
     return run_cmd(args).returncode
 
 
