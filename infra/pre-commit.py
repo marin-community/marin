@@ -440,6 +440,19 @@ def check_eof_newline(files: list[pathlib.Path], fix: bool) -> int:
     return 0
 
 
+def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
+    if not files:
+        return 0
+
+    click.echo("\nPyrefly type checker:")
+    args = ["uv", "tool", "run", "pyrefly", "check", "--baseline", ".pyrefly-baseline.json"]
+
+    file_args = [str(f.relative_to(ROOT_DIR)) for f in files]
+    args.extend(file_args)
+
+    return run_cmd(args).returncode
+
+
 @dataclass
 class PrecommitConfig:
     patterns: list[str]
@@ -454,7 +467,7 @@ PRECOMMIT_CONFIGS = [
             check_ruff,
             lambda files, fix: check_black(files, fix, config=LEVANTER_BLACK_CONFIG),
             lambda files, fix: check_license_headers(files, fix, LEVANTER_LICENSE),
-            check_mypy,
+            # check_mypy,
         ],
     ),
     PrecommitConfig(
@@ -464,6 +477,12 @@ PRECOMMIT_CONFIGS = [
             check_ruff,
             check_black,
             lambda files, fix: check_license_headers(files, fix, MARIN_LICENSE),
+        ],
+    ),
+    PrecommitConfig(
+        patterns=["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"],
+        checks=[
+            check_pyrefly,
         ],
     ),
     PrecommitConfig(
