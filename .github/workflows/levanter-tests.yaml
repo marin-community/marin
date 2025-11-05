@@ -123,7 +123,8 @@ jobs:
         run: uv sync --package levanter --dev --frozen --extra torch_test --default-index https://download.pytorch.org/whl/cpu --index https://pypi.org/simple --index-strategy unsafe-first-match
       - name: Test torch-marked suite
         run: |
-          PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test --default-index https://download.pytorch.org/whl/cpu --index https://pypi.org/simple --index-strategy unsafe-first-match pytest tests -m "torch" --durations=20
+          # for some stupid reason torch insists on using the GPU if available even if we install the CPU-only version
+          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test --default-index https://download.pytorch.org/whl/cpu --index https://pypi.org/simple --index-strategy unsafe-first-match pytest tests -m "torch" --durations=20
 
   tpu-tests:
     runs-on: [tpu-ci]
