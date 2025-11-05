@@ -120,11 +120,11 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --frozen --extra torch_test --extra cpu
+        run: uv sync --package levanter --dev --frozen --extra torch_test_cpu --extra cpu
 
       - name: Test torch-marked suite
         run: |
-          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
+          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test_cpu pytest tests -m "torch" --durations=20
 
   tpu-tests:
     runs-on: [tpu-ci]

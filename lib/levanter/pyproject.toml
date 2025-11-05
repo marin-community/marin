@@ -79,7 +79,7 @@ torch_test = [
 ]
 
 torch_test_cpu = [
-  "torch>=2.7.0+cpu",
+  "torch>=2.7.0",
   "peft>=0.12.0",
 ]
 
