@@ -282,9 +282,7 @@ class _LmEvalHarnessWorker:
         sharded_payload = hax.shard(payload, self.axis_resources)
         out = broadcast_shard(
             sharded_payload,
-            hax.partitioning.infer_resource_partitions(
-                sharded_payload, preserve_existing_shardings=True
-            ),
+            hax.partitioning.infer_resource_partitions(sharded_payload, preserve_existing_shardings=True),
         )
         return out
 
