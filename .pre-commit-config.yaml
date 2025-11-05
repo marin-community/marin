@@ -50,7 +50,7 @@ repos:
     hooks:
       - id: pyrefly
         name: pyrefly type checker
-        entry: pyrefly check --baseline .pyrefly-baseline.json
+        entry: uv tool run pyrefly check --baseline .pyrefly-baseline.json
         language: system
         types: [python]
         pass_filenames: false
