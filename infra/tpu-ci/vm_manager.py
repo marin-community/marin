@@ -147,26 +147,9 @@ def get_startup_script() -> str:
     Fetches GitHub token from Secret Manager at runtime.
     """
     return f"""#!/bin/bash
-set -e
+set -ex
 
 echo "=== TPU VM Setup Starting ==="
-
-PROJECT_ID=$(curl -sSf -H "Metadata-Flavor: Google" \\
-  http://metadata.google.internal/computeMetadata/v1/project/project-id)
-ZONE=$(curl -sSf -H "Metadata-Flavor: Google" \\
-  http://metadata.google.internal/computeMetadata/v1/instance/zone | cut -d/ -f4)
-INSTANCE_NAME=$(curl -sSf -H "Metadata-Flavor: Google" \\
-  http://metadata.google.internal/computeMetadata/v1/instance/name)
-
-echo "Instance: $INSTANCE_NAME in $ZONE"
-
-# Compute regional Docker image URL by parsing region from zone
-# Zone format: us-west4-a -> Region: us-west4
-REGION=$(echo $ZONE | rev | cut -d- -f2- | rev)
-DOCKER_REGISTRY="$REGION-docker.pkg.dev"
-DOCKER_IMAGE="$DOCKER_REGISTRY/{config.DOCKER_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG}"
-
-echo "Using Docker image: $DOCKER_IMAGE (region: $REGION)"
 
 # Completely disable unattended-upgrades to avoid apt lock conflicts
 echo "Disabling unattended-upgrades..."
@@ -194,8 +177,6 @@ if ! command -v docker &> /dev/null; then
     echo "Installing Docker..."
     apt-get update
     apt-get install -y docker.io jq curl
-    systemctl enable docker
-    systemctl start docker
 else
     echo "Docker already installed, skipping..."
     apt-get update
@@ -205,11 +186,34 @@ fi
 systemctl enable docker
 systemctl start docker
 
-echo "Configuring Docker authentication..."
-gcloud auth configure-docker $DOCKER_REGISTRY --quiet
-
 echo "Pre-pulling TPU CI Docker image..."
-docker pull $DOCKER_IMAGE || true
+docker pull {config.DOCKER_IMAGE} || true
+
+echo "Pre-populating uv cache..."
+echo "Using Docker image: {config.DOCKER_IMAGE}"
+# Create persistent uv cache directory
+mkdir -p /var/cache/uv
+# Fix permissions for Docker container user (UID 1000)
+chown -R 1000:1000 /var/cache/uv
+# Clone repo temporarily to get pyproject.toml and uv.lock for initial sync
+TEMP_REPO=$(mktemp -d)
+git clone --depth 1 https://github.com/{config.GITHUB_REPOSITORY}.git "$TEMP_REPO" || true
+if [ -d "$TEMP_REPO" ]; then
+    # Fix permissions for Docker container user (UID 1000)
+    chown -R 1000:1000 "$TEMP_REPO"
+    # Run uv sync to populate the cache
+    docker run --rm \\
+        -v /var/cache/uv:/opt/uv-cache:rw \\
+        -v $TEMP_REPO:/workspace:rw \\
+        -e UV_CACHE_DIR=/opt/uv-cache \\
+        -e UV_LINK_MODE=copy \\
+        -w /workspace \\
+        {config.DOCKER_IMAGE}  uv sync --frozen --all-packages --extra tpu --extra gcp --group test
+    rm -rf "$TEMP_REPO"
+    echo "uv cache pre-populated"
+else
+    echo "Failed to clone repo, skipping cache pre-population"
+fi
 
 echo "Installing GitHub Actions runner..."
 RUNNER_VERSION="2.311.0"
@@ -229,6 +233,9 @@ if [ ! -f config.sh ]; then
 fi
 chown -R $RUNNER_USER:$RUNNER_USER /home/$RUNNER_USER
 
+PROJECT_ID=$(curl -sSf -H "Metadata-Flavor: Google" \\
+  http://metadata.google.internal/computeMetadata/v1/project/project-id)
+
 echo "Fetching GitHub token from Secret Manager..."
 GITHUB_TOKEN=$(gcloud secrets versions access latest \\
   --secret="tpu-ci-github-token" \\
@@ -243,25 +250,45 @@ REGISTRATION_TOKEN=$(curl -s -X POST \\
 echo "Configuring GitHub Actions runner..."
 cd /home/$RUNNER_USER
 
-if [ -f .runner ]; then
-    echo "Removing existing runner configuration..."
-    ./svc.sh stop || true
-    ./svc.sh uninstall || true
-    sudo -u $RUNNER_USER ./config.sh remove --token $REGISTRATION_TOKEN || true
+# Get instance name from metadata
+INSTANCE_NAME=$(curl -sSf -H "Metadata-Flavor: Google" \\
+  http://metadata.google.internal/computeMetadata/v1/instance/name)
+
+# Check if runner is configured by looking for config files OR .runner file
+if [ -f .runner ] || [ -f .credentials ] || [ -f .path ]; then
+    echo "Runner already configured, removing..."
+
+    # Stop service first if it exists
+    if [ -f ./svc.sh ]; then
+        ./svc.sh stop || true
+        ./svc.sh uninstall || true
+    fi
+
+    # Try to cleanly remove configuration if config.sh exists
+    if [ -f ./config.sh ]; then
+        sudo -u $RUNNER_USER ./config.sh remove --token $REGISTRATION_TOKEN || true
+    fi
+
+    # Force cleanup of ALL state files and workspace to ensure clean slate
+    rm -f .runner .credentials .path
+    rm -rf _work
+
+    echo "Existing runner configuration removed"
 fi
 
+# Now configure (works for both new and re-configured runners)
+# Use --replace flag to replace any existing runner with the same name on GitHub
 sudo -u $RUNNER_USER ./config.sh \\
   --url https://github.com/marin-community/marin \\
   --token $REGISTRATION_TOKEN \\
   --name "tpu-$INSTANCE_NAME" \\
   --labels {",".join(config.RUNNER_LABELS)} \\
   --work _work \\
-  --unattended
+  --unattended \\
+  --replace
 
 echo "Installing runner service..."
 cd /home/$RUNNER_USER
-# Avoid "already exists" error
-./svc.sh uninstall || true
 ./svc.sh install $RUNNER_USER
 ./svc.sh start
 
@@ -740,14 +767,6 @@ def debug_tpu(name: str, test_path: str, pytest_args: str, timeout: int, env_var
 sudo rm -f /tmp/libtpu_lockfile || true
 sudo lsof -t /dev/vfio/* 2>/dev/null | xargs -r sudo kill -9 || true
 
-# Detect the regional Docker image by parsing region from zone
-METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/zone"
-ZONE=$(curl -sSf -H "Metadata-Flavor: Google" $METADATA_URL | cut -d/ -f4)
-REGION=$(echo $ZONE | rev | cut -d- -f2- | rev)
-IMAGE="{config.DOCKER_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG}"
-DOCKER_IMAGE="$REGION-docker.pkg.dev/$IMAGE"
-echo "Using Docker image: $DOCKER_IMAGE (zone: $ZONE, region: $REGION)"
-
 sudo docker run --rm \\
   --device /dev/vfio:/dev/vfio \\
   --shm-size=100g \\
@@ -765,7 +784,7 @@ sudo docker run --rm \\
   --tmpfs /workspace/logs:rw \\
   --tmpfs /workspace/.pytest_cache:rw \\
   -w /workspace \\
-  $DOCKER_IMAGE \\
+  ghcr.io/{config.GITHUB_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG} \\
   timeout --kill-after=5 --signal=TERM {timeout} uv run pytest {test_path} {pytest_args}
 """
 

@@ -8,13 +8,15 @@ on:
       - main
   pull_request_review:
     types: [submitted]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  cpu-unit-test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    concurrency:
-      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
     strategy:
       matrix:
         python-version: ["3.12"]
@@ -56,15 +58,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install "uv>=0.7.19" toml
           npm install -g pandiff
-          uv sync
-          uv sync --package marin --extra cpu --group test
+          uv sync --package marin --extra cpu --group test --frozen
 
       - name: Test with pytest
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CI: true
         run: |
-          PYTHONPATH=tests:. uv run pytest -n3 --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
+          PYTHONPATH=tests:. uv run --frozen pytest -n3 --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
 
   tpu-test:
     runs-on: [tpu-ci]
@@ -84,34 +85,43 @@ jobs:
           rm -f /tmp/libtpu_lockfile || true
           lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
 
-          # Detect the regional Docker image by parsing region from zone
-          ZONE=$(curl -sSf -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/zone | cut -d/ -f4)
-          REGION=$(echo $ZONE | rev | cut -d- -f2- | rev)
-          DOCKER_IMAGE="$REGION-docker.pkg.dev/hai-gcp-models/marin-ci/tpu-ci:latest"
-          echo "Using Docker image: $DOCKER_IMAGE (zone: $ZONE, region: $REGION)"
+          # Wait for /dev/vfio/0 to be actually available (not just process-free)
+          for i in {1..30}; do
+            if timeout 1 python3 -c "open('/dev/vfio/0', 'r')" 2>/dev/null; then
+              echo "TPU device /dev/vfio/0 is ready"
+              break
+            fi
+            echo "Waiting for TPU device to be released... ($i/30)"
+            sleep 0.5
+          done
 
-          # Levanter likes to log to `logs/` and crashes if it can't write there
-          # Pytest writes to the cache directory and creates noise warnings if it can't write there
+          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
+          echo "Using Docker image: $DOCKER_IMAGE"
+
+          # Create UV cache directory
+          mkdir -p /tmp/uv-cache
+          chmod 777 /tmp/uv-cache
 
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
             --stop-timeout=1 \
             --cap-add=SYS_RESOURCE \
-             --ulimit memlock=68719476736:68719476736 \
-            -e JAX_PLATFORMS=tpu \
-            -e PJRT_DEVICE=TPU \
+            --ulimit memlock=68719476736:68719476736 \
             -e TPU_CI=true \
             -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
             -e START_RAY_TPU_CLUSTER=true \
+            -e TPU_STDERR_LOG_LEVEL=3 \
+            -e TPU_MIN_LOG_LEVEL=3 \
             -e PYTHONPATH=/workspace \
-            -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \
+            -e JAX_PLATFORMS=tpu,cpu \
+            -e PJRT_DEVICE=TPU \
             -e HF_TOKEN \
             -e WANDB_API_KEY \
             -e WANDB_MODE=offline \
-            -v ${{ github.workspace }}:/workspace:rw \
-            --tmpfs /workspace/logs:rw \
-            --tmpfs /workspace/.pytest_cache:rw \
+            -e UV_CACHE_DIR=/tmp/uv-cache \
+            -v ${{ github.workspace }}:/workspace-src:ro \
+            -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            timeout --kill-after=5 --signal=TERM 900 uv run --frozen pytest tests/tpu -m tpu_ci -v --tb=short -s --log-cli-level=INFO
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 900 uv run --package marin --extra tpu --group test --frozen pytest tests/tpu -m tpu_ci -v --tb=short -s --log-cli-level=INFO"
