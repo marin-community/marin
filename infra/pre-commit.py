@@ -408,10 +408,6 @@ PRECOMMIT_CONFIGS = [
 @click.option("--fix", is_flag=True, help="Automatically fix issues where possible")
 @click.option("--all-files", is_flag=True, help="Run checks on all files, not just staged")
 def main(fix: bool, all_files: bool):
-    click.echo("=" * 60)
-    click.echo("Pre-Commit Checks")
-    click.echo("=" * 60)
-
     all_files_list = get_all_files(all_files)
     exit_codes = []
 
@@ -421,8 +417,12 @@ def main(fix: bool, all_files: bool):
             continue
 
         for check in config.checks:
-            exit_code = check(matched_files, fix)
-            exit_codes.append(exit_code)
+            try:
+                exit_code = check(matched_files, fix)
+                exit_codes.append(exit_code)
+            except Exception as e:
+                click.echo(f"\nError running check {check.__name__}: {e}")
+                exit_codes.append(1)
 
     click.echo("\n" + "=" * 60)
     if any(exit_codes):
