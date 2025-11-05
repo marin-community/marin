@@ -14,6 +14,10 @@ on:
       - uv.lock
       - .github/workflows/levanter-tests.yaml
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   cpu-unit-tests:
     runs-on: ubuntu-latest

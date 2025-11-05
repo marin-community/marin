@@ -171,7 +171,7 @@ def build_and_push_docker_image():
         check=True,
     )
 
-    logging.info(f"✓ Docker images built and pushed to ghcr.io")
+    logging.info("✓ Docker images built and pushed to ghcr.io")
     logging.info(f"  - {latest_image}")
     logging.info(f"  - {date_image}")
 

@@ -4,7 +4,7 @@
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-  
+
 ARG RUNNER_USER=github-runner
 ARG RUNNER_UID=1000
 ARG RUNNER_GID=1000
