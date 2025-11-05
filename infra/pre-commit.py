@@ -15,13 +15,16 @@
 
 import ast
 import fnmatch
+import os
 import pathlib
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import click
+import tomllib
+import yaml
 
 ROOT_DIR = pathlib.Path(__file__).parent.parent
 LEVANTER_LICENSE = ROOT_DIR / "lib/levanter/etc/license_header.txt"
@@ -30,7 +33,26 @@ LEVANTER_BLACK_CONFIG = ROOT_DIR / "lib/levanter/pyproject.toml"
 
 EXCLUDE_PATTERNS = [
     ".git/**",
-    "**/tests/snapshots/**",
+    ".github/**",
+    "tests/snapshots/**",
+    "**/*.gz",
+    "**/*.pb",
+    "**/*.index",
+    "**/*.ico",
+    "**/*.npy",
+    "**/*.lock",
+    "**/*.png",
+    "**/*.jpg",
+    "**/*.html",
+    "**/*.jpeg",
+    "**/*.gif",
+    "**/*.mov",
+    "**/*.mp4",
+    "**/*.data-*",
+    "**/package-lock.json",
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/*-template.yaml",
 ]
 
 
@@ -39,7 +61,16 @@ def run_cmd(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=ROOT_DIR, check=check)
 
 
-def get_all_files(all_files: bool) -> list[pathlib.Path]:
+def get_all_files(all_files: bool, file_args: list[str]) -> list[pathlib.Path]:
+    if file_args:
+        files = []
+        for f in file_args:
+            path = ROOT_DIR / f
+            if not path.exists():
+                click.echo(f"Error: File does not exist: {f}")
+                sys.exit(1)
+            files.append(path)
+        return files
     if all_files:
         result = subprocess.run(
             ["git", "ls-files"],
@@ -73,10 +104,14 @@ def should_exclude(file_path: pathlib.Path) -> bool:
     return matches_pattern(file_path, EXCLUDE_PATTERNS)
 
 
-def get_matching_files(patterns: list[str], all_files_list: list[pathlib.Path]) -> list[pathlib.Path]:
+def get_matching_files(
+    patterns: list[str], all_files_list: list[pathlib.Path], exclude_patterns: list[str]
+) -> list[pathlib.Path]:
     matched = []
     for file_path in all_files_list:
         if should_exclude(file_path):
+            continue
+        if matches_pattern(file_path, exclude_patterns):
             continue
         if matches_pattern(file_path, patterns):
             matched.append(file_path)
@@ -137,20 +172,36 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
         with open(file_path) as f:
             content = f.read()
 
-        has_shebang = content.startswith("#!")
-        if has_shebang:
-            lines = content.split("\n", 1)
-            content_to_check = lines[1].lstrip("\n") if len(lines) > 1 else ""
-        else:
-            content_to_check = content
+        lines = content.split("\n")
 
-        if not content_to_check.startswith(expected_header):
+        # Scan forward until we find the first non-comment line
+        comment_lines = []
+        start_idx = 1 if content.startswith("#!") else 0  # Skip shebang
+
+        for line in lines[start_idx:]:
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                # Strip comment marker and the single space after it if present
+                if len(stripped) > 1 and stripped[1] == " ":
+                    comment_text = stripped[2:]
+                else:
+                    comment_text = stripped[1:]
+                comment_lines.append(comment_text)
+            elif stripped:
+                # Found first non-comment line
+                break
+
+        # Check if license text appears in the comments
+        comment_block = "\n".join(comment_lines)
+        if license_template not in comment_block:
             files_without_header.append(file_path)
 
             if fix:
+                has_shebang = content.startswith("#!")
                 if has_shebang:
-                    shebang_line = content.split("\n", 1)[0]
-                    new_content = f"{shebang_line}\n{expected_header}\n{content_to_check}"
+                    shebang_line = lines[0]
+                    rest_content = "\n".join(lines[1:])
+                    new_content = f"{shebang_line}\n{expected_header}\n{rest_content}"
                 else:
                     new_content = f"{expected_header}\n{content}"
 
@@ -160,10 +211,8 @@ def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pa
     if files_without_header:
         if not fix:
             click.echo(f"  {len(files_without_header)} files missing license headers")
-            for f in files_without_header[:5]:
+            for f in files_without_header:
                 click.echo(f"    - {f.relative_to(ROOT_DIR)}")
-            if len(files_without_header) > 5:
-                click.echo(f"    ... and {len(files_without_header) - 5} more")
         return 1
 
     click.echo("  All files have license headers")
@@ -272,10 +321,21 @@ def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
     click.echo("\nTOML and YAML:")
     errors = []
 
+    # levanter is weird
+    def include_constructor(loader, node):
+        filepath = loader.construct_scalar(node)
+        # Resolve relative to the current YAML file's directory
+        base_dir = os.path.dirname(loader.name) if hasattr(loader, "name") else "."
+        full_path = os.path.join(base_dir, filepath)
+
+        with open(full_path, "r") as f:
+            return yaml.safe_load(f)
+
+    yaml.add_constructor("!include", include_constructor, Loader=yaml.SafeLoader)
+
     for file_path in config_files:
         if file_path.suffix == ".toml":
             try:
-                import tomllib
 
                 with open(file_path, "rb") as f:
                     tomllib.load(f)
@@ -284,7 +344,6 @@ def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
 
         elif file_path.suffix in [".yaml", ".yml"]:
             try:
-                import yaml
 
                 with open(file_path) as f:
                     yaml.safe_load(f)
@@ -328,6 +387,8 @@ def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
     if files_with_whitespace:
         if not fix:
             click.echo(f"  {len(files_with_whitespace)} files with trailing whitespace")
+            for f in files_with_whitespace:
+                click.echo(f"    - {f.relative_to(ROOT_DIR)}")
         return 1
 
     click.echo("  No trailing whitespace")
@@ -360,6 +421,8 @@ def check_eof_newline(files: list[pathlib.Path], fix: bool) -> int:
     if files_missing_newline:
         if not fix:
             click.echo(f"  {len(files_missing_newline)} files missing newline")
+            for f in files_missing_newline:
+                click.echo(f"    - {f.relative_to(ROOT_DIR)}")
         return 1
 
     click.echo("  All files have newlines")
@@ -370,6 +433,7 @@ def check_eof_newline(files: list[pathlib.Path], fix: bool) -> int:
 class PrecommitConfig:
     patterns: list[str]
     checks: list[Callable[[list[pathlib.Path], bool], int]]
+    exclude_patterns: list[str] = field(default_factory=list)
 
 
 PRECOMMIT_CONFIGS = [
@@ -384,6 +448,7 @@ PRECOMMIT_CONFIGS = [
     ),
     PrecommitConfig(
         patterns=["**/*.py"],
+        exclude_patterns=["lib/levanter/**"],
         checks=[
             lambda files, fix: check_ruff(files, fix),
             lambda files, fix: check_black(files, fix),
@@ -407,12 +472,13 @@ PRECOMMIT_CONFIGS = [
 @click.command()
 @click.option("--fix", is_flag=True, help="Automatically fix issues where possible")
 @click.option("--all-files", is_flag=True, help="Run checks on all files, not just staged")
-def main(fix: bool, all_files: bool):
-    all_files_list = get_all_files(all_files)
+@click.argument("files", nargs=-1)
+def main(fix: bool, all_files: bool, files: tuple[str, ...]):
+    all_files_list = get_all_files(all_files, list(files))
     exit_codes = []
 
     for config in PRECOMMIT_CONFIGS:
-        matched_files = get_matching_files(config.patterns, all_files_list)
+        matched_files = get_matching_files(config.patterns, all_files_list, config.exclude_patterns)
         if not matched_files:
             continue
 

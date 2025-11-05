@@ -29,8 +29,13 @@ clean:
 check:
 	uv run python infra/pre-commit.py
 
-autoformat:
-	uv run python infra/pre-commit.py --fix
+fix:
+	@FILES=$$(git diff --name-only HEAD); \
+	if [ -n "$$FILES" ]; then \
+		uv run python infra/pre-commit.py --fix $$FILES && git add $$FILES; \
+	else \
+		echo "No modified files to fix"; \
+	fi
 
 lint:
 	uv run python infra/pre-commit.py --all-files

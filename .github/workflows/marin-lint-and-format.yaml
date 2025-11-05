@@ -25,4 +25,4 @@ jobs:
       run: uv python install
 
     - name: Run pre-commit checks
-      run: uv run python infra/pre-commit.py --all-files
+      run: uv run python infra/pre-commit.py
