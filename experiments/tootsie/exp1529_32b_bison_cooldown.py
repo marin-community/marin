@@ -91,6 +91,7 @@ bison_cooldown_mixture = lm_varying_mixture_data_config(
         (0, NEMOTRON_PT_MIX_WEIGHTS),  # Phase 1 and 2 used the same data mixture and just changed the model arch
         (PHASE_3_START, bison_cooldown_weights),
     ],
+    permutation_type="linear",
 )
 
 DECAY_FRACTION = (PHASE_3_END - PHASE_3_START) / PHASE_3_END

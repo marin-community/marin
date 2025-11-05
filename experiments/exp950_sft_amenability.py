@@ -41,9 +41,9 @@ Author: Will Held
 
 import dataclasses
 
-from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
+from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3_old
 from experiments.defaults import default_sft, default_train
-from experiments.exp606_sft import tulu3_llama_tokenize_step, tulu_sft_config
+from experiments.exp606_sft import tulu3_llama_data_old, tulu_sft_config
 from experiments.llama import llama_1_4b, llama_1_4b_train_config
 from marin.execution.executor import executor_main, output_path_of
 
@@ -61,21 +61,21 @@ llama_1_4b_wsd_high_lr_train_config = dataclasses.replace(
 
 dclm_mix_model_wsd = default_train(
     name="lr_tests_wsd",
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     model_config=llama_1_4b,
     train_config=llama_1_4b_wsd_high_lr_train_config,
 )
 
 dclm_mix_model_cos_high = default_train(
     name="lr_tests_cosin_high",
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     model_config=llama_1_4b,
     train_config=dataclasses.replace(llama_1_4b_wsd_high_lr_train_config, lr_schedule="cosine", decay=None),
 )
 
 dclm_mix_model_cos_low = default_train(
     name="lr_tests_cosin_low",
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     model_config=llama_1_4b,
     train_config=dataclasses.replace(
         llama_1_4b_wsd_high_lr_train_config, learning_rate=3e-4, lr_schedule="cosine", decay=None
@@ -85,7 +85,7 @@ dclm_mix_model_cos_low = default_train(
 
 sft_model_wsd = default_sft(
     name="sft/tulu_sft_wsd_linear_lr",
-    tokenized=tulu3_llama_tokenize_step,
+    tokenized=tulu3_llama_data_old,
     model_config=llama_1_4b,
     sft_config=dataclasses.replace(
         tulu_sft_config,
@@ -96,7 +96,7 @@ sft_model_wsd = default_sft(
 
 sft_model_cos_high = default_sft(
     name="sft/tulu_sft_cos_high_lr",
-    tokenized=tulu3_llama_tokenize_step,
+    tokenized=tulu3_llama_data_old,
     model_config=llama_1_4b,
     sft_config=dataclasses.replace(
         tulu_sft_config,
@@ -107,7 +107,7 @@ sft_model_cos_high = default_sft(
 
 sft_model_cos_low = default_sft(
     name="sft/tulu_sft_cos_low_lr",
-    tokenized=tulu3_llama_tokenize_step,
+    tokenized=tulu3_llama_data_old,
     model_config=llama_1_4b,
     sft_config=dataclasses.replace(
         tulu_sft_config,

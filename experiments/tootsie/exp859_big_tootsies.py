@@ -31,7 +31,7 @@ import dataclasses
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.schedule import ScheduleStep
 
-from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3
+from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3_old
 from experiments.defaults import default_train
 from experiments.llama import llama_13b, llama_24b, llama_56b
 from experiments.simple_train_config import SimpleTrainConfig
@@ -100,7 +100,7 @@ llama_22b_train_config = SimpleTrainConfig(
 # so they were initially just "testing" runs.
 llama_13b_tootsie_phase1 = default_train(
     name="llama-13b-tootsie-dummy-testing",
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     model_config=llama_13b_old_rotary,
     train_config=llama_13b_train_config,
     tags=["llama", "13b", "wsd-s", "exp201", "tootsie"],
@@ -109,7 +109,7 @@ llama_13b_tootsie_phase1 = default_train(
 
 llama_22b_tootsie_phase1 = default_train(
     name="llama-22b-tootsie-dummy-testing",
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     model_config=llama_24b_old_rotary,
     train_config=llama_22b_train_config,
     tags=["llama", "22b", "wsd-s", "exp201", "tootsie"],
@@ -151,7 +151,10 @@ llama_22b_train_config_ema = SimpleTrainConfig(
 )
 
 dclm_mixture_config_llama3_zoned = lm_mixture_data_config(
-    components=dclm_components_zoned, weights=DCLM_MIXTURE_WEIGHTS, include_raw_paths=False
+    components=dclm_components_zoned,
+    weights=DCLM_MIXTURE_WEIGHTS,
+    permutation_type="linear",
+    include_raw_paths=False,
 )
 llama_13b_tootsie_ema_warmstart = dataclasses.replace(
     default_train(
@@ -219,7 +222,7 @@ llama_70b_tootsie_mk2_BAD = dataclasses.replace(
         name="llama-70b-tootsie-mk2",
         # not recorded here:
         # warmstart weights from llama_70b_tootsie step 80000
-        tokenized=dclm_mixture_config_llama3,
+        tokenized=dclm_mixture_config_llama3_old,
         model_config=llama_56b,
         train_config=llama_56b_train_config_mk2,
         tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],
@@ -231,7 +234,7 @@ llama_70b_tootsie_mk2_BAD = dataclasses.replace(
 
 llama_56b_tootsie = default_train(
     name="llama-70b-tootsie-dummy-testing",
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     model_config=llama_56b,
     train_config=llama_56b_train_config,
     tags=["llama", "70b", "wsd-s", "exp201", "tootsie"],
