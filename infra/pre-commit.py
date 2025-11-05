@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import ast
+import fnmatch
+import pathlib
+import subprocess
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass
+
+import click
+
+ROOT_DIR = pathlib.Path(__file__).parent.parent
+LEVANTER_LICENSE = ROOT_DIR / "lib/levanter/etc/license_header.txt"
+MARIN_LICENSE = ROOT_DIR / "etc/license_header.txt"
+LEVANTER_BLACK_CONFIG = ROOT_DIR / "lib/levanter/pyproject.toml"
+
+EXCLUDE_PATTERNS = [
+    ".git/**",
+    "**/tests/snapshots/**",
+]
+
+
+def run_cmd(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
+    click.echo(f"  $ {' '.join(cmd)}")
+    return subprocess.run(cmd, cwd=ROOT_DIR, check=check)
+
+
+def get_all_files(all_files: bool) -> list[pathlib.Path]:
+    if all_files:
+        result = subprocess.run(
+            ["git", "ls-files"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    else:
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    files = [ROOT_DIR / f for f in result.stdout.strip().split("\n") if f]
+    return [f for f in files if f.exists()]
+
+
+def matches_pattern(file_path: pathlib.Path, patterns: list[str]) -> bool:
+    relative_path = str(file_path.relative_to(ROOT_DIR))
+    for pattern in patterns:
+        if fnmatch.fnmatch(relative_path, pattern):
+            return True
+    return False
+
+
+def should_exclude(file_path: pathlib.Path) -> bool:
+    return matches_pattern(file_path, EXCLUDE_PATTERNS)
+
+
+def get_matching_files(patterns: list[str], all_files_list: list[pathlib.Path]) -> list[pathlib.Path]:
+    matched = []
+    for file_path in all_files_list:
+        if should_exclude(file_path):
+            continue
+        if matches_pattern(file_path, patterns):
+            matched.append(file_path)
+    return matched
+
+
+def check_ruff(files: list[pathlib.Path], fix: bool) -> int:
+    if not files:
+        return 0
+
+    click.echo("\nRuff linter:")
+    args = ["uv", "run", "--all-packages", "ruff", "check"]
+    if fix:
+        args.extend(["--fix", "--exit-non-zero-on-fix"])
+
+    file_args = [str(f.relative_to(ROOT_DIR)) for f in files]
+    args.extend(file_args)
+
+    return run_cmd(args).returncode
+
+
+def check_black(files: list[pathlib.Path], fix: bool, config: pathlib.Path | None = None) -> int:
+    if not files:
+        return 0
+
+    click.echo("\nBlack formatter:")
+    args = ["uv", "run", "--all-packages", "black"]
+    if not fix:
+        args.append("--check")
+    if config:
+        args.extend(["--config", str(config)])
+
+    file_args = [str(f.relative_to(ROOT_DIR)) for f in files]
+    args.extend(file_args)
+
+    return run_cmd(args).returncode
+
+
+def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pathlib.Path) -> int:
+    if not files:
+        return 0
+
+    click.echo(f"\nLicense headers ({license_file.relative_to(ROOT_DIR)}):")
+
+    if not license_file.exists():
+        click.echo(f"  Warning: License header file not found: {license_file}")
+        return 0
+
+    with open(license_file) as f:
+        license_template = f.read().strip()
+
+    license_lines = [f"# {line}" if line else "#" for line in license_template.split("\n")]
+    expected_header = "\n".join(license_lines) + "\n"
+
+    files_without_header = []
+
+    for file_path in files:
+        with open(file_path) as f:
+            content = f.read()
+
+        has_shebang = content.startswith("#!")
+        if has_shebang:
+            lines = content.split("\n", 1)
+            content_to_check = lines[1].lstrip("\n") if len(lines) > 1 else ""
+        else:
+            content_to_check = content
+
+        if not content_to_check.startswith(expected_header):
+            files_without_header.append(file_path)
+
+            if fix:
+                if has_shebang:
+                    shebang_line = content.split("\n", 1)[0]
+                    new_content = f"{shebang_line}\n{expected_header}\n{content_to_check}"
+                else:
+                    new_content = f"{expected_header}\n{content}"
+
+                with open(file_path, "w") as f:
+                    f.write(new_content)
+
+    if files_without_header:
+        if not fix:
+            click.echo(f"  {len(files_without_header)} files missing license headers")
+            for f in files_without_header[:5]:
+                click.echo(f"    - {f.relative_to(ROOT_DIR)}")
+            if len(files_without_header) > 5:
+                click.echo(f"    ... and {len(files_without_header) - 5} more")
+        return 1
+
+    click.echo("  All files have license headers")
+    return 0
+
+
+def check_mypy(files: list[pathlib.Path], fix: bool) -> int:
+    if not files:
+        return 0
+
+    click.echo("\nMypy type checker:")
+    args = ["uv", "run", "--all-packages", "mypy", "--ignore-missing-imports", "--python-version=3.11"]
+
+    test_excluded = [f for f in files if not str(f.relative_to(ROOT_DIR)).startswith("tests/")]
+    if not test_excluded:
+        click.echo("  No files to check (all are tests)")
+        return 0
+
+    file_args = [str(f.relative_to(ROOT_DIR)) for f in test_excluded]
+    args.extend(file_args)
+
+    return run_cmd(args).returncode
+
+
+def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
+    if not files:
+        return 0
+
+    click.echo("\nLarge files:")
+    max_size = 500 * 1024
+
+    large_files = []
+    for file_path in files:
+        if file_path.exists() and file_path.stat().st_size > max_size:
+            large_files.append((file_path, file_path.stat().st_size))
+
+    if large_files:
+        click.echo("  Large files detected:")
+        for path, size in large_files:
+            click.echo(f"    - {path.relative_to(ROOT_DIR)} ({size / 1024:.1f} KB)")
+        return 1
+
+    click.echo("  No large files")
+    return 0
+
+
+def check_python_ast(files: list[pathlib.Path], fix: bool) -> int:
+    py_files = [f for f in files if f.suffix == ".py"]
+    if not py_files:
+        return 0
+
+    click.echo("\nPython AST:")
+    invalid_files = []
+
+    for file_path in py_files:
+        try:
+            with open(file_path) as f:
+                ast.parse(f.read(), filename=str(file_path))
+        except SyntaxError as e:
+            invalid_files.append((file_path, str(e)))
+
+    if invalid_files:
+        click.echo("  Invalid Python syntax:")
+        for path, error in invalid_files:
+            click.echo(f"    - {path.relative_to(ROOT_DIR)}: {error}")
+        return 1
+
+    click.echo("  All Python files have valid syntax")
+    return 0
+
+
+def check_merge_conflicts(files: list[pathlib.Path], fix: bool) -> int:
+    if not files:
+        return 0
+
+    click.echo("\nMerge conflicts:")
+    conflict_markers = [b"<<<<<<<", b"=======", b">>>>>>>"]
+    files_with_conflicts = []
+
+    for file_path in files:
+        if "pre-commit" in str(file_path):
+            continue
+        try:
+            with open(file_path, "rb") as f:
+                content = f.read()
+                if any(marker in content for marker in conflict_markers):
+                    files_with_conflicts.append(file_path)
+        except Exception:
+            continue
+
+    if files_with_conflicts:
+        click.echo("  Merge conflict markers found:")
+        for path in files_with_conflicts:
+            click.echo(f"    - {path.relative_to(ROOT_DIR)}")
+        return 1
+
+    click.echo("  No merge conflicts")
+    return 0
+
+
+def check_toml_yaml(files: list[pathlib.Path], fix: bool) -> int:
+    config_files = [f for f in files if f.suffix in [".toml", ".yaml", ".yml"]]
+    if not config_files:
+        return 0
+
+    click.echo("\nTOML and YAML:")
+    errors = []
+
+    for file_path in config_files:
+        if file_path.suffix == ".toml":
+            try:
+                import tomllib
+
+                with open(file_path, "rb") as f:
+                    tomllib.load(f)
+            except Exception as e:
+                errors.append((file_path, str(e)))
+
+        elif file_path.suffix in [".yaml", ".yml"]:
+            try:
+                import yaml
+
+                with open(file_path) as f:
+                    yaml.safe_load(f)
+            except Exception as e:
+                errors.append((file_path, str(e)))
+
+    if errors:
+        click.echo("  Syntax errors:")
+        for path, error in errors:
+            click.echo(f"    - {path.relative_to(ROOT_DIR)}: {error}")
+        return 1
+
+    click.echo("  All files valid")
+    return 0
+
+
+def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
+    if not files:
+        return 0
+
+    click.echo("\nTrailing whitespace:")
+    files_with_whitespace = []
+
+    for file_path in files:
+        try:
+            with open(file_path) as f:
+                lines = f.readlines()
+        except Exception:
+            continue
+
+        has_trailing = any(line.rstrip("\n").endswith((" ", "\t")) for line in lines)
+
+        if has_trailing:
+            files_with_whitespace.append(file_path)
+
+            if fix:
+                with open(file_path, "w") as f:
+                    for line in lines:
+                        f.write(line.rstrip() + "\n")
+
+    if files_with_whitespace:
+        if not fix:
+            click.echo(f"  {len(files_with_whitespace)} files with trailing whitespace")
+        return 1
+
+    click.echo("  No trailing whitespace")
+    return 0
+
+
+def check_eof_newline(files: list[pathlib.Path], fix: bool) -> int:
+    if not files:
+        return 0
+
+    click.echo("\nEnd-of-file newline:")
+    files_missing_newline = []
+
+    for file_path in files:
+        if file_path.stat().st_size == 0:
+            continue
+
+        try:
+            with open(file_path, "rb") as f:
+                content = f.read()
+                if content and not content.endswith(b"\n"):
+                    files_missing_newline.append(file_path)
+
+                    if fix:
+                        with open(file_path, "ab") as f:
+                            f.write(b"\n")
+        except Exception:
+            continue
+
+    if files_missing_newline:
+        if not fix:
+            click.echo(f"  {len(files_missing_newline)} files missing newline")
+        return 1
+
+    click.echo("  All files have newlines")
+    return 0
+
+
+@dataclass
+class PrecommitConfig:
+    patterns: list[str]
+    checks: list[Callable[[list[pathlib.Path], bool], int]]
+
+
+PRECOMMIT_CONFIGS = [
+    PrecommitConfig(
+        patterns=["lib/levanter/**/*.py"],
+        checks=[
+            lambda files, fix: check_ruff(files, fix),
+            lambda files, fix: check_black(files, fix, config=LEVANTER_BLACK_CONFIG),
+            lambda files, fix: check_license_headers(files, fix, LEVANTER_LICENSE),
+            lambda files, fix: check_mypy(files, fix),
+        ],
+    ),
+    PrecommitConfig(
+        patterns=["**/*.py"],
+        checks=[
+            lambda files, fix: check_ruff(files, fix),
+            lambda files, fix: check_black(files, fix),
+            lambda files, fix: check_license_headers(files, fix, MARIN_LICENSE),
+        ],
+    ),
+    PrecommitConfig(
+        patterns=["**/*"],
+        checks=[
+            check_large_files,
+            check_python_ast,
+            check_merge_conflicts,
+            check_toml_yaml,
+            check_trailing_whitespace,
+            check_eof_newline,
+        ],
+    ),
+]
+
+
+@click.command()
+@click.option("--fix", is_flag=True, help="Automatically fix issues where possible")
+@click.option("--all-files", is_flag=True, help="Run checks on all files, not just staged")
+def main(fix: bool, all_files: bool):
+    click.echo("=" * 60)
+    click.echo("Pre-Commit Checks")
+    click.echo("=" * 60)
+
+    all_files_list = get_all_files(all_files)
+    exit_codes = []
+
+    for config in PRECOMMIT_CONFIGS:
+        matched_files = get_matching_files(config.patterns, all_files_list)
+        if not matched_files:
+            continue
+
+        for check in config.checks:
+            exit_code = check(matched_files, fix)
+            exit_codes.append(exit_code)
+
+    click.echo("\n" + "=" * 60)
+    if any(exit_codes):
+        click.echo("FAILED: Some checks failed or files were modified")
+        click.echo("=" * 60)
+        sys.exit(1)
+    else:
+        click.echo("SUCCESS: All checks passed")
+        click.echo("=" * 60)
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
