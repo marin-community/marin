@@ -120,7 +120,7 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --frozen --with torch_test
+        run: uv sync --package levanter --dev --frozen --extra torch_test
       - name: Test torch-marked suite
         run: |
           PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
