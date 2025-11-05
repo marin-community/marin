@@ -130,7 +130,7 @@ jobs:
             echo "Unable to determine torch version from uv.lock" >&2
             exit 1
           fi
-          uv pip install "torch==$TORCH_VERSION" -f https://download.pytorch.org/whl/cpu/torch_stable.html
+          uv pip install "torch==$TORCH_VERSION" -f https://download.pytorch.org/whl/cpu/torch_stable.html  --torch-backend=cpu
 
       - name: Test torch-marked suite
         run: |
