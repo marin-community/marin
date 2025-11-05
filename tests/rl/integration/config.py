@@ -251,7 +251,7 @@ def create_nano_train_worker_config(rollout_storage: RolloutStorageConfig, outpu
             capacity=2048,
             alpha=3.0,
             max_samples=1,
-            max_rollout_step_delay=2,
+            max_rollout_step_delay=0,
         ),
         loss=RLOOLoss(kl_coef=0.0, clip_epsilon=5.0),
         initial_checkpoint=None,
@@ -267,7 +267,6 @@ def create_test_inference_server_config(model_config: LlamaConfig, output_dir: s
             page_size=8,
             max_seq_len=64,
             max_queued_tokens=8,
-            enable_logprobs=True,
         ),
         temperature=1.0,
         port=find_open_port(),
@@ -362,7 +361,6 @@ def run_inference_with_engine(
     tokenizer=None,
     max_tokens: int = 64,
     temperature: float = 1.0,
-    enable_logprobs: bool = False,
 ) -> tuple[list[list[int]], list[str]]:
     """Run inference on prompts using InferenceEngine directly."""
     if tokenizer is None:
@@ -374,7 +372,6 @@ def run_inference_with_engine(
         page_size=32,
         max_pages=8 * len(prompts) * max(1, max_tokens // 32),
         compute_dtype=jnp.bfloat16,
-        enable_logprobs=enable_logprobs,
     )
 
     print("Creating inference engine with config:", config)
@@ -402,7 +399,6 @@ def run_inference_with_engine(
             request_id=i,
             decode_params=decode_params,
             n_generations=1,
-            enable_logprobs=enable_logprobs,
         )
         requests.append(request)
 
@@ -566,6 +562,8 @@ class RolloutWorkerRunner(ThreadedWorkerRunner):
 class TrainWorkerRunner(ThreadedWorkerRunner):
     """Manages running a training worker in a separate thread with metric tracking."""
 
+    worker: TrainWorker
+
     def __init__(self, training_worker_config):
         super().__init__(training_worker_config)
         self.training_worker_config = training_worker_config
@@ -654,7 +652,12 @@ class RolloutBatchFeeder:
                 if self.runner.trained_model:
                     model = self.runner.trained_model
 
-                batch = self.batch_generator(policy_model=model, batch_size=batch_size, tokenizer=self.tokenizer)
+                batch = self.batch_generator(
+                    policy_model=model,
+                    batch_size=batch_size,
+                    tokenizer=self.tokenizer,
+                    step=self.runner.steps_completed,
+                )
                 self.queue_writer.write_batch(batch)
         except Exception:
             logger.error("RolloutBatchFeeder failed", exc_info=True)

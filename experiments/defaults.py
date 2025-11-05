@@ -346,6 +346,9 @@ def default_train(
             quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             watch=train_config.watch,
+            profiler=train_config.profiler,
+            profiler_start_step=train_config.profiler_start_step,
+            profiler_num_steps=train_config.profiler_num_steps,
             axis_resources={
                 # Special axes for MoEs
                 "token": (ResourceAxis.REPLICA, ResourceAxis.DATA),

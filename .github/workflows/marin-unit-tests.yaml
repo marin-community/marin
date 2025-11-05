@@ -1,0 +1,127 @@
+name: Marin - Run unit tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-unit-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+        node-version: ["20.10.0"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+      
+      - name: Setup pandoc
+        uses: r-lib/actions/setup-pandoc@v2
+        with:
+          pandoc-version: '3.1.11'  # Pin version for cache consistency
+      
+      - name: Cache dependencies
+        id: cache-deps
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/uv
+            ~/.npm
+            ~/node_modules
+          key: ${{ runner.os }}-deps-v1-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-deps-v1-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "uv>=0.7.19" toml
+          npm install -g pandiff
+          uv sync --package marin --extra cpu --group test --frozen
+
+      - name: Test with pytest
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          CI: true
+        run: |
+          PYTHONPATH=tests:. uv run --frozen pytest -n3 --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
+
+  tpu-test:
+    runs-on: [tpu-ci]
+    timeout-minutes: 10
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
+
+      - name: Run TPU tests in Docker
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+        run: |
+          rm -f /tmp/libtpu_lockfile || true
+          lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
+
+          # Wait for /dev/vfio/0 to be actually available (not just process-free)
+          for i in {1..30}; do
+            if timeout 1 python3 -c "open('/dev/vfio/0', 'r')" 2>/dev/null; then
+              echo "TPU device /dev/vfio/0 is ready"
+              break
+            fi
+            echo "Waiting for TPU device to be released... ($i/30)"
+            sleep 0.5
+          done
+
+          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
+          echo "Using Docker image: $DOCKER_IMAGE"
+
+          # Create UV cache directory
+          mkdir -p /tmp/uv-cache
+          chmod 777 /tmp/uv-cache
+
+          docker run --rm \
+            --device /dev/vfio:/dev/vfio \
+            --shm-size=100g \
+            --stop-timeout=1 \
+            --cap-add=SYS_RESOURCE \
+            --ulimit memlock=68719476736:68719476736 \
+            -e TPU_CI=true \
+            -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
+            -e START_RAY_TPU_CLUSTER=true \
+            -e TPU_STDERR_LOG_LEVEL=3 \
+            -e TPU_MIN_LOG_LEVEL=3 \
+            -e PYTHONPATH=/workspace \
+            -e JAX_PLATFORMS=tpu,cpu \
+            -e PJRT_DEVICE=TPU \
+            -e HF_TOKEN \
+            -e WANDB_API_KEY \
+            -e WANDB_MODE=offline \
+            -e UV_CACHE_DIR=/tmp/uv-cache \
+            -v ${{ github.workspace }}:/workspace-src:ro \
+            -v /tmp/uv-cache:/tmp/uv-cache:rw \
+            -w /workspace \
+            $DOCKER_IMAGE \
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 900 uv run --package marin --extra tpu --group test --frozen pytest tests/tpu -m tpu_ci -v --tb=short -s --log-cli-level=INFO"

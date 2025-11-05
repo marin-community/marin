@@ -1,0 +1,67 @@
+name: Marin - Quickstart
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  quickstart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+
+    strategy:
+      matrix:
+        python-version: [ "3.12" ]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/uv
+          # "3" as a poor man's version since we were running out of disk for some reason?
+          # Seems to be related to dedupe
+          key: ${{ runner.os }}-${{ matrix.python-version }}-quickstart-3
+
+      - name: Install dependencies
+        run: |
+          # install uv
+          pip install uv
+          uv pip install --system -e . --torch-backend=cpu
+        
+
+      # Start Ray cluster locally; We give cpus as 64 since we don't want Ray to get stuck in infinite loop trying to
+      # get the resources
+      - name: Start Ray cluster locally
+        shell: bash -l {0}
+        run: |
+          ray start --head --num-cpus=64 --resources='{"head_node": 1}'
+          df -h
+#          # Debugging disk space issues
+#          sudo du  -h / | sort -hr | head -n 40
+#          sudo du -h /home/runner/work/marin/marin/.venv/lib/python3.12/site-packages | sort -hr | head -n 50
+
+      - name: Run the quickstart script
+        shell: bash -l {0}
+        run: |
+         python tests/integration_test.py
+        env: # Or as an environment variable
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          JAX_TRACEBACK_FILTERING: off
+          PYTHONPATH: .:${{ github.workspace }}/src:${{ github.workspace }}/tests
+          WANDB_MODE: offline

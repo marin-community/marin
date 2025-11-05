@@ -99,7 +99,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         type=versioned("classify"),
                         attribute_path=output_path_of(compression_step, input_basename),
                         name=versioned("compression_ratio"),
-                        threshold=versioned(0.6),  # Lower bound
+                        lower_threshold=versioned(0.6),  # Lower bound
                         upper_threshold=versioned(0.9),  # Upper bound
                     ),
                 ],

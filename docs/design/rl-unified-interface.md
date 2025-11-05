@@ -287,7 +287,7 @@ trained_model = job.run()
 **Goal:** Define and validate the unified interface without breaking existing code.
 
 ### Step 1.1: Define Configuration Classes
-- Create `src/marin/rl/rl_job.py` with:
+- Create `lib/marin/src/marin/rl/rl_job.py` with:
   - `SamplingParams` dataclass
   - Enhanced `LessonConfig` (extend existing)
   - `RLLossModule` Protocol

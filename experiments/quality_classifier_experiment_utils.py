@@ -96,7 +96,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         attribute_path=output_path_of(inference_step, input_basename),
                         name=versioned(f"{config.experiment_name}-quality"),
                         label="__label__hq",
-                        threshold=versioned(None),
+                        lower_threshold=versioned(None),
                         keep_fraction=versioned(config.keep_fraction),
                     ),
                 ],

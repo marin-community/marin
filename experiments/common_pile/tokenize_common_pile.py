@@ -312,6 +312,18 @@ stackv2_html_filtered = ExecutorStep(
     override_output_path="raw/common_pile/stackv2_html_filtered-92c9fa8",
 )
 
+stackv2 = ExecutorStep(
+    name="raw/common_pile/stackv2",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="common-pile/stackv2",
+        revision="d0e3266",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="raw/common_pile/stackv2-d0e3266",
+)
+
 ubuntu_irc_filtered = ExecutorStep(
     name="raw/common_pile/ubuntu_irc_filtered",
     fn=download_hf,

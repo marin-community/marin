@@ -18,13 +18,15 @@
 This experiment evaluates the correlation between perplexity and other metrics to check the quality of uncheatable evals.
 """
 
-import os
 import logging
+import os
 from functools import lru_cache
+
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 
 from experiments.llama import llama3_tokenizer
 from marin.evaluation.log_probs import default_lm_log_probs
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
 from experiments.paloma import paloma_tokenized
 
@@ -32,12 +34,14 @@ from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
 from experiments.evals.task_configs import EvalTaskConfig
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from experiments.isoflop_sweep import generate_isoflop_sweep
+from experiments.models import ModelConfig as HFModelConfig, download_model_step
 from experiments.tootsie.exp1295_32b import nemotron_mix
 
 # Import shared components from exp1600_uncheatable_evals
 from experiments.evals.exp1600_uncheatable_evals import (
     models,
     get_directory_friendly_name,
+    truncate_model_name,
     uncheatable_eval_tokenized,
 )
 
@@ -64,17 +68,19 @@ def build_steps():
         uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=llama3_tokenizer)
         eval_data = mixture_for_evaluation(paloma_tokenized_dict | uncheatable_eval_tokenized_dict)
         budget, hidden_size, num_layers, batch_size, train_steps = isoflop_metadata
-        wandb_tags = (
+        wandb_tags = [
             f"FLOPs={budget:.1e}",
             f"d={hidden_size}",
             f"L={num_layers}",
             f"B={batch_size}",
             f"steps={train_steps}",
-        )
+        ]
+        model_config = isoflop_step.config.train_config.model
+        checkpoint_path = output_path_of(isoflop_step)
         steps.append(
             default_lm_log_probs(
-                checkpoint=isoflop_step,
-                model=isoflop_metadata,
+                checkpoint=checkpoint_path,
+                model=model_config,
                 data=eval_data,
                 resource_config=SINGLE_TPU_V5p_8_FULL,
                 checkpoint_is_hf=False,
@@ -86,7 +92,7 @@ def build_steps():
         steps.append(
             evaluate_levanter_lm_evaluation_harness(
                 model_name=experiment_name,
-                model_path=isoflop_step,
+                model_path=checkpoint_path,
                 evals=EVAL_TASKS,
                 resource_config=SINGLE_TPU_V5p_8_FULL,
                 # wandb_tags=wandb_tags,
@@ -94,28 +100,39 @@ def build_steps():
         )
 
     for model_config in models:
-        paloma_tokenized_dict = paloma_tokenized(tokenizer=model_config.tokenizer)
-        uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=model_config.tokenizer)
+        tokenizer = model_config.tokenizer if model_config.tokenizer is not None else model_config.model_name
+        paloma_tokenized_dict = paloma_tokenized(tokenizer=tokenizer)
+        uncheatable_eval_tokenized_dict = uncheatable_eval_tokenized(tokenizer=tokenizer)
         eval_data = mixture_for_evaluation(paloma_tokenized_dict | uncheatable_eval_tokenized_dict)
 
+        model_identifier = f"{model_config.model_name}@{model_config.revision}"
+        model_instance = download_model_step(
+            HFModelConfig(hf_repo_id=model_config.model_name, hf_revision=model_config.revision)
+        )
+        hf_model_config = HFCheckpointConverter.from_hf(model_identifier).config_from_hf_checkpoint(model_identifier)
+
         directory_friendly_name = get_directory_friendly_name(model_config.model_name)
+        wandb_tags = [
+            f"M={truncate_model_name(model_config.model_name)}",
+            "eval=paloma-uncheatable-eval-bpb",
+        ]
         steps.append(
             default_lm_log_probs(
-                checkpoint=model_config.model_name,
-                model=model_config.model_config,
+                checkpoint=output_path_of(model_instance),
+                model=hf_model_config,
                 data=eval_data,
                 resource_config=SINGLE_TPU_V5p_8_FULL,
                 checkpoint_is_hf=True,
                 per_device_batch_size=4,
                 name=f"{directory_friendly_name}-paloma-uncheatable-eval-logprobs-v2",
-                wandb_tags=[f"M={model_config.model_name}", "eval=paloma-uncheatable-eval-bpb"],
+                wandb_tags=wandb_tags,
             )
         )
 
         steps.append(
             evaluate_levanter_lm_evaluation_harness(
                 model_name=f"{directory_friendly_name}-mmlu-5shot-sl",
-                model_path=model_config.model_path,
+                model_path=output_path_of(model_instance),
                 evals=EVAL_TASKS,
                 resource_config=SINGLE_TPU_V5p_8_FULL,
                 # wandb_tags=[f"M={model_config.model_name}", "eval=mmlu-5shot-sl"],
