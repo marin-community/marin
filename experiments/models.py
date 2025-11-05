@@ -94,6 +94,13 @@ qwen2_5_7b_instruct = download_model_step(
     )
 )
 
+qwen2_5_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-32B",
+        hf_revision="1818d35",
+    )
+)
+
 qwen2_5_72b_instruct = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen2.5-72B-Instruct",
@@ -147,6 +154,13 @@ olmo_2_base_8b = download_model_step(
     ModelConfig(
         hf_repo_id="allenai/OLMo-2-1124-7B",
         hf_revision="7df9a82",
+    )
+)
+
+olmo_2_base_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/OLMo-2-0325-32B",
+        hf_revision="stage2-ingredient2-step9000-tokens76B",
     )
 )
 
@@ -207,6 +221,13 @@ qwen3_8b = download_model_step(
     )
 )
 
+qwen3_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-32B",
+        hf_revision="9216db5",
+    )
+)
+
 qwen3_0_6b_base = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-0.6B-Base",
@@ -232,5 +253,12 @@ qwen3_8b_base = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-8B-Base",
         hf_revision="49e3418",
+    )
+)
+
+qwen3_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-32B",
+        hf_revision="9216db5781bf21249d130ec9da846c4624c16137",
     )
 )

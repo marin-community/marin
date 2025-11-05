@@ -67,7 +67,7 @@ def test_train_worker(ray_tpu_cluster, tmp_path):
             queue_writer=queue_writer,
             tokenizer=tokenizer,
         ):
-            runner.done.wait()
+            runner.wait_for_result()
 
     # Verify results
     assert runner.steps_completed >= 1, f"Expected at least 1 training step, got {runner.steps_completed}"

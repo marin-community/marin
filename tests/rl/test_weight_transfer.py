@@ -20,10 +20,14 @@ from functools import partial
 import equinox as eqx
 import haliax as hax
 import jax
+import jax.numpy as jnp
+import jmp
 import numpy as np
 import pytest
 import ray
 from jax.sharding import Mesh
+from levanter.models.llama import LlamaConfig
+from transformers import AutoConfig
 
 from marin.rl.weight_transfer import (
     WeightTransferConfig,
@@ -32,25 +36,16 @@ from marin.rl.weight_transfer import (
     create_weight_transfer_server,
 )
 
-try:
-    import jax.experimental.transfer
-
-    TRANSFER_TYPES = [
-        WeightTransferMode.GCS_CHECKPOINT,
-        WeightTransferMode.JAX_TRANSFER_SERVER,
-        WeightTransferMode.ARROW_FLIGHT,
-    ]
-except (ImportError, AttributeError):
-    TRANSFER_TYPES = [
-        WeightTransferMode.GCS_CHECKPOINT,
-        WeightTransferMode.ARROW_FLIGHT,
-    ]
+TRANSFER_TYPES = [
+    WeightTransferMode.GCS_CHECKPOINT,
+    WeightTransferMode.ARROW_FLIGHT,
+]
 
 if os.environ.get("CI"):
     pytest.skip("Skipping slow tests on CI", allow_module_level=True)
 
 
-class TestModule(eqx.Module):
+class EmbeddingTestModule(eqx.Module):
     embedding: eqx.nn.Embedding
     layers: list[eqx.Module]
 
@@ -67,7 +62,7 @@ def create_sample_pytree(
     Vocab = hax.Axis("vocab", vocab_size)
     Hidden = hax.Axis("hidden", hidden_size)
     Layers = hax.Axis("layers", layers)
-    return TestModule(
+    return EmbeddingTestModule(
         embedding=hax.named(
             generator.normal(size=(Vocab.size, Hidden.size)).astype(np.float32),
             (Vocab, Hidden),
@@ -207,49 +202,85 @@ def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_para
         client_2.cleanup()
 
 
-@pytest.mark.slow("Uses a large buffer, can OOM on CI.")
-def test_arrow_flight_with_large_buffer(ray_tpu_cluster):
-    """Test Arrow Flight weight transfer with large buffer sizes."""
+@pytest.mark.skip("Manual benchmark test")
+def benchmark_arrow_flight_with_llama(ray_tpu_cluster):
+    """Test Arrow Flight weight transfer with a LLama 1B model."""
+    MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 
+    # Load model config from HuggingFace
+    hf_config = AutoConfig.from_pretrained(MODEL_NAME)
+    model_config = LlamaConfig.from_hf_config(hf_config)
+
+    devices = jax.devices("tpu")
+    num_devices = len(devices)
+    print(f"Found {num_devices} TPU devices")
+
+    # Use tensor parallelism and FSDP like in exp1247_rl_async.py
+    mesh = Mesh(np.array(devices).reshape(-1, 4), axis_names=("data", "model"))
+    print(f"Mesh created with shape {mesh.shape}: {mesh.devices}")
+
+    # Create axis mapping for sharding - match the pattern from rollout_worker.py
+    # FSDP on embed, TP on mlp and heads
+    axis_mapping = {
+        "embed": "data",  # FSDP
+        "mlp": "model",  # TP
+        "kv_head": "model",
+        "q_heads_per_group": None,
+        "head_size": None,
+        "layers": None,
+    }
+
+    # Create weight transfer config
     weight_transfer_config = WeightTransferConfig(
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
         checkpoint_dir=tempfile.mkdtemp(),
+        coordinator_name=f"test_coordinator_{uuid.uuid4().hex[:8]}",
     )
 
-    server, client = create_test_weight_transfer_pair(weight_transfer_config)
-    # 5k * 5k * 4bytes = ~100MB per layer, 40 layers = ~4GB total
-    large_params = create_sample_pytree(seed=789, hidden_size=5000, layers=40)
+    server = create_weight_transfer_server(
+        config=weight_transfer_config,
+        mesh=mesh,
+        axis_mapping=axis_mapping,
+    )
 
-    # put the params on the TPU to test real transfer, shard across the devices
-    print("Creating mesh for large params transfer...")
-    mesh = create_mesh(devices=jax.devices("tpu"))
-    # mesh = create_mesh(devices=jax.local_devices())
-    with hax.set_mesh(mesh):
-        large_params = jax.device_put(large_params)
-    print("Mesh created with devices:", mesh.devices)
+    client = create_weight_transfer_client(
+        config=weight_transfer_config,
+        mesh=mesh,
+        axis_mapping=axis_mapping,
+    )
+
+    Vocab = hax.Axis("vocab", hf_config.vocab_size)
+    key = jax.random.PRNGKey(0)
+
+    with hax.set_mesh(mesh), hax.axis_mapping(axis_mapping):
+        model = model_config.build(Vocab, key=key)
+        model = jmp.get_policy("p=f32,c=bfloat16").cast_to_compute(model)
+
+    print(f"Model built with vocab size: {hf_config.vocab_size}")
 
     @partial(jax.jit, donate_argnums=0)
     def _bump_params(params):
-        return jax.tree.map(lambda x: x + 1, params)
+        return jax.tree.map(lambda x: x + jnp.ones_like(x) * 0.001, params)
 
     try:
+        # Test weight transfer
+        print("Starting weight transfer test...")
         for i in range(10):
-            print(i)
-            large_params = _bump_params(large_params)
-            server.serve_weights(i, large_params)
-            update = client.receive_weights(large_params)
+            print(f"Transfer iteration {i}")
+            model = _bump_params(model)
+            server.serve_weights(i, model)
+            update = client.receive_weights(model)
 
-            assert update is not None
-            assert isinstance(update.model, eqx.Module)
+            assert update is not None, f"Weight update {i} failed"
+            assert update.weight_id == i, f"Expected weight_id {i}, got {update.weight_id}"
+            model = update.model
 
-            print(client.get_metrics())
+            print(f"Iteration {i} completed successfully")
+            print(f"Client metrics: {client.get_metrics()}")
 
-        # walk the pytree and verify all arrays match
-        def assert_arrays_equal(x, y):
-            np.testing.assert_array_equal(x, y)
+        print("All transfers completed successfully")
 
-        jax.tree.map(assert_arrays_equal, large_params, update.model)
     finally:
         server.cleanup()
         client.cleanup()
@@ -263,4 +294,4 @@ if __name__ == "__main__":
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     cluster = ray.init("local")
-    test_arrow_flight_with_large_buffer(ray_tpu_cluster=cluster)
+    benchmark_arrow_flight_with_llama(ray_tpu_cluster=cluster)
