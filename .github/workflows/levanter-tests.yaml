@@ -149,8 +149,8 @@ jobs:
           lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
           
           # restart harder
-          sudo service tpu stop
-          sudo service tpu start
+          service tpu stop
+          service tpu start
 
           # Wait for /dev/vfio/0 to be actually available (not just process-free)
           for i in {1..30}; do
