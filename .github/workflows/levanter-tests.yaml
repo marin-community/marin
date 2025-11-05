@@ -129,14 +129,13 @@ jobs:
             echo "Unable to determine torch version from uv.lock" >&2
             exit 1
           fi
-          if [[ "$TORCH_VERSION" != *+* ]]; then
-            TORCH_VERSION="${TORCH_VERSION}+cpu"
-          fi
-          CUDA_VISIBLE_DEVICES="" uv run --package levanter --frozen python -m pip install --force-reinstall "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+          uv pip install 'torch==$TORCH_VERSION' -f https://download.pytorch.org/whl/cpu/torch_stable.html
 
       - name: Test torch-marked suite
         run: |
-          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test_cpu pytest tests -m "torch" --durations=20
+          # run directly on CPU to avoid GPU dependency issues
+          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. .venv/bin/python -m ../../pytest tests -m "torch" --durations=20
+#          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
 
   tpu-tests:
     runs-on: [tpu-ci]
