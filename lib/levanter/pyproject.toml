@@ -69,20 +69,12 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 "Bug Tracker" = "https://github.com/stanford-crfm/levanter/issues"
 
 [project.optional-dependencies]
-cpu = ["jax>=0.6.2"]
 gpu = ["jax[cuda12]>=0.6.2"]
 tpu = ["jax[tpu]>=0.6.2"]
-
 torch_test = [
   "torch>=2.7.0",
   "peft>=0.12.0",
 ]
-
-torch_test_cpu = [
-  "torch>=2.7.0",
-  "peft>=0.12.0",
-]
-
 profiling = [
     "xprof",
   # TensorBoard UI for viewing traces and profiles
@@ -143,38 +135,11 @@ dev = [
 [tool.uv]
 default-groups = ["test", "docs", "dev"]
 conflicts = [
-    [
-        { extra = "tpu" },
-        { extra = "gpu" },
-    ],
-    [
-        { extra = "gpu" },
-        { extra = "cpu" },
-    ],
-    [
-        { extra = "torch_test" },
-        { extra = "torch_test_cpu" },
-    ]
-]
-
-[tool.uv.sources]
-torch = [
-    # Default to the CPU index for TPU/CPU builds
-    { index = "pytorch-cpu", extra="torch_test_cpu" },
-    { index = "pytorch-cu128", extra = "torch_test" },
-]
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true
-
-
+  [
+    { extra = "gpu" },
+    { extra = "tpu" },
+  ],
+]  # Never solve for both GPU and TPU at once
 
 [tool.ruff]
 line-length = 119
@@ -203,6 +168,5 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "entry: marks tests as entry point tests (deselect with '-m \"not entry\"')",
     "ray: marks tests that require Ray (deselect with '-m \"not ray\"')",
-    "torch: marks tests that require PyTorch (run with '-m torch')",
 ]
 asyncio_default_fixture_loop_scope = "function"
