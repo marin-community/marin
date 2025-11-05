@@ -151,6 +151,10 @@ conflicts = [
         { extra = "gpu" },
         { extra = "cpu" },
     ],
+    [
+        { extra = "torch_test" },
+        { extra = "torch_test_cpu" },
+    ]
 ]
 
 [tool.uv.sources]
