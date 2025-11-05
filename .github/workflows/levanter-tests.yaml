@@ -120,15 +120,29 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --frozen --extra torch_test --default-index https://download.pytorch.org/whl/cpu --index https://pypi.org/simple --index-strategy unsafe-first-match
+        run: uv sync --package levanter --dev --frozen --extra torch_test
+
+      - name: Force CPU torch wheel
+        run: |
+          TORCH_VERSION=$(sed -n '/^name = "torch"$/ {n; s/version = "\([^"]*\)"/\1/p; q}' uv.lock)
+          if [[ "$TORCH_VERSION" == *+* ]]; then
+            TARGET_VERSION="$TORCH_VERSION"
+          else
+            TARGET_VERSION="${TORCH_VERSION}+cpu"
+          fi
+          uv run --package levanter --frozen python -m pip install --force-reinstall "torch==${TARGET_VERSION}" --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+
       - name: Test torch-marked suite
         run: |
-          # for some stupid reason torch insists on using the GPU if available even if we install the CPU-only version
-          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test --default-index https://download.pytorch.org/whl/cpu --index https://pypi.org/simple --index-strategy unsafe-first-match pytest tests -m "torch" --durations=20
+          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
 
   tpu-tests:
     runs-on: [tpu-ci]
     timeout-minutes: 30
+    # prevent multiple TPU jobs from contending for /dev/vfio/0
+    concurrency:
+      group: tpu-ci
+      cancel-in-progress: false
     if: github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
@@ -140,29 +154,37 @@ jobs:
         with:
           ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
 
+      - name: Prepare TPU device
+        run: |
+          echo "Cleaning up TPU state before run..."
+
+          # Kill any lingering user-space TPU clients
+          pkill -9 -f libtpu || true
+          pkill -9 -f python3 || true
+          rm -f /tmp/libtpu_lockfile || true
+          lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
+          
+          echo "Waiting for /dev/vfio/0 to be released..."
+          for i in {1..60}; do
+            if python3 -c "open('/dev/vfio/0','r+b')" 2>/dev/null; then
+              echo "TPU device /dev/vfio/0 is ready"
+              break
+            fi
+            echo "Still busy ($i/60)"
+            sleep 1
+          done
+
+          if ! python3 -c "open('/dev/vfio/0','r+b')" 2>/dev/null; then
+            echo "TPU device still busy after 60s; skipping TPU tests."
+            exit 0
+          fi
+
       - name: Run Levanter TPU tests in Docker
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           JAX_VERSION: ${{ matrix.jax_version }}
         run: |
-          rm -f /tmp/libtpu_lockfile || true
-          lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
-          
-          # restart harder
-          service tpu stop
-          service tpu start
-
-          # Wait for /dev/vfio/0 to be actually available (not just process-free)
-          for i in {1..30}; do
-            if timeout 1 python3 -c "open('/dev/vfio/0', 'r+b')" 2>/dev/null; then
-              echo "TPU device /dev/vfio/0 is ready"
-              break
-            fi
-            echo "Waiting for TPU device to be released... ($i/30)"
-            sleep 0.5
-          done
-
           DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
           echo "Using Docker image: $DOCKER_IMAGE"
 
@@ -194,3 +216,11 @@ jobs:
             -w /workspace \
             $DOCKER_IMAGE \
             bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 1800 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=WARNING --durations=20"
+
+      - name: Post-run cleanup
+        if: always()
+        run: |
+          echo "Cleaning up TPU after run..."
+          pkill -9 -f libtpu || true
+          pkill -9 -f python3 || true
+          rm -f /tmp/libtpu_lockfile || true
