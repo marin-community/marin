@@ -160,6 +160,18 @@ torch = [
     { index = "pytorch-cu128", extra = "torch_test" },
 ]
 
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+
+
 [tool.ruff]
 line-length = 119
 target-version = "py311"
