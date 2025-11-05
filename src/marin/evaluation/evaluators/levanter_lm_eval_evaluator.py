@@ -155,7 +155,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             harness_config_kwargs = {
                 "task_spec": tasks,
                 "max_examples": max_eval_instances,
-                "log_samples": True,
+                "log_samples": False,  # Use Levanter's sample_logging instead to avoid default limits
                 "max_length": max_length if max_length is not None else 4096,
                 "apply_chat_template": model.apply_chat_template,
                 "sample_logging": eval_harness.SampleLoggingConfig(log_all=True),  # Enable sample collection
