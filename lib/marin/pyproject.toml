@@ -28,7 +28,7 @@ dependencies = [
     "numpy",
     "openai",
     "pandas", # Only needed by Fileprovider in inference.py
-    "pyarrow", # # Only needed by Fileprovider in inference.py
+    "pyarrow>=22",
     "ray==2.45",
     "regex",
     "requests",
@@ -43,8 +43,8 @@ dependencies = [
 
 [project.license]
 file = "../../LICENSE"
-[dependency-groups]
 
+[dependency-groups]
 test = [
     "pytest>=8.3.2",
     "pytest-asyncio",
@@ -79,7 +79,6 @@ docs = [
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
-
 math = ["pylatexenc", "sympy"]
 
 metrics = ["google-cloud-logging"]
@@ -98,13 +97,15 @@ dev = [
     { include-group = "test" },
     { include-group = "lint" },
     { include-group = "docs" },
-    #    {include-group="gcp"},
     { include-group = "math" },
     { include-group = "transform_test_deps" },
 ]
 
 [tool.uv]
-override-dependencies = ["omegaconf>=2.4.0.dev4"]
+override-dependencies = [
+    "omegaconf>=2.4.0.dev4",
+    "antlr4-python3-runtime==4.11",
+]
 
 conflicts = [
     [

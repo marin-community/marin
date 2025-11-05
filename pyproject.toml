@@ -10,6 +10,12 @@ license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = ["marin", "levanter"]
 
+[tool.uv]
+fork-strategy = "fewest"
+override-dependencies = [
+    "antlr4-python3-runtime==4.11",
+]
+
 [tool.uv.workspace]
 members = ["lib/marin", "lib/levanter"]
 
@@ -143,6 +149,7 @@ markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "tpu_ci: mark tests that require a TPU",
 ]
+testpaths = ["tests", "experiments"]
 
 # Make sure we timeout before CI kills us, and don't run TPU tests by default
 addopts = "--session-timeout=500 --dist=worksteal -m 'not tpu_ci'"
