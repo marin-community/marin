@@ -50,7 +50,7 @@ jobs:
           remove-stale-when-updated: true
 
           # Increase operations limit for larger repos
-          operations-per-run: 100
+          operations-per-run: 300
 
           # Exempt issues/PRs with these labels from being marked stale
           exempt-issue-labels: 'pinned,security,bug,enhancement'
