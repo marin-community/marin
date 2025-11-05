@@ -62,13 +62,14 @@ def run_cmd(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
 
 
 def get_all_files(all_files: bool, file_args: list[str]) -> list[pathlib.Path]:
+    """Get list of files to check, excluding deleted files."""
     if file_args:
         files = []
         for f in file_args:
             path = ROOT_DIR / f
             if not path.exists():
-                click.echo(f"Error: File does not exist: {f}")
-                sys.exit(1)
+                click.echo(f"Warning: Skipping non-existent file: {f}")
+                continue
             files.append(path)
         return files
     if all_files:
@@ -80,6 +81,7 @@ def get_all_files(all_files: bool, file_args: list[str]) -> list[pathlib.Path]:
             check=True,
         )
     else:
+        # Use ACM filter to only get Added, Copied, Modified files (not Deleted)
         result = subprocess.run(
             ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
             cwd=ROOT_DIR,
@@ -89,6 +91,7 @@ def get_all_files(all_files: bool, file_args: list[str]) -> list[pathlib.Path]:
         )
 
     files = [ROOT_DIR / f for f in result.stdout.strip().split("\n") if f]
+    # Filter to only include files that exist on disk
     return [f for f in files if f.exists()]
 
 
@@ -246,7 +249,7 @@ def check_large_files(files: list[pathlib.Path], fix: bool) -> int:
 
     large_files = []
     for file_path in files:
-        if file_path.exists() and file_path.stat().st_size > max_size:
+        if file_path.stat().st_size > max_size:
             large_files.append((file_path, file_path.stat().st_size))
 
     if large_files:
@@ -445,10 +448,12 @@ def check_pyrefly(files: list[pathlib.Path], fix: bool) -> int:
         return 0
 
     click.echo("\nPyrefly type checker:")
-    args = ["uv", "tool", "run", "pyrefly", "check", "--baseline", ".pyrefly-baseline.json"]
-
-    file_args = [str(f.relative_to(ROOT_DIR)) for f in files]
-    args.extend(file_args)
+    # Run pyrefly in project-checking mode without passing specific files.
+    # This allows it to respect the project-excludes configuration in pyproject.toml.
+    # When files are passed to pyrefly, it ignores project-excludes.
+    # Use "uv run" instead of "uv tool run" to use the project environment,
+    # otherwise pyrefly treats lib/marin/src as site-packages and excludes it.
+    args = ["uv", "run", "--all-packages", "pyrefly", "check", "--baseline", ".pyrefly-baseline.json"]
 
     return run_cmd(args).returncode
 
@@ -509,6 +514,8 @@ def main(fix: bool, all_files: bool, files: tuple[str, ...]):
 
     for config in PRECOMMIT_CONFIGS:
         matched_files = get_matching_files(config.patterns, all_files_list, config.exclude_patterns)
+        # Filter out non-existent files before running checks
+        matched_files = [f for f in matched_files if f.exists()]
         if not matched_files:
             continue
 

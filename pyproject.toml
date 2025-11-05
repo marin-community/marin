@@ -57,6 +57,13 @@ exclude = ["marin/", "scripts/"]
 [tool.pyrefly]
 project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"]
 
+# Prevent pyrefly from querying the Python interpreter for site-packages
+# which would auto-detect workspace members as site packages and exclude them
+skip-interpreter-query = true
+
+# Explicitly set site-package-path to only include the actual venv
+site-package-path = [".venv/lib/python3.11/site-packages"]
+
 # Exclude non-production code from type checking
 project-excludes = [
     "experiments/**",
