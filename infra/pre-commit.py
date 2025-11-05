@@ -240,7 +240,7 @@ def check_merge_conflicts(files: list[pathlib.Path], fix: bool) -> int:
         return 0
 
     click.echo("\nMerge conflicts:")
-    conflict_markers = [b"<<<<<<<", b"=======", b">>>>>>>"]
+    conflict_markers = [b"<<<<<<<", b">>>>>>>"]
     files_with_conflicts = []
 
     for file_path in files:
