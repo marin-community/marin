@@ -27,7 +27,7 @@ for pci_dev in /sys/bus/pci/devices/*; do
     driver_path=$(readlink -f "$pci_dev/driver" 2>/dev/null || echo "")
     if [[ "$driver_path" == *"vfio-pci"* ]] && [ -f "$pci_dev/reset" ]; then
       echo "Resetting PCI device $(basename $pci_dev)"
-      echo 1 | sudo tee "$pci_dev/reset" > /dev/null 2>&1 || echo "  Reset failed"
+      echo 1 > "$pci_dev/reset" 2>/dev/null || echo "  Reset failed"
     fi
   fi
 done

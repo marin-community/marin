@@ -222,7 +222,7 @@ cat > /etc/udev/rules.d/99-tpu-reset.rules <<'UDEV_EOF'
 SUBSYSTEM=="pci", DRIVER=="vfio-pci", RUN+="/bin/chmod 0666 /sys%p/reset"
 UDEV_EOF
 
-# Reload udev rules
+# Reload udev rules and apply to existing devices
 udevadm control --reload-rules
 udevadm trigger --subsystem-match=pci
 
@@ -234,15 +234,6 @@ if ! id -u $RUNNER_USER > /dev/null 2>&1; then
     useradd -m -s /bin/bash $RUNNER_USER
 fi
 usermod -aG docker $RUNNER_USER
-
-# Allow github-runner to manage TPU resources without password
-cat > /etc/sudoers.d/tpu-cleanup <<'SUDO_EOF'
-# Allow github-runner to reset TPU devices and clean up resources
-github-runner ALL=(ALL) NOPASSWD: /bin/rm -f /tmp/libtpu_lockfile
-github-runner ALL=(ALL) NOPASSWD: /bin/rm -rf /tmp/tpu_logs
-github-runner ALL=(ALL) NOPASSWD: /usr/bin/tee /sys/bus/pci/devices/*/reset
-SUDO_EOF
-chmod 0440 /etc/sudoers.d/tpu-cleanup
 
 cd /home/$RUNNER_USER
 if [ ! -f config.sh ]; then
