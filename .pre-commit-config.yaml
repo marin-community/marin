@@ -46,11 +46,12 @@ repos:
 
   # Pyrefly type checker with baseline for incremental adoption
   # Only reports NEW type errors, not existing ones in baseline
+  # Requires: uv installed (use astral-sh/setup-uv@v6 in CI)
   - repo: local
     hooks:
       - id: pyrefly
         name: pyrefly type checker
-        entry: bash .pre-commit-pyrefly.sh check --baseline .pyrefly-baseline.json
+        entry: uv tool run pyrefly check --baseline .pyrefly-baseline.json
         language: system
         types: [python]
         pass_filenames: false
