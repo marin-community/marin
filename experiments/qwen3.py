@@ -16,7 +16,7 @@
 Specifies a sequence of Llama 3 models from small to large.
 """
 
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig, DefaultRotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config, QwenConfig
 
 qwen3_0_6b = Qwen3Config(
@@ -71,6 +71,17 @@ qwen3_32b = Qwen3Config(
     num_kv_heads=8,
     num_layers=64,
     rope=Llama3RotaryEmbeddingsConfig(),
+)
+
+# Qwen2.5-7B-Instruct
+qwen2_5_7b_instruct = QwenConfig(
+    seq_len=4096,
+    hidden_dim=3584,
+    intermediate_dim=18944,
+    num_heads=28,
+    num_kv_heads=4,
+    num_layers=28,
+    rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000),
 )
 
 # seems not supported by levanter yet
