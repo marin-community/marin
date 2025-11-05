@@ -279,8 +279,12 @@ class _LmEvalHarnessWorker:
 
     def _send_payload(self, payload):
         assert jax.process_index() == 0
+        sharded_payload = hax.shard(payload, self.axis_resources)
         out = broadcast_shard(
-            payload, hax.partitioning.infer_resource_partitions(payload, preserve_existing_shardings=False)
+            sharded_payload,
+            hax.partitioning.infer_resource_partitions(
+                sharded_payload, preserve_existing_shardings=True
+            ),
         )
         return out
 
@@ -290,8 +294,8 @@ class _LmEvalHarnessWorker:
 
     def dispatch_loglikelihood(self, packed_request):
         self._send_message(_Message.LOGLIKELIHOOD)
-        self._send_payload(packed_request)
-        return self.process_loglikelihood(packed_request)
+        sharded_request = self._send_payload(packed_request)
+        return self.process_loglikelihood(sharded_request)
 
     def stop(self):
         self._send_message(_Message.STOP)
