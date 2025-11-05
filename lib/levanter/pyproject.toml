@@ -157,7 +157,6 @@ conflicts = [
 torch = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra="torch_test_cpu" },
-    { index = "pytorch-cpu", extra="tpu" },
     { index = "pytorch-cu128", extra = "torch_test" },
 ]
 
