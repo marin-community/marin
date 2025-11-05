@@ -15,7 +15,7 @@ import haliax.nn as hnn
 from levanter.layers.attention import AttentionMask
 from levanter.models.olmo import Olmo2Attention, Olmo2Config, Olmo2DecoderLayer, Olmo2LMHeadModel
 from levanter.utils.jax_utils import parameter_count
-from test_utils import skip_if_no_torch
+from test_utils import skip_if_no_torch, use_test_mesh
 
 
 def _get_olmo2_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Olmo2Config:
@@ -300,7 +300,7 @@ def test_olmo2_roundtrip(scan_layers, num_kv_heads):
     torch_out = torch_model(input_torch)
     torch_out = torch_out.logits[0].detach().cpu().numpy()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
         # Save HF model
         model_path = f"{tmpdir}/torch_model"
         torch_model.save_pretrained(model_path)
