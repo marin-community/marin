@@ -140,11 +140,7 @@ jobs:
 
   tpu-tests:
     runs-on: [tpu-ci]
-    timeout-minutes: 30
-    # prevent multiple TPU jobs from contending for /dev/vfio/0
-    concurrency:
-      group: tpu-ci
-      cancel-in-progress: false
+    timeout-minutes: 15
     if: github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
@@ -156,37 +152,14 @@ jobs:
         with:
           ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
 
-      - name: Prepare TPU device
-        run: |
-          echo "Cleaning up TPU state before run..."
-
-          # Kill any lingering user-space TPU clients
-          pkill -9 -f libtpu || true
-          pkill -9 -f python3 || true
-          rm -f /tmp/libtpu_lockfile || true
-          lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
-          
-          echo "Waiting for /dev/vfio/0 to be released..."
-          for i in {1..60}; do
-            if python3 -c "open('/dev/vfio/0','r+b')" 2>/dev/null; then
-              echo "TPU device /dev/vfio/0 is ready"
-              break
-            fi
-            echo "Still busy ($i/60)"
-            sleep 1
-          done
-
-          if ! python3 -c "open('/dev/vfio/0','r+b')" 2>/dev/null; then
-            echo "TPU device still busy after 60s; skipping TPU tests."
-            exit 0
-          fi
-
       - name: Run Levanter TPU tests in Docker
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           JAX_VERSION: ${{ matrix.jax_version }}
         run: |
+          bash infra/tpu-ci/clean-tpu.sh
+
           DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
           echo "Using Docker image: $DOCKER_IMAGE"
 
@@ -198,7 +171,7 @@ jobs:
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
-            --stop-timeout=1 \
+            --stop-timeout=5 \
             --cap-add=SYS_RESOURCE \
             --ulimit memlock=68719476736:68719476736 \
             -e TPU_CI=true \
@@ -217,12 +190,4 @@ jobs:
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 1800 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=WARNING --durations=20"
-
-      - name: Post-run cleanup
-        if: always()
-        run: |
-          echo "Cleaning up TPU after run..."
-          pkill -9 -f libtpu || true
-          pkill -9 -f python3 || true
-          rm -f /tmp/libtpu_lockfile || true
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 890 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=WARNING --durations=20"
