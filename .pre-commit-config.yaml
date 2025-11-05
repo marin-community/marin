@@ -15,6 +15,7 @@ repos:
     hooks:
       - id: insert-license  # Insert a short license disclaimer as a header comment in source files
         files: \.py$
+        exclude: ^lib/levanter/
         args:
           - --license-filepath
           - etc/license_header.txt
@@ -24,6 +25,11 @@ repos:
     rev: 25.1.0
     hooks:
       - id: black
+        exclude: ^lib/levanter/
+      - id: black
+        name: black (levanter)
+        files: ^lib/levanter/
+        args: ["--config", "lib/levanter/pyproject.toml"]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -37,3 +43,16 @@ repos:
         args: [ --unsafe ]
       - id: end-of-file-fixer
       - id: trailing-whitespace
+
+  # Pyrefly type checker with baseline for incremental adoption
+  # Only reports NEW type errors, not existing ones in baseline
+  # Requires: uv installed (use astral-sh/setup-uv@v6 in CI)
+  - repo: local
+    hooks:
+      - id: pyrefly
+        name: pyrefly type checker
+        entry: uv tool run pyrefly check --baseline .pyrefly-baseline.json
+        language: system
+        types: [python]
+        pass_filenames: false
+        files: ^lib/(marin|levanter)/src/

@@ -46,6 +46,7 @@ SEQ_LEN = 4096
 dolma_llama3_tokenized = lm_mixture_data_config(
     components=tokenize_dolma_steps(),
     weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
+    permutation_type="linear",
     include_raw_paths=False,
 )
 

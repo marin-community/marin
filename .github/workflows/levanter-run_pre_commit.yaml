@@ -1,0 +1,42 @@
+name: Levanter - Pre-Commit
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - lib/levanter/**
+      - uv.lock
+      - .github/workflows/levanter-run_pre_commit.yaml
+  pull_request:
+    paths:
+      - lib/levanter/**
+      - uv.lock
+      - .github/workflows/levanter-run_pre_commit.yaml
+
+jobs:
+  pre_commit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+        jax-version: ["0.5.2"]
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          working-directory: lib/levanter
+      - name: Set up Python
+        run: uv python install
+      - name: "Run Pre-commit"
+        run: uv run --package levanter --frozen pre-commit run --all-files --show-diff-on-failure
+
+
