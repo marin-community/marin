@@ -53,6 +53,63 @@ python_version = "3.10"
 ignore_missing_imports = true
 exclude = ["marin/", "scripts/"]
 
+# Pyrefly type checker configuration
+# Note: Grow more strict over time by enabling error codes!
+[tool.pyrefly]
+# Include main source directories for type checking
+project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"]
+
+# Exclude non-production code from type checking
+project-excludes = [
+    "experiments/**",
+    "scripts/**",
+    "tests/**",
+    "**/snapshots/**",
+    "**/__pycache__/**",
+    "**/.pytest_cache/**",
+    "**/build/**",
+    "**/dist/**",
+]
+
+# Disable specific error codes that are primarily noise from missing type stubs
+# These can be gradually enabled as the codebase improves
+[tool.pyrefly.errors]
+# Missing imports (824 occurrences) - third-party libs without stubs
+missing-import = false
+
+# Unexpected keyword arguments (47 occurrences) - dynamic configs from transformers, dataclasses
+unexpected-keyword = false
+
+# Missing attributes (315 occurrences) - often from untyped libraries like ray, jax, etc.
+# These are mostly false positives from libraries without complete type stubs
+missing-attribute = false
+
+# Additional error types with >10 occurrences that are hard to fix systematically:
+
+# Deprecated APIs (19 occurrences) - would require code changes across multiple files
+deprecated = false
+
+# Unknown name errors (17 occurrences) - often from dynamic code or missing stubs
+unknown-name = false
+
+# Not iterable errors (17 occurrences) - complex type inference issues with JAX/numpy
+not-iterable = false
+
+# No matching overload (16 occurrences) - complex overload resolution issues
+no-matching-overload = false
+
+# Bad index (12 occurrences) - complex dict/list type inference
+bad-index = false
+
+# Keep these enabled to catch real type errors that should be fixed over time:
+# bad-argument-type = true (64 occurrences)
+# bad-return = true (45 occurrences)
+# unbound-name = true (63 occurrences)
+# bad-assignment = true (31 occurrences)
+# bad-override = true (37 occurrences)
+# unsupported-operation = true (40 occurrences)
+# not-callable = true (25 occurrences)
+
 [tool.hatch.metadata]
 allow-direct-references = true
 
