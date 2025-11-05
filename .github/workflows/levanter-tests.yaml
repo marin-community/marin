@@ -120,17 +120,7 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --package levanter --dev --frozen --extra torch_test
-
-      - name: Force CPU torch wheel
-        run: |
-          TORCH_VERSION=$(sed -n '/^name = "torch"$/ {n; s/version = "\([^"]*\)"/\1/p; q}' uv.lock)
-          if [[ "$TORCH_VERSION" == *+* ]]; then
-            TARGET_VERSION="$TORCH_VERSION"
-          else
-            TARGET_VERSION="${TORCH_VERSION}+cpu"
-          fi
-          uv run --package levanter --frozen python -m pip install --force-reinstall "torch==${TARGET_VERSION}" --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+        run: uv sync --package levanter --dev --frozen --extra torch_test --extra cpu
 
       - name: Test torch-marked suite
         run: |
