@@ -380,9 +380,20 @@ def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
             files_with_whitespace.append(file_path)
 
             if fix:
+                # Check if original file ended with newline
+                file_ended_with_newline = lines[-1].endswith("\n") if lines else True
+
                 with open(file_path, "w") as f:
-                    for line in lines:
-                        f.write(line.rstrip() + "\n")
+                    for i, line in enumerate(lines):
+                        is_last_line = i == len(lines) - 1
+                        cleaned = line.rstrip()
+
+                        if is_last_line and not file_ended_with_newline:
+                            # Last line didn't have newline, don't add one
+                            f.write(cleaned)
+                        else:
+                            # Normal case: preserve the newline
+                            f.write(cleaned + "\n")
 
     if files_with_whitespace:
         if not fix:
@@ -416,7 +427,7 @@ def check_eof_newline(files: list[pathlib.Path], fix: bool) -> int:
                         with open(file_path, "ab") as f:
                             f.write(b"\n")
         except Exception:
-            continue
+            click.echo(f"  Warning: Could not read file: {file_path}")
 
     if files_missing_newline:
         if not fix:
@@ -440,18 +451,18 @@ PRECOMMIT_CONFIGS = [
     PrecommitConfig(
         patterns=["lib/levanter/**/*.py"],
         checks=[
-            lambda files, fix: check_ruff(files, fix),
+            check_ruff,
             lambda files, fix: check_black(files, fix, config=LEVANTER_BLACK_CONFIG),
             lambda files, fix: check_license_headers(files, fix, LEVANTER_LICENSE),
-            lambda files, fix: check_mypy(files, fix),
+            check_mypy,
         ],
     ),
     PrecommitConfig(
         patterns=["**/*.py"],
         exclude_patterns=["lib/levanter/**"],
         checks=[
-            lambda files, fix: check_ruff(files, fix),
-            lambda files, fix: check_black(files, fix),
+            check_ruff,
+            check_black,
             lambda files, fix: check_license_headers(files, fix, MARIN_LICENSE),
         ],
     ),
