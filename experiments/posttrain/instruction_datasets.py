@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Instruction datasets are downloaded from Hugging Face and transformed into OpenAI messages
+Instruction datasets are streamed from Hugging Face and transformed into OpenAI messages
 format which can be used for SFT.
 
 How to add a new instruction dataset:
@@ -49,8 +49,6 @@ from dataclasses import dataclass, field
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -141,7 +139,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     ),
     "TIGER-Lab/AceCode-89K": InstructionDatasetConfig(
         hf_dataset_id="TIGER-Lab/AceCode-89K",
-        revision="0361e95",
+        revision="13216309a9f6cb40b60cb1a9750071efeac414ad",
         wait_for_completion=True,
         metadata_columns=["id", "source"],
         filetype="parquet",
@@ -238,25 +236,7 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     return dataset_name
 
 
-def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
-    """ExecutorStep for downloading of data from external source to GCP"""
-    dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
-    download_step = ExecutorStep(
-        name=f"raw/{dataset_name}",
-        fn=download_hf,
-        config=DownloadConfig(
-            hf_dataset_id=dataset.hf_dataset_id,
-            revision=versioned(dataset.revision),
-            gcs_output_path=this_output_path(),
-            wait_for_completion=True,
-        ),
-        override_output_path=f"raw/{dataset_name}-{dataset.revision}",
-    )
-
-    return download_step
-
-
-def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
+def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorStep:
     """ExecutorStep that preprocesses and shards the input dataset.
 
     ===========================================================================
@@ -281,7 +261,6 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
     """
     adapter_name = dataset_cfg.adapter_name if dataset_cfg.adapter_name is not None else dataset_cfg.hf_dataset_id
     dataset_name = get_directory_friendly_dataset_name(adapter_name)
-    download_data_path = output_path_of(download_step)
 
     config_str = f"{dataset_name}-\
         {dataset_cfg.revision}\
@@ -293,12 +272,11 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step:
         name=f"documents/{dataset_name}",
         fn=transform_hf_dataset,
         config=TransformSFTDatasetConfig(
-            input_path=download_data_path,
+            source=versioned(dataset_cfg.hf_dataset_id),
+            revision=versioned(dataset_cfg.revision),
             output_path=this_output_path(),
-            shard_size=versioned(5000),
             metadata_columns=versioned(dataset_cfg.metadata_columns),
             filetype=dataset_cfg.filetype,
-            source=dataset_cfg.hf_dataset_id,
             subsets=dataset_cfg.subsets,
             splits=dataset_cfg.splits,
             adapter_name=adapter_name,
@@ -319,9 +297,7 @@ def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train"
         **{k: v for k, v in original_config.__dict__.items() if k != "splits"}, splits=splits
     )
 
-    download_step = download_dataset_step(config)
-    transform_step = transform_dataset_step(config, download_step)
-    return transform_step
+    return transform_dataset_step(config)
 
 
 tulu_3_in_dolma = ExecutorStep(
@@ -347,9 +323,7 @@ tulu3_flat_llama_tokenized_as_train = default_tokenize(
 if __name__ == "__main__":
     all_steps = []
     for config in INSTRUCTION_DATASET_NAME_TO_CONFIG.values():
-        downloaded_dataset = download_dataset_step(config)
-        all_steps.append(downloaded_dataset)
-        transformed_dataset = transform_dataset_step(config, downloaded_dataset)
+        transformed_dataset = transform_dataset_step(config)
         all_steps.append(transformed_dataset)
 
     executor_main(steps=all_steps)
