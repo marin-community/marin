@@ -142,7 +142,7 @@ def has_soundlibs():
 
 
 def skip_if_no_torch(f):
-    return pytest.mark.skipif(not has_torch(), reason="torch not installed")(f)
+    return pytest.mark.torch(pytest.mark.skipif(not has_torch(), reason="torch not installed")(f))
 
 
 def skip_if_no_soundlibs(f):
