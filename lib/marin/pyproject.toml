@@ -59,12 +59,13 @@ test = [
 lint = [
     "ruff>=0.5.7",
     "black>=24.8.0",
-    "pre-commit==4.2",
     "mypy>=1.4.1",
     "pyrefly>=0.40.0",
     "types-PyYAML",
     "types-requests",
     "types-six",
+    "click>=8.0",
+    "pyyaml>=6.0",
 ]
 docs = [
     "mkdocs>=1.5.0",
