@@ -99,9 +99,48 @@ jobs:
         run: |
           PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "entry" --durations=20
 
+  cpu-torch-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          working-directory: lib/levanter
+      - name: Set up Python
+        run: uv python install
+      - name: Install dependencies
+        run: uv sync --package levanter --dev --frozen --extra torch_test
+
+      - name: Force CPU torch wheel
+        run: |
+          TORCH_VERSION=$(sed -n '/^name = "torch"$/ {n; s/version = "\([^"]*\)"/\1/p; q}' uv.lock)
+          echo $TORCH_VERSION
+          if [[ -z "$TORCH_VERSION" ]]; then
+            echo "Unable to determine torch version from uv.lock" >&2
+            exit 1
+          fi
+          uv pip install "torch==$TORCH_VERSION" -f https://download.pytorch.org/whl/cpu/torch_stable.html  --torch-backend=cpu
+
+      - name: Test torch-marked suite
+        run: |
+          # run directly on CPU to avoid GPU dependency issues
+          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. ../../.venv/bin/python -m pytest tests -m "torch" --durations=20
+#          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
+
   tpu-tests:
     runs-on: [tpu-ci]
-    timeout-minutes: 30
+    timeout-minutes: 15
     if: github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
@@ -119,18 +158,7 @@ jobs:
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           JAX_VERSION: ${{ matrix.jax_version }}
         run: |
-          rm -f /tmp/libtpu_lockfile || true
-          lsof -t /dev/vfio/* 2>/dev/null | xargs -r kill -9 || true
-
-          # Wait for /dev/vfio/0 to be actually available (not just process-free)
-          for i in {1..30}; do
-            if timeout 1 python3 -c "open('/dev/vfio/0', 'r')" 2>/dev/null; then
-              echo "TPU device /dev/vfio/0 is ready"
-              break
-            fi
-            echo "Waiting for TPU device to be released... ($i/30)"
-            sleep 0.5
-          done
+          bash infra/tpu-ci/clean-tpu.sh
 
           DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
           echo "Using Docker image: $DOCKER_IMAGE"
@@ -143,7 +171,7 @@ jobs:
           docker run --rm \
             --device /dev/vfio:/dev/vfio \
             --shm-size=100g \
-            --stop-timeout=1 \
+            --stop-timeout=5 \
             --cap-add=SYS_RESOURCE \
             --ulimit memlock=68719476736:68719476736 \
             -e TPU_CI=true \
@@ -162,4 +190,4 @@ jobs:
             -v /tmp/uv-cache:/tmp/uv-cache:rw \
             -w /workspace \
             $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 1800 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=WARNING --durations=20"
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 890 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short -s --log-cli-level=WARNING --durations=20"
