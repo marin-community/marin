@@ -160,6 +160,7 @@ jobs:
       - name: Build and push TPU CI image
         run: |
           docker buildx build --file docker/marin/Dockerfile.tpu-ci \
+            --provenance=false \
             --tag ghcr.io/marin-community/marin/tpu-ci:latest \
             --tag ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.DATE_TAG }} \
             --tag ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.HASH_TAG }} \
