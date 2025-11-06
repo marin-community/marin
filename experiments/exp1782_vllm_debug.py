@@ -110,8 +110,8 @@ class ExperimentConfig:
 MODEL = llama1b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
 # MAX_TOKENS = 1024
-MAX_MODEL_LEN = 1024
-MAX_OUTPUT_TOKENS = 256
+MAX_MODEL_LEN = 2048
+MAX_OUTPUT_TOKENS = 2048
 RUN_ID = f"test-{MODEL.name.split('/')[-1]}-curriculum"
 
 
@@ -129,7 +129,7 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
 
     default_sampling = SamplingParams(
         temperature=1.0,
-        n_prompts=32,
+        n_prompts=8,
         n_generations_per_prompt=8,
         max_tokens=MAX_OUTPUT_TOKENS,
         stop_tokens=stop_tokens(experiment_config.model_config.tokenizer),
@@ -216,7 +216,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         # Set the train batch size to num_rollout_workers * n_generations * n_prompts
         # to ensure we accept an entire training batch from the rollout workers.
-        train_batch_size=256,
+        train_batch_size=64,
         # microbatch to avoid OOM
         per_device_parallelism=16,
         num_train_steps=500,
@@ -302,7 +302,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         description=f"Async RL training: {name}",
         fn=RLJob.make_step_fn(),
         config=config,
-        pip_dependency_groups=["post_training", "vllm"],
+        pip_dependency_groups=["post_training"],
     )
 
 

@@ -17,7 +17,7 @@ from marin.download.huggingface.download_hf import download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, executor_main
 from experiments.models import qwen3_32b, get_model_local_path
 from marin.processing.classification.inference import run_inference
-from marin.processing.classification.config import InferenceConfig, RuntimeConfig, DatasetSchemaConfig
+from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig, DatasetSchemaConfig
 from marin.processing.classification.autoscaler import AutoscalingActorPoolConfig
 
 open_thoughts_4 = ExecutorStep(
@@ -34,7 +34,7 @@ open_thoughts_4 = ExecutorStep(
 ).cd("data")
 
 qwen_32B_annotated_open_thoughts_4 = ExecutorStep(
-    name="documents/open-thoughts-4-qwen3-32b-annotated",
+    name="documents/open-thoughts-4-qwen3-32b-annotated-o7500",
     fn=run_inference,
     config=InferenceConfig(
         input_path=open_thoughts_4,
@@ -46,12 +46,13 @@ qwen_32B_annotated_open_thoughts_4 = ExecutorStep(
         batch_size=512,
         resume=True,
         runtime=RuntimeConfig(memory_limit_gb=16),
+        num_batches_per_upload=1,
         dataset_schema=DatasetSchemaConfig(
             input_columns=[
                 "messages",
                 "instruction_seed",
                 "response_seed",
-                "source",
+                "_source",
                 "gpt41_mini_response",
                 "__original_row_idx",
                 "length",
@@ -61,7 +62,7 @@ qwen_32B_annotated_open_thoughts_4 = ExecutorStep(
                 "messages",
                 "instruction_seed",
                 "response_seed",
-                "source",
+                "_source",
                 "gpt41_mini_response",
                 "__original_row_idx",
                 "length",
@@ -93,6 +94,7 @@ qwen_32B_annotated_open_thoughts_4 = ExecutorStep(
             actor_options={"resources": {"TPU": 8}},
         ),
     ),
+    pip_dependency_groups=["vllm"],
 )
 
 # qwen_32B_annotated_open_thoughts_4 = default_synthetic_data_generation(

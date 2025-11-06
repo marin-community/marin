@@ -142,16 +142,15 @@ def process_file_with_quality_classifier_streaming(
     while num_collected_batches < num_batches:
         processed_batch = result_queue.get()
         num_collected_batches += 1
-        output_rows = convert_batch_dict_to_output_rows(
-            processed_batch, dataset_schema.output_columns, len(processed_batch[dataset_schema.output_columns[0]])
-        )
+        batch_len = len(processed_batch[dataset_schema.output_columns[0]])
+        output_rows = convert_batch_dict_to_output_rows(processed_batch, dataset_schema.output_columns, batch_len)
         output_rows_buffer.extend(output_rows)
 
         if num_collected_batches % num_batches_per_upload == 0:
             write_dataset_streaming(output_rows_buffer, output_filename, append=append_mode or total_processed > 0)
             output_rows_buffer = []
 
-        total_processed += len(processed_batch)
+        total_processed += batch_len
         logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
 
     if output_rows_buffer:
@@ -197,8 +196,7 @@ def process_file_ray(
 # NOTE(chris): Ideally this function is run on the head node, but
 # due to some issues with stalling in the unit tests, we can't allow
 # this yet.
-# @ray.remote(num_cpus=0, resources={"head_node": 0.001})
-@ray.remote
+@ray.remote(num_cpus=0, resources={"head_node": 0.001})
 def run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))

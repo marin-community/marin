@@ -252,9 +252,9 @@ class RLJob:
                 temperature=1.0,
                 service=InferenceEngineConfig(
                     max_seqs=max_seqs,
-                    # max_seq_len=max_tokens,
+                    max_seq_len=max_tokens,
                     page_size=128,
-                    hbm_utilization=0.5,
+                    hbm_utilization=0.3,
                 ),
                 port=0,
             )
