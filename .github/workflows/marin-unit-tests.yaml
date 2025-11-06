@@ -1,4 +1,4 @@
-name: Marin - Run unit tests
+name: Marin - Tests
 on:
   push:
     branches:
