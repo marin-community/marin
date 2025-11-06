@@ -50,6 +50,25 @@ ALT Reasoning Mode: {{ reasoning_mode }}
 {% endif -%}
 """
 
+TOOL_TEMPLATE = """{{ bos_token }}
+{%- for message in messages -%}
+  {%- if message['role'] == 'assistant' and message.get('tool_calls') -%}
+    {%- set call = message['tool_calls'][0]['function'] -%}
+<|start_header_id|>assistant<|end_header_id|>
+{% generation %}{{ '{\"name\": \"' + call['name'] + '\", \"arguments\": ' }}{{ call['arguments'] | tojson }}{{ '}' }}<|eot_id|>{% endgeneration %}
+  {%- elif message['role'] == 'tool' -%}
+<|start_header_id|>tool<|end_header_id|>
+{{ message['content'] | tojson }}<|eot_id|>
+  {%- else -%}
+<|start_header_id|>{{ message['role'] }}<|end_header_id|>
+{{ message['content'] | trim }}<|eot_id|>
+  {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+<|start_header_id|>assistant<|end_header_id|>
+{%- endif -%}
+"""
+
 
 @pytest.fixture(scope="module")
 def tokenizer_path() -> Path:
@@ -233,6 +252,104 @@ def test_chat_processor_supports_per_example_chat_template_kwargs(tokenizer_path
     assert '* {"type": "function", "function": {"name": "web_search"' in rendered_override
     assert "[ALT] First prompt" in rendered_override
     assert "[ALT] First reply" in rendered_override
+
+
+def test_chat_processor_tool_call_support(tokenizer_path: Path):
+    tokenizer = load_tokenizer(tokenizer_path)
+    tokenizer.chat_template = TOOL_TEMPLATE
+    processor = ChatProcessor(tokenizer, chat_template=TOOL_TEMPLATE, mask_user_turns=True)
+
+    batch = [
+        {
+            "messages": [
+                {"role": "user", "content": "Call the adder."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "add", "arguments": {"a": 2, "b": 3}},
+                        }
+                    ],
+                },
+                {"role": "tool", "content": {"result": 5}},
+                {"role": "assistant", "content": "The sum is 5."},
+            ]
+        }
+    ]
+
+    result = processor(batch)[0]
+    rendered = decode_sequence(tokenizer, result["input_ids"])
+    assert '{"name": "add", "arguments": {"a": 2, "b": 3}}' in rendered
+    assert '<|start_header_id|>tool<|end_header_id|>' in rendered
+    assert '{"result": 5}' in rendered
+    assert result["assistant_masks"].sum() > 0
+
+
+def test_tool_call_masking_behavior(tokenizer_path: Path):
+    tokenizer = load_tokenizer(tokenizer_path)
+    tokenizer.chat_template = TOOL_TEMPLATE
+    processor = ChatProcessor(tokenizer, chat_template=TOOL_TEMPLATE, mask_user_turns=True)
+
+    batch = [
+        {
+            "messages": [
+                {"role": "user", "content": "Add two numbers."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_add",
+                            "type": "function",
+                            "function": {"name": "add", "arguments": {"a": 1, "b": 2}},
+                        }
+                    ],
+                },
+                {"role": "tool", "content": {"result": 3}},
+                {"role": "assistant", "content": "3"},
+            ]
+        }
+    ]
+
+    result = processor(batch)[0]
+    mask = result["assistant_masks"]
+
+    # locate assistant/tool-call span and tool-response span
+    tool_call_idx = []
+    tool_response_idx = []
+    tokens = result["input_ids"]
+    tool_header = tokenizer.convert_tokens_to_ids("<|start_header_id|>")
+    assistant_ids = tokenizer.encode("assistant", add_special_tokens=False)
+    tool_ids = tokenizer.encode("tool", add_special_tokens=False)
+
+    for i, tok in enumerate(tokens):
+        if tok == tool_header:
+            if tokens[i + 1 : i + 1 + len(assistant_ids)] == assistant_ids:
+                tool_call_idx.append(i)
+            elif tokens[i + 1 : i + 1 + len(tool_ids)] == tool_ids:
+                tool_response_idx.append(i)
+
+    assert tool_call_idx, "Expected assistant tool call span"
+    assert tool_response_idx, "Expected tool response span"
+
+    # ensure tool-call tokens are masked (1)
+    call_start = tool_call_idx[0]
+    call_end = call_start + 1
+    while call_end < len(tokens) and tokens[call_end] != tokenizer.convert_tokens_to_ids("<|eot_id|>"):
+        call_end += 1
+    call_start += len(assistant_ids) + 3  # <start_header_id|> + assistant + <|end_header_id|> + newline
+    tokens = [tokenizer.convert_ids_to_tokens([id]) for id in tokens[call_start:call_end]]
+    assert mask[call_start:call_end].all()
+
+    # ensure tool response tokens are not masked
+    resp_start = tool_response_idx[0]
+    resp_end = resp_start + 1
+    while resp_end < len(tokens) and tokens[resp_end] != tokenizer.convert_tokens_to_ids("<|eot_id|>"):
+        resp_end += 1
+    assert not mask[resp_start:resp_end].any()
 
 
 
