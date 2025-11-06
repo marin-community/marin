@@ -61,9 +61,6 @@ project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"]
 # which would auto-detect workspace members as site packages and exclude them
 skip-interpreter-query = true
 
-# Explicitly set site-package-path to only include the actual venv
-site-package-path = [".venv/lib/python3.11/site-packages"]
-
 # Exclude non-production code from type checking
 project-excludes = [
     "experiments/**",
