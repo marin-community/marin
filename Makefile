@@ -19,7 +19,6 @@ help:
 init:
 	conda install -c conda-forge pandoc
 	npm install -g pandiff
-	pre-commit install
 	uv sync
 	huggingface-cli login
 
@@ -28,16 +27,18 @@ clean:
 	find . -name "__pycache__" | xargs rm -rf
 
 check:
-	ruff check --output-format concise .
-	black --check .
-	mypy .
+	uv run python infra/pre-commit.py
 
-autoformat:
-	ruff check --fix --show-fixes .
-	black .
+fix:
+	@FILES=$$(git diff --name-only HEAD); \
+	if [ -n "$$FILES" ]; then \
+		uv run python infra/pre-commit.py --fix $$FILES && git add $$FILES; \
+	else \
+		echo "No modified files to fix"; \
+	fi
 
 lint:
-	pre-commit run --all-files
+	uv run python infra/pre-commit.py --all-files
 
 test:
 	export HUGGING_FACE_HUB_TOKEN=$HF_TOKEN

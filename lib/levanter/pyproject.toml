@@ -127,7 +127,6 @@ docs = [
 
 dev = [
   "pygments",
-  "pre-commit",
   "click>=8.0.0",
   "prompt_toolkit>=3.0.0",
 ]
