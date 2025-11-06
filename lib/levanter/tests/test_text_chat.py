@@ -235,6 +235,7 @@ def test_chat_processor_supports_per_example_chat_template_kwargs(tokenizer_path
     assert "[ALT] First reply" in rendered_override
 
 
+
 def test_chat_processor_custom_system_field_name(tokenizer_path: Path):
     tokenizer = load_tokenizer(tokenizer_path)
     tokenizer.chat_template = ALT_TEMPLATE

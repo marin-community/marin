@@ -29,6 +29,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import datasets
 import draccus
@@ -90,6 +91,26 @@ def _apply_replacements(text: str, replacements: dict[str, str]) -> str:
     return updated
 
 
+def _normalize_tool_structures(message: dict) -> dict:
+    tool_calls = message.get("tool_calls")
+    if tool_calls:
+        normalized_calls: list[dict[str, Any]] = []
+        for call in tool_calls:
+            call_dict = dict(call)
+            function = call_dict.get("function")
+            if isinstance(function, dict):
+                arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        function["arguments"] = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        pass
+            normalized_calls.append(call_dict)
+        message["tool_calls"] = normalized_calls
+
+    return message
+
+
 def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
     source = unwrap_versioned_value(cfg.source)
     transformed_row_messages: list[OpenAIChatMessage] = adapter.transform_conversation_to_openai_format(row)
@@ -123,6 +144,9 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
             content = message.get("content")
             if isinstance(content, str):
                 message["content"] = _apply_replacements(content, replacements)
+        transformed_row_messages = [_normalize_tool_structures(message) for message in transformed_row_messages]
+    else:
+        transformed_row_messages = [_normalize_tool_structures(message) for message in transformed_row_messages]
     if adapter.extra_metadata_fn:
         extra_from_fn = adapter.extra_metadata_fn(row)
         if extra_from_fn:

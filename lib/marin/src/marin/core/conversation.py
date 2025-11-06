@@ -14,12 +14,16 @@
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class OpenAIChatMessage(BaseModel):
+    model_config = ConfigDict(extra="allow")
     role: str
-    content: str
+    content: Any
+    name: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = Field(default=None, alias="tool_call_id")
 
 
 class DolmaConversationOutput(BaseModel):
