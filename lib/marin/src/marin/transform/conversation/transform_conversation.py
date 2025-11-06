@@ -34,6 +34,7 @@ import datasets
 import draccus
 import fsspec
 import ray
+from tqdm_loggable.tqdm_logging import tqdm_logging
 
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.core.runtime import fsspec_mkdirs
@@ -123,7 +124,10 @@ def create_shard_output_directory(output_filename: str) -> str:
     while path_without_suffix.suffix:
         path_without_suffix = path_without_suffix.with_suffix("")
 
-    output_path = f"{protocol}://{path_without_suffix}"
+    if protocol:
+        output_path = f"{protocol}://{path_without_suffix}"
+    else:
+        output_path = str(path_without_suffix)
     fsspec_mkdirs(output_path)
     return output_path
 
@@ -194,7 +198,9 @@ def process_streaming_shard(
     current_handle = None
     current_filename = None
     rows_in_current_file = 0
-    part_idx = 0
+
+    tqdm_logging.log_level = logging.WARNING
+    pbar = tqdm_logging(desc=f"Transforming {cfg.source} subset={subset_name} split={split} shard={shard_idx}")
 
     try:
         for raw_row in shard_dataset:
@@ -210,6 +216,7 @@ def process_streaming_shard(
             current_handle.write(f"{json.dumps(transformed_row.model_dump())}\n")
             rows_written += 1
             rows_in_current_file += 1
+            pbar.update(1)
     finally:
         if current_handle is not None:
             current_handle.close()
