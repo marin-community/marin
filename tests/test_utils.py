@@ -20,7 +20,6 @@ from dataclasses import dataclass
 import draccus
 import pytest
 import ray
-
 from marin.utils import asdict_excluding, remove_tpu_lockfile_on_exit
 
 
@@ -97,13 +96,6 @@ def skip_in_ci(fn_or_msg):
 class NestedConfig:
     name: str
     value: int
-    runtime_env: str = "test"
-
-
-@dataclass
-class TestConfig:
-    nested: NestedConfig
-    description: str
     runtime_env: str = "test"
 
 
