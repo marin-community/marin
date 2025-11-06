@@ -60,6 +60,7 @@ def tokenizer_path() -> Path:
         return Path(tokenizer.name_or_path)
     except Exception as e:  # noqa
         pytest.skip(f"Could not load tokenizer {MODEL_NAME}: {e}", allow_module_level=True)
+        raise NotImplementedError("unreachable")
 
 
 def load_tokenizer(tokenizer_path: Path):
@@ -214,7 +215,7 @@ def test_chat_processor_supports_per_example_chat_template_kwargs(tokenizer_path
     tokenizer.chat_template = BASE_TEMPLATE
     processor = ChatProcessor(tokenizer, chat_template=BASE_TEMPLATE, mask_user_turns=False)
 
-    batch = [
+    batch: list = [
         {
             "messages": [
                 {"role": "user", "content": "First prompt"},
