@@ -88,6 +88,7 @@ jobs:
       - name: Build and push Marin cluster image
         run: |
           docker buildx build --file docker/marin/Dockerfile.cluster \
+            --provenance=false \
             --tag europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
             --tag europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
             --tag europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
@@ -159,6 +160,7 @@ jobs:
       - name: Build and push TPU CI image
         run: |
           docker buildx build --file docker/marin/Dockerfile.tpu-ci \
+            --provenance=false \
             --tag ghcr.io/marin-community/marin/tpu-ci:latest \
             --tag ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.DATE_TAG }} \
             --tag ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.HASH_TAG }} \
