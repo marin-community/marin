@@ -60,7 +60,6 @@ class TransformSFTDatasetConfig:
         adapter (TransformAdapter): Adapter responsible for mapping raw rows into OpenAI chat format.
         subsets (list[str]): Data subsets (from HuggingFace config) to use. Empty list indicates all/default subset(s).
         splits (list[str]): Data splits (e.g., `train`, `validation`) to use. Empty list indicates all splits.
-        remap_columns (dict[str, str]): Mapping of source column names to new metadata keys preserved in the output.
     """
 
     source: str
@@ -70,8 +69,6 @@ class TransformSFTDatasetConfig:
     adapter: TransformAdapter
     subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
-    remap_columns: dict[str, str] = field(default_factory=dict)
-    replacements: dict[str, str] = field(default_factory=lambda: DEFAULT_TEXT_REPLACEMENTS.copy())
 
 
 def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
@@ -106,12 +103,12 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
     # Create a unique ID for the row based on the text
     row_idx = generate_hash_from_messages(transformed_row_messages)
     metadata_columns = unwrap_versioned_value(cfg.metadata_columns)
-    remap_columns = unwrap_versioned_value(cfg.remap_columns)
-    replacements = unwrap_versioned_value(cfg.replacements)
+    metadata_remap = adapter.metadata_remap or {}
+    replacements = adapter.replacements if adapter.replacements is not None else DEFAULT_TEXT_REPLACEMENTS
 
     metadata = {col: row.get(col, "") for col in metadata_columns}
     extra_columns: dict[str, object] = {}
-    for source_column, target_column in remap_columns.items():
+    for source_column, target_column in metadata_remap.items():
         if target_column in _RESERVED_TOP_LEVEL_FIELDS:
             logging.log(
                 logging.WARNING,
@@ -126,6 +123,10 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
             content = message.get("content")
             if isinstance(content, str):
                 message["content"] = _apply_replacements(content, replacements)
+    if adapter.extra_metadata_fn:
+        extra_from_fn = adapter.extra_metadata_fn(row)
+        if extra_from_fn:
+            extra_columns.update(extra_from_fn)
     return DolmaConversationOutput(
         id=row_idx,
         source=source,

@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import dataclasses
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -93,6 +94,9 @@ class TransformAdapter:
     # If specified, the key will be used to select the message with
     # best metric in multiple turn conversations
     filter_on_key: str = ""
+    metadata_remap: dict[str, str] = field(default_factory=dict)
+    replacements: dict[str, str] | None = None
+    extra_metadata_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
     def transform_conversation_to_openai_format(
         self,

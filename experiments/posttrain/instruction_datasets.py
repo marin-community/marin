@@ -42,11 +42,17 @@ Current datasets:
 16. sherryy/tulu-3-sft-personas-instruction-following-expanded
 17. facebook/natural_reasoning
 18. HuggingFaceTB/smoltalk2
+19. nvidia/Nemotron-Post-Training-Dataset-v1
+20. nvidia/Nemotron-Post-Training-Dataset-v2
+21. HuggingFaceH4/no_robots
 """
 
+import dataclasses
 import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
@@ -63,7 +69,6 @@ from marin.transform.conversation.conversation_to_dolma import (
 )
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.transform_conversation import (
-    DEFAULT_TEXT_REPLACEMENTS,
     TransformSFTDatasetConfig,
     transform_hf_dataset,
 )
@@ -96,6 +101,20 @@ SMOLTALK2_SPLITS = [
     "xlam_traces_no_think",
 ]
 
+NEMOTRON_V2_SPLITS = [
+    "stem",
+    "chat",
+    "math",
+    "code",
+    "multilingual_ja",
+    "multilingual_de",
+    "multilingual_it",
+    "multilingual_es",
+    "multilingual_fr",
+]
+
+NEMOTRON_V1_SPLITS = ["chat", "code", "math", "stem", "tool_calling"]
+
 
 @dataclass(frozen=True)
 class InstructionDatasetConfig:
@@ -110,7 +129,6 @@ class InstructionDatasetConfig:
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
         name: Optional friendly name for the dataset; defaults to `hf_dataset_id`.
-        remap_columns: Mapping of source column names to new keys preserved in the transformed output.
     """
 
     hf_dataset_id: str
@@ -120,8 +138,6 @@ class InstructionDatasetConfig:
     name: str | None = None
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
-    remap_columns: dict[str, str] = field(default_factory=dict)
-    text_replacements: dict[str, str] | None = None
 
 
 def multi_turn_adapter(
@@ -131,6 +147,9 @@ def multi_turn_adapter(
     assistant_value: str = "assistant",
     system_value: str = "system",
     content_key: str = "content",
+    metadata_remap: dict[str, str] | None = None,
+    replacements: dict[str, str] | None = None,
+    extra_metadata_fn=None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
@@ -140,6 +159,9 @@ def multi_turn_adapter(
         assistant_value=assistant_value,
         system_value=system_value,
         content_key=content_key,
+        metadata_remap=metadata_remap or {},
+        replacements=replacements,
+        extra_metadata_fn=extra_metadata_fn,
     )
 
 
@@ -149,6 +171,9 @@ def instruction_response_adapter(
     response_column: str,
     content_key: str = "",
     filter_on_key: str = "",
+    metadata_remap: dict[str, str] | None = None,
+    replacements: dict[str, str] | None = None,
+    extra_metadata_fn=None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
@@ -156,6 +181,9 @@ def instruction_response_adapter(
         response_column=response_column,
         content_key=content_key,
         filter_on_key=filter_on_key,
+        metadata_remap=metadata_remap or {},
+        replacements=replacements,
+        extra_metadata_fn=extra_metadata_fn,
     )
 
 
@@ -163,12 +191,18 @@ def instruct_column_response_adapter(
     instruction_column: str,
     response_column: str,
     content_key: str,
+    metadata_remap: dict[str, str] | None = None,
+    replacements: dict[str, str] | None = None,
+    extra_metadata_fn=None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE,
         instruction_column=instruction_column,
         response_column=response_column,
         content_key=content_key,
+        metadata_remap=metadata_remap or {},
+        replacements=replacements,
+        extra_metadata_fn=extra_metadata_fn,
     )
 
 
@@ -181,6 +215,9 @@ def instruct_msg_response_adapter(
     assistant_value: str,
     system_value: str,
     content_key: str,
+    metadata_remap: dict[str, str] | None = None,
+    replacements: dict[str, str] | None = None,
+    extra_metadata_fn=None,
 ) -> TransformAdapter:
     return TransformAdapter(
         dataset_format=InputDatasetFormat.INSTRUCT_MSG_RESPONSE,
@@ -191,7 +228,23 @@ def instruct_msg_response_adapter(
         assistant_value=assistant_value,
         system_value=system_value,
         content_key=content_key,
+        metadata_remap=metadata_remap or {},
+        replacements=replacements,
+        extra_metadata_fn=extra_metadata_fn,
     )
+
+
+def reasoning_to_chat_kwargs(row: dict[str, Any]) -> dict[str, Any]:
+    value = row.get("reasoning")
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"on", "true", "1"}:
+            return {"chat_template_kwargs": {"enable_thinking": True}}
+        if lowered in {"off", "false", "0"}:
+            return {"chat_template_kwargs": {"enable_thinking": False}}
+    if isinstance(value, bool):
+        return {"chat_template_kwargs": {"enable_thinking": value}}
+    return {}
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -313,10 +366,18 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     "HuggingFaceTB/smoltalk": InstructionDatasetConfig(
         hf_dataset_id="HuggingFaceTB/smoltalk",
         revision="2c849df",
-        adapter=multi_turn_adapter(),
+        adapter=multi_turn_adapter(metadata_remap={"chat_template_kwargs": "chat_template_kwargs"}),
         metadata_columns=["source"],
         name="HuggingFaceTB/smoltalk",
         subsets=["all"],
+    ),
+    "HuggingFaceH4/no_robots": InstructionDatasetConfig(
+        hf_dataset_id="HuggingFaceH4/no_robots",
+        revision="e6f9a4a",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["category", "prompt_id"],
+        name="HuggingFaceH4/no_robots",
+        splits=["train"],
     ),
     "PrimeIntellect/verifiable-math-problems": InstructionDatasetConfig(
         hf_dataset_id="PrimeIntellect/verifiable-math-problems",
@@ -391,11 +452,32 @@ for split_name in SMOLTALK2_SPLITS:
         name=f"HuggingFaceTB/smoltalk2/{split_name}",
         hf_dataset_id="HuggingFaceTB/smoltalk2",
         revision="fc6cc21",
-        adapter=multi_turn_adapter(),
+        adapter=multi_turn_adapter(metadata_remap={"chat_template_kwargs": "chat_template_kwargs"}),
         metadata_columns=[],
         subsets=["SFT"],
         splits=[split_name],
-        remap_columns={"chat_template_kwargs": "chat_template_kwargs"},
+    )
+
+for split_name in NEMOTRON_V2_SPLITS:
+    dataset_key = f"nvidia/Nemotron-Post-Training-Dataset-v2/{split_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id="nvidia/Nemotron-Post-Training-Dataset-v2",
+        revision="5c89e01",
+        adapter=multi_turn_adapter(extra_metadata_fn=reasoning_to_chat_kwargs),
+        metadata_columns=["category", "generator", "license"],
+        splits=[split_name],
+    )
+
+for split_name in NEMOTRON_V1_SPLITS:
+    dataset_key = f"nvidia/Nemotron-Post-Training-Dataset-v1/{split_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id="nvidia/Nemotron-Post-Training-Dataset-v1",
+        revision="74e23eb",
+        adapter=multi_turn_adapter(extra_metadata_fn=reasoning_to_chat_kwargs),
+        metadata_columns=["category", "generator", "license", "metadata", "version"],
+        splits=[split_name],
     )
 
 
@@ -412,36 +494,40 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
     output_name = dataset_cfg.name if dataset_cfg.name is not None else dataset_cfg.hf_dataset_id
     dataset_name = get_directory_friendly_dataset_name(output_name)
 
-    replacements_for_hash = (
-        dataset_cfg.text_replacements if dataset_cfg.text_replacements is not None else DEFAULT_TEXT_REPLACEMENTS
-    )
+    adapter_dict = dataclasses.asdict(adapter)
+    adapter_dict["dataset_format"] = adapter_dict["dataset_format"].value
+
+    def canonicalize(value):
+        if isinstance(value, dict):
+            return {k: canonicalize(v) for k, v in sorted(value.items())}
+        if isinstance(value, list):
+            return [canonicalize(x) for x in value]
+        if callable(value):
+            return f"{value.__module__}.{value.__qualname__}"
+        return value
+
+    adapter_signature = canonicalize(adapter_dict)
+    adapter_signature_str = json.dumps(adapter_signature, sort_keys=True)
+
     config_str = f"{dataset_name}-\
         {dataset_cfg.revision}\
         -{sorted(dataset_cfg.subsets)}\
         -{sorted(dataset_cfg.splits)}\
-        -{adapter.dataset_format.value}\
-        -{sorted(dataset_cfg.remap_columns.items())}\
-        -{sorted(replacements_for_hash.items())}\
-        -{adapter!r}"
+        -{adapter_signature_str}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
-
-    config_kwargs = {
-        "source": versioned(dataset_cfg.hf_dataset_id),
-        "revision": versioned(dataset_cfg.revision),
-        "output_path": this_output_path(),
-        "metadata_columns": versioned(dataset_cfg.metadata_columns),
-        "adapter": versioned(adapter),
-        "subsets": versioned(dataset_cfg.subsets),
-        "splits": versioned(dataset_cfg.splits),
-        "remap_columns": versioned(dataset_cfg.remap_columns),
-    }
-    if dataset_cfg.text_replacements is not None:
-        config_kwargs["replacements"] = versioned(dataset_cfg.text_replacements)
 
     transform_step = ExecutorStep(
         name=f"documents/{output_name}",
         fn=transform_hf_dataset,
-        config=TransformSFTDatasetConfig(**config_kwargs),
+        config=TransformSFTDatasetConfig(
+            source=versioned(dataset_cfg.hf_dataset_id),
+            revision=versioned(dataset_cfg.revision),
+            output_path=this_output_path(),
+            metadata_columns=versioned(dataset_cfg.metadata_columns),
+            adapter=versioned(adapter),
+            subsets=versioned(dataset_cfg.subsets),
+            splits=versioned(dataset_cfg.splits),
+        ),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
     )
 
