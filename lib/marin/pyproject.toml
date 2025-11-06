@@ -102,11 +102,6 @@ dev = [
 ]
 
 [tool.uv]
-override-dependencies = [
-    "omegaconf>=2.4.0.dev4",
-    "antlr4-python3-runtime==4.11",
-]
-
 conflicts = [
     [
         { extra = "crawl" },

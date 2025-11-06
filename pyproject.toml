@@ -13,6 +13,7 @@ dependencies = ["marin", "levanter"]
 [tool.uv]
 fork-strategy = "fewest"
 override-dependencies = [
+    "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
 ]
 
