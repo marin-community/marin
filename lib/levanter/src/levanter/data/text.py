@@ -416,15 +416,35 @@ class LmDatasetFormatBase(abc.ABC, ChoiceRegistry):
 @LmDatasetFormatBase.register_subclass("text")
 @dataclass(frozen=True)
 class TextLmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for raw text examples.
+
+    Attributes:
+        text_key: Field name containing the raw text or tokens.
+    """
+
     text_key: str = "text"  # key for the text field in the jsonl file
 
 
 @LmDatasetFormatBase.register_subclass("chat")
 @dataclass(frozen=True)
 class ChatLmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for multi-turn chat transcripts.
+
+    Attributes:
+        messages_field: Field name containing the ordered list of chat messages.
+        single_turn: Treat examples as a single user/assistant exchange.
+        chat_template: Overrides the tokenizer's chat template when provided.
+        system_prompt: Field name carrying an optional system instruction to prepend.
+        chat_template_kwargs: Field name containing optional keyword arguments passed to the chat template.
+        pack: Whether to allow example packing for efficient batching.
+        mask_user_turns: Mask user tokens from the training loss when True.
+    """
+
     messages_field: str = "messages"  # key for the messages field in the jsonl file
     single_turn: bool = False
     chat_template: str | None = None
+    system_prompt: str | None = None
+    chat_template_kwargs: str | None = "chat_template_kwargs"
     pack: bool = True
     mask_user_turns: bool = True
 
@@ -432,6 +452,16 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
 @LmDatasetFormatBase.register_subclass("supervised")
 @dataclass(frozen=True)
 class SupervisedLmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for supervised input/output pairs.
+
+    Attributes:
+        input_field: Field name with the model input text.
+        output_field: Field name with the target response text.
+        separate_with: Optional separator inserted between input and output.
+        pack: Whether to enable packing of multiple samples.
+        mask_inputs: Mask tokens from the input_field during loss computation.
+    """
+
     input_field: str = CANONICAL_INPUT_FIELD  # key for the input field in the jsonl file
     output_field: str = CANONICAL_OUTPUT_FIELD  # key for the output field in the jsonl file
     separate_with: str | int | None = None  # string to separate input and output with
@@ -608,13 +638,27 @@ def preprocessor_for_format(
     match format:
         case TextLmDatasetFormat(text_key=key):
             return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=key)
-        case ChatLmDatasetFormat(messages_field=m, single_turn=s_turn, chat_template=ct, mask_user_turns=mt):
+        case ChatLmDatasetFormat(
+            messages_field=m,
+            single_turn=s_turn,
+            chat_template=ct,
+            system_prompt=sp,
+            chat_template_kwargs=ct_kwargs,
+            mask_user_turns=mt,
+        ):
             if s_turn:
                 if ct is not None:
                     raise NotImplementedError("Don't currently support chat templates for single turn chat")
                 return SingleTurnChatProcessor(tokenizer, messages_field=m)  # type: ignore
             else:
-                return ChatProcessor(tokenizer, messages_field=m, chat_template=ct, mask_user_turns=mt)  # type: ignore
+                return ChatProcessor(
+                    tokenizer,
+                    messages_field=m,
+                    chat_template=ct,
+                    system_prompt_field=sp,
+                    chat_template_kwargs_field=ct_kwargs,
+                    mask_user_turns=mt,
+                )  # type: ignore
         case SupervisedLmDatasetFormat(input_field=i, output_field=o, separate_with=s):
             return SupervisedProcessor(tokenizer, input_field=i, output_field=o, separate_with=s)  # type: ignore
         case _:
@@ -1452,6 +1496,8 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
         tokenizer: HfTokenizer,
         chat_template: str | None = None,
         messages_field: str = "messages",
+        system_prompt_field: str | None = "system",
+        chat_template_kwargs_field: str | None = "chat_template_kwargs",
         mask_user_turns: bool = True,
     ):
         if chat_template is None and tokenizer.chat_template is None:
@@ -1459,6 +1505,8 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
         self.tokenizer = tokenizer
         self.chat_template = chat_template or tokenizer.chat_template
         self.messages_field = messages_field
+        self.system_prompt_field = system_prompt_field
+        self.chat_template_kwargs_field = chat_template_kwargs_field
 
         if self.chat_template is None:
             raise ValueError("No chat template provided and tokenizer has no default chat template")
@@ -1475,15 +1523,84 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
             )
 
     def __call__(self, batch: Sequence[dict]) -> Sequence[ProcessedChatDict]:
-        # Extract messages from the specified field
-        messages = [example[self.messages_field] for example in batch]
-        tokenized = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=True,
-            chat_template=self.chat_template,
-            return_assistant_tokens_mask=True,
-            return_dict=True,
-        )
+        # Extract messages from the specified field, optionally injecting a system prompt
+        messages: list[list[dict[str, Any]]] = []
+        chat_kwargs_list: list[Mapping[str, Any] | None] = []
+        for example in batch:
+            example_messages = example[self.messages_field]
+            # Copy to avoid mutating the original structure
+            normalized_messages = list(example_messages)
+
+            if self.system_prompt_field is not None and self.system_prompt_field in example:
+                system_content = example[self.system_prompt_field]
+                if system_content is not None:
+                    if isinstance(system_content, Mapping):
+                        system_message = dict(system_content)
+                        system_message["role"] = "system"
+                        if "content" not in system_message:
+                            raise ValueError(
+                                "System prompt mapping must include a 'content' field when provided as a mapping."
+                            )
+                    else:
+                        system_message = {"role": "system", "content": system_content}
+                    normalized_messages = [system_message, *normalized_messages]
+
+            messages.append(normalized_messages)
+
+            example_kwargs: Mapping[str, Any] | None = None
+            if self.chat_template_kwargs_field is not None and self.chat_template_kwargs_field in example:
+                raw_kwargs = example[self.chat_template_kwargs_field]
+                if raw_kwargs is not None:
+                    if not isinstance(raw_kwargs, Mapping):
+                        raise ValueError("chat_template_kwargs must be provided as a mapping when present.")
+                    example_kwargs = dict(raw_kwargs)
+            chat_kwargs_list.append(example_kwargs)
+
+        use_per_example_kwargs = any(kwargs for kwargs in chat_kwargs_list)
+
+        if not use_per_example_kwargs:
+            tokenized = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                chat_template=self.chat_template,
+                return_assistant_tokens_mask=True,
+                return_dict=True,
+            )
+        else:
+            input_ids_batches: list[Sequence[int]] = []
+            assistant_mask_batches: list[Sequence[int]] = []
+
+            for conversation, example_kwargs in zip(messages, chat_kwargs_list):
+                kwargs_dict = dict(example_kwargs) if example_kwargs is not None else {}
+
+                for forbidden in ("tokenize", "return_assistant_tokens_mask", "return_dict"):
+                    if forbidden in kwargs_dict:
+                        raise ValueError(
+                            f"chat_template_kwargs may not override '{forbidden}' because the processor relies on it."
+                        )
+
+                chat_template_override = kwargs_dict.pop("chat_template", self.chat_template)
+                if chat_template_override is None:
+                    raise ValueError("Chat template must be provided either in the dataset format or per example.")
+
+                apply_kwargs = {
+                    **kwargs_dict,
+                    "tokenize": True,
+                    "return_assistant_tokens_mask": True,
+                    "return_dict": True,
+                    "chat_template": chat_template_override,
+                }
+
+                tokenized_single = self.tokenizer.apply_chat_template(
+                    [conversation],
+                    **apply_kwargs,
+                )
+
+                input_ids_batches.extend(tokenized_single["input_ids"])
+                assistant_mask_batches.extend(tokenized_single["assistant_masks"])
+
+            tokenized = {"input_ids": input_ids_batches, "assistant_masks": assistant_mask_batches}
+
         masks = tokenized["assistant_masks"]
         for seq, mask_for_seq in zip(batch, masks):
             if not np.any(mask_for_seq):
@@ -1518,6 +1635,8 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
             "vocab_size": len(self.tokenizer),
             "chat_template": self.chat_template,
             "messages_field": self.messages_field,
+            "system_prompt_field": self.system_prompt_field,
+            "chat_template_kwargs_field": self.chat_template_kwargs_field,
         }
 
 
