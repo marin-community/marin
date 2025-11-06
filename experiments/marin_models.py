@@ -11,20 +11,80 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# flake8: noqa
 
 """
 Various models and templates for Marin.
 """
 
-marin_tokenizer = "stanford-crfm/marin-tokenizer"
+marin_tokenizer = "marin-community/marin-tokenizer"
 """
 The HF Hub name for the Marin tokenizer.
 The Marin tokenizer is (currently) just the Llama 3 tokenizer with a custom chat template (MARIN_CHAT_TEMPLATE).
 """
 
-# to be clear this is the Olmo 2 template except we use llama3's special tokens
+# inspired by the smollm3 template and the Olmo 2 template, using llama3's special tokens
 MARIN_CHAT_TEMPLATE = """
 {{ bos_token }}
+{%- if enable_thinking is defined -%}
+  {%- if enable_thinking is sameas true -%}
+    {%- set _reasoning_mode = "/think" -%}
+  {%- elif enable_thinking is sameas false -%}
+    {%- set _reasoning_mode = "/nothink" -%}
+  {%- else -%}
+    {%- set _reasoning_mode = enable_thinking -%}
+  {%- endif -%}
+{%- else -%}
+  {%- set _reasoning_mode = none -%}
+{%- endif -%}
+{%- set _custom_instructions = custom_instructions | default(None, true) -%}
+{%- set _xml_tools_list = xml_tools | default([], true) -%}
+{%- if tools is defined and tools -%}
+  {%- set _xml_tools_list = tools -%}
+{%- endif -%}
+{%- set _python_tools = python_tools | default([], true) -%}
+{%- set _has_aux_header = (_reasoning_mode is not none) or _custom_instructions or (_xml_tools_list) or (_python_tools) -%}
+{%- if _has_aux_header -%}
+<|start_header_id|>system<|end_header_id|>
+{%- if _reasoning_mode is not none -%}
+Reasoning: {{ _reasoning_mode }}
+{%- endif %}
+{%- if _custom_instructions %}
+{{ _custom_instructions | trim }}
+{%- endif %}
+{% if _xml_tools_list or _python_tools %}
+{{ "\n### Tools\n" }}
+You may call one or more functions to assist with the user query.
+{% if _xml_tools_list %}
+You are provided with function signatures within <tools> </tools> tags:
+
+<tools>
+{% for tool in _xml_tools_list %}
+{{ tool | string }}{% if not loop.last %}
+{% endif %}
+{% endfor %}
+</tools>
+
+For each function call, pass a json object with function name and arguments within <tool_call> </tool_call> tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call>
+
+{% endif %}
+{% if _python_tools %}
+When you send a message containing Python code between <|python_tag|> and <|eom_id|> tags, it will be executed in a stateful Jupyter notebook environment, and you will then be given the output.
+
+You can use the following tools in your python code like regular functions:
+<tools>
+{% for tool in _python_tools %}
+{{ tool | string }}{% if not loop.last %}
+{% endif %}
+{% endfor %}
+</tools>
+{% endif %}
+{% endif %}
+<|eot_id|>
+{%- endif -%}
 {%- for message in messages -%}
 {%- if message['role'] == 'assistant' -%}
     <|start_header_id|>{{ message['role'] }}<|end_header_id|>
