@@ -18,6 +18,7 @@ from experiments.audio.tokenize_mls_en import mls_en_data_config
 from experiments.audio.tokenize_emilia import emilia_english_mixture_config
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
+from experiments.audio.exp1699_marin_yodas2 import yodas_1b_model
 
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
@@ -31,11 +32,12 @@ NUM_ANNEAL_STEPS = 50000
 NUM_ANNEAL_TRAINING_TOKENS = int(NUM_ANNEAL_STEPS * BATCH_SIZE * SEQ_LEN)
 
 checkpoint_step = 190000
-checkpoint_path = f"gs://marin-us-central1/checkpoints/exp1699_marin_yodas2-b5edae/checkpoints/step-{checkpoint_step}"
+# note that it is actually a 0.6B model, not 1B despite the name
+yodas_step = yodas_1b_model.cd(f"checkpoints/step-{checkpoint_step}")
 
 # Annealing with MLS-EN
 annealing_mls_en_config = AnnealConfig(
-    initialize_from_checkpoint_path=checkpoint_path,
+    initialize_from_checkpoint_path=yodas_step,
     dataset_config=mls_en_data_config(),
     learning_rate=LEARNING_RATE,
     weight_decay=0.033,
@@ -49,7 +51,7 @@ annealed_model_mls_en = default_anneal(name="exp1699_anneal_mls_en", anneal_conf
 
 # Annealing with Emilia English language only
 annealing_emilia_config = AnnealConfig(
-    initialize_from_checkpoint_path=checkpoint_path,
+    initialize_from_checkpoint_path=yodas_step,
     dataset_config=emilia_english_mixture_config(),
     learning_rate=LEARNING_RATE,
     weight_decay=0.033,
