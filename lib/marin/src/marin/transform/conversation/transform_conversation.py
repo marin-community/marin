@@ -36,10 +36,13 @@ import fsspec
 import ray
 from tqdm_loggable.tqdm_logging import tqdm_logging
 
+from marin.execution import unwrap_versioned_value
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.core.runtime import fsspec_mkdirs
 
-from .adapters import TransformAdapter, get_adapter
+from .adapters import TransformAdapter
+
+_RESERVED_TOP_LEVEL_FIELDS = {"id", "source", "messages", "added", "created", "metadata"}
 
 logger = logging.getLogger("ray")
 
@@ -51,24 +54,22 @@ class TransformSFTDatasetConfig:
     Args:
         source (str): The name of the HuggingFace dataset.
         revision (str): The revision of the HuggingFace dataset to use.
-        output_path (str): The path to the output file.
-        shard_size (int): The number of rows per shard.
-        metadata_columns (list[str]): The columns to include in the metadata. Check the HuggingFace dataset
-            for the columns to use.
-        filetype (str): The filetype of the input file. Currently supports jsonl, json, and parquet.
-        subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
-        splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
-                Defaults to `train` only.
+        output_path (str): The base path where transformed shards will be written.
+        metadata_columns (list[str]): Additional metadata keys to copy from the source row.
+        adapter (TransformAdapter): Adapter responsible for mapping raw rows into OpenAI chat format.
+        subsets (list[str]): Data subsets (from HuggingFace config) to use. Empty list indicates all/default subset(s).
+        splits (list[str]): Data splits (e.g., `train`, `validation`) to use. Empty list indicates all splits.
+        remap_columns (dict[str, str]): Mapping of source column names to new metadata keys preserved in the output.
     """
 
     source: str
     revision: str
     output_path: str
     metadata_columns: list[str]
-    filetype: str
-    adapter_name: str
+    adapter: TransformAdapter
     subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
+    remap_columns: dict[str, str] = field(default_factory=dict)
 
 
 def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
@@ -87,21 +88,36 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
     transformed_row_messages: list[OpenAIChatMessage] = adapter.transform_conversation_to_openai_format(row)
 
     if transformed_row_messages is None:
-        logger.warning(f"{cfg.adapter_name} returning no valid messages")
+        logger.warning(f"{cfg.source} returning no valid messages")
         return None
 
     transformed_row_messages = [message.model_dump() for message in transformed_row_messages]
+    source = unwrap_versioned_value(cfg.source)
 
     # Create a unique ID for the row based on the text
     row_idx = generate_hash_from_messages(transformed_row_messages)
-    metadata = {col: row.get(col, "") for col in cfg.metadata_columns}
+    metadata_columns = unwrap_versioned_value(cfg.metadata_columns)
+    remap_columns = unwrap_versioned_value(cfg.remap_columns)
+
+    metadata = {col: row.get(col, "") for col in metadata_columns}
+    extra_columns: dict[str, object] = {}
+    for source_column, target_column in remap_columns.items():
+        if target_column in _RESERVED_TOP_LEVEL_FIELDS:
+            logging.log(
+                logging.WARNING,
+                f"Skipping remap for column '{source_column}' because target '{target_column}' is reserved.",
+            )
+            continue
+        if source_column in row:
+            extra_columns[target_column] = row[source_column]
     return DolmaConversationOutput(
         id=row_idx,
-        source=cfg.source,
+        source=source,
         messages=transformed_row_messages,
         added=datetime.now(timezone.utc).isoformat(),
         created="",  # Not available in the dataset
         metadata=metadata,
+        **extra_columns,
     )
 
 
@@ -133,8 +149,9 @@ def create_shard_output_directory(output_filename: str) -> str:
 
 
 def _get_available_subsets(cfg: TransformSFTDatasetConfig) -> list[str | None]:
-    if cfg.subsets:
-        return cfg.subsets
+    configured_subsets = unwrap_versioned_value(cfg.subsets)
+    if configured_subsets:
+        return configured_subsets
     try:
         subsets = datasets.get_dataset_config_names(cfg.source)
     except Exception as exc:
@@ -146,8 +163,9 @@ def _get_available_subsets(cfg: TransformSFTDatasetConfig) -> list[str | None]:
 
 
 def _get_available_splits(cfg: TransformSFTDatasetConfig, subset: str | None) -> list[str]:
-    if cfg.splits:
-        return list(cfg.splits)
+    configured_splits = unwrap_versioned_value(cfg.splits)
+    if configured_splits:
+        return list(configured_splits)
     try:
         split_names = datasets.get_dataset_split_names(cfg.source, name=subset)
     except Exception as exc:
@@ -175,14 +193,18 @@ def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) ->
 def process_streaming_shard(
     cfg: TransformSFTDatasetConfig, subset: str | None, split: str, shard_idx: int, num_shards: int
 ):
-    adapter = get_adapter(cfg.adapter_name)
-    if not cfg.source:
+    adapter = unwrap_versioned_value(cfg.adapter).copy()
+    if adapter is None:
+        raise ValueError("Transform configuration requires an adapter.")
+    source = unwrap_versioned_value(cfg.source)
+    if not source:
         raise ValueError("Transform configuration must include `source` pointing to the HF dataset id.")
+    revision = unwrap_versioned_value(cfg.revision)
     dataset_kwargs: dict[str, object] = {
-        "path": cfg.source,
+        "path": source,
         "split": split,
         "streaming": True,
-        "revision": cfg.revision,
+        "revision": revision,
     }
     if subset not in (None, "default"):
         dataset_kwargs["name"] = subset
@@ -200,7 +222,7 @@ def process_streaming_shard(
     rows_in_current_file = 0
 
     tqdm_logging.log_level = logging.WARNING
-    pbar = tqdm_logging(desc=f"Transforming {cfg.source} subset={subset_name} split={split} shard={shard_idx}")
+    pbar = tqdm_logging(desc=f"Transforming {source} subset={subset_name} split={split} shard={shard_idx}")
 
     try:
         for raw_row in shard_dataset:
@@ -211,6 +233,7 @@ def process_streaming_shard(
             if current_handle is None:
                 current_filename = _shard_filename(output_path, shard_idx)
                 current_handle = fsspec.open(current_filename, "wt", compression="gzip").open()
+                files_written.append(current_filename)
                 rows_in_current_file = 0
 
             current_handle.write(f"{json.dumps(transformed_row.model_dump())}\n")
@@ -230,21 +253,26 @@ def process_streaming_shard(
 @ray.remote
 def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     """Stream a HuggingFace dataset and write remote shards without local staging."""
+    if cfg.adapter is None:
+        raise ValueError("Transform configuration requires an adapter.")
+    source = unwrap_versioned_value(cfg.source)
+    if not source:
+        raise ValueError("Transform configuration must include `source` pointing to the HF dataset id.")
+    revision = unwrap_versioned_value(cfg.revision)
+    configured_splits = unwrap_versioned_value(cfg.splits)
     subsets = _get_available_subsets(cfg)
     if not subsets:
-        raise ValueError(f"No subsets available for dataset {cfg.source}")
-    if not cfg.source:
-        raise ValueError("Transform configuration must include `source` pointing to the HF dataset id.")
+        raise ValueError(f"No subsets available for dataset {source}")
 
     shard_refs = []
 
     for subset in subsets:
         splits = _get_available_splits(cfg, subset)
-        if cfg.splits:
-            requested = set(cfg.splits)
+        if configured_splits:
+            requested = set(configured_splits)
             missing = sorted(requested - set(splits))
             if missing:
-                logging.log(logging.WARNING, f"Requested split(s) {missing} for {cfg.source} skipped.")
+                logging.log(logging.WARNING, f"Requested split(s) {missing} for {source} skipped.")
             splits = [split for split in splits if split in requested]
         if not splits:
             logging.log(logging.WARNING, f"No splits to process for subset={subset}; skipping.")
@@ -252,9 +280,10 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
 
         for split in splits:
             dataset_kwargs: dict[str, object] = {
-                "path": cfg.source,
+                "path": source,
                 "split": split,
                 "streaming": True,
+                "revision": revision,
             }
             if subset not in (None, "default"):
                 dataset_kwargs["name"] = subset
@@ -263,7 +292,7 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
             num_shards = dataset.num_shards
             if not num_shards:
                 raise ValueError(
-                    f"Streaming dataset {cfg.source} subset={subset} split={split} does not expose num_shards."
+                    f"Streaming dataset {source} subset={subset} split={split} does not expose num_shards."
                 )
 
             for shard_idx in range(num_shards):

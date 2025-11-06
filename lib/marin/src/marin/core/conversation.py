@@ -14,7 +14,7 @@
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class OpenAIChatMessage(BaseModel):
@@ -23,6 +23,7 @@ class OpenAIChatMessage(BaseModel):
 
 
 class DolmaConversationOutput(BaseModel):
+    model_config = ConfigDict(extra="allow")
     id: str
     source: str
     messages: list[OpenAIChatMessage]
