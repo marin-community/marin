@@ -10,51 +10,29 @@ import pytest
 from transformers import AutoTokenizer
 
 from levanter.data.text import ChatProcessor
+from experiments.marin_models import MARIN_CHAT_TEMPLATE
 
 
 MODEL_NAME = "stanford-crfm/marin-tokenizer"
 
-BASE_TEMPLATE = """{{ bos_token }}
-{%- set enable_thinking = enable_thinking | default(true) -%}
-{%- set xml_tools_list = xml_tools | default([]) -%}
-{%- if enable_thinking -%}
-  {%- set reasoning_mode = "/think" -%}
-{%- else -%}
-  {%- set reasoning_mode = "/no_think" -%}
-{%- endif -%}
-<|im_start|>system
-Reasoning Mode: {{ reasoning_mode }}
-{%- if xml_tools_list | length > 0 -%}
-\\nTools:
-{%- for tool in xml_tools_list -%}
-\\n- {{ tool }}
-{%- endfor -%}
-{%- endif -%}
-\\n<|im_end|>
-{%- for message in messages -%}
-<|start_header_id|>{{ message['role'] }}<|end_header_id|>
-{%- if message['role'] == 'assistant' -%}
-{% generation %}{{ message['content'] | trim }}<|eot_id|>{% endgeneration %}
-{%- else -%}
-{{ message['content'] | trim }}<|eot_id|>
-{%- endif %}
-{%- endfor %}
-{%- if add_generation_prompt -%}
-<|start_header_id|>assistant<|end_header_id|>
-{% endif -%}
-"""
+BASE_TEMPLATE = MARIN_CHAT_TEMPLATE
 
 ALT_TEMPLATE = """{{ bos_token }}
-{%- set enable_thinking = enable_thinking | default(true) -%}
-{%- set xml_tools_list = xml_tools | default([]) -%}
-{%- if enable_thinking -%}
-  {%- set reasoning_mode = "/think" -%}
+{%- if enable_thinking is defined -%}
+  {%- if enable_thinking is sameas true -%}
+    {%- set reasoning_mode = "/think" -%}
+  {%- elif enable_thinking is sameas false -%}
+    {%- set reasoning_mode = "/nothink" -%}
+  {%- else -%}
+    {%- set reasoning_mode = enable_thinking -%}
+  {%- endif -%}
 {%- else -%}
-  {%- set reasoning_mode = "/no_think" -%}
+  {%- set reasoning_mode = "/think" -%}
 {%- endif -%}
+{%- set xml_tools_list = xml_tools | default([], true) -%}
 <|im_start|>system
 ALT Reasoning Mode: {{ reasoning_mode }}
-{%- if xml_tools_list | length > 0 -%}
+{%- if xml_tools_list %}
 \\nALT Tools:
 {%- for tool in xml_tools_list -%}
 \\n* {{ tool }}
@@ -120,8 +98,9 @@ def test_chat_processor_injects_system_prompt(tokenizer_path: Path):
     assert len(result) == 1
 
     rendered = decode_sequence(tokenizer, result[0]["input_ids"])
-    assert "Reasoning Mode: /think" in rendered
-    assert "Tools:" not in rendered
+    # Default template should remain unchanged beyond the injected system prompt.
+    assert "Reasoning Mode" not in rendered
+    assert "### Tools" not in rendered
     # Confirm the injected system message appears before the user turn.
     assert rendered.index("You are a helpful assistant.") < rendered.index("Hi there.")
     assert_messages_in_order(rendered, ["system", "user", "assistant"])
@@ -129,6 +108,105 @@ def test_chat_processor_injects_system_prompt(tokenizer_path: Path):
     assert "Hi there." in rendered
     assert "Hello!" in rendered
     assert result[0]["assistant_masks"].sum() > 0
+    assert "<|start_think|>" not in rendered
+
+
+def test_chat_processor_respects_thinking_kwarg(tokenizer_path: Path):
+    tokenizer = load_tokenizer(tokenizer_path)
+    tokenizer.chat_template = BASE_TEMPLATE
+    processor = ChatProcessor(tokenizer, chat_template=BASE_TEMPLATE, mask_user_turns=False)
+
+    batch = [
+        {
+            "messages": [
+                {"role": "user", "content": "Please reason carefully."},
+                {"role": "assistant", "content": "Thoughtful answer."},
+            ],
+            "chat_template_kwargs": {
+                "enable_thinking": True,
+                "custom_instructions": "Follow best practices.",
+            },
+        }
+    ]
+
+    result = processor(batch)
+    rendered = decode_sequence(tokenizer, result[0]["input_ids"])
+    assert "Reasoning Mode: /think" in rendered
+    assert "Follow best practices." in rendered
+    assert "<|start_think|>" in rendered
+    assert "<|end_think|>" in rendered
+    assert "### Tools" not in rendered
+
+
+def test_chat_processor_handles_disable_thinking_kwarg(tokenizer_path: Path):
+    tokenizer = load_tokenizer(tokenizer_path)
+    tokenizer.chat_template = BASE_TEMPLATE
+    processor = ChatProcessor(tokenizer, chat_template=BASE_TEMPLATE, mask_user_turns=False)
+
+    batch = [
+        {
+            "messages": [
+                {"role": "user", "content": "Don't think."},
+                {"role": "assistant", "content": "Direct answer."},
+            ],
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+    ]
+
+    rendered = decode_sequence(tokenizer, processor(batch)[0]["input_ids"])
+    assert "Reasoning Mode: /nothink" in rendered
+    assert "<|start_think|>" not in rendered
+
+
+def test_chat_processor_accepts_custom_reasoning_mode_value(tokenizer_path: Path):
+    tokenizer = load_tokenizer(tokenizer_path)
+    tokenizer.chat_template = BASE_TEMPLATE
+    processor = ChatProcessor(tokenizer, chat_template=BASE_TEMPLATE, mask_user_turns=False)
+
+    batch = [
+        {
+            "messages": [
+                {"role": "user", "content": "Custom mode."},
+                {"role": "assistant", "content": "Responding."},
+            ],
+            "chat_template_kwargs": {"enable_thinking": "experimental"},
+        }
+    ]
+
+    rendered = decode_sequence(tokenizer, processor(batch)[0]["input_ids"])
+    assert "Reasoning Mode: experimental" in rendered
+
+
+def test_chat_processor_renders_tool_spec(tokenizer_path: Path):
+    tokenizer = load_tokenizer(tokenizer_path)
+    tokenizer.chat_template = BASE_TEMPLATE
+    processor = ChatProcessor(tokenizer, chat_template=BASE_TEMPLATE, mask_user_turns=False)
+
+    batch = [
+        {
+            "messages": [
+                {"role": "user", "content": "What tools do you have?"},
+                {"role": "assistant", "content": "Listing tools."},
+            ],
+            "chat_template_kwargs": {
+                "xml_tools": [
+                    '{"type": "function", "function": {"name": "final_answer"}}',
+                ],
+                "python_tools": [
+                    '{"type": "function", "function": {"name": "python_exec"}}',
+                ],
+            },
+        }
+    ]
+
+    rendered = decode_sequence(tokenizer, processor(batch)[0]["input_ids"])
+    assert "### Tools" in rendered
+    assert "You may call one or more functions" in rendered
+    assert "<tools>" in rendered
+    assert '{"type": "function", "function": {"name": "final_answer"}}' in rendered
+    assert "When you send a message containing Python code" in rendered
+    assert '{"type": "function", "function": {"name": "python_exec"}}' in rendered
+    assert "<|start_think|>" not in rendered
 
 
 def test_chat_processor_supports_per_example_chat_template_kwargs(tokenizer_path: Path):
@@ -166,14 +244,14 @@ def test_chat_processor_supports_per_example_chat_template_kwargs(tokenizer_path
     rendered_override = decode_sequence(tokenizer, result[0]["input_ids"])
     rendered_default = decode_sequence(tokenizer, result[1]["input_ids"])
 
-    assert "ALT Reasoning Mode: /no_think" in rendered_override
+    assert "ALT Reasoning Mode: /nothink" in rendered_override
     assert "ALT Tools" in rendered_override
     assert '* {"type": "function", "function": {"name": "web_search"' in rendered_override
     assert "[ALT] First prompt" in rendered_override
     assert "[ALT] First reply" in rendered_override
     assert "[ALT]" not in rendered_default
     assert "Second prompt" in rendered_default
-    assert "Reasoning Mode: /think" in rendered_default
+    assert "Reasoning Mode" not in rendered_default
 
 
 def test_chat_processor_custom_system_field_name(tokenizer_path: Path):
