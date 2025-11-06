@@ -43,6 +43,7 @@ from marin.core.runtime import fsspec_mkdirs
 from .adapters import TransformAdapter
 
 _RESERVED_TOP_LEVEL_FIELDS = {"id", "source", "messages", "added", "created", "metadata"}
+DEFAULT_TEXT_REPLACEMENTS = {"<think>": "<|start_think|>", "</think>": "<|end_think|>"}
 
 logger = logging.getLogger("ray")
 
@@ -70,6 +71,7 @@ class TransformSFTDatasetConfig:
     subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
     remap_columns: dict[str, str] = field(default_factory=dict)
+    replacements: dict[str, str] = field(default_factory=lambda: DEFAULT_TEXT_REPLACEMENTS.copy())
 
 
 def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
@@ -84,20 +86,28 @@ def generate_hash_from_messages(messages: list[dict[str, str]]) -> str:
     return hashlib.sha256(str(messages).encode()).hexdigest()
 
 
+def _apply_replacements(text: str, replacements: dict[str, str]) -> str:
+    updated = text
+    for old, new in replacements.items():
+        updated = updated.replace(old, new)
+    return updated
+
+
 def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformAdapter):
+    source = unwrap_versioned_value(cfg.source)
     transformed_row_messages: list[OpenAIChatMessage] = adapter.transform_conversation_to_openai_format(row)
 
     if transformed_row_messages is None:
-        logger.warning(f"{cfg.source} returning no valid messages")
+        logger.warning(f"{source} returning no valid messages")
         return None
 
     transformed_row_messages = [message.model_dump() for message in transformed_row_messages]
-    source = unwrap_versioned_value(cfg.source)
 
     # Create a unique ID for the row based on the text
     row_idx = generate_hash_from_messages(transformed_row_messages)
     metadata_columns = unwrap_versioned_value(cfg.metadata_columns)
     remap_columns = unwrap_versioned_value(cfg.remap_columns)
+    replacements = unwrap_versioned_value(cfg.replacements)
 
     metadata = {col: row.get(col, "") for col in metadata_columns}
     extra_columns: dict[str, object] = {}
@@ -110,6 +120,12 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
             continue
         if source_column in row:
             extra_columns[target_column] = row[source_column]
+
+    if replacements:
+        for message in transformed_row_messages:
+            content = message.get("content")
+            if isinstance(content, str):
+                message["content"] = _apply_replacements(content, replacements)
     return DolmaConversationOutput(
         id=row_idx,
         source=source,

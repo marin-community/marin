@@ -63,6 +63,7 @@ from marin.transform.conversation.conversation_to_dolma import (
 )
 from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.transform_conversation import (
+    DEFAULT_TEXT_REPLACEMENTS,
     TransformSFTDatasetConfig,
     transform_hf_dataset,
 )
@@ -120,6 +121,7 @@ class InstructionDatasetConfig:
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
     remap_columns: dict[str, str] = field(default_factory=dict)
+    text_replacements: dict[str, str] | None = None
 
 
 def multi_turn_adapter(
@@ -407,31 +409,39 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
 def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorStep:
     """ExecutorStep that preprocesses the input dataset into a canonicalized format for SFT training."""
     adapter = dataset_cfg.adapter
-    output_name = dataset_cfg.name if dataset_cfg.name is not None else adapter.source
+    output_name = dataset_cfg.name if dataset_cfg.name is not None else dataset_cfg.hf_dataset_id
     dataset_name = get_directory_friendly_dataset_name(output_name)
 
+    replacements_for_hash = (
+        dataset_cfg.text_replacements if dataset_cfg.text_replacements is not None else DEFAULT_TEXT_REPLACEMENTS
+    )
     config_str = f"{dataset_name}-\
         {dataset_cfg.revision}\
         -{sorted(dataset_cfg.subsets)}\
         -{sorted(dataset_cfg.splits)}\
         -{adapter.dataset_format.value}\
         -{sorted(dataset_cfg.remap_columns.items())}\
+        -{sorted(replacements_for_hash.items())}\
         -{adapter!r}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
+
+    config_kwargs = {
+        "source": versioned(dataset_cfg.hf_dataset_id),
+        "revision": versioned(dataset_cfg.revision),
+        "output_path": this_output_path(),
+        "metadata_columns": versioned(dataset_cfg.metadata_columns),
+        "adapter": versioned(adapter),
+        "subsets": versioned(dataset_cfg.subsets),
+        "splits": versioned(dataset_cfg.splits),
+        "remap_columns": versioned(dataset_cfg.remap_columns),
+    }
+    if dataset_cfg.text_replacements is not None:
+        config_kwargs["replacements"] = versioned(dataset_cfg.text_replacements)
 
     transform_step = ExecutorStep(
         name=f"documents/{output_name}",
         fn=transform_hf_dataset,
-        config=TransformSFTDatasetConfig(
-            source=versioned(dataset_cfg.hf_dataset_id),
-            revision=versioned(dataset_cfg.revision),
-            output_path=this_output_path(),
-            metadata_columns=versioned(dataset_cfg.metadata_columns),
-            adapter=versioned(adapter),
-            subsets=versioned(dataset_cfg.subsets),
-            splits=versioned(dataset_cfg.splits),
-            remap_columns=versioned(dataset_cfg.remap_columns),
-        ),
+        config=TransformSFTDatasetConfig(**config_kwargs),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
     )
 
