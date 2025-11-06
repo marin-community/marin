@@ -9,7 +9,6 @@ import pytest
 
 from haliax.partitioning import ResourceAxis
 from levanter.utils.jax_utils import best_effort_sharding, create_fsdp_mesh, sharded_tree_size
-from test_utils import skip_if_not_enough_devices
 
 
 def _assert_can_put_with_sharding(array, sharding):
@@ -20,7 +19,6 @@ def _assert_can_put_with_sharding(array, sharding):
         raise AssertionError(f"Could not put array with shape {array.shape} with sharding {sharding}")
 
 
-@skip_if_not_enough_devices(8)
 def test_best_effort_sharding():
     if len(jax.devices()) % 8 != 0:
         pytest.skip("Not enough devices")

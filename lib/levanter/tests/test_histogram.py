@@ -8,9 +8,10 @@ import jax
 from jax.random import PRNGKey
 import haliax as hax
 from haliax.partitioning import ResourceAxis
+import pytest
 
 import levanter.tracker.histogram
-from test_utils import use_test_mesh, skip_if_not_enough_devices
+from test_utils import use_test_mesh
 
 
 def test_sharded_histogram_simple():
@@ -28,8 +29,11 @@ def test_sharded_histogram_simple():
         assert jax.numpy.allclose(bins, bins_normal)
 
 
-@skip_if_not_enough_devices(2)
+# @skip_if_not_enough_devices(2)
 def test_sharded_histogram_tp():
+    if jax.device_count() < 2:
+        pytest.skip("Not enough devices for tensor parallelism test")
+
     Batch = hax.Axis("batch", 64)
     Feature = hax.Axis("feature", 128)
 

@@ -281,7 +281,7 @@ def test_mixtral_roundtrip():
     torch_out = torch_out.logits[0].detach().cpu().numpy()
     torch_out = jax.nn.softmax(torch_out, axis=-1)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         model = converter.load_pretrained(
@@ -293,8 +293,7 @@ def test_mixtral_roundtrip():
             return hax.nn.softmax(model_output, axis=model.Vocab)
 
         compute = jax.jit(compute)
-        with use_test_mesh():
-            jax_out = compute(input).array
+        jax_out = compute(input).array
 
         assert torch_out.shape == jax_out.shape, f"{torch_out.shape} != {jax_out.shape}"
         assert np.isclose(torch_out, np.array(jax_out), rtol=1e-4, atol=1e-4).all(), f"{torch_out} != {jax_out}"

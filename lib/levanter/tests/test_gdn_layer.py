@@ -67,7 +67,9 @@ def _init_small_hf_layer_with_linear_only(hidden_size=128, nk=4, nv=8, dk=8, dv=
     return cfg, layer
 
 
-def _init_small_lev_layer(hidden_size=128, nk=4, nv=8, dk=8, dv=8, ksz=4, key=jax.random.PRNGKey(0)):
+def _init_small_lev_layer(hidden_size=128, nk=4, nv=8, dk=8, dv=8, ksz=4, key=None):
+    if key is None:
+        key = jax.random.PRNGKey(0)
     Embed = Axis("embed", hidden_size)
     cfg = GatedDeltaNetConfig(
         Embed=Embed, num_k_heads=nk, num_v_heads=nv, head_k_dim=dk, head_v_dim=dv, conv_kernel_size=ksz
