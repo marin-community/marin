@@ -19,7 +19,7 @@ SmolTalk2 SFT release and NVIDIA's Nemotron Post Training Dataset v2. Mixture
 weights are looked up dynamically from the Hugging Face datasets-server ``/size``
 endpoint so that each split is weighted by its document count.
 """
-
+import dataclasses
 import math
 import re
 from levanter.data.text import ChatLmDatasetFormat
@@ -41,7 +41,7 @@ from marin.resources import TpuPodConfig
 SLUGIFY_PATTERN = re.compile(r"[^a-z0-9]+")
 
 TARGET_EPOCHS = 3
-TRAIN_BATCH_SIZE = 1024
+TRAIN_BATCH_SIZE = 384
 
 # Row counts captured on 2025-11-07 via `uv run python lib/marin/tools/get_hf_dataset_schema.py ...`.
 SMOLTALK2_ROW_COUNTS = {
@@ -156,10 +156,15 @@ mixture_config = lm_mixture_data_config(
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )
 
+llama_8b_blocked_cross_entropy = dataclasses.replace(
+    llama_8b,
+    cross_entropy_block_size=64000,
+)
+
 marin_8b_sft_smoltalk2_nemotron_v2 = default_sft(
     name="marin_8b_sft_smoltalk2_nemotron_v2",
     tokenized=mixture_config,
-    model_config=llama_8b,
+    model_config=llama_8b_blocked_cross_entropy,
     sft_config=mixture_sft_config,
     tags=["llama", "smoltalk2", "nemotron_v2", "sft"],
 )
