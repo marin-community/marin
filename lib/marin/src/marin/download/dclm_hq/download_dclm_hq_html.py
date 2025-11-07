@@ -36,11 +36,10 @@ import draccus
 import fsspec
 import requests
 import warcio
+from marin.utils import fsspec_glob
 from tqdm import tqdm
 from zephyr import Dataset, flow_backend
-
-from marin.core.runtime import cached_or_construct_output
-from marin.utils import fsspec_glob
+from zephyr.writers import ensure_parent_dir
 
 CC_IDX_HOST_URL = "http://34.72.201.218:8080"
 logger = logging.getLogger("ray")
@@ -122,7 +121,6 @@ def find_html_in_cc(split_id: str, target_uri: str) -> str | None:
     return html_content
 
 
-@cached_or_construct_output(success_suffix="SUCCESS")
 def process_file(task: FileTask) -> None:
     """Process a single DCLM file, fetching HTML from Common Crawl.
 
@@ -133,6 +131,7 @@ def process_file(task: FileTask) -> None:
     logger.info(f"Source: {task.input_file_path}")
     logger.info(f"Destination: {task.output_file_path}")
     try:
+        ensure_parent_dir(task.output_file_path)
         with (
             fsspec.open(task.input_file_path, compression="zstd") as source,
             fsspec.open(task.output_file_path, "wt", compression="gzip") as output,

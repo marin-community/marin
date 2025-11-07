@@ -99,9 +99,17 @@ def process_one_warc_file(
     # Logging variables
     logger.info(f"Processing {s3_url} in {input_path}")
     length_warc = 0
-    s3_fs = fsspec.filesystem("s3", anon=False)  # make sure s3 keys are setup
 
-    with s3_fs.open(s3_url, mode="rb") as file_stream:
+    # Detect filesystem protocol from URL
+    if s3_url.startswith("s3://"):
+        fs = fsspec.filesystem("s3", anon=False)  # make sure s3 keys are setup
+    elif s3_url.startswith("file://"):
+        fs = fsspec.filesystem("file")
+    else:
+        # Default to S3 for backward compatibility (URLs without protocol prefix)
+        fs = fsspec.filesystem("s3", anon=False)
+
+    with fs.open(s3_url, mode="rb") as file_stream:
         for record in ArchiveIterator(file_stream):
             if num_urls_found == length_url_inp_list:
                 break

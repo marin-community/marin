@@ -25,14 +25,13 @@ from dataclasses import dataclass
 
 import draccus
 import fsspec
-from tqdm import tqdm
-from zephyr import Dataset, flow_backend
-
 from marin.core.runtime import cached_or_construct_output
 from marin.download.dclm_hq.download_dclm_hq_html import find_html_in_cc
 from marin.download.huggingface.stream_remove_columns import hf_fs
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
+from tqdm import tqdm
+from zephyr import Dataset, flow_backend
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +131,12 @@ def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
 
     # Single-level parallelism over all files
     pipeline = Dataset.from_list(all_files).map(
-        lambda f: process_file(f["input"], f["output"], f["extract_method"], f["extract_config"])
+        lambda f: process_file(
+            input_file_path=f["input"],
+            output_file_path=f["output"],
+            extract_method=f["extract_method"],
+            extract_config=f["extract_config"],
+        )
     )
 
     list(backend.execute(pipeline))

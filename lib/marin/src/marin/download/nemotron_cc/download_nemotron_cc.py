@@ -119,7 +119,7 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
     logger.info(f"Processing {len(files)} Nemotron CC files")
 
     backend = flow_backend()
-    pipeline = Dataset.from_list(files[:2]).map(
+    pipeline = Dataset.from_list(files).map(
         lambda file_info: download_single_nemotron_path(file_info[0], file_info[1], cfg.chunk_size)
     )
 
