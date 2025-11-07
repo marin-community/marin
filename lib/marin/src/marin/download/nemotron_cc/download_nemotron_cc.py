@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Download and process Nemotron-CC dataset from Common Crawl.
+
+Example Usage:
+uv run zephyr --backend=ray --max-parallelism=100 --memory=4GB \
+    lib/marin/src/marin/download/nemotron_cc/download_nemotron_cc.py \
+    --output_path gs://bucket/nemotron-output
+"""
+
 import json
 import logging
 import os
@@ -20,11 +29,10 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import requests
-from zephyr import Dataset, flow_backend
-
 from marin.core.runtime import cached_or_construct_output
 from marin.download.nemotron_cc.utils import decompress_zstd_stream
 from marin.utils import fsspec_exists
+from zephyr import Dataset, flow_backend
 
 logger = logging.getLogger("ray")
 
@@ -111,7 +119,7 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
     logger.info(f"Processing {len(files)} Nemotron CC files")
 
     backend = flow_backend()
-    pipeline = Dataset.from_list(files).map(
+    pipeline = Dataset.from_list(files[:2]).map(
         lambda file_info: download_single_nemotron_path(file_info[0], file_info[1], cfg.chunk_size)
     )
 

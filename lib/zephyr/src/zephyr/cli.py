@@ -193,9 +193,7 @@ Examples:
 """,
 )
 @click.argument("script", type=click.Path(exists=True, dir_okay=False))
-@click.option(
-    "--backend", type=click.Choice(["ray", "threadpool", "sync"]), default="ray", help="Backend type (default: ray)"
-)
+@click.option("--backend", type=click.Choice(["ray", "threadpool", "sync"]), default="threadpool", help="Backend type")
 @click.option("--max-parallelism", type=int, default=100, help="Maximum concurrent tasks (default: 100)")
 @click.option("--memory", type=str, help="Memory per task (e.g., '2GB', '512MB')")
 @click.option("--num-cpus", type=float, help="Number of CPUs per task")
