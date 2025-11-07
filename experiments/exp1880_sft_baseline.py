@@ -41,7 +41,7 @@ from marin.resources import TpuPodConfig
 SLUGIFY_PATTERN = re.compile(r"[^a-z0-9]+")
 
 TARGET_EPOCHS = 3
-TRAIN_BATCH_SIZE = 128
+TRAIN_BATCH_SIZE = 1024
 
 # Row counts captured on 2025-11-07 via `uv run python lib/marin/tools/get_hf_dataset_schema.py ...`.
 SMOLTALK2_ROW_COUNTS = {
@@ -142,22 +142,22 @@ mixture_sft_config = SimpleSFTConfig(
     learning_rate=5e-6,
     resources=TpuPodConfig(tpu_type="v4-64"),
     tokenizer=marin_tokenizer,
-    model_name_or_path="meta-llama/Llama-3.1-8B",
-    max_seq_len=4096,
+    model_name_or_path="marin-community/marin-8b-base",
+    max_seq_len=8192,
     seed=0,
 )
 
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
-    permutation_type="linear",
+    permutation_type="feistel",
     shuffle=True,
     missing_weights_are_validation=True,
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )
 
-training_step = default_sft(
-    name="llama3.1_smoltalk2_nemotron_v2",
+marin_8b_sft_smoltalk2_nemotron_v2 = default_sft(
+    name="marin_8b_sft_smoltalk2_nemotron_v2",
     tokenized=mixture_config,
     model_config=llama_8b,
     sft_config=mixture_sft_config,
@@ -166,4 +166,4 @@ training_step = default_sft(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[training_step])
+    executor_main(steps=[marin_8b_sft_smoltalk2_nemotron_v2])
