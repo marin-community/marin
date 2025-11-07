@@ -21,9 +21,15 @@ https://github.com/marin-community/marin/blob/main/docs/recipes/add_dataset.md
 
 import argparse
 import json
+import os
 import warnings
+
+import requests
 from datasets import load_dataset, get_dataset_split_names, get_dataset_config_names
 from datasets.utils.info_utils import VerificationMode
+
+HF_DATASET_SIZE_URL = "https://datasets-server.huggingface.co/size"
+HF_TOKEN_ENV_VARS = ("HF_TOKEN", "HF_API_TOKEN", "HUGGINGFACE_API_TOKEN", "HF_HUB_TOKEN", "API_TOKEN")
 
 
 def make_json_serializable(obj):
@@ -62,6 +68,64 @@ def _is_string_feature(feature) -> bool:
     if nested is not None:
         return _is_string_feature(nested)
     return False
+
+
+def _hf_auth_headers() -> dict[str, str]:
+    for env_var in HF_TOKEN_ENV_VARS:
+        token = os.environ.get(env_var)
+        if token:
+            return {"Authorization": f"Bearer {token}"}
+    return {}
+
+
+def get_dataset_size(dataset_name: str, config_name: str | None = None) -> dict:
+    """Return dataset size metadata (rows/bytes) from the datasets-server size endpoint."""
+
+    params = {"dataset": dataset_name}
+    if config_name:
+        params["config"] = config_name
+
+    response = requests.get(HF_DATASET_SIZE_URL, params=params, headers=_hf_auth_headers(), timeout=60)
+    response.raise_for_status()
+
+    payload = response.json()
+    size_info = payload.get("size", {})
+
+    def _summary_block() -> dict:
+        if config_name:
+            summary = size_info.get("config")
+            if summary is not None:
+                return summary
+        summary = size_info.get("dataset")
+        if summary is not None:
+            return summary
+        return {}
+
+    def _matches_target(entry: dict) -> bool:
+        if entry.get("dataset") not in {None, dataset_name}:
+            return False
+        if config_name and entry.get("config") != config_name:
+            return False
+        return True
+
+    splits_summary = {
+        entry["split"]: {
+            "config": entry.get("config"),
+            "num_rows": entry.get("num_rows"),
+            "num_columns": entry.get("num_columns"),
+            "num_bytes_parquet_files": entry.get("num_bytes_parquet_files"),
+            "num_bytes_memory": entry.get("num_bytes_memory"),
+        }
+        for entry in size_info.get("splits", [])
+        if entry.get("split") and _matches_target(entry)
+    }
+
+    return {
+        "summary": _summary_block(),
+        "configs": size_info.get("configs"),
+        "splits": splits_summary,
+        "partial": payload.get("partial", False),
+    }
 
 
 def get_schema(
@@ -171,6 +235,11 @@ def get_schema(
             "sample_row": sample,
             "features": feature_dtypes,
         }
+
+        try:
+            result["dataset_size"] = get_dataset_size(dataset_name, config_name)
+        except Exception as exc:  # pragma: no cover - network failures shouldn't break schema dumps
+            result["dataset_size_error"] = f"Failed to fetch dataset size metadata: {exc}"
 
         # Add warning if no text fields found
         if not text_candidates:

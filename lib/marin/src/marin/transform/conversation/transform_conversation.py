@@ -26,6 +26,8 @@ import hashlib
 import json
 import logging
 import os
+import random
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +42,7 @@ from tqdm_loggable.tqdm_logging import tqdm_logging
 from marin.execution import unwrap_versioned_value
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.core.runtime import fsspec_mkdirs
+from marin.utils import load_dataset_with_backoff
 
 from .adapters import TransformAdapter
 
@@ -162,6 +165,21 @@ def transform_row(row: dict, cfg: TransformSFTDatasetConfig, adapter: TransformA
     )
 
 
+def _canonicalize_shard_output_path(output_filename: str) -> str:
+    _, path = fsspec.core.url_to_fs(output_filename)
+    protocol = fsspec.core.split_protocol(output_filename)[0]
+
+    path_without_suffix = Path(path)
+    while path_without_suffix.suffix:
+        path_without_suffix = path_without_suffix.with_suffix("")
+
+    if protocol:
+        output_path = f"{protocol}://{path_without_suffix}"
+    else:
+        output_path = str(path_without_suffix)
+    return output_path
+
+
 def create_shard_output_directory(output_filename: str) -> str:
     """Given an output filename, remove the suffix of the filename and create a directory for the shards.
 
@@ -174,17 +192,7 @@ def create_shard_output_directory(output_filename: str) -> str:
     Returns:
         str: The path to the directory containing the shards.
     """
-    _, path = fsspec.core.url_to_fs(output_filename)
-    protocol = fsspec.core.split_protocol(output_filename)[0]
-
-    path_without_suffix = Path(path)
-    while path_without_suffix.suffix:
-        path_without_suffix = path_without_suffix.with_suffix("")
-
-    if protocol:
-        output_path = f"{protocol}://{path_without_suffix}"
-    else:
-        output_path = str(path_without_suffix)
+    output_path = _canonicalize_shard_output_path(output_filename)
     fsspec_mkdirs(output_path)
     return output_path
 
@@ -221,6 +229,25 @@ def _shard_filename(output_path: str, shard_idx: int) -> str:
     return os.path.join(output_path, f"shard_{shard_idx:05d}.jsonl.gz")
 
 
+def _shard_sentinel_filename(output_path: str, shard_idx: int) -> str:
+    return f"{_shard_filename(output_path, shard_idx)}.complete"
+
+
+def _sentinel_exists(path: str) -> bool:
+    fs, _ = fsspec.core.url_to_fs(path)
+    return fs.exists(path)
+
+
+def _write_sentinel(path: str, *, rows_written: int) -> None:
+    fs_handle = fsspec.open(path, "wt")
+    with fs_handle as handle:
+        payload = {
+            "rows_written": rows_written,
+            "completed": datetime.now(timezone.utc).isoformat(),
+        }
+        handle.write(json.dumps(payload))
+
+
 def get_shard_dir(dir_name: os.PathLike, subset_name: str | None, split: str) -> os.PathLike:
     """Creates a new path with the subset and split names.
     e.g., create_subset_name('gs://thisserver/testfolder-a982374', 'subset', 'train') -> 'gs://thisserver/testfolder-a982374/subset/train'
@@ -241,6 +268,7 @@ def process_streaming_shard(
     if not source:
         raise ValueError("Transform configuration must include `source` pointing to the HF dataset id.")
     revision = unwrap_versioned_value(cfg.revision)
+    subset_name = subset or "default"
     dataset_kwargs: dict[str, object] = {
         "path": source,
         "split": split,
@@ -250,12 +278,21 @@ def process_streaming_shard(
     if subset not in (None, "default"):
         dataset_kwargs["name"] = subset
 
-    dataset = datasets.load_dataset(**dataset_kwargs)
+    dataset = load_dataset_with_backoff(
+        context=f"{source} subset={subset_name} split={split} shard={shard_idx}",
+        logger=logger,
+        **dataset_kwargs,
+    )
     shard_dataset = dataset.shard(num_shards=num_shards, index=shard_idx)
 
-    subset_name = subset or "default"
     subset_output_path = get_shard_dir(cfg.output_path, subset_name, split)
     output_path = create_shard_output_directory(subset_output_path)
+    sentinel_path = _shard_sentinel_filename(output_path, shard_idx)
+    if _sentinel_exists(sentinel_path):
+        logging.info(
+            f"Skipping subset={subset_name} split={split} shard={shard_idx} because sentinel exists at {sentinel_path}"
+        )
+        return []
     rows_written = 0
     files_written: list[str] = []
     current_handle = None
@@ -285,8 +322,10 @@ def process_streaming_shard(
         if current_handle is not None:
             current_handle.close()
 
+    _write_sentinel(sentinel_path, rows_written=rows_written)
     logging.info(
-        f"Wrote {rows_written} rows to {current_filename} " f"for subset={subset_name} split={split} shard={shard_idx}"
+        f"Wrote {rows_written} rows to {current_filename} "
+        f"for subset={subset_name} split={split} shard={shard_idx} (sentinel: {sentinel_path})"
     )
     return files_written
 
@@ -320,6 +359,9 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
             continue
 
         for split in splits:
+            subset_name = subset or "default"
+            subset_output_path = get_shard_dir(cfg.output_path, subset_name, split)
+            canonical_output_path = _canonicalize_shard_output_path(subset_output_path)
             dataset_kwargs: dict[str, object] = {
                 "path": source,
                 "split": split,
@@ -329,7 +371,11 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
             if subset not in (None, "default"):
                 dataset_kwargs["name"] = subset
 
-            dataset = datasets.load_dataset(**dataset_kwargs)
+            dataset = load_dataset_with_backoff(
+                context=f"{source} subset={subset_name} split={split}",
+                logger=logger,
+                **dataset_kwargs,
+            )
             num_shards = dataset.num_shards
             if not num_shards:
                 raise ValueError(
@@ -337,6 +383,12 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
                 )
 
             for shard_idx in range(num_shards):
+                sentinel_path = _shard_sentinel_filename(canonical_output_path, shard_idx)
+                if _sentinel_exists(sentinel_path):
+                    logging.info(
+                        f"Skipping subset={subset_name} split={split} shard={shard_idx} due to existing sentinel"
+                    )
+                    continue
                 shard_refs.append(process_streaming_shard.remote(cfg, subset, split, shard_idx, num_shards))
 
     ray.get(shard_refs)
