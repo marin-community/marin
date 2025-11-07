@@ -55,7 +55,7 @@ from levanter.store.cache import CacheOptions
 from ray.runtime_env import RuntimeEnv
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
-from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
+from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size, load_tokenizer_with_backoff
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +230,10 @@ def tokenize(config: TokenizeConfigBase):
             f"validation source: {validation_source}"
         )
 
-    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
+    tokenizer = load_tokenizer_with_backoff(
+        config.tokenizer,
+        context=f"tokenizer::{config.tokenizer}",
+    )
     batch_tokenizer = preprocessor_for_format(config.format, tokenizer)
 
     if train_source is not None:
