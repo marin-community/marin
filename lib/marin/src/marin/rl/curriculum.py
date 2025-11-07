@@ -30,6 +30,7 @@ import fsspec
 import numpy as np
 
 from marin.rl.environments.base import EnvConfig
+from marin.rl.health_monitor import CurriculumHealthMonitor, HealthMonitorConfig, Warning
 from marin.rl.robust_actor import RobustActor
 from marin.rl.types import RolloutStats
 
@@ -145,6 +146,9 @@ class CurriculumConfig:
 
     checkpoint_steps: int = 10
     """How often to checkpoint curriculum state (in training steps)."""
+
+    health_monitor_config: HealthMonitorConfig = field(default_factory=HealthMonitorConfig)
+    """Configuration for health monitoring system."""
 
     @property
     def max_tokens(self) -> int:
@@ -338,6 +342,9 @@ class Curriculum:
         # Step counter for internal tracking
         self.current_step = 0
 
+        # Initialize health monitor
+        self.health_monitor = CurriculumHealthMonitor(self.config.health_monitor_config)
+
     def compute_sampling_weights(self) -> dict[str, float]:
         """Compute sampling weights for all active lessons.
 
@@ -424,8 +431,24 @@ class Curriculum:
                     self.stats[lesson_id].eval_stats, stats, self.current_step
                 )
 
+            # Update health monitor with performance data
+            lesson_state = self._get_lesson_state(lesson_id)
+            success_rate = compute_success_ratio(self.stats[lesson_id], self.current_step)
+            self.health_monitor.update(
+                env_id=lesson_id,
+                performance=success_rate,
+                mode=mode,
+                state=lesson_state,
+                current_step=self.current_step,
+            )
+
         # Automatically update lesson states (unlocking/graduation) after updating stats
         self._unlock_and_graduate_lessons()
+
+        # Check for health warnings
+        warnings = self.health_monitor.check_warnings()
+        if warnings:
+            self._handle_warnings(warnings)
 
     def get_metrics(self) -> dict:
         """Get curriculum metrics for monitoring.
@@ -442,7 +465,7 @@ class Curriculum:
         # Effective lessons (inverse Simpson index)
         effective = 1 / sum(w**2 for w in weights.values()) if weights else 0
 
-        return {
+        metrics = {
             "step": self.current_step,
             "total_lessons": len(self.config.lessons),
             "unlocked_lessons": len(self.unlocked),
@@ -455,6 +478,25 @@ class Curriculum:
             ),
             "sampling_weights": weights,
         }
+
+        # Add health monitoring metrics
+        if self.config.health_monitor_config.enabled:
+            health_summary = self.health_monitor.get_health_summary()
+            metrics["health"] = health_summary
+
+            # Add per-environment health status
+            env_health = {}
+            for lesson_id in self.config.lessons:
+                report = self.health_monitor.get_environment_report(lesson_id)
+                if report:
+                    env_health[lesson_id] = {
+                        "status": report["health_status"],
+                        "performance": report["performance"]["current_eval"],
+                        "trend": report["performance"]["trend"],
+                    }
+            metrics["environment_health"] = env_health
+
+        return metrics
 
     def _check_dependencies_for_lesson(self, lesson_id: str) -> bool:
         """Return true if all dependencies for a lesson are satisfied."""
@@ -524,6 +566,84 @@ class Curriculum:
                 logger.info("Graduating lesson '%s' with stats %s", lesson_id, self.stats[lesson_id])
                 self.graduated.add(lesson_id)
 
+    def _get_lesson_state(self, lesson_id: str) -> str:
+        """Get the current state of a lesson.
+
+        Returns:
+            "locked", "active", or "graduated"
+        """
+        if lesson_id in self.graduated:
+            return "graduated"
+        elif lesson_id in self.unlocked:
+            return "active"
+        else:
+            return "locked"
+
+    def _handle_warnings(self, warnings: list[Warning]) -> None:
+        """Handle health warnings by logging and optionally sending alerts.
+
+        Args:
+            warnings: List of warnings to handle.
+        """
+        for warning in warnings:
+            # Log warning
+            log_msg = f"[HEALTH WARNING] {warning.message}"
+            if warning.severity == "critical":
+                logger.critical(log_msg)
+            elif warning.severity == "high":
+                logger.error(log_msg)
+            elif warning.severity == "medium":
+                logger.warning(log_msg)
+            else:
+                logger.info(log_msg)
+
+            # Send wandb alert if enabled
+            if self.config.health_monitor_config.enable_wandb_alerts:
+                if self.health_monitor.should_send_wandb_alert(warning.type):
+                    self._send_wandb_alert(warning)
+
+    def _send_wandb_alert(self, warning: Warning) -> None:
+        """Send alert to wandb.
+
+        Args:
+            warning: Warning to send as alert.
+        """
+        try:
+            import wandb
+
+            if wandb.run is not None:
+                # Map severity to wandb alert level strings
+                # wandb.alert accepts strings: "INFO", "WARN", "ERROR"
+                alert_level = {
+                    "critical": "ERROR",
+                    "high": "WARN",
+                    "medium": "WARN",
+                    "low": "INFO",
+                }.get(warning.severity, "INFO")
+
+                wandb.alert(
+                    title=f"Curriculum Health: {warning.type.value}",
+                    text=warning.message,
+                    level=alert_level,
+                    wait_duration=300,  # Don't spam alerts
+                )
+
+                # Also log metrics
+                wandb.log(
+                    {
+                        f"health/warnings/{warning.env_id}/{warning.type.value}": 1,
+                        f"health/warning_severity/{warning.env_id}": {"low": 1, "medium": 2, "high": 3, "critical": 4}.get(
+                            warning.severity, 0
+                        ),
+                        **{f"health/metrics/{warning.env_id}/{k}": v for k, v in warning.metrics.items()},
+                    },
+                    step=self.current_step,
+                )
+        except ImportError:
+            logger.debug("wandb not available, skipping alert")
+        except Exception as e:
+            logger.error(f"Failed to send wandb alert: {e}")
+
     def save_checkpoint(self, checkpoint_dir: str, filename: str = "curriculum_state.json"):
         """Save curriculum state to disk as JSON.
 
@@ -564,6 +684,15 @@ class Curriculum:
             "current_step": self.current_step,
         }
 
+        # Save health monitor state if enabled
+        if self.config.health_monitor_config.enabled:
+            health_data = {
+                "graduation_baselines": self.health_monitor.graduation_baselines,
+                "state_transition_times": dict(self.health_monitor.state_transition_times),
+                "last_progress_step": dict(self.health_monitor.last_progress_step),
+            }
+            checkpoint_data["health_monitor"] = health_data
+
         with fs.open(checkpoint_path, "w") as f:
             json.dump(checkpoint_data, f, indent=2)
 
@@ -601,6 +730,26 @@ class Curriculum:
         self.unlocked = set(checkpoint_data["unlocked"])
         self.graduated = set(checkpoint_data["graduated"])
         self.current_step = checkpoint_data["current_step"]
+
+        # Restore health monitor state if present
+        if "health_monitor" in checkpoint_data and self.config.health_monitor_config.enabled:
+            health_data = checkpoint_data["health_monitor"]
+            self.health_monitor.graduation_baselines = health_data.get("graduation_baselines", {})
+            self.health_monitor.state_transition_times = defaultdict(dict, health_data.get("state_transition_times", {}))
+            self.health_monitor.last_progress_step = defaultdict(int, health_data.get("last_progress_step", {}))
+            self.health_monitor.current_step = self.current_step
+
+            # Re-initialize environment states based on current lesson states
+            for lesson_id in self.config.lessons:
+                state = self._get_lesson_state(lesson_id)
+                success_rate = compute_success_ratio(self.stats[lesson_id], self.current_step)
+                self.health_monitor.update(
+                    env_id=lesson_id,
+                    performance=success_rate,
+                    mode="training" if state == "active" else "eval",
+                    state=state,
+                    current_step=self.current_step,
+                )
 
         logger.info("Restored curriculum checkpoint from %s at step %d", checkpoint_path, self.current_step)
 
