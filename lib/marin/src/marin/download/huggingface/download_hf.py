@@ -20,25 +20,22 @@ using HfFileSystem for direct streaming of data transfer.
 
 import logging
 import os
-import time
 import random
+import time
 
+import draccus
 import fsspec
-import ray
 from huggingface_hub import HfFileSystem
-from tqdm_loggable.tqdm_logging import tqdm_logging
-
-from marin.core.runtime import simple_backpressure
 from marin.download.huggingface.download import DownloadConfig
 from marin.utilities.validation_utils import write_provenance_json
+from zephyr import Dataset, flow_backend
 
-# Set up logging
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
-    fs, path = fsspec.core.url_to_fs(output_path)
+    fs, _ = fsspec.core.url_to_fs(output_path)
     try:
         test_path = os.path.join(output_path, "test_write_access")
         with fs.open(test_path, "w") as f:
@@ -48,7 +45,6 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
 
-@ray.remote
 def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: str, fsspec_file_path: str):
     """Ray task to stream a file from HfFileSystem to another fsspec path."""
     target_fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
@@ -75,9 +71,6 @@ def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: s
 
 def download_hf(cfg: DownloadConfig) -> None:
     logging.basicConfig(level=logging.INFO)
-
-    # Parse the output path and get the file system
-    fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
 
     # TODO: Our earlier version of download_hf used this piece of code for calculating the versioned_output_path
     # versioned_output_path = os.path.join(cfg.gcs_output_path, cfg.revision)
@@ -120,15 +113,10 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     total_files = len(task_generator)
     logger.info(f"Total number of files to process: {total_files}")
-    pbar = tqdm_logging(total=total_files)
 
-    for ref in simple_backpressure(stream_file_to_fsspec, iter(task_generator), max_in_flight=16, fetch_local=True):
-        try:
-            ray.get(ref)
-            pbar.update(1)
-        except Exception as e:
-            logging.exception(f"Error during task execution: {e}")
-            raise e
+    backend = flow_backend()
+    pipeline = Dataset.from_list(task_generator).map(lambda task: stream_file_to_fsspec(*task))
+    list(backend.execute(pipeline))
 
     # Write Provenance JSON
     write_provenance_json(
@@ -137,3 +125,13 @@ def download_hf(cfg: DownloadConfig) -> None:
     )
 
     logger.info(f"Streamed all files and wrote provenance JSON; check {cfg.gcs_output_path}.")
+
+
+@draccus.wrap()
+def main(cfg: DownloadConfig) -> None:
+    """Download HuggingFace dataset."""
+    download_hf(cfg)
+
+
+if __name__ == "__main__":
+    main()

@@ -12,13 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Filter StackExchange data by vote threshold and remove duplicate questions.
+
+Deduplication is performed per-file: duplicate question IDs within each input
+file are removed, keeping the first occurrence. Duplicates across different
+input files are NOT removed.
+
+Example Usage:
+uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
+    lib/marin/src/marin/transform/stackexchange/filter_stackexchange.py \
+    --input_path gs://marin-us-central2/raw/stackexchange/ \
+    --output_path gs://marin-us-central2/processed/stackexchange/filtered \
+    --min_vote_threshold 10 \
+    --remove_duplicate_questions
+"""
+
 import dataclasses
 
 import draccus
-import pandas as pd
-import ray
-
-from marin.core.runtime import cached_or_construct_output, map_files_in_directory
+from zephyr import Dataset, flow_backend
 
 
 @dataclasses.dataclass
@@ -29,39 +42,57 @@ class FilterStackExchangeConfig:
     remove_duplicate_questions: bool = True
 
 
-@ray.remote
-@cached_or_construct_output
-def _process_file(input_file_path: str, output_file_path: str, config: FilterStackExchangeConfig):
-    """Filters the stackexchange dataset by votes and removes duplicate questions.
+def _process_file_with_filtering(file_path: str, config: FilterStackExchangeConfig):
+    """Process one StackExchange file: filter by votes and deduplicate within file.
 
-    Accepts and outputs a dolma formatted file. We filter on a dataset of question-answer pairs.
-    If the dataset is not question-answer pair, then we consider question and answers independently.
+    Args:
+        file_path: Path to input JSONL file
+        config: Filter configuration
+
+    Yields:
+        Records that pass the vote threshold and are unique within this file
     """
+    import json
 
-    df = pd.read_json(input_file_path, lines=True)
-    df["votes"] = df["metadata"].apply(lambda x: x["votes"])
-    df["question_id"] = df["metadata"].apply(lambda x: x["id"])
+    import fsspec
 
-    if config.remove_duplicate_questions:
-        df = df.drop_duplicates(subset=["question_id"], keep="first")
+    seen_ids = set() if config.remove_duplicate_questions else None
 
-    df = df[df["votes"] >= config.min_vote_threshold]
+    with fsspec.open(file_path, "rt", compression="infer") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
 
-    # Add orient='records' parameter when writing JSONL
-    df.to_json(output_file_path, orient="records", lines=True, compression="gzip")
+            row = json.loads(line)
+            votes = row["metadata"]["votes"]
 
+            # Filter by vote threshold
+            if votes < config.min_vote_threshold:
+                continue
 
-@ray.remote
-def _process_dataset(config: FilterStackExchangeConfig):
-    responses = map_files_in_directory(
-        _process_file.remote, config.input_path, "*.jsonl.gz", config.output_path, config=config
-    )
-    ray.get(responses)
+            # Deduplicate within this file
+            if seen_ids is not None:
+                question_id = row["metadata"]["id"]
+                if question_id in seen_ids:
+                    continue
+                seen_ids.add(question_id)
+
+            yield row
 
 
 @draccus.wrap()
 def filter_stackexchange(config: FilterStackExchangeConfig):
-    ray.get(_process_dataset.remote(config))
+    """Filter StackExchange data by vote threshold and remove duplicates."""
+    backend = flow_backend()
+
+    pipeline = (
+        Dataset.from_files(config.input_path, "*.jsonl.gz")
+        .flat_map(lambda path: _process_file_with_filtering(path, config))
+        .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+    )
+
+    list(backend.execute(pipeline))
 
 
 if __name__ == "__main__":

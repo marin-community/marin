@@ -16,24 +16,36 @@
 
 Note: It may not be a good idea to use lavita's allprocessed subset since it is contaminated
 with MMLU. We need to run it through a decontamination pipeline.
+
+Example Usage:
+uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
+    lib/marin/src/marin/transform/medical/lavita_to_dolma.py \
+    --input_path gs://marin-us-central2/raw/medical/lavita-medical-qa-datasets/ \
+    --output_path gs://marin-data/processed/medical/lavita-v1.0/ \
+    --subset pubmed-qa \
+    --split train
 """
 
 import hashlib
 import os
 from dataclasses import dataclass
 
-import pandas as pd
-import ray
-
-from marin.core.runtime import cached_or_construct_output, map_files_in_directory
+import draccus
+from zephyr import Dataset, flow_backend, load_parquet
 
 
 @dataclass
 class LavitaToDolmaConfig:
+    """Configuration for Lavita medical QA dataset transformation."""
+
     input_path: str
+    """Path to the lavita raw directory"""
     output_path: str
+    """Path to store lavita dolma files"""
     subset: str
+    """Subset type: all-processed, medmcqa, or pubmed-qa"""
     split: str
+    """Dataset split to process (e.g., train, test, validation)"""
 
 
 def lavita_pubmedqa_to_dolma(row):
@@ -109,30 +121,45 @@ def lavita_medmcqa_to_dolma(row):
         return None
 
 
-@ray.remote
-@cached_or_construct_output(success_suffix="success")
-def lavita_file_to_dolma(input_path: str, output_path: str, subset: str):
-    df = pd.read_parquet(input_path)
+def lavita_record_to_dolma(row: dict, subset: str):
+    """Transform a single Lavita record to Dolma format.
+
+    Args:
+        row: Record from parquet file
+        subset: Subset type (all-processed, medmcqa, or pubmed-qa)
+
+    Returns:
+        Transformed record in Dolma format, or None if invalid
+    """
     if subset == "all-processed":
-        result_series = df.apply(lavita_allprocessed_to_dolma, axis=1)
+        result = lavita_allprocessed_to_dolma(row)
     elif subset == "medmcqa":
-        result_series = df.apply(lavita_medmcqa_to_dolma, axis=1)
+        result = lavita_medmcqa_to_dolma(row)
     elif subset == "pubmed-qa":
-        result_series = df.apply(lavita_pubmedqa_to_dolma, axis=1)
+        result = lavita_pubmedqa_to_dolma(row)
     else:
         raise ValueError(f"Invalid subset: {subset}")
 
-    # Convert the series of dictionaries back to a DataFrame
-    df = pd.DataFrame(result_series.tolist())
-    df = df[df["text"].str.len() > 0]
-
-    df.to_parquet(output_path)
+    if result and result.get("text") and len(result["text"]) > 0:
+        return result
+    return None
 
 
-def convert_lavita_split_to_dolma(config: LavitaToDolmaConfig):
-    input_path = os.path.join(config.input_path, config.subset)
-    futures = map_files_in_directory(
-        lavita_file_to_dolma.remote, input_path, f"*{config.split}*.parquet", config.output_path, subset=config.subset
+@draccus.wrap()
+def convert_lavita_split_to_dolma(cfg: LavitaToDolmaConfig) -> None:
+    """Transform Lavita medical QA data to Dolma format."""
+    input_path = os.path.join(cfg.input_path, cfg.subset)
+
+    backend = flow_backend()
+    pipeline = (
+        Dataset.from_files(input_path, f"*{cfg.split}*.parquet")
+        .flat_map(load_parquet)
+        .map(lambda row: lavita_record_to_dolma(row, subset=cfg.subset))
+        .filter(lambda record: record is not None)
+        .write_parquet(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
+    list(backend.execute(pipeline))
 
-    ray.get(futures)
+
+if __name__ == "__main__":
+    convert_lavita_split_to_dolma()

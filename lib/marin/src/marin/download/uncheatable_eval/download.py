@@ -26,12 +26,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import fsspec
-import ray
 import requests
+from zephyr import Dataset, flow_backend
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-from marin.core.runtime import cached_or_construct_output, simple_backpressure
+from marin.core.runtime import cached_or_construct_output
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, ensure_versioned, this_output_path
 from marin.utils import fsspec_exists, fsspec_mkdirs
 
@@ -251,7 +251,6 @@ def _normalize_record(raw: Any, dataset: UncheatableEvalDataset, index: int) -> 
     return {"id": record_id, "text": text, "source": dataset.source_label}
 
 
-@ray.remote(max_retries=3)
 @cached_or_construct_output(success_suffix="SUCCESS")
 def _download_and_convert_single(
     input_url: str,
@@ -342,32 +341,26 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
 
     metadata_records: list[dict[str, Any]] = []
 
-    refs = simple_backpressure(
-        _download_and_convert_single,
-        iter(tasks),
-        max_in_flight=cfg.max_concurrent_downloads,
-        fetch_local=True,
-    )
+    backend = flow_backend(max_parallelism=cfg.max_concurrent_downloads, max_retries=3)
+    pipeline = Dataset.from_list(tasks).map(lambda task: _download_and_convert_single(*task))
 
-    for dataset, ref in zip(filtered_datasets, refs, strict=False):
+    for dataset, result in zip(filtered_datasets, backend.execute(pipeline), strict=False):
         try:
-            result = ray.get(ref)
+            metadata_records.append(
+                {
+                    "benchmark": dataset.benchmark,
+                    "start_date": dataset.start_date,
+                    "end_date": dataset.end_date,
+                    "source": dataset.source_label,
+                    "output_file": posixpath.join(output_path, dataset.output_filename()),
+                    "records": result.get("records"),
+                    "sha": dataset.sha,
+                    "size": dataset.size,
+                }
+            )
         except Exception:
             logger.exception("Failed to process dataset %s", dataset.name)
             raise
-
-        metadata_records.append(
-            {
-                "benchmark": dataset.benchmark,
-                "start_date": dataset.start_date,
-                "end_date": dataset.end_date,
-                "source": dataset.source_label,
-                "output_file": posixpath.join(output_path, dataset.output_filename()),
-                "records": result.get("records"),
-                "sha": dataset.sha,
-                "size": dataset.size,
-            }
-        )
 
     _write_metadata(cfg, metadata_records)
     return {"success": True, "processed": metadata_records}
