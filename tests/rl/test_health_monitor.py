@@ -15,17 +15,15 @@
 """Tests for the curriculum health monitoring system."""
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import numpy as np
 import pytest
 
 from marin.rl.health_monitor import (
     CurriculumHealthMonitor,
-    EnvironmentHealthMetrics,
     HealthMonitorConfig,
     HealthStatus,
-    Warning,
+    HealthWarning,
     WarningType,
 )
 
@@ -336,7 +334,7 @@ class TestCurriculumHealthMonitor:
         envs = ["env1", "env2", "env3"]
         states = ["active", "graduated", "locked"]
 
-        for env_id, state in zip(envs, states):
+        for env_id, state in zip(envs, states, strict=False):
             for step in range(10):
                 monitor.update(env_id, 0.5 + step * 0.05, "training", state, step * 10)
 
@@ -358,15 +356,16 @@ class TestIntegrationWithCurriculum:
         """Mock wandb for testing."""
         # Mock wandb at the module level
         import sys
+
         mock = MagicMock()
         mock.run = MagicMock()
         mock.alert = MagicMock()
         mock.log = MagicMock()
-        sys.modules['wandb'] = mock
+        sys.modules["wandb"] = mock
         yield mock
         # Clean up
-        if 'wandb' in sys.modules:
-            del sys.modules['wandb']
+        if "wandb" in sys.modules:
+            del sys.modules["wandb"]
 
     def test_curriculum_integration(self, mock_wandb):
         """Test that health monitoring integrates with curriculum."""
@@ -438,7 +437,7 @@ class TestIntegrationWithCurriculum:
         curriculum = Curriculum(curriculum_config)
 
         # Create a warning
-        warning = Warning(
+        warning = HealthWarning(
             type=WarningType.GRADUATED_REGRESSION,
             env_id="lesson1",
             message="Test regression",

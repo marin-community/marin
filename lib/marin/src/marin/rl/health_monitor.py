@@ -24,7 +24,7 @@ import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -50,7 +50,7 @@ class HealthStatus(Enum):
 
 
 @dataclass
-class Warning:
+class HealthWarning:
     """A warning about environment health."""
 
     type: WarningType
@@ -81,12 +81,12 @@ class EnvironmentHealthMetrics:
     steps_since_last_progress: int = 0
 
     # Graduation tracking
-    graduation_performance: Optional[float] = None
-    graduation_step: Optional[int] = None
+    graduation_performance: float | None = None
+    graduation_step: int | None = None
 
     # Health indicators
     health_status: HealthStatus = HealthStatus.HEALTHY
-    warnings: list[Warning] = field(default_factory=list)
+    warnings: list[HealthWarning] = field(default_factory=list)
 
     # Performance volatility
     performance_variance: float = 0.0
@@ -139,7 +139,10 @@ class CurriculumHealthMonitor:
 
         # Performance tracking
         self.historical_performance: dict[str, dict[str, deque]] = defaultdict(
-            lambda: {"training": deque(maxlen=config.performance_history_size), "eval": deque(maxlen=config.performance_history_size)}
+            lambda: {
+                "training": deque(maxlen=config.performance_history_size),
+                "eval": deque(maxlen=config.performance_history_size),
+            }
         )
 
         # Graduation baselines
@@ -151,7 +154,7 @@ class CurriculumHealthMonitor:
         self.last_progress_step: dict[str, int] = defaultdict(int)
 
         # Warning management
-        self.active_warnings: dict[str, list[Warning]] = defaultdict(list)
+        self.active_warnings: dict[str, list[HealthWarning]] = defaultdict(list)
         self.warning_cooldowns: dict[str, dict[WarningType, int]] = defaultdict(dict)
         self.last_wandb_alert: dict[WarningType, float] = {}
 
@@ -204,7 +207,6 @@ class CurriculumHealthMonitor:
             self._handle_state_transition(env_id, metrics.current_state, state)
             metrics.current_state = state
 
-
         # Update state duration
         if env_id in self.state_transition_times and state in self.state_transition_times[env_id]:
             metrics.time_in_current_state = current_step - self.state_transition_times[env_id][state]
@@ -233,7 +235,11 @@ class CurriculumHealthMonitor:
             metrics = self.env_metrics[env_id]
             # Use the current eval performance as graduation baseline
             # Note: This will be the eval performance at the time of graduation
-            graduation_perf = metrics.current_eval_performance if metrics.current_eval_performance > 0 else metrics.current_train_performance
+            graduation_perf = (
+                metrics.current_eval_performance
+                if metrics.current_eval_performance > 0
+                else metrics.current_train_performance
+            )
             metrics.graduation_performance = graduation_perf
             metrics.graduation_step = self.current_step
 
@@ -245,10 +251,11 @@ class CurriculumHealthMonitor:
             }
 
             logger.info(
-                f"Environment {env_id} graduated with performance {metrics.graduation_performance:.3f} at step {self.current_step}"
+                f"Environment {env_id} graduated with performance"
+                f"{metrics.graduation_performance:.3f} at step {self.current_step}"
             )
 
-    def check_warnings(self) -> list[Warning]:
+    def check_warnings(self) -> list[HealthWarning]:
         """Check for health warnings across all environments.
 
         Returns:
@@ -293,7 +300,7 @@ class CurriculumHealthMonitor:
 
         return new_warnings
 
-    def _check_graduated_regression(self, env_id: str, metrics: EnvironmentHealthMetrics) -> Optional[Warning]:
+    def _check_graduated_regression(self, env_id: str, metrics: EnvironmentHealthMetrics) -> HealthWarning | None:
         """Check if a graduated environment has regressed."""
         if env_id not in self.graduation_baselines:
             return None
@@ -305,7 +312,7 @@ class CurriculumHealthMonitor:
         if current_perf < baseline * self.config.regression_threshold:
             severity = "critical" if current_perf < baseline * self.config.critical_regression_threshold else "high"
 
-            return Warning(
+            return HealthWarning(
                 type=WarningType.GRADUATED_REGRESSION,
                 env_id=env_id,
                 message=(
@@ -324,10 +331,10 @@ class CurriculumHealthMonitor:
 
         return None
 
-    def _check_training_stagnation(self, env_id: str, metrics: EnvironmentHealthMetrics) -> Optional[Warning]:
+    def _check_training_stagnation(self, env_id: str, metrics: EnvironmentHealthMetrics) -> HealthWarning | None:
         """Check if training has stagnated."""
         if metrics.steps_since_last_progress > self.config.stagnation_window:
-            return Warning(
+            return HealthWarning(
                 type=WarningType.TRAINING_STAGNATION,
                 env_id=env_id,
                 message=(
@@ -345,10 +352,10 @@ class CurriculumHealthMonitor:
 
         return None
 
-    def _check_prolonged_training(self, env_id: str, metrics: EnvironmentHealthMetrics) -> Optional[Warning]:
+    def _check_prolonged_training(self, env_id: str, metrics: EnvironmentHealthMetrics) -> HealthWarning | None:
         """Check if environment has been training for too long."""
         if metrics.total_training_steps > self.config.prolonged_training_threshold:
-            return Warning(
+            return HealthWarning(
                 type=WarningType.PROLONGED_TRAINING,
                 env_id=env_id,
                 message=(
@@ -365,11 +372,11 @@ class CurriculumHealthMonitor:
 
         return None
 
-    def _check_performance_volatility(self, env_id: str, metrics: EnvironmentHealthMetrics) -> Optional[Warning]:
+    def _check_performance_volatility(self, env_id: str, metrics: EnvironmentHealthMetrics) -> HealthWarning | None:
         """Check for high performance volatility."""
         if metrics.performance_variance > self.config.volatility_threshold:
             mode = "eval" if metrics.current_state == "graduated" else "training"
-            return Warning(
+            return HealthWarning(
                 type=WarningType.PERFORMANCE_VOLATILITY,
                 env_id=env_id,
                 message=(
@@ -379,7 +386,9 @@ class CurriculumHealthMonitor:
                 severity="low",
                 metrics={
                     "coefficient_of_variation": metrics.performance_variance,
-                    "current_performance": metrics.current_eval_performance if mode == "eval" else metrics.current_train_performance,
+                    "current_performance": (
+                        metrics.current_eval_performance if mode == "eval" else metrics.current_train_performance
+                    ),
                     "state": metrics.current_state,
                 },
             )
@@ -450,7 +459,7 @@ class CurriculumHealthMonitor:
                 return False
         return True
 
-    def _record_warning(self, env_id: str, warning: Warning) -> None:
+    def _record_warning(self, env_id: str, warning: HealthWarning) -> None:
         """Record a warning and update cooldowns."""
         self.active_warnings[env_id].append(warning)
         self.warning_cooldowns[env_id][warning.type] = self.current_step
@@ -461,7 +470,11 @@ class CurriculumHealthMonitor:
     def _update_health_status(self) -> None:
         """Update health status for all environments based on active warnings."""
         for env_id, metrics in self.env_metrics.items():
-            active = [w for w in self.active_warnings[env_id] if self.current_step - self.warning_cooldowns[env_id].get(w.type, 0) < 500]
+            active = [
+                w
+                for w in self.active_warnings[env_id]
+                if self.current_step - self.warning_cooldowns[env_id].get(w.type, 0) < 500
+            ]
 
             if any(w.severity == "critical" for w in active):
                 metrics.health_status = HealthStatus.CRITICAL
@@ -492,7 +505,10 @@ class CurriculumHealthMonitor:
         regressions = sum(
             1
             for env_id, m in self.env_metrics.items()
-            if m.current_state == "graduated" and env_id in self.graduation_baselines and m.current_eval_performance < self.graduation_baselines[env_id]["performance"] * self.config.regression_threshold
+            if m.current_state == "graduated"
+            and env_id in self.graduation_baselines
+            and m.current_eval_performance
+            < self.graduation_baselines[env_id]["performance"] * self.config.regression_threshold
         )
 
         return {
@@ -508,7 +524,7 @@ class CurriculumHealthMonitor:
             ),
         }
 
-    def get_environment_report(self, env_id: str) -> Optional[dict[str, Any]]:
+    def get_environment_report(self, env_id: str) -> dict[str, Any] | None:
         """Get detailed health report for a specific environment.
 
         Args:
@@ -545,7 +561,11 @@ class CurriculumHealthMonitor:
             report["graduation"] = {
                 "performance": metrics.graduation_performance,
                 "step": metrics.graduation_step,
-                "current_ratio": metrics.current_eval_performance / metrics.graduation_performance if metrics.graduation_performance > 0 else 0,
+                "current_ratio": (
+                    metrics.current_eval_performance / metrics.graduation_performance
+                    if metrics.graduation_performance > 0
+                    else 0
+                ),
             }
 
         return report
