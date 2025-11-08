@@ -381,7 +381,10 @@ class TestIntegrationWithCurriculum:
             enable_wandb_alerts=True,
         )
 
-        env_config = EnvConfig(env_name="test_env")
+        env_config = EnvConfig(
+            env_class="marin.rl.environments.mock_env.MockEnv",
+            env_args={"env_id": "test_env", "env_args": {}},
+        )
         lesson_config = LessonConfig(
             lesson_id="lesson1",
             env_config=env_config,
@@ -423,7 +426,10 @@ class TestIntegrationWithCurriculum:
             enable_wandb_alerts=True,
         )
 
-        env_config = EnvConfig(env_name="test_env")
+        env_config = EnvConfig(
+            env_class="marin.rl.environments.mock_env.MockEnv",
+            env_args={"env_id": "test_env", "env_args": {}},
+        )
         lesson_config = LessonConfig(
             lesson_id="lesson1",
             env_config=env_config,
