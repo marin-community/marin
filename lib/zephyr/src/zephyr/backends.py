@@ -532,7 +532,6 @@ def process_shard_fused(
 
 
 def deterministic_hash(obj: object) -> int:
-    """Compute a cheap deterministic hash that's consistent across processes."""
     s = msgspec.msgpack.encode(obj, order="deterministic")
     return zlib.adler32(s)
 
@@ -653,15 +652,9 @@ def process_shard_group_by_reduce(
 
 
 def reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
-    """Redistribute chunks across target number of shards (best-effort).
+    """Redistribute chunks across target number of shards.
 
-    Args:
-        shards: Input shards
-        num_shards: Target number of output shards
-
-    Returns:
-        New list of shards with redistributed chunks
-    """
+    Does not split chunks - simply reassigns chunks to new shards in round-robin fashion."""
     if not shards:
         return []
 
@@ -678,20 +671,7 @@ def reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
 
 
 def recompact_shards(shard_lists: list[list[Shard]]) -> list[Shard]:
-    """Recompact shards after an operation.
-
-    Takes list of lists (one list per input shard) and merges chunks by target shard index.
-    This enables a unified architecture where all operations return list[Shard].
-
-    Args:
-        shard_lists: List of shard lists, one from each input shard
-
-    Returns:
-        Compacted list of output shards, ordered by shard index
-    """
-    if not shard_lists:
-        return []
-
+    """Group a list of shard lists into a list of shards by shard index."""
     # Group chunks by output shard index
     chunks_by_idx = defaultdict(list)
     max_idx = -1
@@ -812,7 +792,6 @@ class Backend:
             if is_fusible(op):
                 fusible_buffer.append(op)
             else:
-                # Non-fusible operation (ReshardOp) - flush buffer and add this op
                 flush_buffer()
                 optimized.append(op)
 

@@ -13,20 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Benchmark script for Zephyr deduplication pipeline.
+"""Benchmark Zephyr deduplication pipeline (generate docs → map → deduplicate by simhash → write).
 
-Tests a realistic pipeline that:
-1. Generates 1M documents with ~1000 words each
-2. Maps over documents to split words
-3. Groups by simhash to deduplicate
-4. Writes output as JSONL
-
-Usage:
-    uv run python tests/benchmark_dedup_pipeline.py --backends ray threadpool
-    uv run python tests/benchmark_dedup_pipeline.py --num-docs 100000
-    uv run python tests/benchmark_dedup_pipeline.py --input-dir /path/to/input
-    uv run python tests/benchmark_dedup_pipeline.py --profile --backends ray
+Usage: uv run python tests/benchmark_dedup_pipeline.py --backends ray threadpool [--profile]
 """
 
 import os
@@ -46,152 +35,20 @@ import psutil
 import zstandard as zstd
 from zephyr import Dataset, create_backend
 
-# Word list for generating synthetic text
-WORDS = [
-    "the",
-    "be",
-    "to",
-    "of",
-    "and",
-    "a",
-    "in",
-    "that",
-    "have",
-    "I",
-    "it",
-    "for",
-    "not",
-    "on",
-    "with",
-    "he",
-    "as",
-    "you",
-    "do",
-    "at",
-    "this",
-    "but",
-    "his",
-    "by",
-    "from",
-    "they",
-    "we",
-    "say",
-    "her",
-    "she",
-    "or",
-    "an",
-    "will",
-    "my",
-    "one",
-    "all",
-    "would",
-    "there",
-    "their",
-    "what",
-    "so",
-    "up",
-    "out",
-    "if",
-    "about",
-    "who",
-    "get",
-    "which",
-    "go",
-    "me",
-    "when",
-    "make",
-    "can",
-    "like",
-    "time",
-    "no",
-    "just",
-    "him",
-    "know",
-    "take",
-    "people",
-    "into",
-    "year",
-    "your",
-    "good",
-    "some",
-    "could",
-    "them",
-    "see",
-    "other",
-    "than",
-    "then",
-    "now",
-    "look",
-    "only",
-    "come",
-    "its",
-    "over",
-    "think",
-    "also",
-    "back",
-    "after",
-    "use",
-    "two",
-    "how",
-    "our",
-    "work",
-    "first",
-    "well",
-    "way",
-    "even",
-    "new",
-    "want",
-    "because",
-    "any",
-    "these",
-    "give",
-    "day",
-    "most",
-    "us",
-    "data",
-    "system",
-    "process",
-    "compute",
-    "memory",
-    "network",
-    "storage",
-    "algorithm",
-    "function",
-    "variable",
-    "method",
-    "class",
-    "object",
-    "interface",
-    "protocol",
-    "implementation",
-    "performance",
-    "optimization",
-    "benchmark",
-    "metric",
-    "throughput",
-    "latency",
-    "scalability",
-    "distributed",
-    "parallel",
-    "concurrent",
-    "asynchronous",
-    "synchronous",
-    "batch",
-    "stream",
-]
+WORDS = """
+the be to of and a in that have I it for not on with he as you do at this but his by from
+they we say her she or an will my one all would there their what so up out if about who get
+which go me when make can like time no just him know take people into year your good some
+could them see other than then now look only come its over think also back after use two how
+our work first well way even new want because any these give day most us data system process
+compute memory network storage algorithm function variable method class object interface
+protocol implementation performance optimization benchmark metric throughput latency
+scalability distributed parallel concurrent asynchronous synchronous batch stream
+""".split()
 
 
 def generate_doc(doc_id: int, num_words: int = 1000) -> dict[str, Any]:
-    """Generate a single synthetic document with body and metadata.
-
-    Args:
-        doc_id: Unique document identifier
-        num_words: Number of words to generate in the body (default: 1000)
-
-    Returns:
-        Dictionary with body, simhash, and metadata fields
-    """
-    # Generate ~num_words random words
+    """Generate synthetic document with body (num_words random words) and metadata."""
     words = [random.choice(WORDS) for _ in range(num_words)]
     body = " ".join(words)
 
@@ -217,31 +74,8 @@ def generate_doc(doc_id: int, num_words: int = 1000) -> dict[str, Any]:
     }
 
 
-def generate_documents(num_docs: int, words_per_doc: int = 1000) -> Iterator[dict[str, Any]]:
-    """Generate synthetic documents lazily.
-
-    Args:
-        num_docs: Total number of documents to generate
-        words_per_doc: Words per document body
-
-    Yields:
-        Synthetic document dictionaries
-    """
-    for i in range(num_docs):
-        yield generate_doc(i, words_per_doc)
-
-
 def write_input_files(docs: Iterator[dict[str, Any]], input_dir: str, num_files: int = 10) -> list[str]:
-    """Write documents to N JSONL files for realistic file-based processing.
-
-    Args:
-        docs: Iterator of document dictionaries
-        input_dir: Directory to write input files
-        num_files: Number of files to create
-
-    Returns:
-        List of file paths created
-    """
+    """Write documents to num_files zstd-compressed JSONL files, returning file paths."""
     os.makedirs(input_dir, exist_ok=True)
     file_paths = []
     file_buffers = [[] for _ in range(num_files)]
@@ -268,22 +102,7 @@ def write_input_files(docs: Iterator[dict[str, Any]], input_dir: str, num_files:
 
 
 def create_pipeline(input_dir: str, output_dir: str) -> Dataset:
-    """Create the benchmark pipeline.
-
-    Pipeline steps:
-    1. Read JSONL files from input directory
-    2. Flat map: parse JSONL records
-    3. Map: split body into words and add word count
-    4. Group by simhash: deduplicate by taking first document per hash
-    5. Write as compressed JSONL
-
-    Args:
-        input_dir: Directory containing input JSONL files
-        output_dir: Directory to write output files
-
-    Returns:
-        Configured Dataset pipeline
-    """
+    """Create benchmark pipeline: load JSONL → map → deduplicate by simhash → write."""
     from zephyr import load_jsonl
 
     return (
@@ -305,14 +124,7 @@ def create_pipeline(input_dir: str, output_dir: str) -> Dataset:
 
 
 def count_jsonl_docs(file_path: str) -> int:
-    """Count number of documents in a JSONL file.
-
-    Args:
-        file_path: Path to JSONL file (may be gzipped or zstd compressed)
-
-    Returns:
-        Number of lines/documents in the file
-    """
+    """Count lines in JSONL file (supports .gz and .zst compression)."""
     import gzip
     import io
 
@@ -336,17 +148,7 @@ def run_benchmark(
     num_docs: int,
     num_input_files: int,
 ) -> dict[str, Any]:
-    """Run benchmark for a specific backend using pre-generated input files.
-
-    Args:
-        backend_type: Backend to use ("sync", "threadpool", or "ray")
-        input_dir: Directory containing input JSONL files
-        num_docs: Number of documents in the input files
-        num_input_files: Number of input files
-
-    Returns:
-        Dictionary with benchmark results
-    """
+    """Run deduplication pipeline benchmark for specified backend, returning metrics dict."""
     print(f"\n{'=' * 70}")
     print(f"Backend: {backend_type.upper()}")
     print(f"{'=' * 70}")
@@ -422,7 +224,7 @@ def setup_input_files(num_docs: int, words_per_doc: int, num_input_files: int) -
 
     print(f"📝 Generating {num_docs:,} documents and writing to {num_input_files} files...")
     gen_start = time.time()
-    docs_generator = generate_documents(num_docs, words_per_doc)
+    docs_generator = (generate_doc(i, words_per_doc) for i in range(num_docs))
     input_files = write_input_files(docs_generator, input_dir, num_input_files)
 
     dir_size = sum(os.path.getsize(f) for f in input_files)
