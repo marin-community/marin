@@ -77,7 +77,7 @@ health_monitor_config:
   performance_history_size: 100  # Rolling window size
   volatility_threshold: 0.15  # Coefficient of variation threshold
   prolonged_training_threshold: 1000  # Max training steps
-  
+
   # Alert management
   warning_cooldown: 200  # Steps between repeated warnings
   enable_wandb_alerts: true  # Send to W&B
@@ -151,7 +151,7 @@ for env_id, status in env_health.items():
 def check_graduated_regression(env_id, current_performance):
     baseline = graduation_baselines[env_id]
     ratio = current_performance / baseline
-    
+
     if ratio < critical_regression_threshold:
         return Warning(severity="critical", ...)
     elif ratio < regression_threshold:

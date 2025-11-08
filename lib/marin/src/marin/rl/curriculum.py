@@ -30,7 +30,7 @@ import fsspec
 import numpy as np
 
 from marin.rl.environments.base import EnvConfig
-from marin.rl.health_monitor import CurriculumHealthMonitor, HealthMonitorConfig, Warning
+from marin.rl.health_monitor import CurriculumHealthMonitor, HealthMonitorConfig, HealthWarning
 from marin.rl.robust_actor import RobustActor
 from marin.rl.types import RolloutStats
 
@@ -579,7 +579,7 @@ class Curriculum:
         else:
             return "locked"
 
-    def _handle_warnings(self, warnings: list[Warning]) -> None:
+    def _handle_warnings(self, warnings: list[HealthWarning]) -> None:
         """Handle health warnings by logging and optionally sending alerts.
 
         Args:
@@ -602,11 +602,11 @@ class Curriculum:
                 if self.health_monitor.should_send_wandb_alert(warning.type):
                     self._send_wandb_alert(warning)
 
-    def _send_wandb_alert(self, warning: Warning) -> None:
+    def _send_wandb_alert(self, warning: HealthWarning) -> None:
         """Send alert to wandb.
 
         Args:
-            warning: Warning to send as alert.
+            warning: HealthWarning to send as alert.
         """
         try:
             import wandb
@@ -632,8 +632,8 @@ class Curriculum:
                 wandb.log(
                     {
                         f"health/warnings/{warning.env_id}/{warning.type.value}": 1,
-                        f"health/warning_severity/{warning.env_id}": {"low": 1, "medium": 2, "high": 3, "critical": 4}.get(
-                            warning.severity, 0
+                        f"health/warning_severity/{warning.env_id}": (
+                            {"low": 1, "medium": 2, "high": 3, "critical": 4}.get(warning.severity, 0)
                         ),
                         **{f"health/metrics/{warning.env_id}/{k}": v for k, v in warning.metrics.items()},
                     },
