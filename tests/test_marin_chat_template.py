@@ -30,7 +30,6 @@ def fresh_marin_tokenizer():
         base = load_llama3_tokenizer()
     except Exception as exc:
         pytest.skip(f"Could not load llama3 tokenizer: {exc}", allow_module_level=True)
-        raise NotImplementedError("unreachable") from None
     return create_marin_tokenizer(base)
 
 

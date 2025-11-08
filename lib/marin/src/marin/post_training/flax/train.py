@@ -378,9 +378,8 @@ class Trainer:
         self.train_state_shard_fns, self.train_state_gather_fns = self.mesh.make_shard_and_gather_fns(
             train_state_shape, self.train_params_sharding_rules
         )
-        _inference_param_shard_fns, _inference_param_gather_fns = self.mesh.make_shard_and_gather_fns(
-            inference_params_shape, self.inference_params_sharding_rules
-        )
+        # Validate inference params sharding (side effect: validates sharding rules)
+        self.mesh.make_shard_and_gather_fns(inference_params_shape, self.inference_params_sharding_rules)
 
         # Initialize training state
         latest_checkpoint_step = -1
@@ -526,16 +525,10 @@ def main(config: TrainingConfig):
     jax_distributed_initalize(**config.distributed.jax_distributed_initialize_config)
     jax_distributed_barrier()
 
-    # Load attention kernel configurations
-    _prefill_attention_kernel, _prefill_attention_kernel_config = load_attention_kernel_config(
-        config.model.prefill_attention_kernel_config, ["splash", "default"]
-    )
-    _generate_attention_kernel, _generate_attention_kernel_config = load_attention_kernel_config(
-        config.model.generate_attention_kernel_config, ["paged", "default"]
-    )
-    _train_attention_kernel, _train_attention_kernel_config = load_attention_kernel_config(
-        config.model.train_attention_kernel_config, ["splash", "default", "ring", "ring_jax"]
-    )
+    # Validate attention kernel configurations (will raise ValueError if malformed)
+    load_attention_kernel_config(config.model.prefill_attention_kernel_config, ["splash", "default"])
+    load_attention_kernel_config(config.model.generate_attention_kernel_config, ["paged", "default"])
+    load_attention_kernel_config(config.model.train_attention_kernel_config, ["splash", "default", "ring", "ring_jax"])
 
     mesh = MeshShardingHelper(
         config.distributed.train_sharding,

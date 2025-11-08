@@ -84,7 +84,7 @@ TARGET_SUMMARY_KEYS = [
 ]
 
 
-def parse_run(run: wandb.apis.public.Run, start_date: str | None = None, end_date: str | None = None) -> dict:
+def parse_run(run: wandb.apis.public.Run, start_date: str | None = None, end_date: str | None = None) -> dict | None:
     runtime = run.summary["_runtime"] / 3600.0  # hours
     create_time = convert_to_local_time(run.createdAt)
     if not check_create_time(create_time, start_date=start_date, end_date=end_date):

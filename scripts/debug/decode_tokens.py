@@ -99,6 +99,7 @@ def repl_cmd(ctx):
                         decode_tokens(tokens)
                         continue
                 except Exception:
+                    # Failed to parse as token list, fall through to encode as text
                     pass
 
             # Otherwise encode as text
