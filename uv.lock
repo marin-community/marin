@@ -9234,8 +9234,13 @@ name = "zephyr"
 version = "0.1.0"
 source = { editable = "lib/zephyr" }
 dependencies = [
+    { name = "braceexpand" },
     { name = "click" },
+    { name = "fsspec" },
     { name = "humanfriendly" },
+    { name = "msgspec" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-5-marin-dev' or extra != 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
     { name = "ray" },
     { name = "tqdm" },
     { name = "typing-extensions" },
@@ -9243,18 +9248,26 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "zstandard" },
 ]
 test = [
+    { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "zstandard" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "braceexpand", specifier = ">=0.1.0" },
     { name = "click", specifier = ">=8.0" },
+    { name = "fsspec", specifier = ">=2023.1.0" },
     { name = "humanfriendly", specifier = ">=10.0" },
+    { name = "msgspec", specifier = ">=0.18.0" },
+    { name = "numpy", specifier = ">=2.0" },
     { name = "ray", specifier = ">=2.45" },
     { name = "tqdm", specifier = ">=4.0" },
     { name = "typing-extensions", specifier = ">=4.0" },
@@ -9262,12 +9275,16 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "zstandard", specifier = ">=0.22.0" },
 ]
 test = [
+    { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "zstandard", specifier = ">=0.22.0" },
 ]
 
 [[package]]

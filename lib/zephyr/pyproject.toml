@@ -14,6 +14,10 @@ dependencies = [
     "tqdm>=4.0",
     "click>=8.0",
     "humanfriendly>=10.0",
+    "msgspec>=0.18.0",
+    "numpy>=2.0",
+    "fsspec>=2023.1.0",
+    "braceexpand>=0.1.0",
 ]
 
 [project.scripts]
@@ -23,6 +27,8 @@ zephyr = "zephyr.cli:main"
 test = [
     "pytest>=8.3.2",
     "pytest-timeout",
+    "zstandard>=0.22.0",
+    "psutil>=5.9.0",
 ]
 
 dev = [
@@ -38,6 +44,7 @@ packages = ["src/zephyr"]
 [tool.pytest.ini_options]
 timeout = 300
 filterwarnings = ["ignore::DeprecationWarning"]
+log_level = "INFO"
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 log_cli_level = "INFO"

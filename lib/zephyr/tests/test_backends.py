@@ -15,7 +15,6 @@
 """Tests for backend implementations."""
 
 import ray
-
 from zephyr.backend_factory import flow_backend
 from zephyr.backends import RayBackend, format_shard_path
 
@@ -125,3 +124,28 @@ def test_flow_backend_defaults_to_ray_when_initialized():
         assert isinstance(backend, RayBackend)
     finally:
         ray.shutdown()
+
+def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):
+    """Test that .zst extension triggers zstd compression."""
+    from zephyr.backends import write_records_to_jsonl
+
+    records = [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]
+    output_path = str(tmp_path / "test.jsonl.zst")
+
+    result = write_records_to_jsonl(records, output_path)
+    assert result == output_path
+
+    # Verify file was created and is zstd compressed
+    import io
+    import json
+
+    import zstandard as zstd
+
+    dctx = zstd.ZstdDecompressor()
+    with open(output_path, "rb") as raw_f:
+        with dctx.stream_reader(raw_f) as reader:
+            text_f = io.TextIOWrapper(reader, encoding="utf-8")
+            lines = text_f.readlines()
+            assert len(lines) == 2
+            assert json.loads(lines[0]) == {"id": 1, "text": "hello"}
+            assert json.loads(lines[1]) == {"id": 2, "text": "world"}

@@ -17,12 +17,15 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
+import braceexpand
 import fsspec
+import msgspec
 
 
 @dataclass
@@ -107,8 +110,57 @@ class FusedMapOp:
     operations: list  # List of operations to fuse (MapOp, FlatMapOp, FilterOp, BatchOp, WriteJsonlOp, WriteParquetOp)
 
 
+@dataclass
+class MapShardOp:
+    """MapShard operation - applies function to entire shard at once.
+
+    Internal operation that processes all items in a shard together.
+    Used for operations like local deduplication that need to see all items.
+    The function receives an iterator of items and returns an iterator of results.
+    """
+
+    fn: Callable[[Iterator], Iterator]
+
+
+@dataclass
+class GroupByLocalOp:
+    """Phase 1 of GroupBy: Local grouping per shard by hash(key) % num_output_shards.
+
+    This operation is FUSIBLE - it processes items one at a time and can be
+    fused with preceding map/filter/flatmap operations. Each item is assigned
+    to an output shard based on hash(key) % num_output_shards.
+    """
+
+    key_fn: Callable  # Function from item -> hashable key
+    num_output_shards: int  # Number of output shards
+
+
+@dataclass
+class GroupByShuffleReduceOp:
+    """Phase 2 of GroupBy: Shuffle and reduce.
+
+    This operation is NON-FUSIBLE - it requires a shuffle boundary and must
+    see all items with the same key together to apply the reducer.
+    """
+
+    key_fn: Callable  # Function from item -> hashable key
+    reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
+
+
 # Type alias for operations
-Operation = MapOp | FilterOp | BatchOp | WriteJsonlOp | WriteParquetOp | FlatMapOp | ReshardOp | FusedMapOp
+Operation = (
+    MapOp
+    | FilterOp
+    | BatchOp
+    | WriteJsonlOp
+    | WriteParquetOp
+    | FlatMapOp
+    | ReshardOp
+    | FusedMapOp
+    | MapShardOp
+    | GroupByLocalOp
+    | GroupByShuffleReduceOp
+)
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -200,11 +252,22 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = list(backend.execute(ds))
         """
-        import os
 
-        from marin.utils import fsspec_glob
+        full_pattern = os.path.join(input_path, pattern)
+        fs, _ = fsspec.core.url_to_fs(full_pattern)
+        protocol = fsspec.core.split_protocol(full_pattern)[0]
 
-        files = fsspec_glob(os.path.join(input_path, pattern))
+        def add_protocol(file: str) -> str:
+            return f"{protocol}://{file}" if protocol else file
+
+        files = []
+        for expanded in braceexpand.braceexpand(full_pattern):
+            for f in fs.glob(expanded):
+                if protocol:
+                    files.append(f"{protocol}://{f}")
+                else:
+                    files.append(f)
+        files = sorted(files)
 
         if len(files) == 0 and not empty_glob_ok:
             raise FileNotFoundError(f"No files found in {input_path} with pattern {pattern}")
@@ -383,6 +446,113 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, WriteParquetOp(output_pattern, schema, batch_size)])
 
+    def _map_shard(self, fn: Callable[[Iterator[T]], Iterator[R]]) -> Dataset[R]:
+        """Internal: Apply function to entire shard at once.
+
+        The function receives an iterator of all items in a shard and returns
+        an iterator of results. Used for operations like local deduplication.
+
+        Args:
+            fn: Function from Iterator[T] -> Iterator[R]
+
+        Returns:
+            New dataset with map_shard operation appended
+        """
+        return Dataset(self.source, [*self.operations, MapShardOp(fn)])
+
+    def group_by(
+        self,
+        key: Callable[[T], object],
+        reducer: Callable[[object, Iterator[T]], R],
+        num_output_shards: int | None = None,
+    ) -> Dataset[R]:
+        """Group items by key and apply reducer function.
+
+        Two-phase operation that:
+        1. Groups items locally per shard by hash(key) % num_output_shards
+        2. Globally reduces each group using the provided reducer
+
+        The reducer receives (key, iterator_of_items) and returns a single result.
+
+        Args:
+            key: Function extracting grouping key from item (must be hashable)
+            reducer: Function from (key, Iterator[items]) -> result
+            num_output_shards: Number of output shards (None = auto-detect, uses current shard count)
+
+        Returns:
+            New dataset with group_by operations appended
+
+        Example:
+            >>> backend = create_backend("ray", max_parallelism=10)
+            >>> # Count items by category
+            >>> ds = (Dataset
+            ...     .from_list([{"cat": "A", "val": 1}, {"cat": "A", "val": 2}, {"cat": "B", "val": 3}])
+            ...     .group_by(
+            ...         key=lambda x: x["cat"],
+            ...         reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)}
+            ...     )
+            ... )
+            >>> list(backend.execute(ds))
+            [{"cat": "A", "count": 2}, {"cat": "B", "count": 1}]
+        """
+        # Split into two explicit operations: local grouping + shuffle/reduce
+        # If num_output_shards is None, backend will detect from current shard count
+        if num_output_shards is None:
+            # Use a sentinel value (-1) to indicate auto-detect at execution time
+            # Backend will replace this with len(shards)
+            num_output_shards = -1
+
+        return Dataset(
+            self.source, [*self.operations, GroupByLocalOp(key, num_output_shards), GroupByShuffleReduceOp(key, reducer)]
+        )
+
+    def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> Dataset[T]:
+        """Deduplicate items by key (keeps arbitrary occurrence).
+
+        Two-phase deduplication:
+        1. Local dedup per shard using np.unique
+        2. Global dedup via group_by with first-item reducer
+
+        Args:
+            key: Function extracting dedup key from item (must be hashable)
+            num_output_shards: Number of output shards (None = auto-detect)
+
+        Returns:
+            New dataset with deduplicate operation appended
+
+        Example:
+            >>> backend = create_backend("ray", max_parallelism=10)
+            >>> ds = (Dataset
+            ...     .from_list([{"id": 1, "val": "a"}, {"id": 2, "val": "b"}, {"id": 1, "val": "c"}])
+            ...     .deduplicate(key=lambda x: x["id"])
+            ... )
+            >>> list(backend.execute(ds))
+            [{"id": 1, "val": "a"}, {"id": 2, "val": "b"}]  # Or {"id": 1, "val": "c"}
+        """
+        import numpy as np
+
+        def local_dedup(items: Iterator[T]) -> Iterator[T]:
+            """Local deduplication using numpy unique."""
+            items_list = list(items)
+            if not items_list:
+                return
+
+            # Extract keys
+            keys = np.array([key(item) for item in items_list], dtype=object)
+
+            # Find unique indices
+            _, unique_indices = np.unique(keys, return_index=True)
+
+            # Yield unique items
+            for idx in sorted(unique_indices):
+                yield items_list[idx]
+
+        def keep_first(k, items: Iterator[T]) -> T:
+            """Reducer that keeps the first item."""
+            return next(iter(items))
+
+        return self._map_shard(local_dedup).group_by(key=key, reducer=keep_first, num_output_shards=num_output_shards)
+
 
 # Predefined transform functions for common file loading patterns
 
@@ -390,11 +560,11 @@ class Dataset(Generic[T]):
 def load_jsonl(file_path: str) -> Iterator[dict]:
     """Load JSONL file and yield records.
 
-    Handles gzip compression automatically via fsspec.
+    Handles gzip and zstd compression automatically.
     Use with .flat_map() to read files containing multiple records.
 
     Args:
-        file_path: Path to JSONL file (local or remote, .gz supported)
+        file_path: Path to JSONL file (local or remote, .gz and .zst supported)
 
     Yields:
         Parsed JSON records as dictionaries
@@ -409,13 +579,34 @@ def load_jsonl(file_path: str) -> Iterator[dict]:
         ... )
         >>> output_files = list(backend.execute(ds))
     """
-    import json
+    import gzip
+    import io
 
-    with fsspec.open(file_path, "rt", compression="infer", block_size=64_000_000, cache_type="background") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                yield json.loads(line)
+    decoder = msgspec.json.Decoder()
+
+    if file_path.endswith(".zst"):
+        import zstandard as zstd
+
+        dctx = zstd.ZstdDecompressor()
+        with open(file_path, "rb") as raw_f:
+            with dctx.stream_reader(raw_f) as reader:
+                text_f = io.TextIOWrapper(reader, encoding="utf-8")
+                for line in text_f:
+                    line = line.strip()
+                    if line:
+                        yield decoder.decode(line)
+    elif file_path.endswith(".gz"):
+        with gzip.open(file_path, "rt") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    yield decoder.decode(line)
+    else:
+        with open(file_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    yield decoder.decode(line)
 
 
 def load_parquet(file_path: str, **kwargs) -> Iterator[dict]:

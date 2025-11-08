@@ -16,10 +16,10 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable
 
 import fsspec
+import msgspec
 from tqdm import tqdm
 
 
@@ -42,7 +42,7 @@ def ensure_parent_dir(path: str) -> None:
 def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     """Write records to a JSONL file with automatic compression.
 
-    Compression is automatically inferred from the file extension (.gz suffix enables gzip).
+    Compression is automatically inferred from the file extension (.gz and .zst supported).
     Useful for writing to custom output paths in map operations where you need control over
     the destination path.
 
@@ -62,13 +62,27 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     """
     ensure_parent_dir(output_path)
 
-    # Infer compression from file extension
-    compression = "gzip" if output_path.endswith(".gz") else None
-
     count = 0
-    with fsspec.open(output_path, "w", compression=compression, block_size=64 * 1024 * 1024) as f:
-        for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):
-            f.write(json.dumps(record) + "\n")
-            count += 1
+    encoder = msgspec.json.Encoder()
+
+    if output_path.endswith(".zst"):
+        import zstandard as zstd
+
+        cctx = zstd.ZstdCompressor(level=1)
+        with fsspec.open(output_path, "wb", block_size=64 * 1024 * 1024) as raw_f:
+            with cctx.stream_writer(raw_f) as f:
+                for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):
+                    f.write(encoder.encode(record) + b"\n")
+                    count += 1
+    elif output_path.endswith(".gz"):
+        with fsspec.open(output_path, "wb", compression="gzip", compresslevel=1, block_size=64 * 1024 * 1024) as f:
+            for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):
+                f.write(encoder.encode(record) + b"\n")
+                count += 1
+    else:
+        with fsspec.open(output_path, "wb", block_size=64 * 1024 * 1024) as f:
+            for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):
+                f.write(encoder.encode(record) + b"\n")
+                count += 1
 
     return {"path": output_path, "count": count}

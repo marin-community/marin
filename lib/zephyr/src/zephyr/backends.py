@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, TypeVar
 
+import msgspec
 import numpy as np
 import ray
 from tqdm import tqdm
@@ -33,7 +35,10 @@ from zephyr.dataset import (
     FilterOp,
     FlatMapOp,
     FusedMapOp,
+    GroupByLocalOp,
+    GroupByShuffleReduceOp,
     MapOp,
+    MapShardOp,
     ReshardOp,
     WriteJsonlOp,
     WriteParquetOp,
@@ -137,13 +142,13 @@ class _ImmediateFuture:
 
 
 @ray.remote
-def _put_on_worker(obj: Any) -> ray.ObjectRef:
-    """Put object in Ray's object store on a worker node.
+def _put_on_worker(serialized: bytes) -> ray.ObjectRef:
+    """Put serialized bytes in Ray's object store on a worker node.
 
     This function is executed remotely to ensure objects are placed on worker
     nodes rather than the head node.
     """
-    return ray.put(obj)
+    return ray.put(serialized)
 
 
 class RayContext:
@@ -162,14 +167,26 @@ class RayContext:
 
         Uses a remote task to place the object on a worker node's object store
         rather than the head node, distributing data across the cluster.
+        Serializes data using msgpack for efficiency.
         """
+        # Serialize with msgpack
+        serialized = msgspec.msgpack.encode(obj)
         # Submit task to worker with SPREAD strategy to distribute across nodes
-        ref_future = _put_on_worker.options(scheduling_strategy="SPREAD").remote(obj)
+        ref_future = _put_on_worker.options(scheduling_strategy="SPREAD").remote(serialized)
         # Get the ObjectRef that the worker created
         return ray.get(ref_future)
 
     def get(self, ref: ray.ObjectRef) -> Any:
-        return ray.get(ref)
+        """Retrieve object, decoding msgpack if applicable.
+
+        Handles both msgpack-encoded chunk data and Ray-pickled function results.
+        """
+        result = ray.get(ref)
+        # If it's bytes, it's msgpack-encoded chunk data
+        if isinstance(result, bytes):
+            return msgspec.msgpack.decode(result)
+        # Otherwise it's a Ray-pickled object (e.g., Shard from remote function)
+        return result
 
     def run(self, fn: Callable, *args) -> ray.ObjectRef:
         """Execute function remotely with configured Ray options.
@@ -252,64 +269,86 @@ class ThreadContext:
 
 
 @dataclass
-class Shard:
-    """Container for a logically grouped set of items split across multiple refs.
+class Chunk:
+    """A single chunk of data with count metadata."""
 
-    Each ref contains a chunk of items (e.g., 1000 items) to prevent large object overhead.
+    count: int
+    data: Any  # The actual ref (ObjectRef, Future, or object)
+
+
+@dataclass
+class Shard:
+    """Container for a logically grouped set of items split across multiple chunks.
+
+    Each chunk contains a portion of items to prevent large object overhead.
     Works with any ExecutionContext (Ray, ThreadPool, Sync) via context.put/get operations.
     """
 
-    refs: list[Any]  # Context-specific refs (ray.ObjectRef, Future, or plain objects)
+    idx: int  # Shard index (e.g., 0 of 50)
+    chunks: list[Chunk]
     context: ExecutionContext
+
+    @property
+    def count(self) -> int:
+        """Total number of items across all chunks."""
+        return sum(c.count for c in self.chunks)
 
     def iter_chunks(self) -> Iterator[list]:
         """Iterate over chunks (each chunk is a list of items)."""
-        for ref in self.refs:
-            yield self.context.get(ref)
-
-    def materialize(self) -> Iterator:
-        """Iterate over all individual items across all chunks."""
-        for chunk in self.iter_chunks():
-            yield from chunk
+        for chunk in self.chunks:
+            yield self.context.get(chunk.data)
 
     def __iter__(self):
-        return self.materialize()
+        """Flat map over all chunks."""
+        for chunk_data in self.iter_chunks():
+            yield from chunk_data
 
     @staticmethod
-    def from_items(items: Iterable, chunk_size: int, context: ExecutionContext) -> Shard:
+    def from_items(items: Iterable, chunk_size: int, context: ExecutionContext, idx: int = 0) -> Shard:
         """Create a Shard from items by chunking and storing via context.
 
         Args:
             items: Items to chunk and store
             chunk_size: Number of items per chunk
             context: Execution context for put/get operations
+            idx: Shard index (default 0)
 
         Returns:
             Shard containing chunked refs
         """
-        refs = []
+        chunks = []
         chunk = []
         for item in items:
             chunk.append(item)
             if len(chunk) >= chunk_size:
-                refs.append(context.put(chunk))
+                ref = context.put(chunk)
+                chunks.append(Chunk(count=len(chunk), data=ref))
                 chunk = []
         if chunk:
-            refs.append(context.put(chunk))
-        return Shard(refs=refs, context=context)
+            ref = context.put(chunk)
+            chunks.append(Chunk(count=len(chunk), data=ref))
+        return Shard(idx=idx, chunks=chunks, context=context)
 
     @staticmethod
-    def from_single_ref(ref: Any, context: ExecutionContext) -> Shard:
+    def from_single_ref(ref: Any, context: ExecutionContext, idx: int = 0, count: int | None = None) -> Shard:
         """Wrap a single ref as a Shard.
 
         Args:
             ref: Reference to wrap (type depends on context)
             context: Execution context for get operations
+            idx: Shard index (default 0)
+            count: Number of items in the ref (if known, otherwise will be computed lazily)
 
         Returns:
             Shard containing the single ref
         """
-        return Shard(refs=[ref], context=context)
+        if count is None:
+            # Need to get the ref to count items
+            data = context.get(ref)
+            count = len(data) if hasattr(data, "__len__") else sum(1 for _ in data)
+            ref = context.put(data) if not hasattr(data, "__len__") else ref
+
+        return Shard(idx=idx, chunks=[Chunk(count=count, data=ref)], context=context)
 
 
 def infer_parquet_type(value):
@@ -486,7 +525,7 @@ def write_records_to_parquet(records: Iterable, output_path: str, schema: object
     return output_path
 
 
-def process_shard_flat_map(shard: Shard, shard_idx: int, total: int, fn: Callable, chunk_size: int) -> Shard:
+def process_shard_flat_map(shard: Shard, shard_idx: int, total: int, fn: Callable, chunk_size: int) -> list[Shard]:
     """Process shard with flat_map, returning chunked results."""
     logger.info(f"flat_map: shard {shard_idx + 1}/{total}")
 
@@ -495,10 +534,10 @@ def process_shard_flat_map(shard: Shard, shard_idx: int, total: int, fn: Callabl
             for item in chunk:
                 yield from fn(item)
 
-    return Shard.from_items(result_generator(), chunk_size, shard.context)
+    return [Shard.from_items(result_generator(), chunk_size, shard.context, idx=shard_idx)]
 
 
-def process_shard_map(shard: Shard, shard_idx: int, total: int, fn: Callable, chunk_size: int) -> Shard:
+def process_shard_map(shard: Shard, shard_idx: int, total: int, fn: Callable, chunk_size: int) -> list[Shard]:
     """Process shard with map, returning chunked results."""
     logger.info(f"map: shard {shard_idx + 1}/{total}")
 
@@ -507,10 +546,10 @@ def process_shard_map(shard: Shard, shard_idx: int, total: int, fn: Callable, ch
             for item in chunk:
                 yield fn(item)
 
-    return Shard.from_items(result_generator(), chunk_size, shard.context)
+    return [Shard.from_items(result_generator(), chunk_size, shard.context, idx=shard_idx)]
 
 
-def process_shard_filter(shard: Shard, shard_idx: int, total: int, predicate: Callable, chunk_size: int) -> Shard:
+def process_shard_filter(shard: Shard, shard_idx: int, total: int, predicate: Callable, chunk_size: int) -> list[Shard]:
     """Process shard with filter, returning chunked results."""
     logger.info(f"filter: shard {shard_idx + 1}/{total}")
 
@@ -520,26 +559,28 @@ def process_shard_filter(shard: Shard, shard_idx: int, total: int, predicate: Ca
                 if predicate(item):
                     yield item
 
-    return Shard.from_items(result_generator(), chunk_size, shard.context)
+    return [Shard.from_items(result_generator(), chunk_size, shard.context, idx=shard_idx)]
 
 
-def process_shard_batch(shard: Shard, shard_idx: int, total: int, batch_size: int, chunk_size: int) -> Shard:
+def process_shard_batch(shard: Shard, shard_idx: int, total: int, batch_size: int, chunk_size: int) -> list[Shard]:
     """Process shard with batching, returning chunked results."""
 
     def result_generator():
-        yield from make_batches(shard.materialize(), batch_size)
+        yield from make_batches(shard, batch_size)
 
-    return Shard.from_items(result_generator(), chunk_size, shard.context)
+    return [Shard.from_items(result_generator(), chunk_size, shard.context, idx=shard_idx)]
 
 
-def process_shard_write_jsonl(shard: Shard, shard_idx: int, total: int, output_pattern: str, chunk_size: int) -> Shard:
+def process_shard_write_jsonl(
+    shard: Shard, shard_idx: int, total: int, output_pattern: str, chunk_size: int
+) -> list[Shard]:
     """Write shard to JSONL file and return Shard containing the output filename."""
     logger.info(f"write_jsonl: shard {shard_idx + 1}/{total}")
     output_path = format_shard_path(output_pattern, shard_idx, total)
 
-    result = write_records_to_jsonl(shard.materialize(), output_path)
+    result = write_records_to_jsonl(shard, output_path)
     logger.info(f"write_jsonl: shard {shard_idx + 1}/{total} → {output_path}")
-    return Shard.from_items([result], chunk_size, shard.context)
+    return [Shard.from_items([result], chunk_size, shard.context, idx=shard_idx)]
 
 
 def process_shard_write_parquet(
@@ -550,18 +591,20 @@ def process_shard_write_parquet(
     schema: object | None,
     batch_size: int,
     chunk_size: int,
-) -> Shard:
+) -> list[Shard]:
     """Write shard to Parquet file and return Shard containing the output filename."""
     logger.info(f"write_parquet: shard {shard_idx + 1}/{total}")
     output_path = format_shard_path(output_pattern, shard_idx, total)
 
     # Stream records from shard
-    result = write_records_to_parquet(shard.materialize(), output_path, schema, batch_size)
+    result = write_records_to_parquet(shard, output_path, schema, batch_size)
     logger.info(f"write_parquet: shard {shard_idx + 1}/{total} → {output_path}")
-    return Shard.from_items([result], chunk_size, shard.context)
+    return [Shard.from_items([result], chunk_size, shard.context, idx=shard_idx)]
 
 
-def process_shard_fused(shard: Shard, shard_idx: int, total: int, operations: list, chunk_size: int) -> Shard:
+def process_shard_fused(
+    shard: Shard, shard_idx: int, total_shards: int, operations: list, chunk_size: int
+) -> list[Shard]:
     """Process shard with fused operations pipeline.
 
     Chains operations into a single pass over the data, avoiding intermediate
@@ -575,75 +618,241 @@ def process_shard_fused(shard: Shard, shard_idx: int, total: int, operations: li
         chunk_size: Number of items per chunk in output
 
     Returns:
-        Output shard with chunked results
+        List of output shards (single shard for most ops, multiple for GroupByLocalOp)
     """
-    from zephyr.dataset import BatchOp, FilterOp, FlatMapOp, MapOp, WriteJsonlOp, WriteParquetOp
+    from zephyr.dataset import BatchOp, FilterOp, FlatMapOp, GroupByLocalOp, MapOp, WriteJsonlOp, WriteParquetOp
 
-    logger.info(f"fused[{len(operations)}]: shard {shard_idx + 1}/{total}")
+    logger.info(f"fused[{len(operations)}]: shard {shard_idx + 1}/{total_shards}")
 
-    def apply_pipeline(items):
-        """Apply all operations to an iterable of items using generators."""
+    def build_stream(stream_input, ops):
+        """Recursively build the generator pipeline."""
+        if not ops:
+            yield from stream_input
+            return
 
-        def build_stream(stream_input, ops):
-            """Recursively build the generator pipeline."""
-            if not ops:
-                yield from stream_input
-                return
+        op, *rest = ops
 
-            op, *rest = ops
+        if isinstance(op, MapOp):
+            yield from build_stream((op.fn(item) for item in stream_input), rest)
+        elif isinstance(op, FlatMapOp):
+            yield from build_stream((result_item for item in stream_input for result_item in op.fn(item)), rest)
+        elif isinstance(op, FilterOp):
+            yield from build_stream((item for item in stream_input if op.predicate(item)), rest)
+        elif isinstance(op, BatchOp):
+            yield from build_stream(make_batches(stream_input, op.batch_size), rest)
+        elif isinstance(op, WriteJsonlOp):
+            output_path = format_shard_path(op.output_pattern, shard_idx, total_shards)
+            result = write_records_to_jsonl(stream_input, output_path)
+            yield from build_stream(iter([result]), rest)
+        elif isinstance(op, WriteParquetOp):
+            output_path = format_shard_path(op.output_pattern, shard_idx, total_shards)
+            result = write_records_to_parquet(stream_input, output_path, op.schema, op.batch_size)
+            yield from build_stream(iter([result]), rest)
 
-            if isinstance(op, MapOp):
-                yield from build_stream((op.fn(item) for item in stream_input), rest)
-            elif isinstance(op, FlatMapOp):
-                yield from build_stream((result_item for item in stream_input for result_item in op.fn(item)), rest)
-            elif isinstance(op, FilterOp):
-                yield from build_stream((item for item in stream_input if op.predicate(item)), rest)
-            elif isinstance(op, BatchOp):
-                yield from build_stream(make_batches(stream_input, op.batch_size), rest)
-            elif isinstance(op, WriteJsonlOp):
-                # Write stream to file, yield filename
-                output_path = format_shard_path(op.output_pattern, shard_idx, total)
-                result = write_records_to_jsonl(stream_input, output_path)
-                logger.info(f"fused write_jsonl: shard {shard_idx + 1}/{total} → {output_path}")
-                yield from build_stream(iter([result]), rest)
-            elif isinstance(op, WriteParquetOp):
-                # Write stream to file, yield filename
-                output_path = format_shard_path(op.output_pattern, shard_idx, total)
-                result = write_records_to_parquet(stream_input, output_path, op.schema, op.batch_size)
-                logger.info(f"fused write_parquet: shard {shard_idx + 1}/{total} → {output_path}")
-                yield from build_stream(iter([result]), rest)
+    # If the last operation is a group by, handle the resharding
+    if operations and isinstance(operations[-1], GroupByLocalOp):
+        group_by_local_op = operations[-1]
+        pre_ops = operations[:-1]
+        num_output_shards = group_by_local_op.num_output_shards
 
-        yield from build_stream(items, operations)
+        # Handle sentinel value (-1) - use total as default
+        if num_output_shards <= 0:
+            num_output_shards = total_shards
 
+        # Accumulate items into output shards
+        output_chunks = defaultdict(list)
+        output_tmp = defaultdict(list)
+
+        for chunk in tqdm(
+            shard.iter_chunks(), desc=f"fused[{len(operations)}]: shard {shard_idx + 1}/{total_shards}", mininterval=10
+        ):
+            for item in build_stream(chunk, pre_ops):
+                key = group_by_local_op.key_fn(item)
+                target_shard = deterministic_hash(key) % num_output_shards
+                output_tmp[target_shard].append(item)
+                if len(output_tmp[target_shard]) >= chunk_size:
+                    output_chunks[target_shard].append(
+                        Chunk(count=len(output_tmp[target_shard]), data=shard.context.put(output_tmp[target_shard]))
+                    )
+                    output_tmp[target_shard] = []
+
+        # Flush remaining items
+        for target_shard, items in output_tmp.items():
+            if items:
+                output_chunks[target_shard].append(Chunk(count=len(items), data=shard.context.put(items)))
+
+        return [Shard(idx=idx, chunks=output_chunks[idx], context=shard.context) for idx in range(num_output_shards)]
+
+    # Otherwise, just stream and return a single output shard
+    def _generator():
+        for chunk in shard.iter_chunks():
+            yield from build_stream(chunk, operations)
+
+    return [
+        Shard.from_items(
+            tqdm(_generator(), desc=f"fused[{len(operations)}]: shard {shard_idx + 1}/{total_shards}", mininterval=10),
+            chunk_size,
+            shard.context,
+            idx=shard_idx,
+        )
+    ]
+
+
+def process_shard_map_shard(shard: Shard, shard_idx: int, total: int, fn: Callable, chunk_size: int) -> list[Shard]:
+    """Process shard with map_shard, applying function to all items at once.
+
+    Args:
+        shard: Input shard
+        shard_idx: Index of this shard
+        total: Total number of shards
+        fn: Function from Iterator[T] -> Iterator[R]
+        chunk_size: Number of items per chunk in output
+
+    Returns:
+        List containing single output shard with chunked results
+    """
+    logger.info(f"map_shard: shard {shard_idx + 1}/{total}")
+    result_items = fn(shard)
+    return [Shard.from_items(result_items, chunk_size, shard.context, idx=shard_idx)]
+
+
+def deterministic_hash(obj: object) -> int:
+    """Compute a cheap deterministic hash that's consistent across processes.
+
+    Python's built-in hash() is randomized per-process for security, which breaks
+    distributed groupby operations. This function uses zlib.adler32 for a fast
+    deterministic hash.
+
+    Args:
+        obj: Object to hash (must be JSON-serializable)
+
+    Returns:
+        Non-negative integer hash value
+    """
+    import json
+    import zlib
+
+    s = json.dumps(obj, sort_keys=True).encode("utf-8")
+    return zlib.adler32(s)
+
+
+def process_shard_group_by_local(
+    shard: Shard, shard_idx: int, total: int, key_fn: Callable, num_output_shards: int, chunk_size: int
+) -> list[Shard]:
+    """Phase 1: Local grouping per shard, distributing by hash(key) % num_output_shards."""
+
+    logger.info(f"group_by_local: shard {shard_idx + 1}/{total}")
+
+    # accumulate output into chunks, grouped by target shard idx
+    output_chunks = defaultdict(list)
+    output_tmp = defaultdict(list)
+
+    for item in tqdm(shard, desc=f"group_by_local shard {shard_idx + 1}/{total}", mininterval=10):
+        key = key_fn(item)
+        target_shard = deterministic_hash(key) % num_output_shards
+        output_tmp[target_shard].append(item)
+        if len(output_tmp[target_shard]) >= chunk_size:
+            output_chunks[target_shard].append(
+                Chunk(count=len(output_tmp[target_shard]), data=shard.context.put(output_tmp[target_shard]))
+            )
+            output_tmp[target_shard] = []
+
+    for target_shard, items in output_tmp.items():
+        output_chunks[target_shard].append(Chunk(count=len(items), data=shard.context.put(items)))
+
+    return [Shard(idx=idx, chunks=output_chunks[idx], context=shard.context) for idx in range(num_output_shards)]
+
+
+def process_shard_group_by_reduce(
+    shard: Shard, shard_idx: int, total: int, key_fn: Callable, reducer_fn: Callable, chunk_size: int
+) -> list[Shard]:
+    """Phase 2: Global reduction per shard, applying reducer to each key group.
+
+    Args:
+        shard: Input shard (contains items for one output shard)
+        shard_idx: Index of this output shard
+        total: Total number of output shards
+        key_fn: Function from item -> key
+        reducer_fn: Function from (key, Iterator[items]) -> result
+        chunk_size: Number of items per chunk in output
+
+    Returns:
+        List containing single output shard with reduced results
+    """
+    from collections import defaultdict
+
+    logger.info(f"group_by_reduce: shard {shard_idx + 1}/{total}")
+
+    # Group items by key
+    groups = defaultdict(list)
+    for item in shard:
+        key = key_fn(item)
+        groups[key].append(item)
+
+    # Apply reducer to each group
     def result_generator():
-        """Generate results by processing chunks through the pipeline."""
-        for chunk in tqdm(shard.iter_chunks(), desc=f"fused[{len(operations)}] shard {shard_idx + 1}/{total}"):
-            yield from apply_pipeline(chunk)
+        for key, items in groups.items():
+            yield reducer_fn(key, iter(items))
 
-    return Shard.from_items(result_generator(), chunk_size, shard.context)
+    return [Shard.from_items(result_generator(), chunk_size, shard.context, idx=shard_idx)]
 
 
 def reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
-    """Redistribute refs across target number of shards (best-effort).
+    """Redistribute chunks across target number of shards (best-effort).
 
     Args:
         shards: Input shards
         num_shards: Target number of output shards
 
     Returns:
-        New list of shards with redistributed refs
+        New list of shards with redistributed chunks
     """
     if not shards:
         return []
 
     context = shards[0].context
-    all_refs = [ref for shard in shards for ref in shard.refs]
+    all_chunks = [chunk for shard in shards for chunk in shard.chunks]
 
-    if not all_refs:
+    if not all_chunks:
         return []
 
-    ref_chunks = np.array_split(all_refs, num_shards)
-    return [Shard(refs=list(chunk), context=context) for chunk in ref_chunks if len(chunk) > 0]
+    chunk_groups = np.array_split(all_chunks, num_shards)
+    return [
+        Shard(idx=idx, chunks=list(group), context=context) for idx, group in enumerate(chunk_groups) if len(group) > 0
+    ]
+
+
+def recompact_shards(shard_lists: list[list[Shard]]) -> list[Shard]:
+    """Recompact shards after an operation.
+
+    Takes list of lists (one list per input shard) and merges chunks by target shard index.
+    This enables a unified architecture where all operations return list[Shard].
+
+    Args:
+        shard_lists: List of shard lists, one from each input shard
+
+    Returns:
+        Compacted list of output shards, ordered by shard index
+    """
+    if not shard_lists:
+        return []
+
+    # Group chunks by output shard index
+    chunks_by_idx = defaultdict(list)
+    max_idx = -1
+
+    for shard_list in shard_lists:
+        for shard in shard_list:
+            chunks_by_idx[shard.idx].extend(shard.chunks)
+            max_idx = max(max_idx, shard.idx)
+
+    if max_idx < 0:
+        return []
+
+    # Rebuild shards with all chunks for each index
+    # Include all shard indices from 0 to max_idx, even if some are empty
+    context = shard_lists[0][0].context if shard_lists[0] else None
+    return [Shard(idx=idx, chunks=chunks_by_idx[idx], context=context) for idx in range(max_idx + 1)]
 
 
 class Backend:
@@ -708,7 +917,8 @@ class Backend:
 
         Fuses consecutive operations (MapOp, FlatMapOp, FilterOp, BatchOp, Write*Op)
         into a single FusedMapOp to avoid materializing intermediate results.
-        Only ReshardOp breaks fusion as it changes parallelism structure.
+        ReshardOp, MapShardOp, and GroupByOp break fusion as they change parallelism
+        structure or need to see all items at once.
 
         Args:
             operations: Original operation chain
@@ -723,8 +933,16 @@ class Backend:
         fusible_buffer = []
 
         def is_fusible(op):
-            """Check if operation can be fused (everything except ReshardOp)."""
-            return not isinstance(op, ReshardOp)
+            """Check if operation can be fused.
+
+            Fusible operations can be chained together in a single pass over the data.
+            Non-fusible operations require a shuffle boundary or need to see all items at once.
+
+            Non-fusible: ReshardOp (just reshuffles refs), MapShardOp (needs all items),
+                        GroupByShuffleReduceOp (shuffle boundary).
+            Fusible: MapOp, FlatMapOp, FilterOp, BatchOp, Write*Op, GroupByLocalOp.
+            """
+            return not isinstance(op, (ReshardOp, MapShardOp, GroupByShuffleReduceOp))
 
         def flush_buffer():
             """Flush accumulated fusible operations."""
@@ -796,27 +1014,41 @@ class Backend:
         """
         # Convert source items to Shards (one item per shard initially)
         shards = []
-        for item in source:
+        for idx, item in enumerate(source):
             ref = self.context.put([item])
-            shards.append(Shard.from_single_ref(ref, self.context))
+            shards.append(Shard.from_single_ref(ref, self.context, idx=idx, count=1))
 
         for op in operations:
             if isinstance(op, FlatMapOp):
-                shards = self._execute_on_shards(process_shard_flat_map, (op.fn, self.chunk_size), shards)
+                shards = self._execute_on_shards_unified(process_shard_flat_map, (op.fn, self.chunk_size), shards)
             elif isinstance(op, MapOp):
-                shards = self._execute_on_shards(process_shard_map, (op.fn, self.chunk_size), shards)
+                shards = self._execute_on_shards_unified(process_shard_map, (op.fn, self.chunk_size), shards)
             elif isinstance(op, FilterOp):
-                shards = self._execute_on_shards(process_shard_filter, (op.predicate, self.chunk_size), shards)
+                shards = self._execute_on_shards_unified(process_shard_filter, (op.predicate, self.chunk_size), shards)
             elif isinstance(op, FusedMapOp):
-                shards = self._execute_on_shards(process_shard_fused, (op.operations, self.chunk_size), shards)
+                shards = self._execute_on_shards_unified(process_shard_fused, (op.operations, self.chunk_size), shards)
             elif isinstance(op, BatchOp):
-                shards = self._execute_on_shards(process_shard_batch, (op.batch_size, self.chunk_size), shards)
+                shards = self._execute_on_shards_unified(process_shard_batch, (op.batch_size, self.chunk_size), shards)
+            elif isinstance(op, MapShardOp):
+                shards = self._execute_on_shards_unified(process_shard_map_shard, (op.fn, self.chunk_size), shards)
+            elif isinstance(op, GroupByLocalOp):
+                # Auto-detect num_output_shards if using sentinel value
+                num_output_shards = op.num_output_shards if op.num_output_shards > 0 else len(shards)
+                shards = self._execute_on_shards_unified(
+                    process_shard_group_by_local, (op.key_fn, num_output_shards, self.chunk_size), shards
+                )
+            elif isinstance(op, GroupByShuffleReduceOp):
+                shards = self._execute_on_shards_unified(
+                    process_shard_group_by_reduce, (op.key_fn, op.reducer_fn, self.chunk_size), shards
+                )
             elif isinstance(op, ReshardOp):
                 shards = reshard_refs(shards, op.num_shards)
             elif isinstance(op, WriteJsonlOp):
-                shards = self._execute_on_shards(process_shard_write_jsonl, (op.output_pattern, self.chunk_size), shards)
+                shards = self._execute_on_shards_unified(
+                    process_shard_write_jsonl, (op.output_pattern, self.chunk_size), shards
+                )
             elif isinstance(op, WriteParquetOp):
-                shards = self._execute_on_shards(
+                shards = self._execute_on_shards_unified(
                     process_shard_write_parquet, (op.output_pattern, op.schema, op.batch_size, self.chunk_size), shards
                 )
 
@@ -826,27 +1058,32 @@ class Backend:
 
         def materialize_all():
             for shard in shards:
-                yield from shard.materialize()
+                yield from shard
 
         yield from tqdm(materialize_all(), desc=desc, unit="items")
 
-    def _execute_on_shards(self, process_fn: Callable, fn_args: tuple, shards: list[Shard]) -> list[Shard]:
-        """Execute a processing function on shards with bounded parallelism.
+    def _execute_on_shards_unified(self, process_fn: Callable, fn_args: tuple, shards: list[Shard]) -> list[Shard]:
+        """Execute a processing function on shards, handling both 1:1 and 1:N operations.
+
+        All process functions now return list[Shard], making the interface uniform.
+        After execution, results are recompacted by shard index.
 
         Args:
-            process_fn: Function that takes (Shard, int, int, *fn_args) -> Shard
+            process_fn: Function that takes (Shard, int, int, *fn_args) -> list[Shard]
             fn_args: Additional arguments to pass to process_fn
             shards: List of input Shards
 
         Returns:
-            List of output Shards in original order
+            Recompacted list of output Shards
         """
+        print(
+            f"Running {process_fn.__name__} on {len(shards)} shards with max parallelism {self.config.max_parallelism}"
+        )
         total = len(shards)
         result_futures = [None] * total
         pending = {}
 
         for shard_idx, shard in enumerate(shards):
-            # Execute via context (Ray remote, thread pool submit, or immediate)
             future = self.context.run(process_fn, shard, shard_idx, total, *fn_args)
             pending[future] = shard_idx
 
@@ -861,8 +1098,11 @@ class Backend:
 
         self.context.wait(result_futures, num_returns=len(result_futures))
 
-        # Get all Shard results
-        return [self.context.get(future) for future in result_futures]
+        # Get all list[Shard] results
+        shard_lists = [self.context.get(future) for future in result_futures]
+
+        # Recompact into final output shards
+        return recompact_shards(shard_lists)
 
 
 class RayBackend(Backend):
