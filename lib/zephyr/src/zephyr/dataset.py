@@ -303,8 +303,6 @@ class Dataset(Generic[T]):
     def batch(self, batch_size: int) -> Dataset[list[T]]:
         """Batch dataset elements into fixed-size lists.
 
-        Batch always executes synchronously as it's lightweight.
-
         Args:
             batch_size: Number of elements per batch
 
@@ -321,9 +319,6 @@ class Dataset(Generic[T]):
 
     def flat_map(self, fn: Callable[[T], Iterable[R]]) -> Dataset[R]:
         """Apply function that returns an iterable, flattening results.
-
-        Use when your function processes one input and yields/returns multiple outputs.
-        Common use case: reading a file that contains multiple records.
 
         Args:
             fn: Function that takes an item and returns an iterable of results
@@ -347,9 +342,7 @@ class Dataset(Generic[T]):
     def reshard(self, num_shards: int) -> Dataset[T]:
         """Redistribute data across target number of shards (best-effort).
 
-        Changes parallelism for subsequent operations. For RayBackend, redistributes
-        object refs without materializing data. For SyncBackend/ThreadPoolBackend,
-        this is a no-op.
+        Changes parallelism for subsequent operations.
 
         Useful after operations that reduce parallelism (like filtering) or when
         starting with a small number of input files.
@@ -379,10 +372,7 @@ class Dataset(Generic[T]):
         Writes each input stream to a separate JSONL file. The output pattern
         supports substitutions: {shard:05d}, {total:05d}, {basename}.
 
-        Compression is automatically inferred from the file extension:
-        - Files ending in .gz use gzip compression
-        - Other files are written uncompressed
-
+        Compression is automatically inferred from the file extension.
         Args:
             output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}-of-{total:05d}.jsonl.gz")
 
@@ -441,10 +431,6 @@ class Dataset(Generic[T]):
     ) -> Dataset[R]:
         """Group items by key and apply reducer function.
 
-        Two-phase operation that:
-        1. Groups items locally per shard by hash(key) % num_output_shards
-        2. Globally reduces each group using the provided reducer
-
         The reducer receives (key, iterator_of_items) and returns a single result.
 
         Args:
@@ -480,18 +466,7 @@ class Dataset(Generic[T]):
         )
 
     def deduplicate(self, key: Callable[[T], object], num_output_shards: int | None = None) -> Dataset[T]:
-        """Deduplicate items by key (keeps arbitrary occurrence).
-
-        Two-phase deduplication:
-        1. Streaming local dedup per shard (fusible, tracks seen keys)
-        2. Global exact dedup via group_by with first-item reducer
-
-        Args:
-            key: Function extracting dedup key from item (must be hashable)
-            num_output_shards: Number of output shards (None = auto-detect)
-
-        Returns:
-            New dataset with deduplicate operation appended
+        """Deduplicate items by key.
 
         Example:
             >>> backend = create_backend("ray", max_parallelism=10)

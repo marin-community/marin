@@ -74,13 +74,14 @@ def test_format_shard_path_basename_placeholder():
 
 def test_write_jsonl_infers_compression_from_gz_extension(tmp_path):
     """Test that .gz extension triggers gzip compression."""
-    from zephyr.backends import write_records_to_jsonl
+    from zephyr.writers import write_jsonl_file
 
     records = [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]
     output_path = str(tmp_path / "test.jsonl.gz")
 
-    result = write_records_to_jsonl(records, output_path)
-    assert result == output_path
+    result = write_jsonl_file(records, output_path)
+    assert result["path"] == output_path
+    assert result["count"] == 2
 
     # Verify file was created and is gzip compressed
     import gzip
@@ -95,13 +96,14 @@ def test_write_jsonl_infers_compression_from_gz_extension(tmp_path):
 
 def test_write_jsonl_no_compression_without_gz_extension(tmp_path):
     """Test that files without .gz extension are not compressed."""
-    from zephyr.backends import write_records_to_jsonl
+    from zephyr.writers import write_jsonl_file
 
     records = [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]
     output_path = str(tmp_path / "test.jsonl")
 
-    result = write_records_to_jsonl(records, output_path)
-    assert result == output_path
+    result = write_jsonl_file(records, output_path)
+    assert result["path"] == output_path
+    assert result["count"] == 2
 
     # Verify file was created and is NOT compressed
     import json
@@ -127,13 +129,14 @@ def test_flow_backend_defaults_to_ray_when_initialized():
 
 def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):
     """Test that .zst extension triggers zstd compression."""
-    from zephyr.backends import write_records_to_jsonl
+    from zephyr.writers import write_jsonl_file
 
     records = [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]
     output_path = str(tmp_path / "test.jsonl.zst")
 
-    result = write_records_to_jsonl(records, output_path)
-    assert result == output_path
+    result = write_jsonl_file(records, output_path)
+    assert result["path"] == output_path
+    assert result["count"] == 2
 
     # Verify file was created and is zstd compressed
     import io

@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import pickle
+import zlib
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
@@ -45,7 +46,7 @@ from zephyr.dataset import (
     WriteParquetOp,
 )
 
-from .writers import ensure_parent_dir, write_jsonl_file
+from .writers import write_jsonl_file, write_parquet_file
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ R = TypeVar("R")
 def msgpack_encode(obj: Any) -> bytes:
     """Serialize with msgpack and compress with zstd."""
     serialized = msgspec.msgpack.encode(obj)
-    cctx = zstd.ZstdCompressor(level=1)
+    cctx = zstd.ZstdCompressor(level=-10, threads=1)
     return cctx.compress(serialized)
 
 
@@ -100,25 +101,11 @@ class ExecutionContext(Protocol):
     """
 
     def put(self, obj: Any) -> Any:
-        """Store an object and return a reference to it.
-
-        Args:
-            obj: Object to store
-
-        Returns:
-            Reference to the stored object (type depends on context)
-        """
+        """Store an object and return a reference to it."""
         ...
 
     def get(self, ref: Any) -> Any:
-        """Retrieve an object from its reference.
-
-        Args:
-            ref: Reference to retrieve
-
-        Returns:
-            The stored object
-        """
+        """Retrieve an object from its reference."""
         ...
 
     def run(self, fn: Callable, *args) -> Any:
@@ -160,8 +147,7 @@ class _ImmediateFuture:
 def _put_on_worker(serialized: bytes) -> ray.ObjectRef:
     """Put serialized bytes in Ray's object store on a worker node.
 
-    This function is executed remotely to ensure objects are placed on worker
-    nodes rather than the head node.
+    This is used to scatter data across the cluster with Ray.
     """
     return ray.put(serialized)
 
@@ -178,20 +164,12 @@ class RayContext:
         self.ray_options = ray_options or {}
 
     def put(self, obj: Any) -> ray.ObjectRef:
-        """Store object on a worker node using SPREAD strategy.
-
-        Uses a remote task to place the object on a worker node's object store
-        rather than the head node, distributing data across the cluster.
-        """
         compressed = msgpack_encode(obj)
         ref_future = _put_on_worker.options(scheduling_strategy="SPREAD").remote(compressed)
         return ray.get(ref_future)
 
     def get(self, ref: ray.ObjectRef) -> Any:
-        """Retrieve object, decompressing and decoding msgpack if applicable.
-
-        Handles both compressed msgpack-encoded chunk data and Ray-pickled function results.
-        """
+        """Retrieve and decode object from Ray object store."""
         result = ray.get(ref)
         if isinstance(result, bytes):
             return msgpack_decode(result)
@@ -200,8 +178,7 @@ class RayContext:
     def run(self, fn: Callable, *args) -> ray.ObjectRef:
         """Execute function remotely with configured Ray options.
 
-        Uses SPREAD scheduling strategy to avoid running on head node and
-        distribute work across worker nodes.
+        Uses SPREAD scheduling strategy to distribute work across worker nodes.
         """
         if self.ray_options:
             remote_fn = ray.remote(**self.ray_options)(fn)
@@ -279,11 +256,7 @@ class Chunk:
 
 @dataclass
 class Shard:
-    """Container for a logically grouped set of items split across multiple chunks.
-
-    Each chunk contains a portion of items to prevent large object overhead.
-    Works with any ExecutionContext (Ray, ThreadPool, Sync) via context.put/get operations.
-    """
+    """Container for a logically grouped set of items split across multiple chunks."""
 
     idx: int  # Shard index (e.g., 0 of 50)
     chunks: list[Chunk]
@@ -346,58 +319,6 @@ class Shard:
         return Shard(idx=idx, chunks=[Chunk(count=count, data=ref)], context=context)
 
 
-def infer_parquet_type(value):
-    """Recursively infer PyArrow type from a Python value.
-
-    Args:
-        value: Python value
-
-    Returns:
-        PyArrow type
-    """
-    import pyarrow as pa
-
-    if isinstance(value, bool):
-        # Check bool before int since bool is a subclass of int
-        return pa.bool_()
-    elif isinstance(value, str):
-        return pa.string()
-    elif isinstance(value, int):
-        return pa.int64()
-    elif isinstance(value, float):
-        return pa.float64()
-    elif isinstance(value, dict):
-        nested_fields = []
-        for k, v in value.items():
-            nested_fields.append((k, infer_parquet_type(v)))
-        return pa.struct(nested_fields)
-    elif isinstance(value, list):
-        # Simple list of strings for now
-        return pa.list_(pa.string())
-    else:
-        return pa.string()
-
-
-def infer_parquet_schema(record: dict):
-    """Infer PyArrow schema from a dictionary record.
-
-    Supports nested dictionaries as struct types.
-
-    Args:
-        record: Dictionary record
-
-    Returns:
-        PyArrow schema
-    """
-    import pyarrow as pa
-
-    fields = []
-    for key, value in record.items():
-        fields.append((key, infer_parquet_type(value)))
-
-    return pa.schema(fields)
-
-
 def make_batches(items: Iterable[T], batch_size: int) -> Iterator[list[T]]:
     """Batch items into groups of batch_size.
 
@@ -446,68 +367,6 @@ def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
     normalized = re.sub(r"(?<!:)//+", "/", formatted)
 
     return normalized
-
-
-def write_records_to_jsonl(records: Iterable, output_path: str) -> str:
-    """Write records to a JSONL file.
-
-    Internal wrapper around write_jsonl_file that returns just the path for backward compatibility.
-
-    Args:
-        records: Records to write (each should be JSON-serializable)
-        output_path: Path to output file
-
-    Returns:
-        Output path written
-    """
-    result = write_jsonl_file(records, output_path)
-    return result["path"]
-
-
-def write_records_to_parquet(records: Iterable, output_path: str, schema: object | None, batch_size: int = 1000) -> str:
-    """Write records to a Parquet file using streaming batched writes.
-
-    Args:
-        records: Records to write (iterable of dicts)
-        output_path: Path to output file
-        schema: PyArrow schema (optional, will be inferred from first record if None)
-        batch_size: Number of records per batch (default: 1000)
-
-    Returns:
-        Output path written
-    """
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    ensure_parent_dir(output_path)
-
-    record_iter = iter(records)
-
-    first_record = None
-    try:
-        first_record = next(record_iter)
-    except StopIteration:
-        actual_schema = schema or pa.schema([])
-        table = pa.Table.from_pylist([], schema=actual_schema)
-        pq.write_table(table, output_path)
-        return output_path
-
-    actual_schema = schema or infer_parquet_schema(first_record)
-
-    with pq.ParquetWriter(output_path, actual_schema) as writer:
-        batch = [first_record]
-        for record in record_iter:
-            batch.append(record)
-            if len(batch) >= batch_size:
-                table = pa.Table.from_pylist(batch, schema=actual_schema)
-                writer.write_table(table)
-                batch = []
-
-        if batch:
-            table = pa.Table.from_pylist(batch, schema=actual_schema)
-            writer.write_table(table)
-
-    return output_path
 
 
 def process_shard_flat_map(shard: Shard, shard_idx: int, total: int, fn: Callable, chunk_size: int) -> list[Shard]:
@@ -567,7 +426,7 @@ def process_shard_write_jsonl(
     logger.info(f"write_jsonl: shard {shard_idx + 1}/{total}")
     output_path = format_shard_path(output_pattern, shard_idx, total)
 
-    result = write_records_to_jsonl(shard, output_path)
+    result = write_jsonl_file(shard, output_path)["path"]
     logger.info(f"write_jsonl: shard {shard_idx + 1}/{total} → {output_path}")
     return [Shard.from_items([result], chunk_size, shard.context, idx=shard_idx)]
 
@@ -585,7 +444,7 @@ def process_shard_write_parquet(
     logger.info(f"write_parquet: shard {shard_idx + 1}/{total}")
     output_path = format_shard_path(output_pattern, shard_idx, total)
 
-    result = write_records_to_parquet(shard, output_path, schema, batch_size)
+    result = write_parquet_file(shard, output_path, schema, batch_size)["path"]
     logger.info(f"write_parquet: shard {shard_idx + 1}/{total} → {output_path}")
     return [Shard.from_items([result], chunk_size, shard.context, idx=shard_idx)]
 
@@ -629,11 +488,11 @@ def process_shard_fused(
             yield from build_stream(make_batches(stream_input, op.batch_size), rest)
         elif isinstance(op, WriteJsonlOp):
             output_path = format_shard_path(op.output_pattern, shard_idx, total_shards)
-            result = write_records_to_jsonl(stream_input, output_path)
+            result = write_jsonl_file(stream_input, output_path)["path"]
             yield from build_stream(iter([result]), rest)
         elif isinstance(op, WriteParquetOp):
             output_path = format_shard_path(op.output_pattern, shard_idx, total_shards)
-            result = write_records_to_parquet(stream_input, output_path, op.schema, op.batch_size)
+            result = write_parquet_file(stream_input, output_path, op.schema, op.batch_size)["path"]
             yield from build_stream(iter([result]), rest)
 
     if operations and isinstance(operations[-1], GroupByLocalOp):
@@ -673,22 +532,8 @@ def process_shard_fused(
 
 
 def deterministic_hash(obj: object) -> int:
-    """Compute a cheap deterministic hash that's consistent across processes.
-
-    Python's built-in hash() is randomized per-process for security, which breaks
-    distributed groupby operations. This function uses zlib.adler32 for a fast
-    deterministic hash.
-
-    Args:
-        obj: Object to hash (must be JSON-serializable)
-
-    Returns:
-        Non-negative integer hash value
-    """
-    import json
-    import zlib
-
-    s = json.dumps(obj, sort_keys=True).encode("utf-8")
+    """Compute a cheap deterministic hash that's consistent across processes."""
+    s = msgspec.msgpack.encode(obj, order="deterministic")
     return zlib.adler32(s)
 
 
@@ -994,33 +839,31 @@ class Backend:
 
         for op in operations:
             if isinstance(op, FlatMapOp):
-                shards = self._execute_on_shards_unified(process_shard_flat_map, (op.fn, self.chunk_size), shards)
+                shards = self._execute_on_shards(process_shard_flat_map, (op.fn, self.chunk_size), shards)
             elif isinstance(op, MapOp):
-                shards = self._execute_on_shards_unified(process_shard_map, (op.fn, self.chunk_size), shards)
+                shards = self._execute_on_shards(process_shard_map, (op.fn, self.chunk_size), shards)
             elif isinstance(op, FilterOp):
-                shards = self._execute_on_shards_unified(process_shard_filter, (op.predicate, self.chunk_size), shards)
+                shards = self._execute_on_shards(process_shard_filter, (op.predicate, self.chunk_size), shards)
             elif isinstance(op, FusedMapOp):
-                shards = self._execute_on_shards_unified(process_shard_fused, (op.operations, self.chunk_size), shards)
+                shards = self._execute_on_shards(process_shard_fused, (op.operations, self.chunk_size), shards)
             elif isinstance(op, BatchOp):
-                shards = self._execute_on_shards_unified(process_shard_batch, (op.batch_size, self.chunk_size), shards)
+                shards = self._execute_on_shards(process_shard_batch, (op.batch_size, self.chunk_size), shards)
             elif isinstance(op, GroupByLocalOp):
                 # Auto-detect num_output_shards if using sentinel value
                 num_output_shards = op.num_output_shards if op.num_output_shards > 0 else len(shards)
-                shards = self._execute_on_shards_unified(
+                shards = self._execute_on_shards(
                     process_shard_group_by_local, (op.key_fn, num_output_shards, self.chunk_size), shards
                 )
             elif isinstance(op, GroupByShuffleReduceOp):
-                shards = self._execute_on_shards_unified(
+                shards = self._execute_on_shards(
                     process_shard_group_by_reduce, (op.key_fn, op.reducer_fn, self.chunk_size), shards
                 )
             elif isinstance(op, ReshardOp):
                 shards = reshard_refs(shards, op.num_shards)
             elif isinstance(op, WriteJsonlOp):
-                shards = self._execute_on_shards_unified(
-                    process_shard_write_jsonl, (op.output_pattern, self.chunk_size), shards
-                )
+                shards = self._execute_on_shards(process_shard_write_jsonl, (op.output_pattern, self.chunk_size), shards)
             elif isinstance(op, WriteParquetOp):
-                shards = self._execute_on_shards_unified(
+                shards = self._execute_on_shards(
                     process_shard_write_parquet, (op.output_pattern, op.schema, op.batch_size, self.chunk_size), shards
                 )
 
@@ -1034,7 +877,7 @@ class Backend:
 
         yield from tqdm(materialize_all(), desc=desc, unit="items")
 
-    def _execute_on_shards_unified(self, process_fn: Callable, fn_args: tuple, shards: list[Shard]) -> list[Shard]:
+    def _execute_on_shards(self, process_fn: Callable, fn_args: tuple, shards: list[Shard]) -> list[Shard]:
         """Execute a processing function on shards, handling both 1:1 and 1:N operations.
 
         All process functions now return list[Shard], making the interface uniform.
@@ -1070,10 +913,8 @@ class Backend:
 
         self.context.wait(result_futures, num_returns=len(result_futures))
 
-        # Get all list[Shard] results
-        shard_lists = [self.context.get(future) for future in result_futures]
-
         # Recompact into final output shards
+        shard_lists = [self.context.get(future) for future in result_futures]
         return recompact_shards(shard_lists)
 
 

@@ -68,7 +68,7 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     if output_path.endswith(".zst"):
         import zstandard as zstd
 
-        cctx = zstd.ZstdCompressor(level=1)
+        cctx = zstd.ZstdCompressor(level=-10, threads=1)
         with fsspec.open(output_path, "wb", block_size=64 * 1024 * 1024) as raw_f:
             with cctx.stream_writer(raw_f) as f:
                 for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):
@@ -84,5 +84,105 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
             for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):
                 f.write(encoder.encode(record) + b"\n")
                 count += 1
+
+    return {"path": output_path, "count": count}
+
+
+def infer_parquet_type(value):
+    """Recursively infer PyArrow type from a Python value.
+
+    Args:
+        value: Python value
+
+    Returns:
+        PyArrow type
+    """
+    import pyarrow as pa
+
+    if isinstance(value, bool):
+        # Check bool before int since bool is a subclass of int
+        return pa.bool_()
+    elif isinstance(value, str):
+        return pa.string()
+    elif isinstance(value, int):
+        return pa.int64()
+    elif isinstance(value, float):
+        return pa.float64()
+    elif isinstance(value, dict):
+        nested_fields = []
+        for k, v in value.items():
+            nested_fields.append((k, infer_parquet_type(v)))
+        return pa.struct(nested_fields)
+    elif isinstance(value, list):
+        # Simple list of strings for now
+        return pa.list_(pa.string())
+    else:
+        return pa.string()
+
+
+def infer_parquet_schema(record: dict):
+    """Infer PyArrow schema from a dictionary record.
+
+    Args:
+        record: Dictionary record
+
+    Returns:
+        PyArrow schema
+    """
+    import pyarrow as pa
+
+    fields = []
+    for key, value in record.items():
+        fields.append((key, infer_parquet_type(value)))
+
+    return pa.schema(fields)
+
+
+def write_parquet_file(
+    records: Iterable, output_path: str, schema: object | None = None, batch_size: int = 1000
+) -> dict:
+    """Write records to a Parquet file using streaming batched writes.
+
+    Args:
+        records: Records to write (iterable of dicts)
+        output_path: Path to output file
+        schema: PyArrow schema (optional, will be inferred from first record if None)
+        batch_size: Number of records per batch (default: 1000)
+
+    Returns:
+        Dict with metadata: {"path": output_path, "count": num_records}
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    ensure_parent_dir(output_path)
+
+    record_iter = iter(records)
+
+    first_record = None
+    try:
+        first_record = next(record_iter)
+    except StopIteration:
+        actual_schema = schema or pa.schema([])
+        table = pa.Table.from_pylist([], schema=actual_schema)
+        pq.write_table(table, output_path)
+        return {"path": output_path, "count": 0}
+
+    actual_schema = schema or infer_parquet_schema(first_record)
+
+    count = 1
+    with pq.ParquetWriter(output_path, actual_schema) as writer:
+        batch = [first_record]
+        for record in tqdm(record_iter, desc=f"write_parquet {output_path}", mininterval=10):
+            batch.append(record)
+            count += 1
+            if len(batch) >= batch_size:
+                table = pa.Table.from_pylist(batch, schema=actual_schema)
+                writer.write_table(table)
+                batch = []
+
+        if batch:
+            table = pa.Table.from_pylist(batch, schema=actual_schema)
+            writer.write_table(table)
 
     return {"path": output_path, "count": count}
