@@ -632,8 +632,8 @@ class Curriculum:
                 wandb.log(
                     {
                         f"health/warnings/{warning.env_id}/{warning.type.value}": 1,
-                        f"health/warning_severity/{warning.env_id}": {"low": 1, "medium": 2, "high": 3, "critical": 4}.get(
-                            warning.severity, 0
+                        f"health/warning_severity/{warning.env_id}": (
+                            {"low": 1, "medium": 2, "high": 3, "critical": 4}.get(warning.severity, 0)
                         ),
                         **{f"health/metrics/{warning.env_id}/{k}": v for k, v in warning.metrics.items()},
                     },
