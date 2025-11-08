@@ -546,6 +546,8 @@ def _group_items_by_hash(
 ) -> dict[int, list[Chunk]]:
     """Core grouping logic: hash items and distribute into chunked buckets.
 
+    Items within each chunk are sorted by key to enable streaming reduction.
+
     Args:
         items: Items to group
         key_fn: Function to extract grouping key from item
@@ -564,16 +566,48 @@ def _group_items_by_hash(
         target_shard = deterministic_hash(key) % num_output_shards
         output_tmp[target_shard].append(item)
         if len(output_tmp[target_shard]) >= chunk_size:
-            output_chunks[target_shard].append(
-                Chunk(count=len(output_tmp[target_shard]), data=context.put(output_tmp[target_shard]))
-            )
+            # Sort items by key before storing chunk
+            sorted_items = sorted(output_tmp[target_shard], key=key_fn)
+            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=context.put(sorted_items)))
             output_tmp[target_shard] = []
 
     for target_shard, items in output_tmp.items():
         if items:
-            output_chunks[target_shard].append(Chunk(count=len(items), data=context.put(items)))
+            # Sort items by key before storing final chunk
+            sorted_items = sorted(items, key=key_fn)
+            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=context.put(sorted_items)))
 
     return output_chunks
+
+
+def _merge_sorted_chunks(shard: Shard, key_fn: Callable) -> Iterator[tuple[object, Iterator]]:
+    """Merge sorted chunks using k-way merge, yielding (key, items_iterator) groups.
+
+    Each chunk is assumed to be sorted by key. This function performs a k-way merge
+    across all chunks and groups consecutive items with the same key.
+
+    Args:
+        shard: Shard containing sorted chunks
+        key_fn: Function to extract key from item
+
+    Yields:
+        Tuples of (key, iterator_of_items) for each unique key
+    """
+    import heapq
+    from itertools import groupby
+
+    # Create iterators for each chunk
+    chunk_iterators = []
+    for chunk_data in shard.iter_chunks():
+        chunk_iterators.append(iter(chunk_data))
+
+    # Use heapq.merge to k-way merge sorted streams
+    # heapq.merge requires a key function that extracts the sort key
+    merged_stream = heapq.merge(*chunk_iterators, key=key_fn)
+
+    # Group consecutive items by key
+    for key, group_iter in groupby(merged_stream, key=key_fn):  # noqa: UP028
+        yield key, group_iter
 
 
 def process_shard_group_by_local(
@@ -594,6 +628,9 @@ def process_shard_group_by_reduce(
 ) -> list[Shard]:
     """Phase 2: Global reduction per shard, applying reducer to each key group.
 
+    Uses streaming k-way merge to avoid materializing all items for each key.
+    Chunks are assumed to be sorted by key from Phase 1.
+
     Args:
         shard: Input shard (contains items for one output shard)
         shard_idx: Index of this output shard
@@ -605,20 +642,12 @@ def process_shard_group_by_reduce(
     Returns:
         List containing single output shard with reduced results
     """
-    from collections import defaultdict
-
     logger.info(f"group_by_reduce: shard {shard_idx + 1}/{total}")
 
-    # Group items by key
-    groups = defaultdict(list)
-    for item in shard:
-        key = key_fn(item)
-        groups[key].append(item)
-
-    # Apply reducer to each group
+    # Use streaming merge to group items by key without full materialization
     def result_generator():
-        for key, items in groups.items():
-            yield reducer_fn(key, iter(items))
+        for key, items_iter in _merge_sorted_chunks(shard, key_fn):
+            yield reducer_fn(key, items_iter)
 
     return [Shard.from_items(result_generator(), chunk_size, shard.context, idx=shard_idx)]
 
