@@ -32,7 +32,6 @@ import os
 from datetime import datetime
 import requests
 import json
-from typing import List
 
 # Configuration
 GITHUB_REPO = "stanford-crfm/marin"
@@ -180,7 +179,7 @@ def get_milestone_id():
     raise ValueError(f"Milestone '{MILESTONE_NAME}' not found")
 
 
-def create_issue(title: str, body: str, labels: List[str], milestone_id: int, assignee: str):
+def create_issue(title: str, body: str, labels: list[str], milestone_id: int, assignee: str):
     url = f"https://api.github.com/repos/{GITHUB_REPO}/issues"
     data = {
         "title": title,
@@ -194,7 +193,7 @@ def create_issue(title: str, body: str, labels: List[str], milestone_id: int, as
     print(f"Created issue: {title}")
 
 
-def create_issues_from_json(json_tasks: List[dict]):
+def create_issues_from_json(json_tasks: list[dict]):
     milestone_id = get_milestone_id()
 
     print(f"Found {len(json_tasks)} tasks.")

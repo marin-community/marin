@@ -18,7 +18,7 @@ We generate braceexpand paths for the files with the same prefix and suffix.
 
 import os
 import re
-from typing import Generator
+from collections.abc import Generator
 
 import fire
 from braceexpand import braceexpand

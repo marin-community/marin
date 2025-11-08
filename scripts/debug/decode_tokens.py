@@ -18,8 +18,6 @@
 
 import ast
 import shlex
-from pathlib import Path
-from typing import Dict, List, Optional, Any
 
 import click
 from prompt_toolkit import prompt
@@ -32,7 +30,7 @@ from transformers import AutoTokenizer
 
 console = Console()
 
-current_tokenizer: Optional[str] = None
+current_tokenizer: str | None = None
 
 
 def load_tokenizer(model_name: str) -> bool:
@@ -125,7 +123,7 @@ def load_tokenizer_cmd(model_name: str):
 @cli.command("encode")
 @click.argument("text")
 @click.option("--tokenizer", "-t", help="Tokenizer to use")
-def encode_cmd(text: str, tokenizer: Optional[str]):
+def encode_cmd(text: str, tokenizer: str | None):
     """Encode text to tokens."""
     if tokenizer:
         load_tokenizer(tokenizer)
@@ -135,7 +133,7 @@ def encode_cmd(text: str, tokenizer: Optional[str]):
 @cli.command("decode")
 @click.argument("tokens")
 @click.option("--tokenizer", "-t", help="Tokenizer to use")
-def decode_cmd(tokens: str, tokenizer: Optional[str]):
+def decode_cmd(tokens: str, tokenizer: str | None):
     """Decode tokens to text."""
     if tokenizer:
         load_tokenizer(tokenizer)
@@ -146,16 +144,16 @@ def decode_cmd(tokens: str, tokenizer: Optional[str]):
         console.print(f"[red]Error parsing tokens: {e}[/red]")
 
 
-def decode_tokens(token_list: List[int]):
+def decode_tokens(token_list: list[int]):
     """Helper to decode tokens."""
     decoded = current_tokenizer.decode(token_list)
-    console.print(f"[green]Decoded:[/green] {repr(decoded)}")
+    console.print(f"[green]Decoded:[/green] {decoded!r}")
 
 
 @cli.command("vocab")
 @click.argument("search_term", required=False)
 @click.option("--tokenizer", "-t", help="Tokenizer to use")
-def vocab_cmd(search_term: Optional[str], tokenizer: Optional[str]):
+def vocab_cmd(search_term: str | None, tokenizer: str | None):
     """Search vocabulary."""
     if tokenizer:
         load_tokenizer(tokenizer)
@@ -174,12 +172,12 @@ def vocab_cmd(search_term: Optional[str], tokenizer: Optional[str]):
                 table.add_row(repr(token), str(token_id))
             console.print(table)
         else:
-            console.print(f"[yellow]No matches found[/yellow]")
+            console.print("[yellow]No matches found[/yellow]")
 
 
 @cli.command("special")
 @click.option("--tokenizer", "-t", help="Tokenizer to use")
-def special_cmd(tokenizer: Optional[str]):
+def special_cmd(tokenizer: str | None):
     """Show special tokens."""
     if tokenizer:
         load_tokenizer(tokenizer)

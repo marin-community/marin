@@ -1,7 +1,18 @@
-# Copyright 2025 The Levanter Authors
-# SPDX-License-Identifier: Apache-2.0
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-from typing import Sequence
+from collections.abc import Sequence
 
 import pytest
 
@@ -17,7 +28,7 @@ from levanter.data.text import ChatProcessor
 def fresh_marin_tokenizer():
     try:
         base = load_llama3_tokenizer()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         pytest.skip(f"Could not load llama3 tokenizer: {exc}", allow_module_level=True)
         raise NotImplementedError("unreachable")
     return create_marin_tokenizer(base)
@@ -100,6 +111,6 @@ def test_marin_chat_template_ipython_output(fresh_marin_tokenizer):
     result = processor(batch)[0]
     rendered = decode_sequence(tokenizer, result["input_ids"])
     assert '{"name": "python_exec", "arguments": {"code": "print(1+1)"}}' in rendered
-    assert '<|start_header_id|>ipython<|end_header_id|>' in rendered
+    assert "<|start_header_id|>ipython<|end_header_id|>" in rendered
     assert '{"output": "4\\n"}' in rendered
     assert result["assistant_masks"].sum() > 0
