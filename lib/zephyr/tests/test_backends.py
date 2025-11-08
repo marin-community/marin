@@ -14,7 +14,10 @@
 
 """Tests for backend implementations."""
 
-from zephyr.backends import format_shard_path
+import ray
+
+from zephyr.backend_factory import flow_backend
+from zephyr.backends import RayBackend, format_shard_path
 
 
 def test_format_shard_path_basic():
@@ -109,3 +112,16 @@ def test_write_jsonl_no_compression_without_gz_extension(tmp_path):
         assert len(lines) == 2
         assert json.loads(lines[0]) == {"id": 1, "text": "hello"}
         assert json.loads(lines[1]) == {"id": 2, "text": "world"}
+
+
+def test_flow_backend_defaults_to_ray_when_initialized():
+    """Test that flow_backend returns RayBackend when Ray is initialized."""
+    if ray.is_initialized():
+        ray.shutdown()
+
+    try:
+        ray.init(ignore_reinit_error=True)
+        backend = flow_backend()
+        assert isinstance(backend, RayBackend)
+    finally:
+        ray.shutdown()
