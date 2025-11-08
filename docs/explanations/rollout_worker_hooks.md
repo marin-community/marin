@@ -86,12 +86,6 @@ EvaluationHook(
 )
 ```
 
-#### Other Built-in Hooks
-- `LoggingHook`: Periodic logging of worker state
-- `MetricsHook`: Custom metrics collection
-- `CheckpointHook`: Trigger checkpoints at intervals
-- `CompositeHook`: Combine multiple hooks
-
 ## Usage Examples
 
 ### Basic Usage
@@ -110,10 +104,6 @@ custom_eval = EvaluationHook(
     eval_type="custom_eval"
 )
 worker.register_hook(custom_eval)
-
-# Add logging
-logging_hook = LoggingHook(frequency=100)
-worker.register_hook(logging_hook)
 ```
 
 ### Custom Hook Implementation
