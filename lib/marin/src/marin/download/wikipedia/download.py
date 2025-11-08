@@ -17,7 +17,16 @@ wikipedia/download.py
 
 Download script for the Wikipedia raw HTML data, provided by Wikimedia.
 
-Home Page: https://dumps.wikimedia.org/enwiki/latest/enwiki-latest-pages-articles.xml.bz2
+Home Page: https://dumps.wikimedia.org/other/enterprise_html/runs/
+
+Example Usage:
+ENWIKI=https://dumps.wikimedia.org/other/enterprise_html/runs/20250320/enwiki-NS0-20250320-ENTERPRISE-HTML.json.tar.gz
+uv run zephyr --backend=ray --max-parallelism=10 \
+    lib/marin/src/marin/download/wikipedia/download.py \
+    --input_urls $ENWIKI \
+    --revision 20250320 --output_path gs://path/to/output
+
+Note: The enwiki-NS0 file (English Wikipedia, namespace 0 = articles) is approximately 130 GB compressed.
 """
 
 import logging
@@ -27,11 +36,10 @@ from dataclasses import dataclass
 
 import draccus
 import fsspec
-import ray
 import requests
-from tqdm_loggable.auto import tqdm
-
 from marin.utils import fsspec_exists, fsspec_size
+from tqdm_loggable.auto import tqdm
+from zephyr import Dataset, flow_backend
 
 logger = logging.getLogger("ray")
 
@@ -43,7 +51,6 @@ class DownloadConfig:
     output_path: str
 
 
-@ray.remote(memory=10 * 1024 * 1024 * 1024)
 def download_tar(url: str, output_path: str) -> None:
     output_path = os.path.join(output_path, url.split("/")[-1])
 
@@ -72,7 +79,6 @@ def download_tar(url: str, output_path: str) -> None:
         raise e
 
 
-@ray.remote(memory=250 * 1024 * 1024 * 1024)
 def process_file(input_file: str, output_path: str) -> None:
     logger.info(f"Processing file: {input_file}")
     logger.info(f"Output path: {output_path}")
@@ -80,18 +86,14 @@ def process_file(input_file: str, output_path: str) -> None:
     try:
         with fsspec.open(input_file) as f:
             with tarfile.open(fileobj=f, mode="r:gz") as tr:
-                file_names = tr.getnames()
-                logger.info(f"Extracting files: {file_names}")
-
-                for file_name in tqdm(file_names):
-                    file = tr.extractfile(file_name)
-                    file_content = file.read()
-                    file_path = os.path.join(output_path, file_name + ".gz")
-
-                    # Each file is a .ndjson file, which contains about 18k-21k articles
-                    # per file with size ranging from 200MB to 300MB
-                    with fsspec.open(file_path, "wb", compression="gzip") as f:
-                        f.write(file_content)
+                for info in tr:
+                    with tr.extractfile(info) as file:
+                        file_content = file.read()
+                        file_path = os.path.join(output_path, info.name + ".gz")
+                        # Each file is a .ndjson file, which contains about 18k-21k articles
+                        # per file with size ranging from 200MB to 300MB
+                        with fsspec.open(file_path, "wb", compression="gzip") as output_f:
+                            output_f.write(file_content)
 
     except Exception as e:
         logger.error(f"Error processing file: {input_file}")
@@ -100,33 +102,17 @@ def process_file(input_file: str, output_path: str) -> None:
 
 @draccus.wrap()
 def download(cfg: DownloadConfig) -> None:
+    """Download and process Wikipedia data."""
+    backend = flow_backend()
     logger.info("Starting transfer of Wikipedia dump...")
 
-    MAX_CONCURRENT_DOWNLOADS = 10
-    download_refs = []
-    downloaded_files = []
-    for url in cfg.input_urls:
-        download_refs.append(download_tar.remote(url, cfg.output_path))
+    output_base = os.path.join(cfg.output_path, cfg.revision)
 
-        # Wait for downloads to complete, processing MAX_CONCURRENT_DOWNLOADS at a time
-        if len(download_refs) >= MAX_CONCURRENT_DOWNLOADS:
-            # Wait for at least one download to complete
-            ready_refs, download_refs = ray.wait(download_refs, num_returns=1)
-            try:
-                downloaded_file = ray.get(download_refs)
-                downloaded_files.extend(downloaded_file)
-            except Exception as e:
-                logger.exception(f"Error downloading: {e}")
-                raise e
+    # Single pipeline: download each URL, then extract the downloaded file
+    pipeline = (
+        Dataset.from_list(cfg.input_urls)
+        .map(lambda url: download_tar(url, cfg.output_path))
+        .map(lambda file: process_file(file, output_base))
+    )
 
-    try:
-        downloaded_file = ray.get(download_refs)
-        downloaded_files.extend(downloaded_file)
-    except Exception as e:
-        raise e
-
-    logger.info(f"Downloaded files: {downloaded_files}")
-
-    for file in downloaded_files:
-        output_path = os.path.join(cfg.output_path, cfg.revision)
-        ray.get(process_file.remote(file, output_path))
+    list(backend.execute(pipeline))

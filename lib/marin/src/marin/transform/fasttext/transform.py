@@ -31,8 +31,6 @@ from datetime import datetime, timezone
 
 import draccus
 import fsspec
-import ray
-
 from marin.core.runtime import cached_or_construct_output
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -56,7 +54,6 @@ def generate_id(line: str, line_number: str) -> str:
     return hash_object.hexdigest()
 
 
-@ray.remote(memory=1 * 1024 * 1024 * 1024, num_cpus=1)  # 1 GB of RAM, 1 CPU by Default
 @cached_or_construct_output(success_suffix="SUCCESS")  # Make idempotent / setup ledger for easy resumption
 def convert_fasttext_to_dolma_format(input_path: str, output_path: str, source: str) -> bool:
     """
@@ -114,15 +111,11 @@ class TransformFasttextToDolmaConfig:
 
 
 @draccus.wrap()
-def main(cfg: TransformFasttextToDolmaConfig):
+def fasttext_to_dolma_format(cfg: TransformFasttextToDolmaConfig):
     # Currently Executor framework passes in directory names, but we are converting a singular
     # Fasttext file to Dolma format, so in the case that the output path is a directory, we need to
     # append the output filename to it.
     if not cfg.output_path.endswith(".jsonl.gz"):
         cfg.output_path = os.path.join(cfg.output_path, "text.jsonl.gz")
 
-    ray.get(convert_fasttext_to_dolma_format.remote(cfg.input_path, cfg.output_path, cfg.source))
-
-
-if __name__ == "__main__":
-    main()
+    convert_fasttext_to_dolma_format(cfg.input_path, cfg.output_path, cfg.source)

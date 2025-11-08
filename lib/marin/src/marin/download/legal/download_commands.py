@@ -15,17 +15,17 @@
 """
 Run with:
     - AustralianLegalCorpus: [Local] python marin/download/huggingface/download.py \
-        --gcs_output_path="gs://marin-data/raw/law/australianlegalcorpus" \
+        --gcs_output_path="gs://marin-us-central2/raw/legal-open-australian-legal-corpus/66e7085/" \
         --hf_dataset_id="umarbutler/open-australian-legal-corpus" \
     - EDGAR: [Local] python marin/download/huggingface/download.py \
-        --gcs_output_path="gs://marin-data/raw/law/edgar" \
+        --gcs_output_path="gs://marin-us-central2/raw/legal-edgar/f7d3ba7/" \
         --hf_dataset_id="eloukas/edgar-corpus" \
     - HUPD: [Local] python marin/download/huggingface/download.py \
-        --gcs_output_path="gs://marin-data/raw/law/hupd" \
+        --gcs_output_path="gs://marin-us-central2/raw/legal-hupd/f570a84/" \
         --hf_dataset_id="HUPD/hupd" \
         --hf_url_glob="data/20*.tar.gz"
     - MultiLegalPile [Local] python marin/download/huggingface/download.py \
-        --gcs_output_path="gs://marin-data/raw/law/multilegalpile" \
+        --gcs_output_path="gs://marin-us-central2/raw/legal-multi-legal-wikipedia-filtered/483f6c8/" \
         --hf_dataset_id="joelniklaus/MultiLegalPileWikipediaFiltered" \
         --hf_url_glob="data/en_*_train.*.jsonl.xz"
 """

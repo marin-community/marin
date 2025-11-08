@@ -20,20 +20,20 @@ TODO: apply these quality classifiers on FineWeb (or DCLM, but that's larger), t
 
 import dataclasses
 
-from experiments.posttrain.instruction_datasets import get_directory_friendly_dataset_name, get_instruction_dataset
 from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
 )
-from marin.transform.conversation.conversation_to_dolma import ConversationToDolmaConfig, process_dataset
-from marin.transform.fasttext.transform import TransformFasttextToDolmaConfig
-from marin.transform.fasttext.transform import main as fasttext_to_dolma_format
+from marin.transform.conversation.conversation_to_dolma import ConversationToDolmaConfig, convert_conversation_to_dolma
+from marin.transform.fasttext.transform import TransformFasttextToDolmaConfig, fasttext_to_dolma_format
+
+from experiments.posttrain.instruction_datasets import get_directory_friendly_dataset_name, get_instruction_dataset
 
 openhermes_in_dolma_format = ExecutorStep(
     name=f"documents/{get_directory_friendly_dataset_name('teknium/OpenHermes-2.5')}",
-    fn=process_dataset,
+    fn=convert_conversation_to_dolma,
     config=ConversationToDolmaConfig(
         input_path=output_path_of(get_instruction_dataset("teknium/OpenHermes-2.5")),
         output_path=this_output_path("text"),

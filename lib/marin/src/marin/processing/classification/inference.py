@@ -26,19 +26,20 @@ import os
 import draccus
 import ray
 from ray.util.queue import Queue
+
 from marin.core.runtime import cached_or_construct_output
+from marin.processing.classification.autoscaler import AutoscalingActorPool, AutoscalingActorPoolConfig
+from marin.processing.classification.checkpoint_utils import get_finished_ids, get_id_from_row
 from marin.processing.classification.classifier import (
     AutoClassifierRayActor,
 )
 from marin.processing.classification.config.inference_config import DatasetSchemaConfig, InferenceConfig
+from marin.processing.classification.dataset_utils import read_dataset_streaming, write_dataset_streaming
 from marin.utils import (
     fsspec_glob,
     fsspec_mkdirs,
     rebase_file_path,
 )
-from marin.processing.classification.dataset_utils import read_dataset_streaming, write_dataset_streaming
-from marin.processing.classification.checkpoint_utils import get_finished_ids, get_id_from_row
-from marin.processing.classification.autoscaler import AutoscalingActorPool, AutoscalingActorPoolConfig
 
 logger = logging.getLogger("ray")
 

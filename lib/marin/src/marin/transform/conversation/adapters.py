@@ -101,7 +101,7 @@ class TransformAdapter:
     def transform_conversation_to_openai_format(
         self,
         row: dict[str, Any],
-    ) -> list[OpenAIChatMessage] | None:
+    ) -> list[OpenAIChatMessage]:
         if self.dataset_format == InputDatasetFormat.INSTRUCTION_RESPONSE:
             messages = []
             instruction = row[self.instruction_column]
@@ -155,7 +155,7 @@ class TransformAdapter:
                 # This occurs in Dolphin-R1 reasoning, where instructions are
                 # sometimes part of the 'system' prompt instead of 'user' prompt.
                 # We handle misaligned data gracefully rather than crash.
-                return None
+                return []
             else:
                 instruction_content = instruction[0][self.content_key]
                 messages.append(OpenAIChatMessage(role="user", content=instruction_content))

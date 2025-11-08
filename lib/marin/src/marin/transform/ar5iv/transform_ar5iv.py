@@ -16,21 +16,19 @@
 ar5iv/transform_ar5iv.py
 
 Performs HTML->Text/MD conversion using the specified tools over a ar5iv dump save in DOLMA format.
+
+Example Usage:
+uv run zephyr --backend=ray --max-parallelism=200 --memory=2GB --cluster=us-central2 \
+    lib/marin/src/marin/transform/ar5iv/transform_ar5iv.py \
+    --input_path gs://path/to/input --output_path gs://path/to/output ...
 """
 
-import json
 import logging
-import os
 import re
 from dataclasses import dataclass
 
 import draccus
-import fsspec
-import ray
 from bs4 import BeautifulSoup
-from tqdm_loggable.auto import tqdm
-
-from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig
 from marin.transform.ar5iv.transform import (
     clean_li,
@@ -50,6 +48,7 @@ from marin.transform.ar5iv.transform import (
 )
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
+from zephyr import Dataset, flow_backend, load_jsonl
 
 logger = logging.getLogger("ray")
 
@@ -136,79 +135,58 @@ def clean_html(html: str, remove_reference_section: bool = True) -> str:
     return str(html)
 
 
-@ray.remote(memory=2 * 1024 * 1024 * 1024)
-@cached_or_construct_output(success_suffix="SUCCESS")
-def process_file(
-    input_file_path: str,
-    output_file_path: str,
+def process_record(
+    row: dict,
     extract_method: str,
     extract_config: ExtractionConfig,
     remove_reference_section: bool = True,
-) -> None:
-    logger.info(f"Starting processing of file {input_file_path}")
-    logger.info(f"Source: {input_file_path}")
-    logger.info(f"Destination: {output_file_path}")
+) -> dict[str, str]:
+    """Process a single ar5iv record and return transformed record.
+
+    Args:
+        row: Record from JSONL file
+        extract_method: Method to use for HTML extraction
+        extract_config: Configuration for the extraction method
+        remove_reference_section: Whether to remove reference sections
+
+    Returns:
+        Transformed record in Dolma format
+    """
     try:
-        with (
-            fsspec.open(input_file_path, compression="gzip") as source,
-            fsspec.open(output_file_path, "wt", compression="gzip") as output,
-        ):
-            for line in tqdm(source, desc="Processing lines"):
-                row = json.loads(line)
+        filtered_html = clean_html(row["content"], remove_reference_section)
+        result = convert_page(filtered_html, extract_method=extract_method, config=extract_config)
+        if remove_reference_section:
+            result["content"] = re.sub(r"\s?\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", result["content"])
 
-                try:
-                    filtered_html = clean_html(row["content"], remove_reference_section)
-                    result = convert_page(filtered_html, extract_method=extract_method, config=extract_config)
-                    if remove_reference_section:
-                        result["content"] = re.sub(r"\s?\\\[(?:\d+(?:,\s*\d+)*)\\\]", "", result["content"])
+        out_dict = {
+            "id": row["filename"],
+            "source": "ar5iv",
+            "format": "text",
+            "text": result["content"],
+        }
 
-                    out_dict = {
-                        "id": row["filename"],
-                        "source": "ar5iv",
-                        "format": "text",
-                        "text": result["content"],
-                    }
-
-                    print(json.dumps(out_dict), file=output)
-                except Exception as e:
-                    logger.exception(f"Error processing line: {e}")
-                    raise
-
-        logger.info("\nProcessing completed successfully!")
-        logger.info(f"File available at: {output_file_path}")
-
+        return out_dict
     except Exception as e:
-        logger.error(f"Error during processing: {e}")
+        logger.exception(f"Error processing line: {e}")
         raise
 
 
 @draccus.wrap()
 def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
+    backend = flow_backend()
     files = fsspec_glob(f"{cfg.input_path}/*.jsonl.gz")
 
-    result_refs = []
-    MAX_CONCURRENT_WORKERS = 200
-
-    for file in files:
-        if len(result_refs) > MAX_CONCURRENT_WORKERS:
-            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            try:
-                ray.get(ready_refs)
-            except Exception as e:
-                logger.exception(f"Error processing the group: {e}")
-                continue
-
-        output_file_path = os.path.join(cfg.output_path, file.split("/")[-1])
-        result_refs.append(
-            process_file.remote(
-                file,
-                output_file_path,
+    pipeline = (
+        Dataset.from_list(files)
+        .flat_map(load_jsonl)
+        .map(
+            lambda row: process_record(
+                row,
                 cfg.extract_method,
                 cfg.extract_config,
                 cfg.remove_reference_section,
             )
         )
-    try:
-        ray.get(result_refs)
-    except Exception as e:
-        logger.exception(f"Error processing the group: {e}")
+        .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+    )
+    list(backend.execute(pipeline))

@@ -19,13 +19,9 @@ Utilities for chunking text on character, paragraph or passage boundaries.
 from enum import Enum
 from dataclasses import dataclass
 from typing import Any
-import json
 import re
 
-import fsspec
-import ray
-
-from marin.core.runtime import map_files_in_directory, TaskConfig
+from zephyr import Dataset, flow_backend, load_jsonl
 
 
 class ChunkStrategy(str, Enum):
@@ -203,32 +199,25 @@ def chunk_text(
     return results
 
 
-@ray.remote
-def _chunk_single_file(input_path: str, output_path: str, config: ChunkingConfig) -> str:
-    with (
-        fsspec.open(input_path, "r", compression="infer") as in_f,
-        fsspec.open(output_path, "w", compression="infer") as out_f,
-    ):
-        for line in in_f:
-            line = line.strip()
-            if not line:
-                continue
-            example = json.loads(line)
-            for chunk in chunk_text(example, config.chunk_strategy, config.chunk_size):
-                out_f.write(json.dumps(chunk))
-                out_f.write("\n")
-    return output_path
+def _chunk_single_record(example: dict, config: ChunkingConfig):
+    """Chunk a single record's text.
+
+    Args:
+        example: Record from JSONL file
+        config: Chunking configuration
+
+    Yields:
+        Chunked records
+    """
+    yield from chunk_text(example, config.chunk_strategy, config.chunk_size)
 
 
 def chunk_with_config(config: ChunkingConfig) -> list[str]:
-    # Launch remote tasks, one per input file
-    refs = map_files_in_directory(
-        _chunk_single_file.remote,
-        config.input_path,
-        config.glob_pattern,
-        config.output_path,
-        TaskConfig(),
-        False,
-        config,
+    backend = flow_backend()
+    pipeline = (
+        Dataset.from_files(config.input_path, config.glob_pattern)
+        .flat_map(load_jsonl)
+        .flat_map(lambda example: _chunk_single_record(example, config=config))
+        .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    ray.get(refs)
+    return list(backend.execute(pipeline))

@@ -16,20 +16,21 @@
 stackexchange/transform_stackexchange.py
 
 Performs HTML->Text/MD conversion using the specified tools over a stackexchange dump save in DOLMA format.
+
+Example Usage:
+uv run zephyr --backend=ray --max-parallelism=50 --memory=2GB --cluster=us-central2 \
+    lib/marin/src/marin/transform/stackexchange/transform_stackexchange.py \
+    --input_path gs://path/to/input --output_path gs://path/to/output ...
 """
 
-import json
 import logging
 import os
 import random
 from dataclasses import dataclass
 
 import draccus
-import fsspec
-import ray
-from tqdm_loggable.auto import tqdm
+from zephyr import Dataset, flow_backend, load_jsonl
 
-from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
@@ -77,74 +78,66 @@ def prepare_md_template(
     return template
 
 
-@ray.remote(memory=2 * 1024 * 1024 * 1024)
-@cached_or_construct_output(success_suffix="SUCCESS")
-def process_file(
-    input_file_path: str,
-    output_file_path: str,
+def process_record(
+    row: dict,
     extract_method: str,
     extract_config: ExtractionConfig,
     shuffle_answers_template: bool = True,
     seed: int | None = None,
-) -> None:
-    logger.info(f"Starting processing of file {input_file_path}")
-    logger.info(f"Source: {input_file_path}")
-    logger.info(f"Destination: {output_file_path}")
+):
+    """Process a single StackExchange record and return transformed record.
+
+    Args:
+        row: Record from JSONL file
+        extract_method: Method to use for HTML extraction
+        extract_config: Configuration for the extraction method
+        shuffle_answers_template: Whether to shuffle answer template format
+        seed: Random seed for reproducibility
+
+    Returns:
+        Transformed record in Dolma format, or None if record should be skipped
+    """
     try:
-        with (
-            fsspec.open(input_file_path, compression="gzip") as source,
-            fsspec.open(output_file_path, "wt", compression="gzip") as output,
-        ):
-            for line in tqdm(source, desc="Processing lines"):
-                row = json.loads(line)
+        if seed is not None:
+            random.seed(seed + hash(row["id"]))
+        prepend_vote_count = random.random() < 0.5 if shuffle_answers_template else False
 
-                try:
-                    if seed is not None:
-                        random.seed(seed + hash(row["id"]))
-                    prepend_vote_count = random.random() < 0.5 if shuffle_answers_template else False
+        title = row["metadata"]["title"] if "title" in row["metadata"] else row["title"]
+        question = row["metadata"]["question"] if "question" in row["metadata"] else row["question"]
+        answers = row["metadata"]["answers"]
+        tags = row["metadata"]["tags"] if "tags" in row["metadata"] else row["tags"]
+        url = row["metadata"]["url"] if "url" in row["metadata"] else row["url"]
 
-                    title = row["metadata"]["title"] if "title" in row["metadata"] else row["title"]
-                    question = row["metadata"]["question"] if "question" in row["metadata"] else row["question"]
-                    answers = row["metadata"]["answers"]
-                    tags = row["metadata"]["tags"] if "tags" in row["metadata"] else row["tags"]
-                    url = row["metadata"]["url"] if "url" in row["metadata"] else row["url"]
+        content = prepare_md_template(
+            title,
+            question,
+            answers,
+            tags,
+            extract_method,
+            extract_config,
+            prepend_vote_count,
+        )
 
-                    content = prepare_md_template(
-                        title,
-                        question,
-                        answers,
-                        tags,
-                        extract_method,
-                        extract_config,
-                        prepend_vote_count,
-                    )
+        if content is None:
+            return None
 
-                    out_dict = {
-                        "id": row["id"],
-                        "url": url,
-                        "title": title,
-                        "date_created": row["created"],
-                        "text": content,
-                    }
+        out_dict = {
+            "id": row["id"],
+            "url": url,
+            "title": title,
+            "date_created": row["created"],
+            "text": content,
+        }
 
-                    if content is None:
-                        continue
-
-                    print(json.dumps(out_dict), file=output)  # Without this line, the JSON file will be corrupted
-                except Exception as e:
-                    logger.exception(f"Error processing line: {e}")
-                    raise e
-
-        logger.info("\nProcessing completed successfully!")
-        logger.info(f"File available at: {output_file_path}")
-
+        return out_dict
     except Exception as e:
-        logger.error(f"Error during processing: {e}")
-        raise
+        logger.exception(f"Error processing line: {e}")
+        raise e
 
 
 @draccus.wrap()
 def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
+    backend = flow_backend()
     logger.info(f"Starting processing of StackExchange dump in {cfg.input_path}")
 
     files = fsspec_glob(f"{cfg.input_path}/*.jsonl.gz")
@@ -153,24 +146,22 @@ def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
     files = [file for file in files if len(os.path.basename(file).split(".")) == 3]
     logger.info(f"Found {len(files)} files to process")
 
-    result_refs = []
-    MAX_CONCURRENT_WORKERS = 50
-
     if cfg.max_files:
         files = files[: cfg.max_files]
 
-    for file in files:
-        if len(result_refs) > MAX_CONCURRENT_WORKERS:
-            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            try:
-                ray.get(ready_refs)
-            except Exception as e:
-                logger.exception(f"Error processing the group: {e}")
-                continue
-
-        output_file_path = os.path.join(cfg.output_path, file.split("/")[-1])
-        result_refs.append(process_file.remote(file, output_file_path, cfg.extract_method, cfg.extract_config, cfg.seed))
-    try:
-        ray.get(result_refs)
-    except Exception as e:
-        logger.exception(f"Error processing the group: {e}")
+    pipeline = (
+        Dataset.from_list(files)
+        .flat_map(load_jsonl)
+        .map(
+            lambda row: process_record(
+                row,
+                cfg.extract_method,
+                cfg.extract_config,
+                cfg.shuffle_answers_template,
+                cfg.seed,
+            )
+        )
+        .filter(lambda record: record is not None)
+        .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+    )
+    list(backend.execute(pipeline))

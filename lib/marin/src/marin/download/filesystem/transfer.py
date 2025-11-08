@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 
 import fsspec
-import ray
+from zephyr import Dataset, flow_backend
 
 from marin.utils import fsspec_exists, fsspec_glob
 
@@ -33,10 +33,12 @@ class TransferConfig:
     filetype: str = "jsonl.zst"
 
 
-@ray.remote
 def transfer_files(config: TransferConfig) -> None:
-    """
-    Transfers the files from the input path to the output path.
+    """Transfers files from the input path to the output path.
+
+    When num_random_files is None, copies the entire directory recursively.
+    When num_random_files is specified, randomly samples that many files and
+    copies them in parallel using zephyr.
     """
     if config.input_path.endswith("/"):
         input_path = config.input_path[:-1]
@@ -49,16 +51,29 @@ def transfer_files(config: TransferConfig) -> None:
     if not fs.exists(input_path):
         raise FileNotFoundError(f"{input_path} does not exist.")
 
+    # Glob all matching files
+    filenames = fsspec_glob(os.path.join(input_path, f"**/*.{config.filetype}"))
+
+    # Select files: either random sample or all files
     if config.num_random_files is None:
-        fs.copy(input_path + "/", config.output_path, recursive=True)
+        selected_files = filenames
     else:
         random.seed(42)
-        filenames = fsspec_glob(os.path.join(input_path, f"**/*.{config.filetype}"))
         random.shuffle(filenames)
-        for i in range(config.num_random_files):
-            output_filename = os.path.join(config.output_path, os.path.basename(filenames[i]))
-            if not fsspec_exists(output_filename):
-                fs.copy(filenames[i], output_filename)
+        selected_files = filenames[: config.num_random_files]
+
+    def copy_file(filename: str) -> None:
+        """Copy a single file if it doesn't already exist at destination."""
+        output_filename = os.path.join(config.output_path, os.path.basename(filename))
+        if not fsspec_exists(output_filename):
+            # Ensure output directory exists
+            fs.makedirs(config.output_path, exist_ok=True)
+            fs.copy(filename, output_filename)
+
+    # Always use parallel copying via zephyr
+    backend = flow_backend()
+    pipeline = Dataset.from_list(selected_files).map(copy_file)
+    list(backend.execute(pipeline))
 
     elapsed_time_seconds: float = time.time() - start_time
     print(f"Downloaded {input_path} to {config.output_path} ({elapsed_time_seconds}s).")

@@ -24,6 +24,7 @@ dependencies = [
     "haliax>=1.4.dev443",
     "levanter[serve]",
     "lz4",
+    "zephyr",
     "multiprocess==0.70.16",
     "numpy",
     "openai",
@@ -118,6 +119,9 @@ conflicts = [
 ]
 
 [tool.uv.sources]
+zephyr = { workspace = true }
+levanter = { workspace = true }
+
 torch = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra="cpu" },

@@ -12,92 +12,92 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Convert Lingoly dataset from zip to Dolma format.
+
+Processes zip file containing test.jsonl, concatenates preamble/context/questions,
+and chunks into ~7000 character text blocks.
+
+Example Usage:
+uv run zephyr --backend=sync \
+    lib/marin/src/marin/transform/lingoly/to_dolma.py \
+    --input_path gs://path/to/lingoly.zip \
+    --output_path gs://path/to/output/lingoly_preamble_context_questions_joined
+"""
+
 import json
-import os
-import tempfile
-import zipfile
 from dataclasses import dataclass
 
 import draccus
-import fsspec
-import ray
-
-from marin.utils import fsspec_mkdirs
+from zephyr import Dataset, flow_backend, load_zip_members
 
 
 @dataclass
 class ConvertLingolyToDolmaConfig:
     input_path: str
-    """The directory containing the zip file of the lingoly dataset."""
+    """Path to the zip file of the lingoly dataset."""
     output_path: str
-    """The directory to save the lingoly dataset in dolma format."""
+    """Directory to save the lingoly dataset in dolma format."""
+    max_doc_length: int = 7000
+    """Maximum length of text chunks before starting a new document."""
 
 
-@ray.remote
-def _convert_lingoly_to_dolma(config: ConvertLingolyToDolmaConfig) -> None:
-    """Convert the lingoly dataset to dolma format by concatenating the preamble, context, and questions."""
-    # Create a temporary directory to extract the zip file
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Handle zip file from GCS or other cloud storage
-        local_zip_path = os.path.join(temp_dir, "lingoly.zip")
+def process_lingoly_member(member: dict, max_doc_length: int = 7000):
+    """Process lingoly zip member, yielding chunked text blocks.
 
-        # Download the zip file if it's in cloud storage
-        fs = fsspec.url_to_fs(config.input_path)[0]
-        fs.get_file(config.input_path, local_zip_path)
+    Args:
+        member: Dict with 'filename' and 'content' (bytes) from load_zip_members
+        max_doc_length: Maximum character length before yielding a chunk
 
-        # Extract the zip file
-        with zipfile.ZipFile(local_zip_path, "r") as zip_ref:
-            zip_ref.extractall(temp_dir)
+    Yields:
+        Dicts with 'text' field containing concatenated preamble/context/questions
+    """
+    # Parse JSONL from bytes
+    text_so_far = ""
+    for line in member["content"].decode("utf-8").splitlines():
+        if not line.strip():
+            continue
 
-        # Find and open the test.jsonl file
-        test_crawl_file_path = os.path.join(temp_dir, "test.jsonl")
+        data = json.loads(line)
+        preamble = data["preamble"]
+        context = data["context"]
 
-        if not os.path.exists(test_crawl_file_path):
-            raise FileNotFoundError(f"test.jsonl not found in the extracted zip file at {test_crawl_file_path}")
+        # Convert questions from string to list of dictionaries if it's a string
+        questions = data["questions"]
+        if isinstance(questions, str):
+            questions = json.loads(questions)
 
-        output_path = os.path.join(config.output_path, "lingoly_preamble_context_questions_joined")
-        fsspec_mkdirs(output_path)
+        for question in questions:
+            question_prompt = question["prompt"]
+            subprompt_question_joined = ""
+            for subprompt in question["subprompts"]:
+                subprompt_question_joined += f"{subprompt['question']}\n"
 
-        shard_number = 0
-        max_doc_length = 7000
-        output_doc_file_path = os.path.join(output_path, f"{shard_number:05d}.jsonl")
+            final_text = f"{preamble}\n{context}\n{question_prompt}\n{subprompt_question_joined}"
 
-        with open(test_crawl_file_path, "r") as f:
-            # Process each line as JSON
+            text_so_far += f"{final_text}\n"
 
-            text_so_far = ""
-            for line in f:
-                data = json.loads(line)
-                preamble = data["preamble"]
-                context = data["context"]
+            if len(text_so_far) > max_doc_length:
+                yield {"text": text_so_far}
+                text_so_far = ""
 
-                # Convert questions from string to list of dictionaries if it's a string
-                questions = data["questions"]
-                if isinstance(questions, str):
-                    questions = json.loads(questions)
+    if text_so_far:
+        yield {"text": text_so_far}
 
-                for question in questions:
-                    question_prompt = question["prompt"]
-                    subprompt_question_joined = ""
-                    for subprompt in question["subprompts"]:
-                        subprompt_question_joined += f"{subprompt['question']}\n"
 
-                final_text = f"{preamble}\n{context}\n{question_prompt}\n{subprompt_question_joined}"
-
-                text_so_far += f"{final_text}\n"
-
-                if len(text_so_far) > max_doc_length:
-                    with fsspec.open(output_doc_file_path, "a") as f_out:
-                        f_out.write(json.dumps({"text": text_so_far}) + "\n")
-                    text_so_far = ""
-                    shard_number += 1
-                    output_doc_file_path = os.path.join(output_path, f"{shard_number:05d}.jsonl")
-
-        if len(text_so_far) > 0:
-            with fsspec.open(output_doc_file_path, "a") as f_out:
-                f_out.write(json.dumps({"text": text_so_far}) + "\n")
+def convert_lingoly_to_dolma(config: ConvertLingolyToDolmaConfig) -> None:
+    """Convert Lingoly dataset to Dolma format."""
+    backend = flow_backend()
+    pipeline = (
+        Dataset.from_list([config.input_path])
+        .flat_map(lambda p: load_zip_members(p, pattern="test.jsonl"))
+        .flat_map(lambda m: process_lingoly_member(m, max_doc_length=config.max_doc_length))
+        .write_jsonl(f"{config.output_path}/{{shard:05d}}.jsonl")
+    )
+    list(backend.execute(pipeline))
 
 
 @draccus.wrap()
-def convert_lingoly_to_dolma(config: ConvertLingolyToDolmaConfig) -> None:
-    ray.get(_convert_lingoly_to_dolma.remote(config))
+def main(config: ConvertLingolyToDolmaConfig) -> None:
+    """CLI entrypoint."""
+    convert_lingoly_to_dolma(config)
