@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:1bc975e12"
+    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:67f99606c"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -112,114 +112,6 @@ available_node_types:
     min_workers: 2
     node_config:
       acceleratorType: v4-8
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_16:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-16
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_32:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-32
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_64:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-64
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_128:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-128
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_256:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-256
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_512:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-512
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_1024:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-1024
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_2048:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-2048
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_4096:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-4096
       runtimeVersion: tpu-ubuntu2204-base
       schedulingConfig:
         preemptible: true

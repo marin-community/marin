@@ -461,7 +461,7 @@ class ArrowFlightClient(WeightTransferClient):
         self.mesh = mesh
         self.axis_mapping = axis_mapping
 
-        self._last_weight_id = -1
+        self._last_weight_id = -2
         self._flight_clients = []
         self._server_locations = []
 

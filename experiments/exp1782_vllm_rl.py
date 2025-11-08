@@ -316,7 +316,11 @@ def main():
     # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
     experiment_configs = [
         ExperimentConfig(
-            model_config=llama_3_1_8b, rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="rloo"
+            model_config=llama_3_1_8b,
+            rl_loss=RLOOLoss(
+                kl_coef=0.01, clip_epsilon=0.2, synchronous=True, do_trainer_inference_mismatch_importance_sampling=True
+            ),
+            experiment_name_suffix="rloo-sync",
         ),
         # ExperimentConfig(
         #     model_config=llama_3_1_8b, rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="grpo"
@@ -342,7 +346,7 @@ def main():
         model_base_name = experiment_config.model_config.name.split("/")[-1].lower()
         experiments.append(
             rl_train(
-                name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-sync-{experiment_config.experiment_name_suffix}-lev-1",
+                name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-sync-{experiment_config.experiment_name_suffix}",
                 experiment_config=experiment_config,
             ),
         )

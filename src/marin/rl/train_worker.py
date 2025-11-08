@@ -233,7 +233,7 @@ class TrainWorker:
             state = trainer.initial_state(training_key, model=self.reference_model)
 
             # Always transfer initial weights to rollout workers before we attempt to start training
-            self.transfer_server.serve_weights(state.int_step, state.model)
+            self.transfer_server.serve_weights(-1, state.model)
 
             self._configure_training_hooks(trainer)
 

@@ -103,6 +103,28 @@ def compute_logprobs(
     return logprobs
 
 
+def compute_ppo_loss_objective(
+    importance_sampling_ratio: jax.Array,
+    loss_weights: jax.Array,
+    loss_masks: jax.Array,
+    *,
+    clip_epsilon: float,
+    trainer_inference_importance_sampling_ratio: jax.Array | None = None,
+):
+    """Compute PPO loss objective."""
+    non_clipped_objective = importance_sampling_ratio * loss_weights * loss_masks
+    clipped_objective = (
+        jnp.clip(importance_sampling_ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon) * loss_weights * loss_masks
+    )
+
+    loss_objective = jnp.minimum(non_clipped_objective, clipped_objective)
+    if trainer_inference_importance_sampling_ratio is not None:
+        loss_objective = trainer_inference_importance_sampling_ratio * loss_objective
+    # Mean over response tokens per batch
+    loss = -1 * jnp.mean(jnp.sum(loss_objective, axis=1) / jnp.sum(loss_masks, axis=1))
+    return loss
+
+
 def cispo_loss_with_importance_sampling(
     model: LmHeadModel,
     reference_model: LmHeadModel,
@@ -162,7 +184,9 @@ def rloo_loss_with_importance_sampling(
     key: jax.Array | None,
     kl_coef: float,
     clip_epsilon: float,
+    do_trainer_inference_mismatch_importance_sampling: bool = False,
     divide_by_entire_length: bool = False,
+    synchronous: bool = False,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
 
@@ -185,8 +209,10 @@ def rloo_loss_with_importance_sampling(
     current_logprobs = compute_logprobs(model, batch.input_ids, batch.position_ids, key)
     current_logprobs = current_logprobs * loss_masks_array
 
-    log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
-    ratio = jnp.exp(log_ratio)
+    if synchronous:
+        ratio = jnp.exp(current_logprobs - jax.lax.stop_gradient(current_logprobs))
+    else:
+        ratio = jnp.exp(current_logprobs - policy_logprobs_array)
 
     # N.B. This should be enabled, but we seem to be training far enough
     # off of policy that we're not learning anything when we clip.
@@ -194,48 +220,53 @@ def rloo_loss_with_importance_sampling(
 
     # Compute fraction of ratios that were clipped
     is_clipped = jnp.logical_or(ratio > 1.0 + clip_epsilon, ratio < 1.0 - clip_epsilon)
-    clip_fraction = jnp.sum(is_clipped * loss_masks_array) / jnp.sum(loss_masks_array)
+    clip_fraction = jnp.mean(jnp.sum(is_clipped, axis=1) / jnp.sum(loss_masks_array, axis=1))
 
-    non_clipped_loss = -ratio * loss_weights_array * loss_masks_array
-    clipped_loss = -clipped_ratio * loss_weights_array * loss_masks_array
+    if do_trainer_inference_mismatch_importance_sampling:
+        trainer_inference_importance_sampling_ratio = (
+            jnp.exp(current_logprobs - policy_logprobs_array) * loss_masks_array
+        )
+        trainer_inference_importance_sampling_ratio = jnp.minimum(trainer_inference_importance_sampling_ratio, 2.0)
+    else:
+        trainer_inference_importance_sampling_ratio = jnp.ones_like(current_logprobs)
 
-    weighted_loss = jnp.minimum(non_clipped_loss, clipped_loss)
+    reinforce_loss = compute_ppo_loss_objective(
+        importance_sampling_ratio=ratio,
+        loss_weights=loss_weights_array,
+        loss_masks=loss_masks_array,
+        clip_epsilon=clip_epsilon,
+        trainer_inference_importance_sampling_ratio=trainer_inference_importance_sampling_ratio,
+    )
 
     # RLOO loss with importance sampling
     # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
     # weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
-
-    if divide_by_entire_length:
-        reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)  # sum of all tokens
-    else:
-        reinforce_loss = jnp.mean(
-            jnp.sum(weighted_loss, axis=1) / jnp.sum(loss_masks_array, axis=1)
-        )  # sum of all tokens per batch item
-
     # KL regularization
 
     if kl_coef > 0:
         reference_logprobs = compute_logprobs(reference_model, batch.input_ids, batch.position_ids, key)
         reference_logprobs = reference_logprobs * loss_masks_array
         # log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
-        deepseek_kl_penalty = (
-            jnp.exp(reference_logprobs - current_logprobs) - (reference_logprobs - current_logprobs) - 1
-        )
+        kl_penalty = jnp.exp(reference_logprobs - current_logprobs) - (reference_logprobs - current_logprobs) - 1
         # https://github.com/openai/lm-human-preferences/blob/cbfd210bb8b08f6bc5c26878c10984b90f516c66/lm_human_preferences/train_policy.py#L151
         # kl_penalty = jnp.abs(log_ratio)
-        kl_loss = kl_coef * jnp.sum(deepseek_kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
+        kl_loss = kl_coef * jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
     else:
+        kl_penalty = 0
         kl_loss = 0
 
     loss = reinforce_loss + kl_loss
 
+    ratio_mean_over_responses_only = jnp.mean(jnp.sum(ratio, axis=1) / jnp.sum(loss_masks_array, axis=1))
+    clipped_ratio_mean_over_responses_only = jnp.mean(jnp.sum(clipped_ratio, axis=1) / jnp.sum(loss_masks_array, axis=1))
+
     return loss, {
-        "ratio_mean": jnp.mean(ratio),
-        "clipped_ratio_mean": jnp.mean(clipped_ratio),
+        "ratio_mean": ratio_mean_over_responses_only,
+        "clipped_ratio_mean": clipped_ratio_mean_over_responses_only,
         "clip_fraction": clip_fraction,
         "reinforce_loss": reinforce_loss,
         "kl_loss": kl_loss,
-        "kl_penalty": jnp.mean(deepseek_kl_penalty),
+        "kl_penalty": jnp.mean(kl_penalty),
         **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
     }
 
@@ -277,6 +308,8 @@ class RLOOLoss(RLLossModule):
 
     kl_coef: float = 0.1
     clip_epsilon: float = 0.2
+    synchronous: bool = False
+    do_trainer_inference_mismatch_importance_sampling: bool = False
 
     def build(self, reference_model: eqx.Module) -> eqx.Module:
         """Initialize any learned components (e.g., value heads)."""
@@ -291,7 +324,14 @@ class RLOOLoss(RLLossModule):
 
         def loss_fn(model, batch, key):
             return rloo_loss_with_importance_sampling(
-                model, reference_model, batch, key=key, kl_coef=self.kl_coef, clip_epsilon=self.clip_epsilon
+                model,
+                reference_model,
+                batch,
+                key=key,
+                kl_coef=self.kl_coef,
+                clip_epsilon=self.clip_epsilon,
+                synchronous=self.synchronous,
+                do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
             )
 
         return loss_fn

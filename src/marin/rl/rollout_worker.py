@@ -186,7 +186,7 @@ class RolloutWorker:
         self._running = True
         self._shutdown_complete = threading.Event()
         self._shutdown_condition = threading.Condition()
-        self._current_weight_step: int = 0
+        self._current_weight_step: int = -2
 
         self._tokenizer = config.tokenizer
 
