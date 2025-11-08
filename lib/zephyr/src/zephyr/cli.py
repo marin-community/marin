@@ -23,8 +23,10 @@ from pathlib import Path
 
 import click
 
+import humanfriendly
+
 from zephyr import set_flow_backend
-from zephyr.backend_factory import BackendConfig, create_backend, parse_memory
+from zephyr.backend_factory import BackendConfig, create_backend
 
 
 def run_local(
@@ -132,7 +134,7 @@ def run_cluster(
 
     # Add resource specs as entrypoint-* args
     if config.memory:
-        memory_bytes = parse_memory(config.memory)
+        memory_bytes = humanfriendly.parse_size(config.memory, binary=True)
         ray_cmd += ["--entrypoint-memory", str(memory_bytes)]
     if config.num_cpus:
         ray_cmd += ["--entrypoint-num-cpus", str(config.num_cpus)]

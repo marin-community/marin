@@ -26,11 +26,11 @@ import hashlib
 import json
 import logging
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from collections.abc import Sequence
 
 import datasets
 import draccus
@@ -39,6 +39,7 @@ from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
 from marin.utils import fsspec_mkdirs
 from zephyr import Dataset, flow_backend
+from zephyr.writers import write_jsonl_file
 
 from .adapters import TransformAdapter
 
@@ -330,20 +331,18 @@ def process_shard_task(task: ShardTask) -> dict:
 
     subset_name = task.subset or "default"
     output_filename = _shard_filename(task.output_path, task.shard_idx)
-    rows_written = 0
 
-    # Process and write shard
-    with fsspec.open(output_filename, "wt", compression="gzip") as f:
+    def transform_records():
+        """Generator that yields transformed records."""
         for raw_row in shard_dataset:
             transformed_row = transform_row(raw_row, task.cfg, adapter)
-            if transformed_row is None:
-                continue
+            if transformed_row is not None:
+                yield transformed_row.model_dump()
 
-            f.write(f"{json.dumps(transformed_row.model_dump())}\n")
-            rows_written += 1
+    result = write_jsonl_file(transform_records(), output_filename)
 
     logging.info(
-        f"Wrote {rows_written} rows to {output_filename} "
+        f"Wrote {result['count']} rows to {result['path']} "
         f"for subset={subset_name} split={task.split} shard={task.shard_idx}"
     )
 
@@ -351,8 +350,8 @@ def process_shard_task(task: ShardTask) -> dict:
         "subset": subset_name,
         "split": task.split,
         "shard_idx": task.shard_idx,
-        "path": output_filename,
-        "count": rows_written,
+        "path": result["path"],
+        "count": result["count"],
     }
 
 

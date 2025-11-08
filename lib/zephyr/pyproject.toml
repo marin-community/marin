@@ -13,6 +13,7 @@ dependencies = [
     "typing-extensions>=4.0",
     "tqdm>=4.0",
     "click>=8.0",
+    "humanfriendly>=10.0",
 ]
 
 [project.scripts]

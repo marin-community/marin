@@ -17,67 +17,17 @@
 from __future__ import annotations
 
 import logging
-import re
 from contextvars import ContextVar
 from dataclasses import replace
 from typing import Literal
+
+import humanfriendly
 
 from zephyr.backends import Backend, BackendConfig, RayBackend, SyncBackend, ThreadPoolBackend
 
 logger = logging.getLogger(__name__)
 
 _backend_context: ContextVar[Backend | None] = ContextVar("zephyr_backend", default=None)
-
-
-def parse_memory(memory_str: str) -> int:
-    """Parse memory string to bytes.
-
-    Supports units: KB, MB, GB, TB (case-insensitive)
-
-    Args:
-        memory_str: Memory string (e.g., "2GB", "512MB", "1024KB")
-
-    Returns:
-        Memory in bytes
-
-    Raises:
-        ValueError: If memory string format is invalid
-
-    Examples:
-        >>> parse_memory("2GB")
-        2147483648
-        >>> parse_memory("512MB")
-        536870912
-        >>> parse_memory("1024KB")
-        1048576
-    """
-    memory_str = memory_str.strip().upper()
-
-    # Match number followed by unit
-    match = re.match(r"^(\d+(?:\.\d+)?)\s*([KMGT]?B?)$", memory_str)
-    if not match:
-        raise ValueError(f"Invalid memory format: {memory_str}. Expected format like '2GB', '512MB', or '1024KB'")
-
-    value = float(match.group(1))
-    unit = match.group(2)
-
-    # Convert to bytes
-    multipliers = {
-        "B": 1,
-        "KB": 1024,
-        "MB": 1024**2,
-        "GB": 1024**3,
-        "TB": 1024**4,
-        "K": 1024,
-        "M": 1024**2,
-        "G": 1024**3,
-        "T": 1024**4,
-    }
-
-    if unit not in multipliers:
-        raise ValueError(f"Unknown memory unit: {unit}. Supported: KB, MB, GB, TB")
-
-    return int(value * multipliers[unit])
 
 
 def create_backend(
@@ -114,7 +64,7 @@ def create_backend(
         >>> backend = create_backend("ray", max_parallelism=10, max_retries=3)
     """
     # Parse memory string to bytes
-    memory_bytes = parse_memory(memory) if memory else None
+    memory_bytes = humanfriendly.parse_size(memory, binary=True) if memory else None
 
     config = BackendConfig(
         backend_type=backend_type,
@@ -209,7 +159,7 @@ def flow_backend(
     if max_parallelism is not None:
         overrides["max_parallelism"] = max_parallelism
     if memory is not None:
-        overrides["memory"] = parse_memory(memory)
+        overrides["memory"] = humanfriendly.parse_size(memory, binary=True)
     if num_cpus is not None:
         overrides["num_cpus"] = num_cpus
     if num_gpus is not None:
