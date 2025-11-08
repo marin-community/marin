@@ -173,7 +173,6 @@ def process_record(
 
 @draccus.wrap()
 def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
-    """Process ar5iv dump using ml-flow backend."""
     backend = flow_backend()
     files = fsspec_glob(f"{cfg.input_path}/*.jsonl.gz")
 

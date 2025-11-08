@@ -137,7 +137,6 @@ def process_record(
 
 @draccus.wrap()
 def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
-    """Process StackExchange dump using ml-flow backend."""
     backend = flow_backend()
     logger.info(f"Starting processing of StackExchange dump in {cfg.input_path}")
 

@@ -289,7 +289,6 @@ def process_record(
 
 @draccus.wrap()
 def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
-    """Process Wikipedia dump using ml-flow backend."""
     backend = flow_backend()
     logger.info(f"Starting processing of Wikipedia dump in {cfg.input_path}")
 

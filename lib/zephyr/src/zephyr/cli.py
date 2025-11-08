@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Command-line interface for ml-flow launcher."""
+"""Command-line interface for zephyr launcher."""
 
 from __future__ import annotations
 
@@ -145,7 +145,7 @@ def run_cluster(
     entrypoint = [
         "uv",
         "run",
-        "mlflow",
+        "zephyr",
         "--backend",
         config.backend_type,
         "--max-parallelism",
@@ -173,25 +173,25 @@ def run_cluster(
 
 @click.command(
     context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
-    help="ml-flow launcher: Execute data processing pipelines with configurable backends",
+    help="zephyr launcher: Execute data processing pipelines with configurable backends",
     epilog="""
 Examples:
 
   # Run locally with sync backend
 
-  mlflow --backend=sync script.py --input=data.jsonl
+  zephyr --backend=sync script.py --input=data.jsonl
 
   # Run locally with Ray backend
 
-  mlflow --backend=ray --max-parallelism=100 --memory=2GB script.py --input=data.jsonl
+  zephyr --backend=ray --max-parallelism=100 --memory=2GB script.py --input=data.jsonl
 
   # Submit to Ray cluster
 
-  mlflow --backend=ray --cluster=us-central2 --memory=2GB script.py --input=data.jsonl
+  zephyr --backend=ray --cluster=us-central2 --memory=2GB script.py --input=data.jsonl
 
   # Dry-run to show optimization plan
 
-  mlflow --backend=ray --dry-run script.py --input=data.jsonl
+  zephyr --backend=ray --dry-run script.py --input=data.jsonl
 """,
 )
 @click.argument("script", type=click.Path(exists=True, dir_okay=False))

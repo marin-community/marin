@@ -20,31 +20,9 @@ import fnmatch
 import zipfile
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar
+from typing import Generic, TypeVar
 
 import fsspec
-
-T = TypeVar("T")
-R = TypeVar("R")
-
-
-class BackendProtocol(Protocol):
-    """Protocol for execution backends.
-
-    Avoids circular import by defining interface without importing Backend class.
-    """
-
-    def execute_operations(self, source: Iterable, operations: list) -> Iterator:
-        """Execute a chain of operations on a data source.
-
-        Args:
-            source: Source data iterable
-            operations: List of operation dataclasses (MapOp, FilterOp, etc.)
-
-        Returns:
-            Iterator over results
-        """
-        ...
 
 
 @dataclass
@@ -131,6 +109,9 @@ class FusedMapOp:
 
 # Type alias for operations
 Operation = MapOp | FilterOp | BatchOp | WriteJsonlOp | WriteParquetOp | FlatMapOp | ReshardOp | FusedMapOp
+
+T = TypeVar("T")
+R = TypeVar("R")
 
 
 class Dataset(Generic[T]):

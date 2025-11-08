@@ -111,7 +111,7 @@ def convert_labeled_document_to_score(example: dict, extract_score_fn: Callable[
 
 
 class DatasetSampler:
-    """Sample a dataset by label weights using ml-flow pipeline."""
+    """Sample a dataset by label weights."""
 
     def __init__(self, input_path: str, output_path: str, label_weights: dict[int, float]):
         self.input_path = input_path

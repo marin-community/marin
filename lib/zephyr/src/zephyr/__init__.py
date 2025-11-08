@@ -12,11 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""ml-flow: Lightweight dataset library for distributed data processing."""
+"""Zephyr: Lightweight dataset library for distributed data processing."""
 
 import logging
-from contextvars import ContextVar
-from dataclasses import replace
 
 from zephyr.backend_factory import create_backend, flow_backend, set_flow_backend
 from zephyr.backends import Backend, RayBackend, SyncBackend, ThreadPoolBackend
