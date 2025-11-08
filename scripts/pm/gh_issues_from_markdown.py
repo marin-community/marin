@@ -71,7 +71,7 @@ For example, given this markdown:
 
 ```markdown
  * Documentation
-    * Note: we’re mostly following the diataxis framework
+    * Note: we're mostly following the diataxis framework  # noqa: E501
     * Your goal is to go through existing docs
     * README \\#p0
     * Tutorials
@@ -100,7 +100,10 @@ The output should be:
   },
   {
     "title": "Tutorial: Launch a basic hello world experiment",
-    "description": "Add or improve a tutorial for launching a basic hello world experiment. Add it to the documentation folder.",
+    "description": (
+        "Add or improve a tutorial for launching a basic hello world experiment. "
+        "Add it to the documentation folder."
+    ),
     "labels": ["p1", "tutorials", "documentation"]
   },
   {

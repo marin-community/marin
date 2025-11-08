@@ -98,7 +98,7 @@ def repl_cmd(ctx):
                     if isinstance(tokens, list) and all(isinstance(t, int) for t in tokens):
                         decode_tokens(tokens)
                         continue
-                except:
+                except Exception:
                     pass
 
             # Otherwise encode as text
@@ -209,11 +209,13 @@ def info_cmd():
         return
 
     if current_tokenizer:
-        info_panel = f"""
-[bold blue]Current Tokenizer:[/bold blue] {current_tokenizer}
-[bold blue]Vocabulary Size:[/bold blue] {tok.vocab_size:,}
-[bold blue]Model Max Length:[/bold blue] {getattr(current_tokenizer, 'model_max_length', 'N/A')}
-        """
+        max_length = getattr(current_tokenizer, "model_max_length", "N/A")
+        vocab_size_fmt = f"{current_tokenizer.vocab_size:,}"
+        info_panel = (
+            f"[bold blue]Current Tokenizer:[/bold blue] {current_tokenizer}\n"
+            f"[bold blue]Vocabulary Size:[/bold blue] {vocab_size_fmt}\n"
+            f"[bold blue]Model Max Length:[/bold blue] {max_length}"
+        )
         console.print(Panel(info_panel, title="Tokenizer Info", border_style="blue"))
 
 
