@@ -378,7 +378,7 @@ class Trainer:
         self.train_state_shard_fns, self.train_state_gather_fns = self.mesh.make_shard_and_gather_fns(
             train_state_shape, self.train_params_sharding_rules
         )
-        inference_param_shard_fns, inference_param_gather_fns = self.mesh.make_shard_and_gather_fns(
+        _inference_param_shard_fns, _inference_param_gather_fns = self.mesh.make_shard_and_gather_fns(
             inference_params_shape, self.inference_params_sharding_rules
         )
 
@@ -448,7 +448,7 @@ class Trainer:
             rng, subrng = jax.random.split(rng)
 
             idx = jax.random.randint(subrng, shape=(), minval=0, maxval=len(self.train_environments))
-            env_name, environment = self.train_environments[idx]
+            _env_name, environment = self.train_environments[idx]
 
             rng, subrng = jax.random.split(subrng)
             inference_params = self.reshard_params(train_state.params)
@@ -527,13 +527,13 @@ def main(config: TrainingConfig):
     jax_distributed_barrier()
 
     # Load attention kernel configurations
-    prefill_attention_kernel, prefill_attention_kernel_config = load_attention_kernel_config(
+    _prefill_attention_kernel, _prefill_attention_kernel_config = load_attention_kernel_config(
         config.model.prefill_attention_kernel_config, ["splash", "default"]
     )
-    generate_attention_kernel, generate_attention_kernel_config = load_attention_kernel_config(
+    _generate_attention_kernel, _generate_attention_kernel_config = load_attention_kernel_config(
         config.model.generate_attention_kernel_config, ["paged", "default"]
     )
-    train_attention_kernel, train_attention_kernel_config = load_attention_kernel_config(
+    _train_attention_kernel, _train_attention_kernel_config = load_attention_kernel_config(
         config.model.train_attention_kernel_config, ["splash", "default", "ring", "ring_jax"]
     )
 
