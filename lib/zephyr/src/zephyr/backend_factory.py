@@ -22,6 +22,7 @@ from dataclasses import replace
 from typing import Literal
 
 import humanfriendly
+import ray
 
 from zephyr.backends import Backend, BackendConfig, RayBackend, SyncBackend, ThreadPoolBackend
 
@@ -145,14 +146,22 @@ def flow_backend(
     )
     if not has_params:
         if current is None:
-            logger.warning("No backend configured in context, using ThreadPoolBackend as default.")
-            return create_backend("threadpool")
+            # Default to Ray backend if Ray is already initialized
+            if ray.is_initialized():
+                logger.info("Ray is initialized, using RayBackend as default.")
+                return create_backend("ray")
+            else:
+                logger.warning("No backend configured in context, using ThreadPoolBackend as default.")
+                return create_backend("threadpool")
         return current
 
     # Parameters provided: create new backend with merged config
     if current is None:
-        # No current backend, create default threadpool
-        current = create_backend("threadpool")
+        # No current backend, create default based on Ray availability
+        if ray.is_initialized():
+            current = create_backend("ray")
+        else:
+            current = create_backend("threadpool")
 
     # Build override dict, only including non-None values
     overrides = {}
