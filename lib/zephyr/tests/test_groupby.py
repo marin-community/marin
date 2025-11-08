@@ -37,6 +37,22 @@ def backend(request):
     return request.param
 
 
+@pytest.fixture
+def large_document_dataset():
+    """Generate 500 documents: 100 unique content values, each appears 5 times."""
+    docs = []
+    for content_id in range(100):
+        for copy_id in range(5):
+            docs.append(
+                {
+                    "id": content_id * 5 + copy_id,
+                    "content": f"document_{content_id}",
+                    "value": content_id * 1000 + copy_id,
+                }
+            )
+    return docs
+
+
 def test_deduplicate_basic(backend):
     """Test basic deduplication by id."""
     data = [
@@ -248,3 +264,73 @@ def test_group_by_chained_with_filter(backend):
 
     results = sorted(list(backend.execute(ds)), key=lambda x: x["cat"])
     assert results == [{"cat": "A", "count": 1}, {"cat": "B", "count": 2}]
+
+
+def test_deduplicate_with_hash_key_large(backend, large_document_dataset):
+    """Test deduplication with MD5 hash on larger dataset with duplicates."""
+    import hashlib
+
+    def compute_hash(doc):
+        """Compute MD5 hash of content field."""
+        content = doc["content"]
+        return hashlib.md5(content.encode()).hexdigest()
+
+    # Add hash field and deduplicate
+    ds = (
+        Dataset.from_list(large_document_dataset)
+        .map(lambda doc: {**doc, "hash": compute_hash(doc)})
+        .deduplicate(key=lambda doc: doc["hash"])
+    )
+
+    results = list(backend.execute(ds))
+
+    # Should have exactly 100 unique documents (one per unique content)
+    assert len(results) == 100
+
+    # Verify all hashes are unique
+    hashes = [r["hash"] for r in results]
+    assert len(set(hashes)) == 100
+
+    # Verify we have the expected content patterns
+    contents = sorted([r["content"] for r in results])
+    expected = sorted([f"document_{i}" for i in range(100)])
+    assert contents == expected
+
+
+def test_group_by_with_hash_key_large(backend, large_document_dataset):
+    """Test group_by with MD5 hash on larger dataset, counting duplicates."""
+    import hashlib
+
+    def compute_hash(doc):
+        """Compute MD5 hash of content field."""
+        content = doc["content"]
+        return hashlib.md5(content.encode()).hexdigest()
+
+    # Add hash field, group by hash, and count
+    def count_and_extract(hash_key, items):
+        """Reducer that counts items and extracts content from first item."""
+        items_list = list(items)
+        return {
+            "hash": hash_key,
+            "count": len(items_list),
+            "content": items_list[0]["content"],
+        }
+
+    ds = (
+        Dataset.from_list(large_document_dataset)
+        .map(lambda doc: {**doc, "hash": compute_hash(doc)})
+        .group_by(key=lambda doc: doc["hash"], reducer=count_and_extract)
+    )
+
+    results = list(backend.execute(ds))
+
+    # Should have exactly 100 groups (one per unique content)
+    assert len(results) == 100
+
+    # Each group should have exactly count of 5 (5 copies per unique content)
+    for result in results:
+        assert result["count"] == 5, f"Expected count 5 for {result['content']}, got {result['count']}"
+
+    # Verify all hashes are unique
+    hashes = [r["hash"] for r in results]
+    assert len(set(hashes)) == 100

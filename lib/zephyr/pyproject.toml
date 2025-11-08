@@ -18,6 +18,7 @@ dependencies = [
     "numpy>=2.0",
     "fsspec>=2023.1.0",
     "braceexpand>=0.1.0",
+    "zstandard>=0.22.0",
 ]
 
 [project.scripts]

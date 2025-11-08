@@ -9244,6 +9244,7 @@ dependencies = [
     { name = "ray" },
     { name = "tqdm" },
     { name = "typing-extensions" },
+    { name = "zstandard" },
 ]
 
 [package.dev-dependencies]
@@ -9271,6 +9272,7 @@ requires-dist = [
     { name = "ray", specifier = ">=2.45" },
     { name = "tqdm", specifier = ">=4.0" },
     { name = "typing-extensions", specifier = ">=4.0" },
+    { name = "zstandard", specifier = ">=0.22.0" },
 ]
 
 [package.metadata.requires-dev]

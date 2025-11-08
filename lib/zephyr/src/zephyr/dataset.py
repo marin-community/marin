@@ -111,18 +111,6 @@ class FusedMapOp:
 
 
 @dataclass
-class MapShardOp:
-    """MapShard operation - applies function to entire shard at once.
-
-    Internal operation that processes all items in a shard together.
-    Used for operations like local deduplication that need to see all items.
-    The function receives an iterator of items and returns an iterator of results.
-    """
-
-    fn: Callable[[Iterator], Iterator]
-
-
-@dataclass
 class GroupByLocalOp:
     """Phase 1 of GroupBy: Local grouping per shard by hash(key) % num_output_shards.
 
@@ -157,7 +145,6 @@ Operation = (
     | FlatMapOp
     | ReshardOp
     | FusedMapOp
-    | MapShardOp
     | GroupByLocalOp
     | GroupByShuffleReduceOp
 )
@@ -446,20 +433,6 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, WriteParquetOp(output_pattern, schema, batch_size)])
 
-    def _map_shard(self, fn: Callable[[Iterator[T]], Iterator[R]]) -> Dataset[R]:
-        """Internal: Apply function to entire shard at once.
-
-        The function receives an iterator of all items in a shard and returns
-        an iterator of results. Used for operations like local deduplication.
-
-        Args:
-            fn: Function from Iterator[T] -> Iterator[R]
-
-        Returns:
-            New dataset with map_shard operation appended
-        """
-        return Dataset(self.source, [*self.operations, MapShardOp(fn)])
-
     def group_by(
         self,
         key: Callable[[T], object],
@@ -510,8 +483,8 @@ class Dataset(Generic[T]):
         """Deduplicate items by key (keeps arbitrary occurrence).
 
         Two-phase deduplication:
-        1. Local dedup per shard using np.unique
-        2. Global dedup via group_by with first-item reducer
+        1. Streaming local dedup per shard (fusible, tracks seen keys)
+        2. Global exact dedup via group_by with first-item reducer
 
         Args:
             key: Function extracting dedup key from item (must be hashable)
@@ -529,29 +502,26 @@ class Dataset(Generic[T]):
             >>> list(backend.execute(ds))
             [{"id": 1, "val": "a"}, {"id": 2, "val": "b"}]  # Or {"id": 1, "val": "c"}
         """
-        import numpy as np
 
-        def local_dedup(items: Iterator[T]) -> Iterator[T]:
-            """Local deduplication using numpy unique."""
-            items_list = list(items)
-            if not items_list:
-                return
+        class _StreamingDedup:
+            """Stateful flat_map that filters duplicates within a shard."""
 
-            # Extract keys
-            keys = np.array([key(item) for item in items_list], dtype=object)
+            def __init__(self):
+                self.seen = set()
 
-            # Find unique indices
-            _, unique_indices = np.unique(keys, return_index=True)
-
-            # Yield unique items
-            for idx in sorted(unique_indices):
-                yield items_list[idx]
+            def __call__(self, item):
+                k = key(item)
+                if k not in self.seen:
+                    self.seen.add(k)
+                    yield item
 
         def keep_first(k, items: Iterator[T]) -> T:
             """Reducer that keeps the first item."""
             return next(iter(items))
 
-        return self._map_shard(local_dedup).group_by(key=key, reducer=keep_first, num_output_shards=num_output_shards)
+        return self.flat_map(_StreamingDedup()).group_by(
+            key=key, reducer=keep_first, num_output_shards=num_output_shards
+        )
 
 
 # Predefined transform functions for common file loading patterns
