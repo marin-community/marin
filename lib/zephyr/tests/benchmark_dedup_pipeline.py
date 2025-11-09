@@ -169,11 +169,11 @@ def run_benchmark(
             raise ValueError(f"Unknown backend: {backend_type}")
 
         # Create pipeline
-        print("🔧 Creating pipeline...")
+        print("Creating pipeline...")
         pipeline = create_pipeline(input_dir, output_dir)
 
         # Execute and measure
-        print("⚡ Executing pipeline...")
+        print("Executing pipeline...")
         mem_before = process.memory_info().rss
         exec_start = time.time()
         results = list(backend.execute(pipeline))
@@ -185,13 +185,13 @@ def run_benchmark(
         memory_mb = (mem_after - mem_before) / (1024 * 1024)
 
         # Count output documents
-        print("📊 Counting output documents...")
+        print("Counting output documents...")
         output_docs = sum(count_jsonl_docs(f) for f in results)
         dedup_ratio = (1 - output_docs / num_docs) * 100
 
         # Report results
-        print(f"\n{'Results':^70}")
-        print(f"{'-' * 70}")
+        print("\nResults:")
+        print("-" * 70)
         print(f"  Execution time:      {exec_time:>10.2f}s")
         print(f"  Throughput:          {throughput:>10,.0f} docs/sec")
         print(f"  Memory delta:        {memory_mb:>10.1f} MB")
@@ -200,7 +200,7 @@ def run_benchmark(
         print(f"  Output documents:    {output_docs:>10,}")
         print(f"  Deduplication:       {dedup_ratio:>10.1f}%")
         print(f"  Output files:        {len(results):>10,}")
-        print(f"{'=' * 70}\n")
+        print("=" * 70 + "\n")
 
         return {
             "backend": backend_type,
@@ -214,7 +214,7 @@ def run_benchmark(
 
     finally:
         # Cleanup output dir
-        print(f"🧹 Cleaning up {output_dir}...")
+        print(f"Cleaning up {output_dir}...")
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
@@ -222,17 +222,16 @@ def setup_input_files(num_docs: int, words_per_doc: int, num_input_files: int) -
     """Generate input files and return directory path and generation time."""
     input_dir = tempfile.mkdtemp(prefix="zephyr_benchmark_input_")
 
-    print(f"📝 Generating {num_docs:,} documents and writing to {num_input_files} files...")
+    print(f"Generating {num_docs:,} documents and writing to {num_input_files} files...")
     gen_start = time.time()
     docs_generator = (generate_doc(i, words_per_doc) for i in range(num_docs))
     input_files = write_input_files(docs_generator, input_dir, num_input_files)
 
     dir_size = sum(os.path.getsize(f) for f in input_files)
-    print(f"   ✓ Total input size: {dir_size / (1024 * 1024):.2f} MB")
-
     gen_time = time.time() - gen_start
-    print(f"   ✓ Wrote {num_docs:,} docs to {len(input_files)} files in {gen_time:.2f}s")
-    print(f"   Input directory: {input_dir}")
+    print(f"Total input size: {dir_size / (1024 * 1024):.2f} MB")
+    print(f"Wrote {num_docs:,} docs to {len(input_files)} files in {gen_time:.2f}s")
+    print(f"Input directory: {input_dir}")
 
     return input_dir, gen_time
 
@@ -275,10 +274,10 @@ def main(
         if profile_output is None:
             profile_output = Path(__file__).parent / "profiles"
 
-        print("\n🔬 Zephyr Benchmark Profiling with py-spy")
+        print("\nZephyr Benchmark Profiling with py-spy")
         print(f"Configuration: {num_docs:,} docs x {words_per_doc} words -> {num_input_files} files")
         print(f"Backends: {', '.join(backends_list)}")
-        print(f"📁 Profile output directory: {profile_output}\n")
+        print(f"Profile output directory: {profile_output}\n")
 
         profile_output.mkdir(parents=True, exist_ok=True)
 
@@ -326,31 +325,31 @@ def main(
                     temp_input_dir,
                 ]
 
-                print(f"   Running: sudo py-spy record ... --output {speedscope_file}")
+                print(f"Running: sudo py-spy record ... --output {speedscope_file}")
 
                 result = subprocess.run(pyspy_cmd, env=env)
 
                 if result.returncode == 0:
-                    print(f"   ✓ Speedscope profile saved to {speedscope_file}\n")
+                    print(f"Speedscope profile saved to {speedscope_file}\n")
                 else:
-                    print(f"   ✗ py-spy failed with return code {result.returncode}\n")
+                    print(f"py-spy failed with return code {result.returncode}\n")
 
-            print(f"{'=' * 70}")
-            print("✓ Profiling complete!")
-            print(f"{'=' * 70}")
+            print("=" * 70)
+            print("Profiling complete!")
+            print("=" * 70)
             print(f"\nProfile files saved to: {profile_output}")
             print("\nTo view speedscope profiles:")
             print("  1. Visit https://www.speedscope.app/")
             print(f"  2. Upload .speedscope files from {profile_output}")
 
         finally:
-            print(f"\n🧹 Cleaning up input directory {temp_input_dir}...")
+            print(f"\nCleaning up input directory {temp_input_dir}...")
             shutil.rmtree(temp_input_dir, ignore_errors=True)
 
         return
 
     # Normal benchmark mode
-    print("\n🚀 Zephyr Deduplication Pipeline Benchmark")
+    print("\nZephyr Deduplication Pipeline Benchmark")
     print(f"Configuration: {num_docs:,} docs x {words_per_doc} words -> {num_input_files} files")
     print(f"Backends: {', '.join(backends_list)}")
 
@@ -361,7 +360,7 @@ def main(
         input_dir, gen_time = setup_input_files(num_docs, words_per_doc, num_input_files)
     else:
         gen_time = 0.0
-        print(f"   Using existing input directory: {input_dir}")
+        print(f"Using existing input directory: {input_dir}")
 
     try:
         # Run benchmarks for each backend
@@ -372,28 +371,28 @@ def main(
                 result["gen_time"] = gen_time
                 results.append(result)
             except Exception as e:
-                print(f"\n❌ ERROR with backend '{backend}': {e}")
+                print(f"\nERROR with backend '{backend}': {e}")
                 import traceback
 
                 traceback.print_exc()
 
         # Summary comparison
         if len(results) > 1:
-            print(f"\n{'Summary Comparison':^70}")
-            print(f"{'=' * 70}")
+            print("\nSummary Comparison:")
+            print("=" * 70)
             print(f"{'Backend':<15} {'Time (s)':<12} {'Throughput':<15} {'Memory (MB)':<15}")
-            print(f"{'-' * 70}")
+            print("-" * 70)
             for r in results:
                 print(f"{r['backend']:<15} {r['exec_time']:<12.2f} {r['throughput']:<15,.0f} {r['memory_mb']:<15.1f}")
-            print(f"{'-' * 70}")
+            print("-" * 70)
             if should_cleanup:
                 print(f"Note: Generation time ({gen_time:.2f}s) was shared across all backends")
-            print(f"{'=' * 70}\n")
+            print("=" * 70 + "\n")
 
     finally:
         # Only cleanup if we generated the input
         if should_cleanup:
-            print(f"\n🧹 Cleaning up input directory {input_dir}...")
+            print(f"\nCleaning up input directory {input_dir}...")
             shutil.rmtree(input_dir, ignore_errors=True)
 
 
