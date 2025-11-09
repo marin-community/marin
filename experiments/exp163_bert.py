@@ -42,6 +42,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from marin.processing.tokenize import lm_data_config
 from marin.processing.classification.bert.train_bert import (
     TrainBertClassifierConfig,
 )
@@ -188,7 +189,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                             attribute_path=output_path_of(fasttext_inference, input_basename),
                             name=versioned(f"{config.experiment_name}-fasttext_classifier"),
                             label="__label__hq",
-                            threshold=versioned(None),
+                            lower_threshold=versioned(None),
                             keep_fraction=versioned(keep_fraction),
                         ),
                     ],
@@ -209,7 +210,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                             attribute_path=output_path_of(bert_inference, input_basename),
                             name=versioned(f"{config.experiment_name}-bert_classifier"),
                             label="hq",
-                            threshold=versioned(None),
+                            lower_threshold=versioned(None),
                             keep_fraction=versioned(keep_fraction),
                         ),
                     ],
@@ -239,13 +240,13 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
 
             fasttext_train_step = default_train(
                 name=f"checkpoints/quality_filtering/{config.experiment_name}/fasttext/{input_data_source}/train",
-                tokenized=fasttext_tokenize_step,
+                tokenized=lm_data_config(fasttext_tokenize_step, permutation_type="linear"),
                 model_config=llama_1_4b,
                 train_config=llama_1_4b_train_config,
             )
             bert_train_step = default_train(
                 name=f"checkpoints/quality_filtering/{config.experiment_name}/bert/{input_data_source}/train",
-                tokenized=bert_tokenize_step,
+                tokenized=lm_data_config(bert_tokenize_step, permutation_type="linear"),
                 model_config=llama_1_4b,
                 train_config=llama_1_4b_train_config,
             )

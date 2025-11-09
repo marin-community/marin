@@ -1,0 +1,14 @@
+# tootsie-32b-cooldown-bison-adamc
+
+
+model:
+  type: qwen3
+  seq_len: 4096
+  hidden_dim: 128
+  intermediate_dim: 256
+  num_heads: 8
+  num_kv_heads: 8
+  num_layers: 4
+  gradient_checkpointing: true
+  rope:
+    type: llama3

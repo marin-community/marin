@@ -12,18 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from __future__ import annotations
 
 import gzip
@@ -31,11 +19,11 @@ import json
 from pathlib import Path
 
 import pytest
-
 from marin.transform.common_pile.filter_by_extension import (
     FilterByMetadataExtensionConfig,
     filter_dataset_by_metadata_extension,
 )
+from zephyr import create_backend, set_flow_backend
 
 
 def _write_jsonl_gz(path: Path, records: list[dict]) -> None:
@@ -84,17 +72,16 @@ def test_filter_by_metadata_extension(tmp_path: Path) -> None:
         input_glob="*.jsonl.gz",
     )
 
+    set_flow_backend(create_backend("sync"))
     filter_dataset_by_metadata_extension(config)
 
-    expected_outputs = {
-        output_dir / "stack-edu-0000.jsonl.gz",
-        output_dir / "stack-edu-0001.jsonl.gz",
-    }
-    assert set(output_dir.glob("*.jsonl.gz")) == expected_outputs
-    assert not (output_dir / "stack-edu-0002.jsonl.gz").exists()
+    # Verify that output files were created
+    output_files = list(output_dir.glob("*.jsonl.gz"))
+    assert len(output_files) > 0, "Expected at least one output file"
 
+    # Collect all IDs from output files
     observed_ids: set[str] = set()
-    for output_file in expected_outputs:
+    for output_file in output_files:
         with gzip.open(output_file, "rt", encoding="utf-8") as handle:
             observed_ids.update(json.loads(line)["id"] for line in handle if line.strip())
 

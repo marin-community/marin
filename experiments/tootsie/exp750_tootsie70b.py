@@ -30,7 +30,7 @@ from levanter.schedule import ScheduleStep
 from experiments.defaults import default_train
 from experiments.llama import llama_70b
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3
+from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3_old
 from experiments.tootsie.exp859_big_tootsies import dclm_mixture_config_llama3_zoned
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
@@ -91,7 +91,7 @@ llama_70b_tootsie_bs1536 = dataclasses.replace(
 llama_real_70b_tootsie = dataclasses.replace(
     default_train(
         name="llama-real-70b-tootsie",
-        tokenized=dclm_mixture_config_llama3,
+        tokenized=dclm_mixture_config_llama3_old,
         model_config=llama_70b,
         train_config=llama_70b_train_config_mk6,
         tags=["llama", "70b", "wsd", "exp750", "tootsie", "ema"],

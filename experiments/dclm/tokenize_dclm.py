@@ -61,10 +61,14 @@ dclm_components_llama3 = {
         ).with_output_path("tokenized/proofpile_2-4a35c7/")
     ),
 }
-dclm_mixture_config_llama3 = lm_mixture_data_config(
+dclm_mixture_config_llama3_old = lm_mixture_data_config(
     components=dclm_components_llama3,
     weights=DCLM_MIXTURE_WEIGHTS,
     permutation_type="linear",
+)
+
+dclm_mixture_config_llama3 = lm_mixture_data_config(
+    components=dclm_components_llama3, weights=DCLM_MIXTURE_WEIGHTS, permutation_type="feistel"
 )
 
 

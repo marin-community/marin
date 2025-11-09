@@ -19,6 +19,7 @@ from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
+from marin.processing.tokenize import lm_data_config
 
 # Get instruction dataset
 openthoughts_dataset = get_instruction_dataset("open-r1/OpenThoughts-114k-math")
@@ -33,7 +34,6 @@ openthoughts_llama_tokenize_step = default_tokenize(
     tokenizer=llama3_tokenizer,
     format=llama3_instruct_chat_format,
 )
-
 openthoughts_sft_config = SimpleSFTConfig(
     train_batch_size=128,
     num_train_steps=NUM_TRAIN_STEPS,
@@ -55,7 +55,7 @@ openthoughts_sft_config = SimpleSFTConfig(
 # Create the SFT training step using the pre-defined 8B model config
 sft_step = default_sft(
     name="openthoughts_llama3_sft",
-    tokenized=openthoughts_llama_tokenize_step,
+    tokenized=lm_data_config(openthoughts_llama_tokenize_step, permutation_type="linear"),
     model_config=llama_8b,
     sft_config=openthoughts_sft_config,
     tags=["openthoughts", "llama", "sft"],

@@ -45,7 +45,7 @@ if os.environ.get("CI"):
     pytest.skip("Skipping slow tests on CI", allow_module_level=True)
 
 
-class TestModule(eqx.Module):
+class EmbeddingTestModule(eqx.Module):
     embedding: eqx.nn.Embedding
     layers: list[eqx.Module]
 
@@ -62,7 +62,7 @@ def create_sample_pytree(
     Vocab = hax.Axis("vocab", vocab_size)
     Hidden = hax.Axis("hidden", hidden_size)
     Layers = hax.Axis("layers", layers)
-    return TestModule(
+    return EmbeddingTestModule(
         embedding=hax.named(
             generator.normal(size=(Vocab.size, Hidden.size)).astype(np.float32),
             (Vocab, Hidden),
@@ -202,8 +202,8 @@ def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_para
         client_2.cleanup()
 
 
-@pytest.mark.slow("Uses real Llama model, requires HuggingFace access.")
-def test_arrow_flight_with_llama_8b(ray_tpu_cluster):
+@pytest.mark.skip("Manual benchmark test")
+def benchmark_arrow_flight_with_llama(ray_tpu_cluster):
     """Test Arrow Flight weight transfer with a LLama 1B model."""
     MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 
@@ -294,4 +294,4 @@ if __name__ == "__main__":
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     cluster = ray.init("local")
-    test_arrow_flight_with_llama_8b(ray_tpu_cluster=cluster)
+    benchmark_arrow_flight_with_llama(ray_tpu_cluster=cluster)

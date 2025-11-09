@@ -173,7 +173,7 @@ def get_all_revisions(repo_id):
     refs = list_repo_refs(repo_id, repo_type="model")
     branches = [branch.name for branch in refs.branches]
     tags = [tag.name for tag in refs.tags]
-    combined = [tag for tag in (branches + tags) if "step" in tag]
+    combined = [tag for tag in branches + tags if "step" in tag]
 
     combined = sorted(combined, key=lambda x: int(x.split("step_")[-1].split("cooldown_")[-1]))
     return combined

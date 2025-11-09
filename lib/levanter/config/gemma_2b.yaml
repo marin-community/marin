@@ -1,0 +1,30 @@
+data:
+  train_urls:
+    - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz"
+  validation_urls:
+    - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..1}-of-8.jsonl.gz"
+  cache_dir: "gs://wasabi-tpu-training/openwebtext-mini"
+  tokenizer: "google/gemma-2b"
+model:
+  type: gemma
+initialize_from_hf: "google/gemma-2b"
+use_hf_model_config: true
+trainer:
+  checkpointer:
+    base_path: "gs://wasabi-tpu-training/gemma-2b/"
+  tracker:
+    type: wandb
+    project: "levanter"
+    tags: ["openwebtext", "gemma"]
+
+  mp: p=bfloat16,c=bfloat16
+  train_batch_size: 16  # set for v5e-16 TPU
+  num_train_steps: 100000
+  steps_per_eval: 50
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+optimizer:
+  learning_rate: 1.2E-5  # set low for fine-tuning
+  weight_decay: 0.1
+  min_lr_ratio: 0.1

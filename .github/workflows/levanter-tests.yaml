@@ -1,0 +1,193 @@
+name: Levanter - Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - lib/levanter/**
+      - uv.lock
+      - .github/workflows/levanter-tests.yaml
+  pull_request:
+    paths:
+      - lib/levanter/**
+      - uv.lock
+      - .github/workflows/levanter-tests.yaml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+        jax-version: ["0.6.2"]
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          working-directory: lib/levanter
+      - name: Set up Python
+        run: uv python install
+      - name: Install dependencies
+        run: uv sync --package levanter --dev --frozen
+      - name: Test with pytest
+        run: |
+          # Test with specific JAX version, excluding TPU tests
+          PYTHONPATH=tests:src:. uv run --package levanter --frozen --with "jax[cpu]==${{ matrix.jax-version }}" pytest tests -m "not entry and not slow and not ray and not tpu" --durations=20
+
+  cpu-ray-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          working-directory: lib/levanter
+      - name: Set up Python
+        run: uv python install
+      - name: Install dependencies
+        run: uv sync --package levanter --dev --frozen
+      - name: Test with pytest
+        run: |
+          PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "ray" --durations=20
+
+  cpu-entry-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          working-directory: lib/levanter
+      - name: Set up Python
+        run: uv python install
+      - name: Install dependencies
+        run: uv sync --package levanter --dev --frozen
+      - name: Test with pytest
+        run: |
+          PYTHONPATH=tests:src:. uv run --package levanter --frozen pytest tests -m "entry" --durations=20
+
+  cpu-torch-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    defaults:
+      run:
+        working-directory: lib/levanter
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          working-directory: lib/levanter
+      - name: Set up Python
+        run: uv python install
+      - name: Install dependencies
+        run: uv sync --package levanter --dev --frozen --extra torch_test
+
+      - name: Force CPU torch wheel
+        run: |
+          TORCH_VERSION=$(sed -n '/^name = "torch"$/ {n; s/version = "\([^"]*\)"/\1/p; q}' uv.lock)
+          echo $TORCH_VERSION
+          if [[ -z "$TORCH_VERSION" ]]; then
+            echo "Unable to determine torch version from uv.lock" >&2
+            exit 1
+          fi
+          uv pip install "torch==$TORCH_VERSION" -f https://download.pytorch.org/whl/cpu/torch_stable.html  --torch-backend=cpu
+
+      - name: Test torch-marked suite
+        run: |
+          # run directly on CPU to avoid GPU dependency issues
+          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. ../../.venv/bin/python -m pytest tests -m "torch" --durations=20
+#          CUDA_VISIBLE_DEVICES="" PYTHONPATH=tests:src:. uv run --package levanter --frozen --extra torch_test pytest tests -m "torch" --durations=20
+
+  tpu-tests:
+    runs-on: [tpu-ci]
+    timeout-minutes: 15
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        jax_version: ["0.6.2", "0.7.2", "0.8.0"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
+
+      - name: Run Levanter TPU tests in Docker
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          JAX_VERSION: ${{ matrix.jax_version }}
+        run: |
+          bash infra/tpu-ci/clean-tpu.sh
+
+          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
+          echo "Using Docker image: $DOCKER_IMAGE"
+
+          # Create UV cache directory
+          mkdir -p /tmp/uv-cache
+          chmod 777 /tmp/uv-cache
+
+          # Run Levanter tests with specific JAX version
+          docker run --rm \
+            --device /dev/vfio:/dev/vfio \
+            --shm-size=100g \
+            --stop-timeout=5 \
+            --cap-add=SYS_RESOURCE \
+            --ulimit memlock=68719476736:68719476736 \
+            -e TPU_CI=true \
+            -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
+            -e START_RAY_TPU_CLUSTER=true \
+            -e TPU_STDERR_LOG_LEVEL=3 \
+            -e TPU_MIN_LOG_LEVEL=3 \
+            -e PYTHONPATH=/workspace \
+            -e JAX_PLATFORMS=tpu,cpu \
+            -e PJRT_DEVICE=TPU \
+            -e HF_TOKEN \
+            -e WANDB_API_KEY \
+            -e WANDB_MODE=offline \
+            -e UV_CACHE_DIR=/tmp/uv-cache \
+            -v ${{ github.workspace }}:/workspace-src:ro \
+            -v /tmp/uv-cache:/tmp/uv-cache:rw \
+            -w /workspace \
+            $DOCKER_IMAGE \
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 890 uv run --package levanter --frozen --with 'jax[tpu]==$JAX_VERSION' pytest lib/levanter/tests -m 'not entry and not ray and not slow' -v --tb=short --log-cli-level=WARNING --durations=20"

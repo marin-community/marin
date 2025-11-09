@@ -1,0 +1,7 @@
+type: sophia-h
+learning_rate: 6E-4
+weight_decay: 0.2
+min_lr_ratio: 0.1
+gamma: 0.01
+# sophia needs a minimum amount of warmup or it doesn't do well
+warmup: 2000
