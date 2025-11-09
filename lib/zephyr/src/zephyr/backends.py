@@ -41,6 +41,7 @@ from zephyr.dataset import (
     GroupByLocalOp,
     GroupByShuffleReduceOp,
     MapOp,
+    MapShardOp,
     ReduceGlobalOp,
     ReduceLocalOp,
     ReshardOp,
@@ -418,6 +419,26 @@ def process_shard_flat_map(shard: Shard, shard_idx: int, total: int, fn: Callabl
     ]
 
 
+def process_shard_map_shard(shard: Shard, shard_idx: int, total: int, fn: Callable, chunk_size: int) -> list[Shard]:
+    """Process shard by applying function to entire shard iterator.
+
+    The function receives an iterator of all items in the shard and returns
+    an iterator of results. Enables stateful shard processing.
+    """
+    logger.info(f"map_shard: shard {shard_idx + 1}/{total}")
+
+    result_iterator = fn(iter(shard))
+
+    return [
+        Shard.from_items(
+            tqdm(result_iterator, desc=f"map_shard shard {shard_idx + 1}/{total}", mininterval=10),
+            chunk_size,
+            shard.context,
+            idx=shard_idx,
+        )
+    ]
+
+
 def process_shard_map(shard: Shard, shard_idx: int, total: int, fn: Callable, chunk_size: int) -> list[Shard]:
     """Process shard with map, returning chunked results."""
     logger.info(f"map: shard {shard_idx + 1}/{total}")
@@ -548,6 +569,9 @@ def process_shard_fused(
             yield from build_stream(
                 (result_item for item in stream_input for result_item in op.fn(item)), rest, processed_count + 1
             )
+        elif isinstance(op, MapShardOp):
+            # MapShard consumes the entire stream and produces a new stream
+            yield from build_stream(op.fn(stream_input), rest, processed_count + 1)
         elif isinstance(op, FilterOp):
             yield from build_stream((item for item in stream_input if op.predicate(item)), rest, processed_count + 1)
         elif isinstance(op, BatchOp):
@@ -975,6 +999,8 @@ class Backend:
         for op in optimized_ops:
             if isinstance(op, FlatMapOp):
                 shards = self._execute_on_shards(process_shard_flat_map, (op.fn, self.chunk_size), shards)
+            elif isinstance(op, MapShardOp):
+                shards = self._execute_on_shards(process_shard_map_shard, (op.fn, self.chunk_size), shards)
             elif isinstance(op, MapOp):
                 shards = self._execute_on_shards(process_shard_map, (op.fn, self.chunk_size), shards)
             elif isinstance(op, FilterOp):

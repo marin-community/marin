@@ -708,7 +708,9 @@ def test_sorted_merge_join_shard_mismatch(backend):
         key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
     )
     right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
-        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=10  # Different shard count!
+        key=lambda x: x["id"],
+        reducer=lambda k, items: next(iter(items)),
+        num_output_shards=10,  # Different shard count!
     )
 
     joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
@@ -783,3 +785,143 @@ def test_sorted_merge_join_with_fusion(backend):
     assert len(results) == 2  # Both id=1 and id=2 have doubled > 0.5
     assert results[0] == {"id": 1, "num": 1, "score": 0.9, "doubled": 1.8}
     assert results[1] == {"id": 2, "num": 3, "score": 0.3, "doubled": 0.6}
+
+
+def test_map_shard_basic(backend):
+    """Test basic map_shard operation with simple generator."""
+
+    def double_all(items):
+        for item in items:
+            yield item * 2
+
+    ds = Dataset.from_list([list(range(1, 6))]).flat_map(lambda x: x).map_shard(double_all)
+    result = sorted(backend.execute(ds))
+    assert result == [2, 4, 6, 8, 10]
+
+
+def test_map_shard_stateful_deduplication(backend):
+    """Test map_shard for stateful within-shard deduplication."""
+
+    def deduplicate_shard(items):
+        seen = set()
+        for item in items:
+            key = item["id"]
+            if key not in seen:
+                seen.add(key)
+                yield item
+
+    data = [
+        {"id": 1, "val": "a"},
+        {"id": 2, "val": "b"},
+        {"id": 1, "val": "c"},  # Duplicate
+        {"id": 3, "val": "d"},
+        {"id": 2, "val": "e"},  # Duplicate
+    ]
+
+    ds = Dataset.from_list([data]).flat_map(lambda x: x).map_shard(deduplicate_shard)
+    result = sorted(list(backend.execute(ds)), key=lambda x: x["id"])
+
+    # Should keep first occurrence of each id
+    assert len(result) == 3
+    assert result[0] == {"id": 1, "val": "a"}
+    assert result[1] == {"id": 2, "val": "b"}
+    assert result[2] == {"id": 3, "val": "d"}
+
+
+def test_map_shard_empty_result(backend):
+    """Test map_shard that filters everything out."""
+
+    def filter_all(items):
+        for _ in items:
+            pass  # Consume but don't yield
+        return iter([])  # Return empty iterator
+
+    ds = Dataset.from_list([list(range(1, 6))]).flat_map(lambda x: x).map_shard(filter_all)
+    result = list(backend.execute(ds))
+    assert result == []
+
+
+def test_map_shard_with_fusion(backend):
+    """Test that map_shard is fusible with other operations."""
+
+    def running_sum(items):
+        total = 0
+        for item in items:
+            total += item
+            yield total
+
+    # Pipeline: map -> filter -> map_shard -> map
+    ds = (
+        Dataset.from_list([list(range(1, 11))])
+        .flat_map(lambda x: x)  # [1, 2, 3, ..., 10]
+        .filter(lambda x: x <= 5)  # [1, 2, 3, 4, 5]
+        .map_shard(running_sum)  # [1, 3, 6, 10, 15]
+        .map(lambda x: x * 2)  # [2, 6, 12, 20, 30]
+    )
+
+    result = list(backend.execute(ds))
+    assert result == [2, 6, 12, 20, 30]
+
+
+def test_map_shard_error_propagation(backend):
+    """Test that exceptions in map_shard functions propagate correctly."""
+
+    def failing_generator(items):
+        for item in items:
+            if item == 3:
+                raise ValueError("Test error")
+            yield item
+
+    ds = Dataset.from_list([list(range(1, 6))]).flat_map(lambda x: x).map_shard(failing_generator)
+
+    with pytest.raises(ValueError, match="Test error"):
+        list(backend.execute(ds))
+
+
+def test_map_shard_sliding_window(backend):
+    """Test map_shard with sliding window operation."""
+
+    def sliding_window(items, window_size=2):
+        buffer = []
+        for item in items:
+            buffer.append(item)
+            if len(buffer) >= window_size:
+                yield list(buffer)
+                buffer.pop(0)
+
+    ds = (
+        Dataset.from_list([list(range(1, 6))])
+        .flat_map(lambda x: x)
+        .map_shard(lambda items: sliding_window(items, window_size=2))
+    )
+
+    result = list(backend.execute(ds))
+    assert result == [[1, 2], [2, 3], [3, 4], [4, 5]]
+
+
+def test_map_shard_operations_are_dataclasses():
+    """Test that map_shard operations are stored as inspectable dataclasses."""
+    ds = Dataset.from_list([1, 2, 3]).map_shard(lambda items: items)
+
+    from zephyr.dataset import MapShardOp
+
+    assert len(ds.operations) == 1
+    assert isinstance(ds.operations[0], MapShardOp)
+
+
+def test_deduplicate_uses_map_shard(backend):
+    """Test that deduplicate now uses map_shard internally."""
+    data = [
+        {"id": 1, "val": "a"},
+        {"id": 2, "val": "b"},
+        {"id": 1, "val": "c"},  # Duplicate
+        {"id": 3, "val": "d"},
+    ]
+
+    ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"], num_output_shards=5)
+    result = sorted(list(backend.execute(ds)), key=lambda x: x["id"])
+
+    # Should keep one of each id
+    assert len(result) == 3
+    ids = [r["id"] for r in result]
+    assert ids == [1, 2, 3]

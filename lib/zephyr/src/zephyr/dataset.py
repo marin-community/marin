@@ -83,6 +83,21 @@ class FlatMapOp:
 
 
 @dataclass
+class MapShardOp:
+    """MapShard operation - applies function to entire shard iterator.
+
+    The converse of flat_map: function receives an iterator of all items
+    in the shard and returns an iterator of results. Enables stateful
+    shard processing without requiring callable classes.
+
+    Use when you need to maintain state across all items in a shard, such as
+    deduplication, reservoir sampling, or loading expensive resources once.
+    """
+
+    fn: Callable
+
+
+@dataclass
 class ReshardOp:
     """Reshard operation - redistributes data across target number of shards.
 
@@ -171,6 +186,7 @@ Operation = (
     | WriteJsonlOp
     | WriteParquetOp
     | FlatMapOp
+    | MapShardOp
     | ReshardOp
     | FusedMapOp
     | GroupByLocalOp
@@ -368,6 +384,41 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, FlatMapOp(fn)])
 
+    def map_shard(self, fn: Callable[[Iterator[T]], Iterator[R]]) -> Dataset[R]:
+        """Apply function to entire shard iterator.
+
+        The function receives an iterator of all items in the shard and returns
+        an iterator of results. This is the recommended pattern for stateful
+        processing across a shard (deduplication, sampling, windowing, etc.)
+        without requiring callable classes.
+
+        Args:
+            fn: Function from Iterator[items] -> Iterator[results]
+
+        Returns:
+            New dataset with map_shard operation appended
+
+        Example:
+            >>> backend = create_backend("ray", max_parallelism=10)
+            >>> # Deduplicate items within each shard
+            >>> def deduplicate_shard(items: Iterator):
+            ...     seen = set()
+            ...     for item in items:
+            ...         key = item["id"]
+            ...         if key not in seen:
+            ...             seen.add(key)
+            ...             yield item
+            >>>
+            >>> ds = (Dataset
+            ...     .from_files("data/*.jsonl")
+            ...     .flat_map(load_jsonl)
+            ...     .map_shard(deduplicate_shard)
+            ...     .write_jsonl("output/deduped-{shard:05d}.jsonl.gz")
+            ... )
+            >>> output_files = list(backend.execute(ds))
+        """
+        return Dataset(self.source, [*self.operations, MapShardOp(fn)])
+
     def reshard(self, num_shards: int) -> Dataset[T]:
         """Redistribute data across target number of shards (best-effort).
 
@@ -507,25 +558,20 @@ class Dataset(Generic[T]):
             [{"id": 1, "val": "a"}, {"id": 2, "val": "b"}]  # Or {"id": 1, "val": "c"}
         """
 
-        class _StreamingDedup:
-            """Stateful flat_map that filters duplicates within a shard."""
-
-            def __init__(self):
-                self.seen = set()
-
-            def __call__(self, item):
+        def streaming_dedup(items: Iterator[T]) -> Iterator[T]:
+            """Deduplicate items within a shard."""
+            seen = set()
+            for item in items:
                 k = key(item)
-                if k not in self.seen:
-                    self.seen.add(k)
+                if k not in seen:
+                    seen.add(k)
                     yield item
 
         def keep_first(k, items: Iterator[T]) -> T:
             """Reducer that keeps the first item."""
             return next(iter(items))
 
-        return self.flat_map(_StreamingDedup()).group_by(
-            key=key, reducer=keep_first, num_output_shards=num_output_shards
-        )
+        return self.map_shard(streaming_dedup).group_by(key=key, reducer=keep_first, num_output_shards=num_output_shards)
 
     def reduce(
         self,

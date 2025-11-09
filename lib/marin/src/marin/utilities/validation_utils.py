@@ -87,3 +87,13 @@ def summarize_document_from_json(json_blob: str) -> DocumentSummary:
     doc = parse_document_json(json_blob)
 
     return DocumentSummary(document_bytes=get_size_bytes(json_blob), text_bytes=get_size_bytes(doc.text))
+
+
+def summarize_document(doc: dict) -> DocumentSummary:
+    """Validate that a document dict is in valid Dolma-format, and return summary (e.g., footprint in bytes, etc.)."""
+    validated_doc = DolmaDocument.model_validate(doc)
+
+    # Compute bytes as if serialized to JSON
+    json_blob = json.dumps(doc)
+
+    return DocumentSummary(document_bytes=get_size_bytes(json_blob), text_bytes=get_size_bytes(validated_doc.text))

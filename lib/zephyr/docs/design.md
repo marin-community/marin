@@ -63,6 +63,33 @@ contains `new_item`. A common use case is for loading files: given a dataset of
 filenames, `ds.flat_map(load_jsonl)` returns a dataset which contains the
 individual JSON lines.
 
+`map_shard(fn)`
+
+The converse of flat_map: the function receives an iterator of all items in a
+shard and returns an iterator of results. This is the recommended pattern for
+stateful shard processing without requiring callable classes.
+
+Use when you need to maintain state across all items in a shard, such as
+deduplication, reservoir sampling, sliding windows, or loading expensive
+resources once per shard.
+
+```python
+def deduplicate_shard(items: Iterator):
+    seen = set()
+    for item in items:
+        key = item["id"]
+        if key not in seen:
+            seen.add(key)
+            yield item
+
+ds = (Dataset
+    .from_files("gs://data/*.jsonl")
+    .flat_map(load_jsonl)
+    .map_shard(deduplicate_shard)  # Dedup within each shard
+    .write_jsonl("gs://output/deduped-{shard:05d}.jsonl.gz")
+)
+```
+
 `map(fn)`
 
 Map the given function over the dataset, transforming the elements.
