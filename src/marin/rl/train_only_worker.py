@@ -28,6 +28,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import levanter
+from levanter import callbacks
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -153,9 +154,6 @@ class TrainOnlyWorker:
         self.tokenizer = config.tokenizer
         self.loss_module = config.loss
 
-        # Timing metrics for benchmarking
-        self._total_tokens_trained = 0
-
         self.data_loader = RandomTokenDataLoader(config)
 
         self._build_models()
@@ -212,24 +210,14 @@ class TrainOnlyWorker:
 
     def _configure_training_hooks(self, trainer):
         """Configure hooks for logging training metrics."""
-
-        def _log_throughput(info: levanter.callbacks.StepInfo):
-            step_duration = info.step_duration
-            metrics = {
-                "train.step_duration_sec": step_duration,
-            }
-
-            # Calculate tokens processed in this step
-            ntokens = self.config.sequence_length * self.config.trainer.train_batch_size
-            self._total_tokens_trained += ntokens
-            
-            if step_duration > 0:
-                tokens_per_sec = ntokens / step_duration
-                metrics["train.tokens_per_second"] = tokens_per_sec
-            
-            metrics["train.total_tokens_trained"] = self._total_tokens_trained
-
-            trainer.tracker.log(metrics, step=info.step)
-            logger.info(f"Step {info.step}: {metrics.get('train.tokens_per_second', 0):.2f} tokens/sec")
-
-        trainer.add_hook(_log_throughput, every=10)
+        # Use Levanter's standard performance logging
+        flops_per_token = self.config.model.flops_per_token(self.tokenizer.vocab_size)
+        flops_per_example = 3 * flops_per_token * self.config.sequence_length if flops_per_token is not None else None
+        trainer.add_hook(
+            callbacks.log_performance_stats(
+                tokens_per_example=self.config.sequence_length,
+                batch_schedule=self.config.trainer.train_batch_size,
+                flops_per_example=flops_per_example,
+            ),
+            every=1,
+        )

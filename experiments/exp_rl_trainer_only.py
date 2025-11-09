@@ -165,7 +165,7 @@ def train_only_benchmark(name: str, experiment_config: ModelConfig) -> ExecutorS
         log_freq=10,
         sequence_length=1024,  # Fixed length for random tokens
         run_config=TrainOnlyRunConfig(
-            train_tpu_type="v4-8",
+            train_tpu_type="v5p-8",
             num_train_slices=1,
         ),
     )
