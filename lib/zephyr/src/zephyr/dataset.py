@@ -145,32 +145,23 @@ class ReduceGlobalOp:
 
 
 @dataclass
-class JoinLocalOp:
-    """Phase 1 of Join: Hash partition both datasets by join key.
+class SortedMergeJoinOp:
+    """Streaming merge join for pre-sorted, co-partitioned datasets.
 
-    Partitions items from both left and right datasets using hash(key) % num_output_shards.
-    Items within each output shard are sorted by key to enable streaming join.
+    Single-phase join that pairs up corresponding shards and streams through them.
+    Much faster than hash join but requires strict preconditions:
+    - Both datasets have the same number of shards
+    - Corresponding shards (left[i], right[i]) contain the same key ranges
+    - Items within each shard are sorted by join key
+
+    Only supports inner and left joins.
     """
 
     left_key_fn: Callable
     right_key_fn: Callable
     right_dataset: object  # Dataset, but avoid circular reference
-    num_output_shards: int
-
-
-@dataclass
-class JoinReduceOp:
-    """Phase 2 of Join: Perform local join per shard.
-
-    Uses streaming merge of sorted chunks to join items with matching keys.
-    Supports inner, left, right, and outer join types.
-
-    Items are already tagged as (side, key, item) tuples from JoinLocalOp,
-    so key extraction functions are not needed.
-    """
-
     combiner_fn: Callable
-    join_type: str
+    join_type: str  # "inner" or "left"
 
 
 # Type alias for operations
@@ -187,8 +178,7 @@ Operation = (
     | GroupByShuffleReduceOp
     | ReduceLocalOp
     | ReduceGlobalOp
-    | JoinLocalOp
-    | JoinReduceOp
+    | SortedMergeJoinOp
 )
 
 T = TypeVar("T")
@@ -567,70 +557,79 @@ class Dataset(Generic[T]):
 
         return Dataset(self.source, [*self.operations, ReduceLocalOp(local_reducer), ReduceGlobalOp(global_reducer)])
 
-    def join(
+    def sorted_merge_join(
         self,
         right: Dataset[R],
         left_key: Callable[[T], object],
         right_key: Callable[[R], object],
         combiner: Callable[[T | None, R | None], object] | None = None,
         how: str = "inner",
-        num_output_shards: int | None = None,
     ) -> Dataset:
-        """Join this dataset with another dataset based on matching keys.
+        """Streaming merge join for already-sorted, co-partitioned datasets.
 
-        Performs a hash-based join similar to SQL join operations. Items from both
-        datasets are partitioned by their join key, then matching items are combined
-        using the combiner function.
+        **PRECONDITIONS (undefined behavior if violated):**
+        - Both datasets have the same number of shards
+        - Corresponding shards (left[i], right[i]) contain the same key ranges
+        - Items within each shard are sorted by their join key
+
+        These preconditions are typically met when both datasets come from
+        group_by() with the same key and num_output_shards.
+
+        **Use this when:**
+        - Both datasets already partitioned by join key (e.g., from group_by)
+        - Want to avoid shuffle overhead
+        - Know datasets are compatible
+
+        **Only supports inner and left joins** (no right or outer joins).
 
         Args:
-            right: Dataset to join with (the "right" side of the join)
-            left_key: Function extracting join key from left (this) dataset items
-            right_key: Function extracting join key from right dataset items
-            combiner: Function combining matching items: (left_item, right_item) -> result
-                     Defaults to dict merge: {**left, **right}
-            how: Join type - "inner", "left", "right", or "outer"
-            num_output_shards: Number of output shards (None = auto-detect from current shard count)
+            right: Right dataset to join with
+            left_key: Function to extract join key from left items
+            right_key: Function to extract join key from right items
+            combiner: Function to combine (left_item, right_item) or (left_item, None).
+                      Defaults to merging dicts: {**left, **right}
+            how: Join type - "inner" or "left" (default: "inner")
 
         Returns:
-            New dataset containing joined results
+            New dataset with joined results
+
+        Raises:
+            ValueError: If join type is not "inner" or "left"
 
         Example:
-            >>> docs = Dataset.from_list([
-            ...     {"id": 1, "text": "hello"},
-            ...     {"id": 2, "text": "world"}
-            ... ])
-            >>> attrs = Dataset.from_list([
-            ...     {"id": 1, "quality": 0.9},
-            ...     {"id": 2, "quality": 0.3}
-            ... ])
-            >>> joined = docs.join(
+            >>> # Both come from group_by - safe to use sorted_merge_join
+            >>> docs = Dataset.from_files(...).group_by(
+            ...     key=lambda x: x["id"],
+            ...     reducer=keep_first,
+            ...     num_output_shards=100
+            ... )
+            >>> attrs = Dataset.from_files(...).group_by(
+            ...     key=lambda x: x["id"],
+            ...     reducer=keep_first,
+            ...     num_output_shards=100
+            ... )
+            >>> joined = docs.sorted_merge_join(
             ...     attrs,
             ...     left_key=lambda x: x["id"],
             ...     right_key=lambda x: x["id"]
             ... )
-            >>> list(backend.execute(joined))
-            [{"id": 1, "text": "hello", "quality": 0.9},
-             {"id": 2, "text": "world", "quality": 0.3}]
         """
+        if how not in ("inner", "left"):
+            raise ValueError(f"sorted_merge_join only supports 'inner' and 'left' joins, got: {how}")
+
+        # Default combiner merges dicts
         if combiner is None:
 
             def default_combiner(left, right):
-                if left is None:
-                    return right
-                if right is None:
-                    return left
+                if left is None or right is None:
+                    raise ValueError(
+                        "Default combiner requires both left and right items (use custom combiner for outer joins)"
+                    )
                 return {**left, **right}
 
             combiner = default_combiner
 
-        if num_output_shards is None:
-            num_output_shards = -1
-
         return Dataset(
             self.source,
-            [
-                *self.operations,
-                JoinLocalOp(left_key, right_key, right, num_output_shards),
-                JoinReduceOp(combiner, how),
-            ],
+            [*self.operations, SortedMergeJoinOp(left_key, right_key, right, combiner, how)],
         )

@@ -602,17 +602,17 @@ def test_reduce_with_pipeline(backend):
     assert results[0] == expected
 
 
-def test_join_inner_basic(backend):
-    """Test basic inner join."""
-    left = Dataset.from_list([{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}, {"id": 3, "text": "foo"}])
-    right = Dataset.from_list(
-        [
-            {"id": 1, "score": 0.9},
-            {"id": 2, "score": 0.3},
-        ]
+def test_sorted_merge_join_inner_basic(backend):
+    """Test basic inner sorted merge join."""
+    # Create pre-sorted, co-partitioned datasets via group_by
+    left = Dataset.from_list(
+        [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}, {"id": 3, "text": "foo"}]
+    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5)
+    right = Dataset.from_list([{"id": 1, "score": 0.9}, {"id": 2, "score": 0.3}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
     )
 
-    joined = left.join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
 
     results = sorted(list(backend.execute(joined)), key=lambda x: x["id"])
     assert len(results) == 2
@@ -620,21 +620,17 @@ def test_join_inner_basic(backend):
     assert results[1] == {"id": 2, "text": "world", "score": 0.3}
 
 
-def test_join_left(backend):
-    """Test left join."""
-    left = Dataset.from_list(
-        [
-            {"id": 1, "text": "hello"},
-            {"id": 2, "text": "world"},
-        ]
+def test_sorted_merge_join_left(backend):
+    """Test left sorted merge join with missing right items."""
+    # Create pre-sorted, co-partitioned datasets
+    left = Dataset.from_list([{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
     )
-    right = Dataset.from_list(
-        [
-            {"id": 1, "score": 0.9},
-        ]
+    right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
     )
 
-    joined = left.join(
+    joined = left.sorted_merge_join(
         right,
         left_key=lambda x: x["id"],
         right_key=lambda x: x["id"],
@@ -648,108 +644,21 @@ def test_join_left(backend):
     assert results[1] == {"id": 2, "text": "world", "score": 0.0}
 
 
-def test_join_right(backend):
-    """Test right join."""
-    left = Dataset.from_list(
-        [
-            {"id": 1, "text": "hello"},
-        ]
+def test_sorted_merge_join_duplicate_keys(backend):
+    """Test sorted merge join with duplicate keys (cartesian product)."""
+    # Create datasets with duplicate keys
+    left = Dataset.from_list([{"id": 1, "text": "a"}, {"id": 1, "text": "b"}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: list(items), num_output_shards=5
     )
-    right = Dataset.from_list(
-        [
-            {"id": 1, "score": 0.9},
-            {"id": 2, "score": 0.3},
-        ]
+    right = Dataset.from_list([{"id": 1, "score": 0.9}, {"id": 1, "score": 0.3}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: list(items), num_output_shards=5
     )
 
-    joined = left.join(
-        right,
-        left_key=lambda x: x["id"],
-        right_key=lambda x: x["id"],
-        combiner=lambda left, right: {**right, "text": left["text"] if left else ""},
-        how="right",
-    )
+    # Flatten the grouped items
+    left = left.flat_map(lambda x: x)
+    right = right.flat_map(lambda x: x)
 
-    results = sorted(list(backend.execute(joined)), key=lambda x: x["id"])
-    assert len(results) == 2
-    assert results[0] == {"id": 1, "score": 0.9, "text": "hello"}
-    assert results[1] == {"id": 2, "score": 0.3, "text": ""}
-
-
-def test_join_outer(backend):
-    """Test outer join."""
-    left = Dataset.from_list(
-        [
-            {"id": 1, "text": "hello"},
-            {"id": 3, "text": "baz"},
-        ]
-    )
-    right = Dataset.from_list(
-        [
-            {"id": 1, "score": 0.9},
-            {"id": 2, "score": 0.3},
-        ]
-    )
-
-    def combiner(left, right):
-        result = {}
-        if left:
-            result.update(left)
-        if right:
-            result.update(right)
-        if not left:
-            result["text"] = ""
-        if not right:
-            result["score"] = 0.0
-        return result
-
-    joined = left.join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], combiner=combiner, how="outer")
-
-    results = sorted(list(backend.execute(joined)), key=lambda x: x["id"])
-    assert len(results) == 3
-    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
-    assert results[1] == {"id": 2, "score": 0.3, "text": ""}
-    assert results[2] == {"id": 3, "text": "baz", "score": 0.0}
-
-
-def test_join_empty_left(backend):
-    """Test join with empty left dataset."""
-    left = Dataset.from_list([])
-    right = Dataset.from_list([{"id": 1, "score": 0.9}])
-
-    joined = left.join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
-
-    results = list(backend.execute(joined))
-    assert len(results) == 0
-
-
-def test_join_empty_right(backend):
-    """Test join with empty right dataset."""
-    left = Dataset.from_list([{"id": 1, "text": "hello"}])
-    right = Dataset.from_list([])
-
-    joined = left.join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
-
-    results = list(backend.execute(joined))
-    assert len(results) == 0
-
-
-def test_join_duplicate_keys(backend):
-    """Test join with duplicate keys (cartesian product)."""
-    left = Dataset.from_list(
-        [
-            {"id": 1, "text": "a"},
-            {"id": 1, "text": "b"},
-        ]
-    )
-    right = Dataset.from_list(
-        [
-            {"id": 1, "score": 0.9},
-            {"id": 1, "score": 0.3},
-        ]
-    )
-
-    joined = left.join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
 
     results = sorted(list(backend.execute(joined)), key=lambda x: (x["text"], x["score"]))
     assert len(results) == 4
@@ -759,14 +668,20 @@ def test_join_duplicate_keys(backend):
     assert results[3] == {"id": 1, "text": "b", "score": 0.9}
 
 
-def test_join_with_filter(backend):
-    """Test join combined with filter (consolidate use case)."""
+def test_sorted_merge_join_after_group_by(backend):
+    """Test realistic pipeline: group_by followed by sorted_merge_join."""
+    # Simulate a typical use case: group documents and attributes, then join
     docs = Dataset.from_list(
         [
-            {"id": 1, "text": "hello"},
-            {"id": 2, "text": "world"},
-            {"id": 3, "text": "foo"},
+            {"id": 1, "text": "hello", "version": 1},
+            {"id": 1, "text": "hello updated", "version": 2},
+            {"id": 2, "text": "world", "version": 1},
+            {"id": 3, "text": "foo", "version": 1},
         ]
+    ).group_by(
+        key=lambda x: x["id"],
+        reducer=lambda k, items: max(items, key=lambda x: x["version"]),  # Keep latest version
+        num_output_shards=10,
     )
 
     attrs = Dataset.from_list(
@@ -775,13 +690,96 @@ def test_join_with_filter(backend):
             {"id": 2, "quality": 0.3},
             {"id": 3, "quality": 0.8},
         ]
+    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=10)
+
+    joined = docs.sorted_merge_join(attrs, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = sorted(list(backend.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 3
+    assert results[0] == {"id": 1, "text": "hello updated", "version": 2, "quality": 0.9}
+    assert results[1] == {"id": 2, "text": "world", "version": 1, "quality": 0.3}
+    assert results[2] == {"id": 3, "text": "foo", "version": 1, "quality": 0.8}
+
+
+def test_sorted_merge_join_shard_mismatch(backend):
+    """Test that shard count mismatch raises error."""
+    # Create datasets with different shard counts
+    left = Dataset.from_list([{"id": 1, "text": "hello"}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+    right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=10  # Different shard count!
     )
 
-    filtered_attrs = attrs.filter(lambda x: x["quality"] > 0.5)
+    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
 
-    result = docs.join(filtered_attrs, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+    with pytest.raises(ValueError, match="Sorted merge join requires equal shard counts"):
+        list(backend.execute(joined))
 
-    results = sorted(list(backend.execute(result)), key=lambda x: x["id"])
-    assert len(results) == 2
-    assert results[0]["id"] == 1
-    assert results[1]["id"] == 3
+
+def test_sorted_merge_join_empty_datasets(backend):
+    """Test sorted merge join with empty datasets.
+
+    Note: Empty datasets with group_by create 0 shards, so shard counts won't match.
+    This test verifies that mismatched shard counts raise an error.
+    """
+    # Empty left dataset - will create 0 shards
+    left = Dataset.from_list([]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+    right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+
+    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    # Empty dataset creates 0 shards, non-empty creates N shards - this is a mismatch
+    with pytest.raises(ValueError, match="Sorted merge join requires equal shard counts"):
+        list(backend.execute(joined))
+
+    # Empty right dataset - will create 0 shards
+    left = Dataset.from_list([{"id": 1, "text": "hello"}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+    right = Dataset.from_list([]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+
+    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    # Empty dataset creates 0 shards, non-empty creates N shards - this is a mismatch
+    with pytest.raises(ValueError, match="Sorted merge join requires equal shard counts"):
+        list(backend.execute(joined))
+
+
+def test_sorted_merge_join_with_fusion(backend):
+    """Test that join is fusible with operations before and after it."""
+    # Create pre-sorted, co-partitioned datasets
+    left_data = [{"id": 1, "val": [1, 2]}, {"id": 2, "val": [3, 4]}, {"id": 3, "val": [5, 6]}]
+    right_data = [{"id": 1, "score": 0.9}, {"id": 2, "score": 0.3}]
+
+    # Pipeline with flat_map before join, map and write after
+    left = (
+        Dataset.from_list(left_data)
+        .flat_map(lambda x: [{"id": x["id"], "num": n} for n in x["val"]])
+        .group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5)
+    )
+    right = (
+        Dataset.from_list(right_data)
+        .flat_map(lambda x: [x])
+        .group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5)
+    )
+
+    joined = (
+        left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+        .map(lambda x: {**x, "doubled": x["score"] * 2})
+        .filter(lambda x: x["doubled"] > 0.5)
+    )
+
+    results = sorted(list(backend.execute(joined)), key=lambda x: (x["id"], x["num"]))
+
+    # Should fuse join -> map -> filter into a single pass
+    # Verify correct results (group_by keeps first of each group)
+    assert len(results) == 2  # Both id=1 and id=2 have doubled > 0.5
+    assert results[0] == {"id": 1, "num": 1, "score": 0.9, "doubled": 1.8}
+    assert results[1] == {"id": 2, "num": 3, "score": 0.3, "doubled": 0.6}
