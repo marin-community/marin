@@ -171,10 +171,15 @@ class TestHookManager(unittest.TestCase):
     
     def test_register_and_unregister_hooks(self):
         """Test registering and unregistering hooks."""
+        
+        class TestHook(PeriodicHook):
+            def run(self, context):
+                return {"ran": True}
+        
         manager = HookManager()
         
-        hook1 = PeriodicHook(frequency=10)
-        hook2 = PeriodicHook(frequency=100)
+        hook1 = TestHook(frequency=10)
+        hook2 = TestHook(frequency=100)
         
         # Register hooks
         manager.register_hook(hook1)
@@ -187,7 +192,7 @@ class TestHookManager(unittest.TestCase):
         self.assertEqual(len(manager), 1)
         
         # Try to unregister a hook that's not registered
-        hook3 = PeriodicHook(frequency=50)
+        hook3 = TestHook(frequency=50)
         success = manager.unregister_hook(hook3)
         self.assertFalse(success)
         self.assertEqual(len(manager), 1)
@@ -284,10 +289,13 @@ class TestMetricsHook(unittest.TestCase):
                 "has_lesson": context.lesson_id is not None
             }
         
-        hook = PeriodicHook(
+        class CustomMetricsHook(PeriodicHook):
+            def run(self, context):
+                return custom_metric_fn(context)
+        
+        hook = CustomMetricsHook(
             frequency=10,
         )
-        hook.run = custom_metric_fn
         
         mock_worker = MagicMock()
         mock_worker.tracker = MagicMock()

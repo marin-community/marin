@@ -30,7 +30,8 @@ class HookContext:
     
     def split_rng(self) -> tuple[jnp.ndarray, jnp.ndarray]:
         """Split the RNG key for use in the hook."""
-        return jrandom.split(self.rng)
+        keys = jrandom.split(self.rng)
+        return keys[0], keys[1]
 
 
 class Hook(ABC):
@@ -209,7 +210,7 @@ class HookManager:
         return f"HookManager(hooks={self.hooks})"
 
 
-def create_default_evaluation_hooks(curriculum_config) -> list[Hook]:
+def create_default_evaluation_hooks(curriculum_config) -> list[EvaluationHook]:
     """Create the default evaluation hooks based on curriculum config.
     
     This preserves the existing evaluation behavior of RolloutWorker.
