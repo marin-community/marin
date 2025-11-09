@@ -31,7 +31,7 @@ class Hook(ABC):
     def should_run(self, context: HookContext) -> bool:
         """Determine if this hook should run at the current step."""
         pass
-    
+
     @abstractmethod
     def run(self, context: HookContext) -> Optional[dict[str, Any]]:
         """Execute the hook logic."""
@@ -111,11 +111,11 @@ worker.register_hook(custom_eval)
 ```python
 class CustomMonitoringHook(PeriodicHook):
     """Monitor rollout generation health."""
-    
+
     def __init__(self):
         super().__init__(frequency=25)
         self.metrics = []
-    
+
     def run(self, context: HookContext) -> Optional[dict[str, Any]]:
         # Collect custom metrics
         metrics = {
@@ -124,7 +124,7 @@ class CustomMonitoringHook(PeriodicHook):
             "monitoring.timestamp": time.time()
         }
         self.metrics.append(metrics)
-        
+
         # Log to worker's tracker
         context.worker.tracker.log(metrics, step=context.step)
         return metrics
@@ -152,10 +152,10 @@ Use custom test hooks:
 class TestEvaluationHook(Hook):
     def __init__(self):
         self.evaluations = []
-    
+
     def should_run(self, context):
         return context.step % 5 == 0
-    
+
     def run(self, context):
         result = {"test_eval": context.step}
         self.evaluations.append(result)
@@ -261,7 +261,7 @@ class ConfigurableHook(PeriodicHook):
         super().__init__(frequency)
         self.threshold = threshold
         self.enabled = enabled
-    
+
     def should_run(self, context):
         return self.enabled and super().should_run(context)
 ```
@@ -278,10 +278,10 @@ def test_custom_hook():
         step=100,
         rng=jrandom.PRNGKey(42)
     )
-    
+
     # Test should_run logic
     assert hook.should_run(context)
-    
+
     # Test run logic
     result = hook.run(context)
     assert "expected_key" in result
@@ -309,12 +309,12 @@ class StatefulHook(PeriodicHook):
     def __init__(self):
         super().__init__(frequency=50)
         self.state = {"runs": 0, "total_reward": 0}
-    
+
     def run(self, context):
         self.state["runs"] += 1
         reward = context.metadata.get("reward", 0)
         self.state["total_reward"] += reward
-        
+
         return {
             "avg_reward": self.state["total_reward"] / self.state["runs"]
         }
