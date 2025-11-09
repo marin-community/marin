@@ -230,7 +230,7 @@ class MixtureDataset(AsyncDataset[T]):
         offset_in_stage = (block_id * self.block_size - self.weight_stages[stage][0]) // self.block_size
         current_stage_offset = offset_in_stage * self._counts_per_block_per_stage[stage][dataset_id]
 
-        return dataset_id, dataset_index + base_offset + current_stage_offset
+        return dataset_id, int(dataset_index) + int(base_offset) + int(current_stage_offset)
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T]:
         block_ids = np.array([idx // self.block_size for idx in indices])
