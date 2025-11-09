@@ -339,7 +339,7 @@ def terminate_workers_by_ip(worker_ips: list[str], project: str, zone: str) -> l
                 logger.warning(f"Could not find TPU node for IP {worker_ip}")
                 continue
 
-            tpu_name, tpu_zone, worker_index = tpu_info
+            tpu_name, _tpu_zone, _worker_index = tpu_info
             if tpu_name not in tpu_to_ips:
                 tpu_to_ips[tpu_name] = []
             tpu_to_ips[tpu_name].append(worker_ip)
