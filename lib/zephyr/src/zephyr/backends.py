@@ -40,7 +40,11 @@ from zephyr.dataset import (
     FusedMapOp,
     GroupByLocalOp,
     GroupByShuffleReduceOp,
+    JoinLocalOp,
+    JoinReduceOp,
     MapOp,
+    ReduceGlobalOp,
+    ReduceLocalOp,
     ReshardOp,
     WriteJsonlOp,
     WriteParquetOp,
@@ -566,6 +570,19 @@ def process_shard_fused(
 
         return [Shard(idx=idx, chunks=output_chunks[idx], context=shard.context) for idx in range(num_output_shards)]
 
+    if operations and isinstance(operations[-1], ReduceLocalOp):
+        reduce_local_op = operations[-1]
+        pre_ops = operations[:-1]
+
+        stream = tqdm(
+            build_stream(shard, pre_ops),
+            desc=f"fused[{op_names}]: shard {shard_idx + 1}/{total_shards}",
+            mininterval=10,
+        )
+
+        result = reduce_local_op.local_reducer(stream)
+        return [Shard.from_items([result], chunk_size, shard.context, idx=shard_idx)]
+
     return [
         Shard.from_items(
             tqdm(
@@ -702,6 +719,148 @@ def process_shard_group_by_reduce(
     return [Shard.from_items(result_generator(), chunk_size, shard.context, idx=shard_idx)]
 
 
+def process_shard_reduce_local(
+    shard: Shard, shard_idx: int, total: int, local_reducer: Callable, chunk_size: int
+) -> list[Shard]:
+    """Phase 1: Local reduction - reduce each shard to a single value."""
+    logger.info(f"reduce_local: shard {shard_idx + 1}/{total}")
+    result = local_reducer(iter(shard))
+    return [Shard.from_items([result], chunk_size, shard.context, idx=shard_idx)]
+
+
+def process_shard_reduce_global(
+    shards: list[Shard], global_reducer: Callable, context: ExecutionContext, chunk_size: int
+) -> list[Shard]:
+    """Phase 2: Global reduction - pull all shard results to controller and reduce."""
+    logger.info(f"reduce_global: reducing {len(shards)} shard results")
+
+    if not shards:
+        return []
+
+    def get_shard_results():
+        for shard in shards:
+            yield from shard
+
+    final_result = global_reducer(get_shard_results())
+    return [Shard.from_items([final_result], chunk_size, context, idx=0)]
+
+
+def process_shard_join_tag_and_partition(
+    shard: Shard,
+    shard_idx: int,
+    total: int,
+    key_fn: Callable,
+    side: str,
+    num_output_shards: int,
+    chunk_size: int,
+) -> list[Shard]:
+    """Phase 1: Tag items with side and hash partition by key to output shards.
+
+    This function processes both left and right shards symmetrically. Items are
+    tagged as (side, key, item) tuples and partitioned by hash(key) % num_output_shards.
+    """
+    logger.info(f"join_tag_partition[{side}]: shard {shard_idx + 1}/{total}")
+
+    output_chunks = defaultdict(list)
+    output_tmp = defaultdict(list)
+
+    for item in shard:
+        key = key_fn(item)
+        target_shard = deterministic_hash(key) % num_output_shards
+        output_tmp[target_shard].append((side, key, item))
+
+        if len(output_tmp[target_shard]) >= chunk_size:
+            sorted_items = sorted(output_tmp[target_shard], key=lambda x: x[1])
+            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=shard.context.put(sorted_items)))
+            output_tmp[target_shard] = []
+
+    flush_data = [
+        (target_shard, sorted(items, key=lambda x: x[1])) for target_shard, items in output_tmp.items() if items
+    ]
+    if flush_data:
+        sorted_items_list = [sorted_items for _, sorted_items in flush_data]
+        refs = shard.context.put_many(sorted_items_list)
+        for (target_shard, sorted_items), ref in zip(flush_data, refs, strict=True):
+            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=ref))
+
+    return [Shard(idx=idx, chunks=output_chunks[idx], context=shard.context) for idx in range(num_output_shards)]
+
+
+def process_shard_join_reduce(
+    shard: Shard,
+    shard_idx: int,
+    total: int,
+    combiner_fn: Callable,
+    join_type: str,
+    chunk_size: int,
+) -> list[Shard]:
+    """Phase 2: Perform local join on items with same key hash.
+
+    Items are already tagged as (side, key, item) tuples from Phase 1, so key
+    extraction functions are not needed here.
+
+    Uses k-way merge to combine sorted chunks from left and right processing.
+    """
+    logger.info(f"join_reduce[{join_type}]: shard {shard_idx + 1}/{total}")
+
+    def result_generator():
+        import heapq
+        from itertools import groupby
+
+        # Get iterators for all chunks and merge them by key
+        # Need to get data from context since chunk.data is an ObjectRef
+        chunk_iterators = [iter(shard.context.get(chunk.data)) for chunk in shard.chunks]
+        merged_items = heapq.merge(*chunk_iterators, key=lambda x: x[1])
+
+        for _, group in groupby(merged_items, key=lambda x: x[1]):
+            left_items = []
+            right_items = []
+
+            for side, _, item in group:
+                if side == "left":
+                    left_items.append(item)
+                else:
+                    right_items.append(item)
+
+            if join_type == "inner":
+                if left_items and right_items:
+                    for left_item in left_items:
+                        for right_item in right_items:
+                            yield combiner_fn(left_item, right_item)
+
+            elif join_type == "left":
+                if not right_items:
+                    for left_item in left_items:
+                        yield combiner_fn(left_item, None)
+                else:
+                    for left_item in left_items:
+                        for right_item in right_items:
+                            yield combiner_fn(left_item, right_item)
+
+            elif join_type == "right":
+                if not left_items:
+                    for right_item in right_items:
+                        yield combiner_fn(None, right_item)
+                else:
+                    for left_item in left_items:
+                        for right_item in right_items:
+                            yield combiner_fn(left_item, right_item)
+
+            elif join_type == "outer":
+                if not right_items:
+                    for left_item in left_items:
+                        yield combiner_fn(left_item, None)
+                elif not left_items:
+                    for right_item in right_items:
+                        yield combiner_fn(None, right_item)
+                else:
+                    for left_item in left_items:
+                        for right_item in right_items:
+                            yield combiner_fn(left_item, right_item)
+
+    return [Shard.from_items(result_generator(), chunk_size, shard.context, idx=shard_idx)]
+
+
 def reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
     """Redistribute chunks across target number of shards.
 
@@ -820,11 +979,8 @@ class Backend:
 
             Fusible operations can be chained together in a single pass over the data.
             Non-fusible operations require a shuffle boundary.
-
-            Non-fusible: ReshardOp (just reshuffles refs), GroupByShuffleReduceOp (shuffle boundary).
-            Fusible: MapOp, FlatMapOp, FilterOp, BatchOp, Write*Op, GroupByLocalOp.
             """
-            return not isinstance(op, (ReshardOp, GroupByShuffleReduceOp))
+            return not isinstance(op, (ReshardOp, GroupByShuffleReduceOp, ReduceGlobalOp, JoinReduceOp))
 
         def flush_buffer():
             """Flush accumulated fusible operations."""
@@ -925,6 +1081,29 @@ class Backend:
                 shards = self._execute_on_shards(
                     process_shard_write_parquet, (op.output_pattern, op.schema, op.batch_size, self.chunk_size), shards
                 )
+            elif isinstance(op, ReduceLocalOp):
+                shards = self._execute_on_shards(process_shard_reduce_local, (op.local_reducer, self.chunk_size), shards)
+            elif isinstance(op, ReduceGlobalOp):
+                shards = process_shard_reduce_global(shards, op.global_reducer, self.context, self.chunk_size)
+            elif isinstance(op, JoinLocalOp):
+                # Determine num_output_shards, ensuring it's at least 1 even if left is empty
+                if op.num_output_shards > 0:
+                    num_output_shards = op.num_output_shards
+                else:
+                    num_output_shards = max(1, len(shards))
+
+                right_items = list(self.execute_operations(op.right_dataset.source, op.right_dataset.operations))
+                right_refs = self.context.put_many([[item] for item in right_items])
+                right_shards = [
+                    Shard.from_single_ref(ref, self.context, idx=idx, count=1) for idx, ref in enumerate(right_refs)
+                ]
+                shards = self._execute_join_local(shards, right_shards, op, num_output_shards)
+            elif isinstance(op, JoinReduceOp):
+                shards = self._execute_on_shards(
+                    process_shard_join_reduce,
+                    (op.combiner_fn, op.join_type, self.chunk_size),
+                    shards,
+                )
 
         op_names = [op.__class__.__name__.replace("Op", "") for op in operations]
         desc = f"Materialize [{' → '.join(op_names)}]"
@@ -974,6 +1153,71 @@ class Backend:
         # Recompact into final output shards
         shard_lists = [self.context.get(future) for future in result_futures]
         return recompact_shards(shard_lists)
+
+    def _execute_join_local(
+        self, left_shards: list[Shard], right_shards: list[Shard], op: JoinLocalOp, num_output_shards: int
+    ) -> list[Shard]:
+        """Execute join local operation, processing left and right shards symmetrically.
+
+        Both left and right shards are processed in parallel, tagged with their side,
+        and hash-partitioned by key. The resulting intermediate shards are then merged
+        by output shard index.
+        """
+        print(
+            f"Running join_tag_partition on {len(left_shards)} left + {len(right_shards)} right shards "
+            f"(max parallelism: {self.config.max_parallelism})"
+        )
+
+        # Process left shards
+        left_result_futures = []
+        pending = set()
+
+        for shard_idx, shard in enumerate(left_shards):
+            future = self.context.run(
+                process_shard_join_tag_and_partition,
+                shard,
+                shard_idx,
+                len(left_shards),
+                op.left_key_fn,
+                "left",
+                num_output_shards,
+                self.chunk_size,
+            )
+            pending.add(future)
+            left_result_futures.append(future)
+
+            if len(pending) >= self.config.max_parallelism:
+                ready, _ = self.context.wait(list(pending), num_returns=1)
+                pending.discard(ready[0])
+
+        # Process right shards
+        right_result_futures = []
+
+        for shard_idx, shard in enumerate(right_shards):
+            future = self.context.run(
+                process_shard_join_tag_and_partition,
+                shard,
+                shard_idx,
+                len(right_shards),
+                op.right_key_fn,
+                "right",
+                num_output_shards,
+                self.chunk_size,
+            )
+            pending.add(future)
+            right_result_futures.append(future)
+
+            if len(pending) >= self.config.max_parallelism:
+                ready, _ = self.context.wait(list(pending), num_returns=1)
+                pending.discard(ready[0])
+
+        # Wait for all remaining tasks
+        all_futures = left_result_futures + right_result_futures
+        self.context.wait(all_futures, num_returns=len(all_futures))
+
+        # Merge left and right shard lists by output shard index
+        all_shard_lists = [self.context.get(future) for future in all_futures]
+        return recompact_shards(all_shard_lists)
 
 
 class RayBackend(Backend):

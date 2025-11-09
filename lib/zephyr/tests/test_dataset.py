@@ -528,3 +528,260 @@ def test_write_without_shard_pattern_single_shard(tmp_path, backend):
     output_files = list(backend.execute(ds))
     assert len(output_files) == 1
     assert Path(output_files[0]).exists()
+
+
+def test_reduce_sum(backend):
+    """Test basic sum reduction."""
+    ds = Dataset.from_list(range(100)).reduce(sum)
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0] == sum(range(100))
+
+
+def test_reduce_count(backend):
+    """Test count reduction."""
+    ds = Dataset.from_list([{"id": i} for i in range(50)]).reduce(
+        local_reducer=lambda items: sum(1 for _ in items),
+        global_reducer=sum,
+    )
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0] == 50
+
+
+def test_reduce_complex_aggregation(backend):
+    """Test custom aggregation with stats."""
+
+    def local_stats(items):
+        items_list = list(items)
+        if not items_list:
+            return {"sum": 0, "count": 0, "min": float("inf"), "max": float("-inf")}
+        return {
+            "sum": sum(items_list),
+            "count": len(items_list),
+            "min": min(items_list),
+            "max": max(items_list),
+        }
+
+    def global_stats(shard_stats):
+        stats_list = list(shard_stats)
+        return {
+            "sum": sum(s["sum"] for s in stats_list),
+            "count": sum(s["count"] for s in stats_list),
+            "min": min(s["min"] for s in stats_list),
+            "max": max(s["max"] for s in stats_list),
+        }
+
+    ds = Dataset.from_list(range(1, 101)).reduce(
+        local_reducer=local_stats,
+        global_reducer=global_stats,
+    )
+
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0]["sum"] == sum(range(1, 101))
+    assert results[0]["count"] == 100
+    assert results[0]["min"] == 1
+    assert results[0]["max"] == 100
+
+
+def test_reduce_empty(backend):
+    """Test reduce on empty dataset."""
+    ds = Dataset.from_list([]).reduce(sum)
+    results = list(backend.execute(ds))
+    assert len(results) == 0
+
+
+def test_reduce_with_pipeline(backend):
+    """Test reduce integrated with other operations."""
+    ds = Dataset.from_list(range(1, 21)).filter(lambda x: x % 2 == 0).map(lambda x: x * 2).reduce(sum)
+
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    expected = sum(x * 2 for x in range(1, 21) if x % 2 == 0)
+    assert results[0] == expected
+
+
+def test_join_inner_basic(backend):
+    """Test basic inner join."""
+    left = Dataset.from_list([{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}, {"id": 3, "text": "foo"}])
+    right = Dataset.from_list(
+        [
+            {"id": 1, "score": 0.9},
+            {"id": 2, "score": 0.3},
+        ]
+    )
+
+    joined = left.join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = sorted(list(backend.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 2
+    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
+    assert results[1] == {"id": 2, "text": "world", "score": 0.3}
+
+
+def test_join_left(backend):
+    """Test left join."""
+    left = Dataset.from_list(
+        [
+            {"id": 1, "text": "hello"},
+            {"id": 2, "text": "world"},
+        ]
+    )
+    right = Dataset.from_list(
+        [
+            {"id": 1, "score": 0.9},
+        ]
+    )
+
+    joined = left.join(
+        right,
+        left_key=lambda x: x["id"],
+        right_key=lambda x: x["id"],
+        combiner=lambda left, right: {**left, "score": right["score"] if right else 0.0},
+        how="left",
+    )
+
+    results = sorted(list(backend.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 2
+    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
+    assert results[1] == {"id": 2, "text": "world", "score": 0.0}
+
+
+def test_join_right(backend):
+    """Test right join."""
+    left = Dataset.from_list(
+        [
+            {"id": 1, "text": "hello"},
+        ]
+    )
+    right = Dataset.from_list(
+        [
+            {"id": 1, "score": 0.9},
+            {"id": 2, "score": 0.3},
+        ]
+    )
+
+    joined = left.join(
+        right,
+        left_key=lambda x: x["id"],
+        right_key=lambda x: x["id"],
+        combiner=lambda left, right: {**right, "text": left["text"] if left else ""},
+        how="right",
+    )
+
+    results = sorted(list(backend.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 2
+    assert results[0] == {"id": 1, "score": 0.9, "text": "hello"}
+    assert results[1] == {"id": 2, "score": 0.3, "text": ""}
+
+
+def test_join_outer(backend):
+    """Test outer join."""
+    left = Dataset.from_list(
+        [
+            {"id": 1, "text": "hello"},
+            {"id": 3, "text": "baz"},
+        ]
+    )
+    right = Dataset.from_list(
+        [
+            {"id": 1, "score": 0.9},
+            {"id": 2, "score": 0.3},
+        ]
+    )
+
+    def combiner(left, right):
+        result = {}
+        if left:
+            result.update(left)
+        if right:
+            result.update(right)
+        if not left:
+            result["text"] = ""
+        if not right:
+            result["score"] = 0.0
+        return result
+
+    joined = left.join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], combiner=combiner, how="outer")
+
+    results = sorted(list(backend.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 3
+    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
+    assert results[1] == {"id": 2, "score": 0.3, "text": ""}
+    assert results[2] == {"id": 3, "text": "baz", "score": 0.0}
+
+
+def test_join_empty_left(backend):
+    """Test join with empty left dataset."""
+    left = Dataset.from_list([])
+    right = Dataset.from_list([{"id": 1, "score": 0.9}])
+
+    joined = left.join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = list(backend.execute(joined))
+    assert len(results) == 0
+
+
+def test_join_empty_right(backend):
+    """Test join with empty right dataset."""
+    left = Dataset.from_list([{"id": 1, "text": "hello"}])
+    right = Dataset.from_list([])
+
+    joined = left.join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = list(backend.execute(joined))
+    assert len(results) == 0
+
+
+def test_join_duplicate_keys(backend):
+    """Test join with duplicate keys (cartesian product)."""
+    left = Dataset.from_list(
+        [
+            {"id": 1, "text": "a"},
+            {"id": 1, "text": "b"},
+        ]
+    )
+    right = Dataset.from_list(
+        [
+            {"id": 1, "score": 0.9},
+            {"id": 1, "score": 0.3},
+        ]
+    )
+
+    joined = left.join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = sorted(list(backend.execute(joined)), key=lambda x: (x["text"], x["score"]))
+    assert len(results) == 4
+    assert results[0] == {"id": 1, "text": "a", "score": 0.3}
+    assert results[1] == {"id": 1, "text": "a", "score": 0.9}
+    assert results[2] == {"id": 1, "text": "b", "score": 0.3}
+    assert results[3] == {"id": 1, "text": "b", "score": 0.9}
+
+
+def test_join_with_filter(backend):
+    """Test join combined with filter (consolidate use case)."""
+    docs = Dataset.from_list(
+        [
+            {"id": 1, "text": "hello"},
+            {"id": 2, "text": "world"},
+            {"id": 3, "text": "foo"},
+        ]
+    )
+
+    attrs = Dataset.from_list(
+        [
+            {"id": 1, "quality": 0.9},
+            {"id": 2, "quality": 0.3},
+            {"id": 3, "quality": 0.8},
+        ]
+    )
+
+    filtered_attrs = attrs.filter(lambda x: x["quality"] > 0.5)
+
+    result = docs.join(filtered_attrs, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = sorted(list(backend.execute(result)), key=lambda x: x["id"])
+    assert len(results) == 2
+    assert results[0]["id"] == 1
+    assert results[1]["id"] == 3

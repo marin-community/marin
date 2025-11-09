@@ -130,6 +130,49 @@ class GroupByShuffleReduceOp:
     reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
 
 
+@dataclass
+class ReduceLocalOp:
+    """Phase 1 of Reduce: Local reduction per shard."""
+
+    local_reducer: Callable
+
+
+@dataclass
+class ReduceGlobalOp:
+    """Phase 2 of Reduce: Pull to controller and apply final reduction."""
+
+    global_reducer: Callable
+
+
+@dataclass
+class JoinLocalOp:
+    """Phase 1 of Join: Hash partition both datasets by join key.
+
+    Partitions items from both left and right datasets using hash(key) % num_output_shards.
+    Items within each output shard are sorted by key to enable streaming join.
+    """
+
+    left_key_fn: Callable
+    right_key_fn: Callable
+    right_dataset: object  # Dataset, but avoid circular reference
+    num_output_shards: int
+
+
+@dataclass
+class JoinReduceOp:
+    """Phase 2 of Join: Perform local join per shard.
+
+    Uses streaming merge of sorted chunks to join items with matching keys.
+    Supports inner, left, right, and outer join types.
+
+    Items are already tagged as (side, key, item) tuples from JoinLocalOp,
+    so key extraction functions are not needed.
+    """
+
+    combiner_fn: Callable
+    join_type: str
+
+
 # Type alias for operations
 Operation = (
     MapOp
@@ -142,6 +185,10 @@ Operation = (
     | FusedMapOp
     | GroupByLocalOp
     | GroupByShuffleReduceOp
+    | ReduceLocalOp
+    | ReduceGlobalOp
+    | JoinLocalOp
+    | JoinReduceOp
 )
 
 T = TypeVar("T")
@@ -491,4 +538,99 @@ class Dataset(Generic[T]):
 
         return self.flat_map(_StreamingDedup()).group_by(
             key=key, reducer=keep_first, num_output_shards=num_output_shards
+        )
+
+    def reduce(
+        self,
+        local_reducer: Callable[[Iterator[T]], R],
+        global_reducer: Callable[[Iterator[R]], R] | None = None,
+    ) -> Dataset[R]:
+        """Reduce dataset to a single value via two-phase reduction.
+
+        Phase 1: Apply local_reducer to each shard independently
+        Phase 2: Pull shard results to controller and apply global_reducer
+
+        Args:
+            local_reducer: Reduces iterator of items to single value per shard
+            global_reducer: Reduces shard results to final value (defaults to local_reducer)
+
+        Returns:
+            Dataset containing a single reduced value
+
+        Example:
+            >>> ds = Dataset.from_list(range(100)).reduce(sum)
+            >>> result = list(backend.execute(ds))[0]
+            4950
+        """
+        if global_reducer is None:
+            global_reducer = local_reducer
+
+        return Dataset(self.source, [*self.operations, ReduceLocalOp(local_reducer), ReduceGlobalOp(global_reducer)])
+
+    def join(
+        self,
+        right: Dataset[R],
+        left_key: Callable[[T], object],
+        right_key: Callable[[R], object],
+        combiner: Callable[[T | None, R | None], object] | None = None,
+        how: str = "inner",
+        num_output_shards: int | None = None,
+    ) -> Dataset:
+        """Join this dataset with another dataset based on matching keys.
+
+        Performs a hash-based join similar to SQL join operations. Items from both
+        datasets are partitioned by their join key, then matching items are combined
+        using the combiner function.
+
+        Args:
+            right: Dataset to join with (the "right" side of the join)
+            left_key: Function extracting join key from left (this) dataset items
+            right_key: Function extracting join key from right dataset items
+            combiner: Function combining matching items: (left_item, right_item) -> result
+                     Defaults to dict merge: {**left, **right}
+            how: Join type - "inner", "left", "right", or "outer"
+            num_output_shards: Number of output shards (None = auto-detect from current shard count)
+
+        Returns:
+            New dataset containing joined results
+
+        Example:
+            >>> docs = Dataset.from_list([
+            ...     {"id": 1, "text": "hello"},
+            ...     {"id": 2, "text": "world"}
+            ... ])
+            >>> attrs = Dataset.from_list([
+            ...     {"id": 1, "quality": 0.9},
+            ...     {"id": 2, "quality": 0.3}
+            ... ])
+            >>> joined = docs.join(
+            ...     attrs,
+            ...     left_key=lambda x: x["id"],
+            ...     right_key=lambda x: x["id"]
+            ... )
+            >>> list(backend.execute(joined))
+            [{"id": 1, "text": "hello", "quality": 0.9},
+             {"id": 2, "text": "world", "quality": 0.3}]
+        """
+        if combiner is None:
+
+            def default_combiner(left, right):
+                if left is None:
+                    return right
+                if right is None:
+                    return left
+                return {**left, **right}
+
+            combiner = default_combiner
+
+        if num_output_shards is None:
+            num_output_shards = -1
+
+        return Dataset(
+            self.source,
+            [
+                *self.operations,
+                JoinLocalOp(left_key, right_key, right, num_output_shards),
+                JoinReduceOp(combiner, how),
+            ],
         )
