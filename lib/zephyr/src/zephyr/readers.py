@@ -116,11 +116,14 @@ def load_parquet(file_path: str, **kwargs) -> Iterator[dict]:
             yield row.to_dict()
 
 
-def load_file(file_path: str, **parquet_kwargs) -> Iterator[dict]:
+def load_file(file_path: str, columns: list[str] | None = None, **parquet_kwargs) -> Iterator[dict]:
     """Load records from file, auto-detecting JSONL or Parquet format.
 
     Args:
         file_path: Path to file (local or remote)
+        columns: Optional list of column names to select. For Parquet files, this
+            enables efficient column pushdown. For JSONL files, only specified
+            columns that exist in each record are included.
         **parquet_kwargs: Additional arguments for load_parquet (ignored for JSONL)
 
     Yields:
@@ -133,12 +136,18 @@ def load_file(file_path: str, **parquet_kwargs) -> Iterator[dict]:
         >>> backend = create_backend("ray", max_parallelism=10)
         >>> # Works with mixed JSONL and Parquet files
         >>> ds = (Dataset
-        ...     .from_files("/input", "**/*")
+        ...     .from_files("/input/**/*.jsonl")
         ...     .flat_map(load_file)
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
         ... )
         >>> output_files = list(backend.execute(ds))
+        >>> # Select specific columns
+        >>> ds = (Dataset
+        ...     .from_files("/input/**/*.parquet")
+        ...     .flat_map(lambda p: load_file(p, columns=["id", "text", "score"]))
+        ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
+        ... )
     """
     if (
         file_path.endswith(".jsonl")
@@ -150,8 +159,14 @@ def load_file(file_path: str, **parquet_kwargs) -> Iterator[dict]:
         or file_path.endswith(".json.zstd")
         or file_path.endswith(".json.xz")
     ):
-        yield from load_jsonl(file_path)
+        for record in load_jsonl(file_path):
+            if columns is not None:
+                yield {k: v for k, v in record.items() if k in columns}
+            else:
+                yield record
     elif file_path.endswith(".parquet"):
+        if columns is not None:
+            parquet_kwargs = {**parquet_kwargs, "columns": columns}
         yield from load_parquet(file_path, **parquet_kwargs)
     else:
         raise ValueError(f"Unsupported extension: {file_path}.")

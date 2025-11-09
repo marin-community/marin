@@ -106,7 +106,7 @@ def create_pipeline(input_dir: str, output_dir: str) -> Dataset:
     from zephyr import load_jsonl
 
     return (
-        Dataset.from_files(input_dir, "*.jsonl.zst")
+        Dataset.from_files(f"{input_dir}/*.jsonl.zst")
         .flat_map(load_jsonl)
         .map(
             lambda doc: {

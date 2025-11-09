@@ -68,7 +68,7 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
     if output_path.endswith(".zst"):
         import zstandard as zstd
 
-        cctx = zstd.ZstdCompressor(level=-10, threads=1)
+        cctx = zstd.ZstdCompressor(level=2, threads=1)
         with fsspec.open(output_path, "wb", block_size=64 * 1024 * 1024) as raw_f:
             with cctx.stream_writer(raw_f) as f:
                 for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):

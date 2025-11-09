@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Generic, TypeVar
@@ -241,19 +240,17 @@ class Dataset(Generic[T]):
 
     @staticmethod
     def from_files(
-        input_path: str,
         pattern: str,
         empty_glob_ok: bool = False,
     ) -> Dataset[str]:
-        """Create dataset from file glob.
+        """Create dataset from file glob pattern.
 
-        This method finds all files matching the pattern in input_path and
-        returns a dataset of file paths. Use .write_jsonl() or .write_parquet()
-        to write output files with explicit path patterns.
+        This method finds all files matching the glob pattern and returns a
+        dataset of file paths. Use .write_jsonl() or .write_parquet() to write
+        output files with explicit path patterns.
 
         Args:
-            input_path: Directory to search for input files
-            pattern: Glob pattern (e.g., "*.jsonl.gz", "**/*.parquet")
+            pattern: Glob pattern (e.g., "/input/**/*.jsonl.gz", "gs://bucket/data/*.parquet")
             empty_glob_ok: If True, empty glob won't raise an error (default: False)
 
         Returns:
@@ -265,22 +262,22 @@ class Dataset(Generic[T]):
         Example:
             >>> backend = create_backend("ray", max_parallelism=10)
             >>> ds = (Dataset
-            ...     .from_files("/input", "*.txt")
+            ...     .from_files("/input/*.txt")
             ...     .map(lambda path: process_file(path))
             ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
             ... )
             >>> output_files = list(backend.execute(ds))
         """
+        import re
 
-        full_pattern = os.path.join(input_path, pattern)
-        fs, _ = fsspec.core.url_to_fs(full_pattern)
-        protocol = fsspec.core.split_protocol(full_pattern)[0]
+        # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
+        pattern = re.sub(r"(?<!:)//+", "/", pattern)
 
-        def add_protocol(file: str) -> str:
-            return f"{protocol}://{file}" if protocol else file
+        fs, _ = fsspec.core.url_to_fs(pattern)
+        protocol = fsspec.core.split_protocol(pattern)[0]
 
         files = []
-        for expanded in braceexpand.braceexpand(full_pattern):
+        for expanded in braceexpand.braceexpand(pattern):
             for f in fs.glob(expanded):
                 if protocol:
                     files.append(f"{protocol}://{f}")
@@ -289,7 +286,7 @@ class Dataset(Generic[T]):
         files = sorted(files)
 
         if len(files) == 0 and not empty_glob_ok:
-            raise FileNotFoundError(f"No files found in {input_path} with pattern {pattern}")
+            raise FileNotFoundError(f"No files found matching pattern: {pattern}")
 
         return Dataset.from_list(files)
 

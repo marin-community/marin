@@ -86,6 +86,115 @@ and `total` formatters are automatically replaced by the backend when
 serializing. If there is only one shard being processed, the shard & total
 patterns may be omitted.
 
+`group_by(key, reducer, num_output_shards=None)`
+
+Group items by a key function and apply a reducer to each group. The operation
+is implemented as a two-phase shuffle:
+
+1. **Local grouping**: Each shard hashes items by `key` and redistributes them
+   into `num_output_shards` buckets
+2. **Shuffle & reduce**: Items with the same key are brought together and the
+   `reducer(key, Iterator[items])` is called to produce a single result
+
+This is commonly used for aggregations like counting, deduplication, or
+computing statistics per group. If `num_output_shards` is not specified, it
+defaults to the current number of shards.
+
+```python
+ds = (Dataset
+  .from_files("gs://data/*.jsonl")
+  .flat_map(load_jsonl)
+  .group_by(
+    key=lambda x: x["user_id"],
+    reducer=lambda key, items: {"user": key, "count": sum(1 for _ in items)}
+  )
+)
+```
+
+`deduplicate(key, num_output_shards=None)`
+
+Remove duplicate items based on a key function.
+
+```python
+ds = (Dataset
+  .from_files("gs://data/*.jsonl")
+  .flat_map(load_jsonl)
+  .deduplicate(key=lambda x: x["id"])
+)
+```
+
+`reduce(local_reducer, global_reducer=None)`
+
+Reduce the entire dataset to a single value using two-phase reduction:
+
+1. **Local reduction**: Apply `local_reducer` to each shard independently
+2. **Global reduction**: Pull all shard results to the controller and apply
+   `global_reducer` (defaults to `local_reducer` if not specified)
+
+This is useful for computing dataset-wide statistics like totals, min/max, or
+custom aggregations.
+
+```python
+# Count total items
+total = (Dataset
+  .from_list(range(1000))
+  .reduce(local_reducer=lambda items: sum(1 for _ in items))
+)
+
+# Custom aggregation
+stats = (Dataset
+  .from_files("gs://data/*.jsonl")
+  .flat_map(load_jsonl)
+  .reduce(
+    local_reducer=lambda items: {"count": sum(1 for _ in items), "sum": sum(x["value"] for x in items)},
+    global_reducer=lambda shards: {
+      "total_count": sum(s["count"] for s in shards),
+      "total_sum": sum(s["sum"] for s in shards)
+    }
+  )
+)
+```
+
+`sorted_merge_join(right, left_key, right_key, combiner=None, how="inner")`
+
+Perform a streaming merge join between two datasets that are already sorted and
+co-partitioned. Preconditions:
+
+- Both datasets must have the same number of shards
+- Corresponding shards (left[i], right[i]) must contain the same key ranges
+- Items within each shard must be sorted by their join key
+
+These preconditions are typically met when both datasets come from `group_by`
+with the same key and `num_output_shards`.
+
+Only supports inner and left joins (no right or outer joins).
+
+```python
+# Both datasets grouped by the same key
+docs = (Dataset
+  .from_files("gs://docs/*.jsonl")
+  .flat_map(load_jsonl)
+  .group_by(key=lambda x: x["id"], reducer=keep_first, num_output_shards=100)
+)
+
+attrs = (Dataset
+  .from_files("gs://attrs/*.jsonl")
+  .flat_map(load_jsonl)
+  .group_by(key=lambda x: x["id"], reducer=keep_first, num_output_shards=100)
+)
+
+# Sorted merge join - no shuffle needed
+joined = docs.sorted_merge_join(
+  attrs,
+  left_key=lambda x: x["id"],
+  right_key=lambda x: x["id"],
+  how="inner"  # or "left"
+)
+```
+
+The default combiner merges dictionaries: `{**left, **right}`. For custom
+combining or handling nulls in left joins, provide a custom combiner function.
+
 ## Backends
 
 A `backend` takes a dataset and runs it, yielding the results from the final
@@ -143,20 +252,17 @@ our own dataset layer is quite trivial and thus we feel it's worth it to buy us
 additional flexibility.
 
 
-## Future Work
+## Implementation Notes
 
-zephyr is missing 2 common operations familiar from existing distribution
-toolkits: shuffle, and repartition. As our existing code does not rely on these
-patterns, we have deferred work on them in the original design.
+### Repartitioning
 
-_Repartitioning_ changes the parallelism of the dataset, without attempting to
-change the underlying order. It is commonly used to increase or reduce the
-amount of parallel work occurring on a dataset. For example, a pipeline like
-`Dataset.from_files([".../corpus.jsonl]).flat_map(load_jsonl)` will only run on
-a single worker by default. Repartitioning forces the runtime to explicitly
-split up the underlying files into separate execution shards, allowing map
-operations to occur in parallel.
+Zephyr provides `reshard(num_shards)` to change the parallelism of a dataset
+without changing the underlying order. This is useful for increasing or
+decreasing the amount of parallel work. For example, a pipeline like
+`Dataset.from_files([".../corpus.jsonl"]).flat_map(load_jsonl)` will only run on
+a single worker by default. Using `.reshard(num_shards=20)` forces the runtime
+to redistribute the data across 20 shards, allowing subsequent operations to run
+in parallel.
 
-_Shuffle_ or _group_ operations re-order the dataset, usually by grouping
-related items by a key. This is commonly used in tasks like de-duplication,
-where we want to keep a single example from a group of near-identical documents.
+The implementation is best-effort and redistributes chunks across shards in
+round-robin fashion without splitting individual chunks.

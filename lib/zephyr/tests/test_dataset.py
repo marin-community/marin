@@ -231,7 +231,7 @@ def test_from_files_basic(tmp_path):
     (input_dir / "file3.txt").write_text("data3")
 
     # Create dataset
-    ds = Dataset.from_files(str(input_dir), "*.txt")
+    ds = Dataset.from_files(f"{input_dir}/*.txt")
     files = list(ds.source)  # Access source directly without backend execution
 
     assert len(files) == 3
@@ -254,7 +254,7 @@ def test_from_files_nested(tmp_path):
     (input_dir / "subdir2" / "file3.txt").write_text("data3")
 
     # Use ** pattern to match nested files
-    ds = Dataset.from_files(str(input_dir), "**/*.txt")
+    ds = Dataset.from_files(f"{input_dir}/**/*.txt")
     files = list(ds.source)
 
     assert len(files) == 3
@@ -270,7 +270,7 @@ def test_from_files_empty_glob_ok(tmp_path):
     input_dir.mkdir()
 
     # No error when empty_glob_ok=True
-    ds = Dataset.from_files(str(input_dir), "*.txt", empty_glob_ok=True)
+    ds = Dataset.from_files(f"{input_dir}/*.txt", empty_glob_ok=True)
     files = list(ds.source)
     assert len(files) == 0
 
@@ -282,7 +282,7 @@ def test_from_files_empty_glob_error(tmp_path):
 
     # Should raise FileNotFoundError
     with pytest.raises(FileNotFoundError, match="No files found"):
-        Dataset.from_files(str(input_dir), "*.txt", empty_glob_ok=False)
+        Dataset.from_files(f"{input_dir}/*.txt", empty_glob_ok=False)
 
 
 def test_from_files_with_map(tmp_path, backend):
@@ -305,7 +305,7 @@ def test_from_files_with_map(tmp_path, backend):
 
     # Create dataset, process files, and write output
     ds = (
-        Dataset.from_files(str(input_dir), "*.txt")
+        Dataset.from_files(f"{input_dir}/*.txt")
         .map(process_file)
         .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"))
     )
@@ -345,7 +345,7 @@ def test_write_and_read_parquet(tmp_path, backend):
     assert all(p.endswith(".parquet") for p in output_files)
 
     # Read back from parquet
-    ds_read = Dataset.from_files(str(output_dir), "*.parquet").flat_map(load_parquet)
+    ds_read = Dataset.from_files(f"{output_dir}/*.parquet").flat_map(load_parquet)
 
     records = list(backend.execute(ds_read))
 
@@ -387,7 +387,7 @@ def test_write_and_read_parquet_nested(tmp_path, backend):
     assert all(Path(p).exists() for p in output_files)
 
     # Read back from parquet
-    ds_read = Dataset.from_files(str(output_dir), "*.parquet").flat_map(load_parquet)
+    ds_read = Dataset.from_files(f"{output_dir}/*.parquet").flat_map(load_parquet)
 
     records = list(backend.execute(ds_read))
 
@@ -423,7 +423,7 @@ def test_load_file_parquet(tmp_path, backend):
     _ = list(backend.execute(ds))
 
     # Load using load_file
-    ds_read = Dataset.from_files(str(output_dir), "*.parquet").flat_map(load_file)
+    ds_read = Dataset.from_files(f"{output_dir}/*.parquet").flat_map(load_file)
     records = list(backend.execute(ds_read))
 
     # Verify data
@@ -467,7 +467,7 @@ def test_load_file_mixed_directory(tmp_path, backend):
     list(backend.execute(ds))
 
     # Load all files using load_file
-    ds_read = Dataset.from_files(str(input_dir), "*").flat_map(load_file)
+    ds_read = Dataset.from_files(f"{input_dir}/*").flat_map(load_file)
     records = list(backend.execute(ds_read))
 
     # Verify we got data from both files

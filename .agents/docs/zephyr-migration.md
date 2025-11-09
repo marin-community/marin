@@ -490,61 +490,34 @@ These files have been successfully migrated to zephyr:
 - ✅ `validation/count_total_tokens.py` - Uses `Dataset.from_list().flat_map(load_file).map()` with stateful TokenCounter class and `flow_backend()`
 - ✅ `crawl/open_web_math/consolidate_open_web_math_shards.py` - Uses `Dataset.from_list().flat_map(load_jsonl).reshard().write_jsonl()` with `flow_backend()`
 
-## Files to Migrate
+## Good Zephyr Migration Targets (Non-Crawl)
+
+These files are **actually good fits** for zephyr - they process collections of files/records in data-parallel patterns:
+
+| Priority | File | LOC | Pattern | Why It Fits |
+|----------|------|-----|---------|-------------|
+| 1 | `validate/validate.py` | 227 | Bounded parallel map + reduce | Validates list of files, aggregates statistics - classic data-parallel |
+| 2 | `processing/classification/consolidate.py` | 417 | Data-parallel map + reduce | Processes files, filters based on attributes, DDSketch aggregation |
+| 3 | `processing/classification/dedupe.py` | 1015 | Subprocess wrapper per file | Thin Ray wrapper around Dolma CLI for many files |
+
+## Files NOT Suitable for Zephyr (Training/Orchestration)
+
+These files don't fit zephyr's design - they're single-task orchestration, training jobs, or stateful actor pools:
+
+### Single-Task Orchestration (Not Data Processing)
+- `validation/get_env.py` - Single utility task, not a data pipeline
+- `classifiers/hf/launch_ray_training.py` - Launches single training job
+- `classifiers/fasttext/training.py` - Single training job execution
+- `processing/tokenize/tokenize.py` - Orchestrates Levanter (single job), not data processing
+- `classifiers/bert/training.py` - Single training job with checkpointing
+
+### Stateful Actor Pools (Require Different Abstraction)
+- `processing/classification/inference.py` - Stateful GPU/TPU actor pool for batch inference
+- `generation/inference.py` - Stateful vLLM actor pool for serving
 
 ### Downloads
-- `download/huggingface/download_gated_manual.py`
+- `download/huggingface/download_gated_manual.py` - DEPRECATED, uses ThreadPool
 
-### Transforms
-(No remaining transform files to migrate in this category)
-
-### Crawl: WARC Processing
-- `crawl/open_web_math/convert_open_web_math_to_html.py`
-- `crawl/common/convert_to_html.py`
-- `crawl/fineweb_edu/convert_fineweb_edu_to_html.py`
-
-### Crawl: Statistics
-- `crawl/get_fineweb_edu_crawl_yield.py`
-- `crawl/get_finemath_crawl_yield.py`
-- `crawl/get_open_web_math_crawl_yield.py`
-- `crawl/count_outlinks.py`
-
-### Crawl: URL Processing
-- `crawl/open_web_math/get_urls_and_scores_from_openwebmath_html.py`
-- `crawl/open_web_math/get_urls_and_openwebmath_scores_from_warcs.py`
-- `crawl/fineweb_edu/get_urls_and_scores_from_fineweb_edu_html.py`
-- `crawl/fineweb_edu/get_urls_and_fineweb_scores_from_warcs.py`
-
-### Crawl: Consolidation
-- `crawl/open_web_math/resample_openwebmath_urls_by_quality_score.py`
-- `crawl/fineweb_edu/resample_fineweb_edu_urls_by_quality_score.py`
-- `crawl/get_outlinks_from_html.py`
-- `crawl/deduplicate_outlinks_against_cc.py`
-- `crawl/convert_responses_parquet_to_warc.py`
-- `crawl/sample_from_unique_outlinks.py`
-- `crawl/sample_from_nonunique_outlinks.py`
-
-### Crawl: Deduplication
-- `crawl/minhash/index_for_deduplication.py`
-- `crawl/minhash/deduplicate_against_index.py`
-
-### Processing
-- `processing/classification/inference.py` - Replace AutoscalingActorPool with WorkerPool
-- `processing/classification/consolidate.py` - Migrate from HF Dataset to streaming
-- `processing/classification/dedupe.py`
-- `processing/tokenize/tokenize.py`
-
-### Validation
-- `validation/get_env.py`
-- `validate/validate.py`
-
-### Generation
-- `generation/inference.py`
-
-### Classifiers
-- `classifiers/fasttext/training.py`
-- `classifiers/bert/training.py`
-- `classifiers/hf/launch_ray_training.py`
 
 ## Files Not Suitable for Migration
 

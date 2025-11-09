@@ -80,7 +80,7 @@ def main(cfg: Config) -> None:
     """Transform Australian Legal Corpus data to Dolma format."""
     backend = flow_backend()
     pipeline = (
-        Dataset.from_files(cfg.input_path, "**/*.jsonl")
+        Dataset.from_files(f"{cfg.input_path}/**/*.jsonl")
         .flat_map(load_jsonl)
         .reshard(32)
         .map(convert_to_dolma)
