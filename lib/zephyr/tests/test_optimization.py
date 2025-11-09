@@ -19,13 +19,14 @@ from zephyr.dataset import FilterOp, FusedMapOp, MapOp, ReshardOp
 
 
 def test_optimize_single_operation():
-    """Single operation should not be wrapped in FusedMapOp."""
+    """Single operation should be wrapped in FusedMapOp."""
     backend = create_backend("sync")
     operations = [MapOp(lambda x: x * 2)]
     optimized = backend._optimize_operations(operations)
 
     assert len(optimized) == 1
-    assert isinstance(optimized[0], MapOp)
+    assert isinstance(optimized[0], FusedMapOp)
+    assert len(optimized[0].operations) == 1
 
 
 def test_optimize_consecutive_maps():
@@ -69,11 +70,11 @@ def test_optimize_with_reshard_breaks_fusion():
     ]
     optimized = backend._optimize_operations(operations)
 
-    # Should have: FusedMapOp, ReshardOp, MapOp
+    # Should have: FusedMapOp, ReshardOp, FusedMapOp
     assert len(optimized) == 3
     assert isinstance(optimized[0], FusedMapOp)
     assert isinstance(optimized[1], ReshardOp)
-    assert isinstance(optimized[2], MapOp)
+    assert isinstance(optimized[2], FusedMapOp)
 
 
 def test_empty_filter_in_fusion():

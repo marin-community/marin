@@ -173,7 +173,7 @@ class SortedMergeJoinOp:
 
     left_key_fn: Callable
     right_key_fn: Callable
-    right_dataset: object  # Dataset, but avoid circular reference
+    right_dataset: Dataset
     combiner_fn: Callable
     join_type: str  # "inner" or "left"
 

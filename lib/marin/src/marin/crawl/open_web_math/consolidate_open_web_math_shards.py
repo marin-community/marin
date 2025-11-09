@@ -41,7 +41,6 @@ import logging
 from dataclasses import dataclass
 
 import draccus
-
 from marin.utils import fsspec_glob
 from zephyr import Dataset, flow_backend, load_jsonl
 
@@ -68,7 +67,6 @@ def main(cfg: ConsolidationConfig):
     shard_files = sorted(shard_files)
     logger.info(f"Found {len(shard_files)} shards to consolidate")
 
-    # Calculate target number of output shards
     num_output_shards = (len(shard_files) + cfg.batch_size - 1) // cfg.batch_size
 
     logger.info(f"Consolidating into {num_output_shards} output files")
@@ -76,10 +74,7 @@ def main(cfg: ConsolidationConfig):
     backend = flow_backend()
 
     pipeline = (
-        Dataset.from_list(shard_files)
-        .flat_map(load_jsonl)  # Stream all records from all files
-        .reshard(num_output_shards)  # Redistribute across target number of shards
-        .write_jsonl(cfg.output_pattern)  # Write consolidated files
+        Dataset.from_list(shard_files).flat_map(load_jsonl).reshard(num_output_shards).write_jsonl(cfg.output_pattern)
     )
 
     output_files = list(backend.execute(pipeline))
