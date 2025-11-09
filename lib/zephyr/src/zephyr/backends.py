@@ -94,7 +94,7 @@ class BackendConfig:
 
 
 class ExecutionContext(Protocol):
-    """Protocol for execution contexts that abstract put/get/run/wait primitives.
+    """Protocol for execution contexts that abstract put/put_many/get/run/wait primitives.
 
     This allows different backends (Ray, ThreadPool, Sync) to share the same
     Shard-based execution logic while using different execution strategies.
@@ -102,6 +102,10 @@ class ExecutionContext(Protocol):
 
     def put(self, obj: Any) -> Any:
         """Store an object and return a reference to it."""
+        ...
+
+    def put_many(self, objs: list[Any]) -> list[Any]:
+        """Store multiple objects and return references to them."""
         ...
 
     def get(self, ref: Any) -> Any:
@@ -143,7 +147,7 @@ class _ImmediateFuture:
         return self._result
 
 
-@ray.remote
+@ray.remote(enable_task_events=False)
 def _put_on_worker(serialized: bytes) -> ray.ObjectRef:
     """Put serialized bytes in Ray's object store on a worker node.
 
@@ -164,9 +168,24 @@ class RayContext:
         self.ray_options = ray_options or {}
 
     def put(self, obj: Any) -> ray.ObjectRef:
-        compressed = msgpack_encode(obj)
-        ref_future = _put_on_worker.options(scheduling_strategy="SPREAD").remote(compressed)
-        return ray.get(ref_future)
+        """Store a single object in Ray object store."""
+        return self.put_many([obj])[0]
+
+    def put_many(self, objs: list[Any]) -> list[ray.ObjectRef]:
+        """Store multiple objects in Ray object store via remote workers."""
+        if not objs:
+            return []
+
+        compressed_objs = [msgpack_encode(obj) for obj in objs]
+
+        # Submit all put tasks asynchronously
+        ref_futures = [
+            _put_on_worker.options(scheduling_strategy="SPREAD", enable_task_events=False).remote(compressed)
+            for compressed in compressed_objs
+        ]
+
+        # Wait for all puts to complete in one batch
+        return ray.get(ref_futures)
 
     def get(self, ref: ray.ObjectRef) -> Any:
         """Retrieve and decode object from Ray object store."""
@@ -195,7 +214,12 @@ class LocalContext:
     """Base class for local execution contexts (sync and thread-based)."""
 
     def put(self, obj: Any) -> Any:
+        """No-op for local contexts - objects are already in memory."""
         return obj
+
+    def put_many(self, objs: list[Any]) -> list[Any]:
+        """No-op for local contexts - objects are already in memory."""
+        return objs
 
     def get(self, ref: Any) -> Any:
         """Get result, unwrapping Future/_ImmediateFuture if needed."""
@@ -570,11 +594,13 @@ def _group_items_by_hash(
             output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=context.put(sorted_items)))
             output_tmp[target_shard] = []
 
-    for target_shard, items in output_tmp.items():
-        if items:
-            # Sort items by key before storing final chunk
-            sorted_items = sorted(items, key=key_fn)
-            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=context.put(sorted_items)))
+    # Batch put all remaining chunks together
+    flush_data = [(target_shard, sorted(items, key=key_fn)) for target_shard, items in output_tmp.items() if items]
+    if flush_data:
+        sorted_items_list = [sorted_items for _, sorted_items in flush_data]
+        refs = context.put_many(sorted_items_list)
+        for (target_shard, sorted_items), ref in zip(flush_data, refs, strict=True):
+            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=ref))
 
     return output_chunks
 
@@ -840,10 +866,10 @@ class Backend:
             Results after applying all operations
         """
         # Convert source items to Shards (one item per shard initially)
-        shards = []
-        for idx, item in enumerate(source):
-            ref = self.context.put([item])
-            shards.append(Shard.from_single_ref(ref, self.context, idx=idx, count=1))
+        # Batch all puts together to avoid sequential round-trips
+        source_items = [[item] for item in source]
+        refs = self.context.put_many(source_items)
+        shards = [Shard.from_single_ref(ref, self.context, idx=idx, count=1) for idx, ref in enumerate(refs)]
 
         for op in operations:
             if isinstance(op, FlatMapOp):

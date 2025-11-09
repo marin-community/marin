@@ -4,8 +4,8 @@
 
 ## Status Summary
 
-**Completed**: 16 files migrated ✅
-**Remaining**: 36 files to migrate
+**Completed**: 18 files migrated ✅
+**Remaining**: 34 files to migrate
 **Not Suitable**: ~39 files (TPU orchestration, RL training, stateful orchestration, infrastructure, etc.)
 
 This document describes concrete patterns for migrating Ray boilerplate to zephyr. Each section shows a real codebase example with before/after code.
@@ -485,6 +485,10 @@ These files have been successfully migrated to zephyr:
 ### Classifiers
 - ✅ `classifiers/utils.py` - Uses `Dataset` and `RayBackend`
 
+### Crawl & Validation
+- ✅ `crawl/count_tokens.py` - Uses `Dataset.from_list().flat_map(load_file).map()` with stateful TokenCounter class and `flow_backend()`
+- ✅ `validation/count_total_tokens.py` - Uses `Dataset.from_list().flat_map(load_file).map()` with stateful TokenCounter class and `flow_backend()`
+
 ## Files to Migrate
 
 ### Downloads
@@ -502,7 +506,6 @@ These files have been successfully migrated to zephyr:
 - `crawl/get_fineweb_edu_crawl_yield.py`
 - `crawl/get_finemath_crawl_yield.py`
 - `crawl/get_open_web_math_crawl_yield.py`
-- `crawl/count_tokens.py`
 - `crawl/count_outlinks.py`
 
 ### Crawl: URL Processing
@@ -532,7 +535,6 @@ These files have been successfully migrated to zephyr:
 - `processing/tokenize/tokenize.py`
 
 ### Validation
-- `validation/count_total_tokens.py`
 - `validation/get_env.py`
 - `validate/validate.py`
 

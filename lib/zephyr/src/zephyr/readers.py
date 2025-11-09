@@ -19,18 +19,52 @@ from __future__ import annotations
 import fnmatch
 import zipfile
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 import msgspec
 
 
-def load_jsonl(file_path: str) -> Iterator[dict]:
-    """Load JSONL file and yield records.
+@contextmanager
+def open_file(file_path: str, mode: str = "rb"):
+    """Open file using fsspec, handling both local and remote paths.
 
-    Handles gzip and zstd compression automatically.
-    Use with .flat_map() to read files containing multiple records.
+    Supports automatic decompression for .gz, .zst, and .xz files.
+    Uses background caching for remote files to improve read performance.
 
     Args:
-        file_path: Path to JSONL file (local or remote, .gz and .zst supported)
+        file_path: Path to file (local or remote via fsspec)
+        mode: File mode ('rb' for binary, 'rt' for text)
+
+    Yields:
+        File-like object (binary or text depending on mode)
+    """
+    import fsspec
+
+    compression = None
+    if file_path.endswith(".gz"):
+        compression = "gzip"
+    elif file_path.endswith(".zst"):
+        compression = "zstd"
+    elif file_path.endswith(".xz"):
+        compression = "xz"
+
+    with fsspec.open(
+        file_path,
+        mode,
+        compression=compression,
+        block_size=16_000_000,
+        cache_type="background",
+        maxblocks=2,
+    ) as f:
+        yield f
+
+
+def load_jsonl(file_path: str) -> Iterator[dict]:
+    """Load JSONL file and yield records.
+    Handles gzip, zstd, and xz compression automatically.
+
+    Args:
+        file_path: Path to JSONL file (local or remote, .gz, .zst, and .xz supported)
 
     Yields:
         Parsed JSON records as dictionaries
@@ -45,43 +79,20 @@ def load_jsonl(file_path: str) -> Iterator[dict]:
         ... )
         >>> output_files = list(backend.execute(ds))
     """
-    import gzip
-    import io
-
     decoder = msgspec.json.Decoder()
 
-    if file_path.endswith(".zst"):
-        import zstandard as zstd
-
-        dctx = zstd.ZstdDecompressor()
-        with open(file_path, "rb") as raw_f:
-            with dctx.stream_reader(raw_f) as reader:
-                text_f = io.TextIOWrapper(reader, encoding="utf-8")
-                for line in text_f:
-                    line = line.strip()
-                    if line:
-                        yield decoder.decode(line)
-    elif file_path.endswith(".gz"):
-        with gzip.open(file_path, "rt") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    yield decoder.decode(line)
-    else:
-        with open(file_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    yield decoder.decode(line)
+    with open_file(file_path, "rt") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                yield decoder.decode(line)
 
 
 def load_parquet(file_path: str, **kwargs) -> Iterator[dict]:
     """Load Parquet file and yield records as dicts.
 
-    Use with .flat_map() to read Parquet files containing multiple records.
-
     Args:
-        file_path: Path to Parquet file
+        file_path: Path to Parquet file (local or remote)
         **kwargs: Additional arguments for pd.read_parquet (e.g., columns, engine)
 
     Yields:
@@ -99,16 +110,14 @@ def load_parquet(file_path: str, **kwargs) -> Iterator[dict]:
     """
     import pandas as pd
 
-    df = pd.read_parquet(file_path, **kwargs)
-    for _, row in df.iterrows():
-        yield row.to_dict()
+    with open_file(file_path, "rb") as f:
+        df = pd.read_parquet(f, **kwargs)
+        for _, row in df.iterrows():
+            yield row.to_dict()
 
 
 def load_file(file_path: str, **parquet_kwargs) -> Iterator[dict]:
     """Load records from file, auto-detecting JSONL or Parquet format.
-
-    Detects format based on file extension and delegates to load_jsonl or load_parquet.
-    Supports .jsonl, .jsonl.gz, .jsonl.zstd, jsonl.xz, and .parquet files.
 
     Args:
         file_path: Path to file (local or remote)
@@ -136,14 +145,16 @@ def load_file(file_path: str, **parquet_kwargs) -> Iterator[dict]:
         or file_path.endswith(".jsonl.gz")
         or file_path.endswith(".jsonl.zstd")
         or file_path.endswith(".jsonl.xz")
+        or file_path.endswith(".json")
+        or file_path.endswith(".json.gz")
+        or file_path.endswith(".json.zstd")
+        or file_path.endswith(".json.xz")
     ):
         yield from load_jsonl(file_path)
     elif file_path.endswith(".parquet"):
         yield from load_parquet(file_path, **parquet_kwargs)
     else:
-        raise ValueError(
-            f"Unsupported extension: {file_path}. Supported formats: .jsonl, .jsonl.gz, .jsonl.zstd, .jsonl.xz, .parquet"
-        )
+        raise ValueError(f"Unsupported extension: {file_path}.")
 
 
 def load_zip_members(zip_path: str, pattern: str = "*") -> Iterator[dict]:

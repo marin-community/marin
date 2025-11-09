@@ -141,11 +141,11 @@ def run_cluster(
     if config.num_gpus:
         ray_cmd += ["--entrypoint-num-gpus", str(config.num_gpus)]
 
-    # Construct the entrypoint command (recursive call without --cluster)
+    # Construct the entrypoint command (direct python call - deps already installed by ray_run)
     entrypoint = [
-        "uv",
-        "run",
-        "zephyr",
+        "python",
+        "-m",
+        "zephyr.cli",
         "--backend",
         config.backend_type,
         "--max-parallelism",
