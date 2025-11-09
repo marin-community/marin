@@ -154,11 +154,10 @@ def chat_template_checks(marin_tokenizer: PreTrainedTokenizer):
         TEST_CONVERSATION, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
     )
     expected_length = len(marin_tokenizer(REASONING_TRACE_EXAMPLE + "I'm doing well, thanks!")["input_ids"]) + len(
-        marin_tokenizer("Great!")["input_ids"]
+        marin_tokenizer("Great!")["input_ids"])
+    assert np.sum(out["assistant_masks"]) == expected_length, (
+        f"Expected {expected_length} assistant tokens, got {np.sum(out['assistant_masks'])}"
     )
-    assert (
-        np.sum(out["assistant_masks"]) == expected_length
-    ), f"Expected {expected_length} assistant tokens, got {np.sum(out['assistant_masks'])}"
 
     """Test that decoding of assistant tokens is correct."""
     out = marin_tokenizer.apply_chat_template(

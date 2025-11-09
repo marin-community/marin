@@ -104,9 +104,9 @@ class ParallelLlamaConfig(HFCompatConfig):
     Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
 
     def __post_init__(self):
-        assert (
-            self.num_heads % self.num_kv_heads == 0
-        ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
+        assert self.num_heads % self.num_kv_heads == 0, (
+            f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
+        )
 
     def hf_checkpoint_converter(self, ref_checkpoint: str | None = None) -> HFCheckpointConverter["ParallelLlamaConfig"]:
         return HFCheckpointConverter(
