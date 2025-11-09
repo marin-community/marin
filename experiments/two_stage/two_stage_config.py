@@ -101,9 +101,9 @@ class TwoStageConfig:
 
         self.set_data_schedule_params()
 
-        assert self.initialize_from_checkpoint_path is None or self.initialize_from_hf is None, (
-            "Cannot specify both initialize_from_checkpoint_path and initialize_from_hf"
-        )
+        assert (
+            self.initialize_from_checkpoint_path is None or self.initialize_from_hf is None
+        ), "Cannot specify both initialize_from_checkpoint_path and initialize_from_hf"
 
         if self.steps_per_eval is None:
             print(f"steps_per_eval not specified, defaulting to {self.num_train_steps // 20}")
@@ -204,12 +204,12 @@ class TwoStageConfig:
                 f"{self.rare_fraction_epoched}"
             )
 
-        assert 0.0 <= self.rare_weight_stage1 <= 1.0, (
-            f"Rare weight stage 1 must be between 0.0 and 1.0, but is {self.rare_weight_stage1}"
-        )
-        assert 0.0 <= self.rare_weight_stage2 <= 1.0, (
-            f"Rare weight stage 2 must be between 0.0 and 1.0, but is {self.rare_weight_stage2}"
-        )
+        assert (
+            0.0 <= self.rare_weight_stage1 <= 1.0
+        ), f"Rare weight stage 1 must be between 0.0 and 1.0, but is {self.rare_weight_stage1}"
+        assert (
+            0.0 <= self.rare_weight_stage2 <= 1.0
+        ), f"Rare weight stage 2 must be between 0.0 and 1.0, but is {self.rare_weight_stage2}"
 
     def build_name(self) -> str:
         rare_data_str = f"{self.rare_data_name}x{self.format_rare_fraction()}x{self.rare_data_epochs}"

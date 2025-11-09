@@ -116,10 +116,10 @@ dolmino_math_tokenized_llama3 = ExecutorStep(
 
 
 def get_dolmino_step_llama3(split: str) -> ExecutorStep[TokenizeConfig]:
-    assert split in DOLMINO_DATASETS, (
-        f"Split {split} not found in {DOLMINO_DATASETS}, \
+    assert (
+        split in DOLMINO_DATASETS
+    ), f"Split {split} not found in {DOLMINO_DATASETS}, \
         Check marin.experiments.dolmino.tokenize_dolmino.DOLMINO_DATASETS for which splits are supported."
-    )
     return tokenize_dolmino_steps()[f"dolmino/{split}"]
 
 

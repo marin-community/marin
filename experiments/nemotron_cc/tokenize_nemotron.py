@@ -100,10 +100,10 @@ def _get_nemotron_split_paths(split):
 
 
 def get_nemotron_step(split: str) -> ExecutorStep[TokenizeConfig]:
-    assert split in NEMOTRON_DATASETS, (
-        f"Split {split} not found in {NEMOTRON_DATASETS}, \
+    assert (
+        split in NEMOTRON_DATASETS
+    ), f"Split {split} not found in {NEMOTRON_DATASETS}, \
         Check marin.experiments.nemotron_cc.tokenize_nemotron.NEMOTRON_DATASETS for which splits are supported."
-    )
     return tokenize_nemotron_steps()[f"nemotron_cc/{split}"]
 
 
