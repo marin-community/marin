@@ -138,7 +138,9 @@ def update_reports_md(new_reports):
         new_content += f"- {title}\n"
 
         # Add GitHub issue link
-        new_content += f"    - [GitHub Issue #{report['issue_num']}](https://github.com/marin-community/marin/issues/{report['issue_num']}) [![#{report['issue_num']}]({report['badge_url']})](https://github.com/marin-community/marin/issues/{report['issue_num']})\n"
+        issue_url = f"https://github.com/marin-community/marin/issues/{report['issue_num']}"
+        badge_link = f"[![#{report['issue_num']}]({report['badge_url']})]({issue_url})"
+        new_content += f"    - [GitHub Issue #{report['issue_num']}]({issue_url}) {badge_link}\n"
 
         # Add WandB links if present
         for url in report["urls"]["wandb"]:

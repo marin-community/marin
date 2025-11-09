@@ -283,7 +283,7 @@ def test_chat_processor_tool_call_support(tokenizer_path: Path):
     result = processor(batch)[0]
     rendered = decode_sequence(tokenizer, result["input_ids"])
     assert '{"name": "add", "arguments": {"a": 2, "b": 3}}' in rendered
-    assert '<|start_header_id|>tool<|end_header_id|>' in rendered
+    assert "<|start_header_id|>tool<|end_header_id|>" in rendered
     assert '{"result": 5}' in rendered
     assert result["assistant_masks"].sum() > 0
 
@@ -350,7 +350,6 @@ def test_tool_call_masking_behavior(tokenizer_path: Path):
     while resp_end < len(tokens) and tokens[resp_end] != tokenizer.convert_tokens_to_ids("<|eot_id|>"):
         resp_end += 1
     assert not mask[resp_start:resp_end].any()
-
 
 
 def test_chat_processor_custom_system_field_name(tokenizer_path: Path):

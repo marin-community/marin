@@ -208,7 +208,7 @@ def test_force_run_failed():
         # Re-run without force_run
         executor_non_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
 
-        with pytest.raises(Exception, match=".*failed previously.*"):
+        with pytest.raises(Exception, match=r".*failed previously.*"):
             executor_non_force.run(steps=[a])
 
         # should still be failed

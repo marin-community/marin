@@ -277,7 +277,7 @@ class SWEBenchEnv(MarinEnv):
 
         try:
             process = subprocess.Popen(commands, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            stdout, stderr = process.communicate(timeout=300)  # 5 minute timeout
+            stdout, _stderr = process.communicate(timeout=300)  # 5 minute timeout
 
             # Award a reward of 1 when GitHub issue is resolved
             if "Instances resolved: 1" in stdout:
