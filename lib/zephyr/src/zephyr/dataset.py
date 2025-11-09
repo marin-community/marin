@@ -111,9 +111,7 @@ class FusedMapOp:
 class GroupByLocalOp:
     """Phase 1 of GroupBy: Local grouping per shard by hash(key) % num_output_shards.
 
-    This operation is FUSIBLE - it processes items one at a time and can be
-    fused with preceding map/filter/flatmap operations. Each item is assigned
-    to an output shard based on hash(key) % num_output_shards.
+    This operation is fusible into a set of preceding operations.
     """
 
     key_fn: Callable  # Function from item -> hashable key
@@ -124,7 +122,7 @@ class GroupByLocalOp:
 class GroupByShuffleReduceOp:
     """Phase 2 of GroupBy: Shuffle and reduce.
 
-    This operation is NON-FUSIBLE - it requires a shuffle boundary and must
+    This operation is not-fusible - it requires a shuffle boundary and must
     see all items with the same key together to apply the reducer.
     """
 

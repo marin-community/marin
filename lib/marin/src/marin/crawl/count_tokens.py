@@ -65,22 +65,28 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class CountTokensConfig:
     input_patterns: list[str]
-    output_path: str
+    output_path: str = ""
     tokenizer_name: str = "gpt2"
+    num_reshards: int | None = None
+    batch_size: int = 64
 
 
-class TokenCounter:
-    """Stateful token counter that loads tokenizer once per worker."""
+class BatchTokenCounter:
+    """Batched token counter using HF tokenizer's native batch encoding."""
 
     def __init__(self, tokenizer_name: str):
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
-    def __call__(self, record: dict) -> int:
-        """Count tokens in a record."""
-        return len(self.tokenizer.encode(record["text"]))
+    def __call__(self, batch: list[dict]) -> list[int]:
+        """Count tokens for a batch of records using native HF batching."""
+        texts = [record["text"] for record in batch]
+        encodings = self.tokenizer(texts, truncation=False, padding=False)
+        return [len(ids) for ids in encodings["input_ids"]]
 
 
-def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: str):
+def count_tokens(
+    input_patterns: list[str], output_path: str, tokenizer_name: str, num_reshards: int | None, batch_size: int
+):
     """Count tokens across all files matching input patterns."""
     input_paths = []
     for pattern in input_patterns:
@@ -88,12 +94,32 @@ def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: st
     logger.info(f"Found {len(input_paths)} files to process")
     backend = flow_backend()
 
-    counter = TokenCounter(tokenizer_name)
-    pipeline = Dataset.from_list(input_paths).flat_map(load_file).map(counter)
+    counter = BatchTokenCounter(tokenizer_name)
+    pipeline = Dataset.from_list(input_paths).flat_map(load_file)
 
-    token_counts = list(backend.execute(pipeline))
-    total_tokens = sum(token_counts)
-    num_documents = len(token_counts)
+    if num_reshards:
+        pipeline = pipeline.reshard(num_reshards)
+
+    stats_pipeline = (
+        pipeline.batch(batch_size)
+        .flat_map(counter)
+        .reduce(
+            local_reducer=lambda tokens: {"num_tokens": sum(tokens), "num_documents": sum(1 for _ in tokens)},
+            global_reducer=lambda shards: {
+                "num_tokens": sum(s["num_tokens"] for s in shards),
+                "num_documents": sum(s["num_documents"] for s in shards),
+            },
+        )
+    )
+
+    results = list(backend.execute(stats_pipeline))
+    if not results:
+        logger.warning("No data processed")
+        return
+
+    stats = results[0]
+    total_tokens = stats["num_tokens"]
+    num_documents = stats["num_documents"]
 
     logger.info(f"Total tokens: {total_tokens:,}, documents: {num_documents:,}")
 
@@ -105,7 +131,7 @@ def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: st
 
 @draccus.wrap()
 def count_tokens_driver(cfg: CountTokensConfig):
-    count_tokens(cfg.input_patterns, cfg.output_path, cfg.tokenizer_name)
+    count_tokens(cfg.input_patterns, cfg.output_path, cfg.tokenizer_name, cfg.num_reshards, cfg.batch_size)
 
 
 if __name__ == "__main__":

@@ -402,11 +402,17 @@ def process_shard_flat_map(shard: Shard, shard_idx: int, total: int, fn: Callabl
     logger.info(f"flat_map: shard {shard_idx + 1}/{total}")
 
     def result_generator():
-        for chunk in tqdm(shard.iter_chunks(), desc=f"flat_map shard {shard_idx + 1}/{total}"):
-            for item in chunk:
-                yield from fn(item)
+        for item in shard:
+            yield from fn(item)
 
-    return [Shard.from_items(result_generator(), chunk_size, shard.context, idx=shard_idx)]
+    return [
+        Shard.from_items(
+            tqdm(result_generator(), desc=f"flat_map shard {shard_idx + 1}/{total}", mininterval=10),
+            chunk_size,
+            shard.context,
+            idx=shard_idx,
+        )
+    ]
 
 
 def process_shard_map(shard: Shard, shard_idx: int, total: int, fn: Callable, chunk_size: int) -> list[Shard]:
@@ -414,11 +420,17 @@ def process_shard_map(shard: Shard, shard_idx: int, total: int, fn: Callable, ch
     logger.info(f"map: shard {shard_idx + 1}/{total}")
 
     def result_generator():
-        for chunk in tqdm(shard.iter_chunks(), desc=f"map shard {shard_idx + 1}/{total}"):
-            for item in chunk:
-                yield fn(item)
+        for item in shard:
+            yield fn(item)
 
-    return [Shard.from_items(result_generator(), chunk_size, shard.context, idx=shard_idx)]
+    return [
+        Shard.from_items(
+            tqdm(result_generator(), desc=f"map shard {shard_idx + 1}/{total}", mininterval=10),
+            chunk_size,
+            shard.context,
+            idx=shard_idx,
+        )
+    ]
 
 
 def process_shard_filter(shard: Shard, shard_idx: int, total: int, predicate: Callable, chunk_size: int) -> list[Shard]:
@@ -426,12 +438,18 @@ def process_shard_filter(shard: Shard, shard_idx: int, total: int, predicate: Ca
     logger.info(f"filter: shard {shard_idx + 1}/{total}")
 
     def result_generator():
-        for chunk in tqdm(shard.iter_chunks(), desc=f"filter shard {shard_idx + 1}/{total}"):
-            for item in chunk:
-                if predicate(item):
-                    yield item
+        for item in shard:
+            if predicate(item):
+                yield item
 
-    return [Shard.from_items(result_generator(), chunk_size, shard.context, idx=shard_idx)]
+    return [
+        Shard.from_items(
+            tqdm(result_generator(), desc=f"filter shard {shard_idx + 1}/{total}", mininterval=10),
+            chunk_size,
+            shard.context,
+            idx=shard_idx,
+        )
+    ]
 
 
 def process_shard_batch(shard: Shard, shard_idx: int, total: int, batch_size: int, chunk_size: int) -> list[Shard]:
@@ -440,7 +458,14 @@ def process_shard_batch(shard: Shard, shard_idx: int, total: int, batch_size: in
     def result_generator():
         yield from make_batches(shard, batch_size)
 
-    return [Shard.from_items(result_generator(), chunk_size, shard.context, idx=shard_idx)]
+    return [
+        Shard.from_items(
+            tqdm(result_generator(), desc=f"batch shard {shard_idx + 1}/{total}", mininterval=10),
+            chunk_size,
+            shard.context,
+            idx=shard_idx,
+        )
+    ]
 
 
 def process_shard_write_jsonl(
@@ -901,9 +926,8 @@ class Backend:
                     process_shard_write_parquet, (op.output_pattern, op.schema, op.batch_size, self.chunk_size), shards
                 )
 
-        # Materialize shards with progress bar
         op_names = [op.__class__.__name__.replace("Op", "") for op in operations]
-        desc = f"Pipeline [{' → '.join(op_names)}]"
+        desc = f"Materialize [{' → '.join(op_names)}]"
 
         def materialize_all():
             for shard in shards:

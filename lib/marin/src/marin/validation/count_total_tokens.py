@@ -47,9 +47,12 @@ class CountTotalTokensConfig:
     text_column: str = "text"
     """Name of the column containing text to tokenize."""
 
+    batch_size: int = 64
+    """Number of records to process in each batch."""
 
-class TokenCounter:
-    """Token counter that loads tokenizer once per worker."""
+
+class BatchTokenCounter:
+    """Batched token counter using HF tokenizer's native batch encoding."""
 
     def __init__(self, tokenizer_name: str, text_column: str):
         from transformers import AutoTokenizer
@@ -57,23 +60,28 @@ class TokenCounter:
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         self.text_column = text_column
 
-    def __call__(self, record: dict) -> int:
-        """Count tokens in a record's text column."""
-        if self.text_column in record and record[self.text_column] is not None:
-            return len(self.tokenizer.encode(str(record[self.text_column])))
-        return 0
+    def __call__(self, batch: list[dict]) -> list[int]:
+        """Count tokens for a batch of records using native HF batching."""
+        texts = [
+            str(record[self.text_column]) if self.text_column in record and record[self.text_column] is not None else ""
+            for record in batch
+        ]
+        encodings = self.tokenizer(texts, truncation=False, padding=False)
+        return [len(ids) for ids in encodings["input_ids"]]
 
 
-def count_total_tokens(input_pattern: str, tokenizer_name: str, text_column: str) -> int:
+def count_total_tokens(input_pattern: str, tokenizer_name: str, text_column: str, batch_size: int) -> int:
     """Count total tokens across all files matching the pattern."""
     input_paths = fsspec_glob(input_pattern)
     logger.info(f"Found {len(input_paths)} files to process")
 
     backend = flow_backend()
-    counter = TokenCounter(tokenizer_name, text_column)
-    pipeline = Dataset.from_list(input_paths).flat_map(load_file).map(counter)
-    token_counts = list(backend.execute(pipeline))
-    total_tokens = sum(token_counts)
+    counter = BatchTokenCounter(tokenizer_name, text_column)
+
+    pipeline = Dataset.from_list(input_paths).flat_map(load_file).batch(batch_size).flat_map(counter).reduce(sum)
+
+    results = list(backend.execute(pipeline))
+    total_tokens = results[0] if results else 0
 
     logger.info(f"Total tokens in '{text_column}' column: {total_tokens:,}")
     return total_tokens
@@ -81,7 +89,7 @@ def count_total_tokens(input_pattern: str, tokenizer_name: str, text_column: str
 
 @draccus.wrap()
 def main(cfg: CountTotalTokensConfig):
-    count_total_tokens(cfg.input_pattern, cfg.tokenizer_name, cfg.text_column)
+    count_total_tokens(cfg.input_pattern, cfg.tokenizer_name, cfg.text_column, cfg.batch_size)
 
 
 if __name__ == "__main__":
