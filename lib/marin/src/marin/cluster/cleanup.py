@@ -513,7 +513,7 @@ def submit_cleanup_cron_job(
         [
             "uv",
             "run",
-            "src/marin/run/ray_run.py",
+            "lib/marin/src/marin/run/ray_run.py",
             f"--submission-id={submission_id}",
             f"--cluster={cluster}",
             "--no_wait",
