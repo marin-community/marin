@@ -500,6 +500,7 @@ def submit_cleanup_cron_job(
             f"--project {project}",
             f"--zone {zone}",
             f"--interval {interval}",
+            f"--disk_threshold_pct {disk_threshold_pct}",
         ]
     )
 
