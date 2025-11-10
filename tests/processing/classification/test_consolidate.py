@@ -16,9 +16,8 @@ import gzip
 import json
 from pathlib import Path
 
-from ddsketch import DDSketch
 import pytest
-
+from ddsketch import DDSketch
 from marin.processing.classification.consolidate import (
     ConsolidateConfig,
     FilterConfig,
@@ -34,8 +33,7 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
             handle.write(json.dumps(row) + "\n")
 
 
-def test_calculate_percentile_threshold_without_ray(tmp_path, ray_tpu_cluster):
-    """Test percentile threshold calculation using zephyr reduce."""
+def test_calculate_percentile_threshold(tmp_path, ray_tpu_cluster):
     documents_dir = tmp_path / "documents"
     attributes_dir = tmp_path / "attributes"
     documents_dir.mkdir()
@@ -52,14 +50,12 @@ def test_calculate_percentile_threshold_without_ray(tmp_path, ray_tpu_cluster):
         ],
     ]
 
-    # Write document files (needed for globbing)
     for shard_index, rows in enumerate(attribute_rows):
         doc_path = documents_dir / f"part-{shard_index}.jsonl"
         doc_path.write_text("{}", encoding="utf-8")
         attr_path = attributes_dir / f"part-{shard_index}.jsonl"
         _write_jsonl(attr_path, rows)
 
-    # Create config with keep_fraction filter
     keep_fraction = 0.5
     config = ConsolidateConfig(
         input_path=str(documents_dir),
@@ -73,13 +69,10 @@ def test_calculate_percentile_threshold_without_ray(tmp_path, ray_tpu_cluster):
                 keep_fraction=keep_fraction,
             )
         ],
-        filetype="jsonl",  # Match the file extension we wrote
+        filetype="jsonl",
     )
 
-    # Calculate percentile thresholds
     updated_filters = calculate_percentile_thresholds(config)
-
-    # Extract the threshold from the updated filter
     threshold = updated_filters[0].lower_threshold
 
     # Calculate expected threshold
@@ -139,7 +132,6 @@ def test_consolidate_filters_and_writes_output(tmp_path):
 
     consolidate(config)
 
-    # Output filename preserves input structure: part-0000.jsonl.gz
     output_file = output_root / "part-0000.jsonl.gz"
     assert (
         output_file.exists()

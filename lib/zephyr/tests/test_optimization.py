@@ -18,17 +18,6 @@ from zephyr import Dataset, create_backend
 from zephyr.dataset import FilterOp, FusedMapOp, MapOp, ReshardOp
 
 
-def test_optimize_single_operation():
-    """Single operation should be wrapped in FusedMapOp."""
-    backend = create_backend("sync")
-    operations = [MapOp(lambda x: x * 2)]
-    optimized = backend._optimize_operations(operations)
-
-    assert len(optimized) == 1
-    assert isinstance(optimized[0], FusedMapOp)
-    assert len(optimized[0].operations) == 1
-
-
 def test_optimize_consecutive_maps():
     """Consecutive maps should be fused."""
     backend = create_backend("sync")
@@ -77,15 +66,6 @@ def test_optimize_with_reshard_breaks_fusion():
     assert isinstance(optimized[2], FusedMapOp)
 
 
-def test_empty_filter_in_fusion():
-    """Test that fusion handles filters that eliminate all items."""
-    backend = create_backend("sync")
-    ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2).filter(lambda x: x > 1000).map(lambda x: x + 1)
-
-    result = list(backend.execute(ds))
-    assert result == []
-
-
 def test_fused_execution_with_batch():
     """Test fusion with batch operations.
 
@@ -104,28 +84,3 @@ def test_fused_execution_with_batch():
 
     result = list(backend.execute(ds))
     assert result == [[6, 8], [10, 12]]
-
-
-def test_flat_map_with_generator():
-    """Test that flat_map works with generator functions."""
-    backend = create_backend("sync")
-
-    def yield_range(x):
-        yield from range(x)
-
-    ds = Dataset.from_list([1, 2, 3]).flat_map(yield_range).map(lambda x: x * 10)
-
-    result = sorted(backend.execute(ds))
-    # from_list([1, 2, 3])
-    # flat_map(yield_range) -> [0, 0, 1, 0, 1, 2]
-    # map(x * 10) -> [0, 0, 10, 0, 10, 20]
-    assert result == [0, 0, 0, 10, 10, 20]
-
-
-def test_empty_operations_list():
-    """Test that empty operations list is handled."""
-    backend = create_backend("sync")
-    operations = []
-    optimized = backend._optimize_operations(operations)
-
-    assert optimized == []

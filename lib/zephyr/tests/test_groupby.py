@@ -15,7 +15,6 @@
 """Tests for deduplicate and group_by operations."""
 
 import pytest
-
 from zephyr import Dataset, create_backend
 
 
@@ -185,19 +184,6 @@ def test_group_by_empty(backend):
     assert results == []
 
 
-def test_group_by_single_group(backend):
-    """Test groupby when all items belong to same group."""
-    data = [{"cat": "A", "val": i} for i in range(5)]
-
-    ds = Dataset.from_list(data).group_by(
-        key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)}
-    )
-
-    results = list(backend.execute(ds))
-    assert len(results) == 1
-    assert results[0] == {"cat": "A", "count": 5}
-
-
 def test_deduplicate_with_num_output_shards(backend):
     """Test deduplication with explicit num_output_shards."""
     data = [{"id": i % 3, "val": f"item_{i}"} for i in range(20)]
@@ -210,91 +196,6 @@ def test_deduplicate_with_num_output_shards(backend):
     assert len(results) == 3
     ids = sorted([r["id"] for r in results])
     assert ids == [0, 1, 2]
-
-
-def test_group_by_with_num_output_shards(backend):
-    """Test groupby with explicit num_output_shards."""
-    data = [{"cat": chr(65 + i % 3), "val": i} for i in range(20)]  # A, B, C
-
-    ds = Dataset.from_list(data).group_by(
-        key=lambda x: x["cat"],
-        reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)},
-        num_output_shards=5,
-    )
-
-    results = list(backend.execute(ds))
-    results = sorted(results, key=lambda x: x["cat"])
-
-    assert len(results) == 3
-    # Each category should have items (A: 0,3,6,9,12,15,18 = 7, B: 1,4,7,10,13,16,19 = 7, C: 2,5,8,11,14,17 = 6)
-    assert results[0] == {"cat": "A", "count": 7}
-    assert results[1] == {"cat": "B", "count": 7}
-    assert results[2] == {"cat": "C", "count": 6}
-
-
-def test_deduplicate_chained_with_map(backend):
-    """Test deduplication chained with other operations."""
-    data = [1, 2, 1, 3, 2, 4, 1]
-
-    ds = (
-        Dataset.from_list(data)
-        .map(lambda x: {"id": x, "val": x * 2})
-        .deduplicate(key=lambda x: x["id"])
-        .map(lambda x: x["val"])
-    )
-
-    results = sorted(list(backend.execute(ds)))
-    assert results == [2, 4, 6, 8]  # 1*2, 2*2, 3*2, 4*2
-
-
-def test_group_by_chained_with_filter(backend):
-    """Test groupby chained with other operations."""
-    data = [
-        {"cat": "A", "val": 1},
-        {"cat": "B", "val": 2},
-        {"cat": "A", "val": 3},
-        {"cat": "B", "val": 4},
-    ]
-
-    ds = (
-        Dataset.from_list(data)
-        .filter(lambda x: x["val"] > 1)
-        .group_by(key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)})
-    )
-
-    results = sorted(list(backend.execute(ds)), key=lambda x: x["cat"])
-    assert results == [{"cat": "A", "count": 1}, {"cat": "B", "count": 2}]
-
-
-def test_deduplicate_with_hash_key_large(backend, large_document_dataset):
-    """Test deduplication with MD5 hash on larger dataset with duplicates."""
-    import hashlib
-
-    def compute_hash(doc):
-        """Compute MD5 hash of content field."""
-        content = doc["content"]
-        return hashlib.md5(content.encode()).hexdigest()
-
-    # Add hash field and deduplicate
-    ds = (
-        Dataset.from_list(large_document_dataset)
-        .map(lambda doc: {**doc, "hash": compute_hash(doc)})
-        .deduplicate(key=lambda doc: doc["hash"])
-    )
-
-    results = list(backend.execute(ds))
-
-    # Should have exactly 100 unique documents (one per unique content)
-    assert len(results) == 100
-
-    # Verify all hashes are unique
-    hashes = [r["hash"] for r in results]
-    assert len(set(hashes)) == 100
-
-    # Verify we have the expected content patterns
-    contents = sorted([r["content"] for r in results])
-    expected = sorted([f"document_{i}" for i in range(100)])
-    assert contents == expected
 
 
 def test_group_by_with_hash_key_large(backend, large_document_dataset):

@@ -37,13 +37,6 @@ Usage:
         --tokenizer gpt2 \
         --validation_paths '[]'
 
-Args:
-    train_paths: List of input paths (files or directories) for training, or empty list
-    validation_paths: List of input paths for validation, or empty list
-    cache_path: Base directory to save tokenized files (train/ and validation/ subdirs)
-    tokenizer: Tokenizer name (must match tokenizer used in training run)
-    format: LmDatasetFormatBase (default: TextLmDatasetFormat())
-
 The tokenized data will be written to:
     {cache_path}/train/     - Training cache
     {cache_path}/validation/ - Validation cache (if provided)
@@ -104,6 +97,10 @@ class TokenizeConfig(TokenizeConfigBase):
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa
+    """
+    The format of the dataset. This is used to determine how to tokenize the data.
+    See Levanter's documentation for more details.
+    """
     window_size_bytes: int = 10_000_000_000
     allow_test_in_train: bool = False
     """
@@ -311,9 +308,9 @@ def tokenize(config: TokenizeConfigBase):
     backend = flow_backend()
 
     def create_pipeline(paths: list[str], split_name: str) -> Dataset:
-        """Create a tokenization pipeline for a set of file paths."""
         logger.info(f"Statting {len(paths)} {split_name} files to compute groups")
 
+        # First compute the file groups we should process per shard.
         file_stats = list(
             create_backend("threadpool").execute(
                 Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)})
@@ -322,7 +319,7 @@ def tokenize(config: TokenizeConfigBase):
         file_groups = list(_group_files_by_size(file_stats, config.window_size_bytes))
         logger.info(f"Grouped {len(paths)} files into {len(file_groups)} groups by size")
 
-        # Main pipeline processes file groups
+        # Now create the actual tokenization pipeline.
         return (
             Dataset.from_list(file_groups)
             .flat_map(lambda file_list: file_list)  # Unpack groups to individual files

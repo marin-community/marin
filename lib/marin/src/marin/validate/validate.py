@@ -49,7 +49,7 @@ class ValidationConfig:
 
 
 def validate_shard(documents: Iterator[dict], num_samples: int) -> Iterator[dict]:
-    """Validate documents in a shard using map_shard pattern with stateful processing.
+    """Validate documents in a shard.
 
     This function processes all documents in a shard, performing:
     - Validation and byte counting for each document
