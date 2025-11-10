@@ -127,6 +127,7 @@ def test_flow_backend_defaults_to_ray_when_initialized():
     finally:
         ray.shutdown()
 
+
 def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):
     """Test that .zst extension triggers zstd compression."""
     from zephyr.writers import write_jsonl_file

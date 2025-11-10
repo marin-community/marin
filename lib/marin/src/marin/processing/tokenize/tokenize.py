@@ -330,10 +330,10 @@ def tokenize(config: TokenizeConfigBase):
         )
 
     if train_paths:
-        list(backend.execute(create_pipeline(train_paths, "train-{shard:05d}")))
+        list(backend.execute(create_pipeline(train_paths, "train")))
 
     if validation_paths:
-        list(backend.execute(create_pipeline(validation_paths, "validation-{shard:05d}")))
+        list(backend.execute(create_pipeline(validation_paths, "validation")))
 
 
 @draccus.wrap()

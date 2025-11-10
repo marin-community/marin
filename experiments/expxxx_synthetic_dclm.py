@@ -441,7 +441,6 @@ synthetic_dclm_5B_high_quality_subset = ExecutorStep(
             ),
         ],
         filetype="jsonl.zst",
-        ray_memory_limit_gb=12,
     ),
     pip_dependency_groups=["ddsketch"],
 )
@@ -463,7 +462,6 @@ synthetic_dclm_5B_low_quality_subset = ExecutorStep(
             ),
         ],
         filetype="jsonl.zst",
-        ray_memory_limit_gb=12,
     ),
     pip_dependency_groups=["ddsketch"],
 )
