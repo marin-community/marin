@@ -284,7 +284,9 @@ def tokenize(config: TokenizeConfigBase):
         train_paths = _get_filepaths_to_tokenize(config.train_paths) if config.train_paths else []
         validation_paths = _get_filepaths_to_tokenize(config.validation_paths) if config.validation_paths else []
     elif isinstance(config, HfTokenizeConfig):
-        # Download HF dataset first, then tokenize the downloaded files
+        # N.B. (power) it looks like this path is never taken, I'm not sure why
+        # this configuration class is even defined in this file. I stubbed out the
+        # actual download which seems sensible, but... yolo?
         from marin.download.huggingface.download import DownloadConfig
         from marin.download.huggingface.download_hf import download_hf
 

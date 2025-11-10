@@ -50,6 +50,7 @@ uv run zephyr --cluster=us-central2 --backend=ray --max-parallelism=1000 --memor
 import json
 import logging
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import draccus
@@ -71,17 +72,25 @@ class CountTokensConfig:
     batch_size: int = 64
 
 
-class BatchTokenCounter:
-    """Batched token counter using HF tokenizer's native batch encoding."""
+def count_tokens_shard(documents: Iterator[dict], tokenizer_name: str, batch_size: int) -> Iterator[int]:
+    """Count tokens in a shard of documents using batched tokenization."""
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
-    def __init__(self, tokenizer_name: str):
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    batch = []
+    for doc in documents:
+        batch.append(doc)
+        if len(batch) >= batch_size:
+            texts = [record["text"] for record in batch]
+            encodings = tokenizer(texts, truncation=False, padding=False)
+            for ids in encodings["input_ids"]:
+                yield len(ids)
+            batch = []
 
-    def __call__(self, batch: list[dict]) -> list[int]:
-        """Count tokens for a batch of records using native HF batching."""
+    if batch:
         texts = [record["text"] for record in batch]
-        encodings = self.tokenizer(texts, truncation=False, padding=False)
-        return [len(ids) for ids in encodings["input_ids"]]
+        encodings = tokenizer(texts, truncation=False, padding=False)
+        for ids in encodings["input_ids"]:
+            yield len(ids)
 
 
 def count_tokens(
@@ -94,22 +103,17 @@ def count_tokens(
     logger.info(f"Found {len(input_paths)} files to process")
     backend = flow_backend()
 
-    counter = BatchTokenCounter(tokenizer_name)
     pipeline = Dataset.from_list(input_paths).flat_map(load_file)
 
     if num_reshards:
         pipeline = pipeline.reshard(num_reshards)
 
-    stats_pipeline = (
-        pipeline.batch(batch_size)
-        .flat_map(counter)
-        .reduce(
-            local_reducer=lambda tokens: {"num_tokens": sum(tokens), "num_documents": sum(1 for _ in tokens)},
-            global_reducer=lambda shards: {
-                "num_tokens": sum(s["num_tokens"] for s in shards),
-                "num_documents": sum(s["num_documents"] for s in shards),
-            },
-        )
+    stats_pipeline = pipeline.map_shard(lambda docs: count_tokens_shard(docs, tokenizer_name, batch_size)).reduce(
+        local_reducer=lambda tokens: {"num_tokens": sum(tokens), "num_documents": sum(1 for _ in tokens)},
+        global_reducer=lambda shards: {
+            "num_tokens": sum(s["num_tokens"] for s in shards),
+            "num_documents": sum(s["num_documents"] for s in shards),
+        },
     )
 
     results = list(backend.execute(stats_pipeline))

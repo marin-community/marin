@@ -16,8 +16,6 @@
 """
 Consolidate many small shards into larger files by resharding.
 
-Example usage with zephyr CLI:
-
 ```bash
 uv run zephyr --backend=ray --max-parallelism=100 --memory=4GB \
     lib/marin/src/marin/crawl/open_web_math/consolidate_open_web_math_shards.py \
@@ -62,11 +60,8 @@ class ConsolidationConfig:
 
 @draccus.wrap()
 def main(cfg: ConsolidationConfig):
-    # Get all files matching the pattern
-    shard_files = fsspec_glob(cfg.input_pattern)
-    shard_files = sorted(shard_files)
+    shard_files = sorted(fsspec_glob(cfg.input_pattern))
     logger.info(f"Found {len(shard_files)} shards to consolidate")
-
     num_output_shards = (len(shard_files) + cfg.batch_size - 1) // cfg.batch_size
 
     logger.info(f"Consolidating into {num_output_shards} output files")

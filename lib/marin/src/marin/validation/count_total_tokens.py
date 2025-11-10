@@ -26,6 +26,7 @@ uv run zephyr --cluster=us-central2 --backend=ray --max-parallelism=1000 --memor
 """
 
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import draccus
@@ -51,23 +52,35 @@ class CountTotalTokensConfig:
     """Number of records to process in each batch."""
 
 
-class BatchTokenCounter:
-    """Batched token counter using HF tokenizer's native batch encoding."""
+def count_tokens_shard(
+    documents: Iterator[dict], tokenizer_name: str, text_column: str, batch_size: int
+) -> Iterator[int]:
+    """Count tokens in a shard of documents using batched tokenization."""
+    from transformers import AutoTokenizer
 
-    def __init__(self, tokenizer_name: str, text_column: str):
-        from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        self.text_column = text_column
+    batch = []
+    for doc in documents:
+        batch.append(doc)
+        if len(batch) >= batch_size:
+            texts = [
+                str(record[text_column]) if text_column in record and record[text_column] is not None else ""
+                for record in batch
+            ]
+            encodings = tokenizer(texts, truncation=False, padding=False)
+            for ids in encodings["input_ids"]:
+                yield len(ids)
+            batch = []
 
-    def __call__(self, batch: list[dict]) -> list[int]:
-        """Count tokens for a batch of records using native HF batching."""
+    if batch:
         texts = [
-            str(record[self.text_column]) if self.text_column in record and record[self.text_column] is not None else ""
+            str(record[text_column]) if text_column in record and record[text_column] is not None else ""
             for record in batch
         ]
-        encodings = self.tokenizer(texts, truncation=False, padding=False)
-        return [len(ids) for ids in encodings["input_ids"]]
+        encodings = tokenizer(texts, truncation=False, padding=False)
+        for ids in encodings["input_ids"]:
+            yield len(ids)
 
 
 def count_total_tokens(input_pattern: str, tokenizer_name: str, text_column: str, batch_size: int) -> int:
@@ -76,9 +89,13 @@ def count_total_tokens(input_pattern: str, tokenizer_name: str, text_column: str
     logger.info(f"Found {len(input_paths)} files to process")
 
     backend = flow_backend()
-    counter = BatchTokenCounter(tokenizer_name, text_column)
 
-    pipeline = Dataset.from_list(input_paths).flat_map(load_file).batch(batch_size).flat_map(counter).reduce(sum)
+    pipeline = (
+        Dataset.from_list(input_paths)
+        .flat_map(load_file)
+        .map_shard(lambda docs: count_tokens_shard(docs, tokenizer_name, text_column, batch_size))
+        .reduce(sum)
+    )
 
     results = list(backend.execute(pipeline))
     total_tokens = results[0] if results else 0

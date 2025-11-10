@@ -144,15 +144,6 @@ patterns may be omitted.
 Group items by a key function and apply a reducer to each group. The operation
 is implemented as a two-phase shuffle:
 
-1. **Local grouping**: Each shard hashes items by `key` and redistributes them
-   into `num_output_shards` buckets
-2. **Shuffle & reduce**: Items with the same key are brought together and the
-   `reducer(key, Iterator[items])` is called to produce a single result
-
-This is commonly used for aggregations like counting, deduplication, or
-computing statistics per group. If `num_output_shards` is not specified, it
-defaults to the current number of shards.
-
 ```python
 ds = (Dataset
   .from_files("gs://data/*.jsonl")
@@ -178,14 +169,8 @@ ds = (Dataset
 
 `reduce(local_reducer, global_reducer=None)`
 
-Reduce the entire dataset to a single value using two-phase reduction:
-
-1. **Local reduction**: Apply `local_reducer` to each shard independently
-2. **Global reduction**: Pull all shard results to the controller and apply
-   `global_reducer` (defaults to `local_reducer` if not specified)
-
-This is useful for computing dataset-wide statistics like totals, min/max, or
-custom aggregations.
+Reduce the entire dataset to a single value. The local_reducer runs on each
+shard before storing results which are then reduced by the global reducer.
 
 ```python
 # Count total items
@@ -217,9 +202,6 @@ co-partitioned. Preconditions:
 - Corresponding shards (left[i], right[i]) must contain the same key ranges
 - Items within each shard must be sorted by their join key
 
-These preconditions are typically met when both datasets come from `group_by`
-with the same key and `num_output_shards`.
-
 Only supports inner and left joins (no right or outer joins).
 
 ```python
@@ -236,7 +218,6 @@ attrs = (Dataset
   .group_by(key=lambda x: x["id"], reducer=keep_first, num_output_shards=100)
 )
 
-# Sorted merge join - no shuffle needed
 joined = docs.sorted_merge_join(
   attrs,
   left_key=lambda x: x["id"],

@@ -35,7 +35,6 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
 import draccus
 from marin.utils import (
@@ -43,11 +42,7 @@ from marin.utils import (
     fsspec_glob,
     rebase_file_path,
 )
-from zephyr import Dataset, flow_backend
-from zephyr.readers import load_file
-
-if TYPE_CHECKING:
-    pass
+from zephyr import Dataset, flow_backend, load_file
 
 
 class FilterType(StrEnum):
@@ -118,8 +113,6 @@ def remove_spans(text: str, spans: list[list[int]]) -> str:
     """
     # Sort spans in reverse order to avoid index shifting
     sorted_spans = sorted(spans, key=lambda x: x[1], reverse=True)
-
-    # Remove spans
     for start, end, _ in sorted_spans:
         text = text[:start] + text[end:]
 
@@ -148,10 +141,7 @@ def passes_filter(doc: dict, filt: FilterConfig, attributes: dict | None) -> boo
             if isinstance(attribute_value, dict) and filt.label in attribute_value:
                 value = attribute_value[filt.label]
             else:
-                logger.warning(
-                    f"Label {filt.label} not found in attribute {filt.name} for document {doc.get('id', 'unknown')}"
-                )
-                return False
+                raise ValueError(f"Label {filt.label} not found in attribute {filt.name} for document {doc}")
         else:
             value = attribute_value
 
@@ -166,8 +156,8 @@ def passes_filter(doc: dict, filt: FilterConfig, attributes: dict | None) -> boo
             accepted = not accepted
 
         return accepted
-
     elif filt.type == FilterType.REMOVE_SPANS:
+        # not really a filter, but...
         spans = attributes[filt.name]
         new_text = remove_spans(doc["text"], spans)
 
@@ -189,25 +179,18 @@ def get_corpus_type(filename: str) -> str:
         return "dolma"
 
 
-def get_id_column_name(corpus_type: str) -> str:
+def get_id_column_name(corpus_type: str) -> str | dict[str, str]:
     """Get the top-level key that contains the ID (or the ID itself for flat structures)."""
     return CORPUS_TYPE_TO_ID_GUIDE[corpus_type]["key"]
 
 
-def extract_id(row: dict, corpus_type: str | None = None) -> str:
+def extract_id(row: dict, corpus_type: str) -> str:
     """Extract ID from row based on corpus type.
 
-    Args:
-        row: The row containing the document data
-        corpus_type: The type of corpus (e.g., "dclm", "dolma"). If None, tries to infer or defaults to "dolma"
+    Recursively navigates nested structures as defined in CORPUS_TYPE_TO_ID_GUIDE."""
+    guide = CORPUS_TYPE_TO_ID_GUIDE[corpus_type]
 
-    Returns:
-        The extracted ID as a string
-    """
-    if corpus_type is None:
-        corpus_type = "dolma"
-
-    guide = CORPUS_TYPE_TO_ID_GUIDE.get(corpus_type, CORPUS_TYPE_TO_ID_GUIDE["dolma"])
+    # grab the key, then navigate nested if needed
     val = row[guide["key"]]
 
     while "nested" in guide:
@@ -259,11 +242,12 @@ def _compute_percentile_threshold(
     )
 
     combined_sketch = next(iter(result))
-    return combined_sketch.get_quantile_value(1 - keep_fraction)
+    threshold = combined_sketch.get_quantile_value(1 - keep_fraction)
+    return threshold
 
 
 def calculate_percentile_thresholds(config: ConsolidateConfig) -> list[FilterConfig]:
-    """Resolve keep_fraction filters to lower_threshold using zephyr reduce.
+    """Resolve keep_fraction filters to lower_threshold using percentile calculation.
 
     Args:
         config: Consolidation configuration
@@ -284,7 +268,6 @@ def calculate_percentile_thresholds(config: ConsolidateConfig) -> list[FilterCon
             updated_filters.append(filt)
             continue
 
-        # Validate percentile
         if not (0 < filt.keep_fraction < 1):
             raise ValueError("keep_fraction must be between 0 and 1")
 
@@ -300,8 +283,6 @@ def calculate_percentile_thresholds(config: ConsolidateConfig) -> list[FilterCon
         # Compute threshold using reduction
         threshold = _compute_percentile_threshold(attr_paths, filt.name, filt.label, filt.keep_fraction)
         logger.info(f"Calculated threshold {threshold} for {filt.name} to keep {filt.keep_fraction} of documents")
-
-        # Create updated filter with threshold
         updated_filters.append(replace(filt, lower_threshold=threshold, keep_fraction=None))
 
     return updated_filters
@@ -313,19 +294,25 @@ def process_file_shard(shard, filters: list[FilterConfig], input_base: str) -> I
     input_path = next(iter(shard))
     corpus_type = get_corpus_type(input_path)
 
-    # Build attribute file paths for this input file
+    # Load all attribute files for this input file and build mapping
     attr_file_paths = {filt.name: rebase_file_path(input_base, input_path, filt.attribute_path) for filt in filters}
 
-    # Load all attributes into memory (small per file: thousands to hundreds of thousands of docs)
     attrs = {}
     for filt_name, attr_path in attr_file_paths.items():
-        if not fsspec_exists(attr_path):
-            logger.warning(f"Attribute file not found: {attr_path}")
-            continue
+        # Try exact path first, then look for compressed versions (.gz, .zst, etc.)
+        if fsspec_exists(attr_path):
+            final_attr_path = attr_path
+        else:
+            candidates = fsspec_glob(f"{attr_path}.*")
+            if candidates:
+                final_attr_path = candidates[0]
+            else:
+                logger.warning(f"Attribute file not found: {attr_path}")
+                continue
 
         # Build dict mapping doc_id -> attributes
         attr_dict = {}
-        for row in load_file(attr_path, columns=[get_id_column_name(corpus_type), "attributes"]):
+        for row in load_file(final_attr_path, columns=[get_id_column_name(corpus_type), "attributes"]):
             doc_id = extract_id(row, corpus_type)
             attr_dict[doc_id] = row["attributes"]
 

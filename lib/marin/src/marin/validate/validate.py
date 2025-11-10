@@ -36,19 +36,16 @@ import draccus
 import fsspec
 import numpy as np
 from marin.utilities.validation_utils import compute_global_mean_std, summarize_document
-from zephyr import Dataset, flow_backend
-from zephyr.readers import load_jsonl
+from zephyr import Dataset, flow_backend, load_jsonl
 
 
 @dataclass
 class ValidationConfig:
-    """Configuration for validation."""
-
     input_path: str
     """Path to top-level documents directory to validate"""
 
     num_examples_to_sample: int = 1024
-    """Number of documents to sample across all shards"""
+    """Number of documents to sample on each shard"""
 
 
 def validate_shard(documents: Iterator[dict], num_samples: int) -> Iterator[dict]:
@@ -176,9 +173,7 @@ def main(cfg: ValidationConfig) -> None:
     )
 
     result = list(backend.execute(pipeline))
-
-    if result:
-        print(f"✓ Validation complete: {result[0]}")
+    print(f"Validation complete: {result[0]}")
 
 
 if __name__ == "__main__":
