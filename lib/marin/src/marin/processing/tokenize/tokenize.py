@@ -51,6 +51,7 @@ from collections.abc import Sequence
 
 import draccus
 import transformers
+from huggingface_hub import dataset_info
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -96,6 +97,10 @@ class TokenizeConfig(TokenizeConfigBase):
     cache_path: str  # base path to save the tokenized files
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
+
+    sample_count: int | None = None
+    """Number of samples to tokenize. If None, tokenize all samples."""
+
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa
     """
     The format of the dataset. This is used to determine how to tokenize the data.
@@ -155,10 +160,14 @@ class HfTokenizeConfig(TokenizeConfigBase):
     id: str  # HF dataset id
     cache_path: str  # base path to save the tokenized files
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
+    revision: str | None = None  # HF dataset revision (commit hash, branch, or tag). Defaults to "main"
     name: str | None = None  # HF dataset name
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
     window_size_bytes: int = 10_000_000_000
+
+    sample_count: int | None = None
+    """Number of samples to tokenize. If None, tokenize all samples."""
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -270,6 +279,16 @@ def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches):
         yield from batch_processor(batch)
 
 
+def _resolve_hf_revision(dataset_id: str, revision: str | None) -> str:
+    """Resolve HuggingFace dataset revision using the HuggingFace Hub API."""
+    if revision is not None:
+        return revision
+
+    info = dataset_info(dataset_id)
+    assert info.sha is not None, "Failed to resolve dataset revision from HuggingFace Hub."
+    return info.sha
+
+
 def tokenize(config: TokenizeConfigBase):
     """Tokenize datasets using zephyr pipeline.
 
@@ -281,24 +300,59 @@ def tokenize(config: TokenizeConfigBase):
         train_paths = _get_filepaths_to_tokenize(config.train_paths) if config.train_paths else []
         validation_paths = _get_filepaths_to_tokenize(config.validation_paths) if config.validation_paths else []
     elif isinstance(config, HfTokenizeConfig):
-        # N.B. (power) it looks like this path is never taken, I'm not sure why
-        # this configuration class is even defined in this file. I stubbed out the
-        # actual download which seems sensible, but... yolo?
-        from marin.download.huggingface.download import DownloadConfig
-        from marin.download.huggingface.download_hf import download_hf
+        # Use HfFileSystem to construct hf:// URLs for streaming without downloading
+        try:
+            from huggingface_hub import HfFileSystem
+        except ImportError as e:
+            raise ImportError(
+                "HfTokenizeConfig requires huggingface_hub. Install it with: uv pip install huggingface_hub"
+            ) from e
 
-        download_dir = os.path.join(config.cache_path, "raw")
-        download_config = DownloadConfig(
-            hf_dataset_id=config.id,
-            gcs_output_path=download_dir,
-            hf_urls_glob=[],  # Download entire dataset
-        )
-        logger.info(f"Downloading HuggingFace dataset {config.id} to {download_dir}")
-        download_hf(download_config)
+        hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
+        resolved_revision = _resolve_hf_revision(config.id, config.revision)
 
-        # Tokenize the downloaded files
-        train_paths = _get_filepaths_to_tokenize([os.path.join(download_dir, "train")])
-        validation_paths = _get_filepaths_to_tokenize([os.path.join(download_dir, "validation")])
+        logger.info(f"Listing files in HuggingFace dataset {config.id} (revision: {resolved_revision})")
+
+        # Construct base path for the dataset
+        base_path = f"datasets/{config.id}@{resolved_revision}"
+
+        # List files for train and validation splits
+        # HF datasets have two common structures:
+        # 1. train/ and validation/ subdirectories
+        # 2. data/ directory with train-* and validation-* file prefixes
+        train_paths = []
+        validation_paths = []
+
+        for split_name in ["train", "validation"]:
+            found_files = []
+
+            # Try pattern 1: split subdirectory (e.g., train/*.parquet)
+            for ext in ["parquet", "jsonl", "jsonl.gz", "jsonl.zst", "jsonl.xz"]:
+                try:
+                    pattern = f"{base_path}/{split_name}/**/*.{ext}"
+                    found_files.extend(hf_fs.glob(pattern))
+                except Exception as e:
+                    logger.debug(f"No files found for pattern {pattern}: {e}")
+
+            # Try pattern 2: data directory with split prefix (e.g., data/train-*.parquet)
+            for ext in ["parquet", "jsonl", "jsonl.gz", "jsonl.zst", "jsonl.xz"]:
+                try:
+                    pattern = f"{base_path}/**/{split_name}-*.{ext}"
+                    found_files.extend(hf_fs.glob(pattern))
+                except Exception as e:
+                    logger.debug(f"No files found for pattern {pattern}: {e}")
+
+            # Convert to hf:// URLs and add to appropriate list
+            paths_to_add = [f"hf://{file_path}" for file_path in found_files]
+            if split_name == "train":
+                train_paths.extend(paths_to_add)
+            else:
+                validation_paths.extend(paths_to_add)
+
+        if train_paths:
+            logger.info(f"Found {len(train_paths)} training files in {config.id}")
+        if validation_paths:
+            logger.info(f"Found {len(validation_paths)} validation files in {config.id}")
     else:
         raise ValueError(f"Unknown config type: {type(config)}")
 
@@ -320,11 +374,17 @@ def tokenize(config: TokenizeConfigBase):
         logger.info(f"Grouped {len(paths)} files into {len(file_groups)} groups by size")
 
         # Now create the actual tokenization pipeline.
-        return (
+        ds = (
             Dataset.from_list(file_groups)
             .flat_map(lambda file_list: file_list)  # Unpack groups to individual files
             .flat_map(load_file)
-            .batch(100)
+        )
+
+        if config.sample_count is not None:
+            ds = ds.take(config.sample_count)
+
+        return (
+            ds.batch(100)
             .map_shard(lambda batches: _tokenize_batches(config, batches))
             .write_levanter_cache(os.path.join(config.cache_path, split_name), config.tokenizer, config.format)
         )
