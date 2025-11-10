@@ -41,7 +41,7 @@ from marin.resources import TpuPodConfig
 SLUGIFY_PATTERN = re.compile(r"[^a-z0-9]+")
 
 TARGET_EPOCHS = 3
-TRAIN_BATCH_SIZE = 384
+TRAIN_BATCH_SIZE = 2048
 
 # Row counts captured on 2025-11-07 via `uv run python lib/marin/tools/get_hf_dataset_schema.py ...`.
 SMOLTALK2_ROW_COUNTS = {
@@ -139,8 +139,8 @@ NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 mixture_sft_config = SimpleSFTConfig(
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=5e-6,
-    resources=TpuPodConfig(tpu_type="v4-64"),
+    learning_rate=1e-5,
+    resources=TpuPodConfig(tpu_type="v4-2048"),
     tokenizer=marin_tokenizer,
     model_name_or_path="marin-community/marin-8b-base",
     max_seq_len=8192,
@@ -156,15 +156,10 @@ mixture_config = lm_mixture_data_config(
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )
 
-llama_8b_blocked_cross_entropy = dataclasses.replace(
-    llama_8b,
-    cross_entropy_block_size=64000,
-)
-
 marin_8b_sft_smoltalk2_nemotron_v2 = default_sft(
-    name="marin_8b_sft_smoltalk2_nemotron_v2",
+    name="marin_8b_sft_smoltalk2_nemotron_v2_big",
     tokenized=mixture_config,
-    model_config=llama_8b_blocked_cross_entropy,
+    model_config=llama_8b,
     sft_config=mixture_sft_config,
     tags=["llama", "smoltalk2", "nemotron_v2", "sft"],
 )
