@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import subprocess
 import sys
 from pathlib import Path
@@ -80,8 +81,6 @@ def run_local(
     if not module_name:
         # Fallback to file name without extension
         module_name = script_path_obj.stem
-        import logging
-
         logging.warning(
             f"Could not derive proper module name for {script_path}, using fallback: {module_name}. "
             "Functions may not pickle correctly for Ray workers."

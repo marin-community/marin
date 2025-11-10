@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
 
 import fsspec
@@ -25,8 +26,6 @@ from tqdm import tqdm
 
 def ensure_parent_dir(path: str) -> None:
     """Create directories for `path` if necessary."""
-    import os
-
     # Use os.path.dirname for local paths, otherwise use fsspec
     if "://" in path:
         output_dir = path.rsplit("/", 1)[0]

@@ -18,6 +18,8 @@
 Usage: uv run python tests/benchmark_dedup_pipeline.py --backends ray threadpool [--profile]
 """
 
+import gzip
+import io
 import os
 import random
 import shutil
@@ -25,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -33,7 +36,7 @@ import click
 import msgspec
 import psutil
 import zstandard as zstd
-from zephyr import Dataset, create_backend
+from zephyr import Dataset, create_backend, load_jsonl
 
 WORDS = """
 the be to of and a in that have I it for not on with he as you do at this but his by from
@@ -103,8 +106,6 @@ def write_input_files(docs: Iterator[dict[str, Any]], input_dir: str, num_files:
 
 def create_pipeline(input_dir: str, output_dir: str) -> Dataset:
     """Create benchmark pipeline: load JSONL → map → deduplicate by simhash → write."""
-    from zephyr import load_jsonl
-
     return (
         Dataset.from_files(f"{input_dir}/*.jsonl.zst")
         .flat_map(load_jsonl)
@@ -125,9 +126,6 @@ def create_pipeline(input_dir: str, output_dir: str) -> Dataset:
 
 def count_jsonl_docs(file_path: str) -> int:
     """Count lines in JSONL file (supports .gz and .zst compression)."""
-    import gzip
-    import io
-
     if file_path.endswith(".gz"):
         with gzip.open(file_path, "rt") as f:
             return sum(1 for line in f if line.strip())
@@ -372,8 +370,6 @@ def main(
                 results.append(result)
             except Exception as e:
                 print(f"\nERROR with backend '{backend}': {e}")
-                import traceback
-
                 traceback.print_exc()
 
         # Summary comparison

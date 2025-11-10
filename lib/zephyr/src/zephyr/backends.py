@@ -16,14 +16,17 @@
 
 from __future__ import annotations
 
+import heapq
 import logging
 import os
 import pickle
+import re
 import zlib
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
+from itertools import groupby
 from typing import Any, Literal, Protocol, TypeVar
 
 import msgspec
@@ -384,8 +387,6 @@ def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
     Raises:
         ValueError: If multiple shards will write to the same file (pattern missing {shard})
     """
-    import re
-
     if total > 1 and "{shard" not in pattern:
         raise ValueError(
             f"Output pattern must contain '{{shard}}' placeholder when writing {total} shards. Got pattern: {pattern}"
@@ -577,9 +578,6 @@ def _sorted_merge_join(left_stream: Iterable, right_stream: Iterable, join_op) -
     Yields:
         Joined items according to join_type (inner or left)
     """
-    import heapq
-    from itertools import groupby
-
     # Materialize left stream and tag both streams
     left_items = list(left_stream)
     left_tagged = (("left", join_op.left_key_fn(item), item) for item in left_items)
@@ -621,9 +619,6 @@ def _merge_sorted_chunks(shard: Shard, key_fn: Callable) -> Iterator[tuple[objec
     Yields:
         Tuples of (key, iterator_of_items) for each unique key
     """
-    import heapq
-    from itertools import groupby
-
     # Create iterators for each chunk
     chunk_iterators = []
     for chunk_data in shard.iter_chunks():

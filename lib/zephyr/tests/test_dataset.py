@@ -14,11 +14,13 @@
 
 """Tests for Dataset API."""
 
+import json
 import time
 from pathlib import Path
 
 import pytest
-from zephyr import Dataset, create_backend
+from zephyr import Dataset, create_backend, load_file, load_parquet
+from zephyr.dataset import FilterOp, MapOp, WindowOp
 
 
 @pytest.fixture(autouse=True)
@@ -279,8 +281,6 @@ def test_operations_are_dataclasses():
     assert len(ds.operations) == 3
 
     # Check operation types
-    from zephyr.dataset import FilterOp, MapOp, WindowOp
-
     assert isinstance(ds.operations[0], MapOp)
     assert isinstance(ds.operations[1], FilterOp)
     assert isinstance(ds.operations[2], WindowOp)
@@ -388,8 +388,6 @@ def test_from_files_with_map(tmp_path, backend):
 
 def test_write_and_read_parquet(tmp_path, backend):
     """Test writing and reading parquet files."""
-    from zephyr import load_parquet
-
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -433,8 +431,6 @@ def test_write_and_read_parquet(tmp_path, backend):
 
 def test_write_and_read_parquet_nested(tmp_path, backend):
     """Test writing and reading parquet files with nested structures."""
-    from zephyr import load_parquet
-
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -474,8 +470,6 @@ def test_write_and_read_parquet_nested(tmp_path, backend):
 
 def test_load_file_parquet(tmp_path, backend):
     """Test load_file with .parquet files."""
-    from zephyr import load_file
-
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -507,14 +501,10 @@ def test_load_file_parquet(tmp_path, backend):
 
 def test_load_file_mixed_directory(tmp_path, backend):
     """Test load_file with mixed JSONL and Parquet files."""
-    from zephyr import load_file
-
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
     # Create JSONL file
-    import json
-
     jsonl_data = [
         {"id": 1, "source": "jsonl"},
         {"id": 2, "source": "jsonl"},
@@ -548,8 +538,6 @@ def test_load_file_mixed_directory(tmp_path, backend):
 
 def test_load_file_unsupported_extension(tmp_path, backend):
     """Test load_file raises ValueError for unsupported file extensions."""
-    from zephyr import load_file
-
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 

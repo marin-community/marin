@@ -14,6 +14,8 @@
 
 """Tests for deduplicate and group_by operations."""
 
+import hashlib
+
 import pytest
 from zephyr import Dataset, create_backend
 
@@ -200,7 +202,6 @@ def test_deduplicate_with_num_output_shards(backend):
 
 def test_group_by_with_hash_key_large(backend, large_document_dataset):
     """Test group_by with MD5 hash on larger dataset, counting duplicates."""
-    import hashlib
 
     def compute_hash(doc):
         """Compute MD5 hash of content field."""

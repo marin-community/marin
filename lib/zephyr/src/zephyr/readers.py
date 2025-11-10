@@ -185,9 +185,6 @@ def load_zip_members(zip_path: str, pattern: str = "*") -> Iterator[dict]:
         ... )
         >>> output_files = list(backend.execute(ds))
     """
-
-    import fsspec
-
     with fsspec.open(zip_path, "rb") as f:
         with zipfile.ZipFile(f) as zf:
             for member_name in zf.namelist():

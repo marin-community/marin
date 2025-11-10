@@ -14,9 +14,14 @@
 
 """Tests for backend implementations."""
 
+import gzip
+import io
+import json
+
 import ray
 from zephyr.backend_factory import flow_backend
 from zephyr.backends import RayBackend, format_shard_path
+from zephyr.writers import write_jsonl_file
 
 
 def test_format_shard_path_basic():
@@ -74,8 +79,6 @@ def test_format_shard_path_basename_placeholder():
 
 def test_write_jsonl_infers_compression_from_gz_extension(tmp_path):
     """Test that .gz extension triggers gzip compression."""
-    from zephyr.writers import write_jsonl_file
-
     records = [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]
     output_path = str(tmp_path / "test.jsonl.gz")
 
@@ -84,9 +87,6 @@ def test_write_jsonl_infers_compression_from_gz_extension(tmp_path):
     assert result["count"] == 2
 
     # Verify file was created and is gzip compressed
-    import gzip
-    import json
-
     with gzip.open(output_path, "rt") as f:
         lines = f.readlines()
         assert len(lines) == 2
@@ -96,8 +96,6 @@ def test_write_jsonl_infers_compression_from_gz_extension(tmp_path):
 
 def test_write_jsonl_no_compression_without_gz_extension(tmp_path):
     """Test that files without .gz extension are not compressed."""
-    from zephyr.writers import write_jsonl_file
-
     records = [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]
     output_path = str(tmp_path / "test.jsonl")
 
@@ -106,8 +104,6 @@ def test_write_jsonl_no_compression_without_gz_extension(tmp_path):
     assert result["count"] == 2
 
     # Verify file was created and is NOT compressed
-    import json
-
     with open(output_path, "r") as f:
         lines = f.readlines()
         assert len(lines) == 2
@@ -130,8 +126,6 @@ def test_flow_backend_defaults_to_ray_when_initialized():
 
 def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):
     """Test that .zst extension triggers zstd compression."""
-    from zephyr.writers import write_jsonl_file
-
     records = [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]
     output_path = str(tmp_path / "test.jsonl.zst")
 
@@ -140,9 +134,6 @@ def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):
     assert result["count"] == 2
 
     # Verify file was created and is zstd compressed
-    import io
-    import json
-
     import zstandard as zstd
 
     dctx = zstd.ZstdDecompressor()
