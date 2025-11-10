@@ -325,8 +325,8 @@ def default_train(
     inner_config = TrainLmConfig(
         data=pretraining_data,
         trainer=TrainerConfig(
-            model_axis_size=2,
-            tensor_parallel_axes=["heads"],
+            # model_axis_size=2,
+            # tensor_parallel_axes=["heads"],
             tracker=WandbConfig(
                 project="marin",
                 tags=[*tags],

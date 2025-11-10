@@ -664,7 +664,7 @@ def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]
         steps_per_hf_export=-1,  # disable checkpointing
     )
 
-    run_name = f"hacktx_{size}_gdn_{seq_len}"
+    run_name = f"hacktx_{size}_gdn_{seq_len}_flash"
     desc = f"Hackable Transformer ({size}) w/ hybrid Gated DeltaNet and standard attention layers (Muon)"
     cfg = SpeedrunConfig(author=AUTHOR, description=desc, model_config=model_cfg, train_config=train)
     return run_name, cfg
@@ -686,9 +686,8 @@ if __name__ == "__main__":
         _cls.__module__ = _IMPORT_PATH
     ###
 
+    sizes = ["130m"]
     # sizes = ["130m", "300m", "520m", "1_2b"]
-    # sizes = ["130m"]
-    sizes = ["300m", "520m", "1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
     sink = False
     steps = []
