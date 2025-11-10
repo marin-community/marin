@@ -13,20 +13,40 @@
 # limitations under the License.
 
 """
-Main for running Levanter's tokenizer infrastructure on a dataset using an existing Ray cluster.
+Tokenize datasets using zephyr pipeline and write to Levanter cache format.
+
+Supports both regular file paths and HuggingFace datasets. For HF datasets, downloads
+them first then tokenizes the downloaded files.
 
 Usage:
-    ray job submit --working-dir . --no-wait -- python -m marin.processing.tokenize \
-        --train_paths '[<input-dir>]' --cache_path <cache-path> --tokenizer <tokenizer_name>
-        --validation_paths null
+    # Tokenize a single file for testing
+    uv run zephyr --entry-point=main \
+        --backend=ray --cluster=us-central2 --max-parallelism=10 --memory=2GB \
+        lib/marin/src/marin/processing/tokenize/tokenize.py \
+        --train_paths '["gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-d1522a/0001.jsonl.gz"]' \
+        --cache_path gs://marin-us-central2/cache/test-tokenize \
+        --tokenizer gpt2 \
+        --validation_paths '[]'
 
-    train_paths: The input directory containing the jsonl files for training, or null/None
-    validation_paths: The input directory containing jsonl files for validation, or null/None
-    cache_path: The base directory to save the tokenized files
-    tokenizer: The name of the tokenizer to use. This must be the same as the tokenizer used in the Levanter
-               training run
+    # Tokenize entire directory
+    uv run zephyr --entry-point=main \
+        --backend=ray --cluster=us-central2 --max-parallelism=500 --memory=4GB \
+        lib/marin/src/marin/processing/tokenize/tokenize.py \
+        --train_paths '["gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-d1522a/"]' \
+        --cache_path gs://marin-us-central2/cache/ar5iv-gpt2 \
+        --tokenizer gpt2 \
+        --validation_paths '[]'
 
-    The data will be tokenized to $cache_path
+Args:
+    train_paths: List of input paths (files or directories) for training, or empty list
+    validation_paths: List of input paths for validation, or empty list
+    cache_path: Base directory to save tokenized files (train/ and validation/ subdirs)
+    tokenizer: Tokenizer name (must match tokenizer used in training run)
+    format: LmDatasetFormatBase (default: TextLmDatasetFormat())
+
+The tokenized data will be written to:
+    {cache_path}/train/     - Training cache
+    {cache_path}/validation/ - Validation cache (if provided)
 """
 
 import abc
@@ -37,12 +57,7 @@ import re
 from collections.abc import Sequence
 
 import draccus
-import fsspec
-import humanfriendly
-import levanter
-import ray
 import transformers
-from levanter.data.sharded_datasource import ShardedDataSource, UrlDataSource
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -51,8 +66,8 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
-from levanter.store.cache import CacheOptions
-from ray.runtime_env import RuntimeEnv
+from zephyr import Dataset, create_backend, flow_backend
+from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
 from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
@@ -80,11 +95,6 @@ class TokenizeConfigBase(abc.ABC):
         """
         pass
 
-    cache_path: str
-    tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
-    cache_options: CacheOptions | None = None
-    format: LmDatasetFormatBase = TextLmDatasetFormat()
-
 
 @dataclasses.dataclass(frozen=True)
 class TokenizeConfig(TokenizeConfigBase):
@@ -93,12 +103,8 @@ class TokenizeConfig(TokenizeConfigBase):
     cache_path: str  # base path to save the tokenized files
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
-    cache_options: CacheOptions | None = None
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa
-    """
-    The format of the dataset. This is used to determine how to tokenize the data.
-    See Levanter's documentation for more details.
-    """
+    window_size_bytes: int = 10_000_000_000
     allow_test_in_train: bool = False
     """
     If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
@@ -149,27 +155,24 @@ def _validate_train_urls(train_paths: list[str | InputName], warn):
     Raises a ValueError if a forbidden pattern is found.
     """
     for item in train_paths:
-        url_or_name_to_check = None
+        url_or_name_to_check: str = ""
         if isinstance(item, str):
             url_or_name_to_check = item
         elif isinstance(item, InputName):
-            url_or_name_to_check = item.name
+            url_or_name_to_check = item.name or ""
 
-        if url_or_name_to_check:
-            # \b doesn't work because of underscores
-            if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url_or_name_to_check) or re.search(
-                r"validation", url_or_name_to_check
-            ):
-                if warn:
-                    logger.warning(
-                        f"Warning: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
-                    )
-                else:
-                    raise ValueError(
-                        f"Error: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
-                        "('test' or 'validation'). "
-                        "Please ensure training data does not include test or validation sets."
-                    )
+        # \b doesn't work because of underscores
+        if re.search(r"[^a-zA-Z]test[^a-zA-Z]", url_or_name_to_check) or re.search(r"validation", url_or_name_to_check):
+            if warn:
+                logger.warning(
+                    f"Warning: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
+                )
+            else:
+                raise ValueError(
+                    f"Error: Training data URL or InputName '{url_or_name_to_check}' contains a forbidden pattern "
+                    "('test' or 'validation'). "
+                    "Please ensure training data does not include test or validation sets."
+                )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -183,8 +186,8 @@ class HfTokenizeConfig(TokenizeConfigBase):
     tokenizer: str  # tokenizer name. Should be the same as you intend to use in the tokenizer spec for the training run
     name: str | None = None  # HF dataset name
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
-    cache_options: CacheOptions | None = None
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
+    window_size_bytes: int = 10_000_000_000
 
     def as_lm_dataset_source_config(
         self, actual_output_path: str | InputName | None, *, include_raw_paths=True
@@ -198,144 +201,98 @@ class HfTokenizeConfig(TokenizeConfigBase):
         )
 
 
-def _expand_directories(config: UrlDatasetSourceConfig, allow_test_in_train) -> UrlDatasetSourceConfig:
-    """
-    Expand directories in the config to globs.
-    """
-
-    train_paths = _get_filepaths_to_tokenize(config.train_urls)
-    _validate_train_urls(train_paths, allow_test_in_train)
-    validation_paths = _get_filepaths_to_tokenize(config.validation_urls)
-
-    return dataclasses.replace(config, train_urls=train_paths, validation_urls=validation_paths)
-
-
-# most of the work is done in other ray remote functions, so we set 0.1
-@ray.remote(num_cpus=0.1)
 def tokenize(config: TokenizeConfigBase):
-    source_config = config.as_lm_dataset_source_config(config.cache_path)
+    """Tokenize datasets using zephyr pipeline.
+
+    Processes train and validation splits separately, writing to Levanter cache format.
+    For HuggingFace datasets, downloads them first then tokenizes the downloaded files.
+    """
 
     if isinstance(config, TokenizeConfig):
-        # TODO: Levanter doesn't automatically expand directories to globs, but by convention we do in Marin
-        # we should backport this to Levanter
-        source_config = _expand_directories(source_config, config.allow_test_in_train)
+        train_paths = _get_filepaths_to_tokenize(config.train_paths) if config.train_paths else []
+        validation_paths = _get_filepaths_to_tokenize(config.validation_paths) if config.validation_paths else []
+    elif isinstance(config, HfTokenizeConfig):
+        # Download HF dataset first, then tokenize the downloaded files
+        from marin.download.huggingface.download import DownloadConfig
+        from marin.download.huggingface.download_hf import download_hf
 
-    train_source = source_config.get_shard_source("train")
-    validation_source = source_config.get_shard_source("validation")
-
-    if train_source is None and validation_source is None:
-        raise ValueError(
-            "No input files specified. Nothing to do. Sources:\n"
-            f"Train source: {train_source}\n\n"
-            f"validation source: {validation_source}"
+        download_dir = os.path.join(config.cache_path, "raw")
+        download_config = DownloadConfig(
+            hf_dataset_id=config.id,
+            gcs_output_path=download_dir,
+            hf_urls_glob=[],  # Download entire dataset
         )
+        logger.info(f"Downloading HuggingFace dataset {config.id} to {download_dir}")
+        download_hf(download_config)
 
-    tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
-    batch_tokenizer = preprocessor_for_format(config.format, tokenizer)
-
-    if train_source is not None:
-        options = config.cache_options
-        if options is None and isinstance(config, TokenizeConfig):
-            options = _heuristic_cache_options(config.train_paths)
-        else:
-            options = CacheOptions()
-
-        train_ledger = (
-            ray.remote(_levanter_build_cache)
-            .options(
-                name=f"tokenize::{config.cache_path}",
-                runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}),
-                max_retries=50,
-            )
-            .remote(
-                train_source,
-                batch_tokenizer,
-                os.path.join(config.cache_path, "train"),
-                options,
-            )
-        )
+        # Tokenize the downloaded files
+        train_paths = _get_filepaths_to_tokenize([os.path.join(download_dir, "train")])
+        validation_paths = _get_filepaths_to_tokenize([os.path.join(download_dir, "validation")])
     else:
-        train_ledger = None
+        raise ValueError(f"Unknown config type: {type(config)}")
 
-    if validation_source is not None:
-        options = config.cache_options
-        if options is None and isinstance(config, TokenizeConfig):
-            options = _heuristic_cache_options(config.validation_paths)
-        else:
-            options = CacheOptions()
+    if not train_paths and not validation_paths:
+        raise ValueError("No input files specified. Nothing to do.")
 
-        validation_ledger = (
-            ray.remote(_levanter_build_cache)
-            .options(
-                name=f"tokenize::{config.cache_path}",
-                runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}),
-                max_retries=50,
-            )
-            .remote(
-                validation_source,
-                batch_tokenizer,
-                os.path.join(config.cache_path, "validation"),
-                options,
+    backend = flow_backend()
+
+    def tokenize_batches(batches):
+        """Load tokenizer once per shard and process all batches."""
+        tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
+        batch_processor = preprocessor_for_format(config.format, tokenizer)
+
+        for batch in batches:
+            yield from batch_processor(batch)
+
+    def group_files_by_size(file_infos, max_bytes: int):
+        """Group files into lists by total size threshold."""
+        current_group = []
+        current_size = 0
+
+        for info in file_infos:
+            if current_size + info["size"] >= max_bytes and current_group:
+                yield current_group
+                current_group = []
+                current_size = 0
+            current_group.append(info["filename"])
+            current_size += info["size"]
+
+        if current_group:
+            yield current_group
+
+    def create_pipeline(paths: list[str], split_name: str) -> Dataset:
+        """Create a tokenization pipeline for a set of file paths."""
+        logger.info(f"Statting {len(paths)} {split_name} files to compute groups")
+
+        file_stats = list(
+            create_backend("threadpool").execute(
+                Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)})
             )
         )
-    else:
-        validation_ledger = None
+        file_groups = list(group_files_by_size(file_stats, config.window_size_bytes))
+        logger.info(f"Grouped {len(paths)} files into {len(file_groups)} groups by size")
 
-    if train_ledger is not None:
-        ray.get(train_ledger)
-    if validation_ledger is not None:
-        ray.get(validation_ledger)
+        # Main pipeline processes file groups
+        return (
+            Dataset.from_list(file_groups)
+            .flat_map(lambda file_list: file_list)  # Unpack groups to individual files
+            .flat_map(load_file)
+            .batch(100)
+            .map_shard(tokenize_batches)
+            .write_levanter_cache(os.path.join(config.cache_path, split_name), config.tokenizer, config.format)
+        )
 
+    if train_paths:
+        list(backend.execute(create_pipeline(train_paths, "train-{shard:05d}")))
 
-def _heuristic_cache_options(paths: list[str]):
-    # attempt to sniff out a good default. We don't want to use tons of processors if there are a lot of small
-    # data files. Rule of thumb: 1 processor per 10GB (capping at 1024, per normal)
-    # This reduces contention when writing to gcs and should hopefully mitigate some cost spikes
-
-    paths = _get_filepaths_to_tokenize(paths)
-    if paths:
-        total_size = sum(fsspec_size(path) for path in paths)
-        num_files = len(paths)
-        num_processors = min(1024, max(1, total_size // 10_000_000_000, num_files))
-        human_size = humanfriendly.format_size(total_size)
-        logger.info(f"Using {num_processors} processors for caching {num_files} files of total size {human_size}")
-        options = CacheOptions(num_shard_groups=num_processors)
-    else:
-        options = CacheOptions()
-    return options
+    if validation_paths:
+        list(backend.execute(create_pipeline(validation_paths, "validation-{shard:05d}")))
 
 
-def _levanter_build_cache(source, batch_tokenizer, output_path, options: CacheOptions):
-    from levanter.data.metrics_monitor import LoggerMetricsMonitor
-    from levanter.store.cache import build_or_load_cache
-
-    cache = build_or_load_cache(
-        cache_dir=output_path,
-        source=source,
-        processor=batch_tokenizer,
-        await_finished=False,
-        monitors=[LoggerMetricsMonitor("ray")],
-        options=options,
-    )
-    cache.await_finished()
-
-
-def _create_source(input_paths: str | list[str]) -> ShardedDataSource:
-    if isinstance(input_paths, str) and not _is_probably_path(input_paths):
-        source = levanter.data.datasource_from_hf(input_paths, split="train")
-    else:
-        if isinstance(input_paths, str):
-            input_paths = [input_paths]
-
-        filepaths_to_tokenize = _get_filepaths_to_tokenize(input_paths)
-
-        if len(filepaths_to_tokenize) == 0:
-            raise ValueError(f"No valid json/jsonl/parquet files found to tokenize in {input_paths}")
-
-        logger.info(f"Found {len(filepaths_to_tokenize)} files to tokenize.")
-        source = UrlDataSource(filepaths_to_tokenize)
-
-    return source
+@draccus.wrap()
+def main(config: TokenizeConfig):
+    """Main entry point for tokenizing datasets with TokenizeConfig."""
+    tokenize(config)
 
 
 def _get_files_by_extensions(input_paths: list[str], extensions: list[str]) -> list[str]:
@@ -382,26 +339,3 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
         )
 
     return out
-
-
-def _is_probably_path(path: str) -> bool:
-    """see if it looks like a real path or not, in which case it might be an hf dataset"""
-
-    protocol, _ = fsspec.core.split_protocol(path)
-
-    if protocol is not None:
-        return True
-
-    if fsspec_isdir(path):
-        return True
-
-    return False
-
-
-@draccus.wrap()
-def main(config: TokenizeConfig):
-    tokenize(config)
-
-
-if __name__ == "__main__":
-    main()

@@ -98,11 +98,37 @@ Map the given function over the dataset, transforming the elements.
 
 Return a new dataset containing only elements where `fn(item)` returns True-ish.
 
-`batch(window_size)`
+`window(size)`
 
-Given a dataset of `item`, return a dataset of `list[item]` where each list is a
-distinct set of `window_size` elements. If the dataset is sharded, batching is
+Given a dataset of `item`, return a dataset of `list[item]` where each list
+contains up to `size` elements. If the dataset is sharded, windowing is
 independently performed on each shard.
+
+`window_by(folder_fn, initial_state=None)`
+
+Window elements using a custom folder function that controls window boundaries.
+The folder function receives `(state, item)` and returns `(should_continue, new_state)`.
+When `should_continue` is False, the current window closes and a new window
+starts with the item that triggered the close.
+
+This enables custom windowing logic such as grouping by total size, time windows,
+or any other stateful partitioning strategy.
+
+```python
+# Window files by total size < 10GB
+ds = (Dataset
+  .from_list([{"path": "f1.txt", "size": 5_000_000_000}, ...])
+  .window_by(
+    folder_fn=lambda total_size, item: (
+      total_size + item["size"] < 10_000_000_000,
+      total_size + item["size"]
+    ),
+    initial_state=0
+  )
+)
+```
+
+`batch(size)` is an alias for `window(size)` for backwards compatibility.
 
 `write_{jsonl|parquet}(file_pattern)`
 

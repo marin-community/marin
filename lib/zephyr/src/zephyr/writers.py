@@ -40,26 +40,7 @@ def ensure_parent_dir(path: str) -> None:
 
 
 def write_jsonl_file(records: Iterable, output_path: str) -> dict:
-    """Write records to a JSONL file with automatic compression.
-
-    Compression is automatically inferred from the file extension (.gz and .zst supported).
-    Useful for writing to custom output paths in map operations where you need control over
-    the destination path.
-
-    Args:
-        records: Records to write (each should be JSON-serializable)
-        output_path: Path to output file (supports local and cloud storage)
-
-    Returns:
-        Dict with metadata: {"path": output_path, "count": num_records}
-
-    Example:
-        def process_task(task):
-            records = (transform(row) for row in load_data(task))
-            return write_jsonl_file(records, f"{task['output_dir']}/data.jsonl.gz")
-
-        pipeline = Dataset.from_list(tasks).map(process_task)
-    """
+    """Write records to a JSONL file with automatic compression."""
     ensure_parent_dir(output_path)
 
     count = 0
@@ -89,14 +70,7 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
 
 
 def infer_parquet_type(value):
-    """Recursively infer PyArrow type from a Python value.
-
-    Args:
-        value: Python value
-
-    Returns:
-        PyArrow type
-    """
+    """Recursively infer PyArrow type from a Python value."""
     import pyarrow as pa
 
     if isinstance(value, bool):
@@ -121,14 +95,7 @@ def infer_parquet_type(value):
 
 
 def infer_parquet_schema(record: dict):
-    """Infer PyArrow schema from a dictionary record.
-
-    Args:
-        record: Dictionary record
-
-    Returns:
-        PyArrow schema
-    """
+    """Infer PyArrow schema from a dictionary record."""
     import pyarrow as pa
 
     fields = []
@@ -184,5 +151,38 @@ def write_parquet_file(
         if batch:
             table = pa.Table.from_pylist(batch, schema=actual_schema)
             writer.write_table(table)
+
+    return {"path": output_path, "count": count}
+
+
+def write_levanter_cache(
+    records: Iterable,
+    output_path: str,
+    tokenizer_name: str,
+    format: object,  # LmDatasetFormatBase  # noqa: A002
+) -> dict:
+    """Write tokenized records to Levanter cache format.
+
+    Uses SerialCacheWriter to write records in the TreeStore/JaggedArrayStore format
+    that Levanter expects for cached tokenized datasets.
+    """
+    from levanter.store.cache import SerialCacheWriter
+
+    ensure_parent_dir(output_path)
+
+    # Collect records to get exemplar and write
+    try:
+        exemplar = next(iter(records))
+    except StopIteration:
+        return {"path": output_path, "count": 0}
+
+    metadata = {"tokenizer": tokenizer_name, "format": str(format)}
+
+    count = 0
+    with SerialCacheWriter(output_path, exemplar, metadata) as writer:
+        writer.write_batch([exemplar])
+        for record in records:
+            writer.write_batch([record])
+            count += 1
 
     return {"path": output_path, "count": count}

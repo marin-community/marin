@@ -71,6 +71,72 @@ def test_batch_exact_size(backend):
     assert batches == [[1, 2, 3], [4, 5, 6]]
 
 
+def test_window(backend):
+    """Test window operation (same as batch)."""
+    ds = Dataset.from_list([[1, 2, 3, 4, 5]]).flat_map(lambda x: x).window(2)
+    windows = list(backend.execute(ds))
+    assert windows == [[1, 2], [3, 4], [5]]
+
+
+def test_window_by_size_based(backend):
+    """Test window_by with size-based windowing."""
+    data = [
+        {"id": 1, "size": 5_000_000_000},  # 5GB
+        {"id": 2, "size": 6_000_000_000},  # 6GB - triggers new window
+        {"id": 3, "size": 3_000_000_000},  # 3GB
+        {"id": 4, "size": 8_000_000_000},  # 8GB - triggers new window
+    ]
+
+    # Use flat_map to ensure all items are in a single shard
+    ds = (
+        Dataset.from_list([data])
+        .flat_map(lambda x: x)
+        .window_by(
+            folder_fn=lambda total_size, item: (total_size + item["size"] < 10_000_000_000, total_size + item["size"]),
+            initial_state=0,
+        )
+    )
+
+    windows = list(backend.execute(ds))
+    # Window 1: [id=1 (5GB)] - total 5GB
+    # Window 2: [id=2 (6GB), id=3 (3GB)] - total 9GB
+    # Window 3: [id=4 (8GB)] - total 8GB
+    assert len(windows) == 3
+    assert len(windows[0]) == 1
+    assert windows[0][0]["id"] == 1
+    assert len(windows[1]) == 2
+    assert windows[1][0]["id"] == 2
+    assert windows[1][1]["id"] == 3
+    assert len(windows[2]) == 1
+    assert windows[2][0]["id"] == 4
+
+
+def test_window_by_count_based(backend):
+    """Test window_by with custom count logic."""
+    data = list(range(1, 11))
+
+    # Window by sum < 10
+    # Use flat_map to ensure all items are in a single shard
+    ds = (
+        Dataset.from_list([data])
+        .flat_map(lambda x: x)
+        .window_by(
+            folder_fn=lambda total, item: (total + item < 10, total + item),
+            initial_state=0,
+        )
+    )
+
+    windows = list(backend.execute(ds))
+    # Window 1: [1, 2, 3] - sum = 6
+    # Window 2: [4, 5] - sum = 9
+    # Window 3: [6] - sum = 6
+    # Window 4: [7] - sum = 7
+    # Window 5: [8] - sum = 8
+    # Window 6: [9] - sum = 9
+    # Window 7: [10] - sum = 10
+    assert len(windows) >= 5
+
+
 def double(x):
     """Simple function for map tests."""
     return x * 2
@@ -213,12 +279,14 @@ def test_operations_are_dataclasses():
     assert len(ds.operations) == 3
 
     # Check operation types
-    from zephyr.dataset import BatchOp, FilterOp, MapOp
+    from zephyr.dataset import FilterOp, MapOp, WindowOp
 
     assert isinstance(ds.operations[0], MapOp)
     assert isinstance(ds.operations[1], FilterOp)
-    assert isinstance(ds.operations[2], BatchOp)
-    assert ds.operations[2].batch_size == 2
+    assert isinstance(ds.operations[2], WindowOp)
+    # WindowOp has folder_fn and initial_state
+    assert callable(ds.operations[2].folder_fn)
+    assert ds.operations[2].initial_state == 0
 
 
 def test_from_files_basic(tmp_path):

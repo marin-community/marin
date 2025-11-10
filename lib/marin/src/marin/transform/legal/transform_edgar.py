@@ -13,8 +13,6 @@
 # limitations under the License.
 
 """
-Anything which is not inside ray.remote function will be executed on the head node, so keep it to minimum.
-path: scripts/legal/transform_edgar.py
 Inputs: raw parquet files, Output: jsonl.gz files in dolma format
 
 Example Usage:

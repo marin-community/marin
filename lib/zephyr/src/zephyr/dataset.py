@@ -39,36 +39,35 @@ class FilterOp:
 
 
 @dataclass
-class BatchOp:
-    """Batch operation - groups elements into fixed-size batches."""
+class WindowOp:
+    """Window operation - groups elements into windows using a folder function.
 
-    batch_size: int
+    The folder function receives (state, item) and returns (should_continue, new_state).
+    When should_continue is False, the current window is closed and a new window
+    starts with the item that triggered the close.
+    """
+
+    folder_fn: Callable  # (state, item) -> (should_continue, new_state)
+    initial_state: object
 
 
 @dataclass
-class WriteJsonlOp:
-    """Write operation for JSONL files.
+class WriteDataOp:
+    """Unified write operation for all output formats.
 
-    Writes records to JSONL files. Compression is inferred from the file extension
-    (.gz suffix enables gzip compression).
+    Supports writing to JSONL, Parquet, or Levanter cache formats.
+    The writer_type determines which writer function is used.
     Supports path patterns with {shard}, {total}, {basename} substitutions.
     """
 
     output_pattern: str
+    writer_type: str  # "jsonl", "parquet", or "levanter_cache"
 
-
-@dataclass
-class WriteParquetOp:
-    """Write operation for Parquet files.
-
-    Writes records to Parquet files with optional schema.
-    Batches records before writing for efficiency.
-    Supports path patterns with {shard}, {total}, {basename} substitutions.
-    """
-
-    output_pattern: str
-    schema: object | None = None  # pyarrow.Schema, but avoid import here
-    batch_size: int = 1000
+    # Format-specific parameters (only used by relevant writer)
+    schema: object | None = None  # For parquet (pyarrow.Schema)
+    batch_size: int = 1000  # For parquet
+    tokenizer_name: str | None = None  # For levanter_cache
+    format: object | None = None  # For levanter_cache (LmDatasetFormatBase)
 
 
 @dataclass
@@ -182,9 +181,8 @@ class SortedMergeJoinOp:
 Operation = (
     MapOp
     | FilterOp
-    | BatchOp
-    | WriteJsonlOp
-    | WriteParquetOp
+    | WindowOp
+    | WriteDataOp
     | FlatMapOp
     | MapShardOp
     | ReshardOp
@@ -262,8 +260,7 @@ class Dataset(Generic[T]):
         """Create dataset from file glob pattern.
 
         This method finds all files matching the glob pattern and returns a
-        dataset of file paths. Use .write_jsonl() or .write_parquet() to write
-        output files with explicit path patterns.
+        dataset of file paths.
 
         Args:
             pattern: Glob pattern (e.g., "/input/**/*.jsonl.gz", "gs://bucket/data/*.parquet")
@@ -345,22 +342,72 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, FilterOp(predicate)])
 
+    def window(self, size: int) -> Dataset[list[T]]:
+        """Window dataset elements into fixed-size lists.
+
+        Args:
+            size: Maximum number of elements per window
+
+        Returns:
+            New dataset with window operation appended
+
+        Example:
+            >>> backend = create_backend("sync")
+            >>> ds = Dataset.from_list([1, 2, 3, 4, 5]).window(2)
+            >>> list(backend.execute(ds))
+            [[1, 2], [3, 4], [5]]
+        """
+
+        # Implement count-based windowing using folder function
+        # count tracks number of items in current window
+        # We continue if adding this item won't exceed size
+        def count_folder(count: int, item: T) -> tuple[bool, int]:
+            return (count < size, count + 1)
+
+        return Dataset(self.source, [*self.operations, WindowOp(count_folder, 0)])
+
+    def window_by(
+        self,
+        folder_fn: Callable[[object, T], tuple[bool, object]],
+        initial_state: object = None,
+    ) -> Dataset[list[T]]:
+        """Window elements using a custom folder function.
+
+        The folder function controls window boundaries by maintaining state
+        and deciding whether to continue the current window or start a new one.
+
+        Args:
+            folder_fn: Function (state, item) -> (should_continue, new_state)
+                      Returns (True, new_state) to add item to current window
+                      Returns (False, new_state) to close window and start new one with item
+            initial_state: Initial accumulator state (default: None)
+
+        Returns:
+            New dataset with window operation appended
+
+        Example:
+            >>> # Window files by total size < 10GB
+            >>> backend = create_backend("sync")
+            >>> ds = (Dataset
+            ...     .from_list([{"size": 5_000_000_000}, {"size": 6_000_000_000}, {"size": 3_000_000_000}])
+            ...     .window_by(
+            ...         folder_fn=lambda total, item: (total + item["size"] < 10_000_000_000, total + item["size"]),
+            ...         initial_state=0
+            ...     )
+            ... )
+        """
+        return Dataset(self.source, [*self.operations, WindowOp(folder_fn, initial_state)])
+
     def batch(self, batch_size: int) -> Dataset[list[T]]:
-        """Batch dataset elements into fixed-size lists.
+        """Alias for window() for backwards compatibility.
 
         Args:
             batch_size: Number of elements per batch
 
         Returns:
-            New dataset with batch operation appended
-
-        Example:
-            >>> backend = create_backend("sync")
-            >>> ds = Dataset.from_list([1, 2, 3, 4, 5]).batch(2)
-            >>> list(backend.execute(ds))
-            [[1, 2], [3, 4], [5]]
+            New dataset with window operation appended
         """
-        return Dataset(self.source, [*self.operations, BatchOp(batch_size)])
+        return self.window(batch_size)
 
     def flat_map(self, fn: Callable[[T], Iterable[R]]) -> Dataset[R]:
         """Apply function that returns an iterable, flattening results.
@@ -449,26 +496,9 @@ class Dataset(Generic[T]):
     def write_jsonl(self, output_pattern: str) -> Dataset[str]:
         """Write records as JSONL files.
 
-        Writes each input stream to a separate JSONL file. The output pattern
-        supports substitutions: {shard:05d}, {total:05d}, {basename}.
-
         Compression is automatically inferred from the file extension.
-        Args:
-            output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}-of-{total:05d}.jsonl.gz")
-
-        Returns:
-            Dataset of output file paths written
-
-        Example:
-            >>> backend = create_backend("ray", max_parallelism=10)
-            >>> ds = (Dataset
-            ...     .from_files("/input", "*.jsonl.gz")
-            ...     .map(lambda path: process_file(path))
-            ...     .write_jsonl("/output/processed-{shard:05d}-of-{total:05d}.jsonl.gz")
-            ... )
-            >>> output_files = list(backend.execute(ds))
         """
-        return Dataset(self.source, [*self.operations, WriteJsonlOp(output_pattern)])
+        return Dataset(self.source, [*self.operations, WriteDataOp(output_pattern, writer_type="jsonl")])
 
     def write_parquet(
         self,
@@ -478,30 +508,37 @@ class Dataset(Generic[T]):
     ) -> Dataset[str]:
         """Write records as Parquet files.
 
-        Writes records to Parquet files, batching for efficiency. Schema can be
-        provided or inferred from the first record or dataclass type.
-        The output pattern supports substitutions: {shard:05d}, {total:05d}, {basename}.
-
-        Args:
-            output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}-of-{total:05d}.parquet")
-            schema: PyArrow schema (optional, will be inferred if not provided)
-            batch_size: Number of records to batch before writing (default: 1000)
-
-        Returns:
-            Dataset of output file paths written
-
-        Example:
-            >>> import pyarrow as pa
-            >>> backend = create_backend("ray", max_parallelism=10)
-            >>> schema = pa.schema([("name", pa.string()), ("age", pa.int64())])
-            >>> ds = (Dataset
-            ...     .from_files("/input", "*.csv")
-            ...     .map(lambda path: read_csv_records(path))
-            ...     .write_parquet("/output/data-{shard:05d}.parquet", schema=schema)
-            ... )
-            >>> output_files = list(backend.execute(ds))
+        Schema can be provided or inferred from the first record or dataclass type.
         """
-        return Dataset(self.source, [*self.operations, WriteParquetOp(output_pattern, schema, batch_size)])
+        return Dataset(
+            self.source,
+            [*self.operations, WriteDataOp(output_pattern, writer_type="parquet", schema=schema, batch_size=batch_size)],
+        )
+
+    def write_levanter_cache(
+        self,
+        output_pattern: str,
+        tokenizer_name: str,
+        format: object,  # noqa: A002
+    ) -> Dataset[str]:
+        """Write tokenized records to Levanter cache format.
+
+        Writes records to Levanter's TreeStore/JaggedArrayStore format for use
+        in training. Each shard creates a separate cache directory.
+        The output pattern supports substitutions: {shard:05d}, {total:05d}, {basename}.
+        """
+        return Dataset(
+            self.source,
+            [
+                *self.operations,
+                WriteDataOp(
+                    output_pattern,
+                    writer_type="levanter_cache",
+                    tokenizer_name=tokenizer_name,
+                    format=format,
+                ),
+            ],
+        )
 
     def group_by(
         self,

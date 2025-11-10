@@ -33,7 +33,6 @@ import zstandard as zstd
 from tqdm import tqdm
 
 from zephyr.dataset import (
-    BatchOp,
     Dataset,
     FilterOp,
     FlatMapOp,
@@ -46,11 +45,11 @@ from zephyr.dataset import (
     ReduceLocalOp,
     ReshardOp,
     SortedMergeJoinOp,
-    WriteJsonlOp,
-    WriteParquetOp,
+    WindowOp,
+    WriteDataOp,
 )
 
-from .writers import write_jsonl_file, write_parquet_file
+from .writers import write_jsonl_file, write_levanter_cache, write_parquet_file
 
 logger = logging.getLogger(__name__)
 
@@ -334,24 +333,41 @@ class ApplyShardCtx:
     aux_shards: dict[int, list[Shard]] = field(default_factory=dict)
 
 
-def make_batches(items: Iterable[T], batch_size: int) -> Iterator[list[T]]:
-    """Batch items into groups of batch_size.
+def make_windows(
+    items: Iterable[T],
+    folder_fn: Callable[[object, T], tuple[bool, object]],
+    initial_state: object,
+) -> Iterator[list[T]]:
+    """Window items using a folder function.
 
     Args:
-        items: Items to batch
-        batch_size: Maximum size of each batch
+        items: Items to window
+        folder_fn: Function (state, item) -> (should_continue, new_state)
+        initial_state: Initial state for the folder function
 
     Yields:
-        Batches of items (last batch may be smaller than batch_size)
+        Windows of items (window closes when folder returns False)
     """
-    batch = []
+    window = []
+    state = initial_state
+
     for item in items:
-        batch.append(item)
-        if len(batch) >= batch_size:
-            yield batch
-            batch = []
-    if batch:
-        yield batch
+        should_continue, new_state = folder_fn(state, item)
+
+        if not should_continue and window:
+            # Close current window and start new one with this item
+            yield window
+            window = [item]
+            state = initial_state
+            # Re-apply folder with the item in the new window
+            _, state = folder_fn(state, item)
+        else:
+            # Add item to current window
+            window.append(item)
+            state = new_state
+
+    if window:
+        yield window
 
 
 def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
@@ -403,13 +419,17 @@ def process_shard_fused(
     op_names = "|".join(op.__class__.__name__.replace("Op", "") for op in operations)
     logger.info(f"fused[{len(operations)}]: shard {ctx.shard_idx + 1}/{ctx.total_shards}")
 
-    def build_stream(stream_input, ops, processed_count=0):
+    # we first build a stream of all of the fused operations.
+    # if we have a group by or reduction, we then apply them at the end
+    # if not, we yield our final shard directly.
+
+    def build_stream(stream_input, ops, op_index=0):
         """Recursively build the generator pipeline.
 
         Args:
             stream_input: Input stream
             ops: Operations still to process
-            processed_count: Number of operations already processed (for indexing into aux_shards)
+            op_index: Index of the current operation
         """
         if not ops:
             yield from stream_input
@@ -418,36 +438,39 @@ def process_shard_fused(
         op, *rest = ops
 
         if isinstance(op, MapOp):
-            yield from build_stream((op.fn(item) for item in stream_input), rest, processed_count + 1)
+            yield from build_stream((op.fn(item) for item in stream_input), rest, op_index + 1)
         elif isinstance(op, FlatMapOp):
-            yield from build_stream(
-                (result_item for item in stream_input for result_item in op.fn(item)), rest, processed_count + 1
-            )
+            # flatten the mapped iterators
+            flat_map_iter = (result_item for item in stream_input for result_item in op.fn(item))
+            yield from build_stream(flat_map_iter, rest, op_index + 1)
         elif isinstance(op, MapShardOp):
-            # MapShard consumes the entire stream and produces a new stream
-            yield from build_stream(op.fn(stream_input), rest, processed_count + 1)
+            yield from build_stream(op.fn(stream_input), rest, op_index + 1)
         elif isinstance(op, FilterOp):
-            yield from build_stream((item for item in stream_input if op.predicate(item)), rest, processed_count + 1)
-        elif isinstance(op, BatchOp):
-            yield from build_stream(make_batches(stream_input, op.batch_size), rest, processed_count + 1)
-        elif isinstance(op, WriteJsonlOp):
+            filter_iter = (item for item in stream_input if op.predicate(item))
+            yield from build_stream(filter_iter, rest, op_index + 1)
+        elif isinstance(op, WindowOp):
+            yield from build_stream(make_windows(stream_input, op.folder_fn, op.initial_state), rest, op_index + 1)
+        elif isinstance(op, WriteDataOp):
             output_path = format_shard_path(op.output_pattern, ctx.shard_idx, ctx.total_shards)
-            result = write_jsonl_file(stream_input, output_path)["path"]
-            yield from build_stream(iter([result]), rest, processed_count + 1)
-        elif isinstance(op, WriteParquetOp):
-            output_path = format_shard_path(op.output_pattern, ctx.shard_idx, ctx.total_shards)
-            result = write_parquet_file(stream_input, output_path, op.schema, op.batch_size)["path"]
-            yield from build_stream(iter([result]), rest, processed_count + 1)
+            if op.writer_type == "jsonl":
+                result = write_jsonl_file(stream_input, output_path)["path"]
+            elif op.writer_type == "parquet":
+                result = write_parquet_file(stream_input, output_path, op.schema, op.batch_size)["path"]
+            elif op.writer_type == "levanter_cache":
+                result = write_levanter_cache(stream_input, output_path, op.tokenizer_name, op.format)["path"]
+            else:
+                raise ValueError(f"Unknown writer_type: {op.writer_type}")
+            yield from build_stream(iter([result]), rest, op_index + 1)
         elif isinstance(op, SortedMergeJoinOp):
             # Get right shard from aux_shards
-            right_shards = ctx.aux_shards.get(processed_count, [])
+            right_shards = ctx.aux_shards.get(op_index, [])
 
             if len(right_shards) != 1:
-                raise ValueError(f"Expected 1 right shard for join at op {processed_count}, got {len(right_shards)}")
+                raise ValueError(f"Expected 1 right shard for join at op {op_index}, got {len(right_shards)}")
 
             right_shard = right_shards[0]
             joined = _sorted_merge_join(stream_input, right_shard, op)
-            yield from build_stream(joined, rest, processed_count + 1)
+            yield from build_stream(joined, rest, op_index + 1)
 
     if operations and isinstance(operations[-1], GroupByLocalOp):
         group_by_local_op = operations[-1]
@@ -458,7 +481,6 @@ def process_shard_fused(
         if num_output_shards <= 0:
             num_output_shards = ctx.total_shards
 
-        # Build streaming pipeline through fused ops, then group
         stream = tqdm(
             build_stream(ctx.shard, pre_ops),
             desc=f"fused[{op_names}]: shard {ctx.shard_idx + 1}/{ctx.total_shards}",
@@ -484,6 +506,7 @@ def process_shard_fused(
         result = reduce_local_op.local_reducer(stream)
         return [Shard.from_items([result], ctx.chunk_size, ctx.shard.context, idx=ctx.shard_idx)]
 
+    # No grouping or reduction at the end, just build the shard directly
     return [
         Shard.from_items(
             tqdm(
@@ -530,7 +553,6 @@ def _group_items_by_hash(
         target_shard = deterministic_hash(key) % num_output_shards
         output_tmp[target_shard].append(item)
         if len(output_tmp[target_shard]) >= chunk_size:
-            # Sort items by key before storing chunk
             sorted_items = sorted(output_tmp[target_shard], key=key_fn)
             output_chunks[target_shard].append(Chunk.from_iterator(sorted_items, context))
             output_tmp[target_shard] = []
@@ -608,10 +630,7 @@ def _merge_sorted_chunks(shard: Shard, key_fn: Callable) -> Iterator[tuple[objec
         chunk_iterators.append(iter(chunk_data))
 
     # Use heapq.merge to k-way merge sorted streams
-    # heapq.merge requires a key function that extracts the sort key
     merged_stream = heapq.merge(*chunk_iterators, key=key_fn)
-
-    # Group consecutive items by key
     for key, group_iter in groupby(merged_stream, key=key_fn):  # noqa: UP028
         yield key, group_iter
 
