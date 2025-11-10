@@ -27,14 +27,14 @@ For GPU training, see train_tiny_model_gpu.py
 import os
 
 from levanter.data.text import TextLmDatasetFormat
+from marin.execution.executor import ExecutorStep, ensure_versioned, executor_main, this_output_path, versioned
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, tokenize
+from marin.resources import CpuOnlyConfig
 
 from experiments.defaults import default_train
 from experiments.llama import llama_nano
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, ensure_versioned, executor_main, this_output_path
-from marin.processing.tokenize.tokenize import HfTokenizeConfig, tokenize
-from marin.resources import CpuOnlyConfig
 
 # 1. Choose a dataset
 tinystories_hf_id = "roneneldan/TinyStories"
@@ -51,7 +51,7 @@ tinystories_tokenized = ExecutorStep(
         cache_path=this_output_path(),
         tokenizer=ensure_versioned(marin_tokenizer),
         format=TextLmDatasetFormat(),
-        sample_count=1000,  # Use take() to limit to 1000 docs per shard
+        sample_count=versioned(1000),  # Use take() to limit to 1000 docs per shard
     ),
     pip_dependency_groups=["tokenize_train"],
 )
