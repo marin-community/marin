@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 from jax import random
-from jax.sharding import AxisType
+from jax.sharding import AxisType, PartitionSpec as P
 from jax.tree_util import register_dataclass
 import optax
 
@@ -39,6 +39,7 @@ def create_mesh() -> jax.sharding.Mesh:
 
 def synthetic_batch(key: jax.Array, *, batch_size: int, seq_len: int, vocab_size: int) -> dict[str, jax.Array]:
     tokens = random.randint(key, (batch_size, seq_len + 1), 0, vocab_size)
+    tokens = jax.device_put(tokens, P(("replica", "data")))
     return {"tokens": tokens[:, :-1], "labels": tokens[:, 1:]}
 
 
