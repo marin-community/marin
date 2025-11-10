@@ -17,10 +17,9 @@ validate.py
 
 Script for validating Dolma-formatted datasets using Zephyr pipelines.
 
-Given an input path to a top-level `documents/` directory on GCS, runs a Zephyr job that:
-    1) [Global]  Creates a list of `.jsonl.gz` files to validate / iterate over (glob on **/*.jsonl.gz).
-    2) [Map]     Validates each shard file and computes per-shard statistics.
-    3) [Reduce]  Aggregates global statistics and writes `metadata.json`.
+Given an input path to a top-level `documents/` directory on GCS, runs a Zephyr job that
+validates all documents, computes dataset statistics, and writes a `metadata.json` file
+to the same directory.
 
 Run with:
     uv run zephyr --backend=ray --max-parallelism=1000 --memory=4GB --cluster=us-central2 \
@@ -36,10 +35,9 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import numpy as np
+from marin.utilities.validation_utils import compute_global_mean_std, summarize_document
 from zephyr import Dataset, flow_backend
 from zephyr.readers import load_jsonl
-
-from marin.utilities.validation_utils import compute_global_mean_std, summarize_document
 
 
 @dataclass
@@ -68,18 +66,14 @@ def validate_shard(documents: Iterator[dict], num_samples: int) -> Iterator[dict
     Yields:
         Single dict with shard metadata including statistics and examples
     """
-    # Track per-document statistics
     num_documents = 0
     all_document_bytes = []
     all_text_bytes = []
 
-    # Reservoir sample examples (non-deterministic)
     rng = np.random.default_rng()
     example_reservoir = []
 
-    # Process documents
     for doc_idx, doc in enumerate(documents):
-        # Validate and compute byte counts
         footprint = summarize_document(doc)
         all_document_bytes.append(footprint.document_bytes)
         all_text_bytes.append(footprint.text_bytes)
@@ -93,7 +87,6 @@ def validate_shard(documents: Iterator[dict], num_samples: int) -> Iterator[dict
             if j < num_samples:
                 example_reservoir[j] = doc
 
-    # Compute summary statistics
     if num_documents == 0:
         return
 
@@ -142,9 +135,7 @@ def aggregate_and_write_metadata(shard_metadata_iter: Iterator[list[dict]], outp
         shard_text_bytes_stds.append(shard["text_bytes_std"])
         examples.extend(shard["examples"])
 
-    # Compute global statistics using validation_utils
     doc_bytes_stats = compute_global_mean_std(shard_num_documents, shard_document_bytes_means, shard_document_bytes_stds)
-
     text_bytes_stats = compute_global_mean_std(shard_num_documents, shard_text_bytes_means, shard_text_bytes_stds)
 
     # Write metadata.json
@@ -174,9 +165,6 @@ def main(cfg: ValidationConfig) -> None:
     """Validate Dolma-formatted documents using Zephyr pipeline."""
     backend = flow_backend()
 
-    # Build and execute pipeline
-    # Note: We distribute samples evenly, but the exact per-shard count depends on
-    # Zephyr's sharding which we discover at runtime
     pipeline = (
         Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
