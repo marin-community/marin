@@ -21,24 +21,13 @@ import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+import fsspec
 import msgspec
 
 
 @contextmanager
 def open_file(file_path: str, mode: str = "rb"):
-    """Open file using fsspec, handling both local and remote paths.
-
-    Supports automatic decompression for .gz, .zst, and .xz files.
-    Uses background caching for remote files to improve read performance.
-
-    Args:
-        file_path: Path to file (local or remote via fsspec)
-        mode: File mode ('rb' for binary, 'rt' for text)
-
-    Yields:
-        File-like object (binary or text depending on mode)
-    """
-    import fsspec
+    """Open `file_path` with sensible defaults for compression and caching."""
 
     compression = None
     if file_path.endswith(".gz"):
@@ -60,8 +49,10 @@ def open_file(file_path: str, mode: str = "rb"):
 
 
 def load_jsonl(file_path: str) -> Iterator[dict]:
-    """Load JSONL file and yield records.
-    Handles gzip, zstd, and xz compression automatically.
+    """Load a JSONL file and yield parsed records as dictionaries.
+
+    If the input file is compressed (.gz, .zst, .xz), it will be automatically
+    decompressed during loading.
 
     Args:
         file_path: Path to JSONL file (local or remote, .gz, .zst, and .xz supported)

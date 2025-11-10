@@ -108,7 +108,7 @@ def infer_parquet_schema(record: dict):
 def write_parquet_file(
     records: Iterable, output_path: str, schema: object | None = None, batch_size: int = 1000
 ) -> dict:
-    """Write records to a Parquet file using streaming batched writes.
+    """Write records to a Parquet file.
 
     Args:
         records: Records to write (iterable of dicts)
@@ -163,8 +163,7 @@ def write_levanter_cache(
 ) -> dict:
     """Write tokenized records to Levanter cache format.
 
-    Uses SerialCacheWriter to write records in the TreeStore/JaggedArrayStore format
-    that Levanter expects for cached tokenized datasets.
+    Uses SerialCacheWriter to write records in the TreeStore/JaggedArrayStore format.
     """
     from levanter.store.cache import SerialCacheWriter
 

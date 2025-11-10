@@ -636,10 +636,9 @@ def _merge_sorted_chunks(shard: Shard, key_fn: Callable) -> Iterator[tuple[objec
 
 
 def process_shard_group_by_reduce(ctx: ApplyShardCtx, key_fn: Callable, reducer_fn: Callable) -> list[Shard]:
-    """Phase 2: Global reduction per shard, applying reducer to each key group.
-
+    """Global reduction per shard, applying reducer to each key group.
     Uses streaming k-way merge to avoid materializing all items for each key.
-    Chunks are assumed to be sorted by key from Phase 1.
+    Chunks are assumed to be sorted by key.
 
     Args:
         ctx: Context containing shard and metadata
@@ -651,7 +650,6 @@ def process_shard_group_by_reduce(ctx: ApplyShardCtx, key_fn: Callable, reducer_
     """
     logger.info(f"group_by_reduce: shard {ctx.shard_idx + 1}/{ctx.total_shards}")
 
-    # Use streaming merge to group items by key without full materialization
     def result_generator():
         for key, items_iter in _merge_sorted_chunks(ctx.shard, key_fn):
             yield reducer_fn(key, items_iter)
@@ -662,7 +660,6 @@ def process_shard_group_by_reduce(ctx: ApplyShardCtx, key_fn: Callable, reducer_
 def process_shard_reduce_global(
     shards: list[Shard], global_reducer: Callable, context: ExecutionContext, chunk_size: int
 ) -> list[Shard]:
-    """Phase 2: Global reduction - pull all shard results to controller and reduce."""
     logger.info(f"reduce_global: reducing {len(shards)} shard results")
 
     if not shards:
@@ -677,7 +674,7 @@ def process_shard_reduce_global(
 
 
 def reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
-    """Redistribute chunks across target number of shards with no data transfer."""
+    """Redistribute chunks across target number of shards. No data shuffling."""
     if not shards:
         return []
 
@@ -694,8 +691,7 @@ def reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
 
 
 def recompact_shards(context: ExecutionContext, shard_lists: list[list[Shard]]) -> list[Shard]:
-    """Group a list of shard lists into a list of shards by shard index."""
-    # Group chunks by output shard index
+    """Convert a list[shard list] into a list of shards, grouping by shard idx."""
     chunks_by_idx = defaultdict(list)
     max_idx = -1
 
@@ -712,12 +708,6 @@ def recompact_shards(context: ExecutionContext, shard_lists: list[list[Shard]]) 
 
 
 class Backend:
-    """Base class for execution backends using Shard-based execution.
-
-    All backends share the same execution logic and differ only in their
-    ExecutionContext (Ray, ThreadPool, or Sync).
-    """
-
     def __init__(self, context: ExecutionContext, config: BackendConfig):
         """Initialize backend with execution context and configuration.
 
@@ -751,19 +741,6 @@ class Backend:
         yield from self._execute_optimized(dataset.source, optimized_ops)
 
     def _optimize_operations(self, operations: list) -> list:
-        """Optimize operation chain by fusing consecutive operations.
-
-        Fuses consecutive operations (MapOp, FlatMapOp, FilterOp, BatchOp, Write*Op)
-        into a single FusedMapOp to avoid materializing intermediate results.
-        ReshardOp and GroupByShuffleReduceOp break fusion as they change parallelism
-        structure or require a shuffle boundary.
-
-        Args:
-            operations: Original operation chain
-
-        Returns:
-            Optimized operation chain with fused operations
-        """
         if not operations:
             return operations
 
@@ -771,19 +748,13 @@ class Backend:
         fusible_buffer = []
 
         def is_fusible(op):
-            """Check if operation can be fused.
-
-            Fusible operations can be chained together in a single pass over the data.
-            Non-fusible operations require a shuffle boundary.
-            """
             return not isinstance(op, (ReshardOp, GroupByShuffleReduceOp, ReduceGlobalOp))
 
         def flush_buffer():
-            """Flush accumulated fusible operations."""
             if not fusible_buffer:
                 return
 
-            # Always create a FusedMapOp, even for single operations
+            # Always create a FusedMapOp, even for single operations, this simplifies downstream logic
             optimized.append(FusedMapOp(operations=fusible_buffer[:]))
             fusible_buffer.clear()
 
@@ -843,14 +814,14 @@ class Backend:
 
         for op in optimized_ops:
             if isinstance(op, FusedMapOp):
-                # Check if any operation in the fusion is a join that needs aux shards
-                join_ops = [
-                    (i, fused_op) for i, fused_op in enumerate(op.operations) if isinstance(fused_op, SortedMergeJoinOp)
-                ]
-
-                # Always build aux_shards mapping (empty if no joins)
                 all_right_shards = {}
-                for join_idx, join_op in join_ops:
+                # If we find any joins, we compute the intermediate right shards first
+                # and then pass them as aux_shards to the processing function. This
+                # currently materializes the right side fully before processing the left side,
+                # we can probably be improved.
+                for i, join_op in enumerate(op.operations):
+                    if not isinstance(join_op, SortedMergeJoinOp):
+                        continue
                     right_ops = self._optimize_operations(join_op.right_dataset.operations)
                     right_shards = self._run_operations_on_shards(join_op.right_dataset.source, right_ops)
 
@@ -860,9 +831,8 @@ class Backend:
                             f"Left has {len(shards)} shards, right has {len(right_shards)} shards."
                         )
 
-                    all_right_shards[join_idx] = right_shards
+                    all_right_shards[i] = right_shards
 
-                # Build aux_shards for all shards (empty dict if no joins)
                 aux_shards_per_left = []
                 for shard_idx in range(len(shards)):
                     shard_aux = {}
