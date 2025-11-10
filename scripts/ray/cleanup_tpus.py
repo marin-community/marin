@@ -23,6 +23,7 @@ def main():
     parser.add_argument("--project", required=True, help="GCP project ID")
     parser.add_argument("--zone", required=True, help="GCP zone")
     parser.add_argument("--interval", type=int, default=600, help="Cleanup interval in seconds (default: 600)")
+    parser.add_argument("--disk_threshold_pct", type=float, default=1.0, help="Disk threshold percentage (default: 1.0)")
 
     args = parser.parse_args()
 
@@ -31,6 +32,7 @@ def main():
         gcp_project=args.project,
         zone=args.zone,
         interval=args.interval,
+        disk_threshold_pct=args.disk_threshold_pct,
     )
 
 
