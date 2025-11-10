@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Readers for common input formats."""
+"""Readers for common input formats.
+
+Supports reading from local filesystems, cloud storage (gs://, s3://) and HuggingFace Hub (hf://) via fsspec.
+"""
 
 from __future__ import annotations
 
@@ -23,6 +26,16 @@ from contextlib import contextmanager
 
 import fsspec
 import msgspec
+
+# Register HuggingFace filesystem with authentication if HF_TOKEN is available
+# This enables reading from hf:// URLs throughout the codebase
+try:
+    from huggingface_hub import HfFileSystem
+
+    fsspec.register_implementation("hf", HfFileSystem, clobber=True)
+except ImportError:
+    # HuggingFace Hub is optional - only needed for hf:// URLs
+    pass
 
 
 @contextmanager
@@ -55,20 +68,27 @@ def load_jsonl(file_path: str) -> Iterator[dict]:
     decompressed during loading.
 
     Args:
-        file_path: Path to JSONL file (local or remote, .gz, .zst, and .xz supported)
+        file_path: Path to JSONL file (local, remote, or HuggingFace Hub)
+            Supports: local paths, gs://, s3://, hf://datasets/{repo}@{rev}/{path}
 
     Yields:
         Parsed JSON records as dictionaries
 
     Example:
         >>> backend = create_backend("ray", max_parallelism=10)
+        >>> # Load from cloud storage
         >>> ds = (Dataset
-        ...     .from_files("/input", "**/*.jsonl.gz")
+        ...     .from_files("gs://bucket/data", "**/*.jsonl.gz")
         ...     .flat_map(load_jsonl)  # Each file yields many records
         ...     .filter(lambda r: r["score"] > 0.5)
         ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
         ... )
         >>> output_files = list(backend.execute(ds))
+        >>>
+        >>> # Load from HuggingFace Hub (requires HF_TOKEN env var)
+        >>> hf_url = "hf://datasets/username/dataset@main/data/train.jsonl.gz"
+        >>> ds = Dataset.from_list([hf_url]).flat_map(load_jsonl)
+        >>> records = list(backend.execute(ds))
     """
     decoder = msgspec.json.Decoder()
 

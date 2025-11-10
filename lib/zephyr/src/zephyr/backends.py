@@ -48,6 +48,7 @@ from zephyr.dataset import (
     ReduceLocalOp,
     ReshardOp,
     SortedMergeJoinOp,
+    TakeOp,
     WindowOp,
     WriteDataOp,
 )
@@ -449,6 +450,11 @@ def process_shard_fused(
         elif isinstance(op, FilterOp):
             filter_iter = (item for item in stream_input if op.predicate(item))
             yield from build_stream(filter_iter, rest, op_index + 1)
+        elif isinstance(op, TakeOp):
+            from itertools import islice
+
+            take_iter = islice(stream_input, op.n)
+            yield from build_stream(take_iter, rest, op_index + 1)
         elif isinstance(op, WindowOp):
             yield from build_stream(make_windows(stream_input, op.folder_fn, op.initial_state), rest, op_index + 1)
         elif isinstance(op, WriteDataOp):

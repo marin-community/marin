@@ -15,7 +15,7 @@
 """Tests for operation fusion optimization."""
 
 from zephyr import Dataset, create_backend
-from zephyr.dataset import FilterOp, FusedMapOp, MapOp, ReshardOp
+from zephyr.dataset import FilterOp, FusedMapOp, MapOp, ReshardOp, TakeOp
 
 
 def test_optimize_consecutive_maps():
@@ -40,6 +40,21 @@ def test_optimize_map_filter_map():
         MapOp(lambda x: x * 2),
         FilterOp(lambda x: x > 5),
         MapOp(lambda x: x + 1),
+    ]
+    optimized = backend._optimize_operations(operations)
+
+    assert len(optimized) == 1
+    assert isinstance(optimized[0], FusedMapOp)
+    assert len(optimized[0].operations) == 3
+
+
+def test_optimize_with_take():
+    """Take should be fused with map and filter."""
+    backend = create_backend("sync")
+    operations = [
+        MapOp(lambda x: x * 2),
+        TakeOp(10),
+        FilterOp(lambda x: x > 5),
     ]
     optimized = backend._optimize_operations(operations)
 

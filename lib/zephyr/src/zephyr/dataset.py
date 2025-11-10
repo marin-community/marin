@@ -40,6 +40,17 @@ class FilterOp:
 
 
 @dataclass
+class TakeOp:
+    """Take operation - limits to first N items per shard.
+
+    Takes the first n items from each shard independently.
+    This preserves parallelism while limiting data volume for testing/debugging.
+    """
+
+    n: int
+
+
+@dataclass
 class WindowOp:
     """Window operation - groups elements into windows using a folder function.
 
@@ -182,6 +193,7 @@ class SortedMergeJoinOp:
 Operation = (
     MapOp
     | FilterOp
+    | TakeOp
     | WindowOp
     | WriteDataOp
     | FlatMapOp
@@ -340,6 +352,28 @@ class Dataset(Generic[T]):
             [2, 4]
         """
         return Dataset(self.source, [*self.operations, FilterOp(predicate)])
+
+    def take(self, n: int) -> Dataset[T]:
+        """Take the first n items from each shard.
+
+        Limits each shard to its first n items independently. This is useful
+        for testing/debugging pipelines with large datasets.
+
+        Note: This operates per-shard, so with k shards you may get up to k*n items total.
+
+        Args:
+            n: Maximum number of items to take from each shard
+
+        Returns:
+            New dataset with take operation appended
+
+        Example:
+            >>> backend = create_backend("sync")
+            >>> ds = Dataset.from_list([1, 2, 3, 4, 5]).take(3)
+            >>> list(backend.execute(ds))
+            [1, 2, 3]
+        """
+        return Dataset(self.source, [*self.operations, TakeOp(n)])
 
     def window(self, size: int) -> Dataset[list[T]]:
         """Window dataset elements into fixed-size lists.

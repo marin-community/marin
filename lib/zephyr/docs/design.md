@@ -98,6 +98,24 @@ Map the given function over the dataset, transforming the elements.
 
 Return a new dataset containing only elements where `fn(item)` returns True-ish.
 
+`take(n)`
+
+Take the first n items from each shard. This operates per-shard independently,
+preserving parallelism while limiting data volume. Useful for testing and
+debugging pipelines with large datasets.
+
+Note: With k shards, you may get up to k*n total items.
+
+```python
+# Test pipeline with first 1000 items per shard
+ds = (Dataset
+  .from_files("gs://data/*.jsonl")
+  .flat_map(load_jsonl)
+  .take(1000)  # Limit each shard to 1000 items
+  .map(process)
+)
+```
+
 `window(size)`
 
 Given a dataset of `item`, return a dataset of `list[item]` where each list
