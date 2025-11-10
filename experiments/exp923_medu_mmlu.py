@@ -114,7 +114,6 @@ class MeduMMLUConfig:
 
 class MMLUMeduPipeline(DatashopRunner):
     def __init__(self, config: MeduMMLUConfig):
-
         self.config = config
         self.corpus_contents = self._create_corpus_contents()
         super().__init__(

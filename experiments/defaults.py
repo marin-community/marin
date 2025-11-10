@@ -52,8 +52,7 @@ from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -407,7 +406,7 @@ def default_train(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size) :,} parameter model for "
+            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
             f"{model_config.seq_len} (seq_len) "

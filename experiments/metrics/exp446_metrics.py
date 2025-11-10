@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 
 
 def compute_metrics(save_path: str) -> dict:
-
     final_metrics = {}
 
     final_metrics = {

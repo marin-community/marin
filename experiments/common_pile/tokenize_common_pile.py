@@ -18,8 +18,7 @@ from levanter.data.dataset import PermType
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 

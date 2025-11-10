@@ -20,10 +20,8 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
 import pytest
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import (
-    download_hf,
-)
+
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.download.huggingface.stream_remove_columns import (
     DatasetConfig,
     prune_hf_dataset,

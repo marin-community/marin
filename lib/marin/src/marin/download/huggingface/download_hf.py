@@ -18,19 +18,57 @@ A script to download a HuggingFace dataset and upload it to a specified fsspec p
 using HfFileSystem for direct streaming of data transfer.
 """
 
+import dataclasses
 import logging
 import os
 import random
 import time
+from dataclasses import dataclass
 
 import draccus
 import fsspec
 from huggingface_hub import HfFileSystem
-from marin.download.huggingface.download import DownloadConfig
+
+from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Dataset, flow_backend
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DownloadConfig:
+    # fmt: off
+
+
+    # HuggingFace Dataset Parameters
+    hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
+
+    revision: str  # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
+    hf_urls_glob: list[str] = dataclasses.field(default_factory=list)
+    # List of Glob Patterns to Match Files in HF Dataset, If empty we get all the files in a hf repo
+
+    gcs_output_path: str = THIS_OUTPUT_PATH
+    """
+    Path to store raw data in persistent storage (e.g. gs://$BUCKET/...).
+    This works with any fsspec-compatible path, but for backwards compatibility, we call it gcs_output_path.
+    """
+
+    # Additional GCS Parameters
+    public_gcs_path: str = (                                # Path to Publicly Readable Bucket (for Storage Transfer)
+        "gs://hf_dataset_transfer_bucket"
+    )
+
+    # Job Control Parameters, used only for non-gated dataset transfers done via STS
+    wait_for_completion: bool = True                        # if True, will block until job completes
+    timeout: int = 1800                                     # Maximum time to wait for job completion (in seconds)
+    poll_interval: int = 10                                 # Time to wait between polling job status (in seconds)
+
+    # fmt: on
+    hf_repo_type_prefix: str = (
+        "datasets"  # The repo_type_prefix is datasets/ for datasets,
+        # spaces/ for spaces, and models do not need a prefix in the URL.
+    )
 
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
@@ -64,7 +102,7 @@ def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: s
             return
         except Exception as e:
             wait_time = (2**attempt) + random.uniform(0, 5)
-            logger.warning(f"Attempt {attempt+1} failed for {file_path}: {e}, retrying in {wait_time:.1f}s")
+            logger.warning(f"Attempt {attempt + 1} failed for {file_path}: {e}, retrying in {wait_time:.1f}s")
             time.sleep(wait_time)
     raise RuntimeError(f"Failed to download {file_path} after {max_retries} attempts")
 
