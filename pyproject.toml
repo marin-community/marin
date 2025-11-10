@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
-dependencies = ["marin", "levanter"]
+dependencies = ["marin", "levanter", "grugpt"]
 
 [tool.uv]
 fork-strategy = "fewest"
@@ -18,12 +18,15 @@ override-dependencies = [
 ]
 
 [tool.uv.workspace]
-members = ["lib/marin", "lib/levanter"]
+members = ["lib/marin", "lib/levanter", "lib/grugpt"]
 
 [tool.uv.sources.marin]
 workspace = true
 
 [tool.uv.sources.levanter]
+workspace = true
+
+[tool.uv.sources.grugpt]
 workspace = true
 
 [tool.black]

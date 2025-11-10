@@ -20,7 +20,7 @@ dependencies = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "jax==0.6.2",
+    "jax>=0.6.2",
     "haliax>=1.4.dev443",
     "levanter[serve]",
     "lz4",
@@ -148,11 +148,11 @@ gcp = [
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
+cuda12 = ["jax[cuda12]>=0.6.2", "torch>=2.7.0"]
 
-tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
+tpu = ["jax[tpu]>=0.6.2", "torch>=2.7.0"]
 
-cpu = ["jax==0.6.2", "torch>=2.7.0"]
+cpu = ["jax>=0.6.2", "torch>=2.7.0"]
 
 crawl = [
     "w3lib",
