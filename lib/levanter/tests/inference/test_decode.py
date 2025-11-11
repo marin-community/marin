@@ -59,7 +59,8 @@ def test_attention_decode_matches_full_ar():
     x = hax.random.normal(x_key, (Pos, Embed)) * 0.2
     full_out = attn(x, AttentionMask.causal(), key=jrandom.PRNGKey(1))
 
-    pt = PageTable.init(max_pages=4, max_seqs=2, page_size=4, max_pages_per_seq=4)
+    # page size must be equal to max_seq_len
+    pt = PageTable.init(max_pages=4, max_seqs=2, page_size=Pos.size, max_pages_per_seq=1)
     sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
     sequences, seq_id_arr = sequences.reserve_slot()
     seq_id = int(seq_id_arr)
@@ -91,7 +92,8 @@ def test_attention_decode_matches_full_prefill():
     attn_key, x_key = jrandom.split(jrandom.PRNGKey(0))
     attn = Attention.init(cfg, key=attn_key)
 
-    pt = PageTable.init(max_pages=4, max_seqs=2, page_size=4, max_pages_per_seq=4)
+    # page size must be equal to max_seq_len
+    pt = PageTable.init(max_pages=4, max_seqs=2, page_size=Pos.size, max_pages_per_seq=1)
     sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
     sequences, seq1_arr = sequences.reserve_slot(0)
     sequences, seq2_arr = sequences.reserve_slot(1)
@@ -141,7 +143,8 @@ def test_attention_decode_ragged_fill_in_chunks():
     x = hax.arange((B, Pos, Embed), start=-2, step=0.1, dtype=jnp.float32)
     full_out = attn(x, AttentionMask.causal(), key=jrandom.PRNGKey(1))
 
-    pt = PageTable.init(max_pages=8, max_seqs=2, page_size=4, max_pages_per_seq=4)
+    # page size must be equal to max_seq_len
+    pt = PageTable.init(max_pages=8, max_seqs=2, page_size=Pos.size, max_pages_per_seq=1)
     sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
     sequences, seq1_arr = sequences.reserve_slot(0)
     sequences, seq2_arr = sequences.reserve_slot(1)
