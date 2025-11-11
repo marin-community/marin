@@ -25,13 +25,22 @@ import draccus
 import fsspec
 import pandas as pd
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
-from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
+from marin.utils import fsspec_glob, fsspec_rm
 from marin.web.convert import convert_page
 from warcio import ArchiveIterator
 from zephyr import Dataset, flow_backend
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
+
+
+def extract_cc_dump(path: str) -> str:
+    """Extract CC-MAIN-* identifier from path, or parent directory as fallback."""
+    parts = path.rstrip("/").split("/")
+    for part in parts:
+        if part.startswith("CC-MAIN-"):
+            return part
+    return parts[-2] if len(parts) >= 2 else ""
 
 
 def process_one_warc_file(
@@ -229,10 +238,6 @@ def process_fw_parquet(
     success_file = output_path + "/_SUCCESS"
     datetime_start = datetime.utcnow()
 
-    if fsspec_exists(success_file):
-        logger.info(f"Output file already processed. Skipping {input_path}")
-        return True
-
     try:
         df = pd.read_parquet(input_path)
     except FileNotFoundError as e:
@@ -325,7 +330,34 @@ def process_fw_dump(cfg: ParquetFWConfig):
             continue
 
         for file in files:
-            all_files.append(file)
+            # Extract cc_dump identifier from file path
+            cc_dump_id = extract_cc_dump(file)
+            input_file_name = os.path.basename(file)
+
+            # Derive output paths
+            output_path = os.path.join(
+                cfg.md_output_path,
+                input_file_name.replace(".parquet", ""),
+            )
+            md_output_path = os.path.join(cfg.md_output_path, cc_dump_id)
+            text_output_path = None
+            if cfg.text_output_path:
+                text_output_path = os.path.join(cfg.text_output_path, cc_dump_id)
+            html_output_path = None
+            if cfg.html_output_path:
+                html_output_path = os.path.join(cfg.html_output_path, cc_dump_id)
+
+            all_files.append(
+                {
+                    "input_path": file,
+                    "output_path": output_path,
+                    "extract_method": cfg.extract_method,
+                    "config": cfg.config,
+                    "md_output_path": md_output_path,
+                    "text_output_path": text_output_path,
+                    "html_output_path": html_output_path,
+                }
+            )
 
             if cfg.max_files and len(all_files) >= cfg.max_files:
                 break
@@ -335,65 +367,24 @@ def process_fw_dump(cfg: ParquetFWConfig):
 
     logger.info(f"Total parquet files to process: {len(all_files)}")
 
-    # Helper function to derive output paths from input path
-    def get_output_path(input_path: str) -> str:
-        """Derive output directory path from input parquet file path."""
-        # Extract cc_dump from input path
-        # Example: gs://bucket/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
-        #                                             ^^^^^^^^^^^^^^
-        parts = input_path.rstrip("/").split("/")
-        # Find the CC-MAIN-* part (or similar cc_dump identifier)
-        cc_dump = None
-        for part in parts:
-            if part.startswith("CC-MAIN-"):
-                cc_dump = part
-                break
-        if cc_dump is None:
-            # Fallback: use parent directory name
-            cc_dump = parts[-2] if len(parts) >= 2 else ""
-
-        input_file_name = os.path.basename(input_path)
-        return os.path.join(
-            cfg.md_output_path,
-            input_file_name.replace(".parquet", ""),
-        )  # gs://marin-us-central2/processed/000_00000
-
-    def process_file_wrapper(input_path: str) -> bool:
-        """Wrapper to call process_fw_parquet with derived parameters."""
-        # Derive output paths from input path
-        parts = input_path.rstrip("/").split("/")
-        cc_dump = None
-        for part in parts:
-            if part.startswith("CC-MAIN-"):
-                cc_dump = part
-                break
-        if cc_dump is None:
-            cc_dump = parts[-2] if len(parts) >= 2 else ""
-
-        output_path = get_output_path(input_path)
-        md_output_path = os.path.join(cfg.md_output_path, cc_dump)
-        text_output_path = None
-        if cfg.text_output_path:
-            text_output_path = os.path.join(cfg.text_output_path, cc_dump)
-        html_output_path = None
-        if cfg.html_output_path:
-            html_output_path = os.path.join(cfg.html_output_path, cc_dump)
-
-        if fsspec_exists(output_path + "/_SUCCESS"):
-            logger.info(f"Skipping already processed file: {input_path}")
-            return True
-
-        return process_fw_parquet(
-            input_path,
-            output_path,
-            cfg.extract_method,
-            cfg.config,
-            md_output_path,
-            text_output_path,
-            html_output_path,
+    # Process all files with metrics tracking
+    pipeline = (
+        Dataset.from_list(all_files)
+        .map(
+            lambda f: process_fw_parquet(
+                f["input_path"],
+                f["output_path"],
+                f["extract_method"],
+                f["config"],
+                f["md_output_path"],
+                f["text_output_path"],
+                f["html_output_path"],
+            )
         )
+        .filter(lambda result: result is True)
+        .write_jsonl(f"{cfg.md_output_path}/metrics/{{shard:05d}}-process.jsonl", skip_existing=True)
+    )
 
-    pipeline = Dataset.from_list(all_files).map(process_file_wrapper)
     list(backend.execute(pipeline))
 
 

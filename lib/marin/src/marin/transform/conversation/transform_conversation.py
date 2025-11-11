@@ -38,7 +38,7 @@ import fsspec
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
 from marin.utils import fsspec_mkdirs
-from zephyr import Dataset, atomic_rename, flow_backend, write_jsonl_file
+from zephyr import Dataset, atomic_rename, flow_backend, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
 
@@ -317,15 +317,6 @@ def process_shard_task(task: ShardTask) -> dict:
         raise ValueError("Transform configuration requires an adapter.")
 
     output_filename = _shard_filename(task.output_path, task.shard_idx)
-    if fsspec.url_to_fs(output_filename)[0].exists(output_filename):
-        logging.info(f"Output file {output_filename} already exists; skipping shard.")
-        return {
-            "subset": task.subset or "default",
-            "split": task.split,
-            "shard_idx": task.shard_idx,
-            "path": output_filename,
-            "count": 0,
-        }
 
     dataset_kwargs: dict[str, object] = {
         "path": task.source,
@@ -370,27 +361,27 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
 
     Streams dataset from HuggingFace Hub and processes each shard in parallel using Zephyr.
     Each shard is processed independently and written to a separate output file.
-    Skips processing for shards with existing output files.
+    Skips processing for shards with existing metrics files.
     """
     backend = flow_backend()
 
     all_tasks = list(get_dataset_tasks(cfg))
     logger.info(f"Found {len(all_tasks)} total shards across all subset/split combinations")
 
-    if not all_tasks:
-        logger.info("All outputs already exist, nothing to process")
-        return cfg.output_path
-
-    logger.info(f"Processing {len(all_tasks)} shards...")
-
-    pipeline = Dataset.from_list(all_tasks).map(process_shard_task)
-    results = list(backend.execute(pipeline))
+    metrics_path = os.path.join(cfg.output_path, "metrics")
+    pipeline = (
+        Dataset.from_list(all_tasks)
+        .map(process_shard_task)
+        .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
+    )
+    metric_files = list(backend.execute(pipeline))
 
     # Log summary by subset/split
     from collections import defaultdict
 
     by_subset_split = defaultdict(list)
-    for result in results:
+    for metric_file in metric_files:
+        result = next(iter(load_jsonl(metric_file)))
         key = (result["subset"], result["split"])
         by_subset_split[key].append(result)
 

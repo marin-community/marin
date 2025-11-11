@@ -321,18 +321,13 @@ round-robin fashion without splitting individual chunks.
 
 ### Resuming from Failures
 
-The `skip_existing_outputs()` method enables per-file caching by skipping input
-files whose corresponding output files already exist. You can use it to skip
-processing files which completed during a previous run. Note that this
-transformation is only valid for _map-only_ pipelines, and the output sharding
-must be identical to the input sharding.
-
-*Zephyr will not validate these assumptions.*
+For a pure map pipeline, you can leverage Zephyr's `skip_existing` functionality
+to skip working on shards that have already been processed. As an optimization,
+any operations _before_ the output file are also skipped.
 
 ```python
 ds = (Dataset
     .from_files("gs://input/*.jsonl")
-    .skip_existing_outputs("gs://output/processed-{shard:05d}-of-{total:05d}.jsonl")
     .flat_map(load_jsonl)
     .map(expensive_transform)
     .write_jsonl("gs://output/processed-{shard:05d}-of-{total:05d}.jsonl", skip_existing=True)
