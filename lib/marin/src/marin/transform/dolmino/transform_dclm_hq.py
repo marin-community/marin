@@ -16,6 +16,33 @@
 marin/transform/dolmino/transform_dclm_hq.py
 
 Performs HTML->Text/MD conversion using the specified tools over a DCLM HQ dump save in DOLMA format.
+
+Example Usage (production, large dataset):
+uv run zephyr --backend=ray --max-parallelism=200 --memory=2GB \
+    lib/marin/src/marin/transform/dolmino/transform_dclm_hq.py \
+    --entry-point=process_dclm_hq_dump \
+    --input_hf_path "hf://datasets/allenai/dolmino-mix-1124@main/data/dclm" \
+    --output_path gs://bucket/processed/dclm-hq \
+    --extract_method resiliparse \
+    --extract_config.type resiliparse \
+    --extract_config.use_custom_variant true \
+    --hf_repo_id "allenai/dolmino-mix-1124" \
+    --hf_revision "main" \
+    --hf_paths '["data/dclm"]'
+
+Example Usage (local testing, small dataset):
+uv run zephyr --backend=threadpool --max-parallelism=2 --entry-point=process_dclm_hq_dump \
+    lib/marin/src/marin/transform/dolmino/transform_dclm_hq.py \
+    --input_hf_path "hf://datasets/allenai/dolmino-mix-1124@main/data/dclm" \
+    --output_path /tmp/dclm_hq_test \
+    --extract_method trafilatura \
+    --extract_config.type trafilatura \
+    --extract_config.favor_precision false \
+    --extract_config.favor_recall true \
+    --hf_repo_id "allenai/dolmino-mix-1124" \
+    --hf_revision "main" \
+    --hf_paths '["data/dclm"]' \
+    --max_split 1
 """
 
 import json
@@ -57,14 +84,10 @@ def process_file(
     logger.info(f"Starting processing of file {input_file_path}")
     logger.info(f"Source: {input_file_path}")
     logger.info(f"Destination: {output_file_path}")
-    fs = fsspec.url_to_fs(output_file_path)[0]
-    if fs.exists(output_file_path):
-        logger.info(f"Output file {output_file_path} already exists. Skipping processing.")
-        return
 
     with atomic_rename(output_file_path) as temp_path:
         with (
-            fsspec.open(input_file_path, compression="zst") as source,
+            fsspec.open(input_file_path, "rt", compression="zstd") as source,
             fsspec.open(temp_path, "wt", compression="gzip") as output,
         ):
             for line in tqdm(source, desc="Processing lines"):
