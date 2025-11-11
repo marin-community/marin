@@ -1,0 +1,32 @@
+model_name_or_path: NousResearch/Llama-2-7b-hf
+
+# Training configuration
+trainer:
+  mp: p=f32,c=bfloat16
+  wandb:
+    project: "levanter-sft"
+    tags: ["llama2", "alpaca"]
+  num_train_steps: 1218
+  train_batch_size: 64
+  # If using model parallelism
+  tensor_parallel_axes: ["mlp", "heads"]
+
+# Optimizer settings
+optimizer:
+  learning_rate: 2e-5
+  weight_decay: 0.0
+
+supervised_data:
+  hf_dataset_name: "tatsu-lab/alpaca"
+  hf_dataset_split: "train"
+  input_field: "instruction"   # change from prompt
+  output_field: "output"    # this is correct
+  cache_dir: "gs://levanter-checkpoints/marin/sft_cache/alpaca-new"
+
+max_tune_length: 2048
+trust_remote_code: false
+model_cache_dir: null
+
+hf_save_path: "sft_hf_ckpts"
+hf_upload: false
+hf_save_steps: 1000

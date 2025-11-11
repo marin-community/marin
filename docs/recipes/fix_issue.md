@@ -37,11 +37,11 @@ Example research report:
 > tuning.
 >
 > Relevant Code
-> - [arrow_flight.py#L384](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/arrow_flight.py#L384) - TPU-to-CPU copy in Arrow Flight implementation
-> - [jax.py#L394-L402](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/jax.py#L394-L402) - TPU-to-CPU transfer in JAX implementation
-> - [arrow_flight.py#L380-L384](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/arrow_flight.py#L380-L384) - Memory layout context
-> - [jax.py#L228-L283](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/jax.py#L228-L283) - JAX transfer server (bypasses CPU)
-> - [base.py#L32-L35](https://github.com/marin-community/marin/blob/main/src/marin/rl/weight_transfer/base.py#L32-L35) - Transfer mode definitions
+> - [arrow_flight.py#L384](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/arrow_flight.py#L384) - TPU-to-CPU copy in Arrow Flight implementation
+> - [jax.py#L394-L402](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/jax.py#L394-L402) - TPU-to-CPU transfer in JAX implementation
+> - [arrow_flight.py#L380-L384](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/arrow_flight.py#L380-L384) - Memory layout context
+> - [jax.py#L228-L283](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/jax.py#L228-L283) - JAX transfer server (bypasses CPU)
+> - [base.py#L32-L35](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/rl/weight_transfer/base.py#L32-L35) - Transfer mode definitions
 > - [test_weight_transfer.py#L211-L255](https://github.com/marin-community/marin/blob/main/tests/rl/test_weight_transfer.py#L211-L255) - Performance benchmark test
 >
 

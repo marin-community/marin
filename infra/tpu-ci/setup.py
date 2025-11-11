@@ -25,10 +25,16 @@ TPU CI Infrastructure Management
 Manages preemptible TPU VMs with GitHub Actions runners.
 """
 
+import json
 import logging
 import os
+import shlex
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
 
 import click
 import config
@@ -38,6 +44,11 @@ def run(cmd: list, **kwargs) -> subprocess.CompletedProcess:
     """Run command with logging."""
     logging.info(f"Running: {' '.join(cmd)}")
     return subprocess.run(cmd, **kwargs)
+
+
+def run_sh(cmd: str, **kwargs) -> subprocess.CompletedProcess:
+    """Run command from string with logging."""
+    return run(shlex.split(cmd), **kwargs)
 
 
 def get_github_token() -> str:
@@ -56,15 +67,8 @@ def store_github_token_in_secret_manager(token: str):
     """Store GitHub token in Secret Manager."""
     logging.info("Storing GitHub token in Secret Manager...")
 
-    result = run(
-        [
-            "gcloud",
-            "secrets",
-            "describe",
-            "tpu-ci-github-token",
-            "--project",
-            config.GCP_PROJECT_ID,
-        ],
+    result = run_sh(
+        f"gcloud secrets describe tpu-ci-github-token --project {config.GCP_PROJECT_ID}",
         capture_output=True,
         check=False,
     )
@@ -73,18 +77,9 @@ def store_github_token_in_secret_manager(token: str):
         logging.info("✓ Secret already exists")
         return
 
-    run(
-        [
-            "gcloud",
-            "secrets",
-            "create",
-            "tpu-ci-github-token",
-            "--project",
-            config.GCP_PROJECT_ID,
-            "--replication-policy",
-            "automatic",
-            "--data-file=-",
-        ],
+    run_sh(
+        f"gcloud secrets create tpu-ci-github-token --project {config.GCP_PROJECT_ID} "
+        f"--replication-policy automatic --data-file=-",
         input=token.encode(),
         check=True,
     )
@@ -92,55 +87,70 @@ def store_github_token_in_secret_manager(token: str):
     logging.info("✓ GitHub token stored")
 
 
-def ensure_artifact_registry():
-    """Ensure Artifact Registry repository exists."""
-    logging.info("Checking Artifact Registry...")
+def check_ghcr_authentication() -> bool:
+    """Check if user is already authenticated to ghcr.io."""
+    docker_config_path = Path.home() / ".docker" / "config.json"
 
-    result = run(
-        [
-            "gcloud",
-            "artifacts",
-            "repositories",
-            "describe",
-            config.ARTIFACT_REGISTRY_REPO_NAME,
-            "--location",
-            config.REGION,
-            "--project",
-            config.GCP_PROJECT_ID,
-        ],
-        capture_output=True,
-        check=False,
-    )
+    if not docker_config_path.exists():
+        return False
 
-    if result.returncode == 0:
-        logging.info("✓ Artifact Registry exists")
-        return
+    try:
+        with docker_config_path.open() as f:
+            config_data = json.load(f)
 
-    logging.info("Creating Artifact Registry...")
-    run(
-        [
-            "gcloud",
-            "artifacts",
-            "repositories",
-            "create",
-            config.ARTIFACT_REGISTRY_REPO_NAME,
-            "--repository-format=docker",
-            "--location",
-            config.REGION,
-            "--project",
-            config.GCP_PROJECT_ID,
-        ],
-        check=True,
-    )
+        # Check for ghcr.io in auths
+        auths = config_data.get("auths", {})
+        if "ghcr.io" in auths:
+            return True
 
-    logging.info("✓ Artifact Registry created")
+        # Check for ghcr.io in credHelpers (credential store)
+        cred_helpers = config_data.get("credHelpers", {})
+        if "ghcr.io" in cred_helpers:
+            return True
+
+        # Check for global credential helper
+        if config_data.get("credsStore"):
+            # If there's a global credential store, assume it works for ghcr.io
+            return True
+
+    except (json.JSONDecodeError, OSError) as e:
+        logging.warning(f"Could not read Docker config: {e}")
+        return False
+
+    return False
 
 
 def build_and_push_docker_image():
-    """Build and push TPU CI Docker image."""
-    logging.info("Building TPU CI Docker image...")
+    """Build and push TPU CI Docker image to GitHub Container Registry."""
+    logging.info("Building and pushing Docker image to ghcr.io...")
 
-    run(["gcloud", "auth", "configure-docker", config.DOCKER_REGISTRY, "-q"], check=True)
+    # Build the full image URLs (both latest and date-tagged)
+    base_url = f"ghcr.io/{config.GITHUB_REPOSITORY}/{config.DOCKER_IMAGE_NAME}"
+    latest_image = f"{base_url}:{config.DOCKER_IMAGE_TAG}"
+
+    date_tag = datetime.utcnow().strftime("%Y-%m-%d-%H%M")
+    date_image = f"{base_url}:{date_tag}"
+
+    logging.info("Target images:")
+    logging.info(f"  - {latest_image}")
+    logging.info(f"  - {date_image}")
+
+    # Check if user is authenticated to ghcr.io
+    if not check_ghcr_authentication():
+        logging.error("Not authenticated to ghcr.io")
+        logging.error("")
+        logging.error("To authenticate, run:")
+        logging.error("")
+        logging.error("  echo $GITHUB_PAT | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin")
+        logging.error("")
+        logging.error("Where:")
+        logging.error("  - GITHUB_PAT is a Personal Access Token with 'write:packages' scope")
+        logging.error("  - Create a token at: https://github.com/settings/tokens/new")
+        logging.error("  - YOUR_GITHUB_USERNAME is your GitHub username")
+        logging.error("")
+        sys.exit(1)
+
+    logging.info("✓ Authenticated to ghcr.io")
 
     run(
         [
@@ -151,7 +161,9 @@ def build_and_push_docker_image():
             "linux/amd64",
             "--push",
             "-t",
-            config.DOCKER_IMAGE_FULL,
+            latest_image,
+            "-t",
+            date_image,
             "-f",
             config.DOCKERFILE_TPU_CI_PATH,
             ".",
@@ -159,25 +171,18 @@ def build_and_push_docker_image():
         check=True,
     )
 
-    logging.info("✓ Docker image built and pushed")
+    logging.info("✓ Docker images built and pushed to ghcr.io")
+    logging.info(f"  - {latest_image}")
+    logging.info(f"  - {date_image}")
 
 
 def delete_controller_vm():
     """Delete controller VM if it exists."""
     logging.info("Checking for existing controller VM...")
 
-    result = run(
-        [
-            "gcloud",
-            "compute",
-            "instances",
-            "describe",
-            config.CONTROLLER_NAME,
-            "--zone",
-            config.ZONE,
-            "--project",
-            config.GCP_PROJECT_ID,
-        ],
+    result = run_sh(
+        f"gcloud compute instances describe {config.CONTROLLER_NAME} "
+        f"--zone {config.CONTROLLER_ZONE} --project {config.GCP_PROJECT_ID}",
         capture_output=True,
         check=False,
     )
@@ -187,29 +192,48 @@ def delete_controller_vm():
         return
 
     logging.info("Deleting existing controller VM...")
-    run(
-        [
-            "gcloud",
-            "compute",
-            "instances",
-            "delete",
-            config.CONTROLLER_NAME,
-            "--zone",
-            config.ZONE,
-            "--project",
-            config.GCP_PROJECT_ID,
-            "--quiet",
-        ],
+    run_sh(
+        f"gcloud compute instances delete {config.CONTROLLER_NAME} "
+        f"--zone {config.CONTROLLER_ZONE} --project {config.GCP_PROJECT_ID} --quiet",
         check=True,
     )
     logging.info("✓ Controller VM deleted")
+
+
+def wait_for_controller_service():
+    logging.info("Waiting for controller service to start (timeout: 10 minutes)...")
+    start_time = time.time()
+    timeout_seconds = 600
+    retry_interval = 10
+
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed > timeout_seconds:
+            logging.error("Controller service failed to start within 10 minutes")
+            sys.exit(1)
+
+        result = run_sh(
+            f"gcloud compute ssh {config.CONTROLLER_NAME} --zone {config.CONTROLLER_ZONE} "
+            f"--project {config.GCP_PROJECT_ID} --command 'curl -sf http://localhost:8000/'",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode == 0:
+            logging.info("Controller service is active and responding")
+            return
+
+        remaining = timeout_seconds - elapsed
+        logging.info(f"Service not ready yet, retrying in {retry_interval}s (time remaining: {int(remaining)}s)...")
+        time.sleep(retry_interval)
 
 
 def create_controller_vm():
     """Create controller VM for running TPU VM manager."""
     logging.info("Creating controller VM...")
 
-    result = run(["git", "branch", "--show-current"], capture_output=True, text=True, check=False)
+    result = run_sh("git branch --show-current", capture_output=True, text=True, check=False)
     branch = result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else config.GITHUB_BRANCH
     logging.info(f"Controller will use branch: {branch}")
 
@@ -223,7 +247,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="/root/.local/bin:$PATH"
 
 cd /opt
-git clone --branch {branch} https://github.com/{config.GITHUB_ORG}/{config.GITHUB_REPO}.git
+git clone --branch {branch} {config.GITHUB_URL}
 cd marin/infra/tpu-ci
 
 cat > /etc/systemd/system/tpu-monitor.service <<'EOF'
@@ -248,6 +272,9 @@ systemctl enable tpu-monitor
 systemctl start tpu-monitor
 """
 
+    startup_script_path = Path("/tmp/controller-startup-script.sh")
+    startup_script_path.write_text(startup_script)
+
     run(
         [
             "gcloud",
@@ -256,7 +283,7 @@ systemctl start tpu-monitor
             "create",
             config.CONTROLLER_NAME,
             "--zone",
-            config.ZONE,
+            config.CONTROLLER_ZONE,
             "--project",
             config.GCP_PROJECT_ID,
             "--machine-type",
@@ -267,68 +294,72 @@ systemctl start tpu-monitor
             "https://www.googleapis.com/auth/cloud-platform",
             "--labels",
             "tpu-ci-component=controller,tpu-ci-managed=true",
-            "--metadata",
-            f"startup-script={startup_script}",
+            "--metadata-from-file",
+            f"startup-script={startup_script_path}",
         ],
         check=True,
     )
 
     logging.info("✓ Controller VM created")
+    wait_for_controller_service()
 
 
 def delete_all_tpu_vms():
-    """Delete all TPU VMs with tpu-ci labels."""
-    logging.info("Deleting TPU VMs...")
+    """Delete all TPU VMs with tpu-ci labels across all zones in parallel."""
+    logging.info("Discovering TPU VMs across all zones...")
 
-    result = run(
-        [
-            "gcloud",
-            "compute",
-            "tpus",
-            "tpu-vm",
-            "list",
-            "--zone",
-            config.ZONE,
-            "--project",
-            config.GCP_PROJECT_ID,
-            "--filter",
-            "labels.tpu-ci-managed=true",
-            "--format",
-            "value(name)",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    zones = list(config.TPU_ZONES_CONFIG.keys())
 
-    if result.returncode != 0 or not result.stdout.strip():
+    def list_vms_in_zone(zone: str) -> list[tuple[str, str]]:
+        """List all TPU VMs in a zone. Returns list of (zone, vm_name) tuples."""
+        result = run_sh(
+            f"gcloud compute tpus tpu-vm list --zone {zone} --project {config.GCP_PROJECT_ID} "
+            f"--filter labels.tpu-ci-managed=true --format value(name)",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+
+        vm_names = [name.strip() for name in result.stdout.strip().split("\n") if name.strip()]
+        return [(zone, vm_name) for vm_name in vm_names]
+
+    def delete_vm(zone: str, vm_name: str):
+        """Delete a single TPU VM."""
+        logging.info(f"Deleting {vm_name} in {zone}")
+        run_sh(
+            f"gcloud compute tpus tpu-vm delete {vm_name} --zone {zone} --project {config.GCP_PROJECT_ID} --quiet",
+            check=False,
+        )
+
+    # Fetch all VM names in parallel
+    all_vms = []
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        futures = [executor.submit(list_vms_in_zone, zone) for zone in zones]
+        for future in as_completed(futures):
+            try:
+                all_vms.extend(future.result())
+            except Exception as e:
+                logging.error(f"Error listing TPU VMs: {e}")
+
+    if not all_vms:
         logging.info("✓ No TPU VMs to delete")
         return
 
-    vm_names = result.stdout.strip().split("\n")
-    logging.info(f"Found {len(vm_names)} TPU VMs to delete")
+    logging.info(f"Found {len(all_vms)} TPU VMs, deleting in parallel...")
 
-    for vm_name in vm_names:
-        if vm_name:
-            logging.info(f"Deleting TPU VM: {vm_name}")
-            run(
-                [
-                    "gcloud",
-                    "compute",
-                    "tpus",
-                    "tpu-vm",
-                    "delete",
-                    vm_name,
-                    "--zone",
-                    config.ZONE,
-                    "--project",
-                    config.GCP_PROJECT_ID,
-                    "--quiet",
-                ],
-                check=False,
-            )
+    # Delete all VMs in parallel
+    with ThreadPoolExecutor(max_workers=32) as executor:
+        futures = [executor.submit(delete_vm, zone, vm_name) for zone, vm_name in all_vms]
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                logging.error(f"Error deleting TPU VM: {e}")
 
-    logging.info("✓ All TPU VMs deleted")
+    logging.info(f"✓ Deleted {len(all_vms)} TPU VMs across all zones")
 
 
 @click.group()
@@ -351,7 +382,6 @@ def setup_controller():
     github_token = get_github_token()
 
     store_github_token_in_secret_manager(github_token)
-    ensure_artifact_registry()
     build_and_push_docker_image()
     delete_controller_vm()
     create_controller_vm()
@@ -360,7 +390,12 @@ def setup_controller():
     logging.info("Controller setup complete!")
     logging.info("=" * 60)
     logging.info("")
-    logging.info(f"Controller VM created and will manage {config.TPU_VM_COUNT} TPU VMs")
+    total_vms = sum(config.TPU_ZONES_CONFIG.values())
+    logging.info(
+        f"Controller VM created and will manage {total_vms} TPU VMs across {len(config.TPU_ZONES_CONFIG)} zones"
+    )
+    for zone, count in config.TPU_ZONES_CONFIG.items():
+        logging.info(f"  {zone}: {count} VMs")
     logging.info("TPU VMs will be automatically created and maintained by the vm_manager daemon")
     logging.info("Each VM will auto-register as a GitHub Actions runner")
     logging.info("")
@@ -369,15 +404,14 @@ def setup_controller():
 @cli.command()
 def teardown():
     """Destroy all TPU CI infrastructure."""
-    delete_all_tpu_vms()
     delete_controller_vm()
+    delete_all_tpu_vms()
 
 
 @cli.command("build-image")
 def build_image():
-    """Build and push the TPU CI Docker image."""
+    """Build and push the TPU CI Docker image to ghcr.io."""
     logging.info("Building TPU CI Docker image...")
-    ensure_artifact_registry()
     build_and_push_docker_image()
     logging.info("✓ Image build complete")
 
@@ -397,20 +431,21 @@ def controller_logs(lines: int, follow: bool):
         f"sudo journalctl -u tpu-monitor -n {lines}" + (" -f" if follow else "")
     )
 
-    cmd = [
-        "gcloud",
-        "compute",
-        "ssh",
-        config.CONTROLLER_NAME,
-        "--zone",
-        config.ZONE,
-        "--project",
-        config.GCP_PROJECT_ID,
-        "--command",
-        cmd_str,
-    ]
-
-    run(cmd, check=True)
+    run(
+        [
+            "gcloud",
+            "compute",
+            "ssh",
+            config.CONTROLLER_NAME,
+            "--zone",
+            config.CONTROLLER_ZONE,
+            "--project",
+            config.GCP_PROJECT_ID,
+            "--command",
+            cmd_str,
+        ],
+        check=True,
+    )
 
 
 if __name__ == "__main__":
