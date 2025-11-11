@@ -43,6 +43,7 @@ def run_vllm_inference(model_path, **model_init_kwargs):
     return generated_texts
 
 
+@pytest.mark.slow
 @pytest.mark.tpu_ci
 def test_local_llm_inference(ray_tpu_cluster):
     config = ModelConfig(
@@ -56,6 +57,7 @@ def test_local_llm_inference(ray_tpu_cluster):
     shutil.rmtree("/tmp/test-llama-eval")
 
 
+@pytest.mark.slow
 @pytest.mark.tpu_ci
 def test_large_model_inference():
     gcsfuse_mount_llama_70b_model_path = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"

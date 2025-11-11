@@ -22,6 +22,7 @@ from marin.generation.pipeline import vLLMTextGeneration
 TEST_OUTPUT_PATH = "gs://marin-us-east5/documents/ray-data-test-llama-200m"
 
 
+@pytest.mark.slow
 @pytest.mark.tpu_ci
 def test_ray_data(test_crawl_file_path):
     gcsfuse_mount_model_path = "/opt/gcsfuse_mount/perplexity-models/llama-200m"
