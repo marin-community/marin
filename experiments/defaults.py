@@ -36,6 +36,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
+from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
@@ -122,6 +123,7 @@ def default_tokenize(
     name: str,
     dataset: InputName | ExecutorStep | str | HfDatasetSpec,
     tokenizer: str,
+    options: CacheOptions | None = None,
     format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
     *,
     is_validation: bool = False,
@@ -137,6 +139,7 @@ def default_tokenize(
             dataset with a particular subset name.
         tokenizer: string HuggingFace tokenizer name. Should be the same as you intend to use in the tokenizer
             spec for the training run.
+        options: CacheOptions to use for tokenization. You typically don't need to set this.
         format: The format of the dataset. This is used to determine how to tokenize the data.
 
             See [Levanter's documentation](https://levanter.readthedocs.io/en/latest/reference/Data-Formats/)
@@ -170,6 +173,9 @@ def default_tokenize(
             tokenizer=ensure_versioned(tokenizer),
             format=format,
         )
+
+    if options is not None:
+        config = dataclasses.replace(config, cache_options=options)
 
     return ExecutorStep(
         name=os.path.join("tokenized", name),
