@@ -759,9 +759,12 @@ class Curriculum:
 
         # Restore alert cooldown times
         if "last_alert_time" in checkpoint_data:
-            self._last_alert_time = {
-                tuple(key.split(":", 1)): step for key, step in checkpoint_data["last_alert_time"].items()
-            }
+            # This is multi line because of pyrefly
+            self._last_alert_time = {}
+            for key, step in checkpoint_data["last_alert_time"].items():
+                parts = key.split(":", 1)
+                if len(parts) == 2:
+                    self._last_alert_time[(parts[0], parts[1])] = step
         else:
             # Backward compatibility: initialize empty if not in checkpoint
             self._last_alert_time = {}
