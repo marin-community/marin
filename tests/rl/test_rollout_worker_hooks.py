@@ -38,26 +38,8 @@ class TestRolloutWorkerHookIntegration(unittest.TestCase):
         self.mock_worker._hook_manager = MagicMock()
         self.mock_worker._hook_manager.hooks = []
 
-        # Mock the register/unregister methods
-        def register_hook(hook):
-            self.mock_worker._hook_manager.hooks.append(hook)
-
-        def unregister_hook(hook):
-            if hook in self.mock_worker._hook_manager.hooks:
-                self.mock_worker._hook_manager.hooks.remove(hook)
-                return True
-            return False
-
-        def clear_hooks():
-            self.mock_worker._hook_manager.hooks.clear()
-
-        def get_hooks():
-            return list(self.mock_worker._hook_manager.hooks)
-
-        self.mock_worker.register_hook = register_hook
-        self.mock_worker.unregister_hook = unregister_hook
-        self.mock_worker.clear_hooks = clear_hooks
-        self.mock_worker.get_hooks = get_hooks
+        # Mock hook_manager property
+        self.mock_worker.hook_manager = self.mock_worker._hook_manager
 
     def test_custom_evaluation_hook(self):
         """Test adding a custom evaluation hook instead of monkey-patching."""
@@ -77,10 +59,10 @@ class TestRolloutWorkerHookIntegration(unittest.TestCase):
 
         # Register the custom hook
         custom_hook = CustomEvaluationHook()
-        self.mock_worker.register_hook(custom_hook)
+        self.mock_worker.hook_manager.register_hook(custom_hook)
 
         # Verify hook was registered
-        self.assertIn(custom_hook, self.mock_worker.get_hooks())
+        self.assertIn(custom_hook, list(self.mock_worker.hook_manager.hooks))
 
         # Simulate running at different steps
         rng = jrandom.PRNGKey(42)
@@ -146,7 +128,7 @@ class TestRolloutWorkerHookIntegration(unittest.TestCase):
 
         # Register the monitoring hook
         monitor_hook = HealthMonitoringHook(alert_threshold=3)
-        self.mock_worker.register_hook(monitor_hook)
+        self.mock_worker.hook_manager.register_hook(monitor_hook)
 
         # Simulate some steps with failures
         rng = jrandom.PRNGKey(42)
@@ -196,7 +178,7 @@ class TestRolloutWorkerHookIntegration(unittest.TestCase):
 
         # Register the data collection hook
         data_hook = DataCollectionHook(frequency=10)
-        self.mock_worker.register_hook(data_hook)
+        self.mock_worker.hook_manager.register_hook(data_hook)
 
         # Simulate some rollout steps
         rng = jrandom.PRNGKey(42)
@@ -247,12 +229,12 @@ class TestRolloutWorkerHookIntegration(unittest.TestCase):
         hook2 = Hook2()
         hook3 = Hook3()
 
-        self.mock_worker.register_hook(hook1)
-        self.mock_worker.register_hook(hook2)
-        self.mock_worker.register_hook(hook3)
+        self.mock_worker.hook_manager.register_hook(hook1)
+        self.mock_worker.hook_manager.register_hook(hook2)
+        self.mock_worker.hook_manager.register_hook(hook3)
 
         # Verify all hooks are registered
-        self.assertEqual(len(self.mock_worker.get_hooks()), 3)
+        self.assertEqual(len(list(self.mock_worker.hook_manager.hooks)), 3)
 
         # Test at different steps
         rng = jrandom.PRNGKey(42)
@@ -290,7 +272,7 @@ class TestRolloutWorkerHookIntegration(unittest.TestCase):
                 return {"temp.count": self.run_count}
 
         temp_hook = TemporaryHook()
-        self.mock_worker.register_hook(temp_hook)
+        self.mock_worker.hook_manager.register_hook(temp_hook)
 
         # Run for a few steps
         rng = jrandom.PRNGKey(42)
@@ -301,12 +283,12 @@ class TestRolloutWorkerHookIntegration(unittest.TestCase):
         self.assertEqual(temp_hook.run_count, 3)
 
         # Remove the hook
-        success = self.mock_worker.unregister_hook(temp_hook)
+        success = self.mock_worker.hook_manager.unregister_hook(temp_hook)
         self.assertTrue(success)
-        self.assertNotIn(temp_hook, self.mock_worker.get_hooks())
+        self.assertNotIn(temp_hook, list(self.mock_worker.hook_manager.hooks))
 
         # Try to remove again (should fail)
-        success = self.mock_worker.unregister_hook(temp_hook)
+        success = self.mock_worker.hook_manager.unregister_hook(temp_hook)
         self.assertFalse(success)
 
     def test_clear_all_hooks(self):
@@ -325,13 +307,13 @@ class TestRolloutWorkerHookIntegration(unittest.TestCase):
         ]
 
         for hook in hooks:
-            self.mock_worker.register_hook(hook)
+            self.mock_worker.hook_manager.register_hook(hook)
 
-        self.assertEqual(len(self.mock_worker.get_hooks()), 3)
+        self.assertEqual(len(list(self.mock_worker.hook_manager.hooks)), 3)
 
         # Clear all hooks
-        self.mock_worker.clear_hooks()
-        self.assertEqual(len(self.mock_worker.get_hooks()), 0)
+        self.mock_worker.hook_manager.clear_hooks()
+        self.assertEqual(len(list(self.mock_worker.hook_manager.hooks)), 0)
 
 
 class TestHookUsagePatterns(unittest.TestCase):
@@ -351,26 +333,22 @@ class TestHookUsagePatterns(unittest.TestCase):
         #     self._evaluate_curriculum(...)
 
         # After: Using hooks
-        from marin.rl.hooks import EvaluationHook
+        from marin.rl.hooks import EvaluateLessonHook, EvaluateCurriculumHook
 
         # Create hooks that replicate the original behavior
-        micro_eval_hook = EvaluationHook(
+        micro_eval_hook = EvaluateLessonHook(
             frequency=10,  # config.micro_eval_frequency
             n_examples=4,  # config.micro_eval_n_examples
-            eval_type="micro_eval",
-            evaluate_all_lessons=False,
         )
 
-        full_eval_hook = EvaluationHook(
+        full_eval_hook = EvaluateCurriculumHook(
             frequency=100,  # config.eval_frequency
             n_examples=64,  # config.eval_n_examples
-            eval_type="eval",
-            evaluate_all_lessons=True,
         )
 
         # These would be registered with the worker
-        # worker.register_hook(micro_eval_hook)
-        # worker.register_hook(full_eval_hook)
+        # worker.hook_manager.register_hook(micro_eval_hook)
+        # worker.hook_manager.register_hook(full_eval_hook)
 
         # The hooks will automatically run at the appropriate steps
         # No need to hardcode the logic in the main loop
@@ -378,8 +356,6 @@ class TestHookUsagePatterns(unittest.TestCase):
         # Verify the hooks are configured correctly
         self.assertEqual(micro_eval_hook.frequency, 10)
         self.assertEqual(full_eval_hook.frequency, 100)
-        self.assertFalse(micro_eval_hook.evaluate_all_lessons)
-        self.assertTrue(full_eval_hook.evaluate_all_lessons)
 
     def test_custom_test_hook_pattern(self):
         """Show how tests can use custom hooks instead of monkey-patching.
@@ -407,7 +383,7 @@ class TestHookUsagePatterns(unittest.TestCase):
 
         # Use a custom hook:
         test_hook = TestEvaluationHook()  # NEW WAY
-        # worker.register_hook(test_hook)
+        # worker.hook_manager.register_hook(test_hook)
 
         # Simulate test execution
         rng = jrandom.PRNGKey(42)

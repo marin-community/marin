@@ -25,11 +25,65 @@ from typing import TYPE_CHECKING, Any
 
 import jax.random as jrandom
 from jax import numpy as jnp
+from levanter.utils.jax_utils import barrier_sync
 
 if TYPE_CHECKING:
     from marin.rl.rollout_worker import RolloutWorker
 
+from marin.rl.types import RolloutBatch, RolloutStats
+
 logger = logging.getLogger("ray")
+
+
+@dataclass
+class RolloutBatchStats:
+    total_count: int
+    success_count: int
+    rollout_stats: list[RolloutStats]
+    avg_reward: float
+
+
+def compute_batch_stats(batch: RolloutBatch, lesson_id: str) -> RolloutBatchStats:
+    """Compute statistics from a rollout batch."""
+    rollout_stats_list = []
+    total_count = 0
+    success_count = 0
+    reward_sum = 0.0
+
+    for group in batch.groups:
+        for rollout in group.rollouts:
+            rollout_stats_list.append(
+                RolloutStats(
+                    lesson_id=lesson_id,
+                    episode_reward=rollout.episode_reward,
+                    env_example_id=rollout.env_example_id,
+                )
+            )
+
+            total_count += 1
+            if rollout.episode_reward > 0:
+                success_count += 1
+            reward_sum += rollout.episode_reward
+
+    return RolloutBatchStats(
+        total_count=total_count,
+        success_count=success_count,
+        rollout_stats=rollout_stats_list,
+        avg_reward=(reward_sum / total_count) if total_count > 0 else 0.0,
+    )
+
+
+def build_eval_metrics(prefix: str, lesson_id: str, batch: RolloutBatch) -> dict[str, Any]:
+    """Build evaluation metrics from a rollout batch."""
+    metrics = {}
+    stats = compute_batch_stats(batch, lesson_id)
+    if stats.total_count == 0:
+        return metrics
+    success_rate = stats.success_count / stats.total_count
+    metrics[f"{prefix}/{lesson_id}/success_rate"] = success_rate
+    metrics[f"{prefix}/{lesson_id}/avg_reward"] = stats.avg_reward
+    metrics[f"{prefix}/{lesson_id}/total_count"] = stats.total_count
+    return metrics
 
 
 @dataclass
@@ -39,6 +93,7 @@ class HookContext:
     worker: "RolloutWorker"
     step: int
     rng: jnp.ndarray
+    curriculum_actor: Any
     lesson_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -47,109 +102,156 @@ class HookContext:
         keys = jrandom.split(self.rng)
         return keys[0], keys[1]
 
+    def sample_batch(
+        self, lesson_id: str, n_examples: int, n_generations: int, mode: str, rng
+    ) -> tuple[RolloutBatch | None, dict | None]:
+        """Sample a batch of rollouts from the environment for the given lesson ID."""
+        return self.worker._sample_batch(lesson_id, n_examples, n_generations, mode, rng)
+
+    def log_prompt_example(self, lesson_id: str, batch: RolloutBatch, eval_type: str = "eval") -> None:
+        """Log a single representative sample from an evaluation batch."""
+        if not batch or not batch.groups:
+            return
+
+        # Take first rollout from first group as representative
+        sample = batch.groups[0].rollouts[0]
+
+        # Decode tokens to human-readable text
+        prompt_text = self.worker._tokenizer.decode(sample.prompt_tokens, skip_special_tokens=True)
+        response_text = self.worker._tokenizer.decode(sample.response_tokens, skip_special_tokens=True)
+
+        # Log with structured keys
+        prefix = f"inference.{eval_type}/{lesson_id}"
+        metrics = {
+            f"{prefix}/sample_prompt": prompt_text,
+            f"{prefix}/sample_response": response_text,
+            f"{prefix}/sample_example_id": sample.env_example_id,
+        }
+        self.worker.tracker.log(metrics, step=self.step)
+        logger.info(f"Eval sample for lesson {lesson_id} at step {self.step}: {metrics}")
+
 
 class Hook(ABC):
     """Base class for all hooks that can be registered with RolloutWorker."""
 
     @abstractmethod
     def should_run(self, context: HookContext) -> bool:
-        """Determine if this hook should run at the current step.
-
-        Args:
-            context: The current hook context
-
-        Returns:
-            True if the hook should run, False otherwise
-        """
+        """Determine if this hook should run at the current step."""
         pass
 
     @abstractmethod
     def run(self, context: HookContext) -> dict[str, Any] | None:
-        """Execute the hook logic.
-
-        Args:
-            context: The current hook context
-
-        Returns:
-            Optional dictionary of metrics or results
-        """
         pass
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}()"
 
 
+@dataclass
 class PeriodicHook(Hook):
     """Base class for hooks that run periodically based on step count."""
 
-    def __init__(self, frequency: int, start_step: int = 0):
-        """Initialize a periodic hook.
+    frequency: int
+    """Run hook every N steps."""
 
-        Args:
-            frequency: Run hook every N steps
-            start_step: First step to start running the hook (default: 0)
-        """
-        self.frequency = frequency
-        self.start_step = start_step
+    name: str = "periodic_hook"
+
+    start_step: int = 0
+    """First step to start running the hook."""
 
     def should_run(self, context: HookContext) -> bool:
-        """Check if hook should run based on frequency."""
         return context.step > self.start_step and context.step % self.frequency == 0
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(frequency={self.frequency}, start_step={self.start_step})"
 
 
-class EvaluationHook(PeriodicHook):
-    """Hook that performs curriculum evaluation - preserves existing behavior."""
+@dataclass
+class EvaluateLessonHook(PeriodicHook):
+    """Evaluate the current lesson periodically."""
 
-    def __init__(
-        self,
-        frequency: int,
-        n_examples: int,
-        eval_type: str = "eval",
-        start_step: int = 0,
-        evaluate_all_lessons: bool = False,
-    ):
-        """Initialize evaluation hook.
+    n_examples: int = field(kw_only=True)
+    """Number of examples to evaluate."""
 
-        Args:
-            frequency: How often to run evaluation
-            n_examples: Number of examples to evaluate
-            eval_type: Type of evaluation ("eval", "micro_eval")
-            start_step: First step to start evaluation
-            evaluate_all_lessons: If True, evaluate all lessons; if False, only current
-        """
-        super().__init__(frequency, start_step)
-        self.n_examples = n_examples
-        self.eval_type = eval_type
-        self.evaluate_all_lessons = evaluate_all_lessons
+    name: str = "evaluate_lesson"
+
+    update_curriculum: bool = False
+    """Whether to update curriculum stats (only for full evals)."""
 
     def run(self, context: HookContext) -> dict[str, Any] | None:
-        """Run evaluation on lessons."""
-        worker = context.worker
-        rng, eval_rng = context.split_rng()
+        assert context.lesson_id is not None, "lesson_id is required for lesson evaluation"
 
-        if self.evaluate_all_lessons:
-            # Full curriculum evaluation
-            logger.info(f"Running full curriculum evaluation at step {context.step}")
-            return worker._evaluate_curriculum(eval_rng, context.step)
-        else:
-            # Single lesson evaluation (micro-eval)
-            if context.lesson_id is None:
-                logger.warning("No lesson_id in context for micro-evaluation")
-                return None
+        _rng, eval_rng = context.split_rng()
+        logger.info(f"Running micro-eval for lesson {context.lesson_id} at step {context.step}")
 
-            logger.info(f"Running {self.eval_type} for lesson {context.lesson_id} at step {context.step}")
-            return worker._evaluate_lesson(
-                context.lesson_id, self.n_examples, eval_type=self.eval_type, rng=eval_rng, step=context.step
+        batch, _ = context.sample_batch(
+            lesson_id=context.lesson_id,
+            n_examples=self.n_examples,
+            n_generations=1,
+            mode="eval",
+            rng=eval_rng,
+        )
+
+        if batch is None:
+            return None
+
+        stats = compute_batch_stats(batch, context.lesson_id)
+        context.log_prompt_example(context.lesson_id, batch, eval_type="micro_eval")
+        metrics = build_eval_metrics(prefix="inference.micro_eval", lesson_id=context.lesson_id, batch=batch)
+        context.worker.tracker.log(metrics, step=context.step)x
+        logger.info("Eval metrics for lesson %s at step %d: %s", context.lesson_id, context.step, metrics)
+
+        if self.update_curriculum:
+            context.curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
+                stats.rollout_stats, mode="eval", current_step=context.step
             )
 
-    def __repr__(self) -> str:
-        return (
-            f"EvaluationHook(frequency={self.frequency}, n_examples={self.n_examples}, "
-            f"eval_type='{self.eval_type}', evaluate_all_lessons={self.evaluate_all_lessons})"
-        )
+        return metrics
+
+
+@dataclass
+class EvaluateCurriculumHook(PeriodicHook):
+    """Evaluate all lessons in the curriculum periodically."""
+
+    n_examples: int = field(kw_only=True)
+    """Number of examples to evaluate."""
+
+    name: str = "evaluate_curriculum"
+
+    def run(self, context: HookContext) -> dict[str, Any] | None:
+        lesson_names = list(context.worker.config.curriculum_config.lessons.keys())
+        if not lesson_names:
+            logger.info("No lessons to evaluate")
+            return {}
+
+        logger.info(f"Evaluating {len(lesson_names)} lessons")
+
+        rng = context.rng
+        for lesson_id in lesson_names:
+            rng, lesson_rng = jrandom.split(rng)
+            batch, _ = context.sample_batch(
+                lesson_id=lesson_id,
+                n_examples=self.n_examples,
+                n_generations=1,
+                mode="eval",
+                rng=lesson_rng,
+            )
+
+            if batch is None:
+                continue
+
+            stats = compute_batch_stats(batch, lesson_id)
+            context.log_prompt_example(lesson_id, batch, eval_type="eval")
+            metrics = build_eval_metrics(prefix="inference.eval", lesson_id=lesson_id, batch=batch)
+            context.worker.tracker.log(metrics, step=context.step)
+            logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, context.step, metrics)
+
+            context.curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
+                stats.rollout_stats, mode="eval", current_step=context.step
+            )
+
+        barrier_sync()
+        return {}
 
 
 class HookManager:
@@ -160,23 +262,10 @@ class HookManager:
         self.hooks: list[Hook] = []
 
     def register_hook(self, hook: Hook) -> None:
-        """Register a new hook.
-
-        Args:
-            hook: The hook to register
-        """
         self.hooks.append(hook)
         logger.info(f"Registered hook: {hook}")
 
     def unregister_hook(self, hook: Hook) -> bool:
-        """Unregister a hook.
-
-        Args:
-            hook: The hook to unregister
-
-        Returns:
-            True if hook was found and removed, False otherwise
-        """
         if hook in self.hooks:
             self.hooks.remove(hook)
             logger.info(f"Unregistered hook: {hook}")
@@ -184,7 +273,6 @@ class HookManager:
         return False
 
     def clear_hooks(self) -> None:
-        """Remove all registered hooks."""
         self.hooks.clear()
         logger.info("Cleared all hooks")
 
@@ -204,52 +292,35 @@ class HookManager:
                     logger.debug(f"Running hook: {hook}")
                     hook_results = hook.run(context)
                     if hook_results:
-                        results.update(hook_results)
+                        results.update({f"{hook.name}/{k}": v for k, v in hook_results.items()})
             except Exception as e:
                 logger.error(f"Error running hook {hook}: {e}", exc_info=True)
         return results
 
     def __len__(self) -> int:
-        """Return the number of registered hooks."""
         return len(self.hooks)
 
     def __repr__(self) -> str:
         return f"HookManager(hooks={self.hooks})"
 
 
-def create_default_evaluation_hooks(curriculum_config) -> list[EvaluationHook]:
-    """Create the default evaluation hooks based on curriculum config.
-
-    This preserves the existing evaluation behavior of RolloutWorker.
-
-    Args:
-        curriculum_config: The curriculum configuration
-
-    Returns:
-        List of default evaluation hooks
-    """
+def create_default_evaluation_hooks(curriculum_config) -> list[Hook]:
     hooks = []
 
-    # Micro-evaluation hook (evaluates current lesson)
-    if hasattr(curriculum_config, "micro_eval_frequency") and curriculum_config.micro_eval_frequency > 0:
-        micro_eval_hook = EvaluationHook(
-            frequency=curriculum_config.micro_eval_frequency,
-            n_examples=curriculum_config.micro_eval_n_examples,
-            eval_type="micro_eval",
-            start_step=0,
-            evaluate_all_lessons=False,
+    if curriculum_config.micro_eval_frequency > 0:
+        hooks.append(
+            EvaluateLessonHook(
+                frequency=curriculum_config.micro_eval_frequency,
+                n_examples=curriculum_config.micro_eval_n_examples,
+            )
         )
-        hooks.append(micro_eval_hook)
 
-    # Full evaluation hook (evaluates all lessons)
-    if hasattr(curriculum_config, "eval_frequency") and curriculum_config.eval_frequency > 0:
-        full_eval_hook = EvaluationHook(
-            frequency=curriculum_config.eval_frequency,
-            n_examples=curriculum_config.eval_n_examples,
-            eval_type="eval",
-            start_step=0,
-            evaluate_all_lessons=True,
+    if curriculum_config.eval_frequency > 0:
+        hooks.append(
+            EvaluateCurriculumHook(
+                frequency=curriculum_config.eval_frequency,
+                n_examples=curriculum_config.eval_n_examples,
+            )
         )
-        hooks.append(full_eval_hook)
 
     return hooks

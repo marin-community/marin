@@ -103,7 +103,7 @@ custom_eval = EvaluationHook(
     n_examples=32,
     eval_type="custom_eval"
 )
-worker.register_hook(custom_eval)
+worker.hook_manager.register_hook(custom_eval)
 ```
 
 ### Custom Hook Implementation
@@ -130,7 +130,7 @@ class CustomMonitoringHook(PeriodicHook):
         return metrics
 
 # Register the custom hook
-worker.register_hook(CustomMonitoringHook())
+worker.hook_manager.register_hook(CustomMonitoringHook())
 ```
 
 ### Testing with Hooks
@@ -162,7 +162,7 @@ class TestEvaluationHook(Hook):
         return result
 
 test_hook = TestEvaluationHook()
-worker.register_hook(test_hook)
+worker.hook_manager.register_hook(test_hook)
 
 # Run worker and check test_hook.evaluations
 ```
@@ -172,16 +172,16 @@ worker.register_hook(test_hook)
 ```python
 # Add hooks during runtime
 health_monitor = HealthMonitoringHook()
-worker.register_hook(health_monitor)
+worker.hook_manager.register_hook(health_monitor)
 
 # Remove hooks when no longer needed
-worker.unregister_hook(health_monitor)
+worker.hook_manager.unregister_hook(health_monitor)
 
 # Clear all hooks (useful for testing)
-worker.clear_hooks()
+worker.hook_manager.clear_hooks()
 
 # Get current hooks
-current_hooks = worker.get_hooks()
+current_hooks = list(worker.hook_manager.hooks)
 ```
 
 ## Migration Guide
@@ -206,8 +206,8 @@ config.curriculum_config.micro_eval_frequency = 5
 config.curriculum_config.eval_frequency = 50
 
 # After: Add custom hooks without changing config
-worker.register_hook(EvaluationHook(frequency=5, ...))
-worker.register_hook(EvaluationHook(frequency=50, ...))
+worker.hook_manager.register_hook(EvaluationHook(frequency=5, ...))
+worker.hook_manager.register_hook(EvaluationHook(frequency=50, ...))
 ```
 
 ### For Tests
@@ -225,9 +225,9 @@ finally:
 
 # After
 test_hook = CustomTestHook()
-worker.register_hook(test_hook)
+worker.hook_manager.register_hook(test_hook)
 # run test
-worker.unregister_hook(test_hook)
+worker.hook_manager.unregister_hook(test_hook)
 ```
 
 ## Best Practices
@@ -329,7 +329,7 @@ composite = CompositeHook([
     LoggingHook(frequency=50),
     MetricsHook(frequency=25, ...)
 ])
-worker.register_hook(composite)
+worker.hook_manager.register_hook(composite)
 ```
 
 ## Troubleshooting
