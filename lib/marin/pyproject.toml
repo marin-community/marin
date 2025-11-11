@@ -24,11 +24,12 @@ dependencies = [
     "haliax>=1.4.dev443",
     "levanter[serve]",
     "lz4",
+    "zephyr",
     "multiprocess==0.70.16",
     "numpy",
     "openai",
     "pandas", # Only needed by Fileprovider in inference.py
-    "pyarrow", # # Only needed by Fileprovider in inference.py
+    "pyarrow>=22",
     "ray==2.45",
     "regex",
     "requests",
@@ -43,8 +44,8 @@ dependencies = [
 
 [project.license]
 file = "../../LICENSE"
-[dependency-groups]
 
+[dependency-groups]
 test = [
     "pytest>=8.3.2",
     "pytest-asyncio",
@@ -59,11 +60,13 @@ test = [
 lint = [
     "ruff>=0.5.7",
     "black>=24.8.0",
-    "pre-commit==4.2",
     "mypy>=1.4.1",
+    "pyrefly>=0.40.0",
     "types-PyYAML",
     "types-requests",
     "types-six",
+    "click>=8.0",
+    "pyyaml>=6.0",
 ]
 docs = [
     "mkdocs>=1.5.0",
@@ -76,7 +79,6 @@ docs = [
     "mkdocs-minify-plugin>=0.7.0",
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
-
 
 math = ["pylatexenc", "sympy"]
 
@@ -96,14 +98,11 @@ dev = [
     { include-group = "test" },
     { include-group = "lint" },
     { include-group = "docs" },
-    #    {include-group="gcp"},
     { include-group = "math" },
     { include-group = "transform_test_deps" },
 ]
 
 [tool.uv]
-override-dependencies = ["omegaconf>=2.4.0.dev4"]
-
 conflicts = [
     [
         { extra = "crawl" },
@@ -120,6 +119,9 @@ conflicts = [
 ]
 
 [tool.uv.sources]
+zephyr = { workspace = true }
+levanter = { workspace = true }
+
 torch = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra="cpu" },

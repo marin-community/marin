@@ -2,7 +2,7 @@ name: Levanter - GPT-2 Small Integration Test
 
 on:
   workflow_run:
-    workflows: ["Build and Push Docker TPU Images"]
+    workflows: ["Build Docker Images"]
     types:
       - completed
     branches: [main]

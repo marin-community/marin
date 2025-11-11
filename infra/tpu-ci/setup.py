@@ -25,6 +25,7 @@ TPU CI Infrastructure Management
 Manages preemptible TPU VMs with GitHub Actions runners.
 """
 
+import json
 import logging
 import os
 import shlex
@@ -32,6 +33,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -85,50 +87,70 @@ def store_github_token_in_secret_manager(token: str):
     logging.info("✓ GitHub token stored")
 
 
-def ensure_artifact_registry():
-    """Ensure Artifact Registry repositories exist in all regions."""
-    regions = config.get_all_regions()
-    logging.info(f"Checking Artifact Registries in {len(regions)} regions: {', '.join(regions)}")
+def check_ghcr_authentication() -> bool:
+    """Check if user is already authenticated to ghcr.io."""
+    docker_config_path = Path.home() / ".docker" / "config.json"
 
-    for region in regions:
-        result = run_sh(
-            f"gcloud artifacts repositories describe {config.ARTIFACT_REGISTRY_REPO_NAME} "
-            f"--location {region} --project {config.GCP_PROJECT_ID}",
-            capture_output=True,
-            check=False,
-        )
+    if not docker_config_path.exists():
+        return False
 
-        if result.returncode == 0:
-            logging.info(f"✓ Artifact Registry exists in {region}")
-            continue
+    try:
+        with docker_config_path.open() as f:
+            config_data = json.load(f)
 
-        logging.info(f"Creating Artifact Registry in {region}...")
-        run_sh(
-            f"gcloud artifacts repositories create {config.ARTIFACT_REGISTRY_REPO_NAME} "
-            f"--repository-format=docker --location {region} --project {config.GCP_PROJECT_ID}",
-            check=True,
-        )
-        logging.info(f"✓ Artifact Registry created in {region}")
+        # Check for ghcr.io in auths
+        auths = config_data.get("auths", {})
+        if "ghcr.io" in auths:
+            return True
 
-    logging.info("✓ All Artifact Registries ready")
+        # Check for ghcr.io in credHelpers (credential store)
+        cred_helpers = config_data.get("credHelpers", {})
+        if "ghcr.io" in cred_helpers:
+            return True
+
+        # Check for global credential helper
+        if config_data.get("credsStore"):
+            # If there's a global credential store, assume it works for ghcr.io
+            return True
+
+    except (json.JSONDecodeError, OSError) as e:
+        logging.warning(f"Could not read Docker config: {e}")
+        return False
+
+    return False
 
 
 def build_and_push_docker_image():
-    """Build and push TPU CI Docker image to all regional registries."""
-    regions = config.get_all_regions()
-    logging.info(f"Building and pushing Docker image to {len(regions)} regions: {', '.join(regions)}")
+    """Build and push TPU CI Docker image to GitHub Container Registry."""
+    logging.info("Building and pushing Docker image to ghcr.io...")
 
-    # Configure docker auth for all regional registries
-    for region in regions:
-        registry = f"{region}-docker.pkg.dev"
-        run_sh(f"gcloud auth configure-docker {registry} -q", check=True)
+    # Build the full image URLs (both latest and date-tagged)
+    base_url = f"ghcr.io/{config.GITHUB_REPOSITORY}/{config.DOCKER_IMAGE_NAME}"
+    latest_image = f"{base_url}:{config.DOCKER_IMAGE_TAG}"
 
-    # Build image tags for all regions
-    tags = []
-    for region in regions:
-        registry = f"{region}-docker.pkg.dev"
-        image_url = f"{registry}/{config.DOCKER_REPOSITORY}/{config.DOCKER_IMAGE_NAME}:{config.DOCKER_IMAGE_TAG}"
-        tags.extend(["-t", image_url])
+    date_tag = datetime.utcnow().strftime("%Y-%m-%d-%H%M")
+    date_image = f"{base_url}:{date_tag}"
+
+    logging.info("Target images:")
+    logging.info(f"  - {latest_image}")
+    logging.info(f"  - {date_image}")
+
+    # Check if user is authenticated to ghcr.io
+    if not check_ghcr_authentication():
+        logging.error("Not authenticated to ghcr.io")
+        logging.error("")
+        logging.error("To authenticate, run:")
+        logging.error("")
+        logging.error("  echo $GITHUB_PAT | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin")
+        logging.error("")
+        logging.error("Where:")
+        logging.error("  - GITHUB_PAT is a Personal Access Token with 'write:packages' scope")
+        logging.error("  - Create a token at: https://github.com/settings/tokens/new")
+        logging.error("  - YOUR_GITHUB_USERNAME is your GitHub username")
+        logging.error("")
+        sys.exit(1)
+
+    logging.info("✓ Authenticated to ghcr.io")
 
     run(
         [
@@ -138,7 +160,10 @@ def build_and_push_docker_image():
             "--platform",
             "linux/amd64",
             "--push",
-            *tags,
+            "-t",
+            latest_image,
+            "-t",
+            date_image,
             "-f",
             config.DOCKERFILE_TPU_CI_PATH,
             ".",
@@ -146,7 +171,9 @@ def build_and_push_docker_image():
         check=True,
     )
 
-    logging.info(f"✓ Docker image built and pushed to all {len(regions)} regions")
+    logging.info("✓ Docker images built and pushed to ghcr.io")
+    logging.info(f"  - {latest_image}")
+    logging.info(f"  - {date_image}")
 
 
 def delete_controller_vm():
@@ -355,7 +382,6 @@ def setup_controller():
     github_token = get_github_token()
 
     store_github_token_in_secret_manager(github_token)
-    ensure_artifact_registry()
     build_and_push_docker_image()
     delete_controller_vm()
     create_controller_vm()
@@ -384,9 +410,8 @@ def teardown():
 
 @cli.command("build-image")
 def build_image():
-    """Build and push the TPU CI Docker image."""
+    """Build and push the TPU CI Docker image to ghcr.io."""
     logging.info("Building TPU CI Docker image...")
-    ensure_artifact_registry()
     build_and_push_docker_image()
     logging.info("✓ Image build complete")
 
