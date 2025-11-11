@@ -48,7 +48,7 @@ def _jit_decode(attn, x, pos_ids, cache: KvPageCache, binfo: PageBatchInfo) -> t
     return attn.decode(x, cache, binfo, pos_ids=pos_ids, key=jrandom.PRNGKey(2))
 
 
-def _run_attention_decode_test(pos_size: int, embed_size: int, attn_backend: AttentionBackend):
+def _run_attention_decode_matches_full_ar(pos_size: int, embed_size: int, attn_backend: AttentionBackend):
     """Helper to test attention decode matches full autoregressive attention."""
     Pos = Axis("position", pos_size)
     Embed = Axis("embed", embed_size)
@@ -86,13 +86,13 @@ def _run_attention_decode_test(pos_size: int, embed_size: int, attn_backend: Att
 
 
 def test_attention_decode_matches_full_ar():
-    _run_attention_decode_test(pos_size=4, embed_size=8, attn_backend=AttentionBackend.VANILLA)
+    _run_attention_decode_matches_full_ar(pos_size=4, embed_size=8, attn_backend=AttentionBackend.VANILLA)
 
 
 def test_attention_decode_matches_full_ar_splash():
     # Splash requires head_dim to be a multiple of 128; 256 / 2 heads = 128 per head
     with use_test_mesh():
-        _run_attention_decode_test(pos_size=128, embed_size=256, attn_backend=AttentionBackend.SPLASH)
+        _run_attention_decode_matches_full_ar(pos_size=128, embed_size=256, attn_backend=AttentionBackend.SPLASH)
 
 
 def test_attention_decode_matches_full_prefill():
