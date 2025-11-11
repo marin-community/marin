@@ -117,7 +117,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 1.0322066896869009e+20,
+        "training_hardware_flops": 5.1610334484345045e+19,
         "training_time": 7027.550991877049,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_300m_attnsink_4096-548aaa"
       }

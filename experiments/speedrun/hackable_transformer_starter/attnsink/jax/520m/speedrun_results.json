@@ -117,7 +117,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 4.214069254388727e+20,
+        "training_hardware_flops": 2.1070346271943636e+20,
         "training_time": 28690.558649160725,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_520m_attnsink_4096-f0de85"
       }

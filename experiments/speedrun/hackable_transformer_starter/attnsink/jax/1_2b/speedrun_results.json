@@ -117,7 +117,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 1.1628360273843057e+21,
+        "training_hardware_flops": 5.8141801369215284e+20,
         "training_time": 79169.11951145872,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_1_2b_attnsink_4096-a222bf"
       }

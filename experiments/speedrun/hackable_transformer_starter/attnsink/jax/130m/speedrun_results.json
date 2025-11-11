@@ -116,7 +116,7 @@
           "weight_decay": null,
           "z_loss_weight": null
         },
-        "training_hardware_flops": 2.2186510470037086e+19,
+        "training_hardware_flops": 1.1093255235018543e+19,
         "training_time": 1510.5195036789955,
         "wandb_run_link": "https://wandb.ai/marin-community/marin/runs/hacktx_130m_attnsink_4096-04f7ec"
       }
