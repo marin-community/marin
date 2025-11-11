@@ -3410,6 +3410,15 @@ wheels = [
 ]
 
 [[package]]
+name = "immutabledict"
+version = "4.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/12/1da8e1a9050d0603ba65fb1796ed8860a705b906701c96e77f85cc7490be/immutabledict-4.2.2.tar.gz", hash = "sha256:cb6ed3090df593148f94cb407d218ca526fd2639694afdb553dc4f50ce6feeca", size = 6099, upload-time = "2025-10-12T13:32:59.755Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/63/7b/04ab6afa1ff7eb9ccb09049918c0407b205f5009092c0416147d163e4e2b/immutabledict-4.2.2-py3-none-any.whl", hash = "sha256:97c31d098a2c850e93a958badeef765e4736ed7942ec73e439facd764a3a7217", size = 4736, upload-time = "2025-10-12T13:32:58.326Z" },
+]
+
+[[package]]
 name = "importlib-metadata"
 version = "8.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4015,6 +4024,15 @@ sdist = { url = "https://files.pythonhosted.org/packages/3a/7a/5a97e327063409a5c
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c3/6b/068c2ea7a712bf805c62445bd9e9c06d7340358ef2824150eceac027444b/langcodes-3.5.0-py3-none-any.whl", hash = "sha256:853c69d1a35e0e13da2f427bb68fb2fa4a8f4fb899e0c62ad8df8d073dcfed33", size = 182974, upload-time = "2024-11-19T10:23:42.824Z" },
 ]
+
+[[package]]
+name = "langdetect"
+version = "1.0.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/72/a3add0e4eec4eb9e2569554f7c70f4a3c27712f40e3284d483e88094cc0e/langdetect-1.0.9.tar.gz", hash = "sha256:cbc1fef89f8d062739774bd51eda3da3274006b3661d199c2655f6b3f6d605a0", size = 981474, upload-time = "2021-05-07T07:54:13.562Z" }
 
 [[package]]
 name = "language-data"
@@ -4642,6 +4660,8 @@ download-transform = [
     { name = "warcio", version = "1.7.5", source = { git = "https://github.com/marin-community/warcio?rev=077ea9359d5b439d152081a9a9c4aafb25046f79#077ea9359d5b439d152081a9a9c4aafb25046f79" }, marker = "extra == 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
 ]
 eval = [
+    { name = "immutabledict" },
+    { name = "langdetect" },
     { name = "lm-eval", extra = ["math"] },
 ]
 gcp = [
@@ -4839,6 +4859,7 @@ requires-dist = [
     { name = "htmlmin", marker = "extra == 'download-transform'", specifier = "==0.1.12" },
     { name = "huggingface-hub", marker = "extra == 'quality-dedup-consolidate'" },
     { name = "hyperloglog", marker = "extra == 'quality-dedup-consolidate'" },
+    { name = "immutabledict", marker = "extra == 'eval'" },
     { name = "ipython", marker = "extra == 'post-training'" },
     { name = "jax", specifier = "==0.6.2" },
     { name = "jax", marker = "extra == 'cpu'", specifier = "==0.6.2" },
@@ -4847,6 +4868,7 @@ requires-dist = [
     { name = "jax", extras = ["tpu"], marker = "extra == 'tpu'", specifier = "==0.6.2" },
     { name = "jaxtyping", marker = "extra == 'post-training'" },
     { name = "kenlm", marker = "extra == 'crawl'", git = "https://github.com/kpu/kenlm?rev=4cb443e60b7bf2c0ddf3c745378f76cb59e254e5" },
+    { name = "langdetect", marker = "extra == 'eval'" },
     { name = "levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "lm-eval", marker = "extra == 'tokenize-train'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lm-eval", extras = ["math"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },

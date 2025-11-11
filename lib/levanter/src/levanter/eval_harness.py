@@ -290,7 +290,7 @@ class _LmEvalHarnessWorker:
 
     def dispatch_loglikelihood(self, packed_request):
         self._send_message(_Message.LOGLIKELIHOOD)
-        self._send_payload(packed_request)
+        packed_request = self._send_payload(packed_request)
         return self.process_loglikelihood(packed_request)
 
     def stop(self):
@@ -545,6 +545,8 @@ class LevanterHarnessLM(TemplateLM):
 
             padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
 
+            batch = jax.device_put(batch)
+
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
 
             # Increment step after processing batch
@@ -761,6 +763,7 @@ class LevanterHarnessLM(TemplateLM):
             max_seqs=256,
             page_size=8,
             compute_dtype=jnp.bfloat16,
+            hbm_utilization=0.5,
         )
         engine = InferenceEngine.from_model_with_config(
             model=self.leader.model, tokenizer=self.tokenizer, config=engine_cfg

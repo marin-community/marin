@@ -24,9 +24,12 @@ TODO: this should probably be tokens instead of doc counts.
 import dataclasses
 import math
 import re
+
+from experiments.evals.resource_configs import TPU_V4_8
 from levanter.data.text import ChatLmDatasetFormat
 
 from experiments.defaults import default_sft, default_tokenize
+from experiments.evals.evals import default_sft_eval
 from experiments.llama import llama_8b
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import (
@@ -166,6 +169,12 @@ marin_8b_sft_smoltalk2_nemotron_v2 = default_sft(
     tags=["llama", "smoltalk2", "nemotron_v2", "sft"],
 )
 
+marin_8b_sft_smoltalk2_nemotron_v2_evals = default_sft_eval(
+    marin_8b_sft_smoltalk2_nemotron_v2,
+    use_levanter_inference=True,
+    resource_config=TPU_V4_8,
+)
+
 
 if __name__ == "__main__":
-    executor_main(steps=[marin_8b_sft_smoltalk2_nemotron_v2])
+    executor_main(steps=[marin_8b_sft_smoltalk2_nemotron_v2, *marin_8b_sft_smoltalk2_nemotron_v2_evals])

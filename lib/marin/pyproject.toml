@@ -254,6 +254,9 @@ post_training = [
 
 eval = [
     "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    # there are some undeclared dependencies in lm-eval
+    "langdetect",
+    "immutabledict",
 ]
 
 
