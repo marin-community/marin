@@ -80,6 +80,8 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str, c
                 }
                 print(json.dumps(dolma_format), file=f)
 
+    return {"input_file": input_file_path, "output_file": output_file_path, "num_records": len(contents)}
+
 
 @dataclass
 class NemotronIngressConfig:
@@ -110,6 +112,7 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
         Dataset.from_list(all_files)
         .filter(lambda file_info: not fsspec_exists(file_info[1]))
         .map(lambda file_info: download_single_nemotron_path(*file_info))
+        .write_jsonl(os.path.join(cfg.output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
 
     list(backend.execute(pipeline))
