@@ -506,6 +506,7 @@ class ReplContext:
             add_generation_prompt=True,
             date_string="06 Nov 2025"
         )
+        logger.info(f'Prompt tokens: {prompt_tokens}')
 
         tokens_list = prompt_tokens + response_token_ids.tolist()
         tokens = np.array([tokens_list] * 4, dtype=np.int32).reshape(4, -1)

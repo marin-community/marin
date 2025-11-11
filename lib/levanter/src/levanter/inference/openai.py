@@ -566,7 +566,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
 def _compute_tokens(messages: list[ChatMessage], tokenizer: PreTrainedTokenizer) -> List[int]:
     try:
         dict_messages = [msg.model_dump(exclude_none=True) for msg in messages]
-        return tokenizer.apply_chat_template(dict_messages, tokenize=True, add_generation_prompt=True)
+        return tokenizer.apply_chat_template(dict_messages, tokenize=True, add_generation_prompt=True, date_string="06 Nov 2025")
     except Exception as e:
         # Fallback: simple concatenation if template fails
         logger.warning(f"Chat template failed, using fallback: {e}", exc_info=True)
