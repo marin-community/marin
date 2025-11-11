@@ -26,11 +26,12 @@ uv run zephyr --cluster=us-central2 --backend=ray --max-parallelism=1000 --memor
 """
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 import draccus
 from marin.utils import fsspec_glob
+from transformers import AutoTokenizer
 from zephyr import Dataset, flow_backend, load_file
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -48,42 +49,19 @@ class CountTotalTokensConfig:
     text_column: str = "text"
     """Name of the column containing text to tokenize."""
 
-    batch_size: int = 64
-    """Number of records to process in each batch."""
 
-
-def count_tokens_shard(
-    documents: Iterator[dict], tokenizer_name: str, text_column: str, batch_size: int
-) -> Iterator[int]:
+def count_tokens_shard(documents: Iterator[Sequence[dict]], tokenizer_name: str, text_column: str) -> Iterator[int]:
     """Count tokens in a shard of documents using batched tokenization."""
-    from transformers import AutoTokenizer
-
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
-    batch = []
-    for doc in documents:
-        batch.append(doc)
-        if len(batch) >= batch_size:
-            texts = [
-                str(record[text_column]) if text_column in record and record[text_column] is not None else ""
-                for record in batch
-            ]
-            encodings = tokenizer(texts, truncation=False, padding=False)
-            for ids in encodings["input_ids"]:
-                yield len(ids)
-            batch = []
-
-    if batch:
-        texts = [
-            str(record[text_column]) if text_column in record and record[text_column] is not None else ""
-            for record in batch
-        ]
+    for batch in documents:
+        texts = [str(record.get(text_column, "") or "") for record in batch]
         encodings = tokenizer(texts, truncation=False, padding=False)
         for ids in encodings["input_ids"]:
             yield len(ids)
 
 
-def count_total_tokens(input_pattern: str, tokenizer_name: str, text_column: str, batch_size: int) -> int:
+def count_total_tokens(input_pattern: str, tokenizer_name: str, text_column: str) -> int:
     """Count total tokens across all files matching the pattern."""
     input_paths = fsspec_glob(input_pattern)
     logger.info(f"Found {len(input_paths)} files to process")
@@ -93,7 +71,8 @@ def count_total_tokens(input_pattern: str, tokenizer_name: str, text_column: str
     pipeline = (
         Dataset.from_list(input_paths)
         .flat_map(load_file)
-        .map_shard(lambda docs: count_tokens_shard(docs, tokenizer_name, text_column, batch_size))
+        .batch(64)
+        .map_shard(lambda docs: count_tokens_shard(docs, tokenizer_name, text_column))
         .reduce(sum)
     )
 
@@ -106,7 +85,7 @@ def count_total_tokens(input_pattern: str, tokenizer_name: str, text_column: str
 
 @draccus.wrap()
 def main(cfg: CountTotalTokensConfig):
-    count_total_tokens(cfg.input_pattern, cfg.tokenizer_name, cfg.text_column, cfg.batch_size)
+    count_total_tokens(cfg.input_pattern, cfg.tokenizer_name, cfg.text_column)
 
 
 if __name__ == "__main__":

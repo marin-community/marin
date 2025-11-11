@@ -50,7 +50,7 @@ uv run zephyr --cluster=us-central2 --backend=ray --max-parallelism=1000 --memor
 import json
 import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 import draccus
@@ -68,34 +68,21 @@ class CountTokensConfig:
     input_patterns: list[str]
     output_path: str = ""
     tokenizer_name: str = "gpt2"
-    num_reshards: int | None = None
     batch_size: int = 64
 
 
-def count_tokens_shard(documents: Iterator[dict], tokenizer_name: str, batch_size: int) -> Iterator[int]:
+def count_tokens_shard(documents: Iterator[Sequence[dict]], tokenizer_name: str) -> Iterator[int]:
     """Count tokens in a shard of documents using batched tokenization."""
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
-    batch = []
-    for doc in documents:
-        batch.append(doc)
-        if len(batch) >= batch_size:
-            texts = [record["text"] for record in batch]
-            encodings = tokenizer(texts, truncation=False, padding=False)
-            for ids in encodings["input_ids"]:
-                yield len(ids)
-            batch = []
-
-    if batch:
+    for batch in documents:
         texts = [record["text"] for record in batch]
         encodings = tokenizer(texts, truncation=False, padding=False)
         for ids in encodings["input_ids"]:
             yield len(ids)
 
 
-def count_tokens(
-    input_patterns: list[str], output_path: str, tokenizer_name: str, num_reshards: int | None, batch_size: int
-):
+def count_tokens(input_patterns: list[str], output_path: str, tokenizer_name: str, batch_size: int):
     """Count tokens across all files matching input patterns."""
     input_paths = []
     for pattern in input_patterns:
@@ -105,15 +92,16 @@ def count_tokens(
 
     pipeline = Dataset.from_list(input_paths).flat_map(load_file)
 
-    if num_reshards:
-        pipeline = pipeline.reshard(num_reshards)
-
-    stats_pipeline = pipeline.map_shard(lambda docs: count_tokens_shard(docs, tokenizer_name, batch_size)).reduce(
-        local_reducer=lambda tokens: {"num_tokens": sum(tokens), "num_documents": sum(1 for _ in tokens)},
-        global_reducer=lambda shards: {
-            "num_tokens": sum(s["num_tokens"] for s in shards),
-            "num_documents": sum(s["num_documents"] for s in shards),
-        },
+    stats_pipeline = (
+        pipeline.batch(batch_size)
+        .map_shard(lambda docs: count_tokens_shard(docs, tokenizer_name))
+        .reduce(
+            local_reducer=lambda tokens: {"num_tokens": sum(tokens), "num_documents": sum(1 for _ in tokens)},
+            global_reducer=lambda shards: {
+                "num_tokens": sum(s["num_tokens"] for s in shards),
+                "num_documents": sum(s["num_documents"] for s in shards),
+            },
+        )
     )
 
     results = list(backend.execute(stats_pipeline))
@@ -135,7 +123,7 @@ def count_tokens(
 
 @draccus.wrap()
 def count_tokens_driver(cfg: CountTokensConfig):
-    count_tokens(cfg.input_patterns, cfg.output_path, cfg.tokenizer_name, cfg.num_reshards, cfg.batch_size)
+    count_tokens(cfg.input_patterns, cfg.output_path, cfg.tokenizer_name, cfg.batch_size)
 
 
 if __name__ == "__main__":
