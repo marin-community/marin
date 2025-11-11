@@ -37,7 +37,9 @@ def simple_autoregressive_inference(model, prompt_tokens, max_new_tokens, key):
     
     for _ in range(max_new_tokens):
         # Run model on full sequence (no KV cache)
+        print(f'[simple_autoregressive_inference] current tokens: {current_tokens}')
         logits = model(input_ids=current_tokens, attn_mask=AttentionMask.causal(), key=key)
+        print(f'[simple_autoregressive_inference] inference model logits: {logits}')
         
         # Get logits for last position using Haliax axis indexing
         logits_position_axis = logits.axes[1]
@@ -160,10 +162,13 @@ if __name__ == "__main__":
         # Extract response token ids for comparison
         response_token_ids = generated.array[0][len(prompt_tokens):].tolist()
 
-        logits = model(input_ids=generated, attn_mask=AttentionMask.causal(), key=jax.random.PRNGKey(0))
+        input = generated[generated.axes[1], :-1]
+        print(f'[train] input: {input}')
+        logits = model(input_ids=input, attn_mask=AttentionMask.causal(), key=jax.random.PRNGKey(0))
+        print(f'[train] logits: {logits}')
 
         # [bsz, seq_len, vocab_size]
-        logits = logits.array.astype(jnp.float32)[:, :-1, :].reshape(4, -1, logits.array.shape[-1])
+        logits = logits.array.astype(jnp.float32).reshape(4, -1, logits.array.shape[-1])
         labels = generated.array[:, 1:].reshape(4, -1)
         logprobs = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
         logprobs = -1 * logprobs
