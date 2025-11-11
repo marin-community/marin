@@ -1717,13 +1717,26 @@ class Attention(eqx.Module):
         )
 
         # Reshape Q for attention: [position, kv_head, q_heads_per_group, head_size]
-        # Rename position axes to distinguish query from key positions
         q_reshaped = q.rearrange(("position", "kv_head", "q_heads_per_group", "head_size"))
-        dense_k_renamed = dense_k.rename({"position": "key_position"})
-        dense_v_renamed = dense_v.rename({"position": "key_position"})
+        # dense_k and dense_v already have key_position axis from _materialize_dense_kv_from_pages
 
         # Flatten q heads for Splash: [position, heads, head_size]
         q_flat = q_reshaped.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
+        
+        # Broadcast K/V to match Q's head structure for GQA
+        # K/V have [key_position, kv_head, head_size], need to repeat for q_heads_per_group
+        # to get [key_position, heads, head_size] where heads = kv_head * q_heads_per_group
+        if self.config.QHeadsPerGroup.size > 1:
+            # Add q_heads_per_group axis and broadcast
+            dense_k = dense_k.broadcast_axis(self.config.QHeadsPerGroup)
+            dense_v = dense_v.broadcast_axis(self.config.QHeadsPerGroup)
+            # Flatten to match q_flat's heads dimension
+            dense_k = dense_k.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
+            dense_v = dense_v.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
+        else:
+            # No GQA, just rename kv_head to heads
+            dense_k = dense_k.rename({"kv_head": "heads"})
+            dense_v = dense_v.rename({"kv_head": "heads"})
 
         # Build a causal mask for Splash
         mask = AttentionMask.causal()
@@ -1734,8 +1747,8 @@ class Attention(eqx.Module):
             KPos="key_position",
             Key="head_size",
             query=q_flat,
-            key=dense_k_renamed,
-            value=dense_v_renamed,
+            key=dense_k,
+            value=dense_v,
             mask=mask,
             bias=None,
             dropout=0.0,
@@ -1757,8 +1770,8 @@ class Attention(eqx.Module):
                 KPos="key_position",
                 Key="head_size",
                 query=q_flat,
-                key=dense_k_renamed,
-                value=dense_v_renamed,
+                key=dense_k,
+                value=dense_v,
                 mask=mask,
                 attention_dtype=jnp.float32 if self.config.upcast_attn else x.dtype,
                 attn_backend=AttentionBackend.VANILLA,
@@ -1811,7 +1824,7 @@ class Attention(eqx.Module):
 
 
 def _materialize_dense_kv_from_pages(
-    kv_pages: NamedArray,  # [Page, PageSize, 2 * KVHeads, HeadSize]
+    kv_pages: NamedArray,  # [Page, Slot, 2 * KVHeads, HeadSize]
     page_indices: NamedArray,  # i32[Seq, Page]
     seq_lens: NamedArray,  # i32[Seq]
     num_seqs: jnp.ndarray,  # scalar
@@ -1821,30 +1834,31 @@ def _materialize_dense_kv_from_pages(
     Assumes page_size = max_seq_len, so each sequence uses a single page (page_indices[:, 0]).
 
     Args:
-        kv_pages: Paged KV cache [Page, PageSize, 2*KVHeads, HeadSize]
+        kv_pages: Paged KV cache [Page, Slot, 2*KVHeads, HeadSize]
         page_indices: Page indices for each sequence [Seq, Page]
         seq_lens: Actual length of each sequence [Seq]
         num_seqs: Number of valid sequences (scalar)
 
     Returns:
-        Tuple of (dense_k, dense_v) where each is [Seq, Position, KVHeads, HeadSize]
+        Tuple of (dense_k, dense_v) where each is [KeyPosition, KVHeads, HeadSize]
+        with KeyPosition = Seq * Position (flattened)
     """
-    page_size = kv_pages.axis_size("page_size")
+    page_size = kv_pages.axis_size("slot")
     num_kv_heads = kv_pages.axis_size("kv_head") // 2
     head_size = kv_pages.resolve_axis("head_size")
 
     # Get the first page for each sequence (assuming 1 page per seq)
     first_page_indices = page_indices["page", 0]
 
-    # Gather pages: [Seq, PageSize, 2*KVHeads, HeadSize]
+    # Gather pages: [Seq, Slot, 2*KVHeads, HeadSize]
     gathered_pages = kv_pages["page", first_page_indices]
 
-    # Rename page_size to position for clarity
-    gathered_pages = gathered_pages.rename({"page_size": "position"})
+    # Rename slot to position for clarity
+    gathered_pages = gathered_pages.rename({"slot": "position"})
 
     # Split interleaved K/V: even indices are K, odd are V
-    k_dense = gathered_pages["kv_head", hax.ds(0, None, 2)]  # [Seq, Position, KVHeads, HeadSize]
-    v_dense = gathered_pages["kv_head", hax.ds(1, None, 2)]  # [Seq, Position, KVHeads, HeadSize]
+    k_dense = gathered_pages["kv_head", 0::2]  # [Seq, Position, KVHeads, HeadSize]
+    v_dense = gathered_pages["kv_head", 1::2]  # [Seq, Position, KVHeads, HeadSize]
 
     # Reindex kv_head to actual size
     k_dense = k_dense.rename({"kv_head": "kv_head_tmp"})
@@ -1859,12 +1873,10 @@ def _materialize_dense_kv_from_pages(
     k_dense = hax.where(valid_mask, k_dense, 0.0)
     v_dense = hax.where(valid_mask, v_dense, 0.0)
 
-    # Flatten seq dimension into position for Splash (expects [position, kv_head, head_size])
-    # Actually, we need to maintain the batch structure
-    # Splash expects a batch dimension, so we keep seq as-is
-    # But we need to reshape to [batch * position, kv_head, head_size] or similar
-    # Actually, looking at the Splash code, it expects BHSD format where B is batch
-    # Let's just return [Seq, Position, KVHeads, HeadSize] and let the caller handle reshaping
+    # Flatten seq and position dimensions together for Splash attention
+    # Splash expects a single sequence dimension containing all KV context
+    k_dense = k_dense.flatten_axes(("seq", "position"), "key_position")
+    v_dense = v_dense.flatten_axes(("seq", "position"), "key_position")
 
     return k_dense, v_dense
 
