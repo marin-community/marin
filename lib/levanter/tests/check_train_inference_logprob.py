@@ -82,12 +82,12 @@ if __name__ == "__main__":
     import equinox as eqx
     from haliax import Axis
     from haliax.partitioning import round_axis_for_partitioning
+    from jax.sharding import Mesh
     
     from levanter.checkpoint import load_checkpoint
     from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
     from levanter.models.lm_model import LmConfig
     from levanter.models.llama import LlamaConfig
-    from levanter.trainer import TrainerConfig
     
     parser = argparse.ArgumentParser(description="Check train vs inference logprobs")
     parser.add_argument("--checkpoint", type=str, default="meta-llama/Llama-3.2-1B-Instruct",
@@ -97,9 +97,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     print(f"Loading model from {args.checkpoint}...")
-    
-    # Set up configuration
-    trainer_config = TrainerConfig()
     
     # Load tokenizer first to encode the prompt
     tokenizer = load_tokenizer(args.checkpoint)
@@ -117,8 +114,15 @@ if __name__ == "__main__":
     
     vocab_size = len(tokenizer)
     
-    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), trainer_config.compute_axis_mapping)
+    # Create a simple mesh with all devices as replicas (no data parallelism requirement)
+    # This allows batch_size=1 to work without sharding constraints
+    num_devices = jax.device_count()
+    devices = jax.devices()
+    mesh = Mesh(np.array(devices).reshape(num_devices, 1, 1), axis_names=("replica", "data", "model"))
+    axis_mapping = {"batch": "data", "embed": "model"}
+    
+    with hax.axis_mapping(axis_mapping), mesh:
+        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), axis_mapping)
         
         print("Loading HF checkpoint...")
         converter = HFCheckpointConverter(
@@ -135,16 +139,16 @@ if __name__ == "__main__":
             model_config.model_type,
             ref=args.checkpoint,
             config=model_config,
-            dtype=trainer_config.mp.compute_dtype,
-            axis_mapping=trainer_config.parameter_axis_mapping,
+            dtype=jnp.float32,
+            axis_mapping=axis_mapping,
         )
         
         print("Model loaded successfully!")
         
         # Run simple autoregressive inference
         print(f"\nGenerating {args.max_tokens} tokens...")
-        # Replicate batch to match data parallelism (typically 4)
-        batch_size = 4
+        # Use single batch for simple testing
+        batch_size = 1
         prompt_array = np.array([prompt_tokens] * batch_size, dtype=np.int32).reshape(batch_size, -1)
         prompt_named = hax.named(prompt_array, ["batch", "position"])
         
@@ -168,8 +172,8 @@ if __name__ == "__main__":
         print(f'[train] logits: {logits}')
 
         # [bsz, seq_len, vocab_size]
-        logits = logits.array.astype(jnp.float32).reshape(4, -1, logits.array.shape[-1])
-        labels = generated.array[:, 1:].reshape(4, -1)
+        logits = logits.array.astype(jnp.float32).reshape(batch_size, -1, logits.array.shape[-1])
+        labels = generated.array[:, 1:].reshape(batch_size, -1)
         logprobs = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
         logprobs = -1 * logprobs
         response_logprobs_levanter = logprobs[0, len(prompt_tokens)-1:]
