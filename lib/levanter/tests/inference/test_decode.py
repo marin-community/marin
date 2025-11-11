@@ -45,7 +45,7 @@ def _tol() -> float:
 
 @jax.jit
 def _jit_decode(attn, x, pos_ids, cache: KvPageCache, binfo: PageBatchInfo) -> tuple[NamedArray, KvPageCache]:
-    return attn.decode(x, cache, binfo, pos_ids=pos_ids, key=jrandom.PRNGKey(2))
+    return attn.decode(x, cache, binfo, pos_ids=pos_ids, key=jrandom.PRNGKey(1))
 
 
 def _run_attention_decode_matches_full_ar(pos_size: int, embed_size: int, attn_backend: AttentionBackend):
