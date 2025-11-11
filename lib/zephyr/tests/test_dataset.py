@@ -918,3 +918,165 @@ def test_map_shard_error_propagation(backend):
 
     with pytest.raises(ValueError, match="Test error"):
         list(backend.execute(ds))
+
+
+class CallCounter:
+    """Helper to track function calls across test scenarios."""
+
+    def __init__(self):
+        self.flat_map_count = 0
+        self.map_count = 0
+        self.processed_ids = []
+
+    def reset(self):
+        self.flat_map_count = 0
+        self.map_count = 0
+        self.processed_ids = []
+
+    def counting_flat_map(self, path):
+        self.flat_map_count += 1
+        return load_file(path)
+
+    def counting_map(self, x):
+        self.map_count += 1
+        self.processed_ids.append(x["id"])
+        return {**x, "processed": True}
+
+
+def test_skip_existing_clean_run(tmp_path):
+    """Test skip_existing with no existing files - all shards process."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # Create input files
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    for i in range(3):
+        with open(input_dir / f"input-{i}.jsonl", "w") as f:
+            f.write(f'{{"id": {i}}}\n')
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_files(f"{input_dir}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert all(Path(p).exists() for p in result)
+    assert counter.flat_map_count == 3  # All files loaded
+    assert counter.map_count == 3  # All items mapped
+    assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
+
+
+def test_skip_existing_one_file_exists(tmp_path):
+    """Test skip_existing with one output file existing - only that shard skips."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # Create input files
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    for i in range(3):
+        with open(input_dir / f"input-{i}.jsonl", "w") as f:
+            f.write(f'{{"id": {i}}}\n')
+
+    # Manually create one output file (shard 1)
+    with open(output_dir / "output-00001.jsonl", "w") as f:
+        f.write('{"id": 1, "processed": true}\n')
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_files(f"{input_dir}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert all(Path(p).exists() for p in result)
+    assert counter.flat_map_count == 2  # Only 2 files loaded (shard 1 skipped)
+    assert counter.map_count == 2  # Only 2 items mapped
+    assert sorted(counter.processed_ids) == [0, 2]  # Only shards 0 and 2 ran
+
+
+def test_skip_existing_all_files_exist(tmp_path):
+    """Test skip_existing with all output files existing - all shards skip."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # Create input files
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    for i in range(3):
+        with open(input_dir / f"input-{i}.jsonl", "w") as f:
+            f.write(f'{{"id": {i}}}\n')
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_files(f"{input_dir}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    # First run: create all output files
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.flat_map_count == 3
+    assert counter.map_count == 3
+    assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
+
+    # Second run: all files exist, nothing should process
+    counter.reset()
+    ds = (
+        Dataset.from_files(f"{input_dir}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.flat_map_count == 0  # Nothing loaded
+    assert counter.map_count == 0  # Nothing mapped
+    assert counter.processed_ids == []  # No shards ran
+
+
+def test_skip_existing_parquet(tmp_path):
+    """Test skip_existing works with parquet files."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_list([{"id": 1}, {"id": 2}, {"id": 3}])
+        .map(counter.counting_map)
+        .write_parquet(str(output_dir / "output-{shard:05d}.parquet"), skip_existing=True)
+    )
+
+    # First run
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.map_count == 3
+    assert sorted(counter.processed_ids) == [1, 2, 3]  # All shards ran
+
+    # Second run: should skip
+    counter.reset()
+    ds = (
+        Dataset.from_list([{"id": 1}, {"id": 2}, {"id": 3}])
+        .map(counter.counting_map)
+        .write_parquet(str(output_dir / "output-{shard:05d}.parquet"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.map_count == 0
+    assert counter.processed_ids == []  # No shards ran
