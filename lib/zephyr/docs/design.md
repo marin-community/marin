@@ -63,6 +63,33 @@ contains `new_item`. A common use case is for loading files: given a dataset of
 filenames, `ds.flat_map(load_jsonl)` returns a dataset which contains the
 individual JSON lines.
 
+`map_shard(fn)`
+
+The converse of flat_map: the function receives an iterator of all items in a
+shard and returns an iterator of results. This is the recommended pattern for
+stateful shard processing without requiring callable classes.
+
+Use when you need to maintain state across all items in a shard, such as
+deduplication, reservoir sampling, sliding windows, or loading expensive
+resources once per shard.
+
+```python
+def deduplicate_shard(items: Iterator):
+    seen = set()
+    for item in items:
+        key = item["id"]
+        if key not in seen:
+            seen.add(key)
+            yield item
+
+ds = (Dataset
+    .from_files("gs://data/*.jsonl")
+    .flat_map(load_jsonl)
+    .map_shard(deduplicate_shard)  # Dedup within each shard
+    .write_jsonl("gs://output/deduped-{shard:05d}.jsonl.gz")
+)
+```
+
 `map(fn)`
 
 Map the given function over the dataset, transforming the elements.
@@ -71,11 +98,55 @@ Map the given function over the dataset, transforming the elements.
 
 Return a new dataset containing only elements where `fn(item)` returns True-ish.
 
-`batch(window_size)`
+`take(n)`
 
-Given a dataset of `item`, return a dataset of `list[item]` where each list is a
-distinct set of `window_size` elements. If the dataset is sharded, batching is
+Take the first n items from each shard. This operates per-shard independently,
+preserving parallelism while limiting data volume. Useful for testing and
+debugging pipelines with large datasets.
+
+Note: With k shards, you may get up to k*n total items.
+
+```python
+# Test pipeline with first 1000 items per shard
+ds = (Dataset
+  .from_files("gs://data/*.jsonl")
+  .flat_map(load_jsonl)
+  .take(1000)  # Limit each shard to 1000 items
+  .map(process)
+)
+```
+
+`window(size)`
+
+Given a dataset of `item`, return a dataset of `list[item]` where each list
+contains up to `size` elements. If the dataset is sharded, windowing is
 independently performed on each shard.
+
+`window_by(folder_fn, initial_state=None)`
+
+Window elements using a custom folder function that controls window boundaries.
+The folder function receives `(state, item)` and returns `(should_continue, new_state)`.
+When `should_continue` is False, the current window closes and a new window
+starts with the item that triggered the close.
+
+This enables custom windowing logic such as grouping by total size, time windows,
+or any other stateful partitioning strategy.
+
+```python
+# Window files by total size < 10GB
+ds = (Dataset
+  .from_list([{"path": "f1.txt", "size": 5_000_000_000}, ...])
+  .window_by(
+    folder_fn=lambda total_size, item: (
+      total_size + item["size"] < 10_000_000_000,
+      total_size + item["size"]
+    ),
+    initial_state=0
+  )
+)
+```
+
+`batch(size)` is an alias for `window(size)` for backwards compatibility.
 
 `write_{jsonl|parquet}(file_pattern)`
 
@@ -85,6 +156,96 @@ pattern for serializing sharded datasets, such as
 and `total` formatters are automatically replaced by the backend when
 serializing. If there is only one shard being processed, the shard & total
 patterns may be omitted.
+
+`group_by(key, reducer, num_output_shards=None)`
+
+Group items by a key function and apply a reducer to each group. The operation
+is implemented as a two-phase shuffle:
+
+```python
+ds = (Dataset
+  .from_files("gs://data/*.jsonl")
+  .flat_map(load_jsonl)
+  .group_by(
+    key=lambda x: x["user_id"],
+    reducer=lambda key, items: {"user": key, "count": sum(1 for _ in items)}
+  )
+)
+```
+
+`deduplicate(key, num_output_shards=None)`
+
+Remove duplicate items based on a key function.
+
+```python
+ds = (Dataset
+  .from_files("gs://data/*.jsonl")
+  .flat_map(load_jsonl)
+  .deduplicate(key=lambda x: x["id"])
+)
+```
+
+`reduce(local_reducer, global_reducer=None)`
+
+Reduce the entire dataset to a single value. The local_reducer runs on each
+shard before storing results which are then reduced by the global reducer.
+
+```python
+# Count total items
+total = (Dataset
+  .from_list(range(1000))
+  .reduce(local_reducer=lambda items: sum(1 for _ in items))
+)
+
+# Custom aggregation
+stats = (Dataset
+  .from_files("gs://data/*.jsonl")
+  .flat_map(load_jsonl)
+  .reduce(
+    local_reducer=lambda items: {"count": sum(1 for _ in items), "sum": sum(x["value"] for x in items)},
+    global_reducer=lambda shards: {
+      "total_count": sum(s["count"] for s in shards),
+      "total_sum": sum(s["sum"] for s in shards)
+    }
+  )
+)
+```
+
+`sorted_merge_join(right, left_key, right_key, combiner=None, how="inner")`
+
+Perform a streaming merge join between two datasets that are already sorted and
+co-partitioned. Preconditions:
+
+- Both datasets must have the same number of shards
+- Corresponding shards (left[i], right[i]) must contain the same key ranges
+- Items within each shard must be sorted by their join key
+
+Only supports inner and left joins (no right or outer joins).
+
+```python
+# Both datasets grouped by the same key
+docs = (Dataset
+  .from_files("gs://docs/*.jsonl")
+  .flat_map(load_jsonl)
+  .group_by(key=lambda x: x["id"], reducer=keep_first, num_output_shards=100)
+)
+
+attrs = (Dataset
+  .from_files("gs://attrs/*.jsonl")
+  .flat_map(load_jsonl)
+  .group_by(key=lambda x: x["id"], reducer=keep_first, num_output_shards=100)
+)
+
+joined = docs.sorted_merge_join(
+  attrs,
+  left_key=lambda x: x["id"],
+  right_key=lambda x: x["id"],
+  how="inner"  # or "left"
+)
+```
+
+The default combiner merges dictionaries: `{**left, **right}`. For custom
+combining or handling nulls in left joins, provide a custom combiner function.
 
 ## Backends
 
@@ -143,20 +304,17 @@ our own dataset layer is quite trivial and thus we feel it's worth it to buy us
 additional flexibility.
 
 
-## Future Work
+## Implementation Notes
 
-zephyr is missing 2 common operations familiar from existing distribution
-toolkits: shuffle, and repartition. As our existing code does not rely on these
-patterns, we have deferred work on them in the original design.
+### Repartitioning
 
-_Repartitioning_ changes the parallelism of the dataset, without attempting to
-change the underlying order. It is commonly used to increase or reduce the
-amount of parallel work occurring on a dataset. For example, a pipeline like
-`Dataset.from_files([".../corpus.jsonl]).flat_map(load_jsonl)` will only run on
-a single worker by default. Repartitioning forces the runtime to explicitly
-split up the underlying files into separate execution shards, allowing map
-operations to occur in parallel.
+Zephyr provides `reshard(num_shards)` to change the parallelism of a dataset
+without changing the underlying order. This is useful for increasing or
+decreasing the amount of parallel work. For example, a pipeline like
+`Dataset.from_files([".../corpus.jsonl"]).flat_map(load_jsonl)` will only run on
+a single worker by default. Using `.reshard(num_shards=20)` forces the runtime
+to redistribute the data across 20 shards, allowing subsequent operations to run
+in parallel.
 
-_Shuffle_ or _group_ operations re-order the dataset, usually by grouping
-related items by a key. This is commonly used in tasks like de-duplication,
-where we want to keep a single example from a group of near-identical documents.
+The implementation is best-effort and redistributes chunks across shards in
+round-robin fashion without splitting individual chunks.

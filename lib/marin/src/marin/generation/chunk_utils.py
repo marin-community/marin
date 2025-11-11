@@ -215,7 +215,7 @@ def _chunk_single_record(example: dict, config: ChunkingConfig):
 def chunk_with_config(config: ChunkingConfig) -> list[str]:
     backend = flow_backend()
     pipeline = (
-        Dataset.from_files(config.input_path, config.glob_pattern)
+        Dataset.from_files(f"{config.input_path}/{config.glob_pattern}")
         .flat_map(load_jsonl)
         .flat_map(lambda example: _chunk_single_record(example, config=config))
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")

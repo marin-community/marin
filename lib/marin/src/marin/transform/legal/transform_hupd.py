@@ -104,7 +104,7 @@ def main(cfg: Config) -> None:
     """Transform HUPD data to Dolma format."""
     backend = flow_backend()
     pipeline = (
-        Dataset.from_files(cfg.input_path, "**/*.tar.gz")
+        Dataset.from_files(f"{cfg.input_path}/**/*.tar.gz")
         .flat_map(convert_to_dolma)
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )

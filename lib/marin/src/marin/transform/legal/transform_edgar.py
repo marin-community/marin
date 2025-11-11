@@ -13,8 +13,6 @@
 # limitations under the License.
 
 """
-Anything which is not inside ray.remote function will be executed on the head node, so keep it to minimum.
-path: scripts/legal/transform_edgar.py
 Inputs: raw parquet files, Output: jsonl.gz files in dolma format
 
 Example Usage:
@@ -90,7 +88,7 @@ def main(cfg: Config) -> None:
     """Transform EDGAR data to Dolma format."""
     backend = flow_backend()
     pipeline = (
-        Dataset.from_files(cfg.input_path, "**/*.parquet")
+        Dataset.from_files(f"{cfg.input_path}/**/*.parquet")
         .flat_map(load_parquet)
         .map(convert_to_dolma)
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
