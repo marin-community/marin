@@ -8,10 +8,28 @@ version = "0.1.0"
 description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
-dependencies = ["marin", "levanter"]
+dependencies = [
+    "marin",
+    "levanter",
+    "zephyr",
+]
+
+[tool.uv]
+fork-strategy = "fewest"
+override-dependencies = [
+    "omegaconf>=2.4.0.dev4",
+    "antlr4-python3-runtime==4.11",
+]
 
 [tool.uv.workspace]
-members = ["lib/marin", "lib/levanter"]
+members = [
+    "lib/marin",
+    "lib/levanter",
+    "lib/zephyr",
+]
+
+[tool.uv.sources.zephyr]
+workspace = true
 
 [tool.uv.sources.marin]
 workspace = true
@@ -53,6 +71,78 @@ python_version = "3.10"
 ignore_missing_imports = true
 exclude = ["marin/", "scripts/"]
 
+# Pyrefly type checker configuration
+[tool.pyrefly]
+project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"]
+
+# Prevent pyrefly from querying the Python interpreter for site-packages
+# which would auto-detect workspace members as site packages and exclude them
+skip-interpreter-query = true
+
+# Exclude non-production code from type checking
+project-excludes = [
+    "experiments/**",
+    "scripts/**",
+    "tests/**",
+    "examples/**",           # Example code doesn't need strict typing
+    "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
+    "lib/**/post_training/**",  # No longer used
+]
+
+# Disable specific error codes that are primarily noise from missing type stubs
+# These can be gradually enabled as the codebase improves
+[tool.pyrefly.errors]
+# Missing imports (824 occurrences) - third-party libs without stubs
+missing-import = false
+
+# Unexpected keyword arguments (47 occurrences) - dynamic configs from transformers, dataclasses
+unexpected-keyword = false
+
+# Missing attributes (315 occurrences) - often from untyped libraries like ray, jax, etc.
+# These are mostly false positives from libraries without complete type stubs
+missing-attribute = false
+
+# Additional error types with >10 occurrences that are hard to fix systematically:
+
+# Deprecated APIs (19 occurrences) - would require code changes across multiple files
+deprecated = false
+
+# Unknown name errors (17 occurrences) - often from dynamic code or missing stubs
+unknown-name = false
+
+# Not iterable errors (17 occurrences) - complex type inference issues with JAX/numpy
+not-iterable = false
+
+# No matching overload (16 occurrences) - complex overload resolution issues
+no-matching-overload = false
+
+# Bad index (12 occurrences) - complex dict/list type inference
+bad-index = false
+
+# Library/stub-related noise - disable to focus on real issues:
+
+# Bad argument type (638 occurrences) - mostly third-party library stub issues
+# Common culprits: smart_open, Flax API, JAX/numpy arrays
+bad-argument-type = false
+
+# Bad context manager (30 occurrences) - tqdm and similar libraries
+bad-context-manager = false
+
+# Missing/bad argument count (99 occurrences) - Flax API positional/keyword confusion
+missing-argument = false
+bad-argument-count = false
+
+# Unbound name (64 occurrences) - pyrefly's control flow analysis doesn't understand
+# patterns where variables are guaranteed to be initialized by program logic
+unbound-name = false
+
+# Keep these enabled to catch real type errors:
+# bad-override = true (126 occurrences)
+# bad-assignment = true (94 occurrences)
+# bad-return = true (84 occurrences)
+# unsupported-operation = true (68 occurrences)
+# not-callable = true (27 occurrences)
+
 [tool.hatch.metadata]
 allow-direct-references = true
 
@@ -67,11 +157,11 @@ timeout = 300
 filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
-log_cli_level = "INFO"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "tpu_ci: mark tests that require a TPU",
 ]
+testpaths = ["tests", "experiments"]
 
 # Make sure we timeout before CI kills us, and don't run TPU tests by default
 addopts = "--session-timeout=500 --dist=worksteal -m 'not tpu_ci'"

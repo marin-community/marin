@@ -18,28 +18,64 @@ A script to download a HuggingFace dataset and upload it to a specified fsspec p
 using HfFileSystem for direct streaming of data transfer.
 """
 
+import dataclasses
 import logging
 import os
-import time
 import random
+import time
+from dataclasses import dataclass
 
+import draccus
 import fsspec
-import ray
 from huggingface_hub import HfFileSystem
-from tqdm_loggable.tqdm_logging import tqdm_logging
 
-from marin.core.runtime import simple_backpressure
-from marin.download.huggingface.download import DownloadConfig
+from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
+from zephyr import Dataset, flow_backend
 
-# Set up logging
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DownloadConfig:
+    # fmt: off
+
+
+    # HuggingFace Dataset Parameters
+    hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
+
+    revision: str  # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
+    hf_urls_glob: list[str] = dataclasses.field(default_factory=list)
+    # List of Glob Patterns to Match Files in HF Dataset, If empty we get all the files in a hf repo
+
+    gcs_output_path: str = THIS_OUTPUT_PATH
+    """
+    Path to store raw data in persistent storage (e.g. gs://$BUCKET/...).
+    This works with any fsspec-compatible path, but for backwards compatibility, we call it gcs_output_path.
+    """
+
+    # Additional GCS Parameters
+    public_gcs_path: str = (                                # Path to Publicly Readable Bucket (for Storage Transfer)
+        "gs://hf_dataset_transfer_bucket"
+    )
+
+    # Job Control Parameters, used only for non-gated dataset transfers done via STS
+    wait_for_completion: bool = True                        # if True, will block until job completes
+    timeout: int = 1800                                     # Maximum time to wait for job completion (in seconds)
+    poll_interval: int = 10                                 # Time to wait between polling job status (in seconds)
+
+    # fmt: on
+    hf_repo_type_prefix: str = (
+        "datasets"  # The repo_type_prefix is datasets/ for datasets,
+        # spaces/ for spaces, and models do not need a prefix in the URL.
+    )
 
 
 def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
-    fs, path = fsspec.core.url_to_fs(output_path)
+    fs, _ = fsspec.core.url_to_fs(output_path)
     try:
+        fs.mkdirs(output_path, exist_ok=True)
         test_path = os.path.join(output_path, "test_write_access")
         with fs.open(test_path, "w") as f:
             f.write("test")
@@ -48,10 +84,10 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
 
-@ray.remote
-def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: str, fsspec_file_path: str):
+def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path: str):
     """Ray task to stream a file from HfFileSystem to another fsspec path."""
-    target_fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
+    hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
+    target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
     # Use larger chunk size for large files, such as 32B models
     chunk_size = 16 * 1024 * 1024
     max_retries = 10
@@ -68,16 +104,13 @@ def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: s
             return
         except Exception as e:
             wait_time = (2**attempt) + random.uniform(0, 5)
-            logger.warning(f"Attempt {attempt+1} failed for {file_path}: {e}, retrying in {wait_time:.1f}s")
+            logger.warning(f"Attempt {attempt + 1} failed for {file_path}: {e}, retrying in {wait_time:.1f}s")
             time.sleep(wait_time)
     raise RuntimeError(f"Failed to download {file_path} after {max_retries} attempts")
 
 
 def download_hf(cfg: DownloadConfig) -> None:
     logging.basicConfig(level=logging.INFO)
-
-    # Parse the output path and get the file system
-    fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
 
     # TODO: Our earlier version of download_hf used this piece of code for calculating the versioned_output_path
     # versioned_output_path = os.path.join(cfg.gcs_output_path, cfg.revision)
@@ -114,21 +147,16 @@ def download_hf(cfg: DownloadConfig) -> None:
         try:
             fsspec_file_path = os.path.join(cfg.gcs_output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
             # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
-            task_generator.append((cfg, hf_fs, file, fsspec_file_path))
+            task_generator.append((cfg.gcs_output_path, file, fsspec_file_path))
         except Exception as e:
             logging.exception(f"Error preparing task for {file}: {e}")
 
     total_files = len(task_generator)
     logger.info(f"Total number of files to process: {total_files}")
-    pbar = tqdm_logging(total=total_files)
 
-    for ref in simple_backpressure(stream_file_to_fsspec, iter(task_generator), max_in_flight=16, fetch_local=True):
-        try:
-            ray.get(ref)
-            pbar.update(1)
-        except Exception as e:
-            logging.exception(f"Error during task execution: {e}")
-            raise e
+    backend = flow_backend()
+    pipeline = Dataset.from_list(task_generator).map(lambda task: stream_file_to_fsspec(*task))
+    list(backend.execute(pipeline))
 
     # Write Provenance JSON
     write_provenance_json(
@@ -137,3 +165,13 @@ def download_hf(cfg: DownloadConfig) -> None:
     )
 
     logger.info(f"Streamed all files and wrote provenance JSON; check {cfg.gcs_output_path}.")
+
+
+@draccus.wrap()
+def main(cfg: DownloadConfig) -> None:
+    """Download HuggingFace dataset."""
+    download_hf(cfg)
+
+
+if __name__ == "__main__":
+    main()

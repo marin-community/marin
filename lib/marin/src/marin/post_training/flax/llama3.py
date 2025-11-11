@@ -546,10 +546,10 @@ class FlaxLLaMAAttention(nn.Module):
         )
 
     def _split_heads(self, hidden_states, num_heads):
-        return hidden_states.reshape(hidden_states.shape[:2] + (num_heads, self.head_dim))
+        return hidden_states.reshape((*hidden_states.shape[:2], num_heads, self.head_dim))
 
     def _merge_heads(self, hidden_states):
-        return hidden_states.reshape(hidden_states.shape[:2] + (self.embed_dim,))
+        return hidden_states.reshape((*hidden_states.shape[:2], self.embed_dim))
 
     @nn.compact
     def _concatenate_to_cache(self, key, value, query, attention_mask):
@@ -565,7 +565,7 @@ class FlaxLLaMAAttention(nn.Module):
         cache_index = self.variable("cache", "cache_index", lambda: jnp.array(0, dtype=jnp.int32))
 
         if is_initialized:
-            *batch_dims, max_length, num_heads, depth_per_head = cached_key.value.shape
+            *batch_dims, max_length, _num_heads, _depth_per_head = cached_key.value.shape
             # update key, value caches with our new 1d spatial slices
             cur_index = cache_index.value
             indices = (0,) * len(batch_dims) + (cur_index, 0, 0)
@@ -604,14 +604,14 @@ class FlaxLLaMAAttention(nn.Module):
             cached_key = self.variable(
                 "cache",
                 "cached_key",
-                lambda s, d: QuantizedTensor(jnp.zeros(s, dtype=jnp.int8), jnp.zeros(s[:-1] + (1,), dtype=d)),
+                lambda s, d: QuantizedTensor(jnp.zeros(s, dtype=jnp.int8), jnp.zeros((*s[:-1], 1), dtype=d)),
                 key.shape,
                 key.dtype,
             )
             cached_value = self.variable(
                 "cache",
                 "cached_value",
-                lambda s, d: QuantizedTensor(jnp.zeros(s, dtype=jnp.int8), jnp.zeros(s[:-1] + (1,), dtype=d)),
+                lambda s, d: QuantizedTensor(jnp.zeros(s, dtype=jnp.int8), jnp.zeros((*s[:-1], 1), dtype=d)),
                 value.shape,
                 value.dtype,
             )
@@ -707,7 +707,7 @@ class FlaxLLaMAAttention(nn.Module):
                 causal_mask = self.causal_mask[:, :, :query_length, :key_length]
 
             batch_size = hidden_states.shape[0]
-            causal_mask = jnp.broadcast_to(causal_mask, (batch_size,) + causal_mask.shape[1:])
+            causal_mask = jnp.broadcast_to(causal_mask, (batch_size, *causal_mask.shape[1:]))
 
             attention_mask = jnp.broadcast_to(jnp.expand_dims(attention_mask, axis=(-3, -2)), causal_mask.shape)
             attention_mask = combine_masks(attention_mask, causal_mask)
@@ -755,7 +755,7 @@ class FlaxLLaMAAttention(nn.Module):
                 causal_mask = self.causal_mask[:, :, :query_length, :key_length]
 
             batch_size = hidden_states.shape[0]
-            causal_mask = jnp.broadcast_to(causal_mask, (batch_size,) + causal_mask.shape[1:])
+            causal_mask = jnp.broadcast_to(causal_mask, (batch_size, *causal_mask.shape[1:]))
 
             temp_attention_mask = jnp.broadcast_to(jnp.expand_dims(attention_mask, axis=(-3, -2)), causal_mask.shape)
             temp_attention_mask = combine_masks(temp_attention_mask, causal_mask)
@@ -939,7 +939,7 @@ class FlaxLLaMABlock(nn.Module):
         )
         hidden_states = hidden_states + feed_forward_hidden_states
 
-        return (hidden_states,) + attn_outputs[1:]
+        return (hidden_states, *attn_outputs[1:])
 
 
 class FlaxLLaMAPreTrainedModel(FlaxPreTrainedModel):
@@ -1092,7 +1092,7 @@ class FlaxLLaMAPreTrainedModel(FlaxPreTrainedModel):
             return outputs
         elif past_key_values is not None and not return_dict:
             outputs, past_key_values = outputs
-            outputs = outputs[:1] + (unfreeze(past_key_values["cache"]),) + outputs[1:]
+            outputs = (*outputs[:1], unfreeze(past_key_values["cache"]), *outputs[1:])
 
         return outputs
 
@@ -1210,9 +1210,9 @@ class FlaxLLaMAModule(nn.Module):
 
         if output_hidden_states:
             all_hidden_states = outputs[1] + (hidden_states,)
-            outputs = (hidden_states, all_hidden_states) + outputs[2:]
+            outputs = (hidden_states, all_hidden_states, *outputs[2:])
         else:
-            outputs = (hidden_states,) + outputs[1:]
+            outputs = (hidden_states, *outputs[1:])
 
         if not return_dict:
             return tuple(v for v in outputs if v is not None)
@@ -1292,7 +1292,7 @@ class FlaxLLaMAForCausalLMModule(nn.Module):
             lm_logits = lm_logits.astype(jnp.float32)
 
         if not return_dict:
-            return (lm_logits,) + outputs[1:]
+            return (lm_logits, *outputs[1:])
 
         return FlaxCausalLMOutput(logits=lm_logits, hidden_states=outputs.hidden_states, attentions=outputs.attentions)
 
