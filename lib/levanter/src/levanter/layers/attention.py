@@ -1734,11 +1734,54 @@ class Attention(eqx.Module):
             dense_k = dense_k.rename({"kv_head": "heads"})
             dense_v = dense_v.rename({"kv_head": "heads"})
 
-        # Create an explicit mask for valid key positions
-        # kv_mask indicates which key positions are valid (within seq_lens)
-        # Broadcast to have both query and key position axes
-        kv_mask_broadcasted = kv_mask.broadcast_axis(q_flat.resolve_axis("position"))
-        mask = AttentionMask.explicit(kv_mask_broadcasted)
+        # Create a comprehensive mask combining validity, causality, and segment isolation
+        # 1. Validity mask: which key positions are valid (within seq_lens)
+        # 2. Causal mask: queries can only attend to current or past keys
+        # 3. Segment mask: queries can only attend to keys from the same sequence
+        
+        # Reconstruct which sequence each query token belongs to
+        # cu_q_lens gives cumulative token counts: [0, n1, n1+n2, ...]
+        # So query i belongs to sequence j where cu_q_lens[j] <= i < cu_q_lens[j+1]
+        # Use searchsorted to efficiently find the sequence for each query
+        position_axis = q_flat.resolve_axis("position")
+        query_idx = hax.arange(position_axis)
+        
+        # searchsorted returns the index where query_idx would be inserted to maintain sorted order
+        # with side='right', it gives us the first index where cu_q_lens[i] > query_idx
+        # So we subtract 1 to get the sequence ID
+        query_seq_id_arr = jnp.searchsorted(batch_info.cu_q_lens.array, query_idx.array, side='right') - 1
+        query_seq_id = hax.named(query_seq_id_arr, position_axis)
+        
+        # Reconstruct key sequence IDs and positions from flattened key_position
+        # key_position = seq_id * page_size + pos_in_seq
+        key_position_axis = dense_k.resolve_axis("key_position")
+        key_idx = hax.arange(key_position_axis)
+        page_size = batch_info.page_size
+        key_seq_id = key_idx // page_size
+        key_pos_in_seq = key_idx % page_size
+        
+        # Broadcast for comparison
+        query_seq_id_bc = query_seq_id.broadcast_axis(key_position_axis)
+        key_seq_id_bc = key_seq_id.broadcast_axis(position_axis)
+        
+        # Segment mask: only attend within the same sequence
+        segment_mask = query_seq_id_bc == key_seq_id_bc
+        
+        # Causal mask: only attend to current or past positions
+        # Use new_token_dests to get the actual cache position for each query
+        # new_token_dests[i] = page_id * page_size + slot_id for token i
+        # Extract the slot ID (position within page/sequence)
+        query_cache_pos = batch_info.new_token_dests % page_size
+        
+        query_pos_bc = query_cache_pos.broadcast_axis(key_position_axis)
+        key_pos_bc = key_pos_in_seq.broadcast_axis(position_axis)
+        causal_mask = query_pos_bc >= key_pos_bc
+        
+        # Combine all masks
+        kv_mask_bc = kv_mask.broadcast_axis(position_axis)
+        combined_mask = kv_mask_bc & segment_mask & causal_mask
+        
+        mask = AttentionMask.explicit(combined_mask)
 
         # Use dot product attention
         attn_output = dot_product_attention(
