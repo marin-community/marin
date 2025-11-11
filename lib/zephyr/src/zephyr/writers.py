@@ -32,12 +32,6 @@ def atomic_rename(output_path: str):
     Yields a temporary path to write to. On successful exit, atomically renames
     the temp file to the final path. On failure, cleans up the temp file.
 
-    Args:
-        output_path: Final destination path
-
-    Yields:
-        Temporary path to write to
-
     Example:
         with atomic_rename("output.jsonl.gz") as tmp_path:
             write_data(tmp_path)

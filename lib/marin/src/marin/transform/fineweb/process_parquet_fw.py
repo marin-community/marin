@@ -382,7 +382,7 @@ def process_fw_dump(cfg: ParquetFWConfig):
             )
         )
         .filter(lambda result: result is True)
-        .write_jsonl(f"{cfg.md_output_path}/metrics/{{shard:05d}}-process.jsonl", skip_existing=True)
+        .write_jsonl(f"{cfg.md_output_path}/.metrics/{{shard:05d}}-process.jsonl", skip_existing=True)
     )
 
     list(backend.execute(pipeline))
