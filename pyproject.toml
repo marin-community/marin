@@ -1,263 +1,41 @@
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-requires-python = ">=3.11,<3.13"
 
 [project]
-name = "marin"
+name = "marin-root"
 version = "0.1.0"
-readme = "README.md"
+description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
-
 requires-python = ">=3.11"
 dependencies = [
-    "braceexpand",
-    "cryptography>=45",
-    "datasets",
-    "deepdiff",
-    "draccus>=0.11.5",
-    "fasteners>=0.19",
-    "flask",
-    "gcsfs",
-    "google-api-python-client>=2.175.0",
-    "google-cloud-storage",
-    "google-cloud-storage-transfer",
-    "jax==0.6.2",
-    "haliax>=1.4.dev443",
-    "levanter[serve] @ git+https://github.com/marin-community/levanter.git@6cd783c82168919b365c1b2266e4a0bde22ba658",
-    "lz4",
-    "multiprocess==0.70.16",
-    "numpy",
-    "openai",
-    "pandas", # Only needed by Fileprovider in inference.py
-    "pyarrow", # # Only needed by Fileprovider in inference.py
-    "ray==2.45",
-    "regex",
-    "requests",
-    "s3fs>=2024",
-    "sentencepiece",
-    "toml",
-    "torch>=2.7.0",
-    "tqdm",
-    "tqdm-loggable",
-    "wandb",
-]
-
-[dependency-groups]
-
-test = [
-    "pytest>=8.3.2",
-    "pytest-asyncio",
-    "pytest-xdist",
-    "pytest-timeout",
-    "pytest-cov",
-    "pytest-profiling",
-    # need this for integration tests
-    "pip",
-    "openai-responses",
-]
-lint = [
-    "ruff>=0.5.7",
-    "black>=24.8.0",
-    "pre-commit==4.2",
-    "mypy>=1.4.1",
-    "types-PyYAML",
-    "types-requests",
-    "types-six",
-]
-docs = [
-    "mkdocs>=1.5.0",
-    "mkdocs-material>=9.5.0",
-    "mkdocstrings>=0.24.0",
-    "mkdocstrings-python>=1.7.0",
-    "pymdown-extensions>=10.0.0",
-    "mkdocs-git-revision-date-localized-plugin>=1.2.0",
-    "mkdocs-git-authors-plugin>=0.9.0",
-    "mkdocs-minify-plugin>=0.7.0",
-    "mkdocs-include-markdown-plugin>=7.1.5",
-]
-
-
-math = ["pylatexenc", "sympy"]
-
-metrics = ["google-cloud-logging"]
-
-transform_test_deps = [
-    "trafilatura>=2.0",
-    "readabilipy",
-    "readability-lxml",
-    "warcio",
-    "markdownify==0.12.1",
-    "resiliparse",
-    "ddsketch",
-]
-
-dev = [
-    { include-group = "test" },
-    { include-group = "lint" },
-    { include-group = "docs" },
-    #    {include-group="gcp"},
-    { include-group = "math" },
-    { include-group = "transform_test_deps" },
+    "marin",
+    "levanter",
+    "zephyr",
 ]
 
 [tool.uv]
-override-dependencies = ["omegaconf>=2.4.0.dev4"]
-
-conflicts = [
-    [
-        { extra = "crawl" },
-        { group = "dev" },
-    ],
-    [
-        { extra = "tpu" },
-        { extra = "cuda12" },
-    ],
-    [
-        { extra = "cuda12" },
-        { extra = "cpu" },
-    ],
+fork-strategy = "fewest"
+override-dependencies = [
+    "omegaconf>=2.4.0.dev4",
+    "antlr4-python3-runtime==4.11",
 ]
 
-[tool.uv.sources]
-torch = [
-    # Default to the CPU index for TPU/CPU builds
-    { index = "pytorch-cpu", extra="cpu" },
-    { index = "pytorch-cpu", extra="tpu" },
-    # CUDA12 index only when --extra cuda12
-    { index = "pytorch-cu128", extra = "cuda12" },
+[tool.uv.workspace]
+members = [
+    "lib/marin",
+    "lib/levanter",
+    "lib/zephyr",
 ]
 
+[tool.uv.sources.zephyr]
+workspace = true
 
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
+[tool.uv.sources.marin]
+workspace = true
 
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true
-
-
-[project.optional-dependencies]
-
-gcp = [
-    "google-api-python-client>=2.175.0", # ray GCP workaround
-    "cryptography>=45",
-    "google-cloud-storage>=3.3.1",
-    "google-cloud-storage-transfer",
-    "google-cloud-compute",
-]
-
-cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
-
-tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
-
-cpu = ["jax==0.6.2", "torch>=2.7.0"]
-
-crawl = [
-    "w3lib",
-    "datatrove[io,processing]",
-    "beautifulsoup4",
-    "resiliparse",
-    "trafilatura",
-    # adds brotlicffi dependency instead of brotlipy
-    "warcio[all] @ git+https://github.com/marin-community/warcio@077ea9359d5b439d152081a9a9c4aafb25046f79",
-    "rbloom-gcs>=1.5.6",
-    "google-cloud-bigquery",
-    "google-cloud-storage-transfer~=1.0",
-    "boto3==1.35.23",
-    "readabilipy",
-    "readability-lxml",
-    "py7zr",
-    "markdownify==0.12.1",
-    "htmlmin",
-    "datasets>=2.18.0",
-    "py-asciimath",
-    "scipy==1.13.1",
-    "spacy",
-    "transformers",
-    "flax",
-    "fastparquet",
-    "orjson",
-    "lxml[html_clean]",
-    "chardet",
-    "courlan",
-    "kenlm @ git+https://github.com/kpu/kenlm@4cb443e60b7bf2c0ddf3c745378f76cb59e254e5",
-    "jax[tpu]",
-]
-
-download_transform = [
-    "chardet",
-    "datasets>=2.18.0",
-    "fastparquet",
-    "google-cloud-storage-transfer~=1.0",
-    "html2text==2024.2.26",               # TODO :: Check pin?
-    "htmlmin==0.1.12",                    # TODO :: Check usage | pin?
-    "markdownify==0.12.1",                # TODO :: Check usage | pin?
-    "py7zr",
-    "readabilipy",
-    "readability-lxml",
-    "lxml[html_clean]",
-    "warcio",
-    "resiliparse",
-    "trafilatura>=2.0",
-    "boto3==1.35.23",
-    "htmlmin",
-]
-
-quality_dedup_consolidate = [
-    "fasttext",
-    "huggingface_hub",
-    "datasets",
-    "transformers",
-    "hyperloglog",
-    "zstandard>=0.23.0",
-    "nltk>=3.8.1",
-    "cattrs==24.1.3",
-    "fsspec>=2025.3.0",
-    "ddsketch",
-    "dolma @ git+https://github.com/marin-community/dolma@79ce49d9535cfc64f4d96781b03ecd0e2c20cf4e",
-]
-
-tokenize_train = [
-    "multiprocess==0.70.16",
-    "haliax>=1.4.dev443",
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
-    "tblib",
-    "sentencepiece",
-    "tiktoken",
-]
-
-rl = [
-    "prime",
-    "sympy",
-    "verifiers==0.1.5",
-]
-
-post_training = [
-    "gcsfs",
-    "transformers",
-    "flax==0.10.0",
-    "jaxtyping",
-    "tyro==0.8.11",
-    "tqdm",
-    "wandb",
-    "einops",
-    "ringattention==0.1.2",
-    "sympy",
-    "pylatexenc",
-    "ipython",
-    "datasets",
-    "scalax@git+https://github.com/Sea-Snell/scalax@8cf9ceabe30d4c4274df3c09aae2f66b59fbce3c",
-    "swebench ; sys_platform != 'darwin'",
-]
-
-eval = [
-    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
-]
-
+[tool.uv.sources.levanter]
+workspace = true
 
 [tool.black]
 line-length = 121
@@ -285,6 +63,7 @@ ignore = ["F722", "B008", "UP015", "A005", "I001"]
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
 
+
 [tool.mypy]
 python_version = "3.10"
 
@@ -292,25 +71,97 @@ python_version = "3.10"
 ignore_missing_imports = true
 exclude = ["marin/", "scripts/"]
 
+# Pyrefly type checker configuration
+[tool.pyrefly]
+project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"]
+
+# Prevent pyrefly from querying the Python interpreter for site-packages
+# which would auto-detect workspace members as site packages and exclude them
+skip-interpreter-query = true
+
+# Exclude non-production code from type checking
+project-excludes = [
+    "experiments/**",
+    "scripts/**",
+    "tests/**",
+    "examples/**",           # Example code doesn't need strict typing
+    "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
+    "lib/**/post_training/**",  # No longer used
+]
+
+# Disable specific error codes that are primarily noise from missing type stubs
+# These can be gradually enabled as the codebase improves
+[tool.pyrefly.errors]
+# Missing imports (824 occurrences) - third-party libs without stubs
+missing-import = false
+
+# Unexpected keyword arguments (47 occurrences) - dynamic configs from transformers, dataclasses
+unexpected-keyword = false
+
+# Missing attributes (315 occurrences) - often from untyped libraries like ray, jax, etc.
+# These are mostly false positives from libraries without complete type stubs
+missing-attribute = false
+
+# Additional error types with >10 occurrences that are hard to fix systematically:
+
+# Deprecated APIs (19 occurrences) - would require code changes across multiple files
+deprecated = false
+
+# Unknown name errors (17 occurrences) - often from dynamic code or missing stubs
+unknown-name = false
+
+# Not iterable errors (17 occurrences) - complex type inference issues with JAX/numpy
+not-iterable = false
+
+# No matching overload (16 occurrences) - complex overload resolution issues
+no-matching-overload = false
+
+# Bad index (12 occurrences) - complex dict/list type inference
+bad-index = false
+
+# Library/stub-related noise - disable to focus on real issues:
+
+# Bad argument type (638 occurrences) - mostly third-party library stub issues
+# Common culprits: smart_open, Flax API, JAX/numpy arrays
+bad-argument-type = false
+
+# Bad context manager (30 occurrences) - tqdm and similar libraries
+bad-context-manager = false
+
+# Missing/bad argument count (99 occurrences) - Flax API positional/keyword confusion
+missing-argument = false
+bad-argument-count = false
+
+# Unbound name (64 occurrences) - pyrefly's control flow analysis doesn't understand
+# patterns where variables are guaranteed to be initialized by program logic
+unbound-name = false
+
+# Keep these enabled to catch real type errors:
+# bad-override = true (126 occurrences)
+# bad-assignment = true (94 occurrences)
+# bad-return = true (84 occurrences)
+# unsupported-operation = true (68 occurrences)
+# not-callable = true (27 occurrences)
+
 [tool.hatch.metadata]
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/marin", "experiments"]
+packages = ["experiments"]
 
 [tool.hatch.build.targets.sdist]
-packages = ["src/marin", "experiments"]
+packages = ["experiments"]
 
 [tool.pytest.ini_options]
 timeout = 300
 filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
-log_cli_level = "INFO"
 markers = [
     "slow: mark tests as slow for CI - use -m 'not slow'",
     "tpu_ci: mark tests that require a TPU",
 ]
+testpaths = ["tests", "experiments"]
 
 # Make sure we timeout before CI kills us, and don't run TPU tests by default
 addopts = "--session-timeout=500 --dist=worksteal -m 'not tpu_ci'"

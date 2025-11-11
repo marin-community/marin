@@ -19,7 +19,6 @@ help:
 init:
 	conda install -c conda-forge pandoc
 	npm install -g pandiff
-	pre-commit install
 	uv sync
 	huggingface-cli login
 
@@ -28,16 +27,18 @@ clean:
 	find . -name "__pycache__" | xargs rm -rf
 
 check:
-	ruff check --output-format concise .
-	black --check .
-	mypy .
+	uv run python infra/pre-commit.py
 
-autoformat:
-	ruff check --fix --show-fixes .
-	black .
+fix:
+	@FILES=$$(git diff --name-only HEAD); \
+	if [ -n "$$FILES" ]; then \
+		uv run python infra/pre-commit.py --fix $$FILES && git add $$FILES; \
+	else \
+		echo "No modified files to fix"; \
+	fi
 
 lint:
-	pre-commit run --all-files
+	uv run python infra/pre-commit.py --all-files
 
 test:
 	export HUGGING_FACE_HUB_TOKEN=$HF_TOKEN
@@ -70,9 +71,9 @@ cluster_docker_build:
 
 cluster_tag:
 	@if [ "$$(uname)" = "Darwin" ]; then \
-		sed -i '' -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py; \
+		sed -i '' -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" lib/marin/src/marin/cluster/config.py; \
 	else \
-		sed -i -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py; \
+		sed -i -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" lib/marin/src/marin/cluster/config.py; \
 	fi
 
 # Target to push the tagged Docker images to their respective Artifact Registries

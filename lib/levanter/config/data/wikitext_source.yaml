@@ -1,0 +1,2 @@
+id: dlwh/wikitext_103_detokenized
+cache_dir: "gs://levanter-data/tokenized/wikitext"

@@ -85,6 +85,7 @@ ENV UV_SYSTEM_PYTHON=1
 
 # Install into the system Python environment b/c Ray will use this as a base
 COPY --chown=ray pyproject.toml /tmp/marin/
+COPY --chown=ray lib/ /tmp/marin/lib/
 WORKDIR /tmp/marin
 RUN mkdir -p src/marin/\
   && touch src/marin/__init__.py\
