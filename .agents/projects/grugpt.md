@@ -175,6 +175,18 @@ def forward(params, tokens, mask, rotary, runtime, eps):
 4. **Evaluation + CLI polish.** Add validation hooks, flag parsing (YAML/Draccus), and a proper entry point under `uv run` instead of the current hard-coded config.
 5. **Testing.** Port the sketched unit tests (`test_model`, `test_mesh`, `test_train_step`) into `tests/grugpt/` and wire them into CI.
 
+## Future Integration with Levanter Trainer
+
+To plug a “grug-defined” model into Levanter’s trainer (`lib/levanter/src/levanter/trainer.py`), we’d need:
+
+1. **Model interface parity.** Implement a wrapper that presents `forward(batch, *, train)` and exposes parameter/state PyTrees the way Levanter expects (see `lib/levanter/src/levanter/models/lm_model.py`). Our current dataclasses are close; we’d just need adapters for attention masks, loss computation, and optional KV cache state.
+2. **Loss adapter.** The trainer takes arbitrary batches and a loss function. We’d supply a simple callable that takes the trainer’s batch (whatever structure we choose) plus model params/rng and returns `(loss, metrics)`. No need to emit `LmExample`s if we keep the batch format consistent.
+3. **Config plumbing.** Expose the grug model config via Levanter’s config system (Draccus). That means a small adapter class registered under `LmConfig` that instantiates `GruGPTModelParameters` and returns the forward/loss function pointers. See `lib/levanter/src/levanter/models/llama.py` for reference.
+4. **Optimizer/state hooks.** Levanter’s trainer manages optimizer state, gradient accumulation, and checkpointing. Our `TrainingState` would need to slot into that (likely by reusing Levanter’s `OptimizerState` structures) so serialization and resume work seamlessly.
+5. **Sharding compatibility.** Ensure our explicit `PartitionSpec`s line up with Levanter’s mesh/resource mapping. Either reuse Levanter’s mapping utilities or provide a translation layer so both sides agree on axis names.
+
+With those pieces, defining a “grug” model could be as simple as providing the dataclasses + forward function, and letting Levanter’s trainer handle data flow, logging, checkpointing, and multi-host orchestration.
+
 ## Open Questions & Follow-Ups
 
 - Do we want gradient accumulation/microbatching in v1, or stick to per-step full batches?
