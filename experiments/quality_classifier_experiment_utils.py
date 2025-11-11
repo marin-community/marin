@@ -100,6 +100,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         keep_fraction=versioned(config.keep_fraction),
                     ),
                 ],
+                ray_memory_limit_gb=12,
             ),
             pip_dependency_groups=["ddsketch"],
         )

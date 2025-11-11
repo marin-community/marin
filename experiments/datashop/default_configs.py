@@ -84,4 +84,5 @@ default_consolidate_filter_config_kwargs = {
 
 default_consolidate_config_kwargs = {
     "filetype": "jsonl.zst",
+    "ray_memory_limit_gb": 12,
 }
