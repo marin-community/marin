@@ -33,11 +33,9 @@ KV_BS = 32  # must match constant inside kernel
 SM_SCALE = 1 / math.sqrt(D.size)
 
 
-# very loose tolerance. JAX uses a very loose tolerance for their ragged_attention tests.
-def _rpa_tol() -> float:
+def _tol() -> float:
     devices = jax.devices()
-    # 2%?!?!
-    return 2e-2 if any(device.platform == "tpu" for device in devices) else 1e-4
+    return 2e-3 if any(device.platform == "tpu" for device in devices) else 1e-4
 
 
 # -----------------------------------------------------------------------------
@@ -81,7 +79,7 @@ def test_attention_decode_matches_full_ar():
         out_chunks.append(out_tok.array)
 
     decoded_arr = jnp.concatenate(out_chunks, axis=0)
-    tol = _rpa_tol()
+    tol = _tol()
     assert_trees_all_close(full_out.array, decoded_arr, atol=tol, rtol=tol)
 
 
@@ -126,7 +124,7 @@ def test_attention_decode_matches_full_prefill():
     full_out = full_out["position", hax.dslice(0, 7)]
     decode_out = decode_out["position", hax.dslice(0, 7)]
 
-    tol = _rpa_tol()
+    tol = _tol()
     assert_trees_all_close(full_out.array, decode_out.array, atol=tol, rtol=tol)
 
 
@@ -140,7 +138,7 @@ def test_attention_decode_prefill_in_chunks(prefix_size, chunk_size, seq_ids):
     cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, rope=None, attn_backend=AttentionBackend.VANILLA)
     attn_key, x_key = jrandom.split(jrandom.PRNGKey(0))
     attn = Attention.init(cfg, key=attn_key)
-    tol = _rpa_tol()
+    tol = _tol()
 
     max_pages_per_seq = math.ceil((prefix_size + 4 * chunk_size) / NUM_SLOTS)
 
@@ -222,7 +220,7 @@ def test_attention_decode_ragged_fill_in_chunks():
     cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, attn_backend=AttentionBackend.VANILLA)
     attn_key, x_key = jrandom.split(jrandom.PRNGKey(0))
     attn = Attention.init(cfg, key=attn_key)
-    tol = _rpa_tol()
+    tol = _tol()
     # x = hax.random.normal(x_key, (B, Pos, Embed)) * 0.2
     x = hax.arange((B, Pos, Embed), start=-2, step=0.1, dtype=jnp.float32)
     full_out = attn(x, AttentionMask.causal(), key=jrandom.PRNGKey(1))
