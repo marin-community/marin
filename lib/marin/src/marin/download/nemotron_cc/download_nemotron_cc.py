@@ -40,15 +40,8 @@ myagent = "marin-nemotron-ingress/1.0"
 NCC_PATH_FILE_URL = "https://data.commoncrawl.org/contrib/Nemotron/Nemotron-CC/data-jsonl.paths.gz"
 
 
-def download_single_nemotron_path(file_info: tuple[str, str, int]):
-    """
-    Fetches content from a Common Crawl path.
-    Args:
-        file_info: Tuple of (input_file_path, output_file_path, chunk_size)
-    Returns:
-        None
-    """
-    input_file_path, output_file_path, chunk_size = file_info
+def download_single_nemotron_path(input_file_path: str, output_file_path: str, chunk_size: int):
+    """Fetches content from a Common Crawl path."""
     contents = []
 
     cc_url = f"https://data.commoncrawl.org/{input_file_path}"
@@ -116,7 +109,7 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
     pipeline = (
         Dataset.from_list(all_files)
         .filter(lambda file_info: not fsspec_exists(file_info[1]))
-        .map(download_single_nemotron_path)
+        .map(lambda file_info: download_single_nemotron_path(*file_info))
     )
 
     list(backend.execute(pipeline))

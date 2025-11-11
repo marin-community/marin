@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from itertools import groupby
 from typing import Any, Literal, Protocol, TypeVar
 
+import fsspec
 import msgspec
 import numpy as np
 import ray
@@ -462,8 +463,6 @@ def process_shard_fused(
 
             # Check if we should skip writing because file already exists
             if op.skip_existing:
-                import fsspec
-
                 fs = fsspec.core.url_to_fs(output_path)[0]
                 if fs.exists(output_path):
                     logger.info(f"Skipping write, output exists: {output_path}")

@@ -44,7 +44,7 @@ class DownloadConfig:
     max_files: int | None = None  # Maximum number of shards to process
 
 
-def process_shard(shard_task: dict) -> None:
+def process_shard(shard_task: dict) -> dict:
     """
     Process a single shard by extracting its files from the zip in GCS and uploading the merged JSONL.
 
@@ -71,6 +71,7 @@ def process_shard(shard_task: dict) -> None:
                         print(json.dumps(record), file=out_f)
 
             logger.info(f"Shard {shard_id} with {len(file_list)} files uploaded to {gcs_path}")
+            return {"shard_id": shard_id, "num_files": len(file_list), "output_path": gcs_path}
 
 
 def download(cfg: DownloadConfig) -> None:
@@ -128,13 +129,10 @@ def download(cfg: DownloadConfig) -> None:
     # Execute pipeline with zephyr
     backend = flow_backend()
 
-    def _output_exists(shard_id: int) -> bool:
-        gcs_path = f"{cfg.output_path}/{shard_id}.jsonl.gz"
-        fs = fsspec.url_to_fs(gcs_path)[0]
-        return fs.exists(gcs_path)
-
     pipeline = (
-        Dataset.from_list(shard_tasks).filter(lambda task: not _output_exists(task["shard_id"])).map(process_shard)
+        Dataset.from_list(shard_tasks)
+        .map(process_shard)
+        .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
     )
     list(backend.execute(pipeline))
 
@@ -144,4 +142,5 @@ def download(cfg: DownloadConfig) -> None:
 @draccus.wrap()
 def main(cfg: DownloadConfig) -> None:
     """CLI entrypoint for downloading and processing Ar5iv dataset."""
+    logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
     download(cfg)
