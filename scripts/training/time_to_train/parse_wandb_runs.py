@@ -1,10 +1,23 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
 import pytz
 import wandb
 
 import pandas as pd
 from datetime import datetime
-
 
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "stanford-mercury")
 WANDB_PROJECT = "marin"
@@ -28,10 +41,10 @@ def convert_to_local_time(utc_str: str) -> str:
     return pacific_str
 
 
-def check_create_time(create_time: str, start_date: str = None, end_date: str = None) -> bool:
+def check_create_time(create_time: str, start_date: str | None = None, end_date: str | None = None) -> bool:
     """Check if the create time is within the start and end date"""
     # Custom parsing of the create_time string
-    date_part, time_part, tz_part = create_time.rsplit(maxsplit=2)
+    date_part, time_part, _tz_part = create_time.rsplit(maxsplit=2)
     create_dt = datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M:%S")
 
     if start_date is None and end_date is None:
@@ -71,7 +84,7 @@ TARGET_SUMMARY_KEYS = [
 ]
 
 
-def parse_run(run: wandb.apis.public.Run, start_date: str = None, end_date: str = None) -> dict:
+def parse_run(run: wandb.apis.public.Run, start_date: str | None = None, end_date: str | None = None) -> dict | None:
     runtime = run.summary["_runtime"] / 3600.0  # hours
     create_time = convert_to_local_time(run.createdAt)
     if not check_create_time(create_time, start_date=start_date, end_date=end_date):
@@ -89,7 +102,6 @@ def parse_run(run: wandb.apis.public.Run, start_date: str = None, end_date: str 
         mfu = "N/A"
     summary = run.summary
     examples_per_second = summary["throughput/examples_per_second"]
-    parameters = summary["parameter_count"]
     global_step = summary["global_step"]
     training_time = global_step * train_batch_size / examples_per_second / 3600.0  # hours
     data = {

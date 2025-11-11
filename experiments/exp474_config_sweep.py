@@ -1,4 +1,18 @@
-# https://github.com/stanford-crfm/marin/issues/474
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# https://github.com/marin-community/marin/issues/474
 # Sweep to determine optimal training configs for small models
 import dataclasses
 import itertools
@@ -15,6 +29,8 @@ from experiments.exp72_baselines import fineweb_edu_tokenized
 from experiments.llama import llama_150m, llama_300m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, versioned
+from marin.processing.tokenize import lm_data_config
+from marin.resources import TpuPodConfig
 
 # TODO: might be nice to do use wandb sweeps, but not today.
 # TODO: redo with mup
@@ -63,7 +79,7 @@ for combo in all_combos(
 
     train_configs_150m.append(
         SimpleTrainConfig(
-            tpu_type=versioned(combo["tpu_type"]),
+            resources=TpuPodConfig(tpu_type=versioned(combo["tpu_type"])),
             train_batch_size=combo["batch_size"],
             num_train_steps=num_train_steps,
             learning_rate=combo["lr"],
@@ -87,7 +103,7 @@ for combo in all_combos(
 
     train_configs_300m.append(
         SimpleTrainConfig(
-            tpu_type=versioned(combo["tpu_type"]),
+            resources=TpuPodConfig(tpu_type=versioned(combo["tpu_type"])),
             train_batch_size=combo["batch_size"],
             num_train_steps=num_train_steps,
             learning_rate=combo["lr"],
@@ -155,7 +171,7 @@ steps_150m = make_sweep_steps(
     prefix="sweep474-150m",
     model_config=llama_150m,
     train_configs=train_configs_150m,
-    tokenized_data=fineweb_edu_tokenized,
+    tokenized_data=lm_data_config(fineweb_edu_tokenized, permutation_type="linear"),
     tags=("llama", "150m", "474_config_sweep", "fineweb_edu"),
 )
 
@@ -163,7 +179,7 @@ steps_300m = make_sweep_steps(
     prefix="sweep474-300m",
     model_config=llama_300m,
     train_configs=train_configs_300m,
-    tokenized_data=fineweb_edu_tokenized,
+    tokenized_data=lm_data_config(fineweb_edu_tokenized, permutation_type="linear"),
     tags=("llama", "300m", "474_config_sweep", "fineweb_edu"),
 )
 

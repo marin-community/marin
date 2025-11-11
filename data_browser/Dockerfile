@@ -12,11 +12,13 @@ RUN apt-get update && apt-get install -y \
 COPY package*.json ./
 RUN npm install
 
-COPY pyproject.toml .
-COPY poetry.lock .
-RUN pip install poetry && \
-    poetry config virtualenvs.create false && \
-    poetry install --no-root
+COPY --from=docker.io/astral/uv:latest /uv /uvx /bin/
+COPY pyproject.toml uv.lock .
+# Create a project-local virtualenv and sync dev deps
+RUN uv sync --frozen --group dev
+
+# Ensure the venv Python is used for subsequent commands and at runtime
+ENV PATH=/app/.venv/bin:$PATH
 
 COPY . .
 

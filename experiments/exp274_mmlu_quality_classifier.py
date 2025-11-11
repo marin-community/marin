@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from experiments.exp164_quality_classifiers import dclm_negative_examples_in_dolma_format
 from experiments.exp412_download_and_raw2json_hf_qa import mmlu_convert_eval_aux
 from experiments.quality_classifier_experiment_utils import ExperimentConfig, create_steps
@@ -7,7 +21,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
 )
-from operations.transform.evaluation.eval_to_dolma import ConvertEvalToDolmaConfig, convert_eval_to_dolma
+from marin.transform.evaluation.eval_to_dolma import ConvertEvalToDolmaConfig, convert_eval_to_dolma
 
 mmlu_eval_aux_in_dolma_format = ExecutorStep(
     name="documents/mmlu_eval_aux",

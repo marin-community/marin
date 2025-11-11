@@ -1,10 +1,24 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """A script to list out the files on GCS to prepare as training data.
 We generate braceexpand paths for the files with the same prefix and suffix.
 """
 
 import os
 import re
-from typing import Generator
+from collections.abc import Generator
 
 import fire
 from braceexpand import braceexpand
@@ -12,7 +26,9 @@ from google.cloud import storage
 
 
 def get_subdirectories(bucket_name, directory_path, suffix) -> Generator[str, None, None]:
-    """Given a GCS bucket name, directory path and suffix, list all the subdirectories that contain files with the given suffix."""
+    """Given a GCS bucket name, directory path and suffix, list all the subdirectories that contain
+    files with the given suffix.
+    """
     storage_client = storage.Client()
     bucket = storage_client.get_bucket(bucket_name)
 
@@ -27,9 +43,10 @@ def get_subdirectories(bucket_name, directory_path, suffix) -> Generator[str, No
 
 
 def list_files_in_subdir(bucket_name, subdir, suffix):
-    """Given a GCS bucket name, subdir and suffix, list all the files in the subdirectory with the given suffix.
-    And generate braceexpand paths for the files with the same prefix and suffix.
-    Note that we intentionally limit this to subdirectories in order to generate braceexpand paths for the files in the same subdir.
+    """Given a GCS bucket name, subdir and suffix, list all the files in the subdirectory with the
+    given suffix. And generate braceexpand paths for the files with the same prefix and suffix.
+    Note that we intentionally limit this to subdirectories in order to generate braceexpand paths
+    for the files in the same subdir.
     """
     storage_client = storage.Client()
     blobs = storage_client.list_blobs(bucket_name, prefix=subdir)

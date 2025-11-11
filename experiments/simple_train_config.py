@@ -1,11 +1,30 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import dataclasses
 from dataclasses import dataclass
 
+from levanter.callbacks.watch import WatchConfig
+from levanter.optim import OptimizerConfig
 from levanter.schedule import IntSchedule
+
+from marin.resources import ResourceConfig, TpuPodConfig
 
 
 @dataclass(frozen=True)
 class SimpleTrainConfig:
-    tpu_type: str
+    resources: ResourceConfig
     train_batch_size: int | IntSchedule
     """
     The batch size for training. If an IntSchedule is provided, the batch size will be
@@ -21,12 +40,18 @@ class SimpleTrainConfig:
     max_grad_norm: float | None = None
     warmup: float | None = None
     decay: float | None = None
+    rewarmup: float | None = None
+    """
+    The rewarmup parameter is used to re-warmup the learning rate after a decay cycles
+    """
     lr_schedule: str | None = None
     min_lr_ratio: float | None = None
     cycle_length: int | list[int] | None = None
     z_loss_weight: float | None = None
     ema_beta: float | None = None
     """exponential moving average beta"""
+    skip_bad_steps: bool = False
+    """If True, skips steps where the loss or grad is significantly higher than the historical mean."""
 
     steps_per_eval: int | None = None
     """how often to run validation losses"""
@@ -35,22 +60,51 @@ class SimpleTrainConfig:
     """how often to run task evaluations"""
     steps_per_hf_export: int | None = None
     """None means match steps_per_export, -1 disables"""
-
-    node_count: int = 1
+    per_device_eval_parallelism: int | None = None
+    """Number of examples to evaluate in parallel on each device"""
+    max_eval_batches: int | None = None
+    """Maximum number of batches to evaluate on. None means all batches"""
 
     initialize_from_checkpoint_path: str | None = None
-    """Path to a checkpoint to initialize from. If None, the model will be trained from scratch."""
+    """If set, the training will resume from the checkpoint at this path. Otherwise, training will start from scratch."""
+    initialize_from_hf: str | None = None
+    """If set, the training will start from the hf model at this path. Otherwise, training will start from scratch."""
+    reset_data_loader_on_init: bool = True
+    """Pairs with initialize_from_checkpoint_path. If True, initialize_from_checkpoint_path will reset the data loader
+    so that it starts from step 0. Otherwise, it will resume from the step in the checkpoint."""
 
     allow_partial_checkpoint: bool = False
     """
     Allow loading partial checkpoints. This is useful for converting training to EMA, e.g.
     """
 
-    allow_out_of_region_reads: bool = False
-    """Allow us to read data from other regions. On GCS, intra-continent bandwidth is roughly 1 month of storage,
-    so sometimes it makes more sense to just read across regions."""
-    allow_out_of_region_writes: bool = False
-    """This makes less sense than reading across regions, but for completeness."""
-
     int8: bool = False
     """Int8 (quantized) training in Levanter."""
+
+    optimizer_config: OptimizerConfig | None = None
+    """Optimizer configuration to use. If not set, Adam will be used."""
+
+    watch: WatchConfig = dataclasses.field(default_factory=WatchConfig)
+    """Config for watching gradients, parameters, etc. Default is to log norms of gradients and parameters."""
+
+    # profiler-related configuration
+    profiler: bool = False
+    """Whether to run the JAX profiler during training."""
+    profiler_start_step: int = 5
+    """Which step to start profiling."""
+    profiler_num_steps: int = 100
+    """How many steps to profile for once started."""
+
+    @property
+    def tpu_type(self) -> str | None:
+        """For backward compatibility."""
+        if isinstance(self.resources, TpuPodConfig):
+            return self.resources.tpu_type
+        return None
+
+    @property
+    def node_count(self) -> int:
+        """For backward compatibility."""
+        if isinstance(self.resources, TpuPodConfig):
+            return self.resources.slice_count
+        return 1

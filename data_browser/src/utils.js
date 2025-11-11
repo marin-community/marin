@@ -1,19 +1,30 @@
-export function apiConfigUrl() {
-  return "/api/config";
+function getPrefix() {
+  // When we deploy the app, we have an iframe relationship between:
+  // - parent: marin.community/data-browser
+  // - child: Google Cloud Run app (marin-data-browser-*.run.app)
+  // If we detect we are running in this environment, use the parent URL.
+  if (/^marin-data-browser-.*\.run\.app$/.test(window.location.hostname)) {
+    return "https://marin.community/data-browser";
+  }
+  return "";
 }
 
-export function viewUrl(params) {
-  // Encode arrays (e.g., `paths`) as JSON
-  params = {...params, paths: JSON.stringify(params.paths)};
-  return "/view?" + new URLSearchParams(params);
+export function apiConfigUrl() {
+  return "/api/config";
 }
 
 export function apiViewUrl(params) {
   return "/api/view?" + new URLSearchParams(params);
 }
 
+export function viewUrl(params) {
+  // Encode arrays (e.g., `paths`) as JSON
+  params = {...params, paths: JSON.stringify(params.paths)};
+  return getPrefix() + "/view?" + new URLSearchParams(params);
+}
+
 export function experimentUrl(params) {
-  return "/experiment?" + new URLSearchParams(params);
+  return getPrefix() + "/experiment?" + new URLSearchParams(params);
 }
 
 export function viewSingleUrl(path) {
@@ -35,17 +46,48 @@ export function renderText(str) {
 }
 
 export function renderDate(date) {
-  return <span className="date">{new Date(date).toLocaleString()}</span>;
+  const options = {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  };
+  return new Date(date).toLocaleString('sv-SE', options);
+}
+
+export function round(value, precision) {
+  return Math.round(value * Math.pow(10, precision)) / Math.pow(10, precision);
 }
 
 export function renderDuration(seconds) {
-  const hours = Math.floor(seconds / 60 / 60);
-  seconds -= hours * 60 * 60;
-  const minutes = Math.floor(seconds / 60);
-  seconds -= minutes * 60;
-  return (hours > 0 ? hours + "h" : "") +
-         (minutes > 0 ? minutes + "m" : "") +
-         Math.round(seconds) + "s";
+  const secondsPerDay = 24 * 60 * 60;
+  if (seconds > secondsPerDay) {
+    return round(seconds / secondsPerDay, 1) + "d";
+  }
+  const secondsPerHour = 60 * 60;
+  if (seconds > secondsPerHour) {
+    return round(seconds / secondsPerHour, 1) + "h";
+  }
+  const secondsPerMinute = 60;
+  if (seconds > secondsPerMinute) {
+    return round(seconds / secondsPerMinute, 1) + "m";
+  }
+  return seconds + "s";
+}
+
+export function joinSpans(spans, separator) {
+  return spans.map((span, i) => <span key={i}>{span}{i < spans.length - 1 ? separator : ""}</span>);
+}
+
+export function renderSciNotation(value) {
+  if (value === 0) {
+    return value
+  }
+  // Render using scientific notation
+  return value.toExponential(1);
 }
 
 export function isUrl(str) {
@@ -67,4 +109,17 @@ export function navigateToUrl(urlParams, delta, location, navigate) {
     pathname: location.pathname,
     search: urlParams.toString(),
   });
+}
+
+export function checkJsonResponse(response, setError) {
+  // If axios can't parse the payload into an object (e.g., there are nan's inside), then it silently returns a string.
+  // This should fail (otherwise the payload would have been an object).
+  if (typeof response.data === "string") {
+    try {
+      JSON.parse(response.data);
+    } catch (e) {
+      setError("Failed to parse response as JSON: " + e.message);
+      return;
+    }
+  }
 }

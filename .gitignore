@@ -1,3 +1,13 @@
+# redundant, but Ray looks for this otherwise.
+.git
+
+CLAUDE.md
+
+logs/
+
+# CPU profiles
+prof/
+
 tests/snapshots/outputs
 tests/snapshots/diffs
 
@@ -5,6 +15,10 @@ tests/snapshots/diffs
 data/*
 output/*
 outputs/*
+
+# Snapshot diffs and outputs
+tests/snapshots/*/outputs/*
+tests/snapshots/*/diffs/*
 
 # This is mainly for Ray and using submodule
 */**/.git
@@ -26,11 +40,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/
-var/
+local_store/
 wheels/
 share/python-wheels/
 *.egg-info/
@@ -183,6 +196,7 @@ cython_debug/
 
 # Secrets
 credentials.json
+marin/crawl/bigquery-gcs-key.json
 
 # Archive
 archive/
@@ -196,3 +210,16 @@ archive/
 
 # wandb logs
 wandb
+
+# Generated leaderboard data
+marin/speedrun/static/data/runs.json
+
+# Ignore generated credentials from google-github-actions/auth
+gha-creds-*.json
+
+.aider*
+.git/*
+
+*.jsonl
+**/*.jsonl
+scr/*

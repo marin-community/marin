@@ -1,0 +1,42 @@
+{
+    "id": "thread-91276",
+    "text": "# Sentence with two not-so-related parts\n\nQuite a lot of articles in Wikipedia, especially about people, have sentences like this one: \n\n> Author of Gitanjali and its \"profoundly sensitive, fresh and beautiful verse\", he became the first non-European to win the Nobel Prize in Literature in 1913.\n\n(This is taken from the article [Rabindranath Tagore](http://en.wikipedia.org/wiki/Rabindranath_Tagore).)\n\nThis sentence makes two statements:\n\n1. That Tagore was the author of Gitanjali and its \"profoundly sensitive, fresh and beautiful verse\".\n2. That he became the first non-European to win the Nobel Prize in Literature in 1913.\n\nIt sounds kinda stylish, but the two things are not so related, so I don't really like this type of sentence. Is this considered correct grammar? Does this phenomenon have a name?\n\n## Answer\n\nThe [\u2018Longman Grammar of Spoken and Written English\u2019](http://rads.stackoverflow.com/amzn/click/0582237262) (LSGSWE) describes such a construction as a **preface**, one of two types of **dislocation**, in which \u2018a definite noun phrase is placed at one end of the clause, and a co-referential pronoun is used in the core of the clause.\u2019\n\nThe example you provide is grammatical, and probably not unusual in academic prose. It is also found in a simpler form in conversation, as in this example from the LSGSWE: \u2018This little shop, it\u2019s lovely.\u2019\n\n## Answer\n\nCould this be [apposition](http://en.wikipedia.org/wiki/Apposition)? That Tagore was the author of Gitanjali and its 'profoundly sensitive, fresh and beautiful verse' is used to modify the pronoun 'he'? \n\n## Answer\n\nI believe KTR's answer is correct: the name of the construction is \"apposition\". I wanted to add some more notes on how it works (and I sort of like it actually...)\n\n> Author of Gitanjali and its \"profoundly sensitive, fresh and beautiful verse\", he became the first non-European to win the Nobel Prize in Literature in 1913.\n\nNow here, the first noun phrase *Author of Gitanjali and its \"profoundly sensitive, fresh and beautiful verse\"* is sort of dangling, but it acts as an [antecedent](http://en.wikipedia.org/wiki/Antecedent_%28grammar%29) to *he* in the sentence's main clause. The antecedent, so constructed, acts to qualify the main phrase through explanation or amplification.\n\nRead this kind of apposition as sitting between two extremes. On the one hand, you could have combined the two phrases using a conjunction **and**, which does not state or imply any causal connection:\n\n* He was the author of Gitanjali and its \"profoundly sensitive, fresh and beautiful verse\", and he became the first non-European to win the Nobel Prize in Literature in 1913.\n\nOn the other hand, you could explicitly state a causal relationship, implying that he won the Nobel *because of* his authorship of *Gitanjali*.\n\n* As the author of Gitanjali and its \"profoundly sensitive, fresh and beautiful verse\", he became the first non-European to win the Nobel Prize in Literature in 1913.\n\nThe appositive construction sits between these two poles; the antecedent clause *\"he was the author of...\"* is offered up as only a hint, or as supporting context for the main clause *\"he won a Nobel Prize...\"*.",
+    "source": "stackexchange",
+    "added": "2024-08-14T11:02:05.320259+00:00",
+    "created": "2012-11-15T07:32:23.643",
+    "metadata": {
+        "id": "91276",
+        "subdomain": "english",
+        "url": "https://english.stackexchange.com/questions/91276",
+        "title": "Sentence with two not-so-related parts",
+        "question": "<p>Quite a lot of articles in Wikipedia, especially about people, have sentences like this one: </p>\n\n<blockquote>\n  <p>Author of Gitanjali and its \"profoundly sensitive, fresh and beautiful verse\", he became the first non-European to win the Nobel Prize in Literature in 1913.</p>\n</blockquote>\n\n<p>(This is taken from the article <a href=\"http://en.wikipedia.org/wiki/Rabindranath_Tagore\" rel=\"nofollow\">Rabindranath Tagore</a>.)</p>\n\n<p>This sentence makes two statements:</p>\n\n<ol>\n<li>That Tagore was the author of Gitanjali and its \"profoundly sensitive, fresh and beautiful verse\".</li>\n<li>That he became the first non-European to win the Nobel Prize in Literature in 1913.</li>\n</ol>\n\n<p>It sounds kinda stylish, but the two things are not so related, so I don't really like this type of sentence. Is this considered correct grammar? Does this phenomenon have a name?</p>\n",
+        "tags": [
+            "grammar",
+            "writing-style",
+            "syntactic-analysis"
+        ],
+        "creation_time_utc": "2012-11-15T07:32:23.643",
+        "votes": 3,
+        "accepted_answer_id": null,
+        "answers": [
+            {
+                "id": "91279",
+                "body": "<p>The <a href=\"http://rads.stackoverflow.com/amzn/click/0582237262\" rel=\"nofollow\">\u2018Longman Grammar of Spoken and Written English\u2019</a> (LSGSWE) describes such a construction as a <strong>preface</strong>, one of two types of <strong>dislocation</strong>, in which \u2018a definite noun phrase is placed at one end of the clause, and a co-referential pronoun is used in the core of the clause.\u2019</p>\n\n<p>The example you provide is grammatical, and probably not unusual in academic prose. It is also found in a simpler form in conversation, as in this example from the LSGSWE: \u2018This little shop, it\u2019s lovely.\u2019</p>\n",
+                "creation_time_utc": "2012-11-15T08:19:52.417",
+                "votes": 2
+            },
+            {
+                "id": "91278",
+                "body": "<p>Could this be <a href=\"http://en.wikipedia.org/wiki/Apposition\" rel=\"nofollow\">apposition</a>? That Tagore was the author of Gitanjali and its 'profoundly sensitive, fresh and beautiful verse' is used to modify the pronoun 'he'? </p>\n",
+                "creation_time_utc": "2012-11-15T08:19:48.847",
+                "votes": 1
+            },
+            {
+                "id": "91285",
+                "body": "<p>I believe KTR's answer is correct: the name of the construction is \"apposition\".  I wanted to add some more notes on how it works (and I sort of like it actually...)</p>\n\n<blockquote>\n  <p>Author of Gitanjali and its \"profoundly sensitive, fresh and beautiful verse\", he became the first non-European to win the Nobel Prize in Literature in 1913.</p>\n</blockquote>\n\n<p>Now here, the first noun phrase <em>Author of Gitanjali and its \"profoundly sensitive, fresh and beautiful verse\"</em> is sort of dangling, but it acts as an <a href=\"http://en.wikipedia.org/wiki/Antecedent_%28grammar%29\" rel=\"nofollow\">antecedent</a> to <em>he</em> in the sentence's main clause.  The antecedent, so constructed, acts to qualify the main phrase through explanation or amplification.</p>\n\n<p>Read this kind of apposition as sitting between two extremes.  On the one hand, you could have combined the two phrases using a conjunction <strong>and</strong>, which does not state or imply any causal connection:</p>\n\n<ul>\n<li>He was the author of Gitanjali and its \"profoundly sensitive, fresh and beautiful verse\", and he became the first non-European to win the Nobel Prize in Literature in 1913.</li>\n</ul>\n\n<p>On the other hand, you could explicitly state a causal relationship, implying that he won the Nobel <em>because of</em> his authorship of <em>Gitanjali</em>.</p>\n\n<ul>\n<li>As the author of Gitanjali and its \"profoundly sensitive, fresh and beautiful verse\",  he became the first non-European to win the Nobel Prize in Literature in 1913.</li>\n</ul>\n\n<p>The appositive construction sits between these two poles; the antecedent clause <em>\"he was the author of...\"</em> is offered up as only a hint, or as supporting context for the main clause <em>\"he won a Nobel Prize...\"</em>.</p>\n",
+                "creation_time_utc": "2012-11-15T09:02:28.023",
+                "votes": 0
+            }
+        ]
+    }
+}

@@ -1,7 +1,36 @@
-from instruction_datasets import get_instruction_dataset
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
-from marin.processing.tokenize.tokenize import TokenizeConfig, levanter_tokenize_sft
+"""
+An experiment to run SFT on a high quality subset of instruction/reasoning datasets.
+
+The default below trains on all the datasets weighted by document count and sets
+the number of training steps to epoch three times. If you wish to fine-tune on a
+different number of datasets you will need to change the number of training steps
+accordingly.
+"""
+
+from levanter.data.text import ChatLmDatasetFormat
+
+from experiments.defaults import default_sft, default_tokenize
+from experiments.llama import llama_8b
+from experiments.marin_models import marin_tokenizer
+from experiments.posttrain.instruction_datasets import get_instruction_dataset
+from experiments.simple_sft_config import SimpleSFTConfig
+from marin.execution.executor import ExecutorStep, executor_main
+from marin.processing.tokenize import lm_mixture_data_config
+from marin.resources import TpuPodConfig
 
 
 def create_tokenization_step(dataset_name: str) -> ExecutorStep:
@@ -19,36 +48,78 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
 
     # Get the last part of the path and clean it up
     short_name = dataset_name.split("/")[-1].lower().replace("-", "_")
-
-    return ExecutorStep(
-        name=f"tokenized/{short_name}_llama3_instruct_tokenizer",
-        fn=levanter_tokenize_sft,
-        config=TokenizeConfig(
-            train_paths=[output_path_of(dataset, "**/*.jsonl.gz")],
-            validation_paths=[],
-            cache_path=this_output_path(),
-            tokenizer="meta-llama/Llama-3.1-8B-Instruct",
-            input_field="user",
-            output_field="assistant",
-        ),
-        description="Tokenize SFT data",
+    return default_tokenize(
+        name=f"{short_name}_marin_tokenizer",
+        dataset=dataset / "**/*.jsonl.gz",
+        tokenizer=marin_tokenizer,
+        format=ChatLmDatasetFormat(),
     )
 
 
 # Dataset configurations
-DATASETS = [
-    "TIGER-Lab/AceCode-89K",
-    "HuggingFaceTB/smoltalk",
-    "PrimeIntellect/verifiable-math-problems",
-    "cognitivecomputations/dolphin-r1-nonreasoning",
-    "cognitivecomputations/dolphin-r1-reasoning",
-    "bespokelabs/Bespoke-Stratos-17k",
-    "open-r1/OpenThoughts-114k-math",
-    "allenai/tulu-3-sft-mixture",
-    "facebook/natural_reasoning",
-]
+DATASETS = {
+    "acecode_89k": "TIGER-Lab/AceCode-89K",
+    "smoltalk": "HuggingFaceTB/smoltalk",
+    "verifiable_math_problems": "PrimeIntellect/verifiable-math-problems",
+    "dolphin_r1_nonreasoning": "cognitivecomputations/dolphin-r1-nonreasoning",
+    "dolphin_r1_reasoning": "cognitivecomputations/dolphin-r1-reasoning",
+    "bespoke_stratos_17k": "bespokelabs/Bespoke-Stratos-17k",
+    "openthoughts_114k_math": "open-r1/OpenThoughts-114k-math",
+    "tulu_3_sft_mixture": "allenai/tulu-3-sft-mixture",
+    "natural_reasoning": "facebook/natural_reasoning",
+}
+
+NUM_TRAIN_STEPS = 19086  # 3 Epochs over all datasets above
+
+# Create tokenization steps for multiple datasets
+tokenized_datasets = {short_name: create_tokenization_step(hf_name) for short_name, hf_name in DATASETS.items()}
+
+# Dataset weights set with the naive baseline of the number of documents per dataset
+mixture_weights = {
+    "tulu_3_sft_mixture": 939343,
+    "openthoughts_114k_math": 89120,
+    "verifiable_math_problems": 777457,
+    "acecode_89k": 87149,
+    "smoltalk": 1043917,
+    "natural_reasoning": 1145824,
+    "dolphin_r1_nonreasoning": 214318,
+    "dolphin_r1_reasoning": 585418,
+    "bespoke_stratos_17k": 16710,
+}
+
+
+assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
+
+# Define an SFT config appropriate for mixture training
+mixture_sft_config = SimpleSFTConfig(
+    train_batch_size=128,
+    num_train_steps=NUM_TRAIN_STEPS,
+    learning_rate=5e-6,
+    resources=TpuPodConfig(tpu_type="v4-128"),
+    tokenizer=marin_tokenizer,
+    model_name_or_path="meta-llama/Llama-3.1-8B",
+    max_seq_len=4096,
+    seed=0,
+)
+
+mixture_config = lm_mixture_data_config(
+    tokenized_datasets,
+    mixture_weights,
+    permutation_type="linear",
+    shuffle=True,
+    missing_weights_are_validation=True,
+)
+
+# Configure mixture-based SFT training
+training_step = default_sft(
+    name="llama3.1_mixture_total-redux",
+    tokenized=mixture_config,
+    model_config=llama_8b,
+    sft_config=mixture_sft_config,
+    tags=["llama", "mixture"],
+)
+
 
 if __name__ == "__main__":
-    # Create tokenization steps for all datasets
-    tokenization_steps = [create_tokenization_step(dataset_name) for dataset_name in DATASETS]
-    executor_main(steps=tokenization_steps)
+    # Run all steps
+    executor_main(steps=[*list(tokenized_datasets.values()), training_step])

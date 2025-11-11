@@ -1,4 +1,18 @@
-# https://github.com/stanford-crfm/marin/issues/725
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# https://github.com/marin-community/marin/issues/725
 # Sweep to determine optimal hyperparameters for Adam on small scale
 import dataclasses
 import itertools
@@ -8,10 +22,11 @@ from collections.abc import Sequence
 import ray
 from levanter.models.llama import LlamaConfig
 
+from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3_wrong
 from experiments.defaults import default_train
-from experiments.exp600_tootsie import dclm_mixture_config_llama3_wrong
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, executor_main, unwrap_versioned_value, versioned
+from marin.resources import TpuPodConfig
 
 logger = logging.getLogger("ray")
 
@@ -165,7 +180,7 @@ for model_scale in ["100m", "500m"]:
 
         train_configs.append(
             SimpleTrainConfig(
-                tpu_type=versioned(TPU_TYPE),
+                resources=TpuPodConfig(versioned(TPU_TYPE)),
                 train_batch_size=BATCH_SIZE,
                 steps_per_eval=1000,
                 num_train_steps=step,
@@ -179,7 +194,7 @@ for model_scale in ["100m", "500m"]:
                     new_config[key] = value
                     train_configs.append(
                         SimpleTrainConfig(
-                            tpu_type=versioned(TPU_TYPE),
+                            resources=TpuPodConfig(tpu_type=versioned(TPU_TYPE)),
                             train_batch_size=BATCH_SIZE,
                             steps_per_eval=1000,
                             num_train_steps=step,

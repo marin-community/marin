@@ -1,14 +1,28 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import dataclasses
 
+from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3_wrong
 from experiments.defaults import default_train
-from experiments.exp600_tootsie import dclm_mixture_config_llama3_wrong
 from experiments.llama import llama_1_4b
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
+from marin.resources import TpuPodConfig
 
 llama_1_4b_train_config = SimpleTrainConfig(
-    tpu_type="v4-128",
-    node_count=1,
+    resources=TpuPodConfig(tpu_type="v4-128", slice_count=1),
     train_batch_size=1024,
     num_train_steps=50_000,
     # these hypers from Table 12 in https://arxiv.org/html/2406.11794v1#A6

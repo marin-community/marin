@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import gzip
 import io
 import json
@@ -9,11 +23,14 @@ import fsspec
 import requests
 import zstandard as zstd
 from flask import Flask, Response, jsonify, request, send_from_directory
+from flask_limiter import Limiter
 from pyarrow.parquet import ParquetFile
 
 app = Flask(__name__, static_folder="build")
 
 CLOUD_STORAGE_PREFIXES = ("gs://", "s3://")
+
+limiter = Limiter(app)
 
 
 @dataclass(frozen=True)
@@ -26,6 +43,20 @@ class ServerConfig:
     root_paths: list[str]
     """Paths (and their descendents) to allow access to."""
 
+    blocked_paths: list[str] | None = None
+    """Paths to explicitly block access to, even if under root_paths."""
+
+    max_size: int | None = None
+    """Maximum size of a file to read in bytes (for text files), when reading a
+    JSON or downloading a file."""
+
+    max_lines: int | None = None
+    """Maximum number of lines to read from a jsonl or parquet file.
+    This is the maximum number of lines that will be read in a single request,
+    which means that even if we're only requesting a single line, if the portion
+    of the file requested is past the first `max_lines` lines, we would exceed
+    this limit."""
+
 
 class Server:
     """
@@ -37,15 +68,22 @@ class Server:
     def __init__(self, config: ServerConfig):
         self.config = config
 
+        # Lazily instantiate remote filesystems to avoid triggering cloud
+        # auth during local-only development.
         self.fs_cache = {
             None: fsspec.filesystem("local"),
-            "gs": fsspec.filesystem("gcs"),
-            "s3": fsspec.filesystem("s3"),
         }
 
     def fs(self, path: str):
         """Automatically figure out the filesystem to use based on the `path`."""
         protocol, _ = fsspec.core.split_protocol(path)
+        if protocol not in self.fs_cache:
+            if protocol == "gs":
+                self.fs_cache[protocol] = fsspec.filesystem("gcs")
+            elif protocol == "s3":
+                self.fs_cache[protocol] = fsspec.filesystem("s3")
+            else:
+                self.fs_cache[protocol] = fsspec.filesystem("local")
         return self.fs_cache[protocol]
 
 
@@ -69,8 +107,13 @@ def list_files(path: str) -> dict:
             return f"{protocol}://{name}"
         return name
 
-    # Replace file with path
-    files = [{"path": name_to_path(file["name"]), **file} for file in files]
+    # Replace file with path and filter out blocked paths
+    files = []
+    for file in server.fs(path).ls(path, detail=True, refresh=True):
+        file_path = name_to_path(file["name"])
+        # Only include files that are not blocked
+        if has_permissions(file_path, server.config.root_paths, server.config.blocked_paths):
+            files.append({"path": file_path, **file})
 
     return {
         "type": "directory",
@@ -80,20 +123,30 @@ def list_files(path: str) -> dict:
 
 def read_json_file(path: str) -> dict:
     """Reads a JSON file."""
-    MAX_BYTES = 100 * 1024 * 1024
     with server.fs(path).open(path) as f:
-        raw = f.read(MAX_BYTES)  # Don't OOM on huge files
-        if len(raw) == MAX_BYTES:
-            return {
-                "type": "json",
-                "error": f"File too large (exceeded {MAX_BYTES} bytes)",
-            }
+        if server.config.max_size is None:
+            raw = f.read()
+        else:
+            raw = f.read(server.config.max_size)  # Don't OOM on huge files
+            if len(raw) == server.config.max_size:
+                return {
+                    "type": "json",
+                    "error": f"File too large (exceeded {server.config.max_size} bytes)",
+                }
         data = json.loads(raw)
 
     return {
         "type": "json",
         "data": data,
     }
+
+
+def is_too_many_lines(offset: int, count: int) -> bool:
+    return server.config.max_lines is not None and offset + count > server.config.max_lines
+
+
+def is_too_large(size: int) -> bool:
+    return server.config.max_size is not None and size > server.config.max_size
 
 
 def read_text_file(
@@ -103,6 +156,9 @@ def read_text_file(
     Reads a range of lines (offset to offset + count) from a text file (possibly compressed using gzip or zstd).
     Interpret each line as a JSON if `get_json` is set.
     """
+    # Ensure we only read a max of server.config.max_lines lines
+    if is_too_many_lines(offset, count):
+        return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
     with server.fs(path).open(path, "rb") as f:
         # Unzip
         if gzipped:
@@ -135,6 +191,10 @@ def read_text_file(
 
 def read_parquet_file(path: str, offset: int, count: int) -> dict:
     """Reads a range of records (offset to offset + count) from a parquet file."""
+    # Ensure we only read a max of server.config.max_lines lines
+    if is_too_many_lines(offset, count):
+        return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
+
     pf = ParquetFile(path)
     # Note: can make this more efficient by skipping the first offset without reading into memory
     rows = next(pf.iter_batches(batch_size=offset + count))[offset:]
@@ -144,19 +204,71 @@ def read_parquet_file(path: str, offset: int, count: int) -> dict:
     }
 
 
-def has_permissions(path: str) -> bool:
+def has_permissions(path: str, root_paths: list[str], blocked_paths: list[str] | None = None) -> bool:
     """Returns whether the user can access `path` according to the permissions."""
-    resolved_path = resolve_path(path)
-    for allowed_path in server.config.root_paths:
+
+    # Check if path is blocked
+    if blocked_paths:
+        for blocked_path_pattern in blocked_paths:
+            # For cloud storage paths, check if the path starts with the blocked pattern
+            if path.startswith(CLOUD_STORAGE_PREFIXES):
+                if path.startswith(blocked_path_pattern):
+                    return False
+            else:
+                # For local paths, use os.path.commonpath for consistent logic
+                if not os.path.isabs(path):
+                    # Don't allow relative paths
+                    return False
+                try:
+                    if os.path.commonpath([path, blocked_path_pattern]) == blocked_path_pattern:
+                        # The path is blocked if it's a subpath of the blocked pattern
+                        return False
+                except ValueError:
+                    # Paths don't have a common base, so not blocked by this pattern
+                    continue
+
+    # Check if path is allowed under root_paths
+    for allowed_path in root_paths:
         # For cloud storage paths, check if the resolved path starts with the allowed path
-        if resolved_path.startswith(CLOUD_STORAGE_PREFIXES):
-            if resolved_path.startswith(allowed_path):
+        if path.startswith(CLOUD_STORAGE_PREFIXES):
+            if path.startswith(allowed_path):
                 return True
-        # For local paths, use os.path.commonpath
         else:
-            if os.path.commonpath([resolved_path, allowed_path]) == allowed_path:
+            if not os.path.isabs(path):
+                # Don't allow relative paths
+                return False
+            if os.path.commonpath([path, allowed_path]) == allowed_path:
+                # The path is allowed if it's a subpath of the allowed path
                 return True
     return False
+
+
+# Sanity checks to ensure has_permissions works as expected
+assert has_permissions("gs://marin-us-central2/test/test.txt", ["gs://marin-us-central2"])
+assert not has_permissions("gs://marin-us-central2/test/test.txt", [])
+assert not has_permissions("/etc/hosts", [])
+assert has_permissions("/app/var/test", ["/app/var"])
+assert not has_permissions("/app/various", ["/app/var"])
+assert not has_permissions("../app/var", ["/app/var"])
+assert not has_permissions("../etc/hosts", ["/etc"])
+
+# Test blocked paths functionality
+assert has_permissions(
+    "gs://marin-us-central2/allowed/file.txt", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+assert not has_permissions(
+    "gs://marin-us-central2/blocked/file.txt", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+assert not has_permissions(
+    "gs://marin-us-central2/blocked/subdir/file.txt", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+# Test that both with and without trailing slash work
+assert not has_permissions(
+    "gs://marin-us-central2/blocked", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+assert not has_permissions(
+    "gs://marin-us-central2/blocked/", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
 
 
 @app.route("/api/config", methods=["GET"])
@@ -165,7 +277,29 @@ def config():
     return jsonify(asdict(server.config))
 
 
+@app.route("/api/download", methods=["GET"])
+@limiter.limit("10 per minute")
+def download():
+    path = request.args.get("path")
+    if not path:
+        return jsonify({"error": "No path specified"})
+    if not has_permissions(path, server.config.root_paths, server.config.blocked_paths):
+        return jsonify({"error": f"No permission to access: {path}"})
+    if not server.fs(path).exists(path):
+        return jsonify({"error": f"Path does not exist: {path}"})
+
+    if is_too_large(server.fs(path).size(path)):
+        return jsonify({"error": f"File too large (exceeded {server.config.max_size} bytes)"})
+
+    try:
+        file_handle = server.fs(path).open(path, "rb")
+        return Response(file_handle, content_type="application/octet-stream")
+    except ValueError as e:
+        return jsonify({"error": str(e)})
+
+
 @app.route("/api/view", methods=["GET"])
+@limiter.limit("60 per minute")
 def view():
     path = request.args.get("path")
     offset = int(request.args.get("offset", 0))
@@ -174,12 +308,12 @@ def view():
     try:
         if not path:
             return jsonify({"error": "No path specified"})
-        if not has_permissions(path):
+        if not has_permissions(path, server.config.root_paths, server.config.blocked_paths):
             return jsonify({"error": f"No permission to access: {path}"})
         if not server.fs(path).exists(path):
             return jsonify({"error": f"Path does not exist: {path}"})
 
-        # Directory
+        # Directory - check permissions before listing
         if server.fs(path).isdir(path):
             return jsonify(list_files(path))
 
@@ -267,6 +401,7 @@ def main(config: ServerConfig):
     server = Server(config)
 
     debug = os.environ.get("DEV") == "true"
+    assert debug, "This function must be run in debug mode"
     app.run(host="0.0.0.0", port=5000 if debug else 80, debug=debug)
 
 

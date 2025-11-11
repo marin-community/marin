@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import json
 import os
 import random
@@ -10,7 +24,17 @@ import pytest
 import ray
 from draccus.utils import Dataclass
 
-from marin.execution.executor import Executor, ExecutorStep, get_info_path, output_path_of, this_output_path, versioned
+from marin.execution import THIS_OUTPUT_PATH
+from marin.execution.executor import (
+    Executor,
+    ExecutorStep,
+    InputName,
+    _get_info_path,
+    collect_dependencies_and_version,
+    output_path_of,
+    this_output_path,
+    versioned,
+)
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
     get_current_status,
@@ -19,11 +43,10 @@ from marin.execution.executor_step_status import (
 )
 
 
+# Re-use the shared Ray TPU cluster for tests
 @pytest.fixture(scope="module", autouse=True)
-def ray_start():
-    ray.init(namespace="marin")
+def ray_start(ray_tpu_cluster):
     yield
-    ray.shutdown()  # teardown
 
 
 @dataclass(frozen=True)
@@ -120,7 +143,7 @@ def test_executor():
             status_path = get_status_path(executor.output_paths[step])
             events = read_events(status_path)
             assert get_current_status(events) == STATUS_SUCCESS
-            info_path = get_info_path(executor.output_paths[step])
+            info_path = _get_info_path(executor.output_paths[step])
             with open(info_path) as f:
                 step_info = json.load(f)
                 check_info(step_info, step)
@@ -185,7 +208,7 @@ def test_force_run_failed():
         # Re-run without force_run
         executor_non_force = Executor(prefix=temp_dir, executor_info_base_path=temp_dir)
 
-        with pytest.raises(Exception, match=".*failed previously.*"):
+        with pytest.raises(Exception, match=r".*failed previously.*"):
             executor_non_force.run(steps=[a])
 
         # should still be failed
@@ -201,89 +224,94 @@ def test_force_run_failed():
     cleanup_log(log)
 
 
-def test_status_actor():
-    """Test the status actor that keeps track of statuses."""
+@pytest.mark.skipif(
+    lambda: int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "0")) > 1,
+    reason="Ray can't handle multiple clusters.",
+)
+def test_status_actor_one_executor_waiting_for_another():
+    # Test when 2 experiments have a step in common and one waits for another to finish
+    with tempfile.NamedTemporaryFile() as file:
+        with open(file.name, "w") as f:
+            f.write("0")
 
-    def test_one_executor_waiting_for_another():
-        # Test when 2 experiments have a step in common and one waits for another to finish
-        with tempfile.NamedTemporaryFile() as file:
-            with open(file.name, "w") as f:
-                f.write("0")
+        @dataclass
+        class Config:
+            number: int
+            path: str
+            wait: int
+            input_path: str
 
-            @dataclass
-            class Config:
-                number: int
-                path: str
-                wait: int
-                input_path: str
+        def fn(config: Config):
+            time.sleep(config.wait)
+            with open(config.path, "r") as f:
+                number = int(f.read())
+            with open(config.path, "w") as f:
+                f.write(str(number + config.number))
 
-            def fn(config: Config):
-                time.sleep(config.wait)
-                with open(config.path, "r") as f:
-                    number = int(f.read())
-                with open(config.path, "w") as f:
-                    f.write(str(number + config.number))
+        a = ExecutorStep(name="a", fn=fn, config=Config(versioned(1), file.name, 2, ""))
+        b = ExecutorStep(name="b", fn=fn, config=Config(versioned(2), file.name, 0, output_path_of(a)))
 
-            a = ExecutorStep(name="a", fn=fn, config=Config(versioned(1), file.name, 2, ""))
-            b = ExecutorStep(name="b", fn=fn, config=Config(versioned(2), file.name, 0, output_path_of(a)))
+        @ray.remote
+        def run_fn(executor, steps):
+            executor.run(steps=steps)
 
-            @ray.remote
-            def run_fn(executor, steps):
-                executor.run(steps=steps)
+        with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+            executor1 = create_executor(temp_dir)
+            executor2 = create_executor(temp_dir)
 
-            with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
-                executor1 = create_executor(temp_dir)
-                executor2 = create_executor(temp_dir)
+            run1 = run_fn.remote(executor1, [a])
+            run2 = run_fn.remote(executor2, [a, b])
 
-                run1 = run_fn.remote(executor1, [a])
-                run2 = run_fn.remote(executor2, [a, b])
+            ray.get([run1, run2])
 
-                ray.get([run1, run2])
-
-                with open(file.name, "r") as f:
-                    assert int(f.read()) == 3
-
-    test_one_executor_waiting_for_another()
-
-    def test_multiple_steps_race_condition():
-        # Test when there are many steps trying to run simultaneously.
-        # Open a temp dir, make a step that write a random file in that temp dir. Make 10 of these steps and run them
-        # in parallel. Check that only one of them runs
-        with tempfile.TemporaryDirectory(prefix="output_path") as output_path:
-
-            @dataclass
-            class Config:
-                path: str
-
-            def fn(config: Config):
-                random_str = str(random.randint(0, 1000))
-                time.sleep(2)
-                with open(os.path.join(config.path, random_str), "w") as f:
-                    f.write("1")
-
-            @ray.remote
-            def run_fn(executor, steps):
-                executor.run(steps=steps)
-
-            with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
-
-                executor_refs = []
-                for _ in range(10):
-                    executor = create_executor(temp_dir)
-                    executor_refs.append(
-                        run_fn.remote(executor, [ExecutorStep(name="step", fn=fn, config=Config(output_path))])
-                    )
-
-                ray.get(executor_refs)
-
-                files = os.listdir(output_path)
-                print(files)
-                assert len(files) == 1
-                os.unlink(os.path.join(output_path, files[0]))
-
-    test_multiple_steps_race_condition()
+            with open(file.name, "r") as f:
+                assert int(f.read()) == 3
 
 
+@pytest.mark.skipif(
+    lambda: int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "0")) > 1,
+    reason="Ray can't handle multiple clusters.",
+)
+def test_status_actor_multiple_steps_race_condition():
+    # Test when there are many steps trying to run simultaneously.
+    # Open a temp dir, make a step that write a random file in that temp dir. Make 10 of these steps and run them
+    # in parallel. Check that only one of them runs
+    with tempfile.TemporaryDirectory(prefix="output_path") as output_path:
+
+        @dataclass
+        class Config:
+            path: str
+
+        def fn(config: Config):
+            random_str = str(random.randint(0, 1000))
+            time.sleep(2)
+            with open(os.path.join(config.path, random_str), "w") as f:
+                f.write("1")
+
+        @ray.remote
+        def run_fn(executor, steps):
+            executor.run(steps=steps)
+
+        with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+            executor_refs = []
+            for _ in range(10):
+                executor = create_executor(temp_dir)
+                executor_refs.append(
+                    run_fn.remote(executor, [ExecutorStep(name="step", fn=fn, config=Config(output_path))])
+                )
+
+            ray.get(executor_refs)
+
+            files = os.listdir(output_path)
+            print(files)
+            assert len(files) == 1
+            os.unlink(os.path.join(output_path, files[0]))
+
+
+@pytest.mark.skipif(
+    lambda: int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "0")) > 1,
+    reason="Overloaded cluster makes this test flaky.",
+)
 def test_parallelism():
     """Make sure things that parallel execution is possible."""
     log = create_log()
@@ -445,3 +473,152 @@ def test_run_only_some_steps():
         results = read_log(log)
         assert len(results) == 2
         assert (results[0] is None and results[1]["m"] == 10) or (results[1] is None and results[0]["m"] == 10)
+
+
+@dataclass(frozen=True)
+class DummyCfg:
+    x: int = 0
+    input_path: str | None = None
+    output_path: str = THIS_OUTPUT_PATH
+
+
+def dummy_fn(cfg: DummyCfg):
+    # write one tiny file so the step "does something"
+    out_path = os.path.join(cfg.output_path, "dummy")
+    os.makedirs(out_path, exist_ok=True)
+    with open(os.path.join(out_path, "done.txt"), "w") as f:
+        f.write(str(cfg.x))
+    return cfg.x
+
+
+def shouldnt_run_fn(cfg: DummyCfg):
+    raise RuntimeError("This function should not run.")
+
+
+# ----------------------------------------------------------------------
+#  Unit tests for collect_dependencies_and_version
+# ----------------------------------------------------------------------
+
+
+def test_collect_deps_skip_vs_block():
+    parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
+
+    # ----- skip parent -------------------------------------------------
+    inp_skip = InputName(step=parent, name="ckpt.pt").nonblocking()
+    computed_deps = collect_dependencies_and_version(inp_skip)
+    deps = computed_deps.dependencies
+    ver = computed_deps.version
+    pseudo = computed_deps.pseudo_dependencies
+
+    assert parent in pseudo and parent not in deps
+    # Placeholder looks like "DEP[0]/ckpt.pt"
+    assert ver == {"": "DEP[0]/ckpt.pt"}
+
+    # ----- require parent (default) ------------------------------------
+    inp_block = InputName(step=parent, name="ckpt.pt")  # no .skip_parent()
+    computed_deps = collect_dependencies_and_version(inp_block)
+    deps = computed_deps.dependencies
+    ver = computed_deps.version
+    pseudo = computed_deps.pseudo_dependencies
+
+    assert parent in deps and parent not in pseudo
+    assert ver == {"": "DEP[0]/ckpt.pt"}  # same placeholder, but in deps
+
+
+# ----------------------------------------------------------------------
+#  Parent-version should still affect child hash
+# ----------------------------------------------------------------------
+
+
+def test_parent_version_bubbles_into_skip_child():
+    """
+    Change parent's config ➜ child's version must change even if parent
+    is only a pseudo-dependency.
+    """
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        # First parent/child pair (parent.x = 1)
+        parent1 = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=versioned(1)))
+        child1_cfg = DummyCfg(0, input_path=parent1.cd("dummy").nonblocking())
+        child1 = ExecutorStep(
+            name="child",
+            fn=dummy_fn,
+            config=child1_cfg,
+        )
+
+        executor = create_executor(temp_dir)
+        executor.run(steps=[child1])
+        version1 = executor.version_strs[child1]
+        executor = create_executor(temp_dir)
+
+        # Second pair - identical except parent.x = 2
+        parent2 = ExecutorStep(name="parent2", fn=dummy_fn, config=DummyCfg(x=versioned(2)))
+        child2 = ExecutorStep(
+            name="child",
+            fn=dummy_fn,
+            config=DummyCfg(x=0, input_path=parent2.cd("dummy").nonblocking()),
+        )
+        executor.run(steps=[child2])
+        version2 = executor.version_strs[child2]
+
+        # Hashes should differ
+        assert version1 != version2
+
+
+def test_parent_doesnt_run_on_skip_parent():
+    """
+    Parent should not run if child is a skip-parent.
+    """
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        parent = ExecutorStep(name="parent", fn=shouldnt_run_fn, config=DummyCfg(x=1))
+        child = ExecutorStep(
+            name="child",
+            fn=dummy_fn,
+            config=DummyCfg(input_path=parent.cd("dummy").nonblocking()),
+        )
+
+        executor = create_executor(temp_dir)
+        executor.run(steps=[child])
+
+
+def test_skippable_parent_will_run_if_asked():
+    """
+    Parent should run if child is a skip-parent and we ask it to.
+    """
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
+        child = ExecutorStep(
+            name="child",
+            fn=dummy_fn,
+            config=DummyCfg(input_path=parent.cd("dummy").nonblocking()),
+        )
+
+        executor = create_executor(temp_dir)
+        executor.run(steps=[child], run_only=["parent"])
+
+        # make sure parent ran
+        assert os.path.exists(os.path.join(executor.output_paths[parent], "dummy", "done.txt"))
+
+
+def test_parent_will_run_if_some_child_is_not_skippable():
+    """
+    Parent should run if child is a skip-parent and we ask it to.
+    """
+    with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
+        parent = ExecutorStep(name="parent", fn=dummy_fn, config=DummyCfg(x=1))
+        child = ExecutorStep(
+            name="child",
+            fn=dummy_fn,
+            config=DummyCfg(input_path=parent.cd("dummy").nonblocking()),
+        )
+
+        child2 = ExecutorStep(
+            name="child2",
+            fn=dummy_fn,
+            config=DummyCfg(input_path=parent.cd("dummy")),  # no skip
+        )
+
+        executor = create_executor(temp_dir)
+        executor.run(steps=[child, child2])
+
+        # make sure parent ran
+        assert os.path.exists(os.path.join(executor.output_paths[parent], "dummy", "done.txt"))

@@ -1,21 +1,34 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 This script runs a suite of scaling laws on the DCLM-Baseline+StarCoder+ProofPile mix.
 This is the default mix that we use for our experiments/scaling laws, and can be used
 as a reference point to compare other mixes/scaling law suites against.
 
-Link to issue for scaling law experiments: https://github.com/stanford-crfm/marin/issues/780
+Link to issue for scaling law experiments: https://github.com/marin-community/marin/issues/780
 """
 
-from defaults import default_scaling_law_pred
-
+from experiments.defaults import default_scaling_law_pred
 from experiments.evals.task_configs import CORE_TASKS
-from experiments.exp600_tootsie import dclm_mixture_config_llama3
+from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3_old
 from marin.execution.executor import executor_main
 from marin.scaling_laws.create_ladder_suite import scaling_law_suite
 
 default_suite = scaling_law_suite(
     sweep_name="scaling-law-suite-default-v2",
-    tokenized=dclm_mixture_config_llama3,
+    tokenized=dclm_mixture_config_llama3_old,
     tags=["scaling_laws"],
 )
 

@@ -1,0 +1,25 @@
+data:
+  id: dlwh/wikitext_103_detokenized
+
+model:
+  type: gpt2_hyena
+  hyena:
+    hidden_dim: 32     # Default: 768
+    filter_order: 16   # Default: 64
+  num_layers: 2      # Default: 12
+
+trainer:
+  num_train_steps: 100
+  require_accelerator: false
+
+  checkpointer:
+    keep:
+      - every: 50
+    save_interval: 5m
+
+  per_device_parallelism: -1
+  train_batch_size: 32
+
+  tensor_parallel_axes: ["hyena_filter_order", "mlp"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"

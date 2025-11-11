@@ -1,3 +1,19 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from levanter.data.text import TextLmDatasetFormat
+
 from experiments.dclm.tokenize_dclm import DCLM_BASELINE_ONLY_MIXTURE, DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
 from experiments.evals.evals import default_eval
@@ -6,6 +22,7 @@ from experiments.llama import LlamaConfig
 from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
+from marin.resources import TpuPodConfig
 
 gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
 
@@ -25,7 +42,10 @@ dclm_baseline_neox_tokenized = default_tokenize(
 )
 
 starcoderdata_neox_tokenized = default_tokenize(
-    name="starcoderdata", dataset=starcoderdata, tokenizer=gpt_neox_tokenizer, text_key="content"
+    name="starcoderdata",
+    dataset=starcoderdata,
+    tokenizer=gpt_neox_tokenizer,
+    format=TextLmDatasetFormat(text_key="content"),
 )
 
 proofpile_2_neox_tokenized = default_tokenize(
@@ -48,10 +68,14 @@ DCLM_MIXTURE_COMPONENTS_NEOX_WRONG = {
 # Define a mixture that has only dclm_baseline data; set the weights of the other datasets to 0
 
 dclm_mixture_config_wrong = lm_mixture_data_config(
-    components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG, weights=DCLM_MIXTURE_WEIGHTS
+    components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG,
+    weights=DCLM_MIXTURE_WEIGHTS,
+    permutation_type="linear",
 )
 dclm_baseline_only_config_wrong = lm_mixture_data_config(
-    components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG, weights=DCLM_BASELINE_ONLY_MIXTURE
+    components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG,
+    weights=DCLM_BASELINE_ONLY_MIXTURE,
+    permutation_type="linear",
 )
 
 ### Define the model and training configurations
@@ -65,14 +89,13 @@ llama_1_4b_dclm = LlamaConfig(
     num_heads=16,
     num_kv_heads=16,
     num_layers=24,
-    use_flash_attention=True,
 )
 
 NUM_TRAIN_TOKENS = int(28.8e9)  # 28.8 billion tokens
 NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (256 * 2048)  # 256 is the batch size, 2048 is the sequence length
 
 training_config = SimpleTrainConfig(
-    tpu_type="v4-128",
+    resources=TpuPodConfig(tpu_type="v4-128", slice_count=1),
     train_batch_size=256,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=3e-3,

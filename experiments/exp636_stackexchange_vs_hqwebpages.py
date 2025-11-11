@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Experiment comparing training on StackExchange filtered web pages vs. training on StackExchange directly.
 
 StackExchange is a dataset of high quality web pages, but the dataset is small. Web pages from FineWeb
@@ -13,7 +27,8 @@ from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_con
 from experiments.pretraining_datasets import dolmino
 from experiments.quality_classifier_experiment_utils import create_steps
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from operations.transform.dolmino.filter_dolmino import FilterDolminoConfig, filter_dolmino
+from marin.processing.tokenize import lm_data_config
+from marin.transform.dolmino.filter_dolmino import FilterDolminoConfig, filter_dolmino
 
 dolmino_stackexchange_jsonl = ExecutorStep(
     name="documents/dolmino_stackexchange",
@@ -31,10 +46,11 @@ dolmino_stackexchange_tokenized = default_tokenize(
     dataset=dolmino_stackexchange_jsonl,
     tokenizer=llama3_tokenizer,
 )
+dolmino_stackexchange_data = lm_data_config(dolmino_stackexchange_tokenized, permutation_type="linear")
 
 dolmino_stackexchange_model = default_train(
     name="quality_filtering/dolmino_stackexchange",
-    tokenized=dolmino_stackexchange_tokenized,
+    tokenized=dolmino_stackexchange_data,
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )
@@ -45,7 +61,7 @@ dolma_stackexchange_tokenized = tokenize_dolma_steps()["dolma/stackexchange"]
 
 dolma_stackexchange_model = default_train(
     name="quality_filtering/dolma_stackexchange",
-    tokenized=dolma_stackexchange_tokenized,
+    tokenized=lm_data_config(dolma_stackexchange_tokenized, permutation_type="linear"),
     model_config=llama_1_4b,
     train_config=llama_1_4b_train_config,
 )

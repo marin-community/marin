@@ -1,4 +1,19 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -7,13 +22,13 @@ logger = logging.getLogger("ray")
 
 @dataclass
 class GcpApiConfig:
-    project_id: str = "hai-gcp-models"
+    project_id: str = os.getenv("GCP_PROJECT_ID", "hai-gcp-models")
     time_since: str = (datetime.now() - timedelta(days=7)).isoformat("T") + "Z"  # Format in RFC3339
 
 
 @dataclass
 class NumRestartConfig(GcpApiConfig):
-    instance_substr: str = "ray-marin-us-central2-head"
+    instance_substr: str = "ray-marin"  # Track all Ray clusters across regions
 
 
 def get_gcp_restart_events(config: NumRestartConfig) -> list[dict]:
@@ -35,6 +50,9 @@ def get_gcp_restart_events(config: NumRestartConfig) -> list[dict]:
     """
     # Run the query to get logs matching the filter
     entries = client.list_entries(filter_=log_filter, order_by=gcp_logging.DESCENDING)
+
+    print(f"Found {entries.total_count} entries matching filter: {log_filter}")
+    print(f"First entry: {entries[0]}")
 
     # Process and return the relevant log entries
     events = {}

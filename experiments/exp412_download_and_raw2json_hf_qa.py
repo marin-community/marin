@@ -1,6 +1,20 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from operations.download.huggingface.download import DownloadConfig, download
-from operations.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
+from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
 Downloads the following datasets
@@ -10,7 +24,7 @@ Downloads the following datasets
 # download mmlu dataset
 mmlu_download_step = ExecutorStep(
     name="raw/cais/mmlu",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="cais/mmlu",
         revision=versioned("c30699e"),
@@ -19,6 +33,7 @@ mmlu_download_step = ExecutorStep(
     ),
     override_output_path="raw/cais/mmlu",
 ).cd("c30699e/huggingface.co/datasets/cais/mmlu/resolve/c30699e")
+
 
 """
 Converts raw to JSON for:

@@ -1,9 +1,24 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import wandb
+from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +33,7 @@ class WandbMetricsConfig:
 
 
 def get_wandb_run_metrics(
-    run_id: str, metrics=None, entity: str = "stanford-mercury", project: str = "marin"
+    run_id: str, metrics=None, entity: str = WANDB_ENTITY, project: str = WANDB_PROJECT
 ) -> dict[str, Any] | None:
     """
     Retrieves key metrics for a specific WandB run.
@@ -32,7 +47,13 @@ def get_wandb_run_metrics(
     - dict: A dictionary containing relevant metrics for the run.
     """
     if metrics is None:
-        metrics = ["eval/paloma/c4_en/bpb", "throughput/total_gflops", "_runtime", "parameter_count"]
+        metrics = [
+            "eval/paloma/c4_en/bpb",
+            "lm_eval/averages/macro_avg_acc",
+            "throughput/total_gflops",
+            "_runtime",
+            "parameter_count",
+        ]
 
     # Initialize the WandB API
     api = wandb.Api()
@@ -78,7 +99,9 @@ def get_wandb_run_metrics(
 
 
 def get_all_runs_over_period(
-    num_days: int | None = None, entity="stanford-mercury", project="marin"
+    num_days: int | None = None,
+    entity=WANDB_ENTITY,
+    project=WANDB_PROJECT,
 ) -> list[dict[str, Any]] | None:
     """
     Retrieves all runs created within the past week (or given time window).
@@ -88,7 +111,6 @@ def get_all_runs_over_period(
     api = wandb.Api()
 
     try:
-
         # Check if project exists first
         try:
             api.project(entity, project)
@@ -124,11 +146,12 @@ def get_all_runs_over_period(
 
 
 def get_vocab_size_for_tokenizer(tokenizer: str) -> int | None:
-
     logger.info(f"Tokenizer:{tokenizer}")
     if tokenizer == "EleutherAI/gpt-neox-20b":
         vocab_size = 50_257
     elif tokenizer == "meta-llama/Meta-Llama-3.1-8B":
+        vocab_size = 128_256
+    elif tokenizer == "stanford-crfm/marin-tokenizer":
         vocab_size = 128_256
     elif tokenizer == "meta-llama/Llama-2-7b":
         vocab_size = 32_000
@@ -142,7 +165,7 @@ def get_vocab_size_for_tokenizer(tokenizer: str) -> int | None:
     return vocab_size
 
 
-def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin") -> int | None:
+def count_params_for_run(run_id: str, entity=WANDB_ENTITY, project=WANDB_PROJECT) -> int | None:
     """
     Retrieves the number of parameters for a specific WandB run.
     """
@@ -157,11 +180,11 @@ def count_params_for_run(run_id: str, entity="stanford-mercury", project="marin"
 
         assert run is not None, f"Run {run_id} not found."
 
-        tokenizer = run.config.get("data", {}).get("tokenizer", None)
+        tokenizer = run.train_config.get("data", {}).get("tokenizer", None)
         vocab_size = get_vocab_size_for_tokenizer(tokenizer)
         if not vocab_size:
             return None
-        model_dict = run.config.get("model", {})
+        model_dict = run.train_config.get("model", {})
         logger.info("Model dict: ", model_dict)
 
         llama_config = LlamaConfig(
@@ -217,26 +240,67 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
         "<23B": 23_000_000_000,  # for 22B scale models or smaller
     }
 
-    # track best BPB for each scale
-    best_bpb_per_scale = {scale: {"bpb": None, "run_id": None} for scale in parameter_scales}
+    # track best metrics for each scale
+    best_metrics_per_scale = {
+        scale: {"bpb": {"value": None, "run_id": None}, "macro_avg_acc": {"value": None, "run_id": None}}
+        for scale in parameter_scales
+    }
 
-    # get the model with best bpb eval for each group in 1b parameter scale
-    # best_bpb_1b, best_bpb_7b = None, None
-    # best_bpb1b_run_id, best_bpb7b_run_id = None, None
+    # Initialize final metrics dictionary
+    final_metrics = {}
+
     for run_id, metrics in run_metrics.items():
-        if metrics["eval/paloma/c4_en/bpb"] is not None:
-            if not isinstance(metrics["eval/paloma/c4_en/bpb"], float):
-                logger.info(f"BPB for run {run_id} is a string: {metrics['eval/paloma/c4_en/bpb']}. Skipping.")
-                continue
+        if metrics["parameter_count"] is None:
+            continue
+
+        try:
             num_parameters = float(metrics["parameter_count"])
-            for scale_label, threshold in parameter_scales.items():
-                if num_parameters < threshold:
-                    current_best_bpb = best_bpb_per_scale[scale_label]["bpb"]
-                    if current_best_bpb is None or metrics["eval/paloma/c4_en/bpb"] < current_best_bpb:
-                        best_bpb_per_scale[scale_label] = {
-                            "bpb": metrics["eval/paloma/c4_en/bpb"],
-                            "run_id": run_id,
-                        }
+        except (ValueError, TypeError):
+            logger.info(f"Invalid parameter count for run {run_id}: {metrics['parameter_count']}. Skipping.")
+            continue
+
+        # Check BPB metric
+        if metrics["eval/paloma/c4_en/bpb"] is not None:
+            try:
+                bpb = float(metrics["eval/paloma/c4_en/bpb"])
+                for scale_label, threshold in parameter_scales.items():
+                    if num_parameters < threshold:
+                        current_best_bpb = best_metrics_per_scale[scale_label]["bpb"]["value"]
+                        if current_best_bpb is None or bpb < current_best_bpb:
+                            best_metrics_per_scale[scale_label]["bpb"] = {"value": bpb, "run_id": run_id}
+            except (ValueError, TypeError):
+                logger.info(f"Invalid BPB for run {run_id}: {metrics['eval/paloma/c4_en/bpb']}. Skipping BPB metric.")
+
+        # Check macro_avg_acc metric
+        if metrics.get("lm_eval/averages/macro_avg_acc") is not None:
+            try:
+                macro_avg_acc = float(metrics["lm_eval/averages/macro_avg_acc"])
+                for scale_label, threshold in parameter_scales.items():
+                    if num_parameters < threshold:
+                        current_best_acc = best_metrics_per_scale[scale_label]["macro_avg_acc"]["value"]
+                        if (
+                            current_best_acc is None or macro_avg_acc > current_best_acc
+                        ):  # Note: higher is better for accuracy
+                            best_metrics_per_scale[scale_label]["macro_avg_acc"] = {
+                                "value": macro_avg_acc,
+                                "run_id": run_id,
+                            }
+            except (ValueError, TypeError):
+                logger.info(
+                    f"""Invalid macro_avg_acc for run {run_id}:
+                    {metrics["lm_eval/averages/macro_avg_acc"]}. Skipping accuracy metric."""
+                )
+    # Add best metrics to final metrics
+    for scale, data in best_metrics_per_scale.items():
+        # Add BPB metrics
+        if data["bpb"]["value"] is not None:
+            final_metrics[f"Best BPB for {scale}"] = data["bpb"]["value"]
+            final_metrics[f"Best BPB Run ID for {scale}"] = data["bpb"]["run_id"]
+
+        # Add macro_avg_acc metrics
+        if data["macro_avg_acc"]["value"] is not None:
+            final_metrics[f"Best Macro Avg Acc for {scale}"] = data["macro_avg_acc"]["value"]
+            final_metrics[f"Best Macro Avg Acc Run ID for {scale}"] = data["macro_avg_acc"]["run_id"]
 
     # calculate total gflops across all runs
     total_gflops = sum(
@@ -247,25 +311,36 @@ def calculate_wandb_metrics(config: WandbMetricsConfig) -> dict[str, Any]:
         ]
     )
 
-    metrics = {
-        "num_runs": len(run_metrics),
-        "best_c4_en_bpb": {
-            scale: {
-                "run_id": data["run_id"],
-                "run_metrics": run_metrics[data["run_id"]] if data["run_id"] else None,
-            }
-            for scale, data in best_bpb_per_scale.items()
-        },
-        "total_gflops_across_runs": total_gflops,
-        "total_petaflops_across_runs": total_gflops / 1e6,
-    }
+    # Add additional metrics
+    final_metrics.update(
+        {
+            "num_runs": len(run_metrics),
+            "best_c4_en_bpb": {
+                scale: {
+                    "run_id": data["bpb"]["run_id"],
+                    "run_metrics": run_metrics[data["bpb"]["run_id"]] if data["bpb"]["run_id"] else None,
+                }
+                for scale, data in best_metrics_per_scale.items()
+            },
+            "best_macro_avg_acc": {
+                scale: {
+                    "run_id": data["macro_avg_acc"]["run_id"],
+                    "run_metrics": (
+                        run_metrics[data["macro_avg_acc"]["run_id"]] if data["macro_avg_acc"]["run_id"] else None
+                    ),
+                }
+                for scale, data in best_metrics_per_scale.items()
+            },
+            "total_gflops_across_runs": total_gflops,
+            "total_petaflops_across_runs": total_gflops / 1e6,
+        }
+    )
 
-    logger.info(metrics)
-    return metrics
+    logger.info(final_metrics)
+    return final_metrics
 
 
 if __name__ == "__main__":
-
-    config = WandbMetricsConfig(entity="stanford-mercury", project="marin", num_days=7)
+    config = WandbMetricsConfig(entity=WANDB_ENTITY, project=WANDB_PROJECT, num_days=7)
 
     calculate_wandb_metrics(config)
