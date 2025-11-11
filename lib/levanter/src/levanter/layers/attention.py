@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
+import inspect
 import logging
 import math
 import warnings
@@ -34,10 +35,21 @@ from haliax.nn.attention import causal_mask, combine_masks_and, combine_masks_or
 from haliax.nn.normalization import LayerNormBase
 from haliax.partitioning import pspec_for_axis
 from haliax.types import PrecisionLike
-from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds
 from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec
 from jaxtyping import PRNGKeyArray
+
+try:
+    from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds  # type: ignore[import-not-found]
+    from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_kernel import (
+        _splash_attention as _splash_attention_impl,
+    )
+except Exception:  # pragma: no cover - optional dep
+    SegmentIds = None
+    _SPLASH_KERNEL_SUPPORTS_SINKS = False
+else:
+    _SPLASH_KERNEL_SUPPORTS_SINKS = "sinks" in inspect.signature(_splash_attention_impl).parameters
+    del _splash_attention_impl
 
 from ..inference.page_table import PageBatchInfo, PageTableSpec
 from .kv_cache import KvPageCache
@@ -178,49 +190,26 @@ def dot_product_attention(
             )
 
         case AttentionBackend.SPLASH:
-            if attn_sink is None:
-                attention_out = _try_tpu_splash_attention(
-                    QPos,
-                    KPos,
-                    Key,
-                    query,
-                    key,
-                    value,
-                    mask,
-                    bias,
-                    dropout,
-                    inference,
-                    force_flash=not was_default,
-                    prng=prng,
-                    attention_dtype=attention_dtype,
-                    precision=precision,
-                    block_size=flash_block_size,
-                    scaling_factor=scaling_factor,
-                    logits_soft_cap=logits_soft_cap,
-                )
-            else:
-                try:
-                    attention_out = _tpu_splash_attention(  # type: ignore[call-arg]
-                        QPos,
-                        KPos,
-                        Key,
-                        query,
-                        key,
-                        value,
-                        mask=mask,
-                        bias=bias,
-                        inference=inference,
-                        block_size=flash_block_size,
-                        scaling_factor=scaling_factor,
-                        logits_soft_cap=logits_soft_cap,
-                        sinks=attn_sink,  # TODO: support after upgrade to JAX 0.7.2
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "TPU Splash w/ sinks unavailable (%s). Falling back to JAX Flash.",
-                        e,
-                    )
-                    attention_out = None
+            attention_out = _try_tpu_splash_attention(
+                QPos,
+                KPos,
+                Key,
+                query,
+                key,
+                value,
+                mask,
+                bias,
+                dropout,
+                inference,
+                force_flash=not was_default,
+                prng=prng,
+                attention_dtype=attention_dtype,
+                precision=precision,
+                block_size=flash_block_size,
+                scaling_factor=scaling_factor,
+                logits_soft_cap=logits_soft_cap,
+                attn_sink=attn_sink,
+            )
 
         case AttentionBackend.VANILLA:
             if attn_sink is None:
@@ -641,9 +630,9 @@ def _te_materialize_mask(KPos, QPos, batch_size, mask):
 
             fused_attn_mask = mask.materialize(QPos, KPos)
 
-            assert (
-                fused_attn_mask is not None
-            ), "If AttentionMask is causal, the materialized array should never be None. Something is wrong."
+            assert fused_attn_mask is not None, (
+                "If AttentionMask is causal, the materialized array should never be None. Something is wrong."
+            )
 
             fused_attn_mask = fused_attn_mask.array
             fused_attn_mask = jnp.dstack([fused_attn_mask] * batch_size)
@@ -762,6 +751,47 @@ def _reshape_axes_for_bshd_bins(q, q_class, output_order=("B", "S", "H", "D")):
     q = _maybe_flatten(q, q_class["D"], "D")
     q = q.rearrange(output_order)
     return q
+
+
+def _prepare_sinks_for_splash(attn_sink: NamedArray, q_class, physical_axes_q: PartitionSpec):
+    """Reshape and broadcast attention sinks to (B, H) for the splash kernel."""
+
+    batch_axes = tuple(q_class["B"])
+    head_axes = tuple(q_class["H"])
+    allowed_axes = {ax.name for ax in batch_axes + head_axes}
+    extra_axes = tuple(ax for ax in attn_sink.axes if ax.name not in allowed_axes)
+    if extra_axes:
+        raise NotImplementedError(
+            f"Attention sinks contain axes unsupported by splash attention: {', '.join(ax.name for ax in extra_axes)}"
+        )
+
+    sink = attn_sink
+    sink_axis_names = {ax.name for ax in sink.axes}
+    for ax in batch_axes:
+        if ax.name not in sink_axis_names:
+            sink = sink.broadcast_axis(ax)
+            sink_axis_names.add(ax.name)
+    for ax in head_axes:
+        if ax.name not in sink_axis_names:
+            sink = sink.broadcast_axis(ax)
+            sink_axis_names.add(ax.name)
+
+    if batch_axes:
+        sink = sink.flatten_axes(tuple(ax.name for ax in batch_axes), "splash_batch")
+    else:
+        sink = sink.broadcast_axis(Axis("splash_batch", 1))
+
+    if head_axes:
+        sink = sink.flatten_axes(tuple(ax.name for ax in head_axes), "splash_head")
+    else:
+        sink = sink.broadcast_axis(Axis("splash_head", 1))
+
+    sink = sink.rearrange(("splash_batch", "splash_head"))
+
+    sinks_array = sink.astype(jnp.float32).array  # also cast to fp32 inside splash
+    physical_axes_sink = PartitionSpec(physical_axes_q[0], physical_axes_q[1])
+
+    return sinks_array, physical_axes_sink
 
 
 def _unflatten_bshd(attn_output, q_class, v_class):
@@ -1130,6 +1160,7 @@ def _try_tpu_splash_attention(
     block_size: Optional[int] = None,
     scaling_factor: float,
     logits_soft_cap: float | None,
+    attn_sink: Optional[NamedArray] = None,
 ) -> Optional[NamedArray]:
     if dropout != 0.0:
         if force_flash:
@@ -1161,14 +1192,15 @@ def _try_tpu_splash_attention(
             block_size=block_size,
             scaling_factor=scaling_factor,
             logits_soft_cap=logits_soft_cap,
+            attn_sink=attn_sink,
         )
     except ImportError as e:
         if "pallas" not in str(e):
             raise
         if force_flash:
-            raise ImportError("Could not import splash attention. You need to update your JAX to at least 0.4.26.")
+            raise ImportError("Could not import splash attention. You need to update your JAX to at least 0.7.2.")
         warnings.warn(
-            "Could not import splash attention. You need to update your JAX to at least 0.4.26. "
+            "Could not import splash attention. You need to update your JAX to at least 0.7.2. "
             "Falling back to the reference implementation."
         )
         return None
@@ -1199,8 +1231,10 @@ def _tpu_splash_attention(
     block_size: Optional[int] = None,
     scaling_factor: float,
     logits_soft_cap: float | None = None,
+    attn_sink: Optional[NamedArray] = None,
 ) -> Optional[NamedArray]:
     from jax.experimental.pallas.ops.tpu.splash_attention import (
+        SegmentIds as SplashSegmentIds,
         splash_attention_kernel,
         splash_attention_mask,
     )
@@ -1274,6 +1308,17 @@ def _tpu_splash_attention(
     physical_axes_k = _physical_axis_for_binning(k_class)
     physical_axes_v = _physical_axis_for_binning(v_class)
 
+    if attn_sink is not None and not _SPLASH_KERNEL_SUPPORTS_SINKS:
+        raise NotImplementedError(
+            "Attention sinks are not supported by the installed Splash kernel. Update JAX to >= 0.7.2."
+        )
+
+    if attn_sink is not None:
+        sinks, physical_axes_sink = _prepare_sinks_for_splash(attn_sink, q_class, physical_axes_q)
+    else:
+        sinks = None
+        physical_axes_sink = None
+
     # segment_ids: handle both the new tuple form and legacy single-array form for robustness
     segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
     if segment_ids is not None:
@@ -1293,13 +1338,13 @@ def _tpu_splash_attention(
             assert segment_ids is not None
             q_segment_ids, kv_segment_ids = segment_ids, segment_ids
 
-        segment_ids = SegmentIds(q_segment_ids.array, kv_segment_ids.array)
+        segment_ids = SplashSegmentIds(q_segment_ids.array, kv_segment_ids.array)
 
         q_segment_batch_axis = _find_batch_axis_for_segment_ids(QPos, q_segment_ids)
         kv_segment_batch_axis = _find_batch_axis_for_segment_ids(QPos, kv_segment_ids)
 
         if q_segment_batch_axis is not None or kv_segment_batch_axis is not None:
-            segment_batch_axis = SegmentIds(q_segment_batch_axis, kv_segment_batch_axis)  # type: ignore
+            segment_batch_axis = SplashSegmentIds(q_segment_batch_axis, kv_segment_batch_axis)  # type: ignore[arg-type]
         else:
             segment_batch_axis = None
     else:
@@ -1317,11 +1362,12 @@ def _tpu_splash_attention(
             physical_axes_k,
             physical_axes_v,
             physical_axes_segments,
+            physical_axes_sink,
         ),
         out_specs=physical_axes_q,
         check_rep=False,
     )
-    def wrap_flash_attention(q, k, v, segment_ids):
+    def wrap_flash_attention(q, k, v, segment_ids, sinks):
         # NB: inside the function, q, k, and v are partitioned, so in general the lengths of dims are not the same
         Sq = q.shape[2]
         Sk = k.shape[2]
@@ -1378,12 +1424,19 @@ def _tpu_splash_attention(
         q = q.astype(attention_dtype)
         k = k.astype(attention_dtype)
         v = v.astype(attention_dtype)
-        return jax.vmap(
-            lambda q, k, v, si: splash_kernel(q, k, v, segment_ids=si),
-            in_axes=(0, 0, 0, segment_batch_axis),
-        )(q, k, v, segment_ids)
+        sink_in_axes = 0 if sinks is not None else None
 
-    attn_output = wrap_flash_attention(q_, k_, v_, segment_ids)
+        def call_kernel(q_b, k_b, v_b, si, sink):
+            if sink is None:
+                return splash_kernel(q_b, k_b, v_b, segment_ids=si)
+            return splash_kernel(q_b, k_b, v_b, segment_ids=si, sinks=sink)
+
+        return jax.vmap(
+            call_kernel,
+            in_axes=(0, 0, 0, segment_batch_axis, sink_in_axes),
+        )(q, k, v, segment_ids, sinks)
+
+    attn_output = wrap_flash_attention(q_, k_, v_, segment_ids, sinks)
 
     attn_output = haliax.named(attn_output, ("B", "H", "S", "D"))
     # the output shape is B, S_q, H_q, D_v. Right now we're requiring D_k == D_v
@@ -1462,9 +1515,9 @@ class AttentionConfig:
     """Configuration for QK normalization. If None, no normalization is applied."""
 
     def __post_init__(self):
-        assert (
-            self.num_heads % self.num_kv_heads == 0
-        ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
+        assert self.num_heads % self.num_kv_heads == 0, (
+            f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
+        )
 
     @property
     def head_size(self) -> int:
@@ -2158,9 +2211,9 @@ class MultiHeadLatentAttention(eqx.Module):
         if self.config.q_lora_rank is None:
             q = self.q_proj(x, key=k_q_a)
         else:
-            assert (
-                self.q_a_proj is not None and self.q_a_norm is not None and self.q_b_proj is not None
-            ), "q_lora_rank defined, but LoRA matrices are not."
+            assert self.q_a_proj is not None and self.q_a_norm is not None and self.q_b_proj is not None, (
+                "q_lora_rank defined, but LoRA matrices are not."
+            )
             q = self.q_a_proj(x, key=k_q_a)
             q = self.q_a_norm(q)
             q = self.q_b_proj(q, key=k_q_b)
