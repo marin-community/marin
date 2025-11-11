@@ -96,6 +96,9 @@ class InferenceEngineConfig:
     max_tokens_per_round: int | None = None
     """Pack size for each decode loop iteration. If None, set to max_seqs """
 
+    use_paged_decode: bool = True
+    """Use paged decode (ragged attention). Defaults to True for better performance."""
+
     def __post_init__(self):
         # this one is only required because of clones. If we really care, we could relax this
         if self.max_queued_tokens < self.max_seqs:
@@ -106,6 +109,12 @@ class InferenceEngineConfig:
 
         if self.max_queued_tokens < self.max_seqs_in_prefill:
             raise ValueError("max_queued_tokens must be >= max_seqs_in_prefill")
+
+        if not self.use_paged_decode and self.page_size != self.max_seq_len:
+            raise ValueError(
+                f"When use_paged_decode=False, page_size must equal max_seq_len. "
+                f"Got page_size={self.page_size}, max_seq_len={self.max_seq_len}"
+            )
 
     @property
     def imputed_max_tokens_per_round(self) -> int:
@@ -398,6 +407,7 @@ def _prefill_kernel(
     sampler: Sampler,
     queue: TokenQueue,
     max_seqs_in_prefill: int,  # static
+    use_paged_decode: bool,  # static
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
 
@@ -418,7 +428,7 @@ def _prefill_kernel(
     #     pos=pos_ids.array,
     #     lens=decode_state.seq_lens.array,
     # )
-    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+    logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids, use_paged_decode=use_paged_decode)
     logits_at_samples = logits["position", sample_indices]
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -537,16 +547,17 @@ def _apply_prefill_work(gen_state: GenState, work: PrefillWork) -> GenState:
     return jax.lax.fori_loop(0, max_slots, body, gen_state)
 
 
-@functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill",))
+@functools.partial(jax.jit, donate_argnums=0, static_argnames=("max_seqs_in_prefill", "use_paged_decode"))
 def _run_prefill(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
     work: PrefillWork,
     max_seqs_in_prefill: int,
+    use_paged_decode: bool,
 ) -> tuple[GenState, _DecodeOutputs]:
     gen_state = _apply_prefill_work(gen_state, work)
-    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill)
+    return _prefill_kernel(gen_state, model, sampler, work.queue, max_seqs_in_prefill, use_paged_decode)
 
 
 def _handle_clones(
@@ -660,13 +671,14 @@ def _handle_clones(
 
 
 # @hax.named_jit(donate_args=(True, False, False))
-@functools.partial(jax.jit, static_argnums=(3, 4), donate_argnames=("gen_state",))
+@functools.partial(jax.jit, static_argnums=(3, 4, 5), donate_argnames=("gen_state",))
 def _run_generation_loop(
     gen_state: GenState,
     model: LmHeadModel,
     sampler: Sampler,
     max_tokens_per_round: int,
     max_rounds: int,
+    use_paged_decode: bool,
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run autoregressive generation until all sequences finish or `max_rounds` reached."""
 
@@ -704,7 +716,7 @@ def _run_generation_loop(
         sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices)
 
         # Decode logits and sample new tokens
-        logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
+        logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids, use_paged_decode=use_paged_decode)
         logits_at_samples = logits["position", sample_indices]
 
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
@@ -859,7 +871,7 @@ class InferenceEngine:
         if prefill_work is None:
             return None
         new_state = _run_prefill(
-            self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill
+            self.gen_state, self.model, self.sampler, prefill_work, self.config.max_seqs_in_prefill, self.config.use_paged_decode
         )
 
         # _run_prefill returns (GenState, _DecodeOutputs)
@@ -1125,6 +1137,7 @@ class InferenceEngine:
                 # TODO: tune max_tokens_per_round
                 self.config.imputed_max_tokens_per_round,
                 self.config.max_rounds,
+                self.config.use_paged_decode,
             )
             submit_done = time.time()
             # Time spent with device executing (and the host thread waiting)
@@ -1200,6 +1213,7 @@ class InferenceEngine:
             # TODO: tune max_tokens_per_round
             self.config.imputed_max_tokens_per_round,
             self.config.max_rounds,
+            self.config.use_paged_decode,
         )
         with fsspec.open(os.path.join(path, "gen_loop.jaxpr.txt.gz"), "w", compression="infer") as f:
             f.write(str(traced.jaxpr))

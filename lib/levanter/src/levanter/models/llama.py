@@ -349,13 +349,18 @@ class LlamaDecoderLayer(eqx.Module):
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
+        use_paged_decode: bool = True,
         key=None,
     ) -> tuple[NamedArray, KvPageCache]:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         # self attention and skip connection
         residual = x
         x = self.input_layernorm(x)
-        attn_output, kv_cache = self.self_attn.paged_decode(x, kv_cache, batch_info, pos_ids=pos_ids, key=k_attn)
+        # jax.debug.print(f'llama.decode: use_paged_decode={use_paged_decode}')
+        if use_paged_decode:
+            attn_output, kv_cache = self.self_attn.paged_decode(x, kv_cache, batch_info, pos_ids=pos_ids, key=k_attn)
+        else:
+            attn_output, kv_cache = self.self_attn.decode(x, kv_cache, batch_info, pos_ids=pos_ids, key=k_attn)
 
         if self.post_attn_layernorm is not None:
             attn_output = self.post_attn_layernorm(attn_output)
@@ -417,6 +422,7 @@ class LlamaTransformer(eqx.Module):
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
+        use_paged_decode: bool = True,
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
@@ -444,6 +450,7 @@ class LlamaTransformer(eqx.Module):
                 this_cache,
                 batch_info,
                 pos_ids=pos_ids,
+                use_paged_decode=use_paged_decode,
                 key=keys[i] if keys is not None else None,
             )
             with jax.named_scope("update cache"):
@@ -625,6 +632,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         batch_info: PageBatchInfo,
         pos_ids: NamedArray,
         *,
+        use_paged_decode: bool = True,
         key=None,
     ) -> tuple[NamedArray, ListCache[KvPageCache]]:
         """Run one decode / pre-fill step with an existing paged-KV *state*.
@@ -655,7 +663,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
 
         # Propagate through the transformer with paged-KV caching
         k_t = maybe_rng_split(key, 1)[0] if key is not None else None
-        x, new_state = self.transformer.decode(kv_cache, x, batch_info, pos_ids, key=k_t)
+        x, new_state = self.transformer.decode(kv_cache, x, batch_info, pos_ids, use_paged_decode=use_paged_decode, key=k_t)
 
         # Project to logits
         if self.lm_head is not None:

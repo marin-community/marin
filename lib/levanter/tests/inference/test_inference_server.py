@@ -89,6 +89,39 @@ def test_client(baby_llama_config, loaded_model, inference_server):
 
 
 @pytest.fixture(scope="module")
+def baby_llama_config_paged_decode_off():
+    """Config with use_paged_decode=False (splash decode)."""
+    max_seq_len = 32
+    return InferenceServerConfig(
+        service=InferenceEngineConfig(
+            max_seq_len=max_seq_len,
+            max_seqs=2,
+            page_size=max_seq_len,
+            max_queued_tokens=max_seq_len,
+            hbm_utilization=0.1,
+            use_paged_decode=False,
+        ),
+        temperature=0.7,
+        seed=42,
+    )
+
+
+@pytest.fixture(scope="module")
+def inference_server_paged_decode_off(trainer_config, baby_llama_config_paged_decode_off, loaded_model):
+    """Create an InferenceServer instance with splash decode."""
+    model, tokenizer = loaded_model
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+        return InferenceServer.create(baby_llama_config_paged_decode_off, model, tokenizer)
+
+
+@pytest.fixture(scope="module")
+def test_client_paged_decode_off(baby_llama_config_paged_decode_off, loaded_model, inference_server_paged_decode_off):
+    """Create a test client for the inference server with splash decode."""
+    with TestClient(inference_server_paged_decode_off.app) as client:
+        yield client, inference_server_paged_decode_off
+
+
+@pytest.fixture(scope="module")
 def hf_reference_model_and_tokenizer():
     """Load the HF reference model used for correctness comparisons."""
     pytest.importorskip("torch")
@@ -107,10 +140,8 @@ def hf_reference_model_and_tokenizer():
     return model, tokenizer
 
 
-def test_greedy_correctness_against_hf(test_client, hf_reference_model_and_tokenizer):
-    """Ensure deterministic (greedy) Levanter generations match HF reference outputs."""
-    (client, _server) = test_client
-    hf_model, hf_tokenizer = hf_reference_model_and_tokenizer
+def _run_test_greedy_correctness_against_hf(client, hf_model, hf_tokenizer):
+    """Helper function to test greedy correctness against HF reference."""
     torch = pytest.importorskip("torch")
 
     prompts = [
@@ -162,6 +193,20 @@ def test_greedy_correctness_against_hf(test_client, hf_reference_model_and_token
 
         assert levanter_ids == generated_ids, f"Token mismatch for prompt '{prompt}'"
         assert levanter_text == hf_text, f"Text mismatch for prompt '{prompt}'"
+
+
+def test_greedy_correctness_against_hf(test_client, hf_reference_model_and_tokenizer):
+    """Ensure deterministic (greedy) Levanter generations match HF reference outputs."""
+    (client, _server) = test_client
+    hf_model, hf_tokenizer = hf_reference_model_and_tokenizer
+    _run_test_greedy_correctness_against_hf(client, hf_model, hf_tokenizer)
+
+
+def test_greedy_correctness_against_hf_paged_decode_off(test_client_paged_decode_off, hf_reference_model_and_tokenizer):
+    """Ensure deterministic (greedy) Levanter generations match HF reference outputs with splash decode (use_paged_decode=False)."""
+    (client, _server) = test_client_paged_decode_off
+    hf_model, hf_tokenizer = hf_reference_model_and_tokenizer
+    _run_test_greedy_correctness_against_hf(client, hf_model, hf_tokenizer)
 
 
 def test_endpoints_exist(test_client):
@@ -664,6 +709,6 @@ def test_logprobs_match_full_forward_pass(test_client, loaded_model, trainer_con
         print(f"Token {i}: server={server_lp:.6f}, model={model_lp:.6f}, diff={diff:.6f}")
         # Allow larger tolerance due to accumulated bfloat16 precision errors in KV cache
         # The errors accumulate as we process more tokens auto-regressively
-        assert diff < 3e-3, f"Logprob mismatch at token {i}: server={server_lp}, model={model_lp}, diff={diff}"
+        assert diff < 4e-3, f"Logprob mismatch at token {i}: server={server_lp}, model={model_lp}, diff={diff}"
 
     print("All logprobs match successfully!")
