@@ -94,23 +94,26 @@ if __name__ == "__main__":
                         help="Maximum tokens to generate")
     args = parser.parse_args()
     
-    # Example prompt tokens (Llama 3 chat format: "Hello, how are you?")
-    prompt_tokens = [
-        128000, 128006, 9125, 128007, 271,
-        38766, 1303, 33025, 2696, 25, 6790, 220, 2366, 18, 198,
-        15724, 2696, 25, 220, 2705, 4723, 220, 2366, 20, 271,
-        128009, 128006, 882, 128007, 271,
-        9906, 11, 1268, 527, 499, 30, 128009, 128006, 78191, 128007, 271
-    ]
-    
     print(f"Loading model from {args.checkpoint}...")
     
     # Set up configuration
     model_config = LlamaConfig()
     trainer_config = TrainerConfig()
     
-    # Load tokenizer and model
+    # Load tokenizer first to encode the prompt
     tokenizer = load_tokenizer(args.checkpoint)
+
+    messages = [
+        {"role": "user", "content": "Hello, how are you?"}
+    ]
+    # https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct/discussions/14#679229feb7c3dc07f41e213b
+    prompt_tokens = tokenizer.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        date_string="06 Nov 2025"
+    )
+    
     vocab_size = len(tokenizer)
     
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
