@@ -1666,7 +1666,7 @@ class Attention(eqx.Module):
 
     @named_call
     @jax.profiler.annotate_function
-    def splash_decode(
+    def decode(
         self,
         x: NamedArray,
         kv_cache: "KvPageCache",
@@ -1675,11 +1675,10 @@ class Attention(eqx.Module):
         pos_ids: NamedArray,
         key=None,
     ) -> tuple[NamedArray, "KvPageCache"]:
-        """Decode-time forward pass using Splash attention with paged KV cache.
+        """Decode-time forward pass with paged KV cache.
 
-        This method uses the Splash attention kernel on TPU. It assumes page_size
-        is set to max_seq_len (i.e., each sequence uses a single page), allowing
-        dense materialization of K/V from the paged cache.
+        This method assumes page_size is set to max_seq_len (i.e., each sequence 
+        uses a single page), allowing dense materialization of K/V from the paged cache.
 
         Args:
             x: Input tokens [position, embed]
@@ -1690,9 +1689,6 @@ class Attention(eqx.Module):
 
         Returns:
             Tuple of (attention_output, updated_kv_cache)
-
-        Note:
-            Falls back to vanilla attention if Splash is unavailable or shapes are incompatible.
         """
         key_proj, key_o = maybe_rng_split(key, 2)
 
@@ -1738,11 +1734,11 @@ class Attention(eqx.Module):
             dense_k = dense_k.rename({"kv_head": "heads"})
             dense_v = dense_v.rename({"kv_head": "heads"})
 
-        # Build a causal mask for Splash
+        # Build a causal mask
         mask = AttentionMask.causal()
 
-        # Try Splash attention with fallback
-        attn_output = _try_tpu_splash_attention(
+        # Use dot product attention
+        attn_output = dot_product_attention(
             QPos="position",
             KPos="key_position",
             Key="head_size",
@@ -1750,36 +1746,13 @@ class Attention(eqx.Module):
             key=dense_k,
             value=dense_v,
             mask=mask,
-            bias=None,
-            dropout=0.0,
-            inference=True,
-            force_flash=False,
-            prng=key,
             attention_dtype=jnp.float32 if self.config.upcast_attn else x.dtype,
-            precision=None,
-            block_size=self.config.flash_attention_block_size,
+            attn_backend=AttentionBackend.VANILLA,
             scaling_factor=sm_scale,
             logits_soft_cap=self.config.logits_soft_cap,
+            inference=True,
+            prng=key,
         )
-
-        # If Splash failed, fall back to vanilla attention
-        if attn_output is None:
-            logger.warning("Splash attention unavailable, falling back to vanilla attention")
-            attn_output = dot_product_attention(
-                QPos="position",
-                KPos="key_position",
-                Key="head_size",
-                query=q_flat,
-                key=dense_k,
-                value=dense_v,
-                mask=mask,
-                attention_dtype=jnp.float32 if self.config.upcast_attn else x.dtype,
-                attn_backend=AttentionBackend.VANILLA,
-                scaling_factor=sm_scale,
-                logits_soft_cap=self.config.logits_soft_cap,
-                inference=True,
-                prng=key,
-            )
 
         # Unflatten heads back: [position, kv_head, q_heads_per_group, head_size]
         attn_output = attn_output.unflatten_axis("heads", (self.config.KVHeads, self.config.QHeadsPerGroup))

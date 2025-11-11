@@ -1,7 +1,7 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# tests/test_splash_attention.py
+# tests/test_decode.py
 import jax
 import math
 
@@ -41,16 +41,16 @@ def _rpa_tol() -> float:
 
 
 # -----------------------------------------------------------------------------
-# Tests for splash_decode
+# Tests for decode
 # -----------------------------------------------------------------------------
 
 
 @jax.jit
-def _jit_splash_decode(attn, x, pos_ids, cache: KvPageCache, binfo: PageBatchInfo) -> tuple[NamedArray, KvPageCache]:
-    return attn.splash_decode(x, cache, binfo, pos_ids=pos_ids, key=jrandom.PRNGKey(2))
+def _jit_decode(attn, x, pos_ids, cache: KvPageCache, binfo: PageBatchInfo) -> tuple[NamedArray, KvPageCache]:
+    return attn.decode(x, cache, binfo, pos_ids=pos_ids, key=jrandom.PRNGKey(2))
 
 
-def test_attention_splash_decode_matches_full_ar():
+def test_attention_decode_matches_full_ar():
     Pos = Axis("position", 4)
     Embed = Axis("embed", 8)
 
@@ -77,7 +77,7 @@ def test_attention_splash_decode_matches_full_ar():
         sequences, pt, binfo = sequences.allocate_for_seq(pt, seg_ids, pos_ids)
 
         x_tok = x[Pos, hax.dslice(i, 1)]
-        out_tok, kv_cache = _jit_splash_decode(attn, x_tok, pos_ids, kv_cache, binfo)
+        out_tok, kv_cache = _jit_decode(attn, x_tok, pos_ids, kv_cache, binfo)
         out_chunks.append(out_tok.array)
 
     decoded_arr = jnp.concatenate(out_chunks, axis=0)
@@ -85,7 +85,7 @@ def test_attention_splash_decode_matches_full_ar():
     assert_trees_all_close(full_out.array, decoded_arr, atol=tol, rtol=tol)
 
 
-def test_attention_splash_decode_matches_full_prefill():
+def test_attention_decode_matches_full_prefill():
     Pos = Axis("position", 16)
     Embed = Axis("embed", 16)
 
@@ -120,7 +120,7 @@ def test_attention_splash_decode_matches_full_prefill():
     starts = sequences.seq_lens["seq", seg_ids].array
     pos_ids = hax.named(starts + rel_pos, "position")
 
-    decode_out, _ = _jit_splash_decode(attn, x, pos_ids, kv_cache, binfo)
+    decode_out, _ = _jit_decode(attn, x, pos_ids, kv_cache, binfo)
 
     # we only care about the first 7 positions, since the rest are padding
     full_out = full_out["position", hax.dslice(0, 7)]
@@ -133,7 +133,7 @@ def test_attention_splash_decode_matches_full_prefill():
 @pytest.mark.parametrize("prefix_size", [1, 2, 3])
 @pytest.mark.parametrize("chunk_size", [1, 2, 3, 8])
 @pytest.mark.parametrize("seq_ids", [[0, 1], [1, 0], [2, 0], [0, 2], [2, 1]])
-def test_attention_splash_decode_prefill_in_chunks(prefix_size, chunk_size, seq_ids):
+def test_attention_decode_prefill_in_chunks(prefix_size, chunk_size, seq_ids):
     Pos = Axis("position", prefix_size + 4 * chunk_size)
     Embed = Axis("embed", 16)
 
@@ -176,7 +176,7 @@ def test_attention_splash_decode_prefill_in_chunks(prefix_size, chunk_size, seq_
         )
         sequences, pt, binfo = sequences.allocate_for_seq(pt, tokens, pos_ids)
 
-        out, kv_cache = _jit_splash_decode(attn, x_prefill, pos_ids, kv_cache, binfo)
+        out, kv_cache = _jit_decode(attn, x_prefill, pos_ids, kv_cache, binfo)
         outputs0.append(out["position", hax.dslice(0, prefix_size)])
         outputs1.append(out["position", hax.dslice(prefix_size, prefix_size)])
 
@@ -204,7 +204,7 @@ def test_attention_splash_decode_prefill_in_chunks(prefix_size, chunk_size, seq_
                 "position",
                 [x0[Pos, hax.dslice(i, chunk_size)], x1[Pos, hax.dslice(i, chunk_size)]],
             )
-            out_chunk, kv_cache = _jit_splash_decode(attn, x_chunk, pos_ids, kv_cache, binfo)
+            out_chunk, kv_cache = _jit_decode(attn, x_chunk, pos_ids, kv_cache, binfo)
             outputs0.append(out_chunk["position", hax.dslice(0, chunk_size)])
             outputs1.append(out_chunk["position", hax.dslice(chunk_size, chunk_size)])
 
@@ -214,7 +214,7 @@ def test_attention_splash_decode_prefill_in_chunks(prefix_size, chunk_size, seq_
         assert_trees_all_close(full_out.array, decoded_arr.array, atol=tol, rtol=tol)
 
 
-def test_attention_splash_decode_ragged_fill_in_chunks():
+def test_attention_decode_ragged_fill_in_chunks():
     B = Axis("batch", 2)
     Pos = Axis("position", 8)
     Embed = Axis("embed", 16)
@@ -261,7 +261,7 @@ def test_attention_splash_decode_ragged_fill_in_chunks():
             [x0[Pos, hax.dslice(off0, step0)], x1[Pos, hax.dslice(off1, step1)]],
         )
 
-        output, kv_cache = _jit_splash_decode(attn, x_chunk, pos_ids=pos_ids, cache=kv_cache, binfo=binfo)
+        output, kv_cache = _jit_decode(attn, x_chunk, pos_ids=pos_ids, cache=kv_cache, binfo=binfo)
         outputs0.append(output["position", hax.dslice(0, step0)])
         outputs1.append(output["position", hax.dslice(step0, step1)])
 
