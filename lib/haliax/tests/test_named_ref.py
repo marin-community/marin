@@ -6,8 +6,15 @@ import jax
 import jax.numpy as jnp
 import pytest
 from jax.experimental.pallas import dslice
+from packaging import version
 
 import haliax as hax
+
+# Skip all tests in this module if JAX < 0.7.0 (jax.new_ref doesn't exist)
+pytestmark = pytest.mark.skipif(
+    version.parse(jax.__version__) < version.parse("0.7.0"),
+    reason="jax.new_ref requires JAX >= 0.7.0"
+)
 
 
 @pytest.fixture

@@ -256,6 +256,7 @@ fork-strategy = "fewest"
 
 [manifest]
 members = [
+    "haliax",
     "levanter",
     "marin",
     "marin-root",
@@ -2379,8 +2380,7 @@ wheels = [
 
 [[package]]
 name = "haliax"
-version = "1.4.dev450"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "lib/haliax" }
 dependencies = [
     { name = "aqtp" },
     { name = "equinox" },
@@ -2389,9 +2389,51 @@ dependencies = [
     { name = "jmp" },
     { name = "safetensors" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/30/e8/5f98068edde2e7b9ca1d01efcb293ca8022e215ef67dba3abd6c4b33436f/haliax-1.4.dev450.tar.gz", hash = "sha256:f518d6e816970a0f43c669e6794bbce73be11859a7765abf4a5aabb8f62090e2", size = 827440, upload-time = "2025-10-18T07:13:09.096Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ff/ba/d974b95b0a5a005efe7f5a6f88b968348402770a6f254ab549b508c09395/haliax-1.4.dev450-py3-none-any.whl", hash = "sha256:602170959b08665755081d28bf4679e57eca5731f73e85a4a6f0f6695d66aa14", size = 144495, upload-time = "2025-10-18T07:13:07.598Z" },
+
+[package.dev-dependencies]
+dev = [
+    { name = "chex" },
+    { name = "mkdocs" },
+    { name = "mkdocs-include-markdown-plugin" },
+    { name = "mkdocs-literate-nav" },
+    { name = "mkdocs-macros-plugin" },
+    { name = "mkdocs-material" },
+    { name = "mkdocstrings" },
+    { name = "mkdocstrings-python" },
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pygments" },
+    { name = "pymdown-extensions" },
+    { name = "pytest" },
+    { name = "safetensors" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aqtp", specifier = ">=0.8.2" },
+    { name = "equinox", specifier = ">=0.10.6" },
+    { name = "jax", specifier = ">=0.6.2" },
+    { name = "jaxtyping", specifier = ">=0.2.20" },
+    { name = "jmp", specifier = ">=0.0.4" },
+    { name = "safetensors", specifier = ">=0.4.3" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "chex", specifier = ">=0.1.86" },
+    { name = "mkdocs", specifier = ">=1.4.3" },
+    { name = "mkdocs-include-markdown-plugin" },
+    { name = "mkdocs-literate-nav", specifier = ">=0.6.0" },
+    { name = "mkdocs-macros-plugin", specifier = ">=0.7.0" },
+    { name = "mkdocs-material", specifier = ">=7.3.3" },
+    { name = "mkdocstrings", specifier = ">=0.22.0" },
+    { name = "mkdocstrings-python", specifier = ">=1.1.2" },
+    { name = "mypy", specifier = ">=0.910" },
+    { name = "pre-commit" },
+    { name = "pygments" },
+    { name = "pymdown-extensions" },
+    { name = "pytest", specifier = ">=7.4.0" },
+    { name = "safetensors", specifier = ">=0.4.3" },
 ]
 
 [[package]]
@@ -3290,7 +3332,7 @@ requires-dist = [
     { name = "google-auth", marker = "extra == 'gcp'" },
     { name = "google-cloud-storage", marker = "extra == 'gcp'" },
     { name = "google-cloud-storage-transfer", marker = "extra == 'gcp'" },
-    { name = "haliax", specifier = ">=1.4.dev450" },
+    { name = "haliax", editable = "lib/haliax" },
     { name = "humanfriendly", specifier = "==10.0" },
     { name = "jax", specifier = ">=0.6.2,!=0.7.0,!=0.7.1" },
     { name = "jax", extras = ["cuda12"], marker = "extra == 'gpu'", specifier = ">=0.6.2" },
@@ -3842,8 +3884,8 @@ requires-dist = [
     { name = "google-cloud-storage-transfer", marker = "extra == 'crawl'", specifier = "~=1.0" },
     { name = "google-cloud-storage-transfer", marker = "extra == 'download-transform'", specifier = "~=1.0" },
     { name = "google-cloud-storage-transfer", marker = "extra == 'gcp'" },
-    { name = "haliax", specifier = ">=1.4.dev443" },
-    { name = "haliax", marker = "extra == 'tokenize-train'", specifier = ">=1.4.dev443" },
+    { name = "haliax", editable = "lib/haliax" },
+    { name = "haliax", marker = "extra == 'tokenize-train'", editable = "lib/haliax" },
     { name = "html2text", marker = "extra == 'download-transform'", specifier = "==2024.2.26" },
     { name = "htmlmin", marker = "extra == 'crawl'" },
     { name = "htmlmin", marker = "extra == 'download-transform'" },
@@ -4016,6 +4058,7 @@ name = "marin-root"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "haliax" },
     { name = "levanter" },
     { name = "marin" },
     { name = "zephyr" },
@@ -4023,6 +4066,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "haliax", editable = "lib/haliax" },
     { name = "levanter", editable = "lib/levanter" },
     { name = "marin", editable = "lib/marin" },
     { name = "zephyr", editable = "lib/zephyr" },
@@ -5731,11 +5775,11 @@ name = "pre-commit"
 version = "4.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cfgv", marker = "sys_platform != 'darwin' or extra == 'extra-5-marin-cuda12' or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-crawl' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-crawl' and extra == 'extra-5-marin-tpu' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
-    { name = "identify", marker = "sys_platform != 'darwin' or extra == 'extra-5-marin-cuda12' or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-crawl' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-crawl' and extra == 'extra-5-marin-tpu' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
-    { name = "nodeenv", marker = "sys_platform != 'darwin' or extra == 'extra-5-marin-cuda12' or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-crawl' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-crawl' and extra == 'extra-5-marin-tpu' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
-    { name = "pyyaml", marker = "sys_platform != 'darwin' or extra == 'extra-5-marin-cuda12' or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-crawl' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-crawl' and extra == 'extra-5-marin-tpu' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
-    { name = "virtualenv", marker = "sys_platform != 'darwin' or extra == 'extra-5-marin-cuda12' or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-crawl' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-crawl' and extra == 'extra-5-marin-tpu' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "cfgv" },
+    { name = "identify" },
+    { name = "nodeenv" },
+    { name = "pyyaml" },
+    { name = "virtualenv" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ff/29/7cf5bbc236333876e4b41f56e06857a87937ce4bf91e117a6991a2dbb02a/pre_commit-4.3.0.tar.gz", hash = "sha256:499fe450cc9d42e9d58e606262795ecb64dd05438943c62b66f6a8673da30b16", size = 193792, upload-time = "2025-08-09T18:56:14.651Z" }
 wheels = [
