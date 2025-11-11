@@ -30,11 +30,10 @@ import re
 from dataclasses import dataclass
 
 import draccus
-from zephyr import Dataset, flow_backend, load_jsonl
-
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
+from zephyr import Dataset, flow_backend, load_jsonl
 
 logger = logging.getLogger("ray")
 
@@ -299,7 +298,6 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
         files = files[: cfg.max_files]
 
     output_base = os.path.join(cfg.output_path, cfg.revision)
-    output_pattern = f"{output_base}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz"
 
     pipeline = (
         Dataset.from_list(files)
@@ -316,6 +314,6 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
             )
         )
         .filter(lambda record: record is not None)
-        .write_jsonl(output_pattern, skip_existing=True)
+        .write_jsonl(f"{output_base}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
     )
     list(backend.execute(pipeline))

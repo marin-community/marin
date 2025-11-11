@@ -93,10 +93,7 @@ def process_file(input_file: str, output_path: str) -> Iterable[str]:
         with fsspec.open(input_file) as f:
             with tarfile.open(fileobj=f, mode="r:gz") as tr:
                 for info in tr:
-                    extracted_file = tr.extractfile(info)
-                    if extracted_file is None:
-                        continue
-                    with extracted_file as file:
+                    with tr.extractfile(info) as file:
                         file_content = file.read()
                         file_path = os.path.join(output_path, info.name + ".gz")
 
@@ -125,7 +122,7 @@ def download(cfg: DownloadConfig) -> None:
         backend.execute(
             Dataset.from_list(cfg.input_urls)
             .map(lambda url: download_tar(url, output_base))
-            .write_jsonl(f"{output_base}/metrics/{{shard:05d}}-download.jsonl", skip_existing=True)
+            .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True)
         )
     )
 
@@ -136,7 +133,7 @@ def download(cfg: DownloadConfig) -> None:
         backend.execute(
             Dataset.from_list(downloads)
             .flat_map(lambda file: process_file(file, output_base))
-            .write_jsonl(f"{output_base}/metrics/{{shard:05d}}-process.jsonl", skip_existing=True)
+            .write_jsonl(f"{output_base}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True)
         )
     )
 

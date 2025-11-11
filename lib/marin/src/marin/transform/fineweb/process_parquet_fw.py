@@ -12,7 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Convert fineweb to markdown"""
+"""
+transform/fineweb/process_parquet_fw.py
+
+Process FineWeb parquet files to extract HTML/markdown content from referenced WARC files.
+
+Example Usage (production, large dataset):
+uv run zephyr --backend=ray --max-parallelism=10 --entry-point=process_fw_dump \
+    lib/marin/src/marin/transform/fineweb/process_parquet_fw.py \
+    --input_path gs://marin-us-central2/raw/fineweb-edu \
+    --md_output_path gs://marin-us-central2/documents/fineweb-edu-md \
+    --text_output_path gs://marin-us-central2/documents/fineweb-edu-text \
+    --cc_dumps '["CC-MAIN-2013-20"]' \
+    --extract_method readability \
+    --max_files 10
+
+Example Usage (local testing, small dataset):
+# Process 1 parquet file from smallest CC dump (CC-MAIN-2013-20)
+uv run zephyr --backend=threadpool --max-parallelism=2 --entry-point=process_fw_dump \
+    lib/marin/src/marin/transform/fineweb/process_parquet_fw.py \
+    --input_path gs://marin-us-central2/raw/fineweb-edu \
+    --md_output_path /tmp/fineweb_test/md \
+    --cc_dumps '["CC-MAIN-2013-20"]' \
+    --extract_method readability \
+    --max_files 1
+
+Note: Each parquet file is ~2GB and processes multiple WARC files. CC-MAIN-2013-20 is the
+      smallest dump with 14 parquet files. Use --max_files 1 for quick local testing.
+"""
 
 import json
 import logging
@@ -44,6 +71,7 @@ def extract_cc_dump(path: str) -> str:
 
 
 def process_one_warc_file(
+    df: pd.DataFrame,
     input_path: str,
     output_path: str,
     extract_method: str,
@@ -56,7 +84,8 @@ def process_one_warc_file(
     Takes in the input file and processes it to get the html and md content.
     It scans the s3 bucket in input_file and returns the content of the urls in the input_file
     Args:
-        input_path (str): The input file to process
+        df: Dataframe containing the fineweb records for a single WARC file
+        input_path (str): The original parquet file path
         output_path (str): The output file to write the processed content
         extract_method (str): The method to use for extracting the content
         config (ExtractionConfig): The config to use for the extraction
@@ -84,12 +113,6 @@ def process_one_warc_file(
     # Write the output to a file with md information.
     logger.info(f"Writing to {md_output_file = }, {text_output_file = }")
 
-    try:
-        df = pd.read_parquet(input_path)
-    except FileNotFoundError as e:
-        logger.exception(f"Error reading the parquet file: {e}")
-        raise e
-
     df["md"] = None
 
     urls = df["url"].tolist()
@@ -103,8 +126,6 @@ def process_one_warc_file(
     num_urls_processed = 0
     length_url_inp_list = len(urls)
 
-    # Logging variables
-    logger.info(f"Processing {s3_url} in {input_path}")
     length_warc = 0
 
     # Detect filesystem protocol from URL
@@ -222,10 +243,13 @@ def process_fw_parquet(
     md_output_path: str,
     text_output_path: str | None = None,
     html_output_path: str | None = None,
-):
+) -> dict:
     """
-    Converts fineweb files to html and markdown. This will essentially take in fineweb and split different groups based
-    on file_path and write all those file paths to a new folder and then run ray for each group
+    Converts fineweb files to html and markdown.
+
+    This extracts each individual WARC file from the fineweb parquet file,
+    processes it to extract html and markdown content, and writes the output
+    to the specified output paths.
 
     Parameters:
     input_path (str): Path to the fineweb parquet file
@@ -235,7 +259,6 @@ def process_fw_parquet(
     # Example of input_path = gs://marin-us-central2/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
     # Example of output_path = gs://marin-us-central2/processed/000_00000
     logger.info(f"Processing {input_path}")
-    success_file = output_path + "/_SUCCESS"
     datetime_start = datetime.utcnow()
 
     try:
@@ -251,15 +274,10 @@ def process_fw_parquet(
     was_successful = True
 
     for index, (_file_url, group_df) in enumerate(grouped):
-        filename = os.path.join(output_path, f"{index}.parquet")
-        # filename = gs://marin-us-central2/processed/000_00000/0.parquet
-
-        output_file_name = filename.replace(".parquet", "_processed.jsonl.gz")
+        output_file_name = os.path.join(output_path, f"{index}_processed.jsonl.gz")
         # output_file_name = gs://marin-us-central2/processed/000_00000/0_processed.jsonl.gz
 
-        # Save the group to a parquet file
-        group_df.to_parquet(filename)
-        logger.info(f"Processing the group: {filename}, into {output_file_name}")
+        logger.info(f"Processing the group: {index}, into {output_file_name}")
 
         # Note: custom resiliparse variant handling removed - ensure correct package is installed in environment
         if isinstance(config, ResiliparseConfig) and config.use_custom_variant:
@@ -270,7 +288,7 @@ def process_fw_parquet(
 
         try:
             process_one_warc_file(
-                filename,
+                group_df,
                 output_file_name,
                 extract_method,
                 config,
@@ -279,27 +297,18 @@ def process_fw_parquet(
                 html_output_path,
             )
         except Exception as e:
-            logger.exception(f"Error processing {filename = }, Error: {e}")
+            logger.exception(f"Error processing {input_path} - index={index}, Error: {e}")
             was_successful = False
-        finally:
-            # We should still remove the filename
-            fsspec_rm(filename)
 
     datetime_end = datetime.utcnow()
 
-    if not was_successful:
-        return False
-
-    with fsspec.open(success_file, "w") as f:
-        metadata = {
-            "input_path": input_path,
-            "output_file_path": output_path,
-            "datetime_start": str(datetime_start),
-            "datetime_end": str(datetime_end),
-        }
-        print(json.dumps(metadata), file=f)
-
-    return True
+    return {
+        "input_path": input_path,
+        "output_file_path": output_path,
+        "datetime_start": str(datetime_start),
+        "datetime_end": str(datetime_end),
+        "success": was_successful,
+    }
 
 
 @dataclass
@@ -367,7 +376,6 @@ def process_fw_dump(cfg: ParquetFWConfig):
 
     logger.info(f"Total parquet files to process: {len(all_files)}")
 
-    # Process all files with metrics tracking
     pipeline = (
         Dataset.from_list(all_files)
         .map(
@@ -381,8 +389,7 @@ def process_fw_dump(cfg: ParquetFWConfig):
                 f["html_output_path"],
             )
         )
-        .filter(lambda result: result is True)
-        .write_jsonl(f"{cfg.md_output_path}/.metrics/{{shard:05d}}-process.jsonl", skip_existing=True)
+        .write_jsonl(f"{cfg.md_output_path}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True)
     )
 
     list(backend.execute(pipeline))
