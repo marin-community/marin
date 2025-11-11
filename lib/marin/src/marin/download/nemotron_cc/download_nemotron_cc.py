@@ -100,7 +100,7 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
     with fsspec.open(paths_file_path, "r", compression="gzip") as f:
         for line in f:
             file = line.strip()
-            output_file_path = os.path.join(cfg.output_path, file)
+            output_file_path = os.path.join(cfg.output_path, file).replace("jsonl.zstd", "jsonl.gz")
             all_files.append((file, output_file_path, cfg.chunk_size))
 
     logger.info(f"Processing {len(all_files)} Nemotron CC files")

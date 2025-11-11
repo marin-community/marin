@@ -289,6 +289,7 @@ def process_fw_parquet(
         try:
             process_one_warc_file(
                 group_df,
+                input_path,
                 output_file_name,
                 extract_method,
                 config,
