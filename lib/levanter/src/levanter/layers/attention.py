@@ -1699,7 +1699,7 @@ class Attention(eqx.Module):
 
         # Materialize dense K/V from paged cache
         # Assumes page_size = max_seq_len, so each sequence has 1 page
-        dense_k, dense_v = _materialize_dense_kv_from_pages(
+        dense_k, dense_v, kv_mask = _materialize_dense_kv_from_pages(
             kv_cache.kv_pages,
             batch_info.page_indices,
             batch_info.seq_lens,
@@ -1734,8 +1734,11 @@ class Attention(eqx.Module):
             dense_k = dense_k.rename({"kv_head": "heads"})
             dense_v = dense_v.rename({"kv_head": "heads"})
 
-        # Build a causal mask
-        mask = AttentionMask.causal()
+        # Create an explicit mask for valid key positions
+        # kv_mask indicates which key positions are valid (within seq_lens)
+        # Broadcast to have both query and key position axes
+        kv_mask_broadcasted = kv_mask.broadcast_axis(q_flat.resolve_axis("position"))
+        mask = AttentionMask.explicit(kv_mask_broadcasted)
 
         # Use dot product attention
         attn_output = dot_product_attention(
@@ -1801,7 +1804,7 @@ def _materialize_dense_kv_from_pages(
     page_indices: NamedArray,  # i32[Seq, Page]
     seq_lens: NamedArray,  # i32[Seq]
     num_seqs: jnp.ndarray,  # scalar
-) -> tuple[NamedArray, NamedArray]:
+) -> tuple[NamedArray, NamedArray, NamedArray]:
     """Materialize dense K and V tensors from a paged KV cache.
 
     Assumes page_size = max_seq_len, so each sequence uses a single page (page_indices[:, 0]).
@@ -1813,8 +1816,9 @@ def _materialize_dense_kv_from_pages(
         num_seqs: Number of valid sequences (scalar)
 
     Returns:
-        Tuple of (dense_k, dense_v) where each is [KeyPosition, KVHeads, HeadSize]
-        with KeyPosition = Seq * Position (flattened)
+        Tuple of (dense_k, dense_v, validity_mask) where:
+        - dense_k, dense_v: [KeyPosition, KVHeads, HeadSize] with KeyPosition = Seq * Position (flattened)
+        - validity_mask: [KeyPosition] boolean mask indicating valid positions
     """
     page_size = kv_pages.axis_size("slot")
     num_kv_heads = kv_pages.axis_size("kv_head") // 2
@@ -1839,9 +1843,14 @@ def _materialize_dense_kv_from_pages(
     k_dense = hax.named(k_dense.array, ("seq", "position", hax.Axis("kv_head", num_kv_heads), head_size))
     v_dense = hax.named(v_dense.array, ("seq", "position", hax.Axis("kv_head", num_kv_heads), head_size))
 
-    # Mask out positions beyond seq_lens
+    # Mask out positions beyond seq_lens and inactive sequences
     position_ids = hax.arange(k_dense.resolve_axis("position"))
-    valid_mask = position_ids < seq_lens["seq", :].broadcast_axis(position_ids.axes)
+    seq_ids = hax.arange(k_dense.resolve_axis("seq"))
+    
+    # Valid if: (1) position < seq_len for that sequence, AND (2) sequence index < num_seqs
+    valid_pos_mask = position_ids < seq_lens["seq", :].broadcast_axis(position_ids.axes)
+    valid_seq_mask = seq_ids < num_seqs
+    valid_mask = valid_pos_mask & valid_seq_mask.broadcast_axis(position_ids.axes)
 
     k_dense = hax.where(valid_mask, k_dense, 0.0)
     v_dense = hax.where(valid_mask, v_dense, 0.0)
@@ -1850,8 +1859,10 @@ def _materialize_dense_kv_from_pages(
     # Splash expects a single sequence dimension containing all KV context
     k_dense = k_dense.flatten_axes(("seq", "position"), "key_position")
     v_dense = v_dense.flatten_axes(("seq", "position"), "key_position")
+    # Flatten the validity mask as well
+    valid_mask_flat = valid_mask.flatten_axes(("seq", "position"), "key_position")
 
-    return k_dense, v_dense
+    return k_dense, v_dense, valid_mask_flat
 
 
 @named_call
