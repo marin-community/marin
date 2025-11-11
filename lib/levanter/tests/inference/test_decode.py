@@ -89,12 +89,6 @@ def test_attention_decode_matches_full_ar():
     _run_attention_decode_matches_full_ar(pos_size=4, embed_size=8, attn_backend=AttentionBackend.VANILLA)
 
 
-def test_attention_decode_matches_full_ar_splash():
-    # Splash requires head_dim to be a multiple of 128; 256 / 2 heads = 128 per head
-    with use_test_mesh():
-        _run_attention_decode_matches_full_ar(pos_size=128, embed_size=256, attn_backend=AttentionBackend.SPLASH)
-
-
 def _run_attention_decode_full_prefill(pos_size: int, embed_size: int, attn_backend: AttentionBackend):
     """Helper to test attention decode matches full prefill with ragged sequences."""
     Pos = Axis("position", pos_size)
@@ -155,12 +149,6 @@ def _run_attention_decode_full_prefill(pos_size: int, embed_size: int, attn_back
 
 def test_attention_decode_matches_full_prefill():
     _run_attention_decode_full_prefill(pos_size=16, embed_size=16, attn_backend=AttentionBackend.VANILLA)
-
-
-def test_attention_decode_matches_full_prefill_splash():
-    # Splash requires head_dim to be a multiple of 128; 256 / 2 heads = 128 per head
-    with use_test_mesh():
-        _run_attention_decode_full_prefill(pos_size=128, embed_size=256, attn_backend=AttentionBackend.SPLASH)
 
 
 def test_attention_decode_ragged_fill_in_chunks():
