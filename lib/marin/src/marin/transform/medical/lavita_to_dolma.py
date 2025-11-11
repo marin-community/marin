@@ -152,7 +152,7 @@ def convert_lavita_split_to_dolma(cfg: LavitaToDolmaConfig) -> None:
 
     backend = flow_backend()
     pipeline = (
-        Dataset.from_files(input_path, f"*{cfg.split}*.parquet")
+        Dataset.from_files(f"{input_path}/*{cfg.split}*.parquet")
         .flat_map(load_parquet)
         .map(lambda row: lavita_record_to_dolma(row, subset=cfg.subset))
         .filter(lambda record: record is not None)

@@ -75,6 +75,7 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
     """Check if the fsspec path is writable by trying to create and delete a temporary file."""
     fs, _ = fsspec.core.url_to_fs(output_path)
     try:
+        fs.mkdirs(output_path, exist_ok=True)
         test_path = os.path.join(output_path, "test_write_access")
         with fs.open(test_path, "w") as f:
             f.write("test")
@@ -83,9 +84,10 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
         raise ValueError(f"No write access to fsspec path: {output_path} ({e})") from e
 
 
-def stream_file_to_fsspec(cfg: DownloadConfig, hf_fs: HfFileSystem, file_path: str, fsspec_file_path: str):
+def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path: str):
     """Ray task to stream a file from HfFileSystem to another fsspec path."""
-    target_fs, _ = fsspec.core.url_to_fs(cfg.gcs_output_path)
+    hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
+    target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
     # Use larger chunk size for large files, such as 32B models
     chunk_size = 16 * 1024 * 1024
     max_retries = 10
@@ -145,7 +147,7 @@ def download_hf(cfg: DownloadConfig) -> None:
         try:
             fsspec_file_path = os.path.join(cfg.gcs_output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
             # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
-            task_generator.append((cfg, hf_fs, file, fsspec_file_path))
+            task_generator.append((cfg.gcs_output_path, file, fsspec_file_path))
         except Exception as e:
             logging.exception(f"Error preparing task for {file}: {e}")
 

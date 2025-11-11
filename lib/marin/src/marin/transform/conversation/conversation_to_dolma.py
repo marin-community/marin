@@ -63,7 +63,7 @@ def process_dataset(config: ConversationToDolmaConfig):
     """Convert conversation format to Dolma format."""
     backend = flow_backend()
     pipeline = (
-        Dataset.from_files(config.input_path, "**/*.jsonl.gz", empty_glob_ok=False)
+        Dataset.from_files(f"{config.input_path}/**/*.jsonl.gz", empty_glob_ok=False)
         .flat_map(load_jsonl)
         .map(transform_conversation_to_dolma)
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")

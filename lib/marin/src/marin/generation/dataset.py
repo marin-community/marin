@@ -41,7 +41,7 @@ def sample_file(input_file_path: str, label_weights: dict[int, float]):
         >>> from zephyr import Dataset, create_backend
         >>> backend = create_backend("ray", max_parallelism=10)
         >>> ds = (Dataset
-        ...     .from_files("/input", "**/*.jsonl.gz")
+        ...     .from_files("/input/**/*.jsonl.gz")
         ...     .map(lambda path: sample_file(path, {0: 0.5, 1: 1.0}))
         ...     .write_jsonl("/output/sampled-{shard:05d}.jsonl.gz")
         ... )
@@ -126,7 +126,7 @@ class DatasetSampler:
         """
         backend = flow_backend()
         pipeline = (
-            Dataset.from_files(self.input_path, "**/*.jsonl.gz")
+            Dataset.from_files(f"{self.input_path}/**/*.jsonl.gz")
             .map(lambda path: sample_file(path, label_weights=self.label_weights))
             .write_jsonl(f"{self.output_path}/sampled-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
         )

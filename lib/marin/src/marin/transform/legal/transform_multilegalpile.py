@@ -67,7 +67,7 @@ def main(cfg: Config) -> None:
     """Transform multilegalpile data to Dolma format."""
     backend = flow_backend()
     pipeline = (
-        Dataset.from_files(cfg.input_path, "**/*.jsonl.xz")
+        Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.xz")
         .flat_map(load_jsonl)
         .map(convert_to_dolma)
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
