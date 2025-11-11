@@ -84,6 +84,43 @@ def test_attention_decode_matches_full_ar():
     assert_trees_all_close(full_out.array, decoded_arr, atol=tol, rtol=tol)
 
 
+def test_attention_decode_matches_full_ar_splash():
+    Pos = Axis("position", 128)
+    Embed = Axis("embed", 256)  # Splash requires head_dim to be a multiple of 128; 256 / 2 heads = 128 per head
+
+    with use_test_mesh():
+        cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, rope=None, attn_backend=AttentionBackend.SPLASH)
+        attn_key, x_key = jrandom.split(jrandom.PRNGKey(0))
+        attn = Attention.init(cfg, key=attn_key)
+
+        x = hax.random.normal(x_key, (Pos, Embed)) * 0.2
+        full_out = attn(x, AttentionMask.causal(), key=jrandom.PRNGKey(1))
+
+        # page size must be equal to max_seq_len
+        pt = PageTable.init(max_pages=4, max_seqs=2, page_size=Pos.size, max_pages_per_seq=1)
+        sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
+        sequences, seq_id_arr = sequences.reserve_slot()
+        seq_id = int(seq_id_arr)
+        kv_cache = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
+        out_chunks = []
+        for i in range(Pos.size):
+            # Compute pos_ids for this allocation using current seq_lens before allocation
+            seg_ids = hax.named([seq_id], "position")
+            # relative position inside this seg is 0 for this single token; absolute pos is current len
+            abs_pos = sequences.seq_lens["seq", seg_ids].array
+            pos_ids = hax.named(abs_pos, "position")
+
+            sequences, pt, binfo = sequences.allocate_for_seq(pt, seg_ids, pos_ids)
+
+            x_tok = x[Pos, hax.dslice(i, 1)]
+            out_tok, kv_cache = _jit_decode(attn, x_tok, pos_ids, kv_cache, binfo)
+            out_chunks.append(out_tok.array)
+
+        decoded_arr = jnp.concatenate(out_chunks, axis=0)
+        tol = _tol()
+        assert_trees_all_close(full_out.array, decoded_arr, atol=tol, rtol=tol)
+
+
 def test_attention_decode_matches_full_prefill():
     Pos = Axis("position", 16)
     Embed = Axis("embed", 16)
