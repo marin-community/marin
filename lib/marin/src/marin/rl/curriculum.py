@@ -355,6 +355,9 @@ class Curriculum:
         # Track last alert time per lesson+alert for cooldown
         self._last_alert_time: dict[tuple[str, str], int] = {}
 
+        # Track graduation performance for regression detection
+        self.graduation_performances: dict[str, float] = {}
+
     def compute_sampling_weights(self) -> dict[str, float]:
         """Compute sampling weights for all active lessons.
 
@@ -544,6 +547,11 @@ class Curriculum:
 
             if lesson_id in self.unlocked and lesson_id not in self.graduated and self.check_graduation(lesson_id):
                 logger.info("Graduating lesson '%s' with stats %s", lesson_id, self.stats[lesson_id])
+                # Capture graduation performance for regression detection
+                stats = self.stats[lesson_id]
+                graduation_perf = compute_success_ratio(stats, self.current_step)
+                self.graduation_performances[lesson_id] = graduation_perf
+                logger.info("Captured graduation performance for lesson '%s': %.3f", lesson_id, graduation_perf)
                 self.graduated.add(lesson_id)
 
     def _get_lesson_state(self, lesson_id: str) -> str:
@@ -582,13 +590,15 @@ class Curriculum:
                         continue
 
                 # Evaluate alert
+                # Pass stored graduation performance if available (for graduated lessons)
+                graduation_perf = self.graduation_performances.get(lesson_id, None)
                 result = alert.evaluate(
                     lesson_id=lesson_id,
                     stats=stats,
                     lesson_config=lesson_config,
                     current_step=self.current_step,
                     lesson_state=lesson_state,
-                    graduation_performance=None,  # Alerts compute this from stats if needed
+                    graduation_performance=graduation_perf,  # Use stored value if available
                 )
 
                 if result and result.triggered:
@@ -706,6 +716,7 @@ class Curriculum:
             "last_alert_time": {
                 f"{lesson_id}:{alert_name}": step for (lesson_id, alert_name), step in self._last_alert_time.items()
             },
+            "graduation_performances": self.graduation_performances,
         }
 
         with fs.open(checkpoint_path, "w") as f:
@@ -754,6 +765,13 @@ class Curriculum:
         else:
             # Backward compatibility: initialize empty if not in checkpoint
             self._last_alert_time = {}
+
+        # Restore graduation performances
+        if "graduation_performances" in checkpoint_data:
+            self.graduation_performances = checkpoint_data["graduation_performances"]
+        else:
+            # Backward compatibility: initialize empty if not in checkpoint
+            self.graduation_performances = {}
 
         logger.info("Restored curriculum checkpoint from %s at step %d", checkpoint_path, self.current_step)
 

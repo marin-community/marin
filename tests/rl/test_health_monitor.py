@@ -94,6 +94,32 @@ class TestGraduationRegressionAlert:
             warning_calls = [call for call in mock_logger.warning.call_args_list if "performance dropped" in str(call)]
             assert len(warning_calls) > 0
 
+    def test_graduation_performance_stored(self):
+        """Test that graduation performance is stored when lesson graduates."""
+        curriculum = create_test_curriculum_with_alerts([GraduationRegressionAlert(regression_threshold=0.85)])
+
+        # Train lesson to graduation
+        for step in range(100):
+            rewards = [0.9] * 10
+            rollout_stats = [create_test_rollout_stats(r, "lesson1") for r in rewards]
+            curriculum.update_lesson_stats(rollout_stats, "training", step)
+
+        # Graduate the lesson
+        for step in range(100, 120):
+            rewards = [0.95] * 10
+            rollout_stats = [create_test_rollout_stats(r, "lesson1") for r in rewards]
+            curriculum.update_lesson_stats(rollout_stats, "eval", step)
+
+        assert "lesson1" in curriculum.graduated
+        # Verify graduation performance was stored
+        assert "lesson1" in curriculum.graduation_performances
+        assert curriculum.graduation_performances["lesson1"] > 0.0
+        # Should be close to the success ratio at graduation time
+        from marin.rl.curriculum import compute_success_ratio
+
+        expected_perf = compute_success_ratio(curriculum.stats["lesson1"], curriculum.current_step)
+        assert abs(curriculum.graduation_performances["lesson1"] - expected_perf) < 0.1
+
 
 class TestTrainingStalledAlert:
     """Test training stagnation detection behavior."""
@@ -264,6 +290,7 @@ class TestAlertIntegration:
         with (
             patch("wandb.run", new_callable=MagicMock) as mock_wandb_run,
             patch("wandb.alert") as mock_wandb_alert,
+            patch("wandb.log") as mock_wandb_log,
         ):
             # Make wandb.run truthy - need to set it on the module
             import wandb
@@ -282,6 +309,19 @@ class TestAlertIntegration:
             call_args = mock_wandb_alert.call_args
             assert "Curriculum Alert" in call_args[1]["title"]
             assert "lesson1" in call_args[1]["text"]
+            assert call_args[1]["level"] == "WARN"  # Should be WARNING level
+            assert call_args[1]["wait_duration"] == curriculum.config.wandb_alert_rate_limit
+
+            # Should also log metrics
+            assert mock_wandb_log.called
+            log_call_args = mock_wandb_log.call_args
+            logged_metrics = log_call_args[0][0]  # First positional arg is the metrics dict
+            assert "alerts/lesson1/graduation_regression" in logged_metrics
+            assert logged_metrics["alerts/lesson1/graduation_regression"] == 1
+            assert "alerts/lesson1/health_status" in logged_metrics
+            assert logged_metrics["alerts/lesson1/health_status"] == 1  # WARNING = 1
+            # Check that metrics from alert result are logged
+            assert any(k.startswith("alerts/lesson1/metrics/") for k in logged_metrics.keys())
 
     def test_alert_evaluation_uses_existing_stats(self):
         """Test that alerts use curriculum's existing statistics, not duplicated logic."""
