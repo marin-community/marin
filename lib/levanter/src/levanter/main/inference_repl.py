@@ -16,6 +16,7 @@ CLI Usage:
 
 import asyncio
 import json
+import numpy as np
 import logging
 import os
 import shlex
@@ -28,7 +29,9 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.random as jrandom
+import jax.numpy as jnp
 import jmp
+import optax
 from haliax import Axis
 from haliax.partitioning import round_axis_for_partitioning
 from prompt_toolkit import prompt
@@ -53,6 +56,8 @@ from levanter.inference.openai import (
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
+from levanter.layers.attention import AttentionMask
+from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -127,7 +132,7 @@ def _load_model(
                 dtype=trainer_config.mp.compute_dtype,
                 axis_mapping=trainer_config.parameter_axis_mapping,
             )
-            return model, tokenizer  # type: ignore[return-value]
+            return model, tokenizer
 
 
 @dataclass
@@ -436,6 +441,7 @@ class ReplContext:
             stop=[self.server.inference_context.tokenizer.eos_token],
             max_tokens=self.config.max_tokens,
             temperature=self.config.server.temperature,
+            logprobs=True,
         )
 
         loop = asyncio.new_event_loop()
@@ -449,15 +455,76 @@ class ReplContext:
         finally:
             loop.close()
 
+    def _response_tokens_from_choice(self, choice) -> np.ndarray:
+        """Extract token IDs with BPE round-trip."""
+        if not choice.logprobs or not choice.logprobs.content:
+            raise ValueError("Choice missing logprobs. Use logprobs=True in API call.")
+
+        tokens = []
+        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
+        for t in choice.logprobs.content:
+            token_id = tokenizer.convert_tokens_to_ids(t.token)
+            tokens.append(token_id)
+
+        if not tokens:
+            raise ValueError("Choice has zero tokens")
+
+        return np.array(tokens, dtype=np.int32)
+
+    def _logprobs_from_choice(self, choice) -> np.ndarray:
+        """Extract logprobs array."""
+        if not choice.logprobs or not choice.logprobs.content:
+            raise ValueError("Choice missing logprobs. Use logprobs=True in API call.")
+
+        logprobs = np.array([t.logprob for t in choice.logprobs.content], dtype=np.float32)
+
+        if np.all(logprobs == 0):
+            logger.warning("All logprobs are zero - may cause NaN loss")
+
+        return logprobs
+
     def _print_completion_response(self, response):
         """Pretty print completion response."""
+        response_token_ids = None
+        response_logprobs = None
         for i, choice in enumerate(response.choices):
             if hasattr(choice, "message"):  # Chat completion
                 content = choice.message.content
             else:  # Text completion
                 content = choice.text
 
-            console.print(f"Response {i + 1}/{len(response.choices)}: {content}")
+            console.print(f"Response {i + 1}/{len(response.choices)}: {content}, {choice}")
+            response_token_ids = self._response_tokens_from_choice(choice)
+            response_logprobs = self._logprobs_from_choice(choice)
+
+        prompt_tokens = [128000, 128006, 9125, 128007, 271, 38766, 1303, 33025, 2696, 25, 6790, 220, 2366, 18, 198, 15724, 2696, 25, 220, 2705, 4723, 220, 2366, 20, 271, 128009, 128006, 882, 128007, 271, 9906, 11, 1268, 527, 499, 30, 128009, 128006, 78191, 128007, 271]
+
+        tokens_list = prompt_tokens + response_token_ids.tolist()
+        tokens = np.array([tokens_list] * 4, dtype=np.int32).reshape(4, -1)
+        tokens = hax.named(tokens, ["batch", "position"])
+
+        with (
+                hax.partitioning.set_mesh(self.config.trainer.device_mesh),
+                hax.axis_mapping(self.config.trainer.compute_axis_mapping),
+            ):
+
+            model = self.server.inference_context.model
+            logits = model(input_ids=tokens, attn_mask=AttentionMask.causal(), key=jax.random.PRNGKey(0))
+
+            # [bsz, seq_len, vocab_size]
+            logits = logits.array.astype(jnp.float32)[:, :-1, :].reshape(4, -1, logits.array.shape[-1])
+            labels = tokens.array[:, 1:].reshape(4, -1)
+            logprobs = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
+            logprobs = -1 * logprobs
+            response_logprobs_levanter = logprobs[0, len(prompt_tokens)-1:]
+            # print("Response logprobs levanter: ", logprobs[0, len(prompt_tokens)-1:])
+
+        print("Response token ids: ", response_token_ids)
+        print("Response logprobs: ", response_logprobs)
+        print("Response logprobs levanter: ", response_logprobs_levanter)
+        print("Response logprobs mean difference: ", np.mean(np.abs(response_logprobs - response_logprobs_levanter)))
+        print("Response logprobs max difference: ", np.max(np.abs(response_logprobs - response_logprobs_levanter)))
+        # print("Prompt and response tokens: ", prompt_tokens + response_token_ids)
 
         # Show usage stats
         if response.usage:
