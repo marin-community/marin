@@ -95,11 +95,12 @@ def test_attention_decode_matches_full_ar_splash():
         _run_attention_decode_matches_full_ar(pos_size=128, embed_size=256, attn_backend=AttentionBackend.SPLASH)
 
 
-def test_attention_decode_matches_full_prefill():
-    Pos = Axis("position", 16)
-    Embed = Axis("embed", 16)
+def _run_attention_decode_full_prefill(pos_size: int, embed_size: int, attn_backend: AttentionBackend):
+    """Helper to test attention decode matches full prefill with ragged sequences."""
+    Pos = Axis("position", pos_size)
+    Embed = Axis("embed", embed_size)
 
-    cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, rope=None, attn_backend=AttentionBackend.VANILLA)
+    cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, rope=None, attn_backend=attn_backend)
     attn_key, x_key = jrandom.split(jrandom.PRNGKey(0))
     attn = Attention.init(cfg, key=attn_key)
 
@@ -110,8 +111,18 @@ def test_attention_decode_matches_full_prefill():
     sequences, seq2_arr = sequences.reserve_slot(1)
 
     x = hax.random.normal(x_key, (Pos, Embed)) * 0.2
-    seg_ids = hax.named([0] * 4 + [1] * 3 + [INVALID] * 9, "position")
-    pos_ids = hax.named(jnp.array([0, 1, 2, 3, 0, 1, 2] + [INVALID] * 9, dtype=jnp.int32), "position")
+    
+    # Create segment_ids with two sequences and padding, scaled to pos_size
+    # Keep the same proportions: seq0=4, seq1=3, padding=9 (out of 16) -> scale proportionally
+    seq0_len = max(1, pos_size // 4)
+    seq1_len = max(1, (pos_size * 3) // 16)
+    padding_len = pos_size - seq0_len - seq1_len
+    
+    seg_ids = hax.named([0] * seq0_len + [1] * seq1_len + [INVALID] * padding_len, Pos)
+    pos_ids = hax.named(
+        jnp.array(list(range(seq0_len)) + list(range(seq1_len)) + [INVALID] * padding_len, dtype=jnp.int32),
+        Pos
+    )
     sequences, pt, binfo = sequences.allocate_for_seq(pt, seg_ids, pos_ids)
 
     causal = AttentionMask.causal().with_segment_ids(seg_ids)
@@ -133,12 +144,23 @@ def test_attention_decode_matches_full_prefill():
 
     decode_out, _ = _jit_decode(attn, x, pos_ids, kv_cache, binfo)
 
-    # we only care about the first 7 positions, since the rest are padding
-    full_out = full_out["position", hax.dslice(0, 7)]
-    decode_out = decode_out["position", hax.dslice(0, 7)]
+    # we only care about the non-padding positions
+    valid_len = seq0_len + seq1_len
+    full_out = full_out["position", hax.dslice(0, valid_len)]
+    decode_out = decode_out["position", hax.dslice(0, valid_len)]
 
     tol = _tol()
     assert_trees_all_close(full_out.array, decode_out.array, atol=tol, rtol=tol)
+
+
+def test_attention_decode_matches_full_prefill():
+    _run_attention_decode_full_prefill(pos_size=16, embed_size=16, attn_backend=AttentionBackend.VANILLA)
+
+
+def test_attention_decode_matches_full_prefill_splash():
+    # Splash requires head_dim to be a multiple of 128; 256 / 2 heads = 128 per head
+    with use_test_mesh():
+        _run_attention_decode_full_prefill(pos_size=128, embed_size=256, attn_backend=AttentionBackend.SPLASH)
 
 
 def test_attention_decode_ragged_fill_in_chunks():
