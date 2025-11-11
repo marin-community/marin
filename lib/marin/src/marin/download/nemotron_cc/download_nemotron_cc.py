@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Download and process Nemotron-CC dataset from Common Crawl.
+
+Example Usage:
+uv run zephyr --backend=ray --max-parallelism=100 --memory=4GB \
+    lib/marin/src/marin/download/nemotron_cc/download_nemotron_cc.py \
+    --output_path gs://bucket/nemotron-output
+"""
+
 import json
 import logging
 import os
@@ -19,12 +28,11 @@ from dataclasses import dataclass
 
 import draccus
 import fsspec
-import ray
 import requests
-
 from marin.core.runtime import cached_or_construct_output
 from marin.download.nemotron_cc.utils import decompress_zstd_stream
 from marin.utils import fsspec_exists
+from zephyr import Dataset, flow_backend
 
 logger = logging.getLogger("ray")
 
@@ -33,13 +41,13 @@ NCC_PATH_FILE_URL = "https://data.commoncrawl.org/contrib/Nemotron/Nemotron-CC/d
 
 
 @cached_or_construct_output(success_suffix="SUCCESS")
-@ray.remote(memory=10 * 1024 * 1024 * 1024, max_retries=5)  # 10 GB
 def download_single_nemotron_path(input_file_path: str, output_file_path: str, chunk_size: int):
     """
     Fetches content from a Common Crawl path.
     Args:
         input_file_path (str): Path to the Common Crawl file
         output_file_path (str): Path to the output file
+        chunk_size (int): Size of chunks to read
     Returns:
         list: List of content from the JSONL records
     """
@@ -101,31 +109,20 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
     logger.info(f"Reading paths from {paths_file_path}")
     with fsspec.open(paths_file_path, "r", compression="gzip") as f:
         for line in f:
-            files.append(line.strip())
+            file = line.strip()
+            output_file_path = os.path.join(cfg.output_path, file).replace("jsonl.zstd", "jsonl.gz")
+            if not fsspec_exists(output_file_path):
+                files.append((file, output_file_path))
+            else:
+                logger.warning(f"Output file {output_file_path} already exists. Skipping download.")
 
-    MAX_NUM_PENDING_TASKS = 5000
+    logger.info(f"Processing {len(files)} Nemotron CC files")
 
-    result_refs = []
-    for file in files:
-        if len(result_refs) > MAX_NUM_PENDING_TASKS:
-            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            try:
-                ray.get(ready_refs)
-            except Exception as e:
-                logger.exception(f"Error processing the group: {e}")
-                continue
+    backend = flow_backend()
+    pipeline = Dataset.from_list(files).map(
+        lambda file_info: download_single_nemotron_path(file_info[0], file_info[1], cfg.chunk_size)
+    )
 
-        output_file_path = os.path.join(cfg.output_path, file).replace("jsonl.zstd", "jsonl.gz")
-        if fsspec_exists(output_file_path):
-            logger.warning(f"Output file {output_file_path} already exists. Skipping download.")
-            continue
-        logger.info(f"Starting Processing for the Nemotron CC file: {file} in output_path: {cfg.output_path}")
-
-        result_refs.append(download_single_nemotron_path.remote(file, output_file_path, cfg.chunk_size))
-
-    try:
-        ray.get(result_refs)
-    except Exception as e:
-        raise Exception(f"Error processing the group: {e}")  # noqa
+    list(backend.execute(pipeline))
 
     logger.info(f"Downloaded Nemotron CC files to {cfg.output_path}")

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import unittest
-from datetime import datetime, timedelta
 
 from scripts.training.time_to_train.parse_wandb_runs import check_create_time
 

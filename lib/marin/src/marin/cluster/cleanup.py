@@ -339,7 +339,7 @@ def terminate_workers_by_ip(worker_ips: list[str], project: str, zone: str) -> l
                 logger.warning(f"Could not find TPU node for IP {worker_ip}")
                 continue
 
-            tpu_name, tpu_zone, worker_index = tpu_info
+            tpu_name, _tpu_zone, _worker_index = tpu_info
             if tpu_name not in tpu_to_ips:
                 tpu_to_ips[tpu_name] = []
             tpu_to_ips[tpu_name].append(worker_ip)
@@ -494,12 +494,13 @@ def submit_cleanup_cron_job(
 
     entrypoint = " ".join(
         [
-            "PYTHONPATH=src/",
+            "PYTHONPATH=lib/marin/src/",
             "python",
             "./scripts/ray/cleanup_tpus.py",
-            f"--project {project}" f"--zone {zone}",
+            f"--project {project}",
+            f"--zone {zone}",
             f"--interval {interval}",
-            f"--disk-threshold {disk_threshold_pct}",
+            f"--disk_threshold_pct {disk_threshold_pct}",
         ]
     )
 
@@ -513,7 +514,7 @@ def submit_cleanup_cron_job(
         [
             "uv",
             "run",
-            "src/marin/run/ray_run.py",
+            "lib/marin/src/marin/run/ray_run.py",
             f"--submission-id={submission_id}",
             f"--cluster={cluster}",
             "--no_wait",

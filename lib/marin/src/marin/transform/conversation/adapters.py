@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import dataclasses
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -67,7 +68,6 @@ class InputDatasetFormat(str, Enum):
 
 @dataclass
 class TransformAdapter:
-    source: str
     dataset_format: InputDatasetFormat = InputDatasetFormat.INSTRUCTION_RESPONSE
 
     # Instruction Response
@@ -94,6 +94,9 @@ class TransformAdapter:
     # If specified, the key will be used to select the message with
     # best metric in multiple turn conversations
     filter_on_key: str = ""
+    metadata_remap: dict[str, str] = field(default_factory=dict)
+    replacements: dict[str, str] | None = None
+    extra_metadata_fn: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 
     def transform_conversation_to_openai_format(
         self,
@@ -152,7 +155,7 @@ class TransformAdapter:
                 # This occurs in Dolphin-R1 reasoning, where instructions are
                 # sometimes part of the 'system' prompt instead of 'user' prompt.
                 # We handle misaligned data gracefully rather than crash.
-                return None
+                return []
             else:
                 instruction_content = instruction[0][self.content_key]
                 messages.append(OpenAIChatMessage(role="user", content=instruction_content))
@@ -163,217 +166,3 @@ class TransformAdapter:
 
     def copy(self) -> "TransformAdapter":
         return dataclasses.replace(self)
-
-
-transform_templates: dict[str, TransformAdapter] = {}
-
-
-def register_adapter(adapter: TransformAdapter):
-    transform_templates[adapter.source] = adapter
-
-
-def get_adapter(source: str) -> TransformAdapter:
-    if source not in transform_templates:
-        raise ValueError(f"No adapter found for source: {source}")
-    return transform_templates[source].copy()
-
-
-register_adapter(
-    TransformAdapter(
-        source="teknium/OpenHermes-2.5",
-        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
-        conversation_column="conversations",
-        role_key="from",
-        user_value="human",
-        assistant_value="gpt",
-        system_value="system",
-        content_key="value",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="meta-math/MetaMathQA",
-        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
-        instruction_column="query",
-        response_column="response",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="allenai/tulu-v2-sft-mixture",
-        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
-        conversation_column="messages",
-        role_key="role",
-        user_value="user",
-        assistant_value="assistant",
-        system_value="system",
-        content_key="content",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="allenai/tulu-v2-sft-mixture-olmo-4096",
-        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
-        conversation_column="messages",
-        role_key="role",
-        user_value="user",
-        assistant_value="assistant",
-        system_value="system",
-        content_key="content",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="allenai/tulu-3-sft-mixture",
-        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
-        conversation_column="messages",
-        role_key="role",
-        user_value="user",
-        assistant_value="assistant",
-        system_value="system",
-        content_key="content",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="open-r1/OpenThoughts-114k-math",
-        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
-        conversation_column="messages",
-        role_key="role",
-        user_value="user",
-        assistant_value="assistant",
-        system_value="system",
-        content_key="content",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="sherryy/tulu-3-sft-personas-instruction-following-expanded",
-        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
-        conversation_column="messages",
-        role_key="role",
-        user_value="user",
-        assistant_value="assistant",
-        system_value="system",
-        content_key="content",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="openbmb/UltraInteract_sft",
-        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
-        instruction_column="instruction",
-        response_column="response",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="TIGER-Lab/AceCode-89K",
-        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
-        instruction_column="question",
-        response_column="inferences",
-        filter_on_key="pass_rate",
-        content_key="completion",
-    )
-)
-
-# Define adapter (parser) for dataset
-register_adapter(
-    TransformAdapter(
-        source="cognitivecomputations/dolphin-r1-nonreasoning",
-        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
-        conversation_column="messages",
-        role_key="role",
-        user_value="user",
-        assistant_value="assistant",
-        system_value="system",
-        content_key="content",
-    )
-)
-
-# Define adapter (parser) for dataset
-register_adapter(
-    TransformAdapter(
-        source="cognitivecomputations/dolphin-r1-reasoning",
-        dataset_format=InputDatasetFormat.INSTRUCT_MSG_RESPONSE,
-        instruction_column="messages",
-        response_column="answer",
-        role_key="role",
-        user_value="user",
-        assistant_value="assistant",
-        system_value="system",
-        content_key="content",
-    )
-)
-
-# Define adapter (parser) for dataset
-register_adapter(
-    TransformAdapter(
-        source="bespokelabs/Bespoke-Stratos-17k",
-        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
-        instruction_column="system",
-        conversation_column="conversations",
-        role_key="from",
-        user_value="user",
-        assistant_value="assistant",
-        content_key="value",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="HuggingFaceTB/smoltalk",
-        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
-        conversation_column="messages",
-        role_key="role",
-        user_value="user",
-        assistant_value="assistant",
-        system_value="system",
-        content_key="content",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="PrimeIntellect/verifiable-math-problems",
-        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
-        instruction_column="prompt",
-        response_column="gold_standard_solution",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="facebook/natural_reasoning",
-        dataset_format=InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE,
-        instruction_column="question",
-        response_column="responses",
-        content_key="response",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="GeneralReasoning/GeneralThought-195K-modelanswer",
-        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
-        instruction_column="question",
-        response_column="model_answer",
-    )
-)
-
-register_adapter(
-    TransformAdapter(
-        source="GeneralReasoning/GeneralThought-195K-modelreasoning",
-        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
-        instruction_column="question",
-        response_column="model_reasoning",
-    )
-)
