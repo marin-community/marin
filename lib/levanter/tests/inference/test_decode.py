@@ -48,11 +48,12 @@ def _jit_decode(attn, x, pos_ids, cache: KvPageCache, binfo: PageBatchInfo) -> t
     return attn.decode(x, cache, binfo, pos_ids=pos_ids, key=jrandom.PRNGKey(2))
 
 
-def test_attention_decode_matches_full_ar():
-    Pos = Axis("position", 4)
-    Embed = Axis("embed", 8)
+def _run_attention_decode_test(pos_size: int, embed_size: int, attn_backend: AttentionBackend):
+    """Helper to test attention decode matches full autoregressive attention."""
+    Pos = Axis("position", pos_size)
+    Embed = Axis("embed", embed_size)
 
-    cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, rope=None, attn_backend=AttentionBackend.VANILLA)
+    cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, rope=None, attn_backend=attn_backend)
     attn_key, x_key = jrandom.split(jrandom.PRNGKey(0))
     attn = Attention.init(cfg, key=attn_key)
 
@@ -84,41 +85,14 @@ def test_attention_decode_matches_full_ar():
     assert_trees_all_close(full_out.array, decoded_arr, atol=tol, rtol=tol)
 
 
+def test_attention_decode_matches_full_ar():
+    _run_attention_decode_test(pos_size=4, embed_size=8, attn_backend=AttentionBackend.VANILLA)
+
+
 def test_attention_decode_matches_full_ar_splash():
-    Pos = Axis("position", 128)
-    Embed = Axis("embed", 256)  # Splash requires head_dim to be a multiple of 128; 256 / 2 heads = 128 per head
-
+    # Splash requires head_dim to be a multiple of 128; 256 / 2 heads = 128 per head
     with use_test_mesh():
-        cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, rope=None, attn_backend=AttentionBackend.SPLASH)
-        attn_key, x_key = jrandom.split(jrandom.PRNGKey(0))
-        attn = Attention.init(cfg, key=attn_key)
-
-        x = hax.random.normal(x_key, (Pos, Embed)) * 0.2
-        full_out = attn(x, AttentionMask.causal(), key=jrandom.PRNGKey(1))
-
-        # page size must be equal to max_seq_len
-        pt = PageTable.init(max_pages=4, max_seqs=2, page_size=Pos.size, max_pages_per_seq=1)
-        sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
-        sequences, seq_id_arr = sequences.reserve_slot()
-        seq_id = int(seq_id_arr)
-        kv_cache = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
-        out_chunks = []
-        for i in range(Pos.size):
-            # Compute pos_ids for this allocation using current seq_lens before allocation
-            seg_ids = hax.named([seq_id], "position")
-            # relative position inside this seg is 0 for this single token; absolute pos is current len
-            abs_pos = sequences.seq_lens["seq", seg_ids].array
-            pos_ids = hax.named(abs_pos, "position")
-
-            sequences, pt, binfo = sequences.allocate_for_seq(pt, seg_ids, pos_ids)
-
-            x_tok = x[Pos, hax.dslice(i, 1)]
-            out_tok, kv_cache = _jit_decode(attn, x_tok, pos_ids, kv_cache, binfo)
-            out_chunks.append(out_tok.array)
-
-        decoded_arr = jnp.concatenate(out_chunks, axis=0)
-        tol = _tol()
-        assert_trees_all_close(full_out.array, decoded_arr, atol=tol, rtol=tol)
+        _run_attention_decode_test(pos_size=128, embed_size=256, attn_backend=AttentionBackend.SPLASH)
 
 
 def test_attention_decode_matches_full_prefill():
