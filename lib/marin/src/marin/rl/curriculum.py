@@ -26,11 +26,15 @@ import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 
+from typing import TYPE_CHECKING
+
 import fsspec
 import numpy as np
 
+if TYPE_CHECKING:
+    from marin.rl.alerts import Alert, AlertResult, HealthStatus
+
 from marin.rl.environments.base import EnvConfig
-from marin.rl.health_monitor import CurriculumHealthMonitor, HealthMonitorConfig, HealthWarning
 from marin.rl.robust_actor import RobustActor
 from marin.rl.types import RolloutStats
 
@@ -115,6 +119,9 @@ class LessonConfig:
     sampling_params: SamplingParams = field(default_factory=SamplingParams)
     """Per-lesson sampling configuration (overrides global defaults)."""
 
+    alerts: list["Alert"] = field(default_factory=list)
+    """Alerts to monitor for this lesson. Evaluated using existing curriculum statistics."""
+
 
 @dataclass
 class CurriculumConfig:
@@ -147,8 +154,11 @@ class CurriculumConfig:
     checkpoint_steps: int = 10
     """How often to checkpoint curriculum state (in training steps)."""
 
-    health_monitor_config: HealthMonitorConfig = field(default_factory=HealthMonitorConfig)
-    """Configuration for health monitoring system."""
+    enable_wandb_alerts: bool = True
+    """Whether to send alerts to wandb."""
+
+    wandb_alert_rate_limit: int = 300
+    """Minimum seconds between wandb alerts of the same type."""
 
     @property
     def max_tokens(self) -> int:
@@ -342,8 +352,8 @@ class Curriculum:
         # Step counter for internal tracking
         self.current_step = 0
 
-        # Initialize health monitor
-        self.health_monitor = CurriculumHealthMonitor(self.config.health_monitor_config)
+        # Track last alert time per lesson+alert for cooldown
+        self._last_alert_time: dict[tuple[str, str], int] = {}
 
     def compute_sampling_weights(self) -> dict[str, float]:
         """Compute sampling weights for all active lessons.
@@ -431,24 +441,11 @@ class Curriculum:
                     self.stats[lesson_id].eval_stats, stats, self.current_step
                 )
 
-            # Update health monitor with performance data
-            lesson_state = self._get_lesson_state(lesson_id)
-            success_rate = compute_success_ratio(self.stats[lesson_id], self.current_step)
-            self.health_monitor.update(
-                env_id=lesson_id,
-                performance=success_rate,
-                mode=mode,
-                state=lesson_state,
-                current_step=self.current_step,
-            )
-
         # Automatically update lesson states (unlocking/graduation) after updating stats
         self._unlock_and_graduate_lessons()
 
-        # Check for health warnings
-        warnings = self.health_monitor.check_warnings()
-        if warnings:
-            self._handle_warnings(warnings)
+        # Evaluate alerts for all lessons
+        self._evaluate_alerts()
 
     def get_metrics(self) -> dict:
         """Get curriculum metrics for monitoring.
@@ -478,23 +475,6 @@ class Curriculum:
             ),
             "sampling_weights": weights,
         }
-
-        # Add health monitoring metrics
-        if self.config.health_monitor_config.enabled:
-            health_summary = self.health_monitor.get_health_summary()
-            metrics["health"] = health_summary
-
-            # Add per-environment health status
-            env_health = {}
-            for lesson_id in self.config.lessons:
-                report = self.health_monitor.get_environment_report(lesson_id)
-                if report:
-                    env_health[lesson_id] = {
-                        "status": report["health_status"],
-                        "performance": report["performance"]["current_eval"],
-                        "trend": report["performance"]["trend"],
-                    }
-            metrics["environment_health"] = env_health
 
         return metrics
 
@@ -579,63 +559,103 @@ class Curriculum:
         else:
             return "locked"
 
-    def _handle_warnings(self, warnings: list[HealthWarning]) -> None:
-        """Handle health warnings by logging and optionally sending alerts.
+    def _evaluate_alerts(self) -> None:
+        """Evaluate all alerts for all lessons and handle triggered alerts."""
+        from marin.rl.alerts import Alert, AlertResult, HealthStatus  # Import here to avoid circular import
+
+        for lesson_id, lesson_config in self.config.lessons.items():
+            if not lesson_config.alerts:
+                continue
+
+            lesson_state = self._get_lesson_state(lesson_id)
+            stats = self.stats[lesson_id]
+
+            for alert in lesson_config.alerts:
+                alert_name = alert.name
+
+                # Check cooldown before evaluating alert
+                alert_key = (lesson_id, alert_name)
+                if alert_key in self._last_alert_time:
+                    steps_since_last = self.current_step - self._last_alert_time[alert_key]
+                    cooldown_steps = getattr(alert, 'cooldown_steps', None)
+                    if cooldown_steps is not None and steps_since_last < cooldown_steps:
+                        # Still in cooldown, skip this alert
+                        continue
+
+                # Evaluate alert
+                result = alert.evaluate(
+                    lesson_id=lesson_id,
+                    stats=stats,
+                    lesson_config=lesson_config,
+                    current_step=self.current_step,
+                    lesson_state=lesson_state,
+                    graduation_performance=None,  # Alerts compute this from stats if needed
+                )
+
+                if result and result.triggered:
+                    self._handle_alert(lesson_id, alert_name, result)
+
+    def _handle_alert(self, lesson_id: str, alert_name: str, result) -> None:
+        """Handle a triggered alert by logging and optionally sending to wandb.
 
         Args:
-            warnings: List of warnings to handle.
+            lesson_id: ID of the lesson that triggered the alert.
+            alert_name: Name of the alert type.
+            result: Alert result with details.
         """
-        for warning in warnings:
-            # Log warning
-            log_msg = f"[HEALTH WARNING] {warning.message}"
-            if warning.severity == "critical":
-                logger.critical(log_msg)
-            elif warning.severity == "high":
-                logger.error(log_msg)
-            elif warning.severity == "medium":
-                logger.warning(log_msg)
-            else:
-                logger.info(log_msg)
+        from marin.rl.alerts import HealthStatus  # Import here to avoid circular import
 
-            # Send wandb alert if enabled
-            if self.config.health_monitor_config.enable_wandb_alerts:
-                if self.health_monitor.should_send_wandb_alert(warning.type):
-                    self._send_wandb_alert(warning)
+        # Update last alert time (cooldown check already done before evaluation)
+        alert_key = (lesson_id, alert_name)
+        self._last_alert_time[alert_key] = self.current_step
 
-    def _send_wandb_alert(self, warning: HealthWarning) -> None:
+        # Log alert
+        log_msg = f"[ALERT] {lesson_id}: {result.message}"
+        if result.health_status == HealthStatus.CRITICAL:
+            logger.critical(log_msg)
+        elif result.health_status == HealthStatus.WARNING:
+            logger.warning(log_msg)
+
+        # Send wandb alert if enabled
+        if self.config.enable_wandb_alerts:
+            self._send_wandb_alert(lesson_id, alert_name, result)
+
+    def _send_wandb_alert(self, lesson_id: str, alert_name: str, result) -> None:
         """Send alert to wandb.
 
         Args:
-            warning: HealthWarning to send as alert.
+            lesson_id: ID of the lesson.
+            alert_name: Name of the alert type.
+            result: Alert result with details.
         """
+        from marin.rl.alerts import HealthStatus  # Import here to avoid circular import
+
         try:
             import wandb
 
             if wandb.run is not None:
-                # Map severity to wandb alert level strings
-                # wandb.alert accepts strings: "INFO", "WARN", "ERROR"
+                # Map health status to wandb alert level strings
                 alert_level = {
-                    "critical": "ERROR",
-                    "high": "WARN",
-                    "medium": "WARN",
-                    "low": "INFO",
-                }.get(warning.severity, "INFO")
+                    HealthStatus.CRITICAL: "ERROR",
+                    HealthStatus.WARNING: "WARN",
+                    HealthStatus.HEALTHY: "INFO",
+                }.get(result.health_status, "INFO")
 
                 wandb.alert(
-                    title=f"Curriculum Health: {warning.type.value}",
-                    text=warning.message,
+                    title=f"Curriculum Alert: {alert_name}",
+                    text=f"[{lesson_id}] {result.message}",
                     level=alert_level,
-                    wait_duration=300,  # Don't spam alerts
+                    wait_duration=self.config.wandb_alert_rate_limit,
                 )
 
                 # Also log metrics
                 wandb.log(
                     {
-                        f"health/warnings/{warning.env_id}/{warning.type.value}": 1,
-                        f"health/warning_severity/{warning.env_id}": (
-                            {"low": 1, "medium": 2, "high": 3, "critical": 4}.get(warning.severity, 0)
+                        f"alerts/{lesson_id}/{alert_name}": 1,
+                        f"alerts/{lesson_id}/health_status": (
+                            {HealthStatus.HEALTHY: 0, HealthStatus.WARNING: 1, HealthStatus.CRITICAL: 2}.get(result.health_status, 0)
                         ),
-                        **{f"health/metrics/{warning.env_id}/{k}": v for k, v in warning.metrics.items()},
+                        **{f"alerts/{lesson_id}/metrics/{k}": v for k, v in result.metrics.items()},
                     },
                     step=self.current_step,
                 )
@@ -682,16 +702,8 @@ class Curriculum:
             "unlocked": list(self.unlocked),
             "graduated": list(self.graduated),
             "current_step": self.current_step,
+            "last_alert_time": {f"{lesson_id}:{alert_name}": step for (lesson_id, alert_name), step in self._last_alert_time.items()},
         }
-
-        # Save health monitor state if enabled
-        if self.config.health_monitor_config.enabled:
-            health_data = {
-                "graduation_baselines": self.health_monitor.graduation_baselines,
-                "state_transition_times": dict(self.health_monitor.state_transition_times),
-                "last_progress_step": dict(self.health_monitor.last_progress_step),
-            }
-            checkpoint_data["health_monitor"] = health_data
 
         with fs.open(checkpoint_path, "w") as f:
             json.dump(checkpoint_data, f, indent=2)
@@ -730,26 +742,15 @@ class Curriculum:
         self.unlocked = set(checkpoint_data["unlocked"])
         self.graduated = set(checkpoint_data["graduated"])
         self.current_step = checkpoint_data["current_step"]
-
-        # Restore health monitor state if present
-        if "health_monitor" in checkpoint_data and self.config.health_monitor_config.enabled:
-            health_data = checkpoint_data["health_monitor"]
-            self.health_monitor.graduation_baselines = health_data.get("graduation_baselines", {})
-            self.health_monitor.state_transition_times = defaultdict(dict, health_data.get("state_transition_times", {}))
-            self.health_monitor.last_progress_step = defaultdict(int, health_data.get("last_progress_step", {}))
-            self.health_monitor.current_step = self.current_step
-
-            # Re-initialize environment states based on current lesson states
-            for lesson_id in self.config.lessons:
-                state = self._get_lesson_state(lesson_id)
-                success_rate = compute_success_ratio(self.stats[lesson_id], self.current_step)
-                self.health_monitor.update(
-                    env_id=lesson_id,
-                    performance=success_rate,
-                    mode="training" if state == "active" else "eval",
-                    state=state,
-                    current_step=self.current_step,
-                )
+        
+        # Restore alert cooldown times
+        if "last_alert_time" in checkpoint_data:
+            self._last_alert_time = {
+                tuple(key.split(":", 1)): step for key, step in checkpoint_data["last_alert_time"].items()
+            }
+        else:
+            # Backward compatibility: initialize empty if not in checkpoint
+            self._last_alert_time = {}
 
         logger.info("Restored curriculum checkpoint from %s at step %d", checkpoint_path, self.current_step)
 
