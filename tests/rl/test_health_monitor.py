@@ -17,12 +17,9 @@
 import logging
 from unittest.mock import MagicMock, patch
 
-import numpy as np
-import pytest
 
 from marin.rl.alerts import (
     GraduationRegressionAlert,
-    HealthStatus,
     PerformanceVolatilityAlert,
     TrainingStalledAlert,
 )
@@ -97,14 +94,13 @@ class TestGraduationRegressionAlert:
             warning_calls = [call for call in mock_logger.warning.call_args_list if "performance dropped" in str(call)]
             assert len(warning_calls) > 0
 
+
 class TestTrainingStalledAlert:
     """Test training stagnation detection behavior."""
 
     def test_alert_triggers_on_stagnation(self):
         """Test that alert triggers when training plateaus."""
-        curriculum = create_test_curriculum_with_alerts(
-            [TrainingStalledAlert(stagnation_window=30, plateau_window=20)]
-        )
+        curriculum = create_test_curriculum_with_alerts([TrainingStalledAlert(stagnation_window=30, plateau_window=20)])
 
         # Train with improving performance
         for step in range(50):
@@ -126,9 +122,7 @@ class TestTrainingStalledAlert:
 
     def test_alert_does_not_trigger_during_improvement(self):
         """Test that alert doesn't trigger when performance is improving."""
-        curriculum = create_test_curriculum_with_alerts(
-            [TrainingStalledAlert(stagnation_window=30, plateau_window=20)]
-        )
+        curriculum = create_test_curriculum_with_alerts([TrainingStalledAlert(stagnation_window=30, plateau_window=20)])
 
         with patch("marin.rl.curriculum.logger") as mock_logger:
             # Continuously improving performance
@@ -210,9 +204,7 @@ class TestAlertIntegration:
             assert len(volatility_calls) > 0
 
         # Test stagnation alert triggers (separate scenario)
-        curriculum2 = create_test_curriculum_with_alerts(
-            [TrainingStalledAlert(stagnation_window=30, plateau_window=20)]
-        )
+        curriculum2 = create_test_curriculum_with_alerts([TrainingStalledAlert(stagnation_window=30, plateau_window=20)])
         with patch("marin.rl.curriculum.logger") as mock_logger:
             curriculum2._last_alert_time.clear()
             # Flat performance (plateaued)
@@ -251,9 +243,7 @@ class TestAlertIntegration:
 
     def test_wandb_alert_integration(self):
         """Test that wandb alerts are sent when enabled."""
-        curriculum = create_test_curriculum_with_alerts(
-            [GraduationRegressionAlert(regression_threshold=0.85)]
-        )
+        curriculum = create_test_curriculum_with_alerts([GraduationRegressionAlert(regression_threshold=0.85)])
         curriculum.config.enable_wandb_alerts = True
 
         # Train lesson first, then graduate
@@ -271,11 +261,13 @@ class TestAlertIntegration:
         assert "lesson1" in curriculum.graduated
 
         # Cause regression - need enough samples to affect recent window
-        with patch("wandb.run", new_callable=MagicMock) as mock_wandb_run, patch("wandb.alert") as mock_wandb_alert, patch(
-            "wandb.log"
-        ) as mock_wandb_log:
+        with (
+            patch("wandb.run", new_callable=MagicMock) as mock_wandb_run,
+            patch("wandb.alert") as mock_wandb_alert,
+        ):
             # Make wandb.run truthy - need to set it on the module
             import wandb
+
             mock_wandb_run.__bool__ = lambda self: True
             wandb.run = mock_wandb_run
 
@@ -293,9 +285,7 @@ class TestAlertIntegration:
 
     def test_alert_evaluation_uses_existing_stats(self):
         """Test that alerts use curriculum's existing statistics, not duplicated logic."""
-        curriculum = create_test_curriculum_with_alerts(
-            [TrainingStalledAlert(stagnation_window=30, plateau_window=20)]
-        )
+        curriculum = create_test_curriculum_with_alerts([TrainingStalledAlert(stagnation_window=30, plateau_window=20)])
 
         # Train lesson
         for step in range(50):
@@ -314,7 +304,7 @@ class TestAlertIntegration:
             # Alert has cooldown_steps=200, so we need to ensure it triggers
             # Reset cooldown by ensuring we're past any previous alert
             curriculum._last_alert_time.clear()
-            
+
             for step in range(50, 80):
                 rewards = [0.5] * 5
                 rollout_stats = [create_test_rollout_stats(r, "lesson1") for r in rewards]
@@ -322,5 +312,9 @@ class TestAlertIntegration:
 
             # Alert should trigger using the same stats
             # Check that warning was called (alert is logged)
-            warning_calls = [call for call in mock_logger.warning.call_args_list if len(call[0]) > 0 and "no progress" in str(call[0][0])]
+            warning_calls = [
+                call
+                for call in mock_logger.warning.call_args_list
+                if len(call[0]) > 0 and "no progress" in str(call[0][0])
+            ]
             assert len(warning_calls) > 0

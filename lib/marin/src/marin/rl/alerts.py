@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from enum import Enum
 
-from marin.rl.curriculum import LessonStats, PerformanceStats, compute_success_ratio, is_plateaued
+from marin.rl.curriculum import LessonStats, compute_success_ratio, is_plateaued
 
 if TYPE_CHECKING:
     from marin.rl.curriculum import LessonConfig
@@ -42,6 +42,7 @@ class HealthStatus(Enum):
     HEALTHY = "healthy"
     WARNING = "warning"
     CRITICAL = "critical"
+
 
 @dataclass
 class AlertResult:
@@ -115,7 +116,7 @@ class GraduationRegressionAlert(Alert):
 
     critical_threshold: float = 0.70
     """Critical warning if performance drops below this fraction."""
-    
+
     cooldown_steps: int = 200
     """Steps between repeated alerts of this type."""
 
@@ -143,7 +144,7 @@ class GraduationRegressionAlert(Alert):
             # Use mean reward value at graduation time (before any regression)
             # Strategy: Use mean of eval rewards excluding recent window (which might contain regression)
             # This approximates graduation-time performance
-            
+
             # Use mean of eval rewards excluding the most recent window
             # This assumes recent samples might contain regression, older samples represent graduation performance
             recent_window = min(20, len(eval_rewards))
@@ -179,7 +180,9 @@ class GraduationRegressionAlert(Alert):
 
         if current_perf < graduation_performance * self.regression_threshold:
             health_status = (
-                HealthStatus.CRITICAL if current_perf < graduation_performance * self.critical_threshold else HealthStatus.WARNING
+                HealthStatus.CRITICAL
+                if current_perf < graduation_performance * self.critical_threshold
+                else HealthStatus.WARNING
             )
 
             # Calculate performance ratio safely (avoid division by zero)
@@ -187,8 +190,8 @@ class GraduationRegressionAlert(Alert):
                 performance_ratio = current_perf / graduation_performance
                 ratio_pct = performance_ratio * 100
             else:
-                performance_ratio = float('inf') if current_perf > 0 else 0.0
-                ratio_pct = float('inf')
+                performance_ratio = float("inf") if current_perf > 0 else 0.0
+                ratio_pct = float("inf")
 
             return AlertResult(
                 triggered=True,
@@ -221,10 +224,10 @@ class TrainingStalledAlert(Alert):
 
     plateau_window: int | None = None
     """Window size for plateau detection. If None, uses lesson_config.plateau_window."""
-    
+
     plateau_threshold: float | None = None
     """Threshold for plateau detection. If None, uses lesson_config.plateau_threshold."""
-    
+
     cooldown_steps: int = 200
     """Steps between repeated alerts of this type."""
 
@@ -261,12 +264,12 @@ class TrainingStalledAlert(Alert):
         # Check if we've been stuck for the stagnation window
         # If overall stats have plateaued and we have enough samples in the stagnation window,
         # we've been stuck for at least that long
-        recent_rewards = stats.training_stats.reward_history[-self.stagnation_window:]
+        recent_rewards = stats.training_stats.reward_history[-self.stagnation_window :]
 
         # If we've plateaued and have enough samples, alert
         # The plateau check already ensures performance isn't improving
         current_perf = compute_success_ratio(stats, current_step)
-        
+
         return AlertResult(
             triggered=True,
             message=(
@@ -324,7 +327,7 @@ class PerformanceVolatilityAlert(Alert):
         if len(reward_history) < self.window:
             return None
 
-        recent = np.array(reward_history[-self.window:])
+        recent = np.array(reward_history[-self.window :])
         mean_perf = np.mean(recent)
         std_perf = np.std(recent)
 
@@ -335,8 +338,7 @@ class PerformanceVolatilityAlert(Alert):
                 return AlertResult(
                     triggered=True,
                     message=(
-                        f"Lesson '{lesson_id}' showing high performance volatility "
-                        f"(CV={cv:.3f}) in {mode} mode"
+                        f"Lesson '{lesson_id}' showing high performance volatility " f"(CV={cv:.3f}) in {mode} mode"
                     ),
                     health_status=HealthStatus.WARNING,
                     metrics={

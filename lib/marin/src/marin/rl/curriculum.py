@@ -32,7 +32,7 @@ import fsspec
 import numpy as np
 
 if TYPE_CHECKING:
-    from marin.rl.alerts import Alert, AlertResult, HealthStatus
+    from marin.rl.alerts import Alert
 
 from marin.rl.environments.base import EnvConfig
 from marin.rl.robust_actor import RobustActor
@@ -561,7 +561,6 @@ class Curriculum:
 
     def _evaluate_alerts(self) -> None:
         """Evaluate all alerts for all lessons and handle triggered alerts."""
-        from marin.rl.alerts import Alert, AlertResult, HealthStatus  # Import here to avoid circular import
 
         for lesson_id, lesson_config in self.config.lessons.items():
             if not lesson_config.alerts:
@@ -577,7 +576,7 @@ class Curriculum:
                 alert_key = (lesson_id, alert_name)
                 if alert_key in self._last_alert_time:
                     steps_since_last = self.current_step - self._last_alert_time[alert_key]
-                    cooldown_steps = getattr(alert, 'cooldown_steps', None)
+                    cooldown_steps = getattr(alert, "cooldown_steps", None)
                     if cooldown_steps is not None and steps_since_last < cooldown_steps:
                         # Still in cooldown, skip this alert
                         continue
@@ -653,7 +652,9 @@ class Curriculum:
                     {
                         f"alerts/{lesson_id}/{alert_name}": 1,
                         f"alerts/{lesson_id}/health_status": (
-                            {HealthStatus.HEALTHY: 0, HealthStatus.WARNING: 1, HealthStatus.CRITICAL: 2}.get(result.health_status, 0)
+                            {HealthStatus.HEALTHY: 0, HealthStatus.WARNING: 1, HealthStatus.CRITICAL: 2}.get(
+                                result.health_status, 0
+                            )
                         ),
                         **{f"alerts/{lesson_id}/metrics/{k}": v for k, v in result.metrics.items()},
                     },
@@ -702,7 +703,9 @@ class Curriculum:
             "unlocked": list(self.unlocked),
             "graduated": list(self.graduated),
             "current_step": self.current_step,
-            "last_alert_time": {f"{lesson_id}:{alert_name}": step for (lesson_id, alert_name), step in self._last_alert_time.items()},
+            "last_alert_time": {
+                f"{lesson_id}:{alert_name}": step for (lesson_id, alert_name), step in self._last_alert_time.items()
+            },
         }
 
         with fs.open(checkpoint_path, "w") as f:
@@ -742,7 +745,7 @@ class Curriculum:
         self.unlocked = set(checkpoint_data["unlocked"])
         self.graduated = set(checkpoint_data["graduated"])
         self.current_step = checkpoint_data["current_step"]
-        
+
         # Restore alert cooldown times
         if "last_alert_time" in checkpoint_data:
             self._last_alert_time = {
