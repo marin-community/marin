@@ -1,0 +1,210 @@
+# JAX NumPy API Parity
+This document tracks JAX NumPy functions not yet wrapped by Haliax.
+
+APIs that don't translate well to named tensors are intentionally omitted here. This includes dtype constructors, raw array converters (e.g. `from_dlpack`), indexing helpers like `c_`/`r_`, and functions whose JAX counterparts already work with `NamedArray` out of the box. Basic array construction is handled by `haliax.named`, so functions such as `array` or `asarray` are not listed.
+
+## numpy
+- [x] `allclose`
+- [x] `amin`
+- [ ] `append`
+- [ ] `apply_along_axis`
+- [ ] `apply_over_axes`
+- [ ] `argpartition`
+- [ ] `argwhere`
+- [x] `array_equal`
+- [x] `array_equiv`
+- [ ] `array_split`
+- [ ] `astype`
+- [ ] `atan2`
+- [ ] `average`
+- [ ] `bartlett`
+- [x] `bitwise_count`
+- [x] `bitwise_invert`
+- [x] `bitwise_left_shift`
+- [x] `bitwise_right_shift`
+- [ ] `blackman`
+- [ ] `block`
+- [ ] `broadcast_shapes`
+- [ ] `can_cast`
+- [ ] `choose`
+- [ ] `column_stack`
+- [ ] `compress`
+- [ ] `concat`
+- [ ] `convolve`
+- [ ] `copysign`
+- [ ] `corrcoef`
+- [ ] `correlate`
+- [ ] `count_nonzero`
+- [ ] `cov`
+- [ ] `cumulative_prod`
+- [ ] `cumulative_sum`
+- [ ] `delete`
+- [ ] `diag`
+- [ ] `diag_indices`
+- [ ] `diag_indices_from`
+- [ ] `diagflat`
+- [ ] `diagonal`
+- [ ] `diff`
+- [ ] `digitize`
+- [ ] `dsplit`
+- [ ] `dstack`
+- [ ] `ediff1d`
+- [ ] `einsum_path`
+- [ ] `empty`
+- [ ] `empty_like`
+- [ ] `expand_dims`
+- [ ] `extract`
+- [ ] `eye`
+- [ ] `fill_diagonal`
+- [ ] `flatnonzero`
+- [ ] `flip`
+- [ ] `fliplr`
+- [ ] `flipud`
+- [ ] `gcd`
+- [ ] `gradient`
+- [ ] `hamming`
+- [ ] `hanning`
+- [ ] `heaviside`
+- [ ] `histogram`
+- [ ] `histogram2d`
+- [ ] `histogram_bin_edges`
+- [ ] `histogramdd`
+- [ ] `hsplit`
+- [ ] `hstack`
+- [ ] `identity`
+- [ ] `indices`
+- [ ] `inner`
+- [ ] `insert`
+- [ ] `interp`
+- [ ] `intersect1d`
+- [ ] `iscomplexobj`
+- [ ] `isin`
+- [ ] `iterable`
+- [ ] `ix_`
+- [ ] `kaiser`
+- [ ] `kron`
+- [ ] `lcm`
+- [ ] `ldexp`
+- [ ] `lexsort`
+- [ ] `mask_indices`
+- [ ] `median`
+- [ ] `meshgrid`
+- [ ] `mgrid`
+- [ ] `modf`
+- [ ] `moveaxis`
+- [ ] `nan_to_num`
+- [x] `nanargmax`
+- [x] `nanargmin`
+- [x] `nancumprod`
+- [x] `nancumsum`
+- [x] `nanmax`
+- [x] `nanmean`
+- [ ] `nanmedian`
+- [x] `nanmin`
+- [ ] `nanpercentile`
+- [x] `nanprod`
+- [ ] `nanquantile`
+- [x] `nanstd`
+- [x] `nansum`
+- [x] `nanvar`
+- [x] `nonzero`
+- [ ] `ogrid`
+- [x] `packbits`
+- [ ] `partition`
+- [ ] `percentile`
+- [ ] `permute_dims`
+- [ ] `piecewise`
+- [ ] `place`
+- [x] `poly`
+- [x] `polyadd`
+- [x] `polyder`
+- [x] `polydiv`
+- [x] `polyfit`
+- [x] `polyint`
+- [x] `polymul`
+- [x] `polysub`
+- [x] `polyval`
+- [ ] `pow`
+- [ ] `promote_types`
+- [ ] `put`
+- [ ] `put_along_axis`
+- [ ] `quantile`
+- [ ] `ravel_multi_index`
+- [ ] `reshape`
+- [ ] `resize`
+- [ ] `result_type`
+- [ ] `rollaxis`
+- [x] `roots`
+- [ ] `rot90`
+- [ ] `select`
+- [ ] `setdiff1d`
+- [ ] `setxor1d`
+- [ ] `spacing`
+- [ ] `squeeze`
+- [ ] `swapaxes`
+- [ ] `take_along_axis`
+- [ ] `transpose`
+- [ ] `trapezoid`
+- [ ] `tri`
+- [ ] `tril_indices`
+- [ ] `tril_indices_from`
+- [x] `trim_zeros`
+- [ ] `triu_indices`
+- [ ] `triu_indices_from`
+- [ ] `union1d`
+- [x] `unpackbits`
+- [ ] `unravel_index`
+- [ ] `unstack`
+- [ ] `unwrap`
+- [x] `vander`
+- [ ] `vsplit`
+- [ ] `vstack`
+
+## fft
+Multi-dimensional transforms like `fftn` or `rfft2` are handled by passing a
+mapping of axes to :func:`haliax.fft` and friends.
+
+- [x] `fft`
+- [x] `fftfreq`
+- [x] `fftshift`
+- [x] `hfft`
+- [x] `ifft`
+- [x] `ifftshift`
+- [x] `ihfft`
+- [x] `irfft`
+- [x] `rfft`
+- [x] `rfftfreq`
+
+## linalg
+- [ ] `cholesky`
+- [ ] `cond`
+- [ ] `cross`
+- [ ] `det`
+- [ ] `diagonal`
+- [ ] `eig`
+- [ ] `eigh`
+- [ ] `eigvals`
+- [ ] `eigvalsh`
+- [ ] `inv`
+- [ ] `lstsq`
+- [ ] `matmul`
+- [ ] `matrix_norm`
+- [ ] `matrix_power`
+- [ ] `matrix_rank`
+- [ ] `matrix_transpose`
+- [ ] `norm`
+- [ ] `outer`
+- [ ] `pinv`
+- [ ] `qr`
+- [ ] `slogdet`
+- [ ] `solve`
+- [ ] `svd`
+- [ ] `svdvals`
+- [ ] `tensordot`
+- [ ] `tensorinv`
+- [ ] `tensorsolve`
+- [ ] `trace`
+- [ ] `vdot`
+- [ ] `vecdot`
+- [ ] `vecmat`
+- [ ] `vector_norm`
