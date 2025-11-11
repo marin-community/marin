@@ -19,7 +19,7 @@ from collections.abc import Mapping
 from levanter.data.text import LMMixtureDatasetConfig
 
 from experiments.defaults import default_tokenize
-from marin.download.huggingface.download import DownloadConfig, download as storage_transfer_download
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution import executor_main, versioned
 from marin.execution.executor import ExecutorStep, this_output_path
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
@@ -57,7 +57,7 @@ def _yodas_download_step() -> ExecutorStep[DownloadConfig]:
     """Use Google Storage Transfer Service for faster YODAS2 downloads."""
     return ExecutorStep(
         name=_YODAS2_DOWNLOAD_NAME,
-        fn=storage_transfer_download,
+        fn=download_hf,
         config=DownloadConfig(
             hf_dataset_id="potsawee/yodas2-mm-pretrain",
             revision=YODAS2_REVISION,
