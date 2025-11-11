@@ -1,390 +1,289 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for Splash attention decode with paged KV cache."""
-
+# tests/test_splash_attention.py
+import jax
 import math
 
-import jax
 import jax.numpy as jnp
+import jax.random as jr
 import jax.random as jrandom
+import numpy as np
 import pytest
 from chex import assert_trees_all_close
 
 import haliax as hax
-from haliax import Axis, NamedArray
+from haliax import NamedArray, Axis
 
-from levanter.inference.jit_scheduler import SequenceTable
 from levanter.inference.page_table import PageBatchInfo, PageTable
+from levanter.inference.jit_scheduler import SequenceTable
 from levanter.inference.utils import INVALID
-from levanter.layers import Attention, AttentionBackend, AttentionConfig
-from levanter.layers.attention import AttentionMask
+from levanter.layers import AttentionConfig, AttentionBackend, Attention
+from levanter.layers.attention import AttentionMask, simple_attention_with_dropout
+from levanter.layers.kv_cache import KvPageCache
 from test_utils import use_test_mesh
 
+SLOT = hax.Axis("slot", 4)  # page size
+NUM_SLOTS = SLOT.size
+KV_HEADS = hax.Axis("kv_head", 1)
+QH = hax.Axis("q_heads_per_group", 1)
+D = hax.Axis("head_size", 128)
 
-def _splash_tol() -> float:
-    """Tolerance for Splash attention tests.
-    
-    Splash attention uses different numerics than vanilla, so we use relaxed tolerances.
-    """
+KV_BS = 32  # must match constant inside kernel
+SM_SCALE = 1 / math.sqrt(D.size)
+
+
+# very loose tolerance. JAX uses a very loose tolerance for their ragged_attention tests.
+def _rpa_tol() -> float:
     devices = jax.devices()
-    # Use 2% tolerance on TPU, tighter on CPU/GPU
+    # 2%?!?!
     return 2e-2 if any(device.platform == "tpu" for device in devices) else 1e-4
 
 
-@pytest.mark.parametrize("seq_len", [128, 256, 384])
-@pytest.mark.parametrize("num_heads", [2, 4])
-def test_splash_decode_single_sequence(seq_len, num_heads):
-    """Test splash_decode matches paged_decode for a single sequence."""
-    # Skip on non-TPU since Splash may not be available
-    if jax.default_backend() != "tpu":
-        pytest.skip("Splash attention only available on TPU")
-    
-    # Setup: page_size = seq_len so the entire sequence fits in one page
-    Pos = Axis("position", seq_len)
-    Embed = Axis("embed", 64)
-    page_size = seq_len
-    
-    cfg = AttentionConfig(
-        Embed=Embed,
-        num_heads=num_heads,
-        num_kv_heads=num_heads,
-        rope=None,
-        attn_backend=AttentionBackend.VANILLA,
-    )
-    
+# -----------------------------------------------------------------------------
+# Tests for splash_decode
+# -----------------------------------------------------------------------------
+
+
+@jax.jit
+def _jit_splash_decode(attn, x, pos_ids, cache: KvPageCache, binfo: PageBatchInfo) -> tuple[NamedArray, KvPageCache]:
+    return attn.splash_decode(x, cache, binfo, pos_ids=pos_ids, key=jrandom.PRNGKey(2))
+
+
+def test_attention_splash_decode_matches_full_ar():
+    Pos = Axis("position", 4)
+    Embed = Axis("embed", 8)
+
+    cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, rope=None, attn_backend=AttentionBackend.VANILLA)
     attn_key, x_key = jrandom.split(jrandom.PRNGKey(0))
     attn = Attention.init(cfg, key=attn_key)
-    
-    # Create page table with page_size = seq_len
-    pt = PageTable.init(max_pages=4, max_seqs=2, page_size=page_size, max_pages_per_seq=1)
+
+    x = hax.random.normal(x_key, (Pos, Embed)) * 0.2
+    full_out = attn(x, AttentionMask.causal(), key=jrandom.PRNGKey(1))
+
+    pt = PageTable.init(max_pages=4, max_seqs=2, page_size=4, max_pages_per_seq=4)
     sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
-    
-    # Reserve a slot
-    sequences, assigned = sequences.reserve_slot(0)
-    assert int(assigned) == 0
-    
-    with use_test_mesh():
-        # Create input tokens
-        x = hax.random.normal(x_key, (Pos, Embed)) * 0.2
-        
-        # Reference: use regular attention on the full sequence
-        full_out = attn(x, AttentionMask.causal(), key=jrandom.PRNGKey(1))
-        
-        # Test paged_decode: pack all tokens into one prefill
-        kv_cache = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
-        
-        # Allocate pages for the sequence
-        pages_needed = (seq_len + page_size - 1) // page_size
-        page_list = list(range(pages_needed))
-        page_indices = hax.full({"seq": pt.max_seqs, "page": pt.pages_per_seq}, INVALID, dtype=jnp.int32)
-        page_indices = page_indices.at["seq", 0, "page", :pages_needed].set(jnp.array(page_list, dtype=jnp.int32))
-        
-        slot_ids = hax.full({"seq": pt.max_seqs}, INVALID, dtype=jnp.int32)
-        slot_ids = slot_ids.at["seq", 0].set(0)
-        
-        seq_lens = hax.full({"seq": pt.max_seqs}, 0, dtype=jnp.int32)
-        seq_lens = seq_lens.at["seq", 0].set(seq_len)
-        
-        cu_q_lens = hax.full({"seq": pt.max_seqs + 1}, 0, dtype=jnp.int32)
-        cu_q_lens = cu_q_lens.at["seq", 1].set(seq_len)
-        
-        new_token_dests = hax.arange(Pos, dtype=jnp.int32)
-        
-        batch_info = PageBatchInfo(
-            slot_ids=slot_ids,
-            page_indices=page_indices,
-            seq_lens=seq_lens,
-            cu_q_lens=cu_q_lens,
-            num_seqs=jnp.array(1, dtype=jnp.int32),
-            new_token_dests=new_token_dests,
-            page_size=page_size,
-        )
-        
-        pos_ids = hax.arange(Pos, dtype=jnp.int32)
-        
-        # Run paged_decode
-        paged_out, kv_cache_paged = attn.paged_decode(
-            x, kv_cache, batch_info, pos_ids=pos_ids, key=jrandom.PRNGKey(1)
-        )
-        
-        # Run splash_decode with same cache
-        kv_cache_splash = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
-        splash_out, kv_cache_splash = attn.splash_decode(
-            x, kv_cache_splash, batch_info, pos_ids=pos_ids, key=jrandom.PRNGKey(1)
-        )
-        
-        tol = _splash_tol()
-        # Compare outputs
-        assert_trees_all_close(splash_out, paged_out, rtol=tol, atol=tol)
-        # Also check against reference
-        assert_trees_all_close(splash_out, full_out, rtol=tol, atol=tol)
+    sequences, seq_id_arr = sequences.reserve_slot()
+    seq_id = int(seq_id_arr)
+    kv_cache = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
+    out_chunks = []
+    for i in range(Pos.size):
+        # Compute pos_ids for this allocation using current seq_lens before allocation
+        seg_ids = hax.named([seq_id], "position")
+        # relative position inside this seg is 0 for this single token; absolute pos is current len
+        abs_pos = sequences.seq_lens["seq", seg_ids].array
+        pos_ids = hax.named(abs_pos, "position")
+
+        sequences, pt, binfo = sequences.allocate_for_seq(pt, seg_ids, pos_ids)
+
+        x_tok = x[Pos, hax.dslice(i, 1)]
+        out_tok, kv_cache = _jit_splash_decode(attn, x_tok, pos_ids, kv_cache, binfo)
+        out_chunks.append(out_tok.array)
+
+    decoded_arr = jnp.concatenate(out_chunks, axis=0)
+    tol = _rpa_tol()
+    assert_trees_all_close(full_out.array, decoded_arr, atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("prefix_size", [64, 128])
-@pytest.mark.parametrize("decode_steps", [1, 2, 4])
-def test_splash_decode_incremental(prefix_size, decode_steps):
-    """Test splash_decode with incremental decoding after prefill."""
-    if jax.default_backend() != "tpu":
-        pytest.skip("Splash attention only available on TPU")
-    
-    max_seq_len = prefix_size + decode_steps
-    Pos = Axis("position", max_seq_len)
-    Embed = Axis("embed", 64)
-    page_size = max_seq_len
-    
-    cfg = AttentionConfig(
-        Embed=Embed,
-        num_heads=2,
-        num_kv_heads=2,
-        rope=None,
-        attn_backend=AttentionBackend.VANILLA,
-    )
-    
+def test_attention_splash_decode_matches_full_prefill():
+    Pos = Axis("position", 16)
+    Embed = Axis("embed", 16)
+
+    cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, rope=None, attn_backend=AttentionBackend.VANILLA)
     attn_key, x_key = jrandom.split(jrandom.PRNGKey(0))
     attn = Attention.init(cfg, key=attn_key)
-    
-    pt = PageTable.init(max_pages=4, max_seqs=2, page_size=page_size, max_pages_per_seq=1)
-    
-    with use_test_mesh():
-        # Generate full sequence
-        x_full = hax.random.normal(x_key, (Pos, Embed)) * 0.2
-        
-        # Reference: full attention
-        full_out = attn(x_full, AttentionMask.causal(), key=jrandom.PRNGKey(1))
-        
-        # Initialize caches
-        kv_cache_splash = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
-        kv_cache_paged = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
-        
-        page_indices = hax.full({"seq": pt.max_seqs, "page": pt.pages_per_seq}, INVALID, dtype=jnp.int32)
-        page_indices = page_indices.at["seq", 0, "page", 0].set(0)
-        
-        slot_ids = hax.full({"seq": pt.max_seqs}, INVALID, dtype=jnp.int32)
-        slot_ids = slot_ids.at["seq", 0].set(0)
-        
-        # Prefill with prefix
-        x_prefix = x_full["position", hax.dslice(0, prefix_size)]
-        PosPrefix = Axis("position", prefix_size)
-        
-        seq_lens = hax.full({"seq": pt.max_seqs}, 0, dtype=jnp.int32)
-        seq_lens = seq_lens.at["seq", 0].set(prefix_size)
-        
-        cu_q_lens = hax.full({"seq": pt.max_seqs + 1}, 0, dtype=jnp.int32)
-        cu_q_lens = cu_q_lens.at["seq", 1].set(prefix_size)
-        
-        new_token_dests = hax.arange(PosPrefix, dtype=jnp.int32)
-        
-        batch_info = PageBatchInfo(
-            slot_ids=slot_ids,
-            page_indices=page_indices,
-            seq_lens=seq_lens,
-            cu_q_lens=cu_q_lens,
-            num_seqs=jnp.array(1, dtype=jnp.int32),
-            new_token_dests=new_token_dests,
-            page_size=page_size,
-        )
-        
-        pos_ids_prefix = hax.arange(PosPrefix, dtype=jnp.int32)
-        
-        splash_out_prefix, kv_cache_splash = attn.splash_decode(
-            x_prefix, kv_cache_splash, batch_info, pos_ids=pos_ids_prefix, key=jrandom.PRNGKey(1)
-        )
-        
-        paged_out_prefix, kv_cache_paged = attn.paged_decode(
-            x_prefix, kv_cache_paged, batch_info, pos_ids=pos_ids_prefix, key=jrandom.PRNGKey(1)
-        )
-        
-        # Incrementally decode remaining tokens
-        outputs_splash = [splash_out_prefix]
-        outputs_paged = [paged_out_prefix]
-        
-        for step in range(decode_steps):
-            token_pos = prefix_size + step
-            x_token = x_full["position", token_pos : token_pos + 1]
-            PosOne = Axis("position", 1)
-            
-            seq_lens = seq_lens.at["seq", 0].set(token_pos + 1)
-            cu_q_lens = hax.full({"seq": pt.max_seqs + 1}, 0, dtype=jnp.int32)
-            cu_q_lens = cu_q_lens.at["seq", 1].set(1)
-            
-            new_token_dests = hax.full(PosOne, token_pos, dtype=jnp.int32)
-            
-            batch_info = PageBatchInfo(
-                slot_ids=slot_ids,
-                page_indices=page_indices,
-                seq_lens=seq_lens,
-                cu_q_lens=cu_q_lens,
-                num_seqs=jnp.array(1, dtype=jnp.int32),
-                new_token_dests=new_token_dests,
-                page_size=page_size,
-            )
-            
-            pos_ids_one = hax.full(PosOne, token_pos, dtype=jnp.int32)
-            
-            out_splash, kv_cache_splash = attn.splash_decode(
-                x_token, kv_cache_splash, batch_info, pos_ids=pos_ids_one, key=jrandom.PRNGKey(2 + step)
-            )
-            
-            out_paged, kv_cache_paged = attn.paged_decode(
-                x_token, kv_cache_paged, batch_info, pos_ids=pos_ids_one, key=jrandom.PRNGKey(2 + step)
-            )
-            
-            outputs_splash.append(out_splash)
-            outputs_paged.append(out_paged)
-        
-        # Concatenate outputs
-        full_splash = hax.concatenate("position", outputs_splash)
-        full_paged = hax.concatenate("position", outputs_paged)
-        
-        tol = _splash_tol()
-        # Compare splash vs paged
-        assert_trees_all_close(full_splash, full_paged, rtol=tol, atol=tol)
-        # Compare against reference
-        assert_trees_all_close(full_splash, full_out, rtol=tol, atol=tol)
+
+    pt = PageTable.init(max_pages=4, max_seqs=2, page_size=4, max_pages_per_seq=4)
+    sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
+    sequences, seq1_arr = sequences.reserve_slot(0)
+    sequences, seq2_arr = sequences.reserve_slot(1)
+
+    x = hax.random.normal(x_key, (Pos, Embed)) * 0.2
+    seg_ids = hax.named([0] * 4 + [1] * 3 + [INVALID] * 9, "position")
+    pos_ids = hax.named(jnp.array([0, 1, 2, 3, 0, 1, 2] + [INVALID] * 9, dtype=jnp.int32), "position")
+    sequences, pt, binfo = sequences.allocate_for_seq(pt, seg_ids, pos_ids)
+
+    causal = AttentionMask.causal().with_segment_ids(seg_ids)
+    full_out = attn(x, causal, key=jrandom.PRNGKey(1))
+
+    kv_cache = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
+
+    # Compute absolute pos ids for this batch from current seq_lens
+    def _relative_positions(seg_ids):
+        idx = jnp.arange(seg_ids.shape[0])
+        is_start = jnp.concatenate([jnp.array([True]), seg_ids[1:] != seg_ids[:-1]])
+        start_idx = idx * is_start.astype(idx.dtype)
+        seg_start = jax.lax.associative_scan(jnp.maximum, start_idx)
+        return idx - seg_start
+
+    rel_pos = _relative_positions(seg_ids.array)
+    starts = sequences.seq_lens["seq", seg_ids].array
+    pos_ids = hax.named(starts + rel_pos, "position")
+
+    decode_out, _ = _jit_splash_decode(attn, x, pos_ids, kv_cache, binfo)
+
+    # we only care about the first 7 positions, since the rest are padding
+    full_out = full_out["position", hax.dslice(0, 7)]
+    decode_out = decode_out["position", hax.dslice(0, 7)]
+
+    tol = _rpa_tol()
+    assert_trees_all_close(full_out.array, decode_out.array, atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("seq_lens", [[128, 256], [256, 128], [128, 128]])
-def test_splash_decode_batched(seq_lens):
-    """Test splash_decode with multiple sequences in a batch."""
-    if jax.default_backend() != "tpu":
-        pytest.skip("Splash attention only available on TPU")
-    
-    max_seq_len = max(seq_lens)
-    total_tokens = sum(seq_lens)
-    Pos = Axis("position", total_tokens)
-    Embed = Axis("embed", 64)
-    page_size = max_seq_len
-    
-    cfg = AttentionConfig(
-        Embed=Embed,
-        num_heads=2,
-        num_kv_heads=2,
-        rope=None,
-        attn_backend=AttentionBackend.VANILLA,
-    )
-    
+@pytest.mark.parametrize("prefix_size", [1, 2, 3])
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 8])
+@pytest.mark.parametrize("seq_ids", [[0, 1], [1, 0], [2, 0], [0, 2], [2, 1]])
+def test_attention_splash_decode_prefill_in_chunks(prefix_size, chunk_size, seq_ids):
+    Pos = Axis("position", prefix_size + 4 * chunk_size)
+    Embed = Axis("embed", 16)
+
+    cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, rope=None, attn_backend=AttentionBackend.VANILLA)
     attn_key, x_key = jrandom.split(jrandom.PRNGKey(0))
     attn = Attention.init(cfg, key=attn_key)
-    
-    num_seqs = len(seq_lens)
-    pt = PageTable.init(max_pages=num_seqs + 2, max_seqs=num_seqs, page_size=page_size, max_pages_per_seq=1)
-    
+    tol = _rpa_tol()
+
+    max_pages_per_seq = math.ceil((prefix_size + 4 * chunk_size) / NUM_SLOTS)
+
+    pt = PageTable.init(max_pages=max_pages_per_seq * 3, max_seqs=3, page_size=4, max_pages_per_seq=max_pages_per_seq)
+    sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
+    seq1 = seq_ids[0]
+    seq2 = seq_ids[1]
+    sequences, assigned1 = sequences.reserve_slot(seq1)
+    sequences, assigned2 = sequences.reserve_slot(seq2)
+    assert int(assigned1) == seq1
+    assert int(assigned2) == seq2
+    kv_cache = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
+
     with use_test_mesh():
-        # Generate packed input
         x = hax.random.normal(x_key, (Pos, Embed)) * 0.2
-        
-        # Setup page indices and metadata
-        page_indices = hax.full({"seq": pt.max_seqs, "page": pt.pages_per_seq}, INVALID, dtype=jnp.int32)
-        for i in range(num_seqs):
-            page_indices = page_indices.at["seq", i, "page", 0].set(i)
-        
-        slot_ids = hax.full({"seq": pt.max_seqs}, INVALID, dtype=jnp.int32)
-        for i in range(num_seqs):
-            slot_ids = slot_ids.at["seq", i].set(i)
-        
-        seq_lens_arr = hax.full({"seq": pt.max_seqs}, 0, dtype=jnp.int32)
-        for i, slen in enumerate(seq_lens):
-            seq_lens_arr = seq_lens_arr.at["seq", i].set(slen)
-        
-        cu_q_lens = hax.full({"seq": pt.max_seqs + 1}, 0, dtype=jnp.int32)
-        cumsum = 0
-        for i, slen in enumerate(seq_lens):
-            cumsum += slen
-            cu_q_lens = cu_q_lens.at["seq", i + 1].set(cumsum)
-        
-        # Build new_token_dests for packed sequences
-        new_token_dests_list = []
-        for slen in seq_lens:
-            new_token_dests_list.extend(range(slen))
-        new_token_dests = hax.named(jnp.array(new_token_dests_list, dtype=jnp.int32), Pos)
-        
-        batch_info = PageBatchInfo(
-            slot_ids=slot_ids,
-            page_indices=page_indices,
-            seq_lens=seq_lens_arr,
-            cu_q_lens=cu_q_lens,
-            num_seqs=jnp.array(num_seqs, dtype=jnp.int32),
-            new_token_dests=new_token_dests,
-            page_size=page_size,
+        x0 = x["position", hax.dslice(0, Pos.size)]
+        x1 = x0
+        full_out = attn(hax.stack("batch", [x0, x1]), AttentionMask.causal(), key=jrandom.PRNGKey(1))
+
+        # prefill prefix
+        outputs0 = []
+        outputs1 = []
+        x_prefill = hax.concatenate(
+            "position", [x0[Pos, hax.dslice(0, prefix_size)], x1[Pos, hax.dslice(0, prefix_size)]]
         )
-        
-        # Position IDs for packed sequences
-        pos_ids_list = []
-        for slen in seq_lens:
-            pos_ids_list.extend(range(slen))
-        pos_ids = hax.named(jnp.array(pos_ids_list, dtype=jnp.int32), Pos)
-        
-        # Run both decode methods
-        kv_cache_splash = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
-        kv_cache_paged = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
-        
-        splash_out, _ = attn.splash_decode(
-            x, kv_cache_splash, batch_info, pos_ids=pos_ids, key=jrandom.PRNGKey(1)
+        tokens = hax.named([seq1] * prefix_size + [seq2] * prefix_size, Axis("position", 2 * prefix_size))
+        pos_ids = hax.concatenate(
+            "position",
+            [
+                hax.arange({"position": prefix_size}, dtype=jnp.int32),
+                hax.arange({"position": prefix_size}, dtype=jnp.int32),
+            ],
         )
-        
-        paged_out, _ = attn.paged_decode(
-            x, kv_cache_paged, batch_info, pos_ids=pos_ids, key=jrandom.PRNGKey(1)
-        )
-        
-        tol = _splash_tol()
-        assert_trees_all_close(splash_out, paged_out, rtol=tol, atol=tol)
+        sequences, pt, binfo = sequences.allocate_for_seq(pt, tokens, pos_ids)
+
+        out, kv_cache = _jit_splash_decode(attn, x_prefill, pos_ids, kv_cache, binfo)
+        outputs0.append(out["position", hax.dslice(0, prefix_size)])
+        outputs1.append(out["position", hax.dslice(prefix_size, prefix_size)])
+
+        start0 = start1 = prefix_size
+
+        # decode rest in chunks
+        for i in range(prefix_size, Pos.size, chunk_size):
+            tok_axis = Axis("position", 2 * chunk_size)
+            tokens = hax.named([seq1] * chunk_size + [seq2] * chunk_size, tok_axis)
+
+            pos_ids = hax.concatenate(
+                "position",
+                [
+                    hax.arange({"position": chunk_size}, start=start0, dtype=jnp.int32),
+                    hax.arange({"position": chunk_size}, start=start1, dtype=jnp.int32),
+                ],
+            )
+
+            start0 += chunk_size
+            start1 += chunk_size
+
+            sequences, pt, binfo = sequences.allocate_for_seq(pt, tokens, pos_ids)
+
+            x_chunk = hax.concatenate(
+                "position",
+                [x0[Pos, hax.dslice(i, chunk_size)], x1[Pos, hax.dslice(i, chunk_size)]],
+            )
+            out_chunk, kv_cache = _jit_splash_decode(attn, x_chunk, pos_ids, kv_cache, binfo)
+            outputs0.append(out_chunk["position", hax.dslice(0, chunk_size)])
+            outputs1.append(out_chunk["position", hax.dslice(chunk_size, chunk_size)])
+
+        outputs0_cat = hax.concatenate("position", outputs0)
+        outputs1_cat = hax.concatenate("position", outputs1)
+        decoded_arr = hax.stack("batch", [outputs0_cat, outputs1_cat])
+        assert_trees_all_close(full_out.array, decoded_arr.array, atol=tol, rtol=tol)
 
 
-def test_splash_decode_fallback():
-    """Test that splash_decode falls back gracefully when Splash is unavailable."""
-    # This test should pass on all platforms
-    Pos = Axis("position", 128)
-    Embed = Axis("embed", 64)
-    page_size = 128
-    
-    cfg = AttentionConfig(
-        Embed=Embed,
-        num_heads=2,
-        num_kv_heads=2,
-        rope=None,
-        attn_backend=AttentionBackend.VANILLA,
-    )
-    
+def test_attention_splash_decode_ragged_fill_in_chunks():
+    B = Axis("batch", 2)
+    Pos = Axis("position", 8)
+    Embed = Axis("embed", 16)
+
+    cfg = AttentionConfig(Embed=Embed, num_heads=2, num_kv_heads=2, attn_backend=AttentionBackend.VANILLA)
     attn_key, x_key = jrandom.split(jrandom.PRNGKey(0))
     attn = Attention.init(cfg, key=attn_key)
-    
-    pt = PageTable.init(max_pages=4, max_seqs=2, page_size=page_size, max_pages_per_seq=1)
-    
-    with use_test_mesh():
-        x = hax.random.normal(x_key, (Pos, Embed)) * 0.2
-        
-        page_indices = hax.full({"seq": pt.max_seqs, "page": pt.pages_per_seq}, INVALID, dtype=jnp.int32)
-        page_indices = page_indices.at["seq", 0, "page", 0].set(0)
-        
-        slot_ids = hax.full({"seq": pt.max_seqs}, INVALID, dtype=jnp.int32)
-        slot_ids = slot_ids.at["seq", 0].set(0)
-        
-        seq_lens = hax.full({"seq": pt.max_seqs}, 0, dtype=jnp.int32)
-        seq_lens = seq_lens.at["seq", 0].set(128)
-        
-        cu_q_lens = hax.full({"seq": pt.max_seqs + 1}, 0, dtype=jnp.int32)
-        cu_q_lens = cu_q_lens.at["seq", 1].set(128)
-        
-        new_token_dests = hax.arange(Pos, dtype=jnp.int32)
-        
-        batch_info = PageBatchInfo(
-            slot_ids=slot_ids,
-            page_indices=page_indices,
-            seq_lens=seq_lens,
-            cu_q_lens=cu_q_lens,
-            num_seqs=jnp.array(1, dtype=jnp.int32),
-            new_token_dests=new_token_dests,
-            page_size=page_size,
+    tol = _rpa_tol()
+    # x = hax.random.normal(x_key, (B, Pos, Embed)) * 0.2
+    x = hax.arange((B, Pos, Embed), start=-2, step=0.1, dtype=jnp.float32)
+    full_out = attn(x, AttentionMask.causal(), key=jrandom.PRNGKey(1))
+
+    pt = PageTable.init(max_pages=8, max_seqs=2, page_size=4, max_pages_per_seq=4)
+    sequences = SequenceTable.init(pt.max_seqs, pt.pages_per_seq, pt.page_size)
+    sequences, seq1_arr = sequences.reserve_slot(0)
+    sequences, seq2_arr = sequences.reserve_slot(1)
+    seq1 = int(seq1_arr)
+    seq2 = int(seq2_arr)
+    kv_cache = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
+
+    x0 = x[B, 0]
+    x1 = x[B, 1]
+
+    chunk_sizes = [[4, 2], [0, 1], [0, 1], [2, 1], [1, 2], [1, 1]]
+    off0 = off1 = 0
+    outputs0 = []
+    outputs1 = []
+
+    for step0, step1 in chunk_sizes:
+        tok_axis = Axis("position", step0 + step1)
+        seg_ids = hax.named([seq1] * step0 + [seq2] * step1, tok_axis)
+        pos_ids = hax.concatenate(
+            "position",
+            [
+                hax.arange({"position": step0}, start=off0, dtype=jnp.int32),
+                hax.arange({"position": step1}, start=off1, dtype=jnp.int32),
+            ],
         )
-        
-        pos_ids = hax.arange(Pos, dtype=jnp.int32)
-        
-        kv_cache = attn.empty_page_cache(pt.spec(), dtype=jnp.float32)
-        
-        # This should not raise, even on non-TPU platforms (will use fallback)
-        out, _ = attn.splash_decode(x, kv_cache, batch_info, pos_ids=pos_ids, key=jrandom.PRNGKey(1))
-        
-        # Verify output shape is correct
-        assert out.axis_size("position") == 128
-        assert out.axis_size("embed") == 64
+
+        sequences, pt, binfo = sequences.allocate_for_seq(pt, seg_ids, pos_ids)
+
+        x_chunk = hax.concatenate(
+            "position",
+            [x0[Pos, hax.dslice(off0, step0)], x1[Pos, hax.dslice(off1, step1)]],
+        )
+
+        output, kv_cache = _jit_splash_decode(attn, x_chunk, pos_ids=pos_ids, cache=kv_cache, binfo=binfo)
+        outputs0.append(output["position", hax.dslice(0, step0)])
+        outputs1.append(output["position", hax.dslice(step0, step1)])
+
+        # check each chunk individually
+        assert_trees_all_close(
+            outputs0[-1].array,
+            full_out[B, 0, "position", hax.dslice(off0, step0)].array,
+            atol=tol,
+            rtol=tol,
+        )
+        assert_trees_all_close(
+            outputs1[-1].array,
+            full_out[B, 1, "position", hax.dslice(off1, step1)].array,
+            atol=tol,
+            rtol=tol,
+        )
+
+        off0 += step0
+        off1 += step1
+
+    outputs0_cat = hax.concatenate("position", outputs0)
+    outputs1_cat = hax.concatenate("position", outputs1)
+
+    decoded_arr = hax.stack("batch", [outputs0_cat, outputs1_cat])
+    assert_trees_all_close(full_out.array, decoded_arr.array, atol=tol, rtol=tol)
