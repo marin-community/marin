@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import haliax as hax
 import optax
 
-from levanter.layers.attention import AttentionMask
+from levanter.layers.attention import AttentionMask, AttentionBackend
 
 
 def simple_autoregressive_inference(model, prompt_tokens, max_new_tokens, key):
@@ -97,7 +97,6 @@ if __name__ == "__main__":
     print(f"Loading model from {args.checkpoint}...")
     
     # Set up configuration
-    model_config = LlamaConfig()
     trainer_config = TrainerConfig()
     
     # Load tokenizer first to encode the prompt
@@ -121,14 +120,19 @@ if __name__ == "__main__":
         
         print("Loading HF checkpoint...")
         converter = HFCheckpointConverter(
-            type(model_config),
+            LlamaConfig,
             reference_checkpoint=args.checkpoint,
             tokenizer=tokenizer,
         )
         
+        # Load the config from checkpoint and override attn_backend to VANILLA
+        hf_config = converter.hf_config_from_hf_checkpoint(args.checkpoint)
+        model_config = converter.config_from_hf_config(hf_config, overrides={"attn_backend": AttentionBackend.VANILLA})
+        
         model = converter.load_pretrained(
             model_config.model_type,
             ref=args.checkpoint,
+            config=model_config,
             dtype=trainer_config.mp.compute_dtype,
             axis_mapping=trainer_config.parameter_axis_mapping,
         )
