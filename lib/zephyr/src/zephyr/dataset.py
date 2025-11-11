@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
@@ -23,6 +24,9 @@ from typing import Generic, TypeVar
 
 import braceexpand
 import fsspec
+from braceexpand import braceexpand
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -211,6 +215,62 @@ T = TypeVar("T")
 R = TypeVar("R")
 
 
+def fsspec_glob(file_path):
+    """Get a list of files in a fsspec filesystem that match a pattern."""
+    fs = fsspec.core.url_to_fs(file_path)[0]
+    protocol = fsspec.core.split_protocol(file_path)[0]
+
+    def join_protocol(file):
+        if protocol:
+            return f"{protocol}://{file}"
+        return file
+
+    out = []
+
+    for file in braceexpand(file_path):
+        out.extend(join_protocol(file) for file in fs.glob(file))
+
+    return out
+
+
+def infer_file_shard(file_path: str) -> int | None:
+    """Infer shard number from file path using common patterns.
+
+    Supports patterns like:
+    - data-{shard:05d}-of-{total:05d}.jsonl
+    - data-part-00001-of-00010.parquet
+
+    Args:
+        file_path: File path to analyze
+
+    Returns:
+        Inferred shard number, or None if not found
+
+    Example:
+        >>> infer_file_shard("data-00003-of-00100.jsonl")
+        3
+        >>> infer_file_shard("data-part-00010-of-00050.parquet")
+        10
+        >>> infer_file_shard("data.jsonl")
+        None
+    """
+    import re
+
+    patterns = [
+        r"-([0-9]+)-of-[0-9]+",  # Matches -00003-of-00100
+        r"-part-([0-9]+)-of-[0-9]+",  # Matches -part-00010-of-00050
+        r"(-[0-9]{5})",
+        r"(-[0-9]{4})",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, file_path)
+        if match:
+            return int(match.group(1))
+
+    return None
+
+
 class Dataset(Generic[T]):
     """Lazy dataset with method chaining for data processing pipelines.
 
@@ -301,7 +361,7 @@ class Dataset(Generic[T]):
         protocol = fsspec.core.split_protocol(pattern)[0]
 
         files = []
-        for expanded in braceexpand.braceexpand(pattern):
+        for expanded in braceexpand(pattern):
             for f in fs.glob(expanded):
                 if protocol:
                     files.append(f"{protocol}://{f}")
@@ -313,6 +373,43 @@ class Dataset(Generic[T]):
             raise FileNotFoundError(f"No files found matching pattern: {pattern}")
 
         return Dataset.from_list(files)
+
+    def skip_existing_outputs(self, output_pattern: str) -> Dataset[T]:
+        """Skip processing for outputs that already exist.
+
+        This method checks for existing output files matching the given pattern
+        and skips processing for those outputs. Useful for resuming interrupted
+        pipelines without reprocessing completed work.
+
+        Args:
+            output_pattern: Output path pattern to check (e.g., "dir/data-{shard:05d}-of-{total:05d}.jsonl.gz")
+
+        Returns:
+            New dataset with skip_existing_outputs operation appended
+
+        Example:
+            >>> backend = create_backend("ray", max_parallelism=10)
+            >>> ds = (Dataset
+            ...     .from_files("/input", "*.jsonl.gz")
+            ...     .map(lambda path: process_file(path))
+            ...     .skip_existing_outputs("/output/processed-{shard:05d}-of-{total:05d}.jsonl.gz")
+            ...     .write_jsonl("/output/processed-{shard:05d}-of-{total:05d}.jsonl.gz")
+            ... )
+            >>> output_files = list(backend.execute(ds))
+        """
+        formatted = output_pattern.format(total=1, basename="*")
+        existing_files = set(fsspec_glob(formatted))
+        output_shards = [infer_file_shard(f) for f in existing_files]
+
+        def _skip_shard(file_list: Iterator[str]) -> Iterator[str]:
+            for file in file_list:
+                input_shard = infer_file_shard(file)
+                if input_shard not in output_shards:
+                    yield file
+                else:
+                    logger.info(f"Skipping existing output for shard {input_shard}: {file}")
+
+        return self.map_shard(_skip_shard)
 
     def map(self, fn: Callable[[T], R]) -> Dataset[R]:
         """Map a function over the dataset.
