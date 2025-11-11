@@ -487,9 +487,10 @@ def open_dashboard(ctx, port):
             urls = f"{direct_url} | {proxy_url}" if proxy_url else direct_url
             print(f"  {name} ({info.zone}) - {urls}")
             print(f"    IP: {info.external_ip} ({info.head_ip})")
-            print(
-                f"    Dashboard: http://localhost:{ports.dashboard_port} | GCS: localhost:{ports.gcs_port} | API: localhost:{ports.api_port}"
-            )
+            dashboard_url = f"http://localhost:{ports.dashboard_port}"
+            gcs_url = f"localhost:{ports.gcs_port}"
+            api_url = f"localhost:{ports.api_port}"
+            print(f"    Dashboard: {dashboard_url} | GCS: {gcs_url} | API: {api_url}")
             print()
 
         if conn.proxy:
