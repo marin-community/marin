@@ -198,7 +198,7 @@ class EvaluateLessonHook(PeriodicHook):
         stats = compute_batch_stats(batch, context.lesson_id)
         context.log_prompt_example(context.lesson_id, batch, eval_type="micro_eval")
         metrics = build_eval_metrics(prefix="inference.micro_eval", lesson_id=context.lesson_id, batch=batch)
-        context.worker.tracker.log(metrics, step=context.step)x
+        context.worker.tracker.log(metrics, step=context.step)
         logger.info("Eval metrics for lesson %s at step %d: %s", context.lesson_id, context.step, metrics)
 
         if self.update_curriculum:
