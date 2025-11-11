@@ -13,79 +13,114 @@
 # limitations under the License.
 
 """
-Count total tokens in a specified column across files using a HuggingFace tokenizer.
+Usage:
 
-Example usage with zephyr CLI:
-
-```bash
-uv run zephyr --cluster=us-central2 --backend=ray --max-parallelism=1000 --memory=1GB \
-    lib/marin/src/marin/validation/count_total_tokens.py \
-    --input_pattern "gs://marin-us-central2/raw/dolma/v1.7/cc_en_head-*.json.gz" \
+ray job submit --working-dir . --no-wait -- \
+python -m marin.validation.count_total_tokens \
+    --input_path gs://marin-data/filtered/dclm-fasttext-quality/fineweb/fw-v1.0/md/ \
     --text_column text
-```
 """
 
-import logging
-from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+import argparse
+import os
+import time
 
-import draccus
+import pandas as pd
+import ray
+
 from marin.utils import fsspec_glob
-from transformers import AutoTokenizer
-from zephyr import Dataset, flow_backend, load_file
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+MAX_TASKS_IN_FLIGHT = 1000
+NUM_DOWNLOAD_RETRIES = 5
 
 
-@dataclass(frozen=True)
-class CountTotalTokensConfig:
-    input_pattern: str
-    """Glob pattern for input files (e.g., gs://bucket/path/**/*.jsonl.gz)."""
+def count_tokens_in_file(filename: str, tokenizer_name: str, text_column: str) -> int:
+    from transformers import AutoTokenizer
 
-    tokenizer_name: str = "meta-llama/Llama-3.1-8B-Instruct"
-    """Name of the HuggingFace tokenizer to use."""
+    tokenizer = None
+    for _ in range(NUM_DOWNLOAD_RETRIES):
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+            break
+        except Exception as e:
+            print(f"Error loading tokenizer: {e}")
+            time.sleep(1)
 
-    text_column: str = "text"
-    """Name of the column containing text to tokenize."""
+    if tokenizer is None:
+        raise RuntimeError(f"Failed to load tokenizer {tokenizer_name} after {NUM_DOWNLOAD_RETRIES} retries")
 
+    total_tokens = 0
 
-def count_tokens_shard(documents: Iterator[Sequence[dict]], tokenizer_name: str, text_column: str) -> Iterator[int]:
-    """Count tokens in a shard of documents using batched tokenization."""
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    # Determine file format and read accordingly
+    if filename.endswith(".parquet"):
+        df = pd.read_parquet(filename)
+    elif filename.endswith(".jsonl.zst"):
+        df = pd.read_json(filename, lines=True, compression="zstd")
+    elif filename.endswith(".jsonl.gz"):
+        df = pd.read_json(filename, lines=True, compression="gzip")
+    elif filename.endswith(".jsonl"):
+        df = pd.read_json(filename, lines=True)
+    else:
+        raise ValueError(f"Unsupported file format: {filename}")
 
-    for batch in documents:
-        texts = [str(record.get(text_column, "") or "") for record in batch]
-        encodings = tokenizer(texts, truncation=False, padding=False)
-        for ids in encodings["input_ids"]:
-            yield len(ids)
+    # Count tokens in 'text' column if it exists
+    if text_column in df.columns:
+        for text in df[text_column].dropna():
+            total_tokens += len(tokenizer.encode(str(text)))
 
-
-def count_total_tokens(input_pattern: str, tokenizer_name: str, text_column: str) -> int:
-    """Count total tokens across all files matching the pattern."""
-    input_paths = fsspec_glob(input_pattern)
-    logger.info(f"Found {len(input_paths)} files to process")
-
-    backend = flow_backend()
-
-    pipeline = (
-        Dataset.from_list(input_paths)
-        .flat_map(load_file)
-        .batch(64)
-        .map_shard(lambda docs: count_tokens_shard(docs, tokenizer_name, text_column))
-        .reduce(sum)
-    )
-
-    results = list(backend.execute(pipeline))
-    total_tokens = results[0] if results else 0
-
-    logger.info(f"Total tokens in '{text_column}' column: {total_tokens:,}")
     return total_tokens
 
 
-@draccus.wrap()
-def main(cfg: CountTotalTokensConfig):
-    count_total_tokens(cfg.input_pattern, cfg.tokenizer_name, cfg.text_column)
+@ray.remote(memory=1 * 1024 * 1024 * 1024)
+def process_file(input_filename: str, tokenizer_name: str, text_column: str):
+    file_tokens = count_tokens_in_file(input_filename, tokenizer_name, text_column)
+    return file_tokens
+
+
+def count_total_tokens(input_path: str, tokenizer_name: str, filetype: str, text_column: str) -> int:
+
+    responses = []
+    tokens = 0
+    input_paths = fsspec_glob(os.path.join(input_path, f"**/*.{filetype}"))
+    for input_path in input_paths:
+        while len(responses) >= MAX_TASKS_IN_FLIGHT:
+            ready_refs, responses = ray.wait(responses, num_returns=1)
+            for response in ray.get(ready_refs):
+                tokens += response
+
+        result_ref = process_file.remote(input_path, tokenizer_name, text_column)
+        responses.append(result_ref)
+
+    # Wait for all tasks to complete
+    for response in ray.get(responses):
+        tokens += response
+
+    return tokens
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Count total tokens in 'text' fields of supported file formats.")
+    parser.add_argument("--input_path", type=str, required=True, help="Input directory containing data files")
+    parser.add_argument(
+        "--tokenizer_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct", help="Name of the tokenizer to use"
+    )
+    parser.add_argument(
+        "--filetype",
+        type=str,
+        default="jsonl.gz",
+        help="Filetype of the input files (jsonl.gz, jsonl.zst, parquet, jsonl)",
+    )
+    parser.add_argument(
+        "--text_column",
+        type=str,
+        default="text",
+        help="Name of the text column to count tokens in",
+    )
+
+    args = parser.parse_args()
+
+    total_tokens = count_total_tokens(args.input_path, args.tokenizer_name, args.filetype, args.text_column)
+    print(f"Total tokens in 'text' fields: {total_tokens}")
 
 
 if __name__ == "__main__":

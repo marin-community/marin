@@ -17,11 +17,17 @@
 https://huggingface.co/datasets/GAIR/lima
 """
 
-import os
+import json
 from dataclasses import dataclass
+from experiments.defaults import default_tokenize
 
-from marin.download.huggingface.download_hf import DownloadConfig as HfDownloadConfig
-from marin.download.huggingface.download_hf import download_hf
+import fsspec
+import ray
+import os
+
+from marin.core.runtime import cached_or_construct_output
+from marin.download.huggingface.download_hf import DownloadConfig as HfDownloadConfig, download_hf
+from experiments.llama import llama3_tokenizer
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -29,10 +35,6 @@ from marin.execution.executor import (
     versioned,
 )
 from marin.processing.tokenize.data_configs import TokenizerStep
-from zephyr import Dataset, flow_backend, load_jsonl
-
-from experiments.defaults import default_tokenize
-from experiments.llama import llama3_tokenizer
 
 lima = (
     ExecutorStep(
@@ -58,31 +60,30 @@ class LimaConversationsToTextConfig:
     raw_lima: str
 
 
-def convert_to_text(record):
-    """Convert LIMA conversation format to plain text."""
-    parts = []
-    for i, content in enumerate(record.get("conversations", [])):
-        role = "User" if i % 2 == 0 else "Assistant"
-        parts.append(f"{role}: {content}")
-
-    if parts:
-        return {"text": "\n\n".join(parts)}
-    return None
+@ray.remote
+@cached_or_construct_output(success_suffix="SUCCESS")
+def _convert_lima_dataset(input_path, output_path):
+    """Convert a single LIMA jsonl file with conversations to a plain text jsonl file."""
+    output_json = os.path.join(output_path, "train.jsonl")
+    with fsspec.open(input_path, "rt") as src, fsspec.open(output_json, "wt") as dst:
+        for line in src:
+            record = json.loads(line)
+            parts = []
+            for i, content in enumerate(record.get("conversations", [])):
+                if i == 0:
+                    print(content)
+                role = "User" if i % 2 == 0 else "Assistant"
+                parts.append(f"{role}: {content}")
+            if parts:
+                dst.write(json.dumps({"text": "\n\n".join(parts)}) + "\n")
+    return True
 
 
 def convert_lima_conversations(config: LimaConversationsToTextConfig):
     input_path = os.path.join(config.raw_lima, "train.jsonl")
-    output_path = os.path.join(config.raw_lima.replace("lima", "lima_text"), "train.jsonl")
+    future = _convert_lima_dataset.remote(input_path, config.raw_lima.replace("lima", "lima_text"))
 
-    backend = flow_backend()
-    pipeline = (
-        Dataset.from_files(input_path)
-        .flat_map(load_jsonl)
-        .map(convert_to_text)
-        .filter(lambda x: x is not None)
-        .write_jsonl(output_path)
-    )
-    list(backend.execute(pipeline))
+    ray.get(future)
 
 
 lima_text = ExecutorStep(
