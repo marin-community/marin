@@ -461,9 +461,8 @@ class ReplContext:
             raise ValueError("Choice missing logprobs. Use logprobs=True in API call.")
 
         tokens = []
-        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct")
         for t in choice.logprobs.content:
-            token_id = tokenizer.convert_tokens_to_ids(t.token)
+            token_id = self.server.inference_context.tokenizer.convert_tokens_to_ids(t.token)
             tokens.append(token_id)
 
         if not tokens:
@@ -497,7 +496,16 @@ class ReplContext:
             response_token_ids = self._response_tokens_from_choice(choice)
             response_logprobs = self._logprobs_from_choice(choice)
 
-        prompt_tokens = [128000, 128006, 9125, 128007, 271, 38766, 1303, 33025, 2696, 25, 6790, 220, 2366, 18, 198, 15724, 2696, 25, 220, 2705, 4723, 220, 2366, 20, 271, 128009, 128006, 882, 128007, 271, 9906, 11, 1268, 527, 499, 30, 128009, 128006, 78191, 128007, 271]
+        messages = [
+            {"role": "user", "content": "Hello, how are you?"}
+        ]
+        # https://huggingface.co/meta-llama/Llama-3.2-1B-Instruct/discussions/14#679229feb7c3dc07f41e213b
+        prompt_tokens = self.server.inference_context.tokenizer.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            date_string="06 Nov 2025"
+        )
 
         tokens_list = prompt_tokens + response_token_ids.tolist()
         tokens = np.array([tokens_list] * 4, dtype=np.int32).reshape(4, -1)
