@@ -27,13 +27,12 @@ from typing import Any
 
 import fsspec
 import requests
-from zephyr import Dataset, flow_backend
-from zephyr.writers import atomic_rename
+from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, ensure_versioned, this_output_path
+from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
-
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, ensure_versioned, this_output_path
-from marin.utils import fsspec_exists, fsspec_mkdirs
+from zephyr import Dataset, flow_backend
+from zephyr.writers import atomic_rename
 
 logger = logging.getLogger("ray")
 
@@ -257,20 +256,6 @@ def _download_and_convert_single(
     dataset: UncheatableEvalDataset,
     request_options: _RequestOptions,
 ) -> dict[str, Any]:
-    # Skip if output already exists
-    if fsspec_exists(output_file_path):
-        logger.info("Skipping %s because output already exists at %s", dataset.name, output_file_path)
-        # Try to determine record count from existing file
-        try:
-            record_count = 0
-            with fsspec.open(output_file_path, "rt", encoding="utf-8", compression="gzip") as f:
-                for _ in f:
-                    record_count += 1
-            return {"records": record_count, "output_file": output_file_path}
-        except Exception:
-            # If we can't read the file, just return unknown count
-            return {"records": None, "output_file": output_file_path}
-
     session = requests.Session()
     retries = Retry(total=5, backoff_factor=1.0, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
     adapter = HTTPAdapter(max_retries=retries)
@@ -351,9 +336,17 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
     metadata_records: list[dict[str, Any]] = []
 
     backend = flow_backend(max_parallelism=cfg.max_concurrent_downloads, max_retries=3)
-    pipeline = Dataset.from_list(tasks).map(lambda task: _download_and_convert_single(*task))
+    pipeline = (
+        Dataset.from_list(tasks)
+        .map(lambda task: _download_and_convert_single(*task))
+        .write_jsonl(f"{cfg.output_path}/metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
+    )
+    output_paths = list(backend.execute(pipeline))
 
-    for dataset, result in zip(filtered_datasets, backend.execute(pipeline), strict=False):
+    for dataset, metadata_file in zip(filtered_datasets, output_paths, strict=True):
+        with fsspec.open(metadata_file, "r", encoding="utf-8") as meta_file:
+            result = json.load(meta_file)
+
         try:
             metadata_records.append(
                 {
