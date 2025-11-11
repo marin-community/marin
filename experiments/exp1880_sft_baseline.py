@@ -16,8 +16,10 @@
 
 This experiment mirrors ``exp808_sft_mixture`` but restricts the mixture to the
 SmolTalk2 SFT release and NVIDIA's Nemotron Post Training Dataset v2. Mixture
-weights are looked up dynamically from the Hugging Face datasets-server ``/size``
-endpoint so that each split is weighted by its document count.
+weights were looked up dynamically from the Hugging Face datasets-server ``/size``
+endpoint so that each split is weighted by its document count. (2025-11-07)
+
+TODO: this should probably be tokens instead of doc counts.
 """
 import dataclasses
 import math

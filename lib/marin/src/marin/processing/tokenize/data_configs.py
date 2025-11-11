@@ -145,7 +145,7 @@ def lm_mixture_data_config(
 
     kwargs = {}
     if mixture_block_size is not None:
-        kwargs['mixture_block_size'] = mixture_block_size
+        kwargs["mixture_block_size"] = mixture_block_size
 
     return LMMixtureDatasetConfig(
         configs=configs,

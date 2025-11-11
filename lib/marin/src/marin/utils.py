@@ -277,6 +277,9 @@ def call_with_hf_backoff(
             )
 
 
+    assert False, "Unreachable"
+
+
 def load_dataset_with_backoff(
     *,
     context: str,
