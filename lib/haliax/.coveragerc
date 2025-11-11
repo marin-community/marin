@@ -1,0 +1,8 @@
+[report]
+exclude_lines =
+    pragma: not covered
+    pragma: no cover
+    @overload
+    @typing.overload
+    @abc.abstractmethod
+    raise NotImplementedError

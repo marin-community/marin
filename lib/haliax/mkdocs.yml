@@ -1,0 +1,105 @@
+site_name: Haliax
+repo_url: https://github.com/stanford-crfm/haliax/
+edit_uri: blob/main/docs/
+theme:
+  name: material
+  highlightjs: false
+  features:
+    - content.code.copy
+markdown_extensions:
+- attr_list
+- admonition
+#- callouts
+- footnotes
+- codehilite
+- pymdownx.details  # Allowing hidden expandable regions denoted by ???
+- pymdownx.magiclink
+- pymdownx.superfences
+- pymdownx.arithmatex: # Render LaTeX via MathJax
+      generic: true
+- pymdownx.superfences  # Seems to enable syntax highlighting when used with the Material theme.
+- pymdownx.snippets: # Include one Markdown file into another
+      base_path: docs
+- pymdownx.inlinehilite
+- pymdownx.snippets:
+    check_paths: true
+- pymdownx.superfences
+- toc:
+    permalink: "¤"
+    toc_depth: "2-3"
+
+plugins:
+  - search
+  - autorefs
+  - mkdocstrings:
+      handlers:
+        python:
+#          setup_commands:
+#              - import pytkdocs_tweaks
+#              - pytkdocs_tweaks.main()
+          paths: [src]
+          import:
+            - https://docs.python.org/3/objects.inv
+            - https://jax.readthedocs.io/en/latest/objects.inv
+            - https://docs.kidger.site/equinox/objects.inv
+            - https://einops.rocks/objects.inv
+          options:
+            docstring_options:
+              ignore_init_summary: true
+            show_source: false
+            filters:
+              - "!^_"
+            heading_level: 4
+            inherited_members: true
+            members_order: source
+            merge_init_into_class: true
+            parameter_headings: true
+            separate_signature: false
+            load_external_modules: true
+            preload_modules: [haliax, haliax.core]
+            show_if_no_docstring: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_signature_annotations: true
+            docstring_section_style: list
+            show_symbol_type_heading: true
+            show_symbol_type_toc: false
+            signature_crossrefs: true
+            line_length: 100
+            summary: true
+
+  - include-markdown
+extra_css:
+  - css/material.css
+  - css/mkdocstrings.css
+
+
+watch:
+  - src
+  - docs
+nav:
+  - Home: 'index.md'
+  - Tutorials:
+      - "Introduction to Haliax": https://colab.research.google.com/drive/1TiTcQQ4V5mopbgCu1SVl-oqJtXn7rFnC
+      - "Distributed Training and FSDP": https://colab.research.google.com/drive/1QX4yH3zRFF3Xiibf1aahETcSQ5nbcUMz
+      - "Tensor Parallelism": https://colab.research.google.com/drive/18_BrtDpe1lu89M4T6fKzda8DdSLtFJhi
+      - "Mixed Precision with `jmp`": https://colab.research.google.com/drive/1_4cikwt-UhSH7yRzNRK8ze9msM9r2mEl?usp=sharing
+  - Cheatsheet: 'cheatsheet.md'
+  - Named Arrays:
+    - Broadcasting: 'broadcasting.md'
+    - Indexing and Slicing: 'indexing.md'
+    - Mutable References: 'mutable-refs.md'
+    - Rearrange: 'rearrange.md'
+    - Matrix Multiplication: 'matmul.md'
+    - Type Annotations: 'typing.md'
+  - Higher Order Functions:
+    - Scan and Fold: 'scan.md'
+    - Vectorization: 'vmap.md'
+  - Neural Networks: 'nn.md'
+  - Partitioning: 'partitioning.md'
+  - FP8: 'fp8.md'
+  - Serialization: 'state-dict.md'
+  - API Reference: 'api.md'
+  - FAQ: 'faq.md'
+  - LLMs:
+      - "LLM Primer": 'primer.md'
