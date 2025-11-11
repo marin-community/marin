@@ -29,10 +29,10 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 import requests
-from marin.core.runtime import cached_or_construct_output
 from marin.download.nemotron_cc.utils import decompress_zstd_stream
 from marin.utils import fsspec_exists
 from zephyr import Dataset, flow_backend
+from zephyr.writers import atomic_rename
 
 logger = logging.getLogger("ray")
 
@@ -40,17 +40,15 @@ myagent = "marin-nemotron-ingress/1.0"
 NCC_PATH_FILE_URL = "https://data.commoncrawl.org/contrib/Nemotron/Nemotron-CC/data-jsonl.paths.gz"
 
 
-@cached_or_construct_output(success_suffix="SUCCESS")
-def download_single_nemotron_path(input_file_path: str, output_file_path: str, chunk_size: int):
+def download_single_nemotron_path(file_info: tuple[str, str, int]):
     """
     Fetches content from a Common Crawl path.
     Args:
-        input_file_path (str): Path to the Common Crawl file
-        output_file_path (str): Path to the output file
-        chunk_size (int): Size of chunks to read
+        file_info: Tuple of (input_file_path, output_file_path, chunk_size)
     Returns:
-        list: List of content from the JSONL records
+        None
     """
+    input_file_path, output_file_path, chunk_size = file_info
     contents = []
 
     cc_url = f"https://data.commoncrawl.org/{input_file_path}"
@@ -73,18 +71,21 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str, c
         logger.warning("No valid JSONL records found")
         return None
 
-    with fsspec.open(output_file_path, "w", compression="gzip") as f:
-        for content in contents:
-            dolma_format = {
-                "id": content["warc_record_id"],
-                "text": content["text"],
-                "source": "nemotron",
-                "format": "text",
-                "metadata": {
-                    f"nemotron_{key}": value for key, value in content.items() if key not in ("warc_record_id", "text")
-                },
-            }
-            print(json.dumps(dolma_format), file=f)
+    with atomic_rename(output_file_path) as temp_path:
+        with fsspec.open(temp_path, "w", compression="gzip") as f:
+            for content in contents:
+                dolma_format = {
+                    "id": content["warc_record_id"],
+                    "text": content["text"],
+                    "source": "nemotron",
+                    "format": "text",
+                    "metadata": {
+                        f"nemotron_{key}": value
+                        for key, value in content.items()
+                        if key not in ("warc_record_id", "text")
+                    },
+                }
+                print(json.dumps(dolma_format), file=f)
 
 
 @dataclass
@@ -95,32 +96,27 @@ class NemotronIngressConfig:
 
 @draccus.wrap()
 def download_nemotron_cc(cfg: NemotronIngressConfig):
-    files = []
-
     paths_file_path = os.path.join(cfg.output_path, "data-jsonl.paths")
     logger.info(f"Downloading Nemotron CC path file {paths_file_path}")
 
-    if fsspec_exists(paths_file_path):
-        logger.warning(f"Paths file {paths_file_path} already exists. Skipping download.")
-    else:
-        with fsspec.open(NCC_PATH_FILE_URL, "rb") as f, fsspec.open(paths_file_path, "wb") as f_out:
-            f_out.write(f.read())
+    with fsspec.open(NCC_PATH_FILE_URL, "rb") as f, fsspec.open(paths_file_path, "wb") as f_out:
+        f_out.write(f.read())
 
     logger.info(f"Reading paths from {paths_file_path}")
+    all_files = []
     with fsspec.open(paths_file_path, "r", compression="gzip") as f:
         for line in f:
             file = line.strip()
-            output_file_path = os.path.join(cfg.output_path, file).replace("jsonl.zstd", "jsonl.gz")
-            if not fsspec_exists(output_file_path):
-                files.append((file, output_file_path))
-            else:
-                logger.warning(f"Output file {output_file_path} already exists. Skipping download.")
+            output_file_path = os.path.join(cfg.output_path, file)
+            all_files.append((file, output_file_path, cfg.chunk_size))
 
-    logger.info(f"Processing {len(files)} Nemotron CC files")
+    logger.info(f"Processing {len(all_files)} Nemotron CC files")
 
     backend = flow_backend()
-    pipeline = Dataset.from_list(files).map(
-        lambda file_info: download_single_nemotron_path(file_info[0], file_info[1], cfg.chunk_size)
+    pipeline = (
+        Dataset.from_list(all_files)
+        .filter(lambda file_info: not fsspec_exists(file_info[1]))
+        .map(download_single_nemotron_path)
     )
 
     list(backend.execute(pipeline))

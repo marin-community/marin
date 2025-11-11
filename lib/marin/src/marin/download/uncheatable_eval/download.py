@@ -28,10 +28,10 @@ from typing import Any
 import fsspec
 import requests
 from zephyr import Dataset, flow_backend
+from zephyr.writers import atomic_rename
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
-from marin.core.runtime import cached_or_construct_output
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, ensure_versioned, this_output_path
 from marin.utils import fsspec_exists, fsspec_mkdirs
 
@@ -251,13 +251,26 @@ def _normalize_record(raw: Any, dataset: UncheatableEvalDataset, index: int) -> 
     return {"id": record_id, "text": text, "source": dataset.source_label}
 
 
-@cached_or_construct_output(success_suffix="SUCCESS")
 def _download_and_convert_single(
     input_url: str,
     output_file_path: str,
     dataset: UncheatableEvalDataset,
     request_options: _RequestOptions,
 ) -> dict[str, Any]:
+    # Skip if output already exists
+    if fsspec_exists(output_file_path):
+        logger.info("Skipping %s because output already exists at %s", dataset.name, output_file_path)
+        # Try to determine record count from existing file
+        try:
+            record_count = 0
+            with fsspec.open(output_file_path, "rt", encoding="utf-8", compression="gzip") as f:
+                for _ in f:
+                    record_count += 1
+            return {"records": record_count, "output_file": output_file_path}
+        except Exception:
+            # If we can't read the file, just return unknown count
+            return {"records": None, "output_file": output_file_path}
+
     session = requests.Session()
     retries = Retry(total=5, backoff_factor=1.0, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
     adapter = HTTPAdapter(max_retries=retries)
@@ -279,12 +292,13 @@ def _download_and_convert_single(
     fsspec_mkdirs(os.path.dirname(output_file_path), exist_ok=True)
 
     record_count = 0
-    with fsspec.open(output_file_path, "wt", encoding="utf-8", compression="gzip") as outfile:
-        for index, raw in enumerate(payload):
-            normalized = _normalize_record(raw, dataset, index)
-            json.dump(normalized, outfile, ensure_ascii=False)
-            outfile.write("\n")
-            record_count += 1
+    with atomic_rename(output_file_path) as temp_path:
+        with fsspec.open(temp_path, "wt", encoding="utf-8", compression="gzip") as outfile:
+            for index, raw in enumerate(payload):
+                normalized = _normalize_record(raw, dataset, index)
+                json.dump(normalized, outfile, ensure_ascii=False)
+                outfile.write("\n")
+                record_count += 1
 
     logger.info("Wrote %s records to %s", record_count, output_file_path)
     return {"records": record_count, "output_file": output_file_path}
@@ -294,16 +308,11 @@ def _generate_tasks(
     datasets: Iterable[UncheatableEvalDataset],
     output_path: str,
     request_options: _RequestOptions,
-    skip_existing: bool,
 ) -> tuple[list[tuple[str, str, UncheatableEvalDataset, _RequestOptions]], list[UncheatableEvalDataset]]:
     tasks: list[tuple[str, str, UncheatableEvalDataset, _RequestOptions]] = []
     filtered: list[UncheatableEvalDataset] = []
     for dataset in datasets:
         output_file = posixpath.join(output_path, dataset.output_filename())
-        success_file = f"{output_file}.SUCCESS"
-        if skip_existing and fsspec_exists(success_file):
-            logger.info("Skipping %s because output already exists", dataset.name)
-            continue
         tasks.append((dataset.download_url, output_file, dataset, request_options))
         filtered.append(dataset)
     return tasks, filtered
@@ -333,7 +342,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
     output_path = str(cfg.output_path)
     fsspec_mkdirs(output_path, exist_ok=True)
 
-    tasks, filtered_datasets = _generate_tasks(latest_datasets, output_path, request_options, cfg.skip_existing)
+    tasks, filtered_datasets = _generate_tasks(latest_datasets, output_path, request_options)
 
     if not tasks:
         logger.info("No new datasets to process")

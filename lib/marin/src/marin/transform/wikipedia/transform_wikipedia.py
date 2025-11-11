@@ -299,6 +299,7 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
         files = files[: cfg.max_files]
 
     output_base = os.path.join(cfg.output_path, cfg.revision)
+    output_pattern = f"{output_base}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz"
 
     pipeline = (
         Dataset.from_list(files)
@@ -315,6 +316,6 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
             )
         )
         .filter(lambda record: record is not None)
-        .write_jsonl(f"{output_base}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+        .write_jsonl(output_pattern, skip_existing=True)
     )
     list(backend.execute(pipeline))

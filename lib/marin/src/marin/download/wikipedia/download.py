@@ -51,32 +51,43 @@ class DownloadConfig:
     output_path: str
 
 
-def download_tar(url: str, output_path: str) -> None:
-    output_path = os.path.join(output_path, url.split("/")[-1])
+def make_download_function(urls: list[str], output_path: str):
+    """Create a download function with URLs and output path in closure."""
 
-    logger.info(f"Downloading URL: {url} to {output_path}")
+    def download_tar(shard_filename: str) -> str:
+        # Extract shard index from filename like "task-00001.txt"
+        import re
 
-    if fsspec_exists(output_path):
-        logger.info(f"File already exists: {output_path}")
-        return output_path
-    try:
-        total_size = fsspec_size(url)
-        pbar = tqdm(total=total_size, desc="Downloading File", unit="B", unit_scale=True)
+        match = re.search(r"-([0-9]{5})", shard_filename)
+        if match is None:
+            raise ValueError(f"Could not extract shard number from: {shard_filename}")
+        shard_idx = int(match.group(1))
 
-        with fsspec.open(output_path, "wb") as f:
-            r = requests.get(url, stream=True)
+        url = urls[shard_idx]
+        output_filename = os.path.join(output_path, f"downloaded-{shard_idx:05d}.tar.gz")
 
-            for chunk in r.raw.stream(20 * 1024 * 1024, decode_content=False):
-                if chunk:
-                    f.write(chunk)
-                    f.flush()
+        logger.info(f"Downloading URL: {url} to {output_filename}")
 
-                    pbar.update(len(chunk))
+        try:
+            total_size = fsspec_size(url)
+            pbar = tqdm(total=total_size, desc="Downloading File", unit="B", unit_scale=True)
 
-        return output_path
-    except Exception as e:
-        logger.error(f"Error downloading URL: {url}")
-        raise e
+            with fsspec.open(output_filename, "wb") as f:
+                r = requests.get(url, stream=True)
+
+                for chunk in r.raw.stream(20 * 1024 * 1024, decode_content=False):
+                    if chunk:
+                        f.write(chunk)
+                        f.flush()
+
+                        pbar.update(len(chunk))
+
+            return output_filename
+        except Exception as e:
+            logger.error(f"Error downloading URL: {url}")
+            raise e
+
+    return download_tar
 
 
 def process_file(input_file: str, output_path: str) -> None:
@@ -87,7 +98,10 @@ def process_file(input_file: str, output_path: str) -> None:
         with fsspec.open(input_file) as f:
             with tarfile.open(fileobj=f, mode="r:gz") as tr:
                 for info in tr:
-                    with tr.extractfile(info) as file:
+                    extracted_file = tr.extractfile(info)
+                    if extracted_file is None:
+                        continue
+                    with extracted_file as file:
                         file_content = file.read()
                         file_path = os.path.join(output_path, info.name + ".gz")
                         # Each file is a .ndjson file, which contains about 18k-21k articles
@@ -108,10 +122,26 @@ def download(cfg: DownloadConfig) -> None:
 
     output_base = os.path.join(cfg.output_path, cfg.revision)
 
+    # Create task filenames with shard numbers that can be inferred
+    task_filenames = [f"task-{i:05d}.txt" for i in range(len(cfg.input_urls))]
+
     # Single pipeline: download each URL, then extract the downloaded file
+    download_fn = make_download_function(cfg.input_urls, cfg.output_path)
+
+    def _output_exists(task_filename: str) -> bool:
+        import re
+
+        match = re.search(r"-([0-9]{5})", task_filename)
+        if match is None:
+            return False
+        shard_idx = int(match.group(1))
+        output_file = os.path.join(cfg.output_path, f"downloaded-{shard_idx:05d}.tar.gz")
+        return fsspec_exists(output_file)
+
     pipeline = (
-        Dataset.from_list(cfg.input_urls)
-        .map(lambda url: download_tar(url, cfg.output_path))
+        Dataset.from_list(task_filenames)
+        .filter(lambda task: not _output_exists(task))
+        .map(download_fn)
         .map(lambda file: process_file(file, output_base))
     )
 

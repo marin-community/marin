@@ -24,18 +24,16 @@ from datetime import datetime
 import draccus
 import fsspec
 import pandas as pd
-from warcio import ArchiveIterator
-from zephyr import Dataset, flow_backend
-
-from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_rm
 from marin.web.convert import convert_page
+from warcio import ArchiveIterator
+from zephyr import Dataset, flow_backend
+from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
 
 
-@cached_or_construct_output(success_suffix="SUCCESS")  # We use this decorator to make this function idempotent
 def process_one_warc_file(
     input_path: str,
     output_path: str,
@@ -148,45 +146,50 @@ def process_one_warc_file(
         f"{length_warc / length_url_inp_list} ratio"
     )
 
-    with fsspec.open(md_output_file, "wt", compression="gzip") as f:  # md output
-        for _index, row in df.iterrows():
-            out_fw = row.to_dict()
-            out_dolma = {
-                "id": out_fw["id"],
-                "text": out_fw["md"] if out_fw["md"] else "",
-                "source": "fineweb",
-                "format": "md",
-                "metadata": {f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "html", "text")},
-            }
-
-            print(json.dumps(out_dolma), file=f)
-
-    if text_output_file and "text" in df.columns:
-        with fsspec.open(text_output_file, "wt", compression="gzip") as f:  # text output
+    with atomic_rename(md_output_file) as temp_path:
+        with fsspec.open(temp_path, "wt", compression="gzip") as f:  # md output
             for _index, row in df.iterrows():
                 out_fw = row.to_dict()
                 out_dolma = {
                     "id": out_fw["id"],
-                    "text": out_fw["text"],
+                    "text": out_fw["md"] if out_fw["md"] else "",
                     "source": "fineweb",
-                    "format": "text",
+                    "format": "md",
                     "metadata": {
                         f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "html", "text")
                     },
                 }
+
                 print(json.dumps(out_dolma), file=f)
 
+    if text_output_file and "text" in df.columns:
+        with atomic_rename(text_output_file) as temp_path:
+            with fsspec.open(temp_path, "wt", compression="gzip") as f:  # text output
+                for _index, row in df.iterrows():
+                    out_fw = row.to_dict()
+                    out_dolma = {
+                        "id": out_fw["id"],
+                        "text": out_fw["text"],
+                        "source": "fineweb",
+                        "format": "text",
+                        "metadata": {
+                            f"fw_{key}": value for key, value in out_fw.items() if key not in ("md", "html", "text")
+                        },
+                    }
+                    print(json.dumps(out_dolma), file=f)
+
     if html_output_file:
-        with fsspec.open(html_output_file, "wt", compression="gzip") as f:  # html output
-            for _index, row in df.iterrows():
-                out_fw = row.to_dict()
-                out_dolma = {
-                    "id": out_fw["id"],
-                    "source": "fineweb",
-                    "format": "html",
-                    "html": out_fw["html"],
-                }
-                print(json.dumps(out_dolma), file=f)
+        with atomic_rename(html_output_file) as temp_path:
+            with fsspec.open(temp_path, "wt", compression="gzip") as f:  # html output
+                for _index, row in df.iterrows():
+                    out_fw = row.to_dict()
+                    out_dolma = {
+                        "id": out_fw["id"],
+                        "source": "fineweb",
+                        "format": "html",
+                        "html": out_fw["html"],
+                    }
+                    print(json.dumps(out_dolma), file=f)
 
     # remove the input file
     fsspec_rm(input_path)
@@ -322,36 +325,7 @@ def process_fw_dump(cfg: ParquetFWConfig):
             continue
 
         for file in files:
-            # Get the input file name
-            # Example of file = gs://marin-us-central2/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
-            # input_file_name = 000_00000.parquet
-            input_file_name = os.path.basename(file)
-
-            md_output_path = os.path.join(cfg.md_output_path, cc_dump)
-            text_output_path = None
-            if cfg.text_output_path:
-                text_output_path = os.path.join(cfg.text_output_path, cc_dump)
-
-            html_output_path = None
-            if cfg.html_output_path:
-                html_output_path = os.path.join(cfg.html_output_path, cc_dump)
-
-            output_path = os.path.join(
-                cfg.md_output_path,
-                input_file_name.replace(".parquet", ""),
-            )  # gs://marin-us-central2/processed/CC-MAIN-2024-10/000_00000
-
-            all_files.append(
-                {
-                    "input_path": file,
-                    "output_path": output_path,
-                    "extract_method": cfg.extract_method,
-                    "config": cfg.config,
-                    "md_output_path": md_output_path,
-                    "text_output_path": text_output_path,
-                    "html_output_path": html_output_path,
-                }
-            )
+            all_files.append(file)
 
             if cfg.max_files and len(all_files) >= cfg.max_files:
                 break
@@ -361,23 +335,65 @@ def process_fw_dump(cfg: ParquetFWConfig):
 
     logger.info(f"Total parquet files to process: {len(all_files)}")
 
-    # Single-level parallelism over all parquet files
-    pipeline = (
-        Dataset.from_list(all_files)
-        .map(
-            lambda f: process_fw_parquet(
-                f["input_path"],
-                f["output_path"],
-                f["extract_method"],
-                f["config"],
-                f["md_output_path"],
-                f["text_output_path"],
-                f["html_output_path"],
-            )
-        )
-        .filter(lambda result: result is True)
-    )
+    # Helper function to derive output paths from input path
+    def get_output_path(input_path: str) -> str:
+        """Derive output directory path from input parquet file path."""
+        # Extract cc_dump from input path
+        # Example: gs://bucket/raw/fineweb/fw-v1.0/CC-MAIN-2024-10/000_00000.parquet
+        #                                             ^^^^^^^^^^^^^^
+        parts = input_path.rstrip("/").split("/")
+        # Find the CC-MAIN-* part (or similar cc_dump identifier)
+        cc_dump = None
+        for part in parts:
+            if part.startswith("CC-MAIN-"):
+                cc_dump = part
+                break
+        if cc_dump is None:
+            # Fallback: use parent directory name
+            cc_dump = parts[-2] if len(parts) >= 2 else ""
 
+        input_file_name = os.path.basename(input_path)
+        return os.path.join(
+            cfg.md_output_path,
+            input_file_name.replace(".parquet", ""),
+        )  # gs://marin-us-central2/processed/000_00000
+
+    def process_file_wrapper(input_path: str) -> bool:
+        """Wrapper to call process_fw_parquet with derived parameters."""
+        # Derive output paths from input path
+        parts = input_path.rstrip("/").split("/")
+        cc_dump = None
+        for part in parts:
+            if part.startswith("CC-MAIN-"):
+                cc_dump = part
+                break
+        if cc_dump is None:
+            cc_dump = parts[-2] if len(parts) >= 2 else ""
+
+        output_path = get_output_path(input_path)
+        md_output_path = os.path.join(cfg.md_output_path, cc_dump)
+        text_output_path = None
+        if cfg.text_output_path:
+            text_output_path = os.path.join(cfg.text_output_path, cc_dump)
+        html_output_path = None
+        if cfg.html_output_path:
+            html_output_path = os.path.join(cfg.html_output_path, cc_dump)
+
+        if fsspec_exists(output_path + "/_SUCCESS"):
+            logger.info(f"Skipping already processed file: {input_path}")
+            return True
+
+        return process_fw_parquet(
+            input_path,
+            output_path,
+            cfg.extract_method,
+            cfg.config,
+            md_output_path,
+            text_output_path,
+            html_output_path,
+        )
+
+    pipeline = Dataset.from_list(all_files).map(process_file_wrapper)
     list(backend.execute(pipeline))
 
 

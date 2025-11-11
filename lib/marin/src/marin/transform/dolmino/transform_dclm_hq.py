@@ -25,13 +25,13 @@ from dataclasses import dataclass
 
 import draccus
 import fsspec
-from marin.core.runtime import cached_or_construct_output
 from marin.download.dclm_hq.download_dclm_hq_html import find_html_in_cc
 from marin.download.huggingface.stream_remove_columns import hf_fs
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
 from tqdm import tqdm
 from zephyr import Dataset, flow_backend
+from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,6 @@ class DCLMHQExtractionConfig:
     max_split: int | None = None
 
 
-@cached_or_construct_output(success_suffix="SUCCESS")
 def process_file(
     input_file_path: str,
     output_file_path: str,
@@ -58,10 +57,15 @@ def process_file(
     logger.info(f"Starting processing of file {input_file_path}")
     logger.info(f"Source: {input_file_path}")
     logger.info(f"Destination: {output_file_path}")
-    try:
+    fs = fsspec.url_to_fs(output_file_path)[0]
+    if fs.exists(output_file_path):
+        logger.info(f"Output file {output_file_path} already exists. Skipping processing.")
+        return
+
+    with atomic_rename(output_file_path) as temp_path:
         with (
             fsspec.open(input_file_path, compression="zst") as source,
-            fsspec.open(output_file_path, "wt", compression="gzip") as output,
+            fsspec.open(temp_path, "wt", compression="gzip") as output,
         ):
             for line in tqdm(source, desc="Processing lines"):
                 row = json.loads(line)
@@ -90,12 +94,8 @@ def process_file(
                     logger.exception(f"Error processing line: {e}")
                     continue
 
-        logger.info("\nProcessing completed successfully!")
-        logger.info(f"File available at: {output_file_path}")
-
-    except Exception as e:
-        logger.error(f"Error during processing: {e}")
-        raise
+    logger.info("\nProcessing completed successfully!")
+    logger.info(f"File available at: {output_file_path}")
 
 
 @draccus.wrap()
@@ -129,13 +129,16 @@ def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
 
     logger.info(f"Total files to process: {len(all_files)}")
 
-    # Single-level parallelism over all files
-    pipeline = Dataset.from_list(all_files).map(
-        lambda f: process_file(
-            input_file_path=f["input"],
-            output_file_path=f["output"],
-            extract_method=f["extract_method"],
-            extract_config=f["extract_config"],
+    pipeline = (
+        Dataset.from_list(all_files)
+        .filter(lambda f: not fsspec.url_to_fs(f["output"])[0].exists(f["output"]))
+        .map(
+            lambda f: process_file(
+                input_file_path=f["input"],
+                output_file_path=f["output"],
+                extract_method=f["extract_method"],
+                extract_config=f["extract_config"],
+            )
         )
     )
 
