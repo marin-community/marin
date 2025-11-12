@@ -1104,34 +1104,22 @@ class KitokenWrapper:
 
     def _load_kitoken(self):
         """Load Kitoken encoder from HF tokenizer's backend."""
-        try:
-            import kitoken
-        except ImportError:
-            raise ImportError("Kitoken is not installed. Install it with: pip install kitoken")
-
+        import kitoken
         import tempfile
 
-        # Get tokenizer JSON from HF backend_tokenizer
         if self._hf_tokenizer.backend_tokenizer is None:
             raise ValueError("HF tokenizer does not have a backend_tokenizer (not a Fast tokenizer)")
 
-        # Create temp file and save tokenizer JSON
-        temp_fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="kitoken_")
-        os.close(temp_fd)
+        # Save tokenizer JSON to temp file and load with Kitoken
+        tokenizer_str = self._hf_tokenizer.backend_tokenizer.to_str()
+        with tempfile.NamedTemporaryFile(mode='w', suffix=".json", prefix="kitoken_", delete=False) as f:
+            f.write(tokenizer_str)
+            temp_path = f.name
 
         try:
-            tokenizer_str = self._hf_tokenizer.backend_tokenizer.to_str()
-            with open(temp_path, 'w') as f:
-                f.write(tokenizer_str)
-
-            kitoken_encoder = kitoken.Kitoken.from_file(temp_path)
-            return kitoken_encoder
+            return kitoken.Kitoken.from_file(temp_path)
         finally:
-            # Always clean up temp file
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
+            os.unlink(temp_path)
 
     def encode(self, text, add_special_tokens=True, **kwargs):
         """Encode text to token IDs using Kitoken."""
