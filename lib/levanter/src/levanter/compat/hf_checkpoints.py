@@ -1103,77 +1103,35 @@ class KitokenWrapper:
         self._kitoken = self._load_kitoken()
 
     def _load_kitoken(self):
-        """Load Kitoken encoder at initialization."""
+        """Load Kitoken encoder from HF tokenizer's backend."""
         try:
             import kitoken
         except ImportError:
-            raise ImportError(
-                "Kitoken is not installed. Install it with: pip install kitoken"
-            )
+            raise ImportError("Kitoken is not installed. Install it with: pip install kitoken")
 
         import tempfile
-        import json
-        from pathlib import Path
 
-        # Try to find tokenizer.json
-        tokenizer_path = None
-        temp_tokenizer_path = None
+        # Get tokenizer JSON from HF backend_tokenizer
+        if self._hf_tokenizer.backend_tokenizer is None:
+            raise ValueError("HF tokenizer does not have a backend_tokenizer (not a Fast tokenizer)")
 
-        if hasattr(self._hf_tokenizer, "name_or_path"):
-            name_or_path = self._hf_tokenizer.name_or_path
+        # Create temp file and save tokenizer JSON
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="kitoken_")
+        os.close(temp_fd)
 
-            # Check if it's a local path (not fsspec)
-            if not ("://" in name_or_path):
-                if os.path.exists(name_or_path):
-                    # Local path
-                    tokenizer_path = os.path.join(name_or_path, "tokenizer.json")
-                else:
-                    # Try to find in HF cache
-                    cache_dir = os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
-                    # Normalize model name for cache directory
-                    normalized_name = name_or_path.replace("/", "--")
-                    model_cache = Path(cache_dir) / f"models--{normalized_name}"
+        try:
+            tokenizer_str = self._hf_tokenizer.backend_tokenizer.to_str()
+            with open(temp_path, 'w') as f:
+                f.write(tokenizer_str)
 
-                    if model_cache.exists():
-                        # Look for tokenizer.json in any snapshot
-                        for snapshot_dir in (model_cache / "snapshots").iterdir():
-                            candidate = snapshot_dir / "tokenizer.json"
-                            if candidate.exists():
-                                tokenizer_path = str(candidate)
-                                break
-
-            # If tokenizer_path not found or this is an fsspec path, try to save it temporarily
-            if tokenizer_path is None or not os.path.exists(tokenizer_path):
-                # Check if the HF tokenizer can be saved as JSON
-                if hasattr(self._hf_tokenizer, "backend_tokenizer") and self._hf_tokenizer.backend_tokenizer is not None:
-                    # Create a temporary file for the tokenizer
-                    temp_fd, temp_tokenizer_path = tempfile.mkstemp(suffix=".json", prefix="kitoken_")
-                    os.close(temp_fd)
-
-                    # Save the tokenizer JSON
-                    tokenizer_str = self._hf_tokenizer.backend_tokenizer.to_str()
-                    with open(temp_tokenizer_path, 'w') as f:
-                        f.write(tokenizer_str)
-
-                    tokenizer_path = temp_tokenizer_path
-                    logger.info(f"Saved temporary tokenizer.json for Kitoken at {tokenizer_path}")
-
-        if tokenizer_path and os.path.exists(tokenizer_path):
-            logger.info(f"Loading Kitoken encoder from {tokenizer_path}")
-            kitoken_encoder = kitoken.Kitoken.from_file(tokenizer_path)
-
-            # Clean up temporary file if created
-            if temp_tokenizer_path:
-                try:
-                    os.unlink(temp_tokenizer_path)
-                except:
-                    pass
-
+            kitoken_encoder = kitoken.Kitoken.from_file(temp_path)
             return kitoken_encoder
-        else:
-            raise FileNotFoundError(
-                f"Could not find or create tokenizer.json for Kitoken from {name_or_path}"
-            )
+        finally:
+            # Always clean up temp file
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
 
     def encode(self, text, add_special_tokens=True, **kwargs):
         """Encode text to token IDs using Kitoken."""
