@@ -735,17 +735,20 @@ class Backend:
     def chunk_size(self) -> int:
         return self.config.chunk_size
 
-    def execute(self, dataset: Dataset) -> Iterator:
+    def execute(self, dataset: Dataset, verbose: bool = False) -> Iterator:
         """Execute a dataset and return an iterator over results.
 
         Args:
             dataset: Dataset to execute
+            verbose: Print additional logging and optimization stats
 
         Returns:
             Iterator over dataset results
         """
         optimized_ops = self._optimize_operations(dataset.operations)
-        self._print_optimization_plan(dataset.operations, optimized_ops)
+
+        if verbose:
+            self._print_optimization_plan(dataset.operations, optimized_ops)
 
         if self.dry_run:
             return

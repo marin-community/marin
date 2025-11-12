@@ -50,14 +50,13 @@ import logging
 import operator
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 
 import draccus
 import fsspec
 import jax
 import transformers
 from datasets import load_dataset_builder
-from huggingface_hub import dataset_info
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -284,23 +283,13 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
         yield current_group
 
 
-def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches):
-    """Load tokenizer once per shard and process all batches."""
+def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
+    """Tokenize a list of batches using the specified tokenizer and format."""
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     for batch in batches:
         yield from batch_processor(batch)
-
-
-def _resolve_hf_revision(dataset_id: str, revision: str | None) -> str:
-    """Resolve HuggingFace dataset revision using the HuggingFace Hub API."""
-    if revision is not None:
-        return revision
-
-    info = dataset_info(dataset_id)
-    assert info.sha is not None, "Failed to resolve dataset revision from HuggingFace Hub."
-    return info.sha
 
 
 def consolidate_shard_caches(
@@ -309,14 +298,7 @@ def consolidate_shard_caches(
     exemplar,
 ) -> CacheLedger:
     """
-    Consolidate multiple shard caches into a single unified cache using Zephyr for parallelization.
-
-    This function:
-    1. Loads ledgers from all shard caches
-    2. Computes cumulative data offsets for proper positioning in the final cache
-    3. Uses Zephyr to copy data and metadata in parallel across shards
-    4. Merges all ledgers into a final consolidated ledger
-    5. Exposes all rows in the final cache
+    Consolidate multiple shard caches into a single cache.
 
     Args:
         shard_cache_paths: List of paths to individual shard cache directories
@@ -360,9 +342,7 @@ def consolidate_shard_caches(
 
     logger.info(f"Computed offsets for {len(shard_info)} shards, total rows: {total_rows}")
 
-    logger.info("Copying shard data and metadata to final cache.")
-
-    def copy_one_shard(info: dict):
+    def copy_shard(info: dict):
         asyncio.run(
             extend_cache_with_other_cache(
                 output_path, info["path"], exemplar, info["data_offset_tree"], info["row_offset"]
@@ -375,8 +355,9 @@ def consolidate_shard_caches(
         )
 
     # TODO(power) - add the skip_existing option here
-    # Copy shards in parallel to the final cache
-    list(flow_backend().execute(Dataset.from_list(shard_info).map(copy_one_shard)))
+    logger.info("Copying shard data and metadata to final cache.")
+
+    list(flow_backend().execute(Dataset.from_list(shard_info).map(copy_shard)))
 
     logger.info("Merging ledgers into final ledger.")
     ledgers = []
@@ -461,12 +442,11 @@ def tokenize(config: TokenizeConfigBase):
     backend = flow_backend()
 
     def run_pipeline(paths: list[str], split_name: str) -> None:
-        logger.info(f"Statting {len(paths)} {split_name} files to compute groups")
-
-        # First compute the file groups we should process per shard.
+        # Compute the file groups we should process per shard.
         file_stats = list(
             create_backend("threadpool").execute(
-                Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)})
+                Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
+                verbose=False,
             )
         )
         file_groups = list(_bundle_files_by_size(file_stats, config.window_size_bytes))
@@ -479,13 +459,14 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
-        initial_shards = (
-            ds.batch(100)
+        # tokenization runs a bit faster with batching
+        temp_shards = (
+            ds.batch(64)
             .map_shard(lambda batches: _tokenize_batches(config, batches))
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={})
         )
 
-        shard_paths = list(backend.execute(initial_shards))
+        shard_paths = list(backend.execute(temp_shards))
 
         # compute an exemplar for merging the caches
         logger.info("Computing exemplar for cache consolidation")

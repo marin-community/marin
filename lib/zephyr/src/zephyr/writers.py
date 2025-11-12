@@ -194,7 +194,7 @@ def batchify(batch: Iterable, n: int = 32) -> Iterable:
         yield batch
 
 
-def write_levanter_cache(records: Iterable, output_path: str, metadata: dict[str, Any]) -> dict:
+def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, metadata: dict[str, Any]) -> dict:
     """Write tokenized records to Levanter cache format."""
     import numpy as np
     from levanter.store.cache import CacheLedger, ShardGroupCacheWriter
