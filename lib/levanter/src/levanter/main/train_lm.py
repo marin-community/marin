@@ -9,10 +9,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
+import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
-
-import haliax as hax
 from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
 
@@ -30,7 +29,6 @@ from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, compute_n
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
-
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +107,7 @@ def main(config: TrainLmConfig):
     # 1. Sets the device mesh
     # 2. Sets the axis mapping (for fsdp)
     # 3. Sets the global metrics tracker
+    print("Config: ", config.trainer)
     with Trainer(config.trainer, optimizer, loss_function) as trainer:
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators
         # this makes deterministic training pretty easy
@@ -184,16 +183,17 @@ def main(config: TrainLmConfig):
         if len(tagged_eval_datasets) == 0:
             logger.warning("No evaluation datasets provided.")
         else:
-            cb = levanter.eval.cb_tagged_lm_evaluate(
-                EvalBatch,
-                tagged_eval_datasets,
-                tokenizer,
-                trainer.device_mesh,
-                compute_axis_mapping,
-                max_eval_examples_per_ds,
-                mp=config.trainer.mp,
-            )
-            trainer.add_hook(cb, every=config.trainer.steps_per_eval)
+            pass
+            # cb = levanter.eval.cb_tagged_lm_evaluate(
+            #     EvalBatch,
+            #     tagged_eval_datasets,
+            #     tokenizer,
+            #     trainer.device_mesh,
+            #     compute_axis_mapping,
+            #     max_eval_examples_per_ds,
+            #     mp=config.trainer.mp,
+            # )
+            # trainer.add_hook(cb, every=config.trainer.steps_per_eval)
 
         flops_per_token = config.model.flops_per_token(vocab_size)
         flops_per_example = 3 * flops_per_token * Pos.size if flops_per_token is not None else None

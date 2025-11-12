@@ -16,9 +16,11 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 from collections.abc import Iterable
 from contextlib import contextmanager
+from typing import Any
 
 import fsspec
 import msgspec
@@ -186,28 +188,29 @@ def write_parquet_file(
     return {"path": output_path, "count": count}
 
 
-def write_levanter_cache(
-    records: Iterable,
-    output_path: str,
-    tokenizer_name: str,
-    format: object,  # LmDatasetFormatBase  # noqa: A002
-) -> dict:
-    """Write tokenized records to Levanter cache format.
+def batchify(batch: Iterable, n: int = 32) -> Iterable:
+    iterator = iter(batch)
+    while batch := tuple(itertools.islice(iterator, n)):
+        yield batch
 
-    Uses SerialCacheWriter to write records in the TreeStore/JaggedArrayStore format.
-    """
-    from levanter.store.cache import SerialCacheWriter
+
+def write_levanter_cache(records: Iterable, output_path: str, metadata: dict[str, Any]) -> dict:
+    """Write tokenized records to Levanter cache format."""
+    import numpy as np
+    from levanter.store.cache import CacheLedger, ShardGroupCacheWriter
+    from levanter.store.jagged_array import PreparedBatch
 
     ensure_parent_dir(output_path)
 
-    # Collect records to get exemplar and write
     try:
         exemplar = next(iter(records))
     except StopIteration:
         return {"path": output_path, "count": 0}
 
-    metadata = {"tokenizer": tokenizer_name, "format": str(format)}
+    def _prepare_batch(items: dict):
+        return {"input_ids": PreparedBatch.from_batch([np.array(item["input_ids"]) for item in items])}
 
+<<<<<<< HEAD
     count = 0
     with atomic_rename(output_path) as tmp_path:
         with SerialCacheWriter(tmp_path, exemplar, metadata) as writer:
@@ -215,5 +218,29 @@ def write_levanter_cache(
             for record in records:
                 writer.write_batch([record])
                 count += 1
+||||||| parent of dcb1e3403 (Tokenizin...)
+    count = 0
+    with SerialCacheWriter(output_path, exemplar, metadata) as writer:
+        writer.write_batch([exemplar])
+        for record in records:
+            writer.write_batch([record])
+            count += 1
+=======
+    ledger = CacheLedger(
+        total_num_rows=0,
+        shard_rows={output_path: 0},
+        is_finished=False,
+        metadata=metadata,
+    )
+
+    count = 1
+    writer = ShardGroupCacheWriter(output_path, ledger, [output_path], exemplar)
+    writer.write_prepared_batch(shard_name=output_path, row_count=1, batch=_prepare_batch([exemplar]))
+    for batch in batchify(records):
+        writer.write_prepared_batch(shard_name=output_path, row_count=len(batch), batch=_prepare_batch(batch))
+        count += len(batch)
+    writer.finish_shard(shard_name=output_path, num_rows=count)
+    writer.finish()
+>>>>>>> dcb1e3403 (Tokenizin...)
 
     return {"path": output_path, "count": count}

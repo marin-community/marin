@@ -20,7 +20,7 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 import fsspec
 from braceexpand import braceexpand
@@ -34,6 +34,9 @@ class MapOp:
 
     fn: Callable
 
+    def __repr__(self):
+        return f"MapOp(fn={self.fn.__name__})"
+
 
 @dataclass
 class FilterOp:
@@ -41,9 +44,12 @@ class FilterOp:
 
     predicate: Callable
 
+    def __repr__(self):
+        return f"FilterOp(predicate={self.predicate.__name__})"
+
 
 @dataclass
-class TakeOp:
+class TakePerShardOp:
     """Take operation - limits to first N items per shard.
 
     Takes the first n items from each shard independently.
@@ -51,6 +57,9 @@ class TakeOp:
     """
 
     n: int
+
+    def __repr__(self):
+        return f"TakePerShardOp(n={self.n})"
 
 
 @dataclass
@@ -64,6 +73,9 @@ class WindowOp:
 
     folder_fn: Callable  # (state, item) -> (should_continue, new_state)
     initial_state: object
+
+    def __repr__(self):
+        return "WindowOp"
 
 
 @dataclass
@@ -79,11 +91,15 @@ class WriteDataOp:
     writer_type: str  # "jsonl", "parquet", or "levanter_cache"
 
     # Format-specific parameters (only used by relevant writer)
+    levanter_metadata: dict[str, Any] | None = None
     schema: object | None = None  # For parquet (pyarrow.Schema)
     batch_size: int = 1000  # For parquet
     tokenizer_name: str | None = None  # For levanter_cache
     format: object | None = None  # For levanter_cache (LmDatasetFormatBase)
     skip_existing: bool = False  # Skip writing if output file already exists
+
+    def __repr__(self):
+        return f"WriteDataOp(type={self.writer_type}, pattern={self.output_pattern})"
 
 
 @dataclass
@@ -95,6 +111,9 @@ class FlatMapOp:
     """
 
     fn: Callable
+
+    def __repr__(self):
+        return f"FlatMapOp(fn={self.fn.__name__})"
 
 
 @dataclass
@@ -111,6 +130,9 @@ class MapShardOp:
 
     fn: Callable
 
+    def __repr__(self):
+        return f"MapShardOp(fn={self.fn.__name__})"
+
 
 @dataclass
 class ReshardOp:
@@ -122,6 +144,9 @@ class ReshardOp:
     """
 
     num_shards: int
+
+    def __repr__(self):
+        return f"ReshardOp(num_shards={self.num_shards})"
 
 
 @dataclass
@@ -135,6 +160,10 @@ class FusedMapOp:
 
     operations: list  # List of operations to fuse (MapOp, FlatMapOp, FilterOp, BatchOp, WriteJsonlOp, WriteParquetOp)
 
+    def __repr__(self):
+        fused = "|".join(str(op) for op in self.operations)
+        return f"FusedMapOp(ops=[{fused}])"
+
 
 @dataclass
 class GroupByLocalOp:
@@ -145,6 +174,9 @@ class GroupByLocalOp:
 
     key_fn: Callable  # Function from item -> hashable key
     num_output_shards: int  # Number of output shards
+
+    def __repr__(self):
+        return f"GroupByLocalOp(key={self.key_fn.__name__}"
 
 
 @dataclass
@@ -158,6 +190,9 @@ class GroupByShuffleReduceOp:
     key_fn: Callable  # Function from item -> hashable key
     reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
 
+    def __repr__(self) -> str:
+        return f"GroupByShuffleReduceOp(key={self.key_fn.__name__})"
+
 
 @dataclass
 class ReduceLocalOp:
@@ -165,12 +200,18 @@ class ReduceLocalOp:
 
     local_reducer: Callable
 
+    def __repr__(self):
+        return f"ReduceLocalOp(local_reducer={self.local_reducer.__name__})"
+
 
 @dataclass
 class ReduceGlobalOp:
     """Phase 2 of Reduce: Pull to controller and apply final reduction."""
 
     global_reducer: Callable
+
+    def __repr__(self):
+        return f"ReduceGlobalOp(global_reducer={self.global_reducer.__name__})"
 
 
 @dataclass
@@ -192,12 +233,15 @@ class SortedMergeJoinOp:
     combiner_fn: Callable
     join_type: str  # "inner" or "left"
 
+    def __repr__(self):
+        return f"SortedMergeJoinOp(type={self.join_type})"
+
 
 # Type alias for operations
 Operation = (
     MapOp
     | FilterOp
-    | TakeOp
+    | TakePerShardOp
     | WindowOp
     | WriteDataOp
     | FlatMapOp
@@ -357,7 +401,7 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, FilterOp(predicate)])
 
-    def take(self, n: int) -> Dataset[T]:
+    def take_per_shard(self, n: int) -> Dataset[T]:
         """Take the first n items from each shard.
 
         Limits each shard to its first n items independently. This is useful
@@ -377,7 +421,7 @@ class Dataset(Generic[T]):
             >>> list(backend.execute(ds))
             [1, 2, 3]
         """
-        return Dataset(self.source, [*self.operations, TakeOp(n)])
+        return Dataset(self.source, [*self.operations, TakePerShardOp(n)])
 
     def window(self, size: int) -> Dataset[list[T]]:
         """Window dataset elements into fixed-size lists.
@@ -578,8 +622,7 @@ class Dataset(Generic[T]):
     def write_levanter_cache(
         self,
         output_pattern: str,
-        tokenizer_name: str,
-        format: object,  # noqa: A002
+        metadata: dict[str, Any],
     ) -> Dataset[str]:
         """Write tokenized records to Levanter cache format.
 
@@ -594,8 +637,7 @@ class Dataset(Generic[T]):
                 WriteDataOp(
                     output_pattern,
                     writer_type="levanter_cache",
-                    tokenizer_name=tokenizer_name,
-                    format=format,
+                    levanter_metadata=metadata,
                 ),
             ],
         )

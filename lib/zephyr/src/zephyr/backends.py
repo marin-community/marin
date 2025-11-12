@@ -26,7 +26,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from itertools import groupby
+from itertools import groupby, islice
 from typing import Any, Literal, Protocol, TypeVar
 
 import fsspec
@@ -49,7 +49,7 @@ from zephyr.dataset import (
     ReduceLocalOp,
     ReshardOp,
     SortedMergeJoinOp,
-    TakeOp,
+    TakePerShardOp,
     WindowOp,
     WriteDataOp,
 )
@@ -451,9 +451,8 @@ def process_shard_fused(
         elif isinstance(op, FilterOp):
             filter_iter = (item for item in stream_input if op.predicate(item))
             yield from build_stream(filter_iter, rest, op_index + 1)
-        elif isinstance(op, TakeOp):
-            from itertools import islice
-
+        elif isinstance(op, TakePerShardOp):
+            logger.info(f"Taking first {op.n} items from shard {ctx.shard_idx}")
             take_iter = islice(stream_input, op.n)
             yield from build_stream(take_iter, rest, op_index + 1)
         elif isinstance(op, WindowOp):
@@ -476,7 +475,7 @@ def process_shard_fused(
             elif op.writer_type == "parquet":
                 result = write_parquet_file(stream_input, output_path, op.schema, op.batch_size)["path"]
             elif op.writer_type == "levanter_cache":
-                result = write_levanter_cache(stream_input, output_path, op.tokenizer_name, op.format)["path"]
+                result = write_levanter_cache(stream_input, output_path, op.levanter_metadata)["path"]
             else:
                 raise ValueError(f"Unknown writer_type: {op.writer_type}")
             yield from build_stream(iter([result]), rest, op_index + 1)
@@ -788,26 +787,24 @@ class Backend:
             original_ops: Original operation chain
             optimized_ops: Optimized operation chain with fused operations
         """
-        print("\n=== ML-Flow Optimization Plan ===\n")
-        print(f"Original operations: {len(original_ops)}")
-        print(f"Optimized operations: {len(optimized_ops)}")
-        print(f"Fusion savings: {len(original_ops) - len(optimized_ops)} operations fused\n")
+        logger.info("\n=== ML-Flow Optimization Plan ===\n")
+        logger.info(f"Original operations: {len(original_ops)}")
+        logger.info(f"Optimized operations: {len(optimized_ops)}")
+        logger.info(f"Fusion savings: {len(original_ops) - len(optimized_ops)} operations fused\n")
 
-        print("Original pipeline:")
+        logger.info("Original pipeline:")
         for i, op in enumerate(original_ops, 1):
-            op_name = op.__class__.__name__.replace("Op", "")
-            print(f"  {i}. {op_name}")
+            logger.info(f"  {i}. {op}")
 
-        print("\nOptimized pipeline:")
+        logger.info("\nOptimized pipeline:")
         for i, op in enumerate(optimized_ops, 1):
             if isinstance(op, FusedMapOp):
-                fused_names = [fused_op.__class__.__name__.replace("Op", "") for fused_op in op.operations]
-                print(f"  {i}. FusedMap[{' → '.join(fused_names)}] ({len(op.operations)} operations)")
+                fused_names = [str(op) for op in op.operations]
+                logger.info(f"  {i}. FusedMap[{' → '.join(fused_names)}] ({len(op.operations)} operations)")
             else:
-                op_name = op.__class__.__name__.replace("Op", "")
-                print(f"  {i}. {op_name}")
+                logger.info(f"  {i}. {op}")
 
-        print("\n=== End Optimization Plan ===\n")
+        logger.info("\n=== End Optimization Plan ===\n")
 
     def _run_operations_on_shards(self, source: Iterable, optimized_ops: list) -> list[Shard]:
         """Core execution logic - executes already-optimized operations on shards.

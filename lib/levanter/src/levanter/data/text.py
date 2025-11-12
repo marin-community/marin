@@ -31,17 +31,16 @@ from typing import (
 
 import equinox as eqx
 import fsspec
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
 import regex
 import tensorstore as ts
 from draccus import ChoiceRegistry, field
+from haliax import Axis
 from jaxtyping import PRNGKeyArray
 from tokenizers import normalizers
-
-import haliax as hax
-from haliax import Axis
 
 import levanter
 from levanter.data import AsyncDataset
@@ -59,7 +58,6 @@ from levanter.utils.hf_utils import HfTokenizer, num_cpus_used_by_tokenizer
 
 # intercept the logging nonsense here
 from levanter.utils.logging import silence_transformer_nag  # noqa
-
 
 silence_transformer_nag()  # noqa
 from transformers import BatchEncoding, PreTrainedTokenizer, PreTrainedTokenizerBase, PreTrainedTokenizerFast  # noqa
@@ -944,11 +942,12 @@ def build_lm_dataset_cache(
 
     processor = preprocessor_for_format(format, tokenizer, enforce_bos=True, enforce_eos=enforce_eos)
     try:
-        return TreeCache.load(
+        tree_cache = TreeCache.load(
             cache_dir,
             exemplar=processor.output_exemplar,
             options=CacheMetadata(preprocessor_metadata=processor.metadata),
         )
+        logger.info(f"Loaded cache from {cache_dir}, size={len(tree_cache)}")
     except FileNotFoundError:
         pass
 

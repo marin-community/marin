@@ -119,57 +119,37 @@ def remove_spans(text: str, spans: list[list[int]]) -> str:
     return text
 
 
-def passes_filter(doc: dict, filt: FilterConfig, attributes: dict | None) -> bool:
-    """Check if document passes filter using its attributes.
+def is_valid(doc: dict, filt: FilterConfig, attributes: dict) -> bool:
+    assert filt.type == FilterType.CLASSIFY
+    attribute_value = attributes[filt.name]
 
-    Args:
-        doc: Document to check
-        filt: Filter configuration
-        attributes: Attributes for this document (or None if not found)
-
-    Returns:
-        True if document passes filter, False otherwise
-    """
-    if attributes is None:
-        return False
-
-    if filt.type == FilterType.CLASSIFY:
-        attribute_value = attributes[filt.name]
-
-        # Handle nested attributes structure if a label is specified
-        if filt.label is not None:
-            if isinstance(attribute_value, dict) and filt.label in attribute_value:
-                value = attribute_value[filt.label]
-            else:
-                raise ValueError(f"Label {filt.label} not found in attribute {filt.name} for document {doc}")
+    # Handle nested attributes structure if a label is specified
+    if filt.label is not None:
+        if isinstance(attribute_value, dict) and filt.label in attribute_value:
+            value = attribute_value[filt.label]
         else:
-            value = attribute_value
+            raise ValueError(f"Label {filt.label} not found in attribute {filt.name} for document {doc}")
+    else:
+        value = attribute_value
 
-        # Check both lower and upper bounds if specified
-        accepted = True
-        if filt.lower_threshold is not None and value < filt.lower_threshold:
-            accepted = False
-        if filt.upper_threshold is not None and value > filt.upper_threshold:
-            accepted = False
+    # Check both lower and upper bounds if specified
+    accepted = True
+    if filt.lower_threshold is not None and value < filt.lower_threshold:
+        accepted = False
+    if filt.upper_threshold is not None and value > filt.upper_threshold:
+        accepted = False
 
-        if filt.reverse:
-            accepted = not accepted
+    if filt.reverse:
+        accepted = not accepted
 
-        return accepted
-    elif filt.type == FilterType.REMOVE_SPANS:
-        # not really a filter, but...
-        spans = attributes[filt.name]
-        new_text = remove_spans(doc["text"], spans)
+    return accepted
 
-        # If the deduped text doesn't have actual content, filter it out
-        if new_text.strip() == "":
-            return False
 
-        # Mutate document in place with new text
-        doc["text"] = new_text
-        return True
-
-    return True
+def apply_filter(doc: dict, filt: FilterConfig, attributes: dict) -> dict:
+    assert filt.type == FilterType.REMOVE_SPANS
+    spans = attributes[filt.name]
+    new_text = remove_spans(doc["text"], spans)
+    return dict(**doc, text=new_text)
 
 
 def get_corpus_type(filename: str) -> str:
@@ -319,18 +299,22 @@ def process_file_shard(shard, filters: list[FilterConfig], input_base: str) -> I
         attrs[filt_name] = attr_dict
 
     logger.info(f"Processing {input_path}")
+    keep = True
     for doc in load_file(input_path):
         doc_id = extract_id(doc, corpus_type)
 
-        # Apply all filters - if any filter fails, skip document
-        keep_doc = True
         for filt in filters:
             filt_attrs = attrs.get(filt.name, {}).get(doc_id)
-            if not passes_filter(doc, filt, filt_attrs):
-                keep_doc = False
+            if not filt_attrs:
+                keep = False
                 break
 
-        if keep_doc:
+            if filt.type == FilterType.CLASSIFY:
+                keep = keep & is_valid(doc, filt, filt_attrs)
+            else:
+                doc = apply_filter(doc, filt, filt_attrs)
+
+        if keep and doc["text"]:
             yield doc
 
 
