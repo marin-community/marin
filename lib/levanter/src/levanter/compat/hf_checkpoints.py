@@ -1086,12 +1086,167 @@ def save_hf_checkpoint_callback(
     return cb
 
 
-def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
-    """Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec"""
+class KitokenWrapper:
+    """
+    A wrapper around HuggingFace tokenizers that uses Kitoken for encoding/decoding operations.
+    This provides faster tokenization while maintaining compatibility with the HF tokenizer interface.
+    """
+
+    def __init__(self, hf_tokenizer: HfTokenizer, kitoken_encoder=None):
+        """
+        Initialize the Kitoken wrapper.
+
+        Args:
+            hf_tokenizer: The HuggingFace tokenizer to wrap
+            kitoken_encoder: Optional Kitoken encoder instance. If None, will be lazily loaded.
+        """
+        self._hf_tokenizer = hf_tokenizer
+        self._kitoken_encoder = kitoken_encoder
+        self._kitoken_available = kitoken_encoder is not None
+
+    @cached_property
+    def _kitoken(self):
+        """Lazily load Kitoken encoder when first needed."""
+        if self._kitoken_encoder is not None:
+            return self._kitoken_encoder
+
+        try:
+            import kitoken
+        except ImportError:
+            logger.warning(
+                "Kitoken is not installed. Falling back to HuggingFace tokenizer. "
+                "Install kitoken for faster tokenization: pip install kitoken"
+            )
+            return None
+
+        # Try to find tokenizer.json in the HF cache
+        try:
+            # Get the path to the tokenizer files
+            tokenizer_path = None
+            if hasattr(self._hf_tokenizer, "name_or_path"):
+                name_or_path = self._hf_tokenizer.name_or_path
+                if os.path.exists(name_or_path):
+                    # Local path
+                    tokenizer_path = os.path.join(name_or_path, "tokenizer.json")
+                else:
+                    # Try to find in HF cache
+                    from pathlib import Path
+
+                    cache_dir = os.environ.get("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
+                    # Normalize model name for cache directory
+                    normalized_name = name_or_path.replace("/", "--")
+                    model_cache = Path(cache_dir) / f"models--{normalized_name}"
+
+                    if model_cache.exists():
+                        # Look for tokenizer.json in any snapshot
+                        for snapshot_dir in (model_cache / "snapshots").iterdir():
+                            candidate = snapshot_dir / "tokenizer.json"
+                            if candidate.exists():
+                                tokenizer_path = str(candidate)
+                                break
+
+            if tokenizer_path and os.path.exists(tokenizer_path):
+                logger.info(f"Loading Kitoken encoder from {tokenizer_path}")
+                return kitoken.Kitoken.from_file(tokenizer_path)
+            else:
+                logger.warning(
+                    f"Could not find tokenizer.json for Kitoken. Falling back to HuggingFace tokenizer."
+                )
+                return None
+        except Exception as e:
+            logger.warning(f"Failed to load Kitoken encoder: {e}. Falling back to HuggingFace tokenizer.")
+            return None
+
+    def encode(self, text, add_special_tokens=True, **kwargs):
+        """Encode text to token IDs using Kitoken if available, otherwise fallback to HF."""
+        if self._kitoken is not None:
+            try:
+                return self._kitoken.encode(text, add_special_tokens=add_special_tokens)
+            except Exception as e:
+                logger.warning(f"Kitoken encoding failed: {e}. Falling back to HuggingFace tokenizer.")
+
+        return self._hf_tokenizer.encode(text, add_special_tokens=add_special_tokens, **kwargs)
+
+    def decode(self, token_ids, skip_special_tokens=False, **kwargs):
+        """Decode token IDs to text using Kitoken if available, otherwise fallback to HF."""
+        if self._kitoken is not None:
+            try:
+                return self._kitoken.decode(token_ids, skip_special_tokens=skip_special_tokens)
+            except Exception as e:
+                logger.warning(f"Kitoken decoding failed: {e}. Falling back to HuggingFace tokenizer.")
+
+        return self._hf_tokenizer.decode(token_ids, skip_special_tokens=skip_special_tokens, **kwargs)
+
+    def __call__(self, text, **kwargs):
+        """Tokenize text using Kitoken for encoding if available."""
+        # For __call__, we need to return a BatchEncoding-like dict
+        add_special_tokens = kwargs.get("add_special_tokens", True)
+
+        if self._kitoken is not None:
+            try:
+                # Use Kitoken for encoding
+                input_ids = self._kitoken.encode(text, add_special_tokens=add_special_tokens)
+                # Return in the expected format
+                from transformers import BatchEncoding
+
+                return BatchEncoding({"input_ids": input_ids})
+            except Exception as e:
+                logger.warning(f"Kitoken __call__ failed: {e}. Falling back to HuggingFace tokenizer.")
+
+        return self._hf_tokenizer(text, **kwargs)
+
+    def batch_decode(self, sequences, skip_special_tokens=False, **kwargs):
+        """Batch decode token sequences."""
+        if self._kitoken is not None:
+            try:
+                return [
+                    self._kitoken.decode(seq, skip_special_tokens=skip_special_tokens) for seq in sequences
+                ]
+            except Exception as e:
+                logger.warning(f"Kitoken batch_decode failed: {e}. Falling back to HuggingFace tokenizer.")
+
+        return self._hf_tokenizer.batch_decode(sequences, skip_special_tokens=skip_special_tokens, **kwargs)
+
+    # Delegate all other attributes/methods to the wrapped HF tokenizer
+    def __getattr__(self, name):
+        return getattr(self._hf_tokenizer, name)
+
+    def __len__(self):
+        return len(self._hf_tokenizer)
+
+    def __repr__(self):
+        return f"KitokenWrapper({self._hf_tokenizer.__repr__()})"
+
+
+def load_tokenizer(
+    model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True, use_kitoken=True
+) -> HfTokenizer:
+    """
+    Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec.
+
+    Args:
+        model_name_or_path: Model name or path
+        revision: Model revision
+        local_cache_dir: Cache directory
+        trust_remote_code: Whether to trust remote code
+        use_kitoken: Whether to wrap the tokenizer with Kitoken for faster encoding/decoding
+
+    Returns:
+        HfTokenizer (optionally wrapped with KitokenWrapper for performance)
+    """
     with _patch_hf_hub_download():
-        return AutoTokenizer.from_pretrained(
+        hf_tokenizer = AutoTokenizer.from_pretrained(
             model_name_or_path, revision=revision, cache_dir=local_cache_dir, trust_remote_code=trust_remote_code
         )
+
+        if use_kitoken:
+            try:
+                return KitokenWrapper(hf_tokenizer)
+            except Exception as e:
+                logger.warning(f"Failed to wrap tokenizer with Kitoken: {e}. Using HuggingFace tokenizer.")
+                return hf_tokenizer
+        else:
+            return hf_tokenizer
 
 
 def load_processor(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> ProcessorMixin:
