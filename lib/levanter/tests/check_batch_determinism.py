@@ -89,7 +89,7 @@ if __name__ == "__main__":
         
         print("Model loaded successfully!")
 
-        batch_size = 1
+        batch_size = 4
         prompt_array = np.array([prompt_tokens] * batch_size, dtype=np.int32).reshape(batch_size, -1)
         prompt_named = hax.named(prompt_array, ["batch", "position"])
         
