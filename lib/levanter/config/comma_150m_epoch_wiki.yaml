@@ -1,0 +1,88 @@
+data:
+  # Single-component mixture focusing on wikimedia
+  configs:
+    wikimedia:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/wikimedia-53a667"
+
+  train_weights:
+    wikimedia: 1.0
+
+  # Limit effective dataset size to 1 initial batch worth of sequences
+  # num_sequences_kept = max_train_batches[name] * initial_batch_size
+  max_train_batches:
+    wikimedia: 1
+
+  tokenizer: "meta-llama/Meta-Llama-3.1-8B"
+
+# Model configuration - 150M parameters
+model:
+  type: llama
+  hidden_dim: 512
+  intermediate_dim: 1792
+  num_heads: 8
+  num_kv_heads: 8
+  num_layers: 6
+  seq_len: 4096
+  gradient_checkpointing: true
+
+# Training configuration
+trainer:
+  ray:
+    auto_start_cluster: false
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["memorize", "comma", "150m", "central2", "epoch-wiki", "levanter-yaml"]
+  wandb:
+    project: "marin"
+    name: "llama_150m_comma_epoch_wiki"
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: -1
+
+  train_batch_size: 128
+  num_train_steps: 600000
+
+  steps_per_eval: 1000
+  max_eval_batches: 10
+
+  checkpointer:
+    save_interval: 10m
+    keep:
+      - every: 1000
+
+  tensor_parallel_axes: ["heads", "mlp"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+
+# Optimizer configuration using ISOFlop-derived hyperparameters for 150M
+optimizer:
+  learning_rate: 0.0073
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 5000
+  decay: 0.15
+
+# Misc configuration
+z_loss_weight: 0.0001
+log_entropy: false
+
+# Inner-loop evaluation: P(z) on the first cached document for wikimedia
+pz_eval:
+  datasets: [wikimedia]
+  mode: first
+  num_documents: 1
+  eval_batch_size: 64
+  doc_tokens: null          # evaluate over the entire first document
+  chunk_size: 512           # tokens per window
+  prompt_tokens: 256        # prefix length; suffix is 384
+  cursor_inc_tokens: 16     # stride
+  # Disable artifacts and non-scalar logs to sanity-check scalar metrics only
+  histogram: false
+  pz_npz: false
+  decode_preview: null
+  verify_treecache: false
+
+pz_eval_steps: 5

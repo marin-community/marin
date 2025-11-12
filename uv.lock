@@ -3288,6 +3288,7 @@ tpu = [
 [package.dev-dependencies]
 dev = [
     { name = "click" },
+    { name = "pre-commit" },
     { name = "prompt-toolkit" },
     { name = "pygments" },
 ]
@@ -3370,6 +3371,7 @@ provides-extras = ["gpu", "tpu", "torch-test", "profiling", "serve", "lm-eval", 
 [package.metadata.requires-dev]
 dev = [
     { name = "click", specifier = ">=8.0.0" },
+    { name = "pre-commit" },
     { name = "prompt-toolkit", specifier = ">=3.0.0" },
     { name = "pygments" },
 ]
@@ -3394,7 +3396,7 @@ test = [
     { name = "pytest-profiling", specifier = ">=1.8.1" },
     { name = "soundfile" },
     { name = "tensorboardx", specifier = ">=2.6" },
-    { name = "trackio", specifier = ">=0.5.0" },
+    { name = "trackio" },
 ]
 
 [[package]]

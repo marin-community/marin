@@ -110,7 +110,7 @@ test = [
   "chex>=0.1.86",
   "httpx>=0.28.1",
   "pytest-profiling>=1.8.1",
-  "trackio>=0.5.0",
+  "trackio",
 ]
 
 docs = [
@@ -127,6 +127,7 @@ docs = [
 
 dev = [
   "pygments",
+  "pre-commit",
   "click>=8.0.0",
   "prompt_toolkit>=3.0.0",
 ]

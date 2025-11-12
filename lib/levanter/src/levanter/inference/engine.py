@@ -7,6 +7,7 @@ import logging
 import os
 import time
 import warnings
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
@@ -24,6 +25,7 @@ import levanter.tracker
 from levanter.inference.jit_scheduler import (
     DecodeState,
     SeqDecodingParams,
+    SequenceTable,
     TokenQueue,
     _DecodeOutputs,
 )
@@ -35,6 +37,61 @@ from levanter.models.lm_model import LmHeadModel
 from levanter.utils.jax_utils import estimated_free_device_memory, sharded_tree_size
 
 logger = logging.getLogger(__name__)
+
+
+def _tree_byte_size(tree) -> int:
+    """Return the per-device number of bytes represented by ``tree``."""
+
+    return sharded_tree_size(tree)
+
+
+def _available_hbm_budget_bytes(hbm_utilization: float) -> int:
+    """Estimate the per-device HBM budget available to the KV cache."""
+
+    if not (0.0 < hbm_utilization <= 1.0):
+        raise ValueError("hbm_utilization must be in the interval (0, 1].")
+
+    devices = jax.devices()
+    if not devices:
+        raise RuntimeError("No JAX devices available for inference.")
+
+    budgets: list[int] = []
+    bytes_per_gib = 1024**3
+    for device in devices:
+        free_gib = estimated_free_device_memory(device)
+        if free_gib is None:
+            raise RuntimeError(f"Device {device} does not expose memory statistics.")
+        free_bytes = max(int(free_gib * bytes_per_gib), 0)
+        budgets.append(int(free_bytes * hbm_utilization))
+
+    if not budgets:
+        raise RuntimeError("Unable to determine device HBM budget.")
+
+    return min(budgets)
+
+
+@dataclass(frozen=True)
+class Request:
+    """A request for generation of a single sequence."""
+
+    prompt_tokens: list[int]
+    request_id: int
+    decode_params: SeqDecodingParams
+    n_generations: int
+    enable_logprobs: bool = False
+
+
+@dataclasses.dataclass
+class DecodeResult:
+    """Holds per-(request, choice) decode outputs and status."""
+
+    id: int
+    choice: int
+    token_list: list[int]
+    # Count of newly appended tokens (includes prompt tokens as extracted)
+    tokens_decoded: int = 0
+    done: bool = False
+    logprobs: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -66,6 +123,9 @@ class InferenceEngineConfig:
 
     # Default PRNG seed for building per-request keys (optional convenience)
     seed: int = 0
+
+    enable_logprobs: bool = False
+    """Enable computing logprobs for generated tokens."""
 
     # You probably don't need to tune the knobs below
 
@@ -117,150 +177,6 @@ class InferenceEngineConfig:
         return (self.max_seq_len + self.page_size - 1) // self.page_size
 
 
-def _tree_byte_size(tree) -> int:
-    """Return the per-device number of bytes represented by ``tree``."""
-
-    return sharded_tree_size(tree)
-
-
-def _available_hbm_budget_bytes(hbm_utilization: float) -> int:
-    """Estimate the per-device HBM budget available to the KV cache."""
-
-    if not (0.0 < hbm_utilization <= 1.0):
-        raise ValueError("hbm_utilization must be in the interval (0, 1].")
-
-    devices = jax.devices()
-    if not devices:
-        raise RuntimeError("No JAX devices available for inference.")
-
-    budgets: list[int] = []
-    bytes_per_gib = 1024**3
-    for device in devices:
-        free_gib = estimated_free_device_memory(device)
-        if free_gib is None:
-            raise RuntimeError(f"Device {device} does not expose memory statistics.")
-        free_bytes = max(int(free_gib * bytes_per_gib), 0)
-        budgets.append(int(free_bytes * hbm_utilization))
-
-    if not budgets:
-        raise RuntimeError("Unable to determine device HBM budget.")
-
-    return min(budgets)
-
-
-def _infer_max_pages_from_hbm(model: LmHeadModel, config: InferenceEngineConfig) -> int:
-    """Infer a KV-page budget using HBM utilization targets."""
-
-    max_pages_per_seq = config.max_pages_per_seq
-
-    try:
-        budget = _available_hbm_budget_bytes(config.hbm_utilization)
-    except Exception as exc:  # pragma: no cover - depends on runtime environment
-        logger.warning(
-            "Falling back to max_seqs * max_pages_per_seq for KV cache sizing because HBM budget "
-            "could not be determined: %s",
-            exc,
-        )
-        return int(config.max_seqs * max_pages_per_seq)
-
-    @functools.lru_cache(maxsize=None)
-    def cache_bytes(num_pages: int) -> int:
-        if num_pages <= 0:
-            raise ValueError("num_pages must be positive when sizing the KV cache.")
-
-        def initial_cache(pages: int) -> int:
-            table = PageTable.init(pages, config.max_seqs, config.page_size, max_pages_per_seq)
-            cache_shape = model.initial_cache(table.spec(), dtype=config.compute_dtype)
-            return cache_shape
-
-        cache_shape = eqx.filter_eval_shape(initial_cache, num_pages)
-
-        return _tree_byte_size(cache_shape)
-
-    bytes_one = cache_bytes(1)
-    if bytes_one > budget:
-        raise ValueError(
-            "HBM budget insufficient to allocate even a single KV cache page. "
-            "Provide `max_pages` explicitly or increase `hbm_utilization`."
-        )
-
-    # Use the previous heuristic as the initial guess before expanding.
-    guess = max(int(config.max_seqs * max_pages_per_seq), 1)
-
-    low = 1
-    high = guess
-    high_bytes = cache_bytes(high)
-
-    if high_bytes <= budget:
-        low = high
-        while True:
-            high *= 2
-            if high > (1 << 20):
-                warnings.warn(
-                    "KV cache size exceeded 1M pages during budget inference; "
-                    "aborting search and using current estimate."
-                )
-                high = 1 << 20
-                break
-            high_bytes = cache_bytes(high)
-            if high_bytes > budget:
-                break
-            low = high
-
-    # Binary search between the known-good lower bound and the first oversized bound.
-    while low + 1 < high:
-        mid = (low + high) // 2
-        mid_bytes = cache_bytes(mid)
-        if mid_bytes <= budget:
-            low = mid
-        else:
-            high = mid
-
-    max_pages = low
-
-    bytes_at_max = cache_bytes(max_pages)
-    next_bytes = cache_bytes(high)
-    per_page = bytes_at_max if max_pages == 1 else bytes_at_max - cache_bytes(max_pages - 1)
-    base_bytes = max(bytes_at_max - per_page * max_pages, 0)
-
-    import humanfriendly as hly
-
-    logger.info(
-        "Auto-computed KV cache budget: base=%s, per_page=%s, budget=%s, used=%s, next=%s -> max_pages=%d",
-        hly.format_size(base_bytes),
-        hly.format_size(per_page),
-        hly.format_size(budget),
-        hly.format_size(bytes_at_max),
-        hly.format_size(next_bytes),
-        max_pages,
-    )
-
-    return max_pages
-
-
-@dataclass(frozen=True)
-class Request:
-    """A request for generation of a single sequence."""
-
-    prompt_tokens: list[int]
-    request_id: int
-    decode_params: SeqDecodingParams
-    n_generations: int
-
-
-@dataclasses.dataclass
-class DecodeResult:
-    """Holds per-(request, choice) decode outputs and status."""
-
-    id: int
-    choice: int
-    token_list: list[int]
-    # Count of newly appended tokens (includes prompt tokens as extracted)
-    tokens_decoded: int = 0
-    done: bool = False
-    logprobs: list[float] = field(default_factory=list)
-
-
 class GenState(eqx.Module):
     """Container for generation state used during decoding.
 
@@ -271,12 +187,6 @@ class GenState(eqx.Module):
 
     cache: PageCache
     decode_state: DecodeState
-
-    def reset(self):
-        return GenState(
-            cache=self.cache.reset(),
-            decode_state=self.decode_state.reset(),
-        )
 
     def clone_sequence(
         self, parent_local_id: int, child_local_id: int | None = None, seq_params: SeqDecodingParams | None = None
@@ -316,6 +226,7 @@ def _clone_sequence(
     *,
     seq_params: SeqDecodingParams | None = None,
 ) -> tuple["GenState", int]:
+
     decode_state = state.decode_state
     if child_local_id is None:
         decode_state, new_child = decode_state.reserve_slot()
@@ -392,6 +303,21 @@ def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
     return sample_indices
 
 
+@hax.named_jit(donate_args=(True,))
+def _release_finished_device(gen_state: GenState, finished_mask: ht.bool_[NamedArray, "seq"] | None = None):  # type: ignore
+    """JIT-safe release of finished sequences on device.
+
+    Frees pages in the PageTable for finished slots and invalidates those slots in DecodeState.
+    If ``finished_mask`` is None, uses ``gen_state.decode_state.finished``.
+    """
+    ds = gen_state.decode_state
+
+    mask = finished_mask if finished_mask is not None else ds.finished
+    ds = ds.free_pages_for_finished(mask.array)
+    ds = ds.invalidate_finished()
+    return dataclasses.replace(gen_state, decode_state=ds)
+
+
 def _prefill_kernel(
     gen_state: GenState,
     model: LmHeadModel,
@@ -466,6 +392,7 @@ def _prefill_kernel(
         )
 
     # Device-side release of finished sequences (jit-safe)
+    gen_state = _release_finished_device(gen_state)
     # jax.debug.print("[_run_prefill] output_tokens={} output_slots={}", outputs.tokens, outputs.slot_ids)
 
     # jax.debug.print(
@@ -656,6 +583,8 @@ def _handle_clones(
     outputs = outputs.append(new_tokens, tgt_ids, log_probs, num_new, gen_state.decode_state.finished)
 
     # Device-side release of finished sequences (jit-safe)
+    gen_state = _release_finished_device(gen_state)
+
     return gen_state, outputs
 
 
@@ -724,6 +653,7 @@ def _run_generation_loop(
         # Append non-stateful outputs for host-side extraction
         outputs = outputs.append(new_tokens, new_slot_ids, log_probs, num_new_tokens, decode_state.finished)
 
+        new_gen_state = _release_finished_device(new_gen_state)
         # jax.debug.print(
         #     "[gen] step={step} outputs_size={size} queued_after={queued}",
         #     step=step,
@@ -800,8 +730,26 @@ class InferenceEngine:
         # sequences: request id -> {child id -> local slot id}
         self.local_map: dict[int, tuple[int, int]] = {}
         self.sequences: dict[int, dict[int, int]] = {}
+        # FIFO request queue for incremental admission
+        self.request_queue: deque[Request] = deque()
         # Results by request id -> choice -> DecodeResult
         self.results: dict[int, dict[int, DecodeResult]] = {}
+
+    def _verify_free_slot_view(self, *, context: str) -> None:
+        """Ensure host free-list matches the device page-table used mask."""
+
+        used_mask = np.asarray(jax.device_get(self.gen_state.decode_state.sequences.used_mask.array)).astype(bool)
+        free_set = set(self.free_slots)
+
+        for slot_id, is_used in enumerate(used_mask):
+            if is_used and slot_id in free_set:
+                raise RuntimeError(
+                    f"[free slot invariant] slot {slot_id} marked used but present in free list during {context}"
+                )
+            if not is_used and slot_id not in free_set:
+                raise RuntimeError(
+                    f"[free slot invariant] slot {slot_id} free in page table but missing from free list during {context}"
+                )
 
     @classmethod
     def from_model_with_config(
@@ -812,7 +760,7 @@ class InferenceEngine:
     ) -> "InferenceEngine":
         """Build an engine using a EngineConfig for sizing knobs."""
         if config.max_pages is None:
-            inferred_pages = _infer_max_pages_from_hbm(model, config)
+            inferred_pages = cls._infer_max_pages_from_hbm(model, config)
             config = dataclasses.replace(config, max_pages=int(inferred_pages))
 
         max_pages_per_seq = config.max_pages_per_seq
@@ -826,6 +774,7 @@ class InferenceEngine:
             max_stop_seqs=config.max_stop_seqs,
             max_stop_tokens=config.max_stop_tokens,
             max_queued_tokens=config.max_queued_tokens,
+            enable_logprobs=config.enable_logprobs,
         )
         vocab_axis = model.Vocab
         sampler = Sampler(vocab_axis)
@@ -843,17 +792,91 @@ class InferenceEngine:
 
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         """
-        self.gen_state = self.gen_state.reset()
-        self.free_slots = list(range(int(self.gen_state.decode_state.max_seqs)))
+        decode_state = self.gen_state.decode_state
+        page_table = decode_state.page_table
+        sequences = decode_state.sequences
+        for slot_id in range(page_table.max_seqs):
+            sequences, page_table = sequences.free_pages(page_table, slot_id)
+
+        clean_sequences = SequenceTable.init(page_table.max_seqs, page_table.pages_per_seq, page_table.page_size)
+        new_decode_state = dataclasses.replace(
+            self._initial_decode_state,
+            page_table=page_table,
+            sequences=clean_sequences,
+        )
+        self.gen_state = dataclasses.replace(self.gen_state, decode_state=new_decode_state)
+        # All local slots are free after reset (ascending order to keep parents before clones)
+        self.free_slots = list(range(int(page_table.max_seqs)))
         self.local_map.clear()
         self.sequences.clear()
-        self.results = {}
+        self._verify_free_slot_view(context="reset")
 
-    def _prefill_batch(self, batch: Sequence[Request]) -> _DecodeOutputs | None:
+    def _release_finished_sequences(self, outputs: _DecodeOutputs) -> None:
+        """Host-side bookkeeping for finished sequences.
+
+        Device-side page freeing and decode-state invalidation occur inside the JIT loops.
+        Here we update host maps and free-slot counters using the finished mask from outputs when provided.
+        """
+        finished_mask = jax.device_get(outputs.finished.array).astype(bool)
+        finished_locals = [i for i, f in enumerate(finished_mask) if bool(f)]
+        if not finished_locals:
+            return
+        logger.info(f"Releasing finished sequences: locals={finished_locals}")
+        # Maintain request/child mappings and slot counts on host
+        for local_slot in finished_locals:
+            info = self.local_map.pop(local_slot, None)
+            if info is not None:
+                rid, cid = info
+                cmap = self.sequences.get(rid)
+                if cmap is not None:
+                    cmap.pop(cid, None)
+                    if len(cmap) == 0:
+                        self.sequences.pop(rid, None)
+            # Ensure any residual tokens/logprobs for this slot are dropped from the pending queue
+            self.free_slots.append(local_slot)
+
+    # ------------------------------- Queue helpers -------------------------------
+    def enqueue_requests(self, requests: Sequence[Request]) -> None:
+        for r in requests:
+            self.request_queue.append(r)
+
+    def _admit_from_queue(self) -> _DecodeOutputs | None:
         """Admit a batch from the head of the queue that fits in free slots/pages.
 
         Returns the decode outputs for the admitted prefill batch, or None if no work was admitted.
         """
+        if not self.request_queue:
+            return None
+
+        sim_slots = len(self.free_slots)
+        sim_pages = self._free_page_count()
+        max_prefill_size = int(self.config.max_prefill_size or self.gen_state.decode_state.page_table.max_len_per_seq)
+        max_seqs_in_prefill = int(self.config.max_seqs_in_prefill)
+        sim_tokens = 0
+        primaries_in_batch = 0
+
+        batch: list[Request] = []
+        while self.request_queue:
+            nxt = self.request_queue[0]
+            need_slots = int(nxt.n_generations)
+            need_pages = self._pages_needed_for_prompt(len(nxt.prompt_tokens))
+            # Check capacity constraints: slots (including clones), pages, token buffer, prefill batch size
+            if (
+                sim_slots < need_slots
+                or sim_pages < need_pages
+                or sim_tokens + len(nxt.prompt_tokens) > max_prefill_size
+                or primaries_in_batch >= max_seqs_in_prefill
+            ):
+                break
+            batch.append(self.request_queue.popleft())
+            sim_slots -= need_slots
+            sim_pages -= need_pages
+            sim_tokens += len(nxt.prompt_tokens)
+            primaries_in_batch += 1
+
+        if not batch:
+            return None
+
         # Build a single PrefillWork description and run prefill exactly once
         prefill_work = self._prefill_prompts(batch)
         if prefill_work is None:
@@ -865,6 +888,15 @@ class InferenceEngine:
         # _run_prefill returns (GenState, _DecodeOutputs)
         self.gen_state, outputs = new_state
         return outputs
+
+    def _free_page_count(self) -> int:
+        """Return number of free KV pages in the PageTable."""
+        prc = jax.device_get(self.gen_state.decode_state.page_table.page_ref_counts.array)
+        return int((prc == 0).sum())
+
+    def _pages_needed_for_prompt(self, prompt_len: int) -> int:
+        size = int(self.gen_state.decode_state.page_table.page_size)
+        return (int(prompt_len) + size - 1) // size
 
     def _prefill_prompts(
         self,
@@ -1038,10 +1070,20 @@ class InferenceEngine:
                 "Decompose your request into smaller batches or increase max_seqs when building the service."
             )
 
-        # for now, reset the engine state between each batch - the engine cannot be called with
-        # parallel batches.
-        self.reset()
+        needs_logprobs = any(r.enable_logprobs for r in requests)
+        # if we need logprobs but decode state doesn't have logprobs enabled, re-init
+        if needs_logprobs and self.gen_state.decode_state.logprobs is None:
+            logger.info("Re-initializing decode state with logprobs enabled.")
+            max_seqs = int(self.gen_state.decode_state.max_seqs)
+            max_seq_len = int(self.gen_state.decode_state.page_table.max_len_per_seq)
+            new_decode_state = dataclasses.replace(
+                self.gen_state.decode_state,
+                logprobs=hax.full({"seq": max_seqs, "position": max_seq_len}, jnp.nan, dtype=jnp.float32),
+            )
+            self.gen_state = dataclasses.replace(self.gen_state, decode_state=new_decode_state)
 
+        # Enqueue incoming requests to internal queue
+        self.enqueue_requests(requests)
         # Track outputs and finished flags using self.results for only this call's requests
         call_rids = [int(r.request_id) for r in requests]
         expected_children: dict[int, int] = {rid: int(r.n_generations) for rid, r in zip(call_rids, requests)}
@@ -1078,13 +1120,28 @@ class InferenceEngine:
                 )
 
         time_in = time.time()
-        # Initial admission from queue and extract prompt tokens
-        decode_outputs = self._prefill_batch(requests)
-        self._ingest_outputs(decode_outputs)
+        # Try initial admission from queue and extract prompt tokens
+        decode_outputs = self._admit_from_queue()
+        if decode_outputs:
+            _ = self._ingest_outputs(decode_outputs)
         initial_prefill_out = time.time()
         logger.info(f"Initial prefill and extraction took {initial_prefill_out - time_in:.3f}s")
 
+        # Autoregressive generation loop with periodic extraction
+        num_outer_rounds = 0
+
         def _all_done() -> bool:
+            nonlocal num_outer_rounds
+            if num_outer_rounds * self.config.max_rounds >= self.config.max_seq_len:
+                logger.warning(
+                    f"Breaking decode loop after {num_outer_rounds} rounds."
+                    f" max_rounds={self.config.max_rounds} "
+                    f" outer_rounds={num_outer_rounds}"
+                    f" max_needed_tokens={max_needed}"
+                    f" max_seq_len={self.config.max_seq_len}"
+                )
+                return True
+            num_outer_rounds += 1
             for rid, n_kids in expected_children.items():
                 kid_map = self.results.get(rid, {})
                 for cid in range(n_kids):
@@ -1095,9 +1152,7 @@ class InferenceEngine:
 
         stagnant_iters = 0
         decode_iteration = 0
-        for _ in range(self.config.max_seq_len // self.config.max_rounds):
-            if _all_done():
-                break
+        while not _all_done():
             # Call step callback if provided
             if step_callback is not None:
                 step_callback(decode_iteration)
@@ -1135,6 +1190,17 @@ class InferenceEngine:
             new_tokens = self._ingest_outputs(decode_outputs)
             extract_time = time.time() - extract_start
 
+            # Release any sequences that finished in this step
+            release_start = time.time()
+            # Admit more if capacity allows
+            admit_outputs = self._admit_from_queue()
+            if admit_outputs is not None:
+                mid_tokens = self._ingest_outputs(admit_outputs)
+            else:
+                mid_tokens = 0
+            new_tokens += mid_tokens
+            release_time = time.time() - release_start
+
             iter_end = time.time()
             iter_time = iter_end - iter_start
             # Host time is everything except the device execution wait
@@ -1142,18 +1208,22 @@ class InferenceEngine:
             submit_time = submit_done - submit_start
             if iter_time > 0:
                 tps_total = new_tokens / iter_time
-                logger.info(
+                logger.debug(
                     f"Decode iter: total {iter_time:.3f}s (device {device_time:.3f}s, host {host_time:.3f}s, "
                     f"submit {submit_time:.3f}s), "
                     f"fake_submit {fake_submit_done - fake_submit_start:.3f}s, "
                     f"{tps_total:.2f} tok/s, {new_tokens} new"
-                    f" (extract {extract_time:.3f}s"
+                    f" (extract {extract_time:.3f}s, release {release_time:.3f}s)"
                 )
 
             decode_iteration += 1
 
-            # Safety: if nothing new was produced, avoid infinite loop
-            if new_tokens == 0 and int(jax.device_get(self.gen_state.decode_state.num_queued_tokens)) == 0:
+            # Safety: if nothing new was produced and queue is empty, avoid infinite loop
+            if (
+                new_tokens == 0
+                and int(jax.device_get(self.gen_state.decode_state.num_queued_tokens)) == 0
+                and not self.request_queue
+            ):
                 stagnant_iters += 1
             else:
                 stagnant_iters = 0
@@ -1322,4 +1392,95 @@ class InferenceEngine:
         if outputs is None:
             return 0
         appended = self._extract_outputs(outputs)
+        self._release_finished_sequences(outputs)
         return appended
+
+    @classmethod
+    def _infer_max_pages_from_hbm(cls, model: LmHeadModel, config: InferenceEngineConfig) -> int:
+        """Infer a KV-page budget using HBM utilization targets."""
+
+        max_pages_per_seq = config.max_pages_per_seq
+
+        try:
+            budget = _available_hbm_budget_bytes(config.hbm_utilization)
+        except Exception as exc:  # pragma: no cover - depends on runtime environment
+            logger.warning(
+                "Falling back to max_seqs * max_pages_per_seq for KV cache sizing because HBM budget "
+                "could not be determined: %s",
+                exc,
+            )
+            return int(config.max_seqs * max_pages_per_seq)
+
+        @functools.lru_cache(maxsize=None)
+        def cache_bytes(num_pages: int) -> int:
+            if num_pages <= 0:
+                raise ValueError("num_pages must be positive when sizing the KV cache.")
+
+            def initial_cache(pages: int) -> int:
+                table = PageTable.init(pages, config.max_seqs, config.page_size, max_pages_per_seq)
+                cache_shape = model.initial_cache(table.spec(), dtype=config.compute_dtype)
+                return cache_shape
+
+            cache_shape = eqx.filter_eval_shape(initial_cache, num_pages)
+
+            return _tree_byte_size(cache_shape)
+
+        bytes_one = cache_bytes(1)
+        if bytes_one > budget:
+            raise ValueError(
+                "HBM budget insufficient to allocate even a single KV cache page. "
+                "Provide `max_pages` explicitly or increase `hbm_utilization`."
+            )
+
+        # Use the previous heuristic as the initial guess before expanding.
+        guess = max(int(config.max_seqs * max_pages_per_seq), 1)
+
+        low = 1
+        high = guess
+        high_bytes = cache_bytes(high)
+
+        if high_bytes <= budget:
+            low = high
+            while True:
+                high *= 2
+                if high > (1 << 20):
+                    warnings.warn(
+                        "KV cache size exceeded 1M pages during budget inference; "
+                        "aborting search and using current estimate."
+                    )
+                    high = 1 << 20
+                    break
+                high_bytes = cache_bytes(high)
+                if high_bytes > budget:
+                    break
+                low = high
+
+        # Binary search between the known-good lower bound and the first oversized bound.
+        while low + 1 < high:
+            mid = (low + high) // 2
+            mid_bytes = cache_bytes(mid)
+            if mid_bytes <= budget:
+                low = mid
+            else:
+                high = mid
+
+        max_pages = low
+
+        bytes_at_max = cache_bytes(max_pages)
+        next_bytes = cache_bytes(high)
+        per_page = bytes_at_max if max_pages == 1 else bytes_at_max - cache_bytes(max_pages - 1)
+        base_bytes = max(bytes_at_max - per_page * max_pages, 0)
+
+        import humanfriendly as hly
+
+        logger.info(
+            "Auto-computed KV cache budget: base=%s, per_page=%s, budget=%s, used=%s, next=%s -> max_pages=%d",
+            hly.format_size(base_bytes),
+            hly.format_size(per_page),
+            hly.format_size(budget),
+            hly.format_size(bytes_at_max),
+            hly.format_size(next_bytes),
+            max_pages,
+        )
+
+        return max_pages

@@ -1,0 +1,23 @@
+# Model configuration
+model:
+  type: llama
+  seq_len: 131072
+  hidden_dim: 8192
+  intermediate_dim: 28672
+  num_layers: 80
+  num_heads: 64
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+    scaling:
+      factor: 8.0
+      low_freq_factor: 1.0
+      high_freq_factor: 4.0
+      original_max_position_embeddings: 8192
+
+# need to set this!
+tokenizer: "meta-llama/Meta-Llama-3.1-70B"

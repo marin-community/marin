@@ -1,0 +1,90 @@
+data:
+  shuffle: false
+  # Enable Feistel PRP and per-epoch reshuffling to avoid repeat order on wrap
+  permutation_type: feistel
+  shuffle_per_epoch: true
+  configs:
+    wikimedia:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/wikimedia-53a667"
+
+  train_weights:
+    wikimedia: 0.08323088002604166
+
+  max_train_batches:
+    wikimedia: 2
+
+  tokenizer: "meta-llama/Meta-Llama-3.1-8B"
+
+model:
+  type: llama
+  hidden_dim: 512
+  intermediate_dim: 1792
+  num_heads: 8
+  num_kv_heads: 8
+  num_layers: 6
+  seq_len: 4096
+  gradient_checkpointing: true
+
+trainer:
+  seed: 0
+  ray:
+    auto_start_cluster: false
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["memorize", "comma", "150m", "1M", "wikimedia", "central2", "v4-64"]
+  wandb:
+    project: "marin"
+    name: "memorize/comma_150m_1M_wikimedia_10epoch_central2"
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: -1
+
+  train_batch_size: 128
+  num_train_steps: 20  # 2 batches/epoch × 10 epochs
+
+  steps_per_eval: 1000
+  max_eval_batches: 10
+
+  checkpointer:
+    save_interval: 10m
+    keep:
+      - every: 50
+
+  tensor_parallel_axes: ["heads", "mlp"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+
+optimizer:
+  learning_rate: 0.003
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 0.01
+  min_lr_ratio: 0.0
+
+z_loss_weight: 0
+log_entropy: false
+
+pz_eval:
+  datasets: ["wikimedia"]
+  mode: first
+  num_documents: 1000
+  eval_batch_size: 64
+  doc_tokens: 1024
+  chunk_size: 100
+  prompt_tokens: 50
+  cursor_inc_tokens: 16
+  histogram: false
+  pz_npz: false
+  decode_preview: 1
+  verify_treecache: false
+  # Align with memorize utils: ensure selection within training subset and shuffle-first semantics
+  restrict_to_training_subset: true
+  initial_batch_size: 128
+  doc_shuffle: true
+  doc_perm_type: feistel
+  doc_perm_seed: 0
+
+pz_eval_steps: 1

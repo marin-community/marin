@@ -1,0 +1,85 @@
+# Example config to evaluate a Llama-3.1-70B checkpoint with eval_careless_lm.py
+# Generates sliding 100-token windows on-the-fly from We Were Eight Years in Power, scores the
+# second 50-token half, and produces character-level memorisation plots.
+
+# ---------------------------------------------------------------------------
+# Input text ----------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Raw plain-text book to read (bundled in repository).
+book_title: "We Were Eight Years in Power"
+
+txt_path: "src/levanter/data/books/we_were_eight_years_in_power.txt"
+
+# How many tokens are taken as the prompt (first half of window).
+prompt_tokens: 50
+
+# Slide the character cursor by this many chars between windows.
+cursor_inc_chars: 10
+
+# slice length
+slice_length: 2000
+
+# chunk size
+chunk_size: 100
+
+# ---------------------------------------------------------------------------
+# Tokenizer ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Hugging Face tokenizer to load for on-the-fly tokenisation.
+tokenizer_name: meta-llama/Llama-3.1-8B
+
+# ---------------------------------------------------------------------------
+# Model ----------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+model:  # 70B Llama-3.1 architecture (same hyper-params as HF release)
+  type: llama
+  seq_len: 101
+  hidden_dim: 8192        # HF release uses 8192 dim for 70B as well
+  intermediate_dim: 28672
+  num_layers: 80
+  num_heads: 64
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+
+# ---------------------------------------------------------------------------
+# Trainer/runtime ------------------------------------------------------------
+# ---------------------------------------------------------------------------
+trainer:
+  seed: 0
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["llama3", "eval", "70b", "we_were_eight_years"]
+    name: "llama_3.1_70b_we_were_eight_years"
+  mp: p=f32,c=f32
+  per_device_eval_parallelism: -1
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+
+# Evaluation-specific overrides
+# Reduce batch size to avoid OOM on 70B.
+eval_batch_size: 64
+
+# ---------------------------------------------------------------------------
+# Output paths ---------------------------------------------------------------
+# ---------------------------------------------------------------------------
+plot_path: "bar_plot_char_max_pz_70b_we_were_eight_years.png"
+histogram_path: "pz_distribution_histogram_we_were_eight_years.png"
+pz_data_path: "pz_data_we_were_eight_years.npz"
+
+# ---------------------------------------------------------------------------
+# Checkpoint -----------------------------------------------------------------
+# ---------------------------------------------------------------------------
+initialize_from_hf: "/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-70B"
+
+# We keep our custom model hyper-parameters above, so set to False.
+use_hf_model_config: False
+
+# Uncomment for quick debug (evaluates only first N suffix windows)
+# max_examples: 1000

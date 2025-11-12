@@ -161,6 +161,7 @@ class InferenceRequest:
     seed: int | None
     future: asyncio.Future
     n_generations: int = 1
+    enable_logprobs: bool = False
 
 
 @dataclass
@@ -270,6 +271,7 @@ class InferenceContext:
         seed: int | None,
         future: asyncio.Future,
         n_generations: int = 1,
+        enable_logprobs: bool = False,
     ) -> str:
         """Submit a request to the inference queue"""
         assert self.shutdown_event.is_set() is False, "InferenceContext is shut down"
@@ -285,6 +287,7 @@ class InferenceContext:
             seed=seed,
             future=future,
             n_generations=n_generations,
+            enable_logprobs=enable_logprobs,
         )
 
         logger.info("Enqueuing request %s", request)
@@ -398,6 +401,7 @@ class InferenceContext:
                 request_id=i,  # Use batch index as service request id
                 decode_params=seq_params,
                 n_generations=req.n_generations,
+                enable_logprobs=req.enable_logprobs,
             )
             service_requests.append(service_req)
 
@@ -417,7 +421,11 @@ class InferenceContext:
                         generated_tokens = result.tokens[output_idx]
                         text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
-                        result_logprobs = result.logprobs[output_idx] if result.logprobs is not None else None
+                        # Extract logprobs if requested, logprobs are already only for generated tokens
+                        result_logprobs = None
+                        if req.enable_logprobs:
+                            assert result.logprobs is not None
+                            result_logprobs = result.logprobs[output_idx]
 
                         req_outputs.append(
                             InferenceResponse(
@@ -502,6 +510,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                 seed=request.seed,
                 future=future,
                 n_generations=request.n or 1,
+                enable_logprobs=bool(request.logprobs),
             )
 
         # Wait for all results
@@ -619,6 +628,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
             seed=request.seed,
             future=future,
             n_generations=request.n or 1,
+            enable_logprobs=request.logprobs,
         )
 
         # Wait for result

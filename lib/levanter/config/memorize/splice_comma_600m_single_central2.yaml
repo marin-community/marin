@@ -1,0 +1,147 @@
+data:
+  # Splice a single document from Wikimedia using slide_within
+  tokenizer: "meta-llama/Meta-Llama-3.1-8B"
+  base:
+    # Base mixture only needs the dataset we will draw the document from
+    cache_dir: null
+    shuffle: false
+    shuffle_per_epoch: true
+    configs:
+      common_pile/wikimedia:
+        cache_dir: "gs://marin-us-central2/tokenized/common_pile/wikimedia-53a667"
+        train_urls:
+          - "gs://marin-us-central2/raw/common_pile/wikimedia_filtered-0641bb8"
+        validation_urls: []
+        tags: []
+        format:
+          text_key: "text"
+    train_weights:
+      common_pile/wikimedia: 1
+    max_train_batches:
+      common_pile/wikimedia: 1
+    mixture_block_size: 2048
+    cache_options:
+      batch_size: 128
+      num_shard_groups: 128
+      target_size_per_flush: "512MB"
+
+  # Important: enable per-epoch reshuffle on the splice dataset itself,
+  # so training streams infinitely rather than ending after one pass.
+  shuffle_per_epoch: true
+
+  dataset_name: common_pile/wikimedia
+  # Select by length instead of a fixed index
+  # override: doc 38 seems decent, c++ doc
+  # index 113 is 20k document
+  doc_index: null              # pick a specific document index
+  min_doc_length: 40000         # require at least this many tokens
+  max_doc_length: null         # require at most this many tokens
+  doc_select_mode: first     # among candidates, choose the longest
+  content_length: null         # use as many tokens as fit per (t,s)
+  content_stride: 1            # slide t within the document
+  offset_stride: 1             # slide s within the frame
+  content_start_mode: slide_within
+  min_copy_len: 2
+
+# Model configuration - Llama ~600M parameters
+model:
+  type: llama
+  hidden_dim: 1024
+  intermediate_dim: 3584
+  num_heads: 16
+  num_kv_heads: 8
+  num_layers: 24
+  seq_len: 4096
+  gradient_checkpointing: true
+  tie_word_embeddings: false
+  reference_checkpoint: "NousResearch/Llama-2-7b-hf"
+  activation_function: silu
+  initializer_range: 0.02
+  layer_norm_epsilon: 0.00001
+  use_bias: false
+  scan_layers: true
+  rope:
+    type: llama3
+    theta: 500000
+    factor: 8
+    low_freq_factor: 1
+    high_freq_factor: 4
+    original_max_position_embeddings: 8192
+
+# Training configuration
+trainer:
+  seed: 0
+  ray:
+    auto_start_cluster: false
+    start_workers: false
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["memorize", "splice", "600m", "wikimedia", "central2"]
+    resume: allow
+    save_code: true
+  wandb:
+    project: "marin"
+    #name: "llama_600m_splice_wikimedia_single_doc_11steps"
+    #name: "llama_600m_splice_wikimedia_single_doc_len4096_1000steps"
+    #name: "debug_long"
+    name: "llama_600m_doc_20k"
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: -1
+
+  train_batch_size: 256
+  num_train_steps: 15000
+  allow_nondivisible_batch_size: true
+
+  steps_per_eval: 1000000
+  max_eval_batches: 10
+
+  checkpointer:
+    save_interval: 100000h
+    keep:
+      - every: 1000000
+
+  tensor_parallel_axes: ["heads", "mlp"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+  axis_resources:
+    token: ["replica", "data"]
+    token_repeat: ["replica", "data"]
+
+# Optimizer configuration
+optimizer:
+  learning_rate: 0.002
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 0.01
+  min_lr_ratio: 0.0
+  epsilon: 1e-08
+  lr_schedule: cosine
+  max_grad_norm: 1
+
+# Misc configuration
+data_seed: 1
+z_loss_weight: 0
+log_entropy: false
+
+pz_single_doc:
+  chunk_size: 100
+  prompt_tokens: 50
+  cursor_inc_tokens: 5
+  eval_batch_size: 128
+  verbose: true
+  gcp_prefix: &PZ_PREFIX "gs://marin-us-central2/memorize/pz_single_doc_600m_len4096/"
+
+pz_single_doc_steps: 2 #100
+
+# Write HTML viz of per-token log-probs for the same single document.
+viz_single_doc:
+  output_prefix: *PZ_PREFIX
+  filename_prefix: "viz_single_doc"
+  include_argmax: true
+  verbose: true
+
+viz_single_doc_steps: 500

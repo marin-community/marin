@@ -1,0 +1,650 @@
+data:
+  cache_dir: null
+  shuffle: false
+  # Enable Feistel PRP and per-epoch reshuffling to avoid repeat order on wrap
+  permutation_type: feistel
+  shuffle_per_epoch: false
+  configs:
+    # Full common_pile prefix naming (matches 1000epoch run)
+    common_pile/arxiv_abstracts:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/arxiv_abstracts-fa99b2"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/arxiv_abstracts_filtered-f1d7a9a"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/arxiv_papers:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/arxiv_papers-75f8c0"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/arxiv_papers_filtered-033cf7f"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/biodiversity_heritage_library:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/biodiversity_heritage_library-c141ed"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/biodiversity_heritage_library_filtered-0486ed6"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/caselaw_access_project:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/caselaw_access_project-ba2bc9"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/caselaw_access_project_filtered-50e1961"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/cccc:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/cccc-fd5797"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/cccc_filtered-03a3de5"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/data_provenance_initiative:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/data_provenance_initiative-f0f8e6"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/data_provenance_initiative_filtered-8f5afcf"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/doab:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/doab-cab67a"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/doab_filtered-defb24c"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/foodista:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/foodista-904225"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/foodista_filtered-bf2c7aa"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/github_archive:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/github_archive-ed0971"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/github_archive_filtered-52282fe"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/library_of_congress:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/library_of_congress-8cd324"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/library_of_congress_filtered-56725c7"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/libretexts:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/libretexts-46297d"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/libretexts_filtered-70388bc"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/news:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/news-8f5d41"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/news_filtered-59aaa8f"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/oercommons:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/oercommons-728289"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/oercommons_filtered-506b615"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/peS2o:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/peS2o-2e6500"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/peS2o_filtered-2977475"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/pre_1929_books:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/pre_1929_books-c33f75"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/pre_1929_books_filtered-23f9d96"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/pressbooks:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/pressbooks-6d36ee"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/pressbooks_filtered-1a1d3b5"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/project_gutenberg:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/project_gutenberg-4ae24e"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/project_gutenberg_filtered-3cdf687"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/public_domain_review:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/public_domain_review-e73382"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/public_domain_review_filtered-efc7f21"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/pubmed:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/pubmed-7986e4"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/pubmed_filtered-c156f05"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/python_enhancement_proposals:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/python_enhancement_proposals-cfa465"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/python_enhancement_proposals_filtered-5821709"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/regulations:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/regulations-9d6cae"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/regulations_filtered-3327364"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/stackexchange:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackexchange-1ba844"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/stackexchange_filtered-c0ac737"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/stackv2_edu:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackv2_edu-fdc0ad"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/stackv2_edu_filtered-c354dbe"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/stackv2_html:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackv2_html-2b653d"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/stackv2_html_filtered-92c9fa8"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/ubuntu_irc:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/ubuntu_irc-ffc7af"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/ubuntu_irc_filtered-84f88c9"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/uk_hansard:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/uk_hansard-67e776"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/uk_hansard_filtered-c88adc4"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/usgpo:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/usgpo-86324c"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/usgpo_filtered-b150cc2"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/uspto:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/uspto-674f8f"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/uspto_filtered-13894c5"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/wikimedia:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/wikimedia-53a667"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/wikimedia_filtered-0641bb8"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/wikiteam:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/wikiteam-174e57"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/wikiteam_filtered-f4ed055"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    common_pile/youtube:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/youtube-6fb6c3"
+      train_urls:
+        - "gs://marin-us-central2/raw/common_pile/youtube_filtered-dff8c8a"
+      validation_urls: []
+      tags: []
+      format:
+        text_key: "text"
+    # Paloma validation datasets
+    paloma/4chan:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/4chan-496ad5"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/c4_100_domains:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/c4_100_domains-2b6db7"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/c4_100_domains/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/c4_en:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/c4_en-cf1f79"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/c4_en/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/dolma-v1_5:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/dolma-v1_5-d3bed7"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma-v1_5/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/dolma_100_programing_languages:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-369132"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/dolma_100_subreddits:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/dolma_100_subreddits-f25f70"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/falcon-refinedweb:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/falcon-refinedweb-75d43b"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/gab:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/gab-ccaced"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/gab/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/m2d2_s2orc_unsplit:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/m2d2_wikipedia_unsplit:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/manosphere_meta_sep:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/manosphere_meta_sep-a07891"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/mc4:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/mc4-ea36a2"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/mc4/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/ptb:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/ptb-628036"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/ptb/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/redpajama:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/redpajama-9d4ddd"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/redpajama/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/twitterAAE_HELM_fixed:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    paloma/wikitext_103:
+      cache_dir: "gs://marin-us-central2/tokenized/paloma/wikitext_103-1f5636"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/wikitext_103/val/val*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    # Uncheatable eval datasets
+    uncheatable_eval/ao3_english:
+      cache_dir: "gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/ao3_english_*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    uncheatable_eval/arxiv_computer_science:
+      cache_dir: "gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_computer_science-9760a5"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/arxiv_computer_science_*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    uncheatable_eval/arxiv_physics:
+      cache_dir: "gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_physics-713363"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/arxiv_physics_*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    uncheatable_eval/bbc_news:
+      cache_dir: "gs://marin-us-central2/tokenized/uncheatable_eval/bbc_news-2ff739"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/bbc_news_*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    uncheatable_eval/github_cpp:
+      cache_dir: "gs://marin-us-central2/tokenized/uncheatable_eval/github_cpp-d0da6b"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/github_cpp_*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    uncheatable_eval/github_python:
+      cache_dir: "gs://marin-us-central2/tokenized/uncheatable_eval/github_python-00e7de"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/github_python_*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+    uncheatable_eval/wikipedia_english:
+      cache_dir: "gs://marin-us-central2/tokenized/uncheatable_eval/wikipedia_english-ba27aa"
+      train_urls: []
+      validation_urls:
+        - "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/wikipedia_english_*.jsonl.gz"
+      tags: []
+      format:
+        text_key: "text"
+
+  # COMMA mixture weights (normalized over the 15-dataset head)
+  train_weights:
+    common_pile/arxiv_abstracts: 0
+    common_pile/arxiv_papers: 0
+    common_pile/biodiversity_heritage_library: 0
+    common_pile/caselaw_access_project: 0
+    common_pile/cccc: 0
+    common_pile/data_provenance_initiative: 0
+    common_pile/doab: 0
+    common_pile/foodista: 0
+    common_pile/github_archive: 0
+    common_pile/library_of_congress: 0
+    common_pile/libretexts: 0
+    common_pile/news: 0
+    common_pile/oercommons: 0
+    common_pile/peS2o: 0
+    common_pile/pre_1929_books: 0
+    common_pile/pressbooks: 0
+    common_pile/project_gutenberg: 0
+    common_pile/public_domain_review: 0
+    common_pile/pubmed: 0
+    common_pile/python_enhancement_proposals: 0
+    common_pile/regulations: 0
+    common_pile/stackexchange: 0
+    common_pile/stackv2_edu: 0
+    common_pile/stackv2_html: 0
+    common_pile/ubuntu_irc: 0
+    common_pile/uk_hansard: 0
+    common_pile/usgpo: 0
+    common_pile/uspto: 0
+    common_pile/wikimedia: 1
+    common_pile/wikiteam: 0
+    common_pile/youtube: 0
+    paloma/4chan: 0
+    paloma/c4_100_domains: 0
+    paloma/c4_en: 0
+    paloma/dolma-v1_5: 0
+    paloma/dolma_100_programing_languages: 0
+    paloma/dolma_100_subreddits: 0
+    paloma/falcon-refinedweb: 0
+    paloma/gab: 0
+    paloma/m2d2_s2orc_unsplit: 0
+    paloma/m2d2_wikipedia_unsplit: 0
+    paloma/manosphere_meta_sep: 0
+    paloma/mc4: 0
+    paloma/ptb: 0
+    paloma/redpajama: 0
+    paloma/twitterAAE_HELM_fixed: 0
+    paloma/wikitext_103: 0
+    uncheatable_eval/ao3_english: 0
+    uncheatable_eval/arxiv_computer_science: 0
+    uncheatable_eval/arxiv_physics: 0
+    uncheatable_eval/bbc_news: 0
+    uncheatable_eval/github_cpp: 0
+    uncheatable_eval/github_python: 0
+    uncheatable_eval/wikipedia_english: 0
+
+  # Seed set: 1 batch per dataset = 15 total batches (~7.8M tokens at 4096 seq_len)
+  max_train_batches:
+    common_pile/arxiv_abstracts: 0
+    common_pile/arxiv_papers: 0
+    common_pile/biodiversity_heritage_library: 0
+    common_pile/caselaw_access_project: 0
+    common_pile/cccc: 0
+    common_pile/data_provenance_initiative: 0
+    common_pile/doab: 0
+    common_pile/foodista: 0
+    common_pile/github_archive: 0
+    common_pile/library_of_congress: 0
+    common_pile/libretexts: 0
+    common_pile/news: 0
+    common_pile/oercommons: 0
+    common_pile/peS2o: 0
+    common_pile/pre_1929_books: 0
+    common_pile/pressbooks: 0
+    common_pile/project_gutenberg: 0
+    common_pile/public_domain_review: 0
+    common_pile/pubmed: 0
+    common_pile/python_enhancement_proposals: 0
+    common_pile/regulations: 0
+    common_pile/stackexchange: 0
+    common_pile/stackv2_edu: 0
+    common_pile/stackv2_html: 0
+    common_pile/ubuntu_irc: 0
+    common_pile/uk_hansard: 0
+    common_pile/usgpo: 0
+    common_pile/uspto: 0
+    common_pile/wikimedia: 1
+    common_pile/wikiteam: 0
+    common_pile/youtube: 0
+
+  tokenizer: "meta-llama/Meta-Llama-3.1-8B"
+  enforce_eos: true
+  mixture_block_size: 2048
+  cache_options:
+    batch_size: 128
+    num_shard_groups: 128
+    target_size_per_flush: "512MB"
+
+# Model configuration - Llama-3.2 ~1B parameters
+model:
+  type: llama
+  hidden_dim: 2048
+  intermediate_dim: 8192
+  num_heads: 32
+  num_kv_heads: 8
+  num_layers: 16
+  seq_len: 4096
+  gradient_checkpointing: true
+  tie_word_embeddings: true
+  reference_checkpoint: "NousResearch/Llama-2-7b-hf"
+  activation_function: silu
+  initializer_range: 0.02
+  layer_norm_epsilon: 0.00001
+  use_bias: false
+  scan_layers: true
+  rope:
+    type: llama3
+    theta: 500000
+    factor: 8
+    low_freq_factor: 1
+    high_freq_factor: 4
+    original_max_position_embeddings: 8192
+
+# Training configuration
+trainer:
+  seed: 0
+  ray:
+    auto_start_cluster: false
+    start_workers: false
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["memorize", "comma", "1b", "10M", "central2", "v4-64"]
+    resume: allow
+    save_code: true
+  wandb:
+    project: "marin"
+    name: "llama_1b_comma_10M_single_1epoch_central2_pz_wikimedia"
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: 4
+  per_device_eval_parallelism: 4
+
+  train_batch_size: 128
+  num_train_steps: 15000
+  allow_nondivisible_batch_size: true
+
+  steps_per_eval: 1000
+  max_eval_batches: 10
+
+  checkpointer:
+    save_interval: 100000h
+    keep:
+      - every: 1000000
+
+  tensor_parallel_axes: ["heads", "mlp"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+  axis_resources:
+    token: ["replica", "data"]
+    token_repeat: ["replica", "data"]
+
+# Optimizer configuration
+optimizer:
+  learning_rate: 0.002
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 0.01
+  min_lr_ratio: 0.0
+  epsilon: 1e-08
+  lr_schedule: cosine
+  max_grad_norm: 1
+
+# Misc configuration
+data_seed: 1
+z_loss_weight: 0
+log_entropy: false
+
+# Inner-loop P(z) evaluation (exactly matches the single-doc sliding config)
+pz_eval:
+  datasets: ["common_pile/wikimedia"]                # Pool across all datasets
+  mode: sliding                 # Sliding windows over the selected document
+  num_documents: 1              # Exactly one document globally
+  eval_batch_size: 64
+  doc_tokens: null              # Use full document length
+  min_doc_tokens: 1024          # Require at least 1024 tokens
+  chunk_size: 100               # Window size N
+  prompt_tokens: 50             # Prompt length P
+  cursor_inc_tokens: 5          # Stride S
+  histogram: false
+  pz_npz: false
+  decode_preview: 1
+  verify_treecache: false
+  verbose: false
+  pz_threshold: 0.0001
+  # Ensure selection strictly within the training subset head and deterministic shuffle
+  restrict_to_training_subset: true
+  initial_batch_size: 128
+  doc_shuffle: true
+  doc_perm_type: feistel
+  doc_perm_seed: 0
+
+# Run P(z) ~1% of steps (15 total → 1)
+pz_eval_steps: 150

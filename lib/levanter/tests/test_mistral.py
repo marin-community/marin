@@ -14,13 +14,7 @@ import haliax as hax
 
 from levanter.layers.attention import AttentionMask
 from levanter.models.mistral import MistralConfig, MistralLMHeadModel
-from test_utils import (
-    check_load_config,
-    check_model_works_with_seqlen,
-    parameterize_with_configs,
-    skip_if_no_torch,
-    use_test_mesh,
-)
+from test_utils import check_load_config, check_model_works_with_seqlen, parameterize_with_configs, skip_if_no_torch
 
 
 @skip_if_no_torch
@@ -116,7 +110,7 @@ def test_mistral_roundtrip(num_kv_heads):
     torch_out = torch_out.logits[0].detach().cpu().numpy()
     torch_out = jax.nn.softmax(torch_out, axis=-1)
 
-    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
+    with tempfile.TemporaryDirectory() as tmpdir:
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         model = converter.load_pretrained(

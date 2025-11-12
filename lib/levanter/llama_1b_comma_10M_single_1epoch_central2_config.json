@@ -1,0 +1,524 @@
+{
+  "_wandb": {
+    "value": {
+      "cli_version": "0.22.2",
+      "code_path": "source-marin-src_levanter_main_train_lm.py",
+      "e": {
+        "obg2ooqu9xt6qzrv1ps8ga3cgpzswmdl": {
+          "args": [
+            "--config_path",
+            "config/memorize/comma_1b_10M_single_central2.yaml"
+          ],
+          "codePath": "src/levanter/main/train_lm.py",
+          "codePathLocal": "src/levanter/main/train_lm.py",
+          "cpu_count": 120,
+          "cpu_count_logical": 240,
+          "disk": {
+            "/": {
+              "total": "103865303040",
+              "used": "17856638976"
+            }
+          },
+          "docker": "levanter-ahmed",
+          "email": "ahmedah@stanford.edu",
+          "executable": "/opt/levanter/.venv/bin/python",
+          "git": {
+            "commit": "3fb0dd92eafe7866d6bcbcc0c0daed6a267c2a3f"
+          },
+          "host": "t1v-n-bf1bbe4e-w-5",
+          "memory": {
+            "total": "430004359168"
+          },
+          "os": "Linux-5.19.0-1022-gcp-x86_64-with-glibc2.41",
+          "program": "/opt/levanter/src/levanter/main/train_lm.py",
+          "python": "CPython 3.11.14",
+          "root": "/opt/levanter",
+          "startedAt": "2025-10-19T07:30:57.819548Z",
+          "tpu": {
+            "count": 4,
+            "devicesPerChip": 1,
+            "hbmGib": 32,
+            "name": "v4"
+          },
+          "writerId": "obg2ooqu9xt6qzrv1ps8ga3cgpzswmdl"
+        }
+      },
+      "m": [],
+      "python_version": "3.11.14",
+      "t": {
+        "1": [
+          5,
+          11,
+          12,
+          30,
+          45,
+          49,
+          51,
+          53,
+          100
+        ],
+        "12": "0.22.2",
+        "13": "linux-x86_64",
+        "2": [
+          5,
+          11,
+          12,
+          30,
+          45,
+          49,
+          51,
+          53,
+          100
+        ],
+        "3": [
+          13,
+          14,
+          15,
+          16,
+          24,
+          61,
+          62
+        ],
+        "4": "3.11.14",
+        "5": "0.22.2",
+        "6": "4.57.1"
+      }
+    }
+  },
+  "data": {
+    "value": {
+      "cache_dir": "cache/",
+      "cache_options": {
+        "batch_size": 128,
+        "num_shard_groups": 128,
+        "target_size_per_flush": "512MB"
+      },
+      "chat_template": null,
+      "configs": {
+        "arxiv_abstracts": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/arxiv_abstracts-fa99b2",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "arxiv_papers": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/arxiv_papers-75f8c0",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "caselaw_access_project": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/caselaw_access_project-ba2bc9",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "doab": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/doab-cab67a",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "github_archive": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/github_archive-ed0971",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "libretexts": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/libretexts-46297d",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "news": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/news-8f5d41",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "peS2o": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/peS2o-2e6500",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "project_gutenberg": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/project_gutenberg-4ae24e",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "pubmed": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/pubmed-7986e4",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "stackexchange": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/stackexchange-1ba844",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "stackv2_edu": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/stackv2_edu-fdc0ad",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "stackv2_html": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/stackv2_html-2b653d",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "wikimedia": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/wikimedia-53a667",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        },
+        "youtube": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/youtube-6fb6c3",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": null,
+          "train_urls": [],
+          "validation_urls": []
+        }
+      },
+      "enforce_eos": true,
+      "experiment_budget": null,
+      "ignore_token_id": -100,
+      "max_train_batches": {
+        "arxiv_abstracts": 0,
+        "arxiv_papers": 0,
+        "caselaw_access_project": 0,
+        "doab": 0,
+        "github_archive": 0,
+        "libretexts": 0,
+        "news": 0,
+        "peS2o": 0,
+        "project_gutenberg": 0,
+        "pubmed": 0,
+        "stackexchange": 0,
+        "stackv2_edu": 0,
+        "stackv2_html": 0,
+        "wikimedia": 1,
+        "youtube": 0
+      },
+      "mixture_block_size": 2048,
+      "num_validation_sequences": null,
+      "permutation_type": "feistel",
+      "shuffle": false,
+      "shuffle_per_epoch": true,
+      "stop_strategy": "restart",
+      "target_budget": null,
+      "tokenizer": "meta-llama/Meta-Llama-3.1-8B",
+      "train_weights": {
+        "arxiv_abstracts": 0,
+        "arxiv_papers": 0,
+        "caselaw_access_project": 0,
+        "doab": 0,
+        "github_archive": 0,
+        "libretexts": 0,
+        "news": 0,
+        "peS2o": 0,
+        "project_gutenberg": 0,
+        "pubmed": 0,
+        "stackexchange": 0,
+        "stackv2_edu": 0,
+        "stackv2_html": 0,
+        "wikimedia": 1,
+        "youtube": 0
+      },
+      "vocab_size": null
+    }
+  },
+  "data_seed": {
+    "value": 1
+  },
+  "epoch": {
+    "value": 0
+  },
+  "eval_harness": {
+    "value": null
+  },
+  "eval_harness_steps": {
+    "value": 10000
+  },
+  "git_commit": {
+    "value": "3fb0dd92eafe7866d6bcbcc0c0daed6a267c2a3f"
+  },
+  "hf_save_dtype": {
+    "value": null
+  },
+  "hf_save_path": {
+    "value": null
+  },
+  "hf_save_steps": {
+    "value": 10000
+  },
+  "hf_upload": {
+    "value": null
+  },
+  "initialize_from_checkpoint_path": {
+    "value": null
+  },
+  "initialize_from_hf": {
+    "value": false
+  },
+  "log_entropy": {
+    "value": false
+  },
+  "model": {
+    "value": {
+      "activation_function": "silu",
+      "attn_backend": null,
+      "cross_entropy_block_size": null,
+      "flash_attention_block_size": null,
+      "gradient_checkpointing": true,
+      "head_dim": null,
+      "hidden_dim": 2048,
+      "hybrid_norm": false,
+      "initializer_range": 0.02,
+      "input_embedding_norm": false,
+      "intermediate_dim": 8192,
+      "layer_norm_epsilon": 1e-05,
+      "num_heads": 32,
+      "num_kv_heads": 8,
+      "num_layers": 16,
+      "reference_checkpoint": "NousResearch/Llama-2-7b-hf",
+      "rope": {
+        "factor": 8,
+        "high_freq_factor": 4,
+        "low_freq_factor": 1,
+        "original_max_position_embeddings": 8192,
+        "theta": 500000
+      },
+      "scan_layers": true,
+      "seq_len": 4096,
+      "tie_word_embeddings": true,
+      "tokenizer": null,
+      "upcast_attn": false,
+      "use_bias": false,
+      "use_layer_norm_weight": true
+    }
+  },
+  "optimizer": {
+    "value": {
+      "adamc_weight_decay": false,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "clip_update_norm": null,
+      "cooldown": null,
+      "cycle_length": null,
+      "cycles": null,
+      "decay": null,
+      "default_weight_decay_mask": null,
+      "epsilon": 1e-08,
+      "haps": null,
+      "learning_rate": 0.003,
+      "lr_schedule": "cosine",
+      "max_grad_norm": 1,
+      "min_lr_ratio": 0,
+      "nesterov": false,
+      "rewarmup": 0,
+      "skip_bad_steps": false,
+      "update_rms_clipping": null,
+      "warmup": 0.01,
+      "weight_decay": 0,
+      "weight_decay_modules": null
+    }
+  },
+  "pz_eval": {
+    "value": {
+      "chunk_size": 100,
+      "cursor_inc_tokens": 5,
+      "datasets": null,
+      "decode_preview": 1,
+      "doc_perm_seed": 0,
+      "doc_perm_type": "feistel",
+      "doc_shuffle": true,
+      "doc_tokens": null,
+      "eval_batch_size": 64,
+      "histogram": false,
+      "histogram_every_steps": null,
+      "histogram_linear": true,
+      "initial_batch_size": 128,
+      "min_doc_tokens": 1024,
+      "mode": "sliding",
+      "num_documents": 1,
+      "prompt_tokens": 50,
+      "pz_npz": false,
+      "pz_threshold": 0.0001,
+      "restrict_to_training_subset": true,
+      "verbose": false,
+      "verify_treecache": false
+    }
+  },
+  "pz_eval_steps": {
+    "value": 150
+  },
+  "trainer": {
+    "value": {
+      "allow_nondivisible_batch_size": false,
+      "allow_partial_checkpoint": false,
+      "axis_resources": {
+        "token": "['replica', 'data']",
+        "token_repeat": "['replica', 'data']"
+      },
+      "batch_axis": "batch",
+      "checkpointer": {
+        "append_run_id_to_base_path": true,
+        "base_path": "checkpoints/",
+        "delete_old_temp_checkpoints": true,
+        "keep": [
+          {
+            "every": 10000
+          }
+        ],
+        "save_interval": "1 day, 0:00:00"
+      },
+      "crash_on_inf": true,
+      "crash_on_nan": true,
+      "distributed": {
+        "coordinator_address": null,
+        "initialize_jax_distributed": true,
+        "local_device_ids": null,
+        "num_processes": null,
+        "process_id": null
+      },
+      "fsdp_axis": "embed",
+      "id": "ccmpsija",
+      "initialize_from": null,
+      "jax_compilation_cache_dir": null,
+      "jax_config": {
+        "jax_softmax_custom_jvp": true,
+        "jax_threefry_partitionable": true
+      },
+      "load_checkpoint": null,
+      "load_checkpoint_path": null,
+      "log_dir": "logs",
+      "log_jaxprs": true,
+      "log_xla_hlo": true,
+      "max_eval_batches": 10,
+      "model_averaging": null,
+      "model_axis_size": 1,
+      "mp": {
+        "compute_dtype": "jax.numpy.bfloat16",
+        "output_dtype": "jax.numpy.bfloat16",
+        "param_dtype": "jax.numpy.float32"
+      },
+      "num_train_steps": 15000,
+      "per_device_eval_parallelism": 4,
+      "per_device_parallelism": 4,
+      "profiler": false,
+      "profiler_num_steps": 100,
+      "profiler_perfetto_link": false,
+      "profiler_start_step": 5,
+      "quantization": null,
+      "ray": {
+        "address": null,
+        "auto_start_cluster": false,
+        "start_workers": true
+      },
+      "replica_dcn_axis_size": 1,
+      "replica_ici_axis_size": 1,
+      "require_accelerator": true,
+      "seed": 0,
+      "shutdown_at_exit": false,
+      "steps_per_eval": 1000,
+      "tensor_parallel_axes": [
+        "heads",
+        "mlp"
+      ],
+      "tracker": {
+        "entity": null,
+        "group": null,
+        "id": null,
+        "mode": null,
+        "name": "llama_1b_comma_10M_single_1epoch_central2",
+        "project": "marin",
+        "resume": "allow",
+        "save_code": true,
+        "save_xla_dumps": false,
+        "tags": []
+      },
+      "train_batch_size": 128,
+      "wandb": {
+        "entity": null,
+        "group": null,
+        "id": null,
+        "mode": null,
+        "name": "llama_1b_comma_10M_single_1epoch_central2",
+        "project": "marin",
+        "resume": "allow",
+        "save_code": true,
+        "save_xla_dumps": false,
+        "tags": []
+      },
+      "watch": {
+        "include_histograms": false,
+        "include_norms": true,
+        "include_per_parameter_norms": true,
+        "interval": 10,
+        "split_scan_layers": true,
+        "watch_targets": [
+          "grads",
+          "params"
+        ]
+      }
+    }
+  },
+  "use_hf_model_config": {
+    "value": false
+  },
+  "z_loss_weight": {
+    "value": 0
+  }
+}

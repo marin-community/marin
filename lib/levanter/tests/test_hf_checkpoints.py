@@ -47,13 +47,13 @@ def test_save_sharded_checkpoints():
     nano_config = Gpt2Config(hidden_dim=64, num_heads=2, num_layers=2, resid_pdrop=0.0, use_flash_attention=False)
     converter = nano_config.hf_checkpoint_converter()
 
+    nano_model = Gpt2LMHeadModel.init(converter.Vocab, nano_config, key=PRNGKey(3))
+
     mp = jmp.get_policy("f32")
+    nano_model = mp.cast_to_param(nano_model)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         with use_test_mesh():
-            nano_model = Gpt2LMHeadModel.init(converter.Vocab, nano_config, key=PRNGKey(3))
-            nano_model = mp.cast_to_param(nano_model)
-
             converter.save_pretrained(nano_model, tmpdir, max_shard_size=1024)
 
         # make sure we saved a few different files
@@ -119,20 +119,19 @@ class BasicModelWrapper(ModuleWithStateDictSerialization, ModelWithHfSerializati
 def test_save_pretrained_with_custom_dtype():
     gpt2_config = Gpt2Config(num_layers=1, num_heads=1, hidden_dim=32, use_flash_attention=False)
     converter = gpt2_config.hf_checkpoint_converter()
+    # Wrap the model
+    wrapped_model = BasicModelWrapper.init(converter.Vocab, gpt2_config, key=PRNGKey(0))
+
+    # Ensure initial dtypes are as expected
+    assert wrapped_model.model.transformer.blocks.stacked.attn.c_attn.weight.array.dtype == jnp.float32
+    assert wrapped_model.a_float_param.dtype == jnp.float32
+    assert wrapped_model.an_int_param.dtype == jnp.int32
+    assert wrapped_model.a_bool_buffer.dtype == jnp.bool_
 
     with tempfile.TemporaryDirectory() as tmpdir:
         os.makedirs(tmpdir, exist_ok=True)
 
         with use_test_mesh():
-            # Wrap the model
-            wrapped_model = BasicModelWrapper.init(converter.Vocab, gpt2_config, key=PRNGKey(0))
-
-            # Ensure initial dtypes are as expected
-            assert wrapped_model.model.transformer.blocks.stacked.attn.c_attn.weight.array.dtype == jnp.float32
-            assert wrapped_model.a_float_param.dtype == jnp.float32
-            assert wrapped_model.an_int_param.dtype == jnp.int32
-            assert wrapped_model.a_bool_buffer.dtype == jnp.bool_
-
             converter.save_pretrained(
                 wrapped_model,
                 tmpdir,
@@ -167,6 +166,8 @@ def test_save_pretrained_default_dtype():
     gpt2_config = Gpt2Config(num_layers=1, num_heads=1, hidden_dim=32, use_flash_attention=False)
     converter = gpt2_config.hf_checkpoint_converter()
 
+    wrapped_model = BasicModelWrapper.init(converter.Vocab, gpt2_config, key=PRNGKey(0))
+
     mp_policy = jmp.get_policy("float32")
     expected_float_dtype = mp_policy.param_dtype  # usually float32
 
@@ -176,18 +177,14 @@ def test_save_pretrained_default_dtype():
             return x.astype(expected_float_dtype)
         return x
 
+    wrapped_model = jax.tree_util.tree_map(cast_floats, wrapped_model, is_leaf=lambda x: eqx.is_array(x))
+
+    assert wrapped_model.model.transformer.blocks.stacked.attn.c_attn.weight.array.dtype == expected_float_dtype
+    assert wrapped_model.a_float_param.dtype == expected_float_dtype
+    assert wrapped_model.an_int_param.dtype == jnp.int32
+    assert wrapped_model.a_bool_buffer.dtype == jnp.bool_
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        with use_test_mesh():
-            wrapped_model = BasicModelWrapper.init(converter.Vocab, gpt2_config, key=PRNGKey(0))
-            wrapped_model = jax.tree_util.tree_map(cast_floats, wrapped_model, is_leaf=eqx.is_array)
-
-            assert (
-                wrapped_model.model.transformer.blocks.stacked.attn.c_attn.weight.array.dtype == expected_float_dtype
-            )
-            assert wrapped_model.a_float_param.dtype == expected_float_dtype
-            assert wrapped_model.an_int_param.dtype == jnp.int32
-            assert wrapped_model.a_bool_buffer.dtype == jnp.bool_
-
         # Save the wrapped_model without passing dtype
         # Similar to the above test, using _save_pretrained_local for direct testing.
 
@@ -218,6 +215,7 @@ def test_save_pretrained_to_memory_fs():
 
     gpt2_config = Gpt2Config(num_layers=4, num_heads=1, hidden_dim=32, use_flash_attention=False)
     converter = gpt2_config.hf_checkpoint_converter()
+    model = Gpt2LMHeadModel.init(converter.Vocab, gpt2_config, key=PRNGKey(4))
 
     try:
         fs.rm(path, recursive=True)
@@ -225,8 +223,6 @@ def test_save_pretrained_to_memory_fs():
         pass
 
     with use_test_mesh():
-        model = Gpt2LMHeadModel.init(converter.Vocab, gpt2_config, key=PRNGKey(4))
-
         converter.save_pretrained(
             model,
             path,
@@ -236,17 +232,17 @@ def test_save_pretrained_to_memory_fs():
             save_feature_extractor=False,
         )
 
-        stored_files = {fs._strip_protocol(file) for file in fs.find(path)}
-        base_path = fs._strip_protocol(path)
-        safetensor_files = {file for file in stored_files if file.endswith(".safetensors")}
+    stored_files = {fs._strip_protocol(file) for file in fs.find(path)}
+    base_path = fs._strip_protocol(path)
+    safetensor_files = {file for file in stored_files if file.endswith(".safetensors")}
 
-        assert len(safetensor_files) > 1
-        assert f"{base_path}/config.json" in stored_files
-        assert f"{base_path}/{SAFE_TENSORS_INDEX_NAME}" in stored_files
+    assert len(safetensor_files) > 1
+    assert f"{base_path}/config.json" in stored_files
+    assert f"{base_path}/{SAFE_TENSORS_INDEX_NAME}" in stored_files
 
-        for file in safetensor_files:
-            with fs.open(file, "rb") as fh:
-                assert fh.read(1) != b""
+    for file in safetensor_files:
+        with fs.open(file, "rb") as fh:
+            assert fh.read(1) != b""
 
     with tempfile.TemporaryDirectory() as tmpdir:
         local_path = os.path.join(tmpdir, "model")

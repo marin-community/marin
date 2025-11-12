@@ -50,7 +50,7 @@ class EmaModelAveraging(ModelAveraging[M]):
 
 
 class EmaDecaySqrtModelAveraging(ModelAveraging[M]):
-    r"""Hybrid EMA followed by :math:`1 - \sqrt{x}` decay.
+    """Hybrid EMA followed by :math:`1 - \sqrt{x}` decay.
 
     This implementation keeps a running total of the weight mass so the
     average can be queried at any step. After ``decay_steps`` updates the
@@ -100,7 +100,7 @@ class EmaModelAveragingConfig(ModelAveragingConfig[M]):
 @ModelAveragingConfig.register_subclass("ema_decay_sqrt")
 @dataclasses.dataclass(frozen=True)
 class EmaDecaySqrtConfig(ModelAveragingConfig[M]):
-    r"""EMA followed by :math:`1 - \sqrt{x}` decay."""
+    """EMA followed by :math:`1 - \sqrt{x}` decay."""
 
     beta: float = 0.999
     switch_step: int = 100_000

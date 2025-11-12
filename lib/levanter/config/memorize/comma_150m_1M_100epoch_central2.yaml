@@ -1,0 +1,137 @@
+data:
+  shuffle: false
+  configs:
+    arxiv_abstracts:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/arxiv_abstracts-fa99b2"
+    arxiv_papers:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/arxiv_papers-75f8c0"
+    caselaw_access_project:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/caselaw_access_project-ba2bc9"
+    doab:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/doab-cab67a"
+    github_archive:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/github_archive-ed0971"
+    libretexts:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/libretexts-46297d"
+    news:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/news-8f5d41"
+    peS2o:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/peS2o-2e6500"
+    project_gutenberg:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/project_gutenberg-4ae24e"
+    pubmed:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/pubmed-7986e4"
+    stackexchange:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackexchange-1ba844"
+    stackv2_edu:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackv2_edu-fdc0ad"
+    stackv2_html:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackv2_html-2b653d"
+    wikimedia:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/wikimedia-53a667"
+    youtube:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/youtube-6fb6c3"
+
+  train_weights:
+    arxiv_abstracts: 0.03458550185249307
+    arxiv_papers: 0.1037565055574792
+    caselaw_access_project: 0.017292750926246536
+    doab: 0.008646375463123268
+    github_archive: 0.04323187731561634
+    libretexts: 0.017292750926246536
+    news: 0.03458550185249307
+    peS2o: 0.1556522341405229
+    project_gutenberg: 0.008646375463123268
+    pubmed: 0.06917100370498614
+    stackexchange: 0.10799027340696585
+    stackv2_edu: 0.10799027340696585
+    stackv2_html: 0.05183012707641196
+    wikimedia: 0.08323088002604166
+    youtube: 0.20718425463647342
+
+  max_train_batches:
+    arxiv_abstracts: 0
+    arxiv_papers: 0
+    caselaw_access_project: 0
+    doab: 0
+    github_archive: 0
+    libretexts: 0
+    news: 0
+    peS2o: 0
+    project_gutenberg: 0
+    pubmed: 0
+    stackexchange: 0
+    stackv2_edu: 0
+    stackv2_html: 0
+    wikimedia: 2
+    youtube: 0
+
+  tokenizer: "meta-llama/Meta-Llama-3.1-8B"
+
+model:
+  type: llama
+  hidden_dim: 512
+  intermediate_dim: 1792
+  num_heads: 8
+  num_kv_heads: 8
+  num_layers: 6
+  seq_len: 4096
+  gradient_checkpointing: true
+
+trainer:
+  seed: 0
+  ray:
+    auto_start_cluster: false
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["memorize", "comma", "150m", "1M", "100epoch", "central2"]
+  wandb:
+    project: "marin"
+    name: "llama_150m_comma_1M_100epoch"
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: -1
+
+  train_batch_size: 128
+  num_train_steps: 200
+
+  steps_per_eval: 1000
+  max_eval_batches: 10
+
+  checkpointer:
+    save_interval: 10m
+    keep:
+      - every: 50
+
+  tensor_parallel_axes: ["heads", "mlp"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+
+optimizer:
+  learning_rate: 0.003
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 0.01
+  min_lr_ratio: 0.0
+
+z_loss_weight: 0
+log_entropy: false
+
+pz_eval:
+  datasets: ["wikimedia"]
+  mode: first
+  num_documents: 1
+  eval_batch_size: 64
+  doc_tokens: 1024
+  chunk_size: 100
+  prompt_tokens: 50
+  cursor_inc_tokens: 16
+  histogram: false
+  pz_npz: false
+  decode_preview: 1
+  verify_treecache: false
+
+pz_eval_steps: 20

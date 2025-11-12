@@ -1,0 +1,61 @@
+# Example config for running eval_sliding_total.py over the bundled books
+
+tokenizer_name: meta-llama/Llama-3.1-8B
+model:  # 8B Llama-3.1 architecture (same hyper-params as HF release)
+  type: llama
+  seq_len: 101
+  hidden_dim: 4096
+  intermediate_dim: 14336
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+trainer:
+  seed: 0
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["llama3", "eval", "70b"]
+    name: "llama_3.1_8b_multi_now_done"
+  mp: p=f32,c=f32
+  per_device_eval_parallelism: -1
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+  ray:
+    auto_start_cluster: false
+    start_workers: false
+initialize_from_hf: "/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B"
+use_hf_model_config: false
+chunk_size: 100
+slice_length: 2000
+prompt_tokens: 50
+cursor_inc_chars: 10
+token_mode: true
+cursor_inc_tokens: 5
+# Large batches (e.g. 128) fit during evaluation because FSDP shards
+# parameters and we avoid gradients or optimizer state.
+eval_batch_size: 128
+output_base_path: "gs://marin-us-central2/books_evals/llama3.1_8b/"
+
+books:
+  gatsby:
+    txt_path: src/levanter/data/books/gatsby.txt
+    book_title: gatsby
+  hp1:
+    txt_path: src/levanter/data/books/hp1.txt
+    book_title: harry_potter_1
+  curious_incident:
+    txt_path: src/levanter/data/books/curious_incident_of_the_dog_in_the_nighttime.txt
+    book_title: curious_incident
+  this_is_how_you_lose_her:
+    txt_path: src/levanter/data/books/this_is_how_you_lose_her.txt
+    book_title: this_is_how_you_lose_her
+  we_were_eight_years_in_power:
+    txt_path: src/levanter/data/books/we_were_eight_years_in_power.txt
+    book_title: we_were_eight_years_in_power

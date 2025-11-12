@@ -32,6 +32,7 @@ class SimpleTrainConfig:
     """
     num_train_steps: int
     learning_rate: float
+    seed: int = 0  # Global random seed for model init and training
     data_seed: int | None = None
     weight_decay: float | None = None
     beta1: float | None = None

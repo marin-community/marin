@@ -1,0 +1,145 @@
+data:
+  shuffle: false
+  configs:
+    # All 15 COMMA datasets
+    arxiv_abstracts:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/arxiv_abstracts-fa99b2"
+    arxiv_papers:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/arxiv_papers-75f8c0"
+    caselaw_access_project:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/caselaw_access_project-ba2bc9"
+    doab:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/doab-cab67a"
+    github_archive:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/github_archive-ed0971"
+    libretexts:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/libretexts-46297d"
+    news:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/news-8f5d41"
+    peS2o:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/peS2o-2e6500"
+    project_gutenberg:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/project_gutenberg-4ae24e"
+    pubmed:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/pubmed-7986e4"
+    stackexchange:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackexchange-1ba844"
+    stackv2_edu:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackv2_edu-fdc0ad"
+    stackv2_html:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackv2_html-2b653d"
+    wikimedia:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/wikimedia-53a667"
+    youtube:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/youtube-6fb6c3"
+
+  # COMMA mixture weights
+  train_weights:
+    arxiv_abstracts: 0.03458550185249307
+    arxiv_papers: 0.1037565055574792
+    caselaw_access_project: 0.017292750926246536
+    doab: 0.008646375463123268
+    github_archive: 0.04323187731561634
+    libretexts: 0.017292750926246536
+    news: 0.03458550185249307
+    peS2o: 0.1556522341405229
+    project_gutenberg: 0.008646375463123268
+    pubmed: 0.06917100370498614
+    stackexchange: 0.10799027340696585
+    stackv2_edu: 0.10799027340696585
+    stackv2_html: 0.05183012707641196
+    wikimedia: 0.08323088002604166
+    youtube: 0.20718425463647342
+
+  # Seed set: 13 batches per dataset = 195 total batches = ~102M tokens
+  max_train_batches:
+    arxiv_abstracts: 13
+    arxiv_papers: 13
+    caselaw_access_project: 13
+    doab: 13
+    github_archive: 13
+    libretexts: 13
+    news: 13
+    peS2o: 13
+    project_gutenberg: 13
+    pubmed: 13
+    stackexchange: 13
+    stackv2_edu: 13
+    stackv2_html: 13
+    wikimedia: 13
+    youtube: 13
+
+  tokenizer: "meta-llama/Meta-Llama-3.1-8B"
+
+# Model configuration - 150M parameters
+model:
+  type: llama
+  hidden_dim: 512
+  intermediate_dim: 1792
+  num_heads: 8
+  num_kv_heads: 8
+  num_layers: 6
+  seq_len: 4096
+  gradient_checkpointing: true
+
+# Training configuration
+trainer:
+  seed: 0
+  ray:
+    auto_start_cluster: false
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["memorize", "comma", "150m", "100M", "1epoch", "central2"]
+  wandb:
+    project: "marin"
+    name: "llama_150m_comma_100M_1epoch"
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: -1
+
+  train_batch_size: 128
+  num_train_steps: 195  # 13 batches × 15 datasets × 1 epoch
+
+  steps_per_eval: 1000
+  max_eval_batches: 10
+
+  checkpointer:
+    save_interval: 10m
+    keep:
+      - every: 50
+
+  tensor_parallel_axes: ["heads", "mlp"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+
+# Optimizer configuration (from mem_pr.md)
+optimizer:
+  learning_rate: 0.003  # 130M model: 3e-3
+  weight_decay: 0.0     # No weight decay for memorization experiments
+  beta1: 0.9
+  beta2: 0.95
+  warmup_ratio: 0.01    # 1% warmup
+  min_lr_ratio: 0.0     # Anneal to 0
+
+# Misc configuration
+z_loss_weight: 0
+log_entropy: false
+
+# Inner-loop P(z) evaluation
+pz_eval:
+  datasets: ["wikimedia"]  # Evaluate single dataset for speed (was: null = all 15 datasets)
+  mode: first
+  num_documents: 1
+  eval_batch_size: 64
+  doc_tokens: 1024  # Limit document length to 1024 tokens (was: null = full doc, some >5k tokens)
+  chunk_size: 256
+  prompt_tokens: 200
+  cursor_inc_tokens: 16
+  histogram: false
+  pz_npz: false
+  decode_preview: null
+  verify_treecache: false
+
+pz_eval_steps: 2  # ~1% of training (was 5)

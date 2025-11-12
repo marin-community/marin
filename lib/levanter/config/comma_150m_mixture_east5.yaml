@@ -1,0 +1,65 @@
+data:
+  configs:
+    # Only include datasets with non-zero weights
+    arxiv_abstracts:
+      cache_dir: "gs://marin-us-east5/tokenized/common_pile/arxiv_abstracts-fa99b2"
+
+  # Only include non-zero weights from COMMA_MAIN_MIXTURE_WEIGHTS
+  train_weights:
+    arxiv_abstracts: 1.0
+
+  tokenizer: "meta-llama/Meta-Llama-3.1-8B"
+
+# Model configuration - 150M parameters
+model:
+  type: llama
+  hidden_dim: 512
+  intermediate_dim: 1792
+  num_heads: 8
+  num_kv_heads: 8
+  num_layers: 6
+  seq_len: 4096
+  gradient_checkpointing: true
+
+# Training configuration
+trainer:
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["memorize", "comma", "150m", "east5", "v4-128", "isoflop-derived", "levanter-yaml"]
+  wandb:
+    project: "marin"
+    name: "llama_150m_comma_mixture_v4_128_east5"
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: -1
+
+  train_batch_size: 64
+  num_train_steps: 600000  # Scaled between 50M (1M) and 1B (375K)
+
+  steps_per_eval: 1000
+  max_eval_batches: 10
+
+  checkpointer:
+    save_interval: 10m
+    keep:
+      - every: 1000
+
+  # TPU configuration
+  tensor_parallel_axes: ["heads", "mlp"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+
+# Optimizer configuration using ISOFlop-derived hyperparameters for 150M
+optimizer:
+  learning_rate: 0.0073  # ISOFlop scaling: (0.33 * sqrt(batch_size)) / hidden_dim with batch=128 cap
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 5000
+  decay: 0.15  # Between 50M (0.2) and 1B (none)
+
+# Misc configuration
+z_loss_weight: 0.0001
+log_entropy: false

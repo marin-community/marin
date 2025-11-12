@@ -7,9 +7,8 @@ if [ "$DEBUG" == "1" ]; then
   set -x
 fi
 
-REPO="https://github.com/marin-community/marin.git"
+REPO="https://github.com/stanford-crfm/levanter.git"
 BRANCH=main
-CLONE_DIR="marin"
 
 if [ "$GIT_BRANCH" != "" ]; then
   BRANCH="$GIT_BRANCH"
@@ -99,10 +98,10 @@ python3.11 -m pip install --upgrade pip wheel uv || exit 1
 # on Ubuntu, that is usually ~/.local/bin
 export PATH="$(python3.11 -m site --user-base)/bin:$PATH"
 
-# clone marin monorepo
-if [ -d $CLONE_DIR ]; then
-  echo "$CLONE_DIR directory already exists, Assuming git repo and fetching latest changes"
-  cd $CLONE_DIR || exit 1
+# clone levanter
+if [ -d levanter ]; then
+  echo "Levanter directory already exists, Assuming git repo and fetching latest changes"
+  cd levanter || exit 1
   git fetch origin || exit 1
   if git rev-parse --verify "origin/$BRANCH" >/dev/null 2>&1; then
     git reset --hard "origin/$BRANCH" || exit 1
@@ -110,8 +109,8 @@ if [ -d $CLONE_DIR ]; then
     git reset --hard "$BRANCH" || exit 1
   fi
 else
-  git clone $REPO $CLONE_DIR || exit 1
-  cd $CLONE_DIR || exit 1
+  git clone $REPO levanter || exit 1
+  cd levanter || exit 1
   git checkout $BRANCH || exit 1
 fi
 
@@ -120,13 +119,4 @@ echo "Checking out branch $BRANCH"
 
 # install levanter
 uv venv
-uv sync --package levanter --extra tpu --group test --frozen
-
-# Create venv_path.txt so run.sh can find the venv at monorepo root
-echo "$(pwd)/.venv" > lib/levanter/infra/venv_path.txt
-
-# Pin JAX version if JAX_VERSION is set (for testing specific versions)
-if [ -n "$JAX_VERSION" ]; then
-  echo "Pinning JAX to version $JAX_VERSION"
-  uv pip install "jax[tpu]==$JAX_VERSION" --upgrade
-fi
+uv sync --extra tpu

@@ -179,7 +179,6 @@ def _unify_model_and_model_init(model: Optional[M], model_init: Optional[Callabl
     elif model_init is None:
         raise ValueError("one of model and model_init must be specified")
 
-    assert model_init is not None
     return model_init
 
 

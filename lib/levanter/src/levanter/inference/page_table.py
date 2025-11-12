@@ -4,9 +4,9 @@
 import dataclasses
 
 import equinox as eqx
+import jax.numpy as jnp
 import haliax as hax
 import haliax.haxtyping as ht
-import jax.numpy as jnp
 from haliax import NamedArray
 
 from levanter.inference.utils import INVALID, is_valid
@@ -34,10 +34,6 @@ class PageTable(eqx.Module):
     def init(max_pages: int, max_seqs: int, page_size: int, max_pages_per_seq: int) -> "PageTable":
         ref_counts = hax.full({"page": max_pages}, 0, dtype=jnp.int32)
         return PageTable(ref_counts, page_size, max_seqs, max_pages_per_seq)
-
-    def reset(self) -> "PageTable":
-        ref_counts = hax.full_like(self.page_ref_counts, 0)
-        return PageTable(ref_counts, self.page_size, self._max_seqs, self._pages_per_seq)
 
     @property
     def num_pages(self) -> int:

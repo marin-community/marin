@@ -140,7 +140,7 @@ overwrite the default function `update_state_dict()` and `from_state_dict()`. It
 For implementation, there are a few helper methods from `haliax.state_dict` that you can use:
 - To join specific prefix to the keys of Hugging Face state_dict, you can use the helper function `apply_prefix()`. The prefix comes from the name of attributes defined at the beginning of your model class.
 
-For example, below is an implementation of `update_state_dict()` in a model.
+For example, below is the implementation of `update_state_dict()` in [levanter.models.backpack.BackpackLMHeadModel][].
 In this class, we want to preserve HF compatibility by saving untied output embeddings. (We chose not to implement
 non-weight-tied embeddings.)
 
