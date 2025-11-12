@@ -19,7 +19,6 @@ This script demonstrates how to:
 1. Train a tiny model on TinyStories using CPU
 2. Use CPU-specific training configuration
 3. Run a quick training experiment
-4. Use take() to limit dataset size for faster iteration
 
 For GPU training, see train_tiny_model_gpu.py
 """
@@ -40,8 +39,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 tinystories_hf_id = "roneneldan/TinyStories"
 
 # 2. Tokenize the dataset with sampling
-# For this tutorial, we limit to 1000 documents per shard using take()
-# This makes iteration much faster while still demonstrating the full pipeline
+# For this tutorial, we limit to 1000 documents per shard
 tinystories_tokenized = ExecutorStep(
     name=os.path.join("tokenized", tinystories_hf_id),
     description=f"Tokenize TinyStories with 1000 samples per shard using {marin_tokenizer}",
@@ -51,7 +49,7 @@ tinystories_tokenized = ExecutorStep(
         cache_path=this_output_path(),
         tokenizer=ensure_versioned(marin_tokenizer),
         format=TextLmDatasetFormat(),
-        sample_count=versioned(1000),  # Use take() to limit to 1000 docs per shard
+        sample_count=versioned(1000),
     ),
     pip_dependency_groups=["tokenize_train"],
 )

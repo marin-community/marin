@@ -480,6 +480,11 @@ def tokenize(config: TokenizeConfigBase):
         )
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
+        # log the shards we created
+        for shard_path in shard_paths:
+            logger.info(f"  Shard: {shard_path}")
+            os.system("find " + shard_path)
+
         consolidate_shard_caches(
             shard_cache_paths=shard_paths,
             output_path=prefix,

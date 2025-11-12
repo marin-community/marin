@@ -9,12 +9,10 @@ import jax
 import jax.numpy as jnp
 import jax.tree_util as jtu
 import numpy as np
+from haliax.jax_utils import is_jax_array_like
 from jaxtyping import PyTree
 
-from haliax.jax_utils import is_jax_array_like
-
 from .jagged_array import JaggedArrayStore, PreparedBatch
-
 
 T = TypeVar("T", bound=PyTree)
 
@@ -61,6 +59,7 @@ class TreeStore(Generic[T]):
         """
         Open a TreeStoreBuilder from a file.
         """
+        print("Exemplar? ", exemplar)
         tree = _construct_builder_tree(exemplar, path, mode, cache_metadata)
         return TreeStore(tree, path, mode)
 

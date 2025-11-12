@@ -130,8 +130,8 @@ def test_tokenize_full_pipeline_integration(tmp_path):
     config = HfTokenizeConfig(
         id="dlwh/wikitext_2_detokenized",
         cache_path=str(tmp_path / "cache"),
-        tokenizer="gpt2",  # Simple, widely available tokenizer
-        sample_count=100,  # Keep test fast by limiting samples
+        tokenizer="gpt2",
+        sample_count=100,
         format=TextLmDatasetFormat(),
     )
 

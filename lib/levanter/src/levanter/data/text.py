@@ -942,12 +942,11 @@ def build_lm_dataset_cache(
 
     processor = preprocessor_for_format(format, tokenizer, enforce_bos=True, enforce_eos=enforce_eos)
     try:
-        tree_cache = TreeCache.load(
+        return TreeCache.load(
             cache_dir,
             exemplar=processor.output_exemplar,
             options=CacheMetadata(preprocessor_metadata=processor.metadata),
         )
-        logger.info(f"Loaded cache from {cache_dir}, size={len(tree_cache)}")
     except FileNotFoundError:
         pass
 

@@ -222,7 +222,6 @@ class TreeCache(AsyncDataset[T_co]):
         return len(await self.store_async())
 
     def __len__(self):
-        logger.info(f"Tree Cache? {self.store}")
         self.await_finished()
 
         return len(self.store)
@@ -561,10 +560,12 @@ class SerialCacheWriter(AbstractContextManager):
         cache_dir: str,
         exemplar: T,
         metadata: Optional["CacheMetadata"] = None,
+        shard_name: str = "",
     ):
         self.cache_dir = cache_dir
         self.metadata = metadata
         self._exemplar = exemplar
+        self._shard_name = shard_name
         self._tree_store = TreeStore.open(exemplar, self.cache_dir, mode="w", cache_metadata=True)
         self._is_closed = False
 
@@ -577,8 +578,8 @@ class SerialCacheWriter(AbstractContextManager):
         ledger = CacheLedger(
             total_num_rows=len(self._tree_store),
             is_finished=True,
-            shard_rows={"": len(self._tree_store)},
-            finished_shards=[""],
+            shard_rows={self._shard_name: len(self._tree_store)},
+            finished_shards=[self._shard_name],
             field_counts={},
             metadata=self.metadata or CacheMetadata.empty(),
         )
