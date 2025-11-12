@@ -40,12 +40,15 @@ if __name__ == "__main__":
     
     vocab_size = len(tokenizer)
     
-    # Create a simple mesh with all devices as replicas (no data parallelism requirement)
-    # This allows batch_size=1 to work without sharding constraints
+    # Create a mesh with 4-way data parallelism
+    # Batches will be sharded across 4 devices along the data axis
     num_devices = jax.device_count()
     devices = jax.devices()
-    mesh = Mesh(np.array(devices).reshape(num_devices, 1, 1), axis_names=("replica", "data", "model"))
+    mesh = Mesh(np.array(devices).reshape(num_devices // 4, 4, 1), axis_names=("replica", "data", "model"))
     axis_mapping = {"batch": "data", "embed": "model"}
+    
+    print(f"Mesh shape: {mesh.shape}")
+    print(f"Mesh devices per axis - replica: {mesh.shape['replica']}, data: {mesh.shape['data']}, model: {mesh.shape['model']}")
     
     with hax.axis_mapping(axis_mapping), mesh:
         Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), axis_mapping)
@@ -74,6 +77,11 @@ if __name__ == "__main__":
         batch_size = 4
         prompt_array = np.array([prompt_tokens] * batch_size, dtype=np.int32).reshape(batch_size, -1)
         prompt_named = hax.named(prompt_array, ["batch", "position"])
+        prompt_named = hax.shard(prompt_named)
+        
+        print(f"\nBatch verification:")
+        print(f"Batch shape: {prompt_named.axes}")
+        print(f"Batch sharding: {prompt_named.array.sharding}")
         
         previous_logits = None
         for i in range(10):
