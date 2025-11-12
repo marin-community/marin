@@ -206,7 +206,6 @@ def train(config: SFTConfig):
         Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), parameter_axis_mapping)
 
         if config.initialize_from_hf:
-            assert converter is not None
             logger.info(f"Loading pretrained model from {converter.reference_checkpoint}")
             model: LmHeadModel = converter.load_pretrained(
                 model_config.model_type, axis_mapping=parameter_axis_mapping, dtype=trainer.mp.param_dtype
@@ -289,7 +288,6 @@ def train(config: SFTConfig):
         packed_loader = BackgroundIterator(packed_iterator, max_capacity=1024)
 
         if config.hf_save_path is not None:
-            assert converter is not None, "converter must be set when saving HF checkpoints"
             # bit gross to reach this far into the config, but it's fine
             if config.trainer.checkpointer.append_run_id_to_base_path:
                 full_save_path = os.path.join(config.hf_save_path, trainer.run_id)

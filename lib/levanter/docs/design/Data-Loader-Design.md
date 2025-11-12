@@ -63,7 +63,7 @@ as well as some information to make it less likely that you accidentally reuse a
 
 ### Cache Structure
 
-A cache is a [PyTree](https://jax.readthedocs.io/en/latest/pytrees.html) of [levanter.store.JaggedArrayStore][]s, each
+A cache is a [PyTree](https://jax.readthedocs.io/en/latest/pytrees.html) of [levanter.store.JaggedArray][]s, each
 representing a different field of the processed documents. Each JaggedArray is a group of either two or three arrays:
 
 * **Data**: The actual data, stored as a Zarray array. All the "tokens" for a given field for all documents are stored in a single flat array.
@@ -127,7 +127,7 @@ Along with the cache, we introduce interfaces and classes for working with the c
   the parts of batches that each machine needs. It has an iterator and supports "seeking" to a particular batch.
 - [levanter.store.TreeCache][]: This is an AsyncDataest that wraps a cache and exposes a `get_batch` method that returns
   a batch of documents for the given indices.
-- [levanter.data.text.TokenSeqDataset][]: This is an async dataset that does the chunking of documents into examples. It
+- [levanter.data.TokenSeqDataset][]: This is an async dataset that does the chunking of documents into examples. It
   takes a cache and a `max_seq_len` and returns examples of length `max_seq_len`.
 - [levanter.data.PermutationDataset][]: This is a dataset that permutes the indices of another dataset. It is used for shuffling.
 - [levanter.data.EraShufflingDataset][]: This is a dataset that emulates the behavior of a shuffle buffer, while

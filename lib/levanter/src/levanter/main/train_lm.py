@@ -24,6 +24,9 @@ from levanter import callbacks
 from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_callback
 from levanter.data.text import LMMixtureDatasetConfig, SingleDatasetLMConfig, UrlSingleDatasetLMConfig
+from levanter.data.splice_dataset import SpliceSingleDocumentLMConfig, SpliceMultiDocumentLMConfig
+from levanter.eval_pz_single_doc import PzSingleDocConfig, pz_single_doc_callback
+from levanter.eval_pz_multi_doc import PzMultiDocConfig, pz_multi_doc_callback
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, compute_next_token_loss
@@ -37,7 +40,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TrainLmConfig:
-    data: Union[SingleDatasetLMConfig, LMMixtureDatasetConfig] = field(default_factory=UrlSingleDatasetLMConfig)
+    data: Union[SingleDatasetLMConfig, LMMixtureDatasetConfig, SpliceSingleDocumentLMConfig, SpliceMultiDocumentLMConfig] = field(
+        default_factory=UrlSingleDatasetLMConfig
+    )
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     model: LmConfig = field(default_factory=LlamaConfig)
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
@@ -69,6 +74,13 @@ class TrainLmConfig:
 
     # TODO: really need to add callback framework
     log_entropy: bool = False
+
+    # Optional single-document P(z) evaluation over the training doc (for splice dataset configs)
+    pz_single_doc: Optional[PzSingleDocConfig] = None
+    pz_single_doc_steps: int = 10000
+    # Optional multi-document P(z) evaluation (works with SpliceMultiDocumentLMConfig)
+    pz_multi_doc: Optional[PzMultiDocConfig] = None
+    pz_multi_doc_steps: int = 10000
 
 
 def main(config: TrainLmConfig):
@@ -156,7 +168,6 @@ def main(config: TrainLmConfig):
             # TODO: I don't love that we init the model twice, but it's not a big deal i think?
             if config.initialize_from_hf:
                 # initialize from an hf pretrained model
-                assert converter is not None
                 logger.info(
                     "No training checkpoint found. Initializing model from HF checkpoint"
                     f" '{converter.reference_checkpoint}'"
@@ -195,6 +206,33 @@ def main(config: TrainLmConfig):
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
 
+        # Optional: P(z) evaluation for a single training document
+        if config.pz_single_doc is not None:
+            pz_cb = pz_single_doc_callback(
+                cfg=config.pz_single_doc,
+                tokenizer=tokenizer,
+                axis_resources=compute_axis_mapping,
+                mp=trainer.mp,
+                data_config=config.data,
+                device_mesh=trainer.device_mesh,
+            )
+            trainer.add_hook(pz_cb, every=config.pz_single_doc_steps)
+
+        # Optional: P(z) evaluation across multiple selected documents
+        if config.pz_multi_doc is not None:
+            try:
+                pz_md_cb = pz_multi_doc_callback(
+                    cfg=config.pz_multi_doc,
+                    tokenizer=tokenizer,
+                    axis_resources=compute_axis_mapping,
+                    mp=trainer.mp,
+                    data_config=config.data,  # no-op if not multi-doc
+                    device_mesh=trainer.device_mesh,
+                )
+                trainer.add_hook(pz_md_cb, every=config.pz_multi_doc_steps)
+            except Exception as e:
+                logger.warning(f"Failed to create pz_multi_doc callback: {e}")
+
         flops_per_token = config.model.flops_per_token(vocab_size)
         flops_per_example = 3 * flops_per_token * Pos.size if flops_per_token is not None else None
         trainer.add_hook(
@@ -204,7 +242,6 @@ def main(config: TrainLmConfig):
 
         if config.hf_save_path is not None and config.hf_save_steps is not None:
             # bit gross to reach this far into the config, but it's fine
-            assert converter is not None, "converter must be set when saving HF checkpoints"
             if config.trainer.checkpointer.append_run_id_to_base_path:
                 full_save_path = os.path.join(config.hf_save_path, trainer.run_id)
             else:

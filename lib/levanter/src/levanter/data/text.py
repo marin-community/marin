@@ -49,6 +49,7 @@ from levanter.data.dataset import EpochDataset, MappedAsyncDataset
 from levanter.data.mixture import MixtureDataset, StopStrategy, rescale_mixture_schedule_for_batch_schedule
 from levanter.data.packing import GreedyPrepackedDataset
 from levanter.data.passthrough_tokenizer import PassthroughTokenizer
+from levanter.data.permutation import EpochPermutationDataset
 from levanter.models.lm_model import LmExample
 from levanter.schedule import BatchSchedule
 from levanter.store.cache import CacheMetadata, CacheOptions, TreeCache
@@ -416,35 +417,15 @@ class LmDatasetFormatBase(abc.ABC, ChoiceRegistry):
 @LmDatasetFormatBase.register_subclass("text")
 @dataclass(frozen=True)
 class TextLmDatasetFormat(LmDatasetFormatBase):
-    """Dataset configuration for raw text examples.
-
-    Attributes:
-        text_key: Field name containing the raw text or tokens.
-    """
-
     text_key: str = "text"  # key for the text field in the jsonl file
 
 
 @LmDatasetFormatBase.register_subclass("chat")
 @dataclass(frozen=True)
 class ChatLmDatasetFormat(LmDatasetFormatBase):
-    """Dataset configuration for multi-turn chat transcripts.
-
-    Attributes:
-        messages_field: Field name containing the ordered list of chat messages.
-        single_turn: Treat examples as a single user/assistant exchange.
-        chat_template: Overrides the tokenizer's chat template when provided.
-        system_prompt: Field name carrying an optional system instruction to prepend.
-        chat_template_kwargs: Field name containing optional keyword arguments passed to the chat template.
-        pack: Whether to allow example packing for efficient batching.
-        mask_user_turns: Mask user tokens from the training loss when True.
-    """
-
     messages_field: str = "messages"  # key for the messages field in the jsonl file
     single_turn: bool = False
     chat_template: str | None = None
-    system_prompt: str | None = None
-    chat_template_kwargs: str | None = "chat_template_kwargs"
     pack: bool = True
     mask_user_turns: bool = True
 
@@ -452,16 +433,6 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
 @LmDatasetFormatBase.register_subclass("supervised")
 @dataclass(frozen=True)
 class SupervisedLmDatasetFormat(LmDatasetFormatBase):
-    """Dataset configuration for supervised input/output pairs.
-
-    Attributes:
-        input_field: Field name with the model input text.
-        output_field: Field name with the target response text.
-        separate_with: Optional separator inserted between input and output.
-        pack: Whether to enable packing of multiple samples.
-        mask_inputs: Mask tokens from the input_field during loss computation.
-    """
-
     input_field: str = CANONICAL_INPUT_FIELD  # key for the input field in the jsonl file
     output_field: str = CANONICAL_OUTPUT_FIELD  # key for the output field in the jsonl file
     separate_with: str | int | None = None  # string to separate input and output with
@@ -571,8 +542,11 @@ class LMTaskConfig(abc.ABC):
     """
     Type of permutation to use for shuffle.
 
-    If None, defaults to linear, but this will change in the future since Feistel is better.
+    If None, defaults to feistel.
     """
+    shuffle_per_epoch: bool = False
+    """If True, wrap each training component dataset with an EpochPermutationDataset so each wrap/epoch gets a
+    fresh permutation (deterministic via fold_in on the base key). Applied after slicing (e.g., max_train_batches)."""
 
     @cached_property
     def the_tokenizer(self) -> HfTokenizer:
@@ -638,27 +612,13 @@ def preprocessor_for_format(
     match format:
         case TextLmDatasetFormat(text_key=key):
             return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=key)
-        case ChatLmDatasetFormat(
-            messages_field=m,
-            single_turn=s_turn,
-            chat_template=ct,
-            system_prompt=sp,
-            chat_template_kwargs=ct_kwargs,
-            mask_user_turns=mt,
-        ):
+        case ChatLmDatasetFormat(messages_field=m, single_turn=s_turn, chat_template=ct, mask_user_turns=mt):
             if s_turn:
                 if ct is not None:
                     raise NotImplementedError("Don't currently support chat templates for single turn chat")
                 return SingleTurnChatProcessor(tokenizer, messages_field=m)  # type: ignore
             else:
-                return ChatProcessor(
-                    tokenizer,
-                    messages_field=m,
-                    chat_template=ct,
-                    system_prompt_field=sp,
-                    chat_template_kwargs_field=ct_kwargs,
-                    mask_user_turns=mt,
-                )  # type: ignore
+                return ChatProcessor(tokenizer, messages_field=m, chat_template=ct, mask_user_turns=mt)  # type: ignore
         case SupervisedLmDatasetFormat(input_field=i, output_field=o, separate_with=s):
             return SupervisedProcessor(tokenizer, input_field=i, output_field=o, separate_with=s)  # type: ignore
         case _:
@@ -1051,15 +1011,16 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
 
         perm_type = self.permutation_type
         if perm_type is None:
-            logger.warning(
-                "Defaulting to linear permutation for shuffling. This will change to Feistel in the future."
-            )
-            perm_type = "linear"
+            # Default to Feistel (robust PRP for arbitrary lengths)
+            perm_type = "feistel"
 
         if self.shuffle is True:
             ds = ds.shuffle(key, perm_type=perm_type)
         elif isinstance(self.shuffle, int) and self.shuffle > 0:
             ds = ds.era_shuffle(self.shuffle, key=key, perm_type=perm_type)
+
+        if getattr(self, "shuffle_per_epoch", False):
+            ds = EpochPermutationDataset(ds, key=key, perm_type=perm_type)  # type: ignore
 
         if epochs:
             logger.info("Wrapping dataset in epoch dataset")
@@ -1242,6 +1203,11 @@ class LMMixtureDatasetConfig(LMTaskConfig):
             weights = rescale_mixture_schedule_for_batch_schedule(weights, batch_schedule)
 
         initial_batch_size = batch_schedule.batch_size_at_step(0)
+        # [DIV] initial batch size sanity
+        try:
+            print(f"[DIV] initial_batch_size: {initial_batch_size}", flush=True)
+        except Exception:
+            pass
 
         causal_datasets = self.train_sets(
             Pos, monitors, key=shuffle_key, epochs=epochs, initial_batch_size=initial_batch_size
@@ -1279,10 +1245,8 @@ class LMMixtureDatasetConfig(LMTaskConfig):
         # the "stable batch" property of the mixture dataset.
         perm_type = self.permutation_type
         if perm_type is None and self.shuffle is not False:
-            logger.warning(
-                "Defaulting to linear permutation for shuffling. This will change to Feistel in the future."
-            )
-            perm_type = "linear"
+            # Default to Feistel (robust PRP for arbitrary lengths)
+            perm_type = "feistel"
 
         def shuffle_ds(ds, key):
             if self.shuffle is True:
@@ -1337,8 +1301,27 @@ class LMMixtureDatasetConfig(LMTaskConfig):
                     assert (
                         num_sequences <= len_dataset
                     ), f"Max sequences for {name} ({num_sequences}) is greater than the dataset size ({len_dataset})"
+                    try:
+                        print(
+                            f"[DIV] slice_apply name={name} num_sequences={num_sequences} len_dataset={len_dataset}",
+                            flush=True,
+                        )
+                    except Exception:
+                        pass
                     logger.info(f"Selecting {num_sequences} sequences from {name} training set of size {len_dataset}")
                     datasets[name] = ds.slice_dataset(end_index=num_sequences)
+
+        # Apply per-epoch permutation after slicing so the epoch length is the post-slice length.
+        if self.shuffle_per_epoch:
+            # hard code to feistel for now
+            perm_type_epoch = "feistel"
+            new_datasets: Dict[str, AsyncDataset[LmExample]] = {}
+            for name, ds in datasets.items():
+                # derive per-dataset base key deterministically from key and dataset name
+                name_fold = int(np.frombuffer(name.encode("utf-8"), dtype=np.uint8).sum())
+                dkey = jax.random.fold_in(key, name_fold)
+                new_datasets[name] = EpochPermutationDataset(ds, key=dkey, perm_type=perm_type_epoch)  # type: ignore
+            datasets = new_datasets
 
         return datasets
 
@@ -1496,8 +1479,6 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
         tokenizer: HfTokenizer,
         chat_template: str | None = None,
         messages_field: str = "messages",
-        system_prompt_field: str | None = "system",
-        chat_template_kwargs_field: str | None = "chat_template_kwargs",
         mask_user_turns: bool = True,
     ):
         if chat_template is None and tokenizer.chat_template is None:
@@ -1505,8 +1486,6 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
         self.tokenizer = tokenizer
         self.chat_template = chat_template or tokenizer.chat_template
         self.messages_field = messages_field
-        self.system_prompt_field = system_prompt_field
-        self.chat_template_kwargs_field = chat_template_kwargs_field
 
         if self.chat_template is None:
             raise ValueError("No chat template provided and tokenizer has no default chat template")
@@ -1523,84 +1502,15 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
             )
 
     def __call__(self, batch: Sequence[dict]) -> Sequence[ProcessedChatDict]:
-        # Extract messages from the specified field, optionally injecting a system prompt
-        messages: list[list[dict[str, Any]]] = []
-        chat_kwargs_list: list[Mapping[str, Any] | None] = []
-        for example in batch:
-            example_messages = example[self.messages_field]
-            # Copy to avoid mutating the original structure
-            normalized_messages = list(example_messages)
-
-            if self.system_prompt_field is not None and self.system_prompt_field in example:
-                system_content = example[self.system_prompt_field]
-                if system_content is not None:
-                    if isinstance(system_content, Mapping):
-                        system_message = dict(system_content)
-                        system_message["role"] = "system"
-                        if "content" not in system_message:
-                            raise ValueError(
-                                "System prompt mapping must include a 'content' field when provided as a mapping."
-                            )
-                    else:
-                        system_message = {"role": "system", "content": system_content}
-                    normalized_messages = [system_message, *normalized_messages]
-
-            messages.append(normalized_messages)
-
-            example_kwargs: Mapping[str, Any] | None = None
-            if self.chat_template_kwargs_field is not None and self.chat_template_kwargs_field in example:
-                raw_kwargs = example[self.chat_template_kwargs_field]
-                if raw_kwargs is not None:
-                    if not isinstance(raw_kwargs, Mapping):
-                        raise ValueError("chat_template_kwargs must be provided as a mapping when present.")
-                    example_kwargs = dict(raw_kwargs)
-            chat_kwargs_list.append(example_kwargs)
-
-        use_per_example_kwargs = any(kwargs for kwargs in chat_kwargs_list)
-
-        if not use_per_example_kwargs:
-            tokenized = self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=True,
-                chat_template=self.chat_template,
-                return_assistant_tokens_mask=True,
-                return_dict=True,
-            )
-        else:
-            input_ids_batches: list[Sequence[int]] = []
-            assistant_mask_batches: list[Sequence[int]] = []
-
-            for conversation, example_kwargs in zip(messages, chat_kwargs_list):
-                kwargs_dict = dict(example_kwargs) if example_kwargs is not None else {}
-
-                for forbidden in ("tokenize", "return_assistant_tokens_mask", "return_dict"):
-                    if forbidden in kwargs_dict:
-                        raise ValueError(
-                            f"chat_template_kwargs may not override '{forbidden}' because the processor relies on it."
-                        )
-
-                chat_template_override = kwargs_dict.pop("chat_template", self.chat_template)
-                if chat_template_override is None:
-                    raise ValueError("Chat template must be provided either in the dataset format or per example.")
-
-                apply_kwargs = {
-                    **kwargs_dict,
-                    "tokenize": True,
-                    "return_assistant_tokens_mask": True,
-                    "return_dict": True,
-                    "chat_template": chat_template_override,
-                }
-
-                tokenized_single = self.tokenizer.apply_chat_template(
-                    [conversation],
-                    **apply_kwargs,
-                )
-
-                input_ids_batches.extend(tokenized_single["input_ids"])
-                assistant_mask_batches.extend(tokenized_single["assistant_masks"])
-
-            tokenized = {"input_ids": input_ids_batches, "assistant_masks": assistant_mask_batches}
-
+        # Extract messages from the specified field
+        messages = [example[self.messages_field] for example in batch]
+        tokenized = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=True,
+            chat_template=self.chat_template,
+            return_assistant_tokens_mask=True,
+            return_dict=True,
+        )
         masks = tokenized["assistant_masks"]
         for seq, mask_for_seq in zip(batch, masks):
             if not np.any(mask_for_seq):
@@ -1635,8 +1545,6 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
             "vocab_size": len(self.tokenizer),
             "chat_template": self.chat_template,
             "messages_field": self.messages_field,
-            "system_prompt_field": self.system_prompt_field,
-            "chat_template_kwargs_field": self.chat_template_kwargs_field,
         }
 
 

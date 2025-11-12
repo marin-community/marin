@@ -1,0 +1,43 @@
+# Example config to evaluate a llama3 checkpoint with eval_sliding_lm.py
+# Evaluates the validation split of the tulu-3 SFT mixture.
+
+# Dataset processed with SingleTurnChatProcessor
+data:
+  validation_urls:
+    - "gs://marin-us-central2/documents/books_token_window/great_gatsby-3097c4/matches_row_0/shard_00000.jsonl.gz"
+  format:
+    type: "chat"
+    single_turn: true
+  tokenizer: meta-llama/Llama-3.1-8B
+  cache_dir: "gs://marin-us-central2/tokenized/llama3/great_gatsby_windowed"
+  shuffle: false
+
+model:  # 8B llama3 model
+  type: llama
+  seq_len: 100
+  hidden_dim: 4096
+  intermediate_dim: 14336
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+
+trainer:
+  seed: 0
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["llama3", "eval"]
+  mp: p=f32,c=f16
+  per_device_eval_parallelism: -1
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+
+initialize_from_hf: "meta-llama/Llama-3.1-8B"
+use_hf_model_config: False # Use the model config defined above

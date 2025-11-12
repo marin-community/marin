@@ -89,7 +89,7 @@ def _load_model(config: SampleLmConfig, Vocab: Axis, *, key) -> LmHeadModel:
         model = converter.load_pretrained(
             config.model.model_type, ref=config.hf_checkpoint, dtype=config.trainer.mp.compute_dtype
         )
-        return model  # type: ignore[return-value]
+        return model
 
 
 def main(config: SampleLmConfig):

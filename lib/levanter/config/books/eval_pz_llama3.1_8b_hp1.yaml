@@ -1,0 +1,63 @@
+# Single-book P(z) evaluation with Llama 3.1 8B using eval_pz.py
+
+tokenizer_name: meta-llama/Llama-3.1-8B
+
+model:  # Llama‑3.1 8B architecture (HF-equivalent)
+  type: llama
+  seq_len: 101                 # intentionally not multiple-of-128; see opt_align_seq_len_128
+  hidden_dim: 4096
+  intermediate_dim: 14336
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+
+trainer:
+  seed: 0
+  tracker:
+    type: wandb
+    project: "marin"
+    name: "llama3_1_8b_pz_hp1"
+    tags: ["pz", "llama3.1_8b", "books"]
+  mp: p=f32,c=f32
+  per_device_eval_parallelism: -1
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+  ray:
+    auto_start_cluster: false
+    start_workers: false
+
+# Load HF weights from GCSFuse-mounted cache on cluster
+initialize_from_hf: "meta-llama/Llama-3.1-8B"
+use_hf_model_config: false
+
+# Sliding window settings (token mode)
+chunk_size: 100
+slice_length: 2000
+prompt_tokens: 50
+cursor_inc_chars: 10
+token_mode: true
+cursor_inc_tokens: 5
+eval_batch_size: 8
+
+# Input text (single book)
+txt_path: "gs://marin-us-central2/documents/books/50_books/harry_potter_and_the_sorcerer_s_stone.txt"
+book_title: "harry_potter_1"
+
+# Output controls
+output_base_path: "gs://marin-us-central2/books_evals/debug_v4_8/llama3.1_8b_pz/"
+gcp_log: true  # save histogram + npz via fsspec to GCS
+pz_threshold: 0.0001
+histogram_linear: true
+
+# Optimization toggles (experiment by flipping these)
+opt_align_seq_len_128: true           # align model seq_len to a multiple of 128 to enable Splash/Flash
+opt_disable_checkpointing: true       # turn off gradient checkpointing for eval
+opt_force_flash_block_128: true       # set flash_attention_block_size=128 to relax block-size constraints
+opt_warmup_compile: true              # run a warm-up call to separate compile from steady-state

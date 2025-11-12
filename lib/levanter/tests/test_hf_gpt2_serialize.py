@@ -62,49 +62,46 @@ def _roundtrip_compare_gpt2_checkpoint(model_id, revision, config: Optional[Gpt2
     torch_model: HfGpt2LMHeadModel = AutoModelForCausalLM.from_pretrained(model_id, revision=revision)
     torch_model.eval()
 
-    with use_test_mesh():
-        model = cast(
-            Gpt2LMHeadModel,
-            converter.load_pretrained(Gpt2LMHeadModel, RepoRef(model_id, revision=revision), config),
-        )
-        model = inference_mode(model, True)
+    model: Gpt2LMHeadModel = cast(
+        Gpt2LMHeadModel,
+        converter.load_pretrained(Gpt2LMHeadModel, RepoRef(model_id, revision=revision), config),
+    )
+    model = inference_mode(model, True)
 
-        lm_head = model.embeddings.token_embeddings
-        jax_lm_head = onp.array(lm_head.weight.array)
-        torch_lm_head = torch_model.transformer.wte.weight.detach().cpu().numpy()
-        assert torch_lm_head.shape == jax_lm_head.shape
-        assert_allclose(jax_lm_head, torch_lm_head, rtol=1e-4, atol=1e-4)
+    lm_head = model.embeddings.token_embeddings
+    jax_lm_head = onp.array(lm_head.weight.array)
+    torch_lm_head = torch_model.transformer.wte.weight.detach().cpu().numpy()
+    assert torch_lm_head.shape == jax_lm_head.shape
+    assert_allclose(jax_lm_head, torch_lm_head, rtol=1e-4, atol=1e-4)
 
-        input = hax.random.randint(PRNGKey(0), model.Pos, 0, model.Vocab.size)
-        attn_mask = AttentionMask.causal()
+    input = hax.random.randint(PRNGKey(0), model.Pos, 0, model.Vocab.size)
+    attn_mask = AttentionMask.causal()
 
-        # we compare softmaxes because the numerics are wonky and we usually just care about the softmax
-        torch_out = torch_model(torch.from_numpy(onp.array(input.array)).to(torch.int32).unsqueeze(0))
-        torch_out = torch_out.logits[0].detach().cpu().numpy()
-        torch_out = jax.nn.softmax(torch_out, axis=-1)
+    # we compare softmaxes because the numerics are wonky and we usually just care about the softmax
+    torch_out = torch_model(torch.from_numpy(onp.array(input.array)).to(torch.int32).unsqueeze(0))
+    torch_out = torch_out.logits[0].detach().cpu().numpy()
+    torch_out = jax.nn.softmax(torch_out, axis=-1)
 
-        def compute(input):
-            return hax.nn.softmax(model(input, key=None, attn_mask=attn_mask), axis=model.Vocab)
+    def compute(input):
+        return hax.nn.softmax(model(input, key=None, attn_mask=attn_mask), axis=model.Vocab)
 
-        compute = jax.jit(compute)
-        jax_out = compute(input).array
-        assert torch_out.shape == jax_out.shape, f"{torch_out.shape} != {jax_out.shape}"
-        # get the argmaxes for the two models
-        assert_allclose(torch_out, onp.array(jax_out), rtol=1e-2, atol=1e-2)
+    compute = jax.jit(compute)
+    jax_out = compute(input).array
+    assert torch_out.shape == jax_out.shape, f"{torch_out.shape} != {jax_out.shape}"
+    # get the argmaxes for the two models
+    assert_allclose(torch_out, onp.array(jax_out), rtol=1e-2, atol=1e-2)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            converter.save_pretrained(model, tmpdir)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        converter.save_pretrained(model, tmpdir)
 
-            torch_model2: HfGpt2LMHeadModel = AutoModelForCausalLM.from_pretrained(tmpdir)
-            torch_model2.eval()
+        torch_model2: HfGpt2LMHeadModel = AutoModelForCausalLM.from_pretrained(tmpdir)
+        torch_model2.eval()
 
-            torch_out2 = torch_model2(torch.from_numpy(onp.array(input.array)).to(torch.int32).unsqueeze(0))
-            torch_out2 = torch_out2.logits[0].detach().cpu().numpy()
-            torch_out2 = jax.nn.softmax(torch_out2, axis=-1)
+        torch_out2 = torch_model2(torch.from_numpy(onp.array(input.array)).to(torch.int32).unsqueeze(0))
+        torch_out2 = torch_out2.logits[0].detach().cpu().numpy()
+        torch_out2 = jax.nn.softmax(torch_out2, axis=-1)
 
-            assert onp.isclose(
-                torch_out2, onp.array(jax_out), rtol=1e-2, atol=1e-2
-            ).all(), f"{torch_out2} != {jax_out}"
+        assert onp.isclose(torch_out2, onp.array(jax_out), rtol=1e-2, atol=1e-2).all(), f"{torch_out2} != {jax_out}"
 
 
 # Gradient tests
@@ -132,26 +129,23 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2
     torch_model: HfGpt2LMHeadModel = AutoModelForCausalLM.from_pretrained(model_id, revision=revision)
     torch_model.eval()
 
-    with use_test_mesh():
-        model = cast(
-            Gpt2LMHeadModel, converter.load_pretrained(config.model_type, RepoRef(model_id, revision), config)
-        )
-        model = inference_mode(model, True)
+    model = cast(Gpt2LMHeadModel, converter.load_pretrained(config.model_type, RepoRef(model_id, revision), config))
+    model = inference_mode(model, True)
 
-        input = hax.random.randint(PRNGKey(0), model.Pos, 0, model.Vocab.size)
+    input = hax.random.randint(PRNGKey(0), model.Pos, 0, model.Vocab.size)
 
-        def torch_loss(model, input_ids) -> torch.Tensor:
-            return model(input_ids, labels=input_ids)[0]
+    def torch_loss(model, input_ids) -> torch.Tensor:
+        return model(input_ids, labels=input_ids)[0]
 
-        torch_out = torch_loss(torch_model, torch.from_numpy(onp.array(input.array)).to(torch.int64).unsqueeze(0))
+    torch_out = torch_loss(torch_model, torch.from_numpy(onp.array(input.array)).to(torch.int64).unsqueeze(0))
 
-        def compute_loss(model: LmHeadModel, input_ids):
-            example = LmExample.causal(input_ids, eos_id=converter.tokenizer.eos_token_id)
-            return compute_next_token_loss(model, example, key=None).scalar()
+    def compute_loss(model: LmHeadModel, input_ids):
+        example = LmExample.causal(input_ids, eos_id=converter.tokenizer.eos_token_id)
+        return compute_next_token_loss(model, example, key=None).scalar()
 
-        jax_compute_grad = equinox.filter_value_and_grad(compute_loss, has_aux=False)
-        jax_grad: Gpt2LMHeadModel
-        jax_loss, jax_grad = jax_compute_grad(model, input)
+    jax_compute_grad = equinox.filter_value_and_grad(compute_loss, has_aux=False)
+    jax_grad: Gpt2LMHeadModel
+    jax_loss, jax_grad = jax_compute_grad(model, input)
 
     # gradients are kind of a pain to get at in torch, but we do it anyway
     torch_out.backward()
@@ -205,10 +199,9 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2
 def test_hf_save_to_fs_spec():
     config = Gpt2Config(hidden_dim=32, num_heads=2, num_layers=2)
     converter = HFCheckpointConverter(Gpt2Config, "gpt2", HfGpt2Config, ignore_prefix="transformer")
+    simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
 
     with use_test_mesh():
-        simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
-
         converter.save_pretrained(simple_model, "memory://model")
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -233,6 +226,7 @@ def test_hf_save_to_gcs_roundtrip():
 
     config = Gpt2Config(hidden_dim=32, num_heads=2, num_layers=2)
     converter = HFCheckpointConverter(Gpt2Config, "gpt2", HfGpt2Config, ignore_prefix="transformer")
+    simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
 
     prefix = "gs://levanter-data/unit-test-data/models"
     unique_path = f"{prefix.rstrip('/')}/roundtrip-{uuid.uuid4().hex}"
@@ -249,8 +243,6 @@ def test_hf_save_to_gcs_roundtrip():
 
     try:
         with use_test_mesh():
-            simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
-
             from gcsfs.retry import HttpError
 
             try:

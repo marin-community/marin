@@ -198,7 +198,7 @@ def assert_loss_mask_matches_all_assistants(example, tokenizer):
     end_hdr_id = tokenizer.convert_tokens_to_ids("<|end_header_id|>")
     eot_id = tokenizer.convert_tokens_to_ids("<|eot_id|>")
     newline_id = tokenizer.encode("\n", add_special_tokens=False)[0]
-    assistant_ids: list[int] = tokenizer.encode("assistant", add_special_tokens=False)
+    assistant_ids: List[int] = tokenizer.encode("assistant", add_special_tokens=False)
 
     expected = np.zeros_like(loss_mask, dtype=loss_mask.dtype)
 

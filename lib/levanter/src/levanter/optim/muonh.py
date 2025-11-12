@@ -168,15 +168,15 @@ def scale_with_muonh(momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, learn
                 return None
             if p.ndim == 2:
                 # this is the case for no layer stacking
-                new_p = p - learning_rate * u * jnp.linalg.norm(p) / jnp.maximum(jnp.linalg.norm(u), 1e-10)
+                new_p = p - learning_rate * u * jnp.linalg.norm(p) / max(jnp.linalg.norm(u), 1e-10)
                 return new_p / jnp.linalg.norm(new_p) * jnp.linalg.norm(p) - p
             else:
                 axes = tuple(range(1, p.ndim))
                 p_norm = jnp.sqrt(jnp.sum(jnp.square(p), axis=axes, keepdims=True))
                 u_norm = jnp.sqrt(jnp.sum(jnp.square(u), axis=axes, keepdims=True))
-                new_p = p - learning_rate * u * p_norm / jnp.maximum(u_norm, 1e-10)
+                new_p = p - learning_rate * u * p_norm / max(u_norm, 1e-10)
                 new_p_norm = jnp.sqrt(jnp.sum(jnp.square(new_p), axis=axes, keepdims=True))
-                return new_p / jnp.maximum(new_p_norm, 1e-10) * p_norm - p
+                return new_p / max(new_p_norm, 1e-10) * p_norm - p
 
         muonh_updates = jax.tree_util.tree_map(
             scale_invariant_update,

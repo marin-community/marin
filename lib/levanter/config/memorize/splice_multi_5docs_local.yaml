@@ -1,0 +1,22 @@
+data:
+  type: splice_multi_document_local
+  tokenizer: meta-llama/Meta-Llama-3.1-8B
+
+  # Multi-doc sampling (refined)
+  balance_mode: by_temperature
+  balance_tau: 0.7
+  adaptive_k: true
+  offset_jitter: 2
+  alpha: 0.0
+
+  # Splice parameters
+  content_length: 4096
+  content_stride: 1
+  content_start_mode: coverage_balanced
+  min_copy_len: 2
+
+model:
+  seq_len: 4096
+
+# Note: This config is consumed by scripts/visualize_multi_splice_sampling.py to set splice parameters.
+# The actual 5 document paths are provided via --texts on the CLI for local visualization.

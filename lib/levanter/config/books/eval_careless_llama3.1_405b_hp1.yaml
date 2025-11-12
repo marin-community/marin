@@ -1,0 +1,93 @@
+# Example config to evaluate a Llama-3.1-70B checkpoint with eval_careless_lm.py
+# Generates sliding 100-token windows on-the-fly from Harry Potter book 1, scores the
+# second 50-token half, and produces character-level memorisation plots.
+
+# ---------------------------------------------------------------------------
+# Input text ----------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Raw plain-text book to read (bundled in repository).
+book_title: "Harry Potter and the Philosopher's Stone"
+
+txt_path: "src/levanter/data/books/hp1.txt"
+
+# How many tokens are taken as the prompt (first half of window).
+prompt_tokens: 50
+
+# Slide the character cursor by this many chars between windows.
+cursor_inc_chars: 10
+
+# slice length
+slice_length: 2000
+
+# chunk size
+chunk_size: 100
+
+# enable token-based sliding window mode
+token_mode: true
+cursor_inc_tokens: 5
+
+# ---------------------------------------------------------------------------
+# Tokenizer ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Hugging Face tokenizer to load for on-the-fly tokenisation.
+tokenizer_name: meta-llama/Llama-3.1-8B
+
+# ---------------------------------------------------------------------------
+# Model ----------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+model:
+  type: llama
+  seq_len: 101
+  hidden_dim: 16384
+  intermediate_dim: 53248
+  num_layers: 126
+  num_heads: 128
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+
+# ---------------------------------------------------------------------------
+# Trainer/runtime ------------------------------------------------------------
+# ---------------------------------------------------------------------------
+trainer:
+  seed: 0
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["llama3", "eval", "405b", "hp1", "tensor_parallel"]
+    name: "llama_3.1_405b_hp1_token_v4_256_model128_newv2"
+  mp: p=f32,c=f32
+  per_device_eval_parallelism: -1
+  # Pure tensor parallelism: Shard computation along mlp/heads across model axis (NOT embed for pure TP)
+  tensor_parallel_axes: ["mlp", "heads"]
+  batch_axis: "batch"
+  # Use all 128 devices for model parallelism - full model parallelism
+  # v4-256 has 128 devices total, use all for model axis: 3328MB ÷ 128 = 26MB per device
+  model_axis_size: 128
+
+# Evaluation-specific overrides
+# Reduce batch size to avoid OOM on 70B.
+eval_batch_size: 1
+
+# ---------------------------------------------------------------------------
+# Output paths ---------------------------------------------------------------
+# ---------------------------------------------------------------------------
+output_base_path: "gs://marin-us-central2/books_evals/llama3.1_405b/harry_potter_1/v4_256_model16_tp/"
+plot_path: "bar_plot_char_max_pz_405b_hp1.png"
+histogram_path: "pz_distribution_histogram_hp1.png"
+pz_data_path: "pz_data_hp1.npz"
+
+# ---------------------------------------------------------------------------
+# Checkpoint -----------------------------------------------------------------
+# ---------------------------------------------------------------------------
+initialize_from_hf: "/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-405B"
+
+# We keep our custom model hyper-parameters above, so set to False.
+use_hf_model_config: False
+
+# Uncomment for quick debug (evaluates only first N suffix windows)
+# max_examples: 1000

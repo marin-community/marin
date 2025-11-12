@@ -21,6 +21,7 @@ from levanter.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig, WrappedLossFunction
 
 # Use a batch size that remains divisible by the data-parallel axis on multi-device setups.
+Batch = hax.Axis("batch", size=4 * max(1, jax.device_count()))
 Embed = hax.Axis("embed", size=8)
 
 
@@ -188,7 +189,6 @@ def varied_metrics_loss_fn(model, batch, key=None):
 
 def test_wrapped_loss_function_invalid_metrics():
     """WrappedLossFunction validates metrics must be a dict."""
-    Batch = hax.Axis("batch", size=4 * max(1, jax.device_count()))
     model = hax.random.normal(jax.random.PRNGKey(0), (Embed,))
     batch = hax.random.normal(jax.random.PRNGKey(1), (Batch, Embed))
 
@@ -213,7 +213,6 @@ def test_wrapped_loss_function_invalid_metrics():
 def test_eval_loss_loop(has_metrics, max_batches):
     """eval_loss_loop handles metrics and max_batches correctly."""
     model = hax.random.normal(jax.random.PRNGKey(0), (Embed,))
-    Batch = hax.Axis("batch", size=4 * max(1, jax.device_count()))
 
     def raw_loss_fn(model, batch):
         val = hax.mean(batch["value"])
@@ -255,7 +254,6 @@ def test_eval_loss_loop(has_metrics, max_batches):
 def test_trainer_train_step(loss_fn, per_device_parallelism, expected_metrics):
     """Trainer.train_step works with various loss functions and microbatching."""
     model = SimpleModel.init(jax.random.PRNGKey(0))
-    Batch = hax.Axis("batch", size=4 * max(1, jax.device_count()))
 
     config = TrainerConfig(
         tracker=NoopConfig(),
@@ -290,7 +288,6 @@ def test_trainer_train_step(loss_fn, per_device_parallelism, expected_metrics):
 def test_microbatching_metric_aggregation():
     """Microbatching correctly aggregates different metric types."""
     model = SimpleModel.init(jax.random.PRNGKey(0))
-    Batch = hax.Axis("batch", size=4 * max(1, jax.device_count()))
 
     config = TrainerConfig(
         tracker=NoopConfig(),

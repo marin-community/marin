@@ -26,9 +26,19 @@ model:
   gradient_checkpointing: true
   scale_attn_by_inverse_layer_idx: true
 trainer:
+  seed: 0
+  ray:
+    auto_start_cluster: false
+    start_workers: false
   tracker:
-    project: "levanter"
+    type: wandb
+    project: "marin"
     tags: [ "openwebtext+wiki", "gpt2", "itest"]
+    resume: allow
+    save_code: true
+  wandb:
+    project: "marin"
+    name: "gpt2_small_fast_mix_chat_levanter"
 
   mp: p=f32,c=bfloat16
   model_axis_size: 1

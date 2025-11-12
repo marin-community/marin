@@ -1,0 +1,136 @@
+data:
+  # Splice a single document from Wikimedia with coverage-balanced placement
+  tokenizer: "meta-llama/Meta-Llama-3.1-8B"
+  base:
+    # Base mixture only needs the dataset we will draw the document from
+    cache_dir: null
+    shuffle: false
+    shuffle_per_epoch: true
+    configs:
+      common_pile/wikimedia:
+        cache_dir: "gs://marin-us-central2/tokenized/common_pile/wikimedia-53a667"
+        train_urls:
+          - "gs://marin-us-central2/raw/common_pile/wikimedia_filtered-0641bb8"
+        validation_urls: []
+        tags: []
+        format:
+          text_key: "text"
+    train_weights:
+      common_pile/wikimedia: 1
+    max_train_batches:
+      common_pile/wikimedia: 1
+    mixture_block_size: 2048
+    cache_options:
+      batch_size: 128
+      num_shard_groups: 128
+      target_size_per_flush: "512MB"
+
+  # Important: enable per-epoch reshuffle on the splice dataset itself,
+  # so training streams infinitely rather than ending after one pass.
+  shuffle_per_epoch: true
+
+  dataset_name: common_pile/wikimedia
+  doc_index: 8771860            # 40k document index
+  min_doc_length: 40000
+  max_doc_length: null
+  doc_select_mode: first
+
+  # Balanced mode: use a constant content length per example and a fixed offset
+  content_length: 4096          # copy this many tokens per example
+  content_stride: 1
+  offset_stride: 1              # ignored in balanced mode
+  content_start_mode: coverage_balanced
+  min_copy_len: 128
+  alpha: 0.8
+
+
+# Model configuration - Llama ~600M parameters
+model:
+  type: llama
+  hidden_dim: 1024
+  intermediate_dim: 3584
+  num_heads: 16
+  num_kv_heads: 8
+  num_layers: 24
+  seq_len: 4096
+  gradient_checkpointing: true
+  tie_word_embeddings: false
+  reference_checkpoint: "NousResearch/Llama-2-7b-hf"
+  activation_function: silu
+  initializer_range: 0.02
+  layer_norm_epsilon: 0.00001
+  use_bias: false
+  scan_layers: true
+  rope:
+    type: llama3
+    theta: 500000
+    factor: 8
+    low_freq_factor: 1
+    high_freq_factor: 4
+    original_max_position_embeddings: 8192
+
+# Training configuration
+trainer:
+  seed: 0
+  ray:
+    auto_start_cluster: false
+    start_workers: false
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["memorize", "splice", "600m", "wikimedia", "central2", "balanced"]
+    resume: allow
+    save_code: true
+  wandb:
+    project: "marin"
+    name: "llama_600m_splice_wikimedia_single_doc_40k_balanced"
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: -1
+
+  train_batch_size: 256
+  num_train_steps: 15000
+  allow_nondivisible_batch_size: true
+
+  steps_per_eval: 1000000
+  max_eval_batches: 10
+
+  checkpointer:
+    save_interval: 100000h
+    keep:
+      - every: 1000000
+
+  tensor_parallel_axes: ["heads", "mlp"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+  axis_resources:
+    token: ["replica", "data"]
+    token_repeat: ["replica", "data"]
+
+# Optimizer configuration
+optimizer:
+  learning_rate: 0.002
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 0.01
+  min_lr_ratio: 0.0
+  epsilon: 1e-08
+  lr_schedule: cosine
+  max_grad_norm: 1
+
+# Misc configuration
+data_seed: 1
+z_loss_weight: 0
+log_entropy: false
+
+pz_single_doc:
+  chunk_size: 100
+  prompt_tokens: 50
+  cursor_inc_tokens: 5
+  eval_batch_size: 128
+  verbose: true
+  gcp_prefix: &PZ_PREFIX "gs://marin-us-central2/memorize/pz_single_doc_600m_doc_40k_balanced/"
+
+pz_single_doc_steps: 200

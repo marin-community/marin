@@ -67,9 +67,9 @@ def maybe_fused_next_token_loss(
     target_y = hax.roll(true_ids, -1, Pos)
 
     # Create a mask that excludes the last token
-    not_last_loss_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))  # type: ignore
+    not_last_loss_mask = 1 - hax.nn.one_hot(-1, Pos, dtype=jnp.bool_)  # type: ignore
     if loss_mask is not None:
-        loss_mask = loss_mask * not_last_loss_mask
+        loss_mask = loss_mask & not_last_loss_mask
     else:
         loss_mask = not_last_loss_mask
 
@@ -122,9 +122,9 @@ def next_token_loss(
     target_y_full = hax.nn.one_hot(target_y, Vocab, dtype=logits.dtype)
 
     # Create a mask that excludes the last token
-    not_last_loss_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
+    not_last_loss_mask = 1 - hax.nn.one_hot(-1, Pos, dtype=jnp.bool_)  # type: ignore
     if loss_mask is not None:
-        loss_mask = hax.logical_and(loss_mask, not_last_loss_mask)
+        loss_mask = loss_mask & not_last_loss_mask
     else:
         loss_mask = not_last_loss_mask
 
@@ -155,6 +155,10 @@ def cross_entropy_and_logsumexp_penalty(
 
     if logsumexp_weight is not None and logsumexp_weight != 0.0:
         loss = loss + logsumexp_weight * (log_normalizers**2)
+
+    # Ensure where mask is boolean (JAX requires this for reduction operations)
+    if where is not None and not jnp.issubdtype(where.dtype, jnp.bool_):
+        where = where.astype(jnp.bool_)
 
     return hax.nn.loss.maybe_reduce_loss(loss, reduction, reduction_axis, where)
 
@@ -208,6 +212,10 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
 
     if logsumexp_weight is not None and (not isinstance(logsumexp_weight, (int, float)) or logsumexp_weight != 0.0):
         loss = loss + logsumexp_weight * (log_normalizers**2)
+
+    # Ensure where mask is boolean (JAX requires this for reduction operations)
+    if where is not None and not jnp.issubdtype(where.dtype, jnp.bool_):
+        where = where.astype(jnp.bool_)
 
     return hax.nn.loss.maybe_reduce_loss(loss, reduction, reduction_axis, where)
 

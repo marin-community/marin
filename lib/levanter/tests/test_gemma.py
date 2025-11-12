@@ -26,20 +26,12 @@ from levanter.models.gemma import (
 )
 from levanter.models.llama import LlamaMlp
 from levanter.utils.jax_utils import parameter_count
-from test_utils import (
-    check_load_config,
-    check_model_works_with_seqlen,
-    parameterize_with_configs,
-    skip_if_hf_model_not_accessible,
-    skip_if_no_torch,
-    use_test_mesh,
-)
+from test_utils import check_load_config, check_model_works_with_seqlen, parameterize_with_configs, skip_if_no_torch
 
 
 # N.B. Gemma uses LLamaAttention directly so we skip tests for attention and rotary embeddings.
 
 
-@skip_if_hf_model_not_accessible("google/gemma-2b")
 @skip_if_no_torch
 def test_gemma_config():
     # load HF config and convert to levanter config
@@ -314,7 +306,6 @@ def test_gemma2_mlp():
     chex.assert_trees_all_close(hf_out.detach().cpu().numpy(), out.array, rtol=1e-5, atol=1e-5)
 
 
-@skip_if_hf_model_not_accessible("google/gemma-2-2b")
 @skip_if_no_torch
 def test_gemma2_roundtrip():
     import torch
@@ -350,7 +341,7 @@ def test_gemma2_roundtrip():
     torch_out = torch_out.logits[0].detach().cpu().numpy()
     torch_out = jax.nn.softmax(torch_out, axis=-1)
 
-    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
+    with tempfile.TemporaryDirectory() as tmpdir:
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         model = converter.load_pretrained(
@@ -502,7 +493,6 @@ def test_gemma3_decoder_layer(num_kv_heads):
     chex.assert_trees_all_close(hf_out[0].detach().cpu().numpy(), lev_out.array, rtol=1e-4, atol=1e-4)
 
 
-@skip_if_hf_model_not_accessible("google/gemma-3-1b-pt")
 @skip_if_no_torch
 def test_gemma3_roundtrip():
     import torch
@@ -539,7 +529,7 @@ def test_gemma3_roundtrip():
     torch_out = torch_out.logits[0].detach().cpu().numpy()
     torch_out = jax.nn.softmax(torch_out, axis=-1)
 
-    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
+    with tempfile.TemporaryDirectory() as tmpdir:
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         model = converter.load_pretrained(

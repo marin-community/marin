@@ -127,7 +127,7 @@ def _load_model(
                 dtype=trainer_config.mp.compute_dtype,
                 axis_mapping=trainer_config.parameter_axis_mapping,
             )
-            return model, tokenizer  # type: ignore[return-value]
+            return model, tokenizer
 
 
 @dataclass
@@ -163,13 +163,13 @@ class InferenceReplConfig:
         default_factory=lambda: InferenceServerConfig(
             service=InferenceEngineConfig(
                 page_size=8,
-                max_pages=64 * 8,
                 max_seq_len=64,
                 max_seqs=2,
                 max_queued_tokens=64,
                 max_seqs_in_prefill=1,
                 max_prefill_size=64,
                 max_rounds=4,
+                hbm_utilization=0.2,
             ),
         )
     )

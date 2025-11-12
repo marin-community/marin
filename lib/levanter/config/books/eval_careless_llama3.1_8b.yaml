@@ -1,0 +1,89 @@
+# Example config to evaluate a Llama-3.1-8B checkpoint with eval_careless_lm.py
+# Generates sliding 100-token windows on-the-fly from The Great Gatsby, scores the
+# second 50-token half, and produces token-level memorisation plots.
+
+# ---------------------------------------------------------------------------
+# Input text ----------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Raw plain-text book to read (bundled in repository).
+book_title: "The Great Gatsby"
+
+txt_path: "src/levanter/data/books/gatsby.txt"
+
+# How many tokens are taken as the prompt (first half of window).
+prompt_tokens: 50
+
+# Slide the character cursor by this many chars between windows.
+cursor_inc_chars: 10
+# Enable token-based sliding window mode
+token_mode: true
+cursor_inc_tokens: 1
+
+# slice length
+slice_length: 2000
+
+# chunk size
+chunk_size: 100
+
+# ---------------------------------------------------------------------------
+# Tokenizer ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Hugging Face tokenizer to load for on-the-fly tokenisation.
+tokenizer_name: meta-llama/Llama-3.1-8B
+
+# ---------------------------------------------------------------------------
+# Model ----------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+model:  # 8B Llama-3.1 architecture (same hyper-params as HF release)
+  type: llama
+  seq_len: 101
+  hidden_dim: 4096
+  intermediate_dim: 14336
+  num_layers: 32
+  num_heads: 32
+  num_kv_heads: 8
+  flash_attention_block_size: 512
+  use_bias: false
+  use_layer_norm_weight: true
+  initializer_range: 0.02
+  rope:
+    type: "llama3"
+
+# ---------------------------------------------------------------------------
+# Trainer/runtime ------------------------------------------------------------
+# ---------------------------------------------------------------------------
+trainer:
+  seed: 0
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["llama3", "eval", "8b"]
+    name: "llama_3.1_8b_gatsby_token_mode_profile_sanity_check_v3"
+  mp: p=f32,c=f32
+  per_device_eval_parallelism: -1
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+
+# Evaluation-specific overrides
+# can go up to 256!
+eval_batch_size: 256
+
+# ---------------------------------------------------------------------------
+# Output paths ---------------------------------------------------------------
+# ---------------------------------------------------------------------------
+output_base_path: "gs://marin-us-central2/books_evals/debug_8b_new/"
+plot_path: "bar_plot_char_max_pz_8b_gatsby.png"
+histogram_path: "pz_distribution_histogram_gatsby_8b.png"
+pz_data_path: "pz_data_gatsby_8b.npz"
+
+# ---------------------------------------------------------------------------
+# Checkpoint -----------------------------------------------------------------
+# ---------------------------------------------------------------------------
+initialize_from_hf: "/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B"
+
+# We keep our custom model hyper-parameters above, so set to False.
+use_hf_model_config: False
+
+# Uncomment for quick debug (evaluates only first N suffix windows)
+# max_examples: 1000

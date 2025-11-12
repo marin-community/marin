@@ -1,0 +1,108 @@
+data:
+  configs:
+    # Only include datasets with non-zero weights
+    arxiv_abstracts:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/arxiv_abstracts-fa99b2"
+    arxiv_papers:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/arxiv_papers-75f8c0"
+    caselaw_access_project:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/caselaw_access_project-ba2bc9"
+    doab:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/doab-cab67a"
+    github_archive:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/github_archive-ed0971"
+    libretexts:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/libretexts-46297d"
+    news:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/news-8f5d41"
+    peS2o:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/peS2o-2e6500"
+    project_gutenberg:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/project_gutenberg-4ae24e"
+    pubmed:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/pubmed-7986e4"
+    stackexchange:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackexchange-1ba844"
+    stackv2_edu:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackv2_edu-fdc0ad"
+    stackv2_html:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackv2_html-2b653d"
+    wikimedia:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/wikimedia-53a667"
+    youtube:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/youtube-6fb6c3"
+
+  # Only include non-zero weights from COMMA_MAIN_MIXTURE_WEIGHTS
+  train_weights:
+    arxiv_abstracts: 0.03458550185249307
+    arxiv_papers: 0.1037565055574792
+    caselaw_access_project: 0.017292750926246536
+    doab: 0.008646375463123268
+    github_archive: 0.04323187731561634
+    libretexts: 0.017292750926246536
+    news: 0.03458550185249307
+    peS2o: 0.1556522341405229
+    project_gutenberg: 0.008646375463123268
+    pubmed: 0.06917100370498614
+    stackexchange: 0.10799027340696585
+    stackv2_edu: 0.10799027340696585
+    stackv2_html: 0.05183012707641196
+    wikimedia: 0.08323088002604166
+    youtube: 0.20718425463647342
+
+  tokenizer: "meta-llama/Meta-Llama-3.1-8B"
+
+# Model configuration - 1B parameters
+model:
+  type: llama
+  hidden_dim: 2048
+  intermediate_dim: 8192
+  num_heads: 16
+  num_kv_heads: 16
+  num_layers: 16
+  seq_len: 4096
+  gradient_checkpointing: true
+  flash_attention_block_size: 1024
+
+# Training configuration
+trainer:
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["memorize", "comma", "1b", "central2", "v4-128", "isoflop-derived", "levanter-yaml"]
+  wandb:
+    project: "marin"
+    name: "llama_1b_comma_mixture_v4_128_try1"
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: -1
+
+  train_batch_size: 1024  # 8 samples per worker, ~20.5GB per worker (fits in 32GB)
+  num_train_steps: 375000  # Scaled down from 1M for 1B model
+
+  steps_per_eval: 1000
+  max_eval_batches: 10
+
+  checkpointer:
+    save_interval: 10m
+    keep:
+      - every: 1000
+
+  # TPU configuration
+  tensor_parallel_axes: ["heads", "mlp"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+
+# Optimizer configuration using ISOFlop-derived hyperparameters for 1B
+optimizer:
+  learning_rate: 0.004  # 4E-4, adjusted for 1B scale
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 5000
+  min_lr_ratio: 0.1
+
+# Misc configuration
+z_loss_weight: 0.0001
+log_entropy: false

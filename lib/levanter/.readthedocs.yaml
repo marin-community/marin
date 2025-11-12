@@ -9,7 +9,9 @@ build:
   os: ubuntu-22.04
   tools:
     python: "3.11"
-  commands:
-    - pip install uv
-    - uv sync --group docs --package levanter --frozen
-    - cd lib/levanter && uv run --frozen mkdocs build --site-dir $READTHEDOCS_OUTPUT/html
+mkdocs:
+  configuration: mkdocs.yml
+# Optionally declare the Python requirements required to build your docs
+python:
+  install:
+  - requirements: docs/requirements.txt

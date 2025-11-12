@@ -1,0 +1,165 @@
+data:
+  shuffle: false
+  # Enable Feistel PRP and per-epoch reshuffling to avoid repeat order on wrap
+  permutation_type: feistel
+  shuffle_per_epoch: true
+  configs:
+    # COMMA 10M seed set: 1 batch per dataset (15 datasets)
+    arxiv_abstracts:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/arxiv_abstracts-fa99b2"
+    arxiv_papers:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/arxiv_papers-75f8c0"
+    caselaw_access_project:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/caselaw_access_project-ba2bc9"
+    doab:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/doab-cab67a"
+    github_archive:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/github_archive-ed0971"
+    libretexts:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/libretexts-46297d"
+    news:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/news-8f5d41"
+    peS2o:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/peS2o-2e6500"
+    project_gutenberg:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/project_gutenberg-4ae24e"
+    pubmed:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/pubmed-7986e4"
+    stackexchange:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackexchange-1ba844"
+    stackv2_edu:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackv2_edu-fdc0ad"
+    stackv2_html:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/stackv2_html-2b653d"
+    wikimedia:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/wikimedia-53a667"
+    youtube:
+      cache_dir: "gs://marin-us-central2/tokenized/common_pile/youtube-6fb6c3"
+
+  # COMMA mixture weights (normalized over the 15-dataset head)
+  train_weights:
+    arxiv_abstracts: 0
+    arxiv_papers: 0
+    caselaw_access_project: 0
+    doab: 0
+    github_archive: 0
+    libretexts: 0
+    news: 0
+    peS2o: 0
+    project_gutenberg: 0
+    pubmed: 0
+    stackexchange: 0
+    stackv2_edu: 0
+    stackv2_html: 0
+    wikimedia: 1
+    youtube: 0
+
+  # Seed set: 1 batch per dataset = 15 total batches (~7.8M tokens at 4096 seq_len)
+  max_train_batches:
+    arxiv_abstracts: 0
+    arxiv_papers: 0
+    caselaw_access_project: 0
+    doab: 0
+    github_archive: 0
+    libretexts: 0
+    news: 0
+    peS2o: 0
+    project_gutenberg: 0
+    pubmed: 0
+    stackexchange: 0
+    stackv2_edu: 0
+    stackv2_html: 0
+    wikimedia: 1
+    youtube: 0
+
+  tokenizer: "meta-llama/Meta-Llama-3.1-8B"
+
+# Model configuration - Llama-3.2 ~1B parameters
+model:
+  type: llama
+  hidden_dim: 2048
+  intermediate_dim: 8192
+  num_heads: 32
+  num_kv_heads: 8
+  num_layers: 16
+  seq_len: 4096
+  gradient_checkpointing: true
+  tie_word_embeddings: true
+  rope:
+    type: llama3
+
+# Training configuration
+trainer:
+  seed: 0
+  ray:
+    auto_start_cluster: false
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["memorize", "comma", "1b", "10M", "central2"]
+  wandb:
+    project: "marin"
+    name: "llama_1b_comma_10M_single_1epoch_central2"
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+  per_device_parallelism: -1
+
+  train_batch_size: 128
+  # 1 batch × 15 datasets × 1 epoch
+  num_train_steps: 15000
+
+  steps_per_eval: 1000
+  max_eval_batches: 10
+
+  checkpointer:
+    save_interval: 24h
+    keep:
+      - every: 10000
+
+  tensor_parallel_axes: ["heads", "mlp"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+  axis_resources:
+    token: ["replica", "data"]
+    token_repeat: ["replica", "data"]
+
+# Optimizer configuration
+optimizer:
+  learning_rate: 0.003
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.95
+  warmup: 0.01
+  min_lr_ratio: 0.0
+
+# Misc configuration
+data_seed: 1
+z_loss_weight: 0
+log_entropy: false
+
+# Inner-loop P(z) evaluation (exactly matches the single-doc sliding config)
+pz_eval:
+  datasets: null                # Pool across all datasets
+  mode: sliding                 # Sliding windows over the selected document
+  num_documents: 1              # Exactly one document globally
+  eval_batch_size: 64
+  doc_tokens: null              # Use full document length
+  min_doc_tokens: 1024          # Require at least 1024 tokens
+  chunk_size: 100               # Window size N
+  prompt_tokens: 50             # Prompt length P
+  cursor_inc_tokens: 5          # Stride S
+  histogram: false
+  pz_npz: false
+  decode_preview: 1
+  verify_treecache: false
+  verbose: false
+  # Ensure selection strictly within the training subset head and deterministic shuffle
+  restrict_to_training_subset: true
+  initial_batch_size: 128
+  doc_shuffle: true
+  doc_perm_type: feistel
+  doc_perm_seed: 0
+
+# Run P(z) ~1% of steps (15 total → 1)
+pz_eval_steps: 150

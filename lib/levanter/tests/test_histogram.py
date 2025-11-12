@@ -8,10 +8,9 @@ import jax
 from jax.random import PRNGKey
 import haliax as hax
 from haliax.partitioning import ResourceAxis
-import pytest
 
 import levanter.tracker.histogram
-from test_utils import use_test_mesh
+from test_utils import use_test_mesh, skip_if_not_enough_devices
 
 
 def test_sharded_histogram_simple():
@@ -23,17 +22,15 @@ def test_sharded_histogram_simple():
         a = hax.random.normal(PRNGKey(1), (Batch, Feature))
         a = hax.shard(a)
         hist, bins = levanter.tracker.histogram.sharded_histogram(a, bins=32)
-        hist_normal, bins_normal = jax.numpy.histogram(a.array, bins=32)
 
-        assert jax.numpy.allclose(hist, hist_normal)
-        assert jax.numpy.allclose(bins, bins_normal)
+    hist_normal, bins_normal = jax.numpy.histogram(a.array, bins=32)
+
+    assert jax.numpy.allclose(hist, hist_normal)
+    assert jax.numpy.allclose(bins, bins_normal)
 
 
-# @skip_if_not_enough_devices(2)
+@skip_if_not_enough_devices(2)
 def test_sharded_histogram_tp():
-    if jax.device_count() < 2:
-        pytest.skip("Not enough devices for tensor parallelism test")
-
     Batch = hax.Axis("batch", 64)
     Feature = hax.Axis("feature", 128)
 
@@ -44,10 +41,11 @@ def test_sharded_histogram_tp():
         a = hax.random.normal(PRNGKey(0), (Batch, Feature)) * 100
         a = hax.shard(a)
         hist, bins = levanter.tracker.histogram.sharded_histogram(a, bins=64)
-        jnp_hist, jnp_bins = jax.numpy.histogram(a.array, bins=64)
 
-        assert jax.numpy.allclose(hist, jnp_hist)
-        assert jax.numpy.allclose(bins, jnp_bins)
+    jnp_hist, jnp_bins = jax.numpy.histogram(a.array, bins=64)
+
+    assert jax.numpy.allclose(hist, jnp_hist)
+    assert jax.numpy.allclose(bins, jnp_bins)
 
 
 def test_sharded_histogram_with_vmap():
@@ -68,7 +66,8 @@ def test_sharded_histogram_with_vmap():
         a = hax.random.normal(PRNGKey(1), (Layer, Batch, Feature))
         a = hax.shard(a)
         hist, bins = jit_vmap_hist(a)
-        hist_normal, bins_normal = jax.vmap(functools.partial(jax.numpy.histogram, bins=32), in_axes=0)(a.array)
 
-        assert jax.numpy.allclose(hist, hist_normal)
-        assert jax.numpy.allclose(bins, bins_normal)
+    hist_normal, bins_normal = jax.vmap(functools.partial(jax.numpy.histogram, bins=32), in_axes=0)(a.array)
+
+    assert jax.numpy.allclose(hist, hist_normal)
+    assert jax.numpy.allclose(bins, bins_normal)

@@ -38,7 +38,7 @@ def trainer_config():
 def baby_llama_config():
     return InferenceServerConfig(
         service=InferenceEngineConfig(
-            max_seq_len=32,
+            max_seq_len=16,
             max_seqs=2,
             page_size=4,
             max_queued_tokens=32,
@@ -422,35 +422,6 @@ def test_logprobs_deterministic_behavior(test_client):
         assert abs(lp1 - lp2) < 1e-6
 
     print("Deterministic logprobs test passed!")
-
-
-def test_many_requests_threaded(test_client):
-    executor = ThreadPoolExecutor(max_workers=8)
-    client, server = test_client
-    futures = []
-    num_requests = 20
-    for i in range(num_requests):
-        futures.append(
-            executor.submit(
-                client.post,
-                "/v1/completions",
-                json={
-                    "model": "timinar/baby-llama-58m",
-                    "prompt": "The quick brown fox",
-                    "max_tokens": 16,
-                    "temperature": 0.0,
-                    "seed": i,
-                },
-            )
-        )
-
-    for i, future in enumerate(futures):
-        response = future.result()
-        assert response.status_code == 200
-        completion = Completion.model_validate(response.json())
-        choice = completion.choices[0]
-        assert choice.text
-        print(f"Request {i} generated text: '{choice.text}'")
 
 
 def test_reload_with_zeros_clears_outputs(test_client):

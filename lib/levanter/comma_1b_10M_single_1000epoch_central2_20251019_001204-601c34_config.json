@@ -1,0 +1,1056 @@
+{
+  "_wandb": {
+    "value": {
+      "cli_version": "0.22.2",
+      "code_path": "source-marin-None",
+      "e": {
+        "gu7kcld2t8wnvjthmy67lie94yuu0p4w": {
+          "args": [
+            "--node-ip-address=10.130.2.131",
+            "--node-manager-port=42287",
+            "--object-store-name=/tmp/ray/session_2025-10-06_11-40-22_118604_732/sockets/plasma_store",
+            "--raylet-name=/tmp/ray/session_2025-10-06_11-40-22_118604_732/sockets/raylet",
+            "--redis-address=None",
+            "--metrics-agent-port=64821",
+            "--logging-rotate-bytes=536870912",
+            "--logging-rotate-backup-count=5",
+            "--runtime-env-agent-port=55476",
+            "--gcs-address=10.130.0.4:6379",
+            "--session-name=session_2025-10-06_11-40-22_118604_732",
+            "--temp-dir=/tmp/ray",
+            "--webui=10.130.0.4:8265",
+            "--cluster-id=11dfb4c600717bf346bc18be6e8d166e298ffd6cbfe7b3f1431d0e96",
+            "--startup-token=602",
+            "--worker-launch-time-ms=1760857996320",
+            "--node-id=050bbdb4e41f17ca2bf09a65b0af2d7b006fe5bf6860cdcff4d98a16",
+            "--runtime-env-hash=-172359820",
+            "--enable-resource-isolation=false"
+          ],
+          "cpu_count": 120,
+          "cpu_count_logical": 240,
+          "disk": {
+            "/": {
+              "total": "103865303040",
+              "used": "33941725184"
+            }
+          },
+          "email": "ahmedah@stanford.edu",
+          "executable": "/tmp/ray/session_2025-10-06_11-40-22_118604_732/runtime_resources/pip/c6bdc552276ebf97a340bcebdad67a1ed2231342/virtualenv/bin/python",
+          "git": {
+            "commit": "4e39dd9d3bd79d4732c016d2a78dbbd0cf22495d"
+          },
+          "host": "t1v-n-8e60cecf-w-3",
+          "memory": {
+            "total": "430004359168"
+          },
+          "os": "Linux-5.19.0-1022-gcp-x86_64-with-glibc2.35",
+          "program": "/home/ray/anaconda3/lib/python3.11/site-packages/ray/_private/workers/default_worker.py",
+          "python": "CPython 3.11.11",
+          "root": "/tmp/ray/session_2025-10-06_11-40-22_118604_732/runtime_resources/working_dir_files/_ray_pkg_8d26c3a20f608fa7",
+          "startedAt": "2025-10-19T07:13:32.684118Z",
+          "tpu": {
+            "count": 4,
+            "devicesPerChip": 1,
+            "hbmGib": 32,
+            "name": "v4"
+          },
+          "writerId": "gu7kcld2t8wnvjthmy67lie94yuu0p4w"
+        }
+      },
+      "m": [],
+      "python_version": "3.11.11",
+      "t": {
+        "1": [
+          1,
+          5,
+          11,
+          12,
+          30,
+          45,
+          49,
+          51,
+          53,
+          100
+        ],
+        "12": "0.22.2",
+        "13": "linux-x86_64",
+        "2": [
+          1,
+          5,
+          11,
+          12,
+          30,
+          45,
+          49,
+          51,
+          53,
+          100
+        ],
+        "3": [
+          2,
+          14,
+          15,
+          16,
+          24,
+          61,
+          62
+        ],
+        "4": "3.11.11",
+        "5": "0.22.2",
+        "6": "4.55.4"
+      }
+    }
+  },
+  "data": {
+    "value": {
+      "cache_dir": null,
+      "cache_options": {
+        "batch_size": 128,
+        "num_shard_groups": 128,
+        "target_size_per_flush": "512MB"
+      },
+      "chat_template": null,
+      "configs": {
+        "common_pile/arxiv_abstracts": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/arxiv_abstracts-fa99b2",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/arxiv_abstracts_filtered-f1d7a9a"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/arxiv_papers": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/arxiv_papers-75f8c0",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/arxiv_papers_filtered-033cf7f"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/biodiversity_heritage_library": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/biodiversity_heritage_library-c141ed",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/biodiversity_heritage_library_filtered-0486ed6"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/caselaw_access_project": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/caselaw_access_project-ba2bc9",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/caselaw_access_project_filtered-50e1961"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/cccc": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/cccc-fd5797",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/cccc_filtered-03a3de5"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/data_provenance_initiative": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/data_provenance_initiative-f0f8e6",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/data_provenance_initiative_filtered-8f5afcf"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/doab": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/doab-cab67a",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/doab_filtered-defb24c"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/foodista": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/foodista-904225",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/foodista_filtered-bf2c7aa"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/github_archive": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/github_archive-ed0971",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/github_archive_filtered-52282fe"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/library_of_congress": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/library_of_congress-8cd324",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/library_of_congress_filtered-56725c7"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/libretexts": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/libretexts-46297d",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/libretexts_filtered-70388bc"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/news": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/news-8f5d41",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/news_filtered-59aaa8f"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/oercommons": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/oercommons-728289",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/oercommons_filtered-506b615"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/peS2o": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/peS2o-2e6500",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/peS2o_filtered-2977475"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/pre_1929_books": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/pre_1929_books-c33f75",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/pre_1929_books_filtered-23f9d96"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/pressbooks": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/pressbooks-6d36ee",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/pressbooks_filtered-1a1d3b5"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/project_gutenberg": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/project_gutenberg-4ae24e",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/project_gutenberg_filtered-3cdf687"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/public_domain_review": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/public_domain_review-e73382",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/public_domain_review_filtered-efc7f21"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/pubmed": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/pubmed-7986e4",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/pubmed_filtered-c156f05"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/python_enhancement_proposals": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/python_enhancement_proposals-cfa465",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/python_enhancement_proposals_filtered-5821709"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/regulations": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/regulations-9d6cae",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/regulations_filtered-3327364"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/stackexchange": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/stackexchange-1ba844",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/stackexchange_filtered-c0ac737"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/stackv2_edu": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/stackv2_edu-fdc0ad",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/stackv2_edu_filtered-c354dbe"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/stackv2_html": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/stackv2_html-2b653d",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/stackv2_html_filtered-92c9fa8"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/ubuntu_irc": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/ubuntu_irc-ffc7af",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/ubuntu_irc_filtered-84f88c9"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/uk_hansard": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/uk_hansard-67e776",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/uk_hansard_filtered-c88adc4"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/usgpo": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/usgpo-86324c",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/usgpo_filtered-b150cc2"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/uspto": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/uspto-674f8f",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/uspto_filtered-13894c5"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/wikimedia": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/wikimedia-53a667",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/wikimedia_filtered-0641bb8"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/wikiteam": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/wikiteam-174e57",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/wikiteam_filtered-f4ed055"
+          ],
+          "validation_urls": []
+        },
+        "common_pile/youtube": {
+          "cache_dir": "gs://marin-us-central2/tokenized/common_pile/youtube-6fb6c3",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [
+            "gs://marin-us-central2/raw/common_pile/youtube_filtered-dff8c8a"
+          ],
+          "validation_urls": []
+        },
+        "paloma/4chan": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/4chan-496ad5",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/4chan_meta_sep/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/c4_100_domains": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/c4_100_domains-2b6db7",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/c4_100_domains/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/c4_en": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/c4_en-cf1f79",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/c4_en/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/dolma-v1_5": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/dolma-v1_5-d3bed7",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma-v1_5/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/dolma_100_programing_languages": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/dolma_100_programing_languages-369132",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma_100_programing_languages/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/dolma_100_subreddits": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/dolma_100_subreddits-f25f70",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/dolma_100_subreddits/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/falcon-refinedweb": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/falcon-refinedweb-75d43b",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/falcon-refinedweb/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/gab": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/gab-ccaced",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/gab/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/m2d2_s2orc_unsplit": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/m2d2_s2orc_unsplit-7dbcc1",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/m2d2_s2orc_unsplit/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/m2d2_wikipedia_unsplit": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/m2d2_wikipedia_unsplit-b33d23",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/m2d2_wikipedia_unsplit/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/manosphere_meta_sep": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/manosphere_meta_sep-a07891",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/manosphere_meta_sep/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/mc4": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/mc4-ea36a2",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/mc4/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/ptb": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/ptb-628036",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/ptb/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/redpajama": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/redpajama-9d4ddd",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/redpajama/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/twitterAAE_HELM_fixed": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/twitterAAE_HELM_fixed-2e17c1",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/twitterAAE_HELM_fixed/val/val*.jsonl.gz"
+          ]
+        },
+        "paloma/wikitext_103": {
+          "cache_dir": "gs://marin-us-central2/tokenized/paloma/wikitext_103-1f5636",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/paloma-fc6827/65cd6fc/wikitext_103/val/val*.jsonl.gz"
+          ]
+        },
+        "uncheatable_eval/ao3_english": {
+          "cache_dir": "gs://marin-us-central2/tokenized/uncheatable_eval/ao3_english-55e735",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/ao3_english_*.jsonl.gz"
+          ]
+        },
+        "uncheatable_eval/arxiv_computer_science": {
+          "cache_dir": "gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_computer_science-9760a5",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/arxiv_computer_science_*.jsonl.gz"
+          ]
+        },
+        "uncheatable_eval/arxiv_physics": {
+          "cache_dir": "gs://marin-us-central2/tokenized/uncheatable_eval/arxiv_physics-713363",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/arxiv_physics_*.jsonl.gz"
+          ]
+        },
+        "uncheatable_eval/bbc_news": {
+          "cache_dir": "gs://marin-us-central2/tokenized/uncheatable_eval/bbc_news-2ff739",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/bbc_news_*.jsonl.gz"
+          ]
+        },
+        "uncheatable_eval/github_cpp": {
+          "cache_dir": "gs://marin-us-central2/tokenized/uncheatable_eval/github_cpp-d0da6b",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/github_cpp_*.jsonl.gz"
+          ]
+        },
+        "uncheatable_eval/github_python": {
+          "cache_dir": "gs://marin-us-central2/tokenized/uncheatable_eval/github_python-00e7de",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/github_python_*.jsonl.gz"
+          ]
+        },
+        "uncheatable_eval/wikipedia_english": {
+          "cache_dir": "gs://marin-us-central2/tokenized/uncheatable_eval/wikipedia_english-ba27aa",
+          "format": {
+            "text_key": "text"
+          },
+          "tags": [],
+          "train_urls": [],
+          "validation_urls": [
+            "gs://marin-us-central2/raw/uncheatable-eval/latest-364401/wikipedia_english_*.jsonl.gz"
+          ]
+        }
+      },
+      "enforce_eos": true,
+      "experiment_budget": null,
+      "ignore_token_id": -100,
+      "max_train_batches": {
+        "common_pile/arxiv_abstracts": 0,
+        "common_pile/arxiv_papers": 0,
+        "common_pile/biodiversity_heritage_library": 0,
+        "common_pile/caselaw_access_project": 0,
+        "common_pile/cccc": 0,
+        "common_pile/data_provenance_initiative": 0,
+        "common_pile/doab": 0,
+        "common_pile/foodista": 0,
+        "common_pile/github_archive": 0,
+        "common_pile/library_of_congress": 0,
+        "common_pile/libretexts": 0,
+        "common_pile/news": 0,
+        "common_pile/oercommons": 0,
+        "common_pile/peS2o": 0,
+        "common_pile/pre_1929_books": 0,
+        "common_pile/pressbooks": 0,
+        "common_pile/project_gutenberg": 0,
+        "common_pile/public_domain_review": 0,
+        "common_pile/pubmed": 0,
+        "common_pile/python_enhancement_proposals": 0,
+        "common_pile/regulations": 0,
+        "common_pile/stackexchange": 0,
+        "common_pile/stackv2_edu": 0,
+        "common_pile/stackv2_html": 0,
+        "common_pile/ubuntu_irc": 0,
+        "common_pile/uk_hansard": 0,
+        "common_pile/usgpo": 0,
+        "common_pile/uspto": 0,
+        "common_pile/wikimedia": 1,
+        "common_pile/wikiteam": 0,
+        "common_pile/youtube": 0
+      },
+      "mixture_block_size": 2048,
+      "num_validation_sequences": null,
+      "permutation_type": "feistel",
+      "shuffle": false,
+      "shuffle_per_epoch": true,
+      "stop_strategy": "restart",
+      "target_budget": null,
+      "tokenizer": "meta-llama/Meta-Llama-3.1-8B",
+      "train_weights": {
+        "common_pile/arxiv_abstracts": 0,
+        "common_pile/arxiv_papers": 0,
+        "common_pile/biodiversity_heritage_library": 0,
+        "common_pile/caselaw_access_project": 0,
+        "common_pile/cccc": 0,
+        "common_pile/data_provenance_initiative": 0,
+        "common_pile/doab": 0,
+        "common_pile/foodista": 0,
+        "common_pile/github_archive": 0,
+        "common_pile/library_of_congress": 0,
+        "common_pile/libretexts": 0,
+        "common_pile/news": 0,
+        "common_pile/oercommons": 0,
+        "common_pile/peS2o": 0,
+        "common_pile/pre_1929_books": 0,
+        "common_pile/pressbooks": 0,
+        "common_pile/project_gutenberg": 0,
+        "common_pile/public_domain_review": 0,
+        "common_pile/pubmed": 0,
+        "common_pile/python_enhancement_proposals": 0,
+        "common_pile/regulations": 0,
+        "common_pile/stackexchange": 0,
+        "common_pile/stackv2_edu": 0,
+        "common_pile/stackv2_html": 0,
+        "common_pile/ubuntu_irc": 0,
+        "common_pile/uk_hansard": 0,
+        "common_pile/usgpo": 0,
+        "common_pile/uspto": 0,
+        "common_pile/wikimedia": 1,
+        "common_pile/wikiteam": 0,
+        "common_pile/youtube": 0,
+        "paloma/4chan": 0,
+        "paloma/c4_100_domains": 0,
+        "paloma/c4_en": 0,
+        "paloma/dolma-v1_5": 0,
+        "paloma/dolma_100_programing_languages": 0,
+        "paloma/dolma_100_subreddits": 0,
+        "paloma/falcon-refinedweb": 0,
+        "paloma/gab": 0,
+        "paloma/m2d2_s2orc_unsplit": 0,
+        "paloma/m2d2_wikipedia_unsplit": 0,
+        "paloma/manosphere_meta_sep": 0,
+        "paloma/mc4": 0,
+        "paloma/ptb": 0,
+        "paloma/redpajama": 0,
+        "paloma/twitterAAE_HELM_fixed": 0,
+        "paloma/wikitext_103": 0,
+        "uncheatable_eval/ao3_english": 0,
+        "uncheatable_eval/arxiv_computer_science": 0,
+        "uncheatable_eval/arxiv_physics": 0,
+        "uncheatable_eval/bbc_news": 0,
+        "uncheatable_eval/github_cpp": 0,
+        "uncheatable_eval/github_python": 0,
+        "uncheatable_eval/wikipedia_english": 0
+      },
+      "vocab_size": null
+    }
+  },
+  "data_seed": {
+    "value": 1
+  },
+  "epoch": {
+    "value": 0
+  },
+  "eval_harness": {
+    "value": null
+  },
+  "eval_harness_steps": {
+    "value": 10000
+  },
+  "git_commit": {
+    "value": "4e39dd9d3bd79d4732c016d2a78dbbd0cf22495d"
+  },
+  "hf_save_dtype": {
+    "value": null
+  },
+  "hf_save_path": {
+    "value": "gs://marin-us-central2/checkpoints/memorize/comma_1b_10M_single_1000epoch_central2_20251019_001204-601c34/hf"
+  },
+  "hf_save_steps": {
+    "value": 10000
+  },
+  "hf_upload": {
+    "value": null
+  },
+  "initialize_from_checkpoint_path": {
+    "value": null
+  },
+  "initialize_from_hf": {
+    "value": false
+  },
+  "log_entropy": {
+    "value": false
+  },
+  "model": {
+    "value": {
+      "activation_function": "silu",
+      "attn_backend": null,
+      "cross_entropy_block_size": null,
+      "flash_attention_block_size": null,
+      "gradient_checkpointing": true,
+      "head_dim": null,
+      "hidden_dim": 2048,
+      "hybrid_norm": false,
+      "initializer_range": 0.02,
+      "input_embedding_norm": false,
+      "intermediate_dim": 8192,
+      "layer_norm_epsilon": 1e-05,
+      "num_heads": 32,
+      "num_kv_heads": 8,
+      "num_layers": 16,
+      "reference_checkpoint": "NousResearch/Llama-2-7b-hf",
+      "rope": {
+        "factor": 8,
+        "high_freq_factor": 4,
+        "low_freq_factor": 1,
+        "original_max_position_embeddings": 8192,
+        "theta": 500000
+      },
+      "scan_layers": true,
+      "seq_len": 4096,
+      "tie_word_embeddings": true,
+      "tokenizer": null,
+      "upcast_attn": false,
+      "use_bias": false,
+      "use_layer_norm_weight": true
+    }
+  },
+  "optimizer": {
+    "value": {
+      "adamc_weight_decay": false,
+      "beta1": 0.9,
+      "beta2": 0.95,
+      "clip_update_norm": null,
+      "cooldown": null,
+      "cycle_length": null,
+      "cycles": null,
+      "decay": null,
+      "default_weight_decay_mask": null,
+      "epsilon": 1e-08,
+      "haps": null,
+      "learning_rate": 0.003,
+      "lr_schedule": "cosine",
+      "max_grad_norm": 1,
+      "min_lr_ratio": 0,
+      "nesterov": false,
+      "rewarmup": 0,
+      "skip_bad_steps": false,
+      "update_rms_clipping": null,
+      "warmup": 0.01,
+      "weight_decay": 0,
+      "weight_decay_modules": null
+    }
+  },
+  "pz_eval": {
+    "value": {
+      "chunk_size": 100,
+      "cursor_inc_tokens": 5,
+      "datasets": null,
+      "decode_preview": 1,
+      "doc_perm_seed": 0,
+      "doc_perm_type": "feistel",
+      "doc_shuffle": true,
+      "doc_tokens": null,
+      "eval_batch_size": 64,
+      "histogram": false,
+      "histogram_every_steps": null,
+      "histogram_linear": true,
+      "initial_batch_size": 128,
+      "min_doc_tokens": 1024,
+      "mode": "sliding",
+      "num_documents": 1,
+      "prompt_tokens": 50,
+      "pz_npz": false,
+      "pz_threshold": 0.0001,
+      "restrict_to_training_subset": true,
+      "verbose": false,
+      "verify_treecache": false
+    }
+  },
+  "pz_eval_steps": {
+    "value": 150
+  },
+  "trainer": {
+    "value": {
+      "allow_nondivisible_batch_size": true,
+      "allow_partial_checkpoint": false,
+      "axis_resources": {
+        "token": [
+          "replica",
+          "data"
+        ],
+        "token_repeat": [
+          "replica",
+          "data"
+        ]
+      },
+      "batch_axis": "batch",
+      "checkpointer": {
+        "append_run_id_to_base_path": false,
+        "base_path": "gs://marin-us-central2/checkpoints/memorize/comma_1b_10M_single_1000epoch_central2_20251019_001204-601c34/checkpoints",
+        "delete_old_temp_checkpoints": true,
+        "keep": [
+          {
+            "every": 10000
+          }
+        ],
+        "save_interval": "1 day, 0:00:00"
+      },
+      "crash_on_inf": true,
+      "crash_on_nan": true,
+      "distributed": {
+        "coordinator_address": null,
+        "initialize_jax_distributed": true,
+        "local_device_ids": null,
+        "num_processes": null,
+        "process_id": null
+      },
+      "fsdp_axis": "embed",
+      "id": "comma_1b_10M_single_1000epoch_central2_20251019_001204-601c34",
+      "initialize_from": null,
+      "jax_compilation_cache_dir": null,
+      "jax_config": {
+        "jax_softmax_custom_jvp": true,
+        "jax_threefry_partitionable": true
+      },
+      "load_checkpoint": null,
+      "load_checkpoint_path": null,
+      "log_dir": "logs",
+      "log_jaxprs": true,
+      "log_xla_hlo": true,
+      "max_eval_batches": 10,
+      "model_averaging": null,
+      "model_axis_size": 1,
+      "mp": {
+        "compute_dtype": "jax.numpy.bfloat16",
+        "output_dtype": "jax.numpy.bfloat16",
+        "param_dtype": "jax.numpy.float32"
+      },
+      "num_train_steps": 15000,
+      "per_device_eval_parallelism": 4,
+      "per_device_parallelism": 4,
+      "profiler": false,
+      "profiler_num_steps": 100,
+      "profiler_perfetto_link": false,
+      "profiler_start_step": 5,
+      "quantization": null,
+      "ray": {
+        "address": null,
+        "auto_start_cluster": false,
+        "start_workers": false
+      },
+      "replica_dcn_axis_size": 1,
+      "replica_ici_axis_size": 1,
+      "require_accelerator": true,
+      "seed": 0,
+      "shutdown_at_exit": false,
+      "steps_per_eval": 1000,
+      "tensor_parallel_axes": [
+        "heads",
+        "mlp"
+      ],
+      "tracker": {
+        "entity": null,
+        "group": null,
+        "id": null,
+        "mode": null,
+        "name": null,
+        "project": "marin",
+        "resume": "allow",
+        "save_code": true,
+        "save_xla_dumps": false,
+        "tags": [
+          "memorize",
+          "comma",
+          "1b",
+          "10M",
+          "central2",
+          "v4-64"
+        ]
+      },
+      "train_batch_size": 128,
+      "wandb": null,
+      "watch": {
+        "include_histograms": false,
+        "include_norms": true,
+        "include_per_parameter_norms": true,
+        "interval": 10,
+        "split_scan_layers": true,
+        "watch_targets": [
+          "grads",
+          "params"
+        ]
+      }
+    }
+  },
+  "use_hf_model_config": {
+    "value": false
+  },
+  "z_loss_weight": {
+    "value": 0
+  }
+}

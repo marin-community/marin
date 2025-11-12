@@ -54,10 +54,9 @@ class LmExample(eqx.Module):
         if ignore_id is not None:
             # we don't compute loss for any tokens matching the ignore index
             ignore_mask = hax.roll(tokens, -1, Pos) != ignore_id
-            ignore_mask = ignore_mask.astype(loss_mask.dtype)
             loss_mask = loss_mask & ignore_mask
 
-        loss_mask = loss_mask.astype(jnp.int32)
+        loss_mask = loss_mask.astype(jnp.bool_)
 
         attn_mask = AttentionMask.causal(sliding_window=sliding_window)
 
@@ -101,12 +100,12 @@ class LmExample(eqx.Module):
 
     @staticmethod
     def causal_loss_mask(Pos: Axis, prompt_length: Optional[int] = None) -> NamedArray:
-        loss_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
+        loss_mask = 1 - hax.nn.one_hot(-1, Pos, dtype=jnp.bool_)
 
         if prompt_length is not None:
             # don't predict the prompt tokens
             prompt_mask = hax.arange(Pos) >= prompt_length - 1
-            loss_mask = hax.logical_and(loss_mask, prompt_mask)
+            loss_mask = loss_mask & prompt_mask
 
         return loss_mask
 
