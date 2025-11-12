@@ -1,43 +1,25 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Simple script to check train-time vs inference-time logprobs match.
-Uses a simple autoregressive loop with no KV cache.
-"""
-
 import numpy as np
 import jax
 import jax.numpy as jnp
 import haliax as hax
-import optax
 
 from levanter.layers.attention import AttentionMask, AttentionBackend
 
 if __name__ == "__main__":
-    """
-    Run logprob checking on an example prompt.
-    
-    Usage:
-        python -m levanter.main.inference_repl --checkpoint meta-llama/Llama-3.2-1B-Instruct
-        # Then use this script to verify logprobs match
-    """
     import argparse
-    import equinox as eqx
     from haliax import Axis
     from haliax.partitioning import round_axis_for_partitioning
     from jax.sharding import Mesh
     
-    from levanter.checkpoint import load_checkpoint
     from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
-    from levanter.models.lm_model import LmConfig
     from levanter.models.llama import LlamaConfig
     
     parser = argparse.ArgumentParser(description="Check train vs inference logprobs")
     parser.add_argument("--checkpoint", type=str, default="meta-llama/Llama-3.2-1B-Instruct",
                         help="HuggingFace checkpoint to load")
-    parser.add_argument("--max-tokens", type=int, default=5,
-                        help="Maximum tokens to generate")
     args = parser.parse_args()
     
     print(f"Loading model from {args.checkpoint}...")
