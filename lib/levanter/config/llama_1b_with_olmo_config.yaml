@@ -1,0 +1,27 @@
+data: !include data/dolma_olmo_paloma.yaml
+model:  # 1B class model
+  type: llama
+  seq_len: 2048
+  hidden_dim: 2048
+  intermediate_dim: 8192
+  num_layers: 16
+  num_heads: 16
+  num_kv_heads: 16
+trainer:
+  tracker:
+    type: wandb
+    project: "marin"
+    tags: ["dolma", "olmo", "llama"]
+
+  mp: p=f32,c=bfloat16
+  train_batch_size: 1024
+  num_train_steps: 750000  # 3,000,000,000,000 / 4,000,000 = 750,000
+  steps_per_eval: 1000
+  tensor_parallel_axes: ["mlp", "heads"]
+  fsdp_axis: "embed"
+  batch_axis: "batch"
+optimizer:
+  learning_rate: 4E-4
+  weight_decay: 0.1
+  min_lr_ratio: 0.1
+  warmup: 5000

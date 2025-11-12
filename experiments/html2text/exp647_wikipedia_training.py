@@ -62,7 +62,6 @@ wiki_readability_tokenized, wiki_readability_1_4b_model, wiki_readability_1_4b_e
 )
 
 if __name__ == "__main__":
-
     tokenization_step = [
         *list(tokenized_dolma_steps.values()),
         wiki_readability_tokenized,

@@ -14,12 +14,11 @@
 
 """Tokenization and mixture configs for the Common Pile v0.1 dataset."""
 
-from __future__ import annotations
+from levanter.data.dataset import PermType
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 
@@ -312,6 +311,18 @@ stackv2_html_filtered = ExecutorStep(
     override_output_path="raw/common_pile/stackv2_html_filtered-92c9fa8",
 )
 
+stackv2 = ExecutorStep(
+    name="raw/common_pile/stackv2",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="common-pile/stackv2",
+        revision="d0e3266",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="raw/common_pile/stackv2-d0e3266",
+)
+
 ubuntu_irc_filtered = ExecutorStep(
     name="raw/common_pile/ubuntu_irc_filtered",
     fn=download_hf,
@@ -500,25 +511,25 @@ def common_pile_tokenized(*, tokenizer: str = llama3_tokenizer) -> dict[str, Tok
     return tokenized
 
 
-def comma_main_mixture(*, tokenizer: str = llama3_tokenizer):
+def comma_main_mixture(*, tokenizer: str = llama3_tokenizer, permutation_type: PermType = "feistel"):
     """LmMixtureDatasetConfig for the main training stage."""
     tokenized = common_pile_tokenized(tokenizer=tokenizer)
     components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
     return lm_mixture_data_config(
         components=components,
         weights=COMMA_MAIN_MIXTURE_WEIGHTS,
-        permutation_type="linear",
+        permutation_type=permutation_type,
     )
 
 
-def comma_cooldown_mixture(*, tokenizer: str = llama3_tokenizer):
+def comma_cooldown_mixture(*, tokenizer: str = llama3_tokenizer, permutation_type="feistel"):
     """LmMixtureDatasetConfig for the cooldown stage."""
     tokenized = common_pile_tokenized(tokenizer=tokenizer)
     components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
     return lm_mixture_data_config(
         components=components,
         weights=COMMA_COOLDOWN_MIXTURE_WEIGHTS,
-        permutation_type="linear",
+        permutation_type=permutation_type,
     )
 
 

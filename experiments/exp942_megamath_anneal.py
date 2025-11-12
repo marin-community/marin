@@ -19,15 +19,18 @@ Evaluates the quality of MegaMath: hope to see boost in GSM8K and MMLU mathemati
 cf exp722_anneal.py for more details on the annealing process and configuration.
 """
 
+import dataclasses
+
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
 from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MMLU_TASKS
-from experiments.midtraining_datasets import megamath_mixture, megamath_real_only
+from experiments.midtraining_datasets import megamath_real_only, megamath_tokenized, megamath_token_counts
 from experiments.tootsie.exp600_tootsie import phoenix_phase4_checkpoint_for_phase5
 from marin.execution.executor import executor_main
-from marin.processing.tokenize.data_configs import interpolate_mixture_configs, lm_mixture_data_config
+from marin.processing.tokenize import lm_mixture_data_config
+from marin.processing.tokenize.data_configs import interpolate_mixture_configs
 
 dolmino_dclm = get_dolmino_step_llama3("dclm")
 
@@ -40,17 +43,25 @@ pure_dolmino_mixture = lm_mixture_data_config(
 checkpoint = phoenix_phase4_checkpoint_for_phase5
 
 
+megamath_real_only_old = dataclasses.replace(megamath_real_only, permutation_type="linear")
+
 megamath_real_anneal_config = AnnealConfig(
     dataset_config=interpolate_mixture_configs(
-        [pure_dolmino_mixture, megamath_real_only],
+        [pure_dolmino_mixture, megamath_real_only_old],
         [0.7, 0.3],  # 70% Dolmino DCLM, 30% MegaMath Real
     ),
     initialize_from_checkpoint_path=checkpoint,
 )
 
+megamath_mixture_old = lm_mixture_data_config(
+    components=megamath_tokenized,
+    weights=megamath_token_counts,
+    permutation_type="linear",
+)
+
 megamath_anneal_config = AnnealConfig(
     dataset_config=interpolate_mixture_configs(
-        [pure_dolmino_mixture, megamath_mixture],
+        [pure_dolmino_mixture, megamath_mixture_old],
         [0.7, 0.3],  # 70% Dolmino DCLM, 30% MegaMath
     ),
     initialize_from_checkpoint_path=checkpoint,

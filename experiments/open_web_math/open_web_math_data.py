@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,14 +17,14 @@ Downloads the open-web-math dataset
 (https://huggingface.co/datasets/open-web-math/open-web-math) to GCS.
 """
 
-from marin.download.huggingface.download import DownloadConfig, download
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 
 ############################################################
 # download open-web-math dataset
 open_web_math_raw = ExecutorStep(
     name="raw/open-web-math",
-    fn=download,
+    fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="open-web-math/open-web-math",
         revision=versioned("fde8ef8"),

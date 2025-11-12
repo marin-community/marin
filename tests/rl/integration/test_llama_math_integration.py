@@ -168,4 +168,4 @@ def test_llama_math_integration(ray_tpu_cluster, tmp_path):
     inference_runner = RolloutWorkerRunner.from_job(job)
 
     with inference_runner:
-        inference_runner.done.wait()
+        inference_runner.wait_for_result()

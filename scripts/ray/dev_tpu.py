@@ -62,11 +62,16 @@ import threading
 import time
 import yaml
 
-# N.B. We have to import from "src" as we are using the `ray.remote` directly from our `uv run`
-# script instead of launching a driver job. This confuses cloudpickle for some reason.
-from src.marin.cluster import ray as ray_utils
-from src.marin.cluster.config import RayClusterConfig, find_config_by_region
-from src.marin.utils import _hacky_remove_tpu_lockfile
+import ray.cloudpickle as cloudpickle
+
+import marin.utils
+from marin.cluster import ray as ray_utils
+from marin.cluster.config import RayClusterConfig, find_config_by_region
+from marin.utils import _hacky_remove_tpu_lockfile
+
+# Register `marin.utils` by value, so it can work over `ray.remote` without `marin` being installed on the worker.
+# See also #1786 / #1789.
+cloudpickle.register_pickle_by_value(marin.utils)
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +129,7 @@ def build_env_dict(extra_env: list[str] | None = None, forward_all: bool = False
             try:
                 config_yaml = yaml.safe_load(open(config_file).read())
             except Exception as e:
-                logger.warning(f"Failed to load config from environment {e}")
+                raise RuntimeError("Failed to load config from environment") from e
 
             for key, value in config_yaml.get("env", {}).items():
                 env_dict[key] = str(value)
@@ -371,7 +376,7 @@ def remove_ssh_host_config(tpu_name: str) -> None:
         logger.info(f"Removed SSH configuration for dev-tpu-{tpu_name}")
 
 
-def list_tracked_files(local_path: str) -> list[str]:
+def list_tracked_files(local_path: Path) -> list[str]:
     """List all files that git would track (excluding gitignored files).
 
     This includes tracked, modified, staged, and untracked files.
@@ -389,7 +394,7 @@ def list_tracked_files(local_path: str) -> list[str]:
     return sorted(all_files)
 
 
-def sync_to_remote(target_host: str, local_path: os.PathLike = ".") -> None:
+def sync_to_remote(target_host: str, local_path: os.PathLike | str = ".") -> None:
     local_path = Path(local_path).resolve()
     sync_files = list_tracked_files(local_path)
 
@@ -446,17 +451,12 @@ def hold_tpu_allocation(
     config_file: str,
     sync_path: str = ".",
     tpu_type: str = "v4-8",
-    duration_minutes: int = 480,
 ) -> Generator[dict[str, str], None, None]:
     """Context manager that holds a TPU allocation until the context exits.
 
     Uses a Ray actor to manage the TPU allocation lifecycle.
     """
     logger.info(f"{tpu_name}: Beginning TPU allocation")
-
-    actor = None
-    config_obj = yaml.safe_load(open(config_file).read())
-    zone = config_obj["provider"]["availability_zone"]
 
     from marin.cluster.ray import DashboardConfig
 
@@ -552,9 +552,8 @@ def cli(ctx, config, cluster, tpu_name, verbose):
 @click.option("--tpu-type", help="TPU type")
 @click.option("--sync-path", default=".", help="Local path to sync")
 @click.option("--username", help="Username to use for ssh", default=getpass.getuser())
-@click.option("--duration", default=480, help="Allocation duration in minutes")
 @click.pass_context
-def allocate(ctx, tpu_type, sync_path, username, duration):
+def allocate(ctx, tpu_type, sync_path, username):
     """Allocate a development TPU. Holds until Ctrl-C."""
     if not ctx.obj.config_file:
         print("Error: --config required", file=sys.stderr)
@@ -577,9 +576,8 @@ def allocate(ctx, tpu_type, sync_path, username, duration):
 
     print(f"Allocating development TPU '{tpu_name}' for {username}...")
     print(f"TPU type: {tpu_type}")
-    print(f"Duration: {duration} minutes")
 
-    with hold_tpu_allocation(username, tpu_name, ctx.obj.config_file, sync_path, tpu_type, duration):
+    with hold_tpu_allocation(username, tpu_name, ctx.obj.config_file, sync_path, tpu_type):
         print("\nTPU allocation is active. Press Ctrl-C to release...")
         try:
             while True:
@@ -615,13 +613,9 @@ def connect(ctx, username):
 
 
 @cli.command("setup_env")
-@click.option("--username", help="Username to use for ssh", default=getpass.getuser())
-@click.option("--sync-path", default=".", help="Local path to sync")
 @click.pass_context
-def setup_env(ctx, username, sync_path):
+def setup_env(ctx):
     """Set up the remote environment on the development TPU."""
-    if not username:
-        username = getpass.getuser()
     tpu_name = ctx.obj.tpu_name
     host_alias = f"dev-tpu-{tpu_name}"
     setup_remote_environment(host_alias)

@@ -35,7 +35,7 @@ from pathlib import Path
 import click
 import yaml
 
-from marin.cluster import cleanup, gcp, monitoring, ray
+from marin.cluster import gcp, monitoring, ray
 from marin.cluster.cleanup import cleanup_iteration, submit_cleanup_cron_job
 from marin.cluster.config import (
     RayClusterConfig,
@@ -115,7 +115,6 @@ def start_cluster(ctx):
         print("Error: --config required for cluster commands", file=sys.stderr)
         sys.exit(1)
 
-    # Check if cluster head is already running
     if check_cluster_head_running(config_path):
         print(f"Warning: Cluster head for {config_obj.cluster_name} appears to already be running.")
         print("This may cause conflicts or unexpected behavior.")
@@ -126,10 +125,14 @@ def start_cluster(ctx):
     print(f"Starting cluster {config_obj.cluster_name}...")
     subprocess.run(["ray", "up", "-y", config_path], check=True)
 
-    # Auto-start cleanup cron
     print("Starting automated cleanup cron...")
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-        job_id = submit_cleanup_cron_job(config_obj.project_id, config_obj.zone, interval=600)
+        job_id = submit_cleanup_cron_job(
+            project=config_obj.project_id,
+            cluster=config_obj.cluster_name,
+            zone=config_obj.zone,
+            interval=600,
+        )
         print(f"Cleanup cron job started: {job_id}")
 
 
@@ -186,7 +189,7 @@ def restart_cluster(ctx, preserve_jobs):
         print("Backing up jobs...")
         try:
             with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-                ray.backup_jobs(config_path, backup_dir)
+                ray.backup_jobs(config_path, str(backup_dir))
         except Exception as e:
             print()
             print("=" * 60)
@@ -211,12 +214,17 @@ def restart_cluster(ctx, preserve_jobs):
     if preserve_jobs:
         print("Restoring jobs...")
         with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-            ray.restore_jobs(config_path, backup_dir)
+            ray.restore_jobs(str(backup_dir))
 
     # Auto-start cleanup cron
     print("Starting automated cleanup cron...")
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-        job_id = submit_cleanup_cron_job(config_obj.project_id, config_obj.zone, interval=600)
+        job_id = submit_cleanup_cron_job(
+            project=config_obj.project_id,
+            cluster=config_obj.cluster_name,
+            zone=config_obj.zone,
+            interval=600,
+        )
         print(f"Cleanup cron job started: {job_id}")
 
     print("Cluster restarted successfully!")
@@ -239,7 +247,7 @@ def cluster_backup_jobs(ctx, backup_dir):
 def cluster_restore_jobs(ctx, backup_dir):
     """Restore Ray jobs from specified directory."""
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
-        ray.restore_jobs(ctx.obj.config_file, backup_dir)
+        ray.restore_jobs(backup_dir)
         print(f"Jobs restored successfully from {backup_dir}")
 
 
@@ -393,8 +401,9 @@ def start_cleanup(ctx, interval):
 
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         job_id = submit_cleanup_cron_job(
-            config_obj.project_id,
-            config_obj.zone,
+            project=config_obj.project_id,
+            cluster=config_obj.cluster_name,
+            zone=config_obj.zone,
             interval=interval,
         )
         print(f"Cleanup cron job started: {job_id}")
@@ -403,31 +412,17 @@ def start_cleanup(ctx, interval):
 @cli.command("run-cleanup")
 @click.option("--dry-run", is_flag=True, help="Show what would be cleaned")
 @click.pass_context
-def run_cleanup(ctx):
+def run_cleanup(ctx, dry_run):
     """Run a single cleanup iteration."""
     config_obj = ctx.obj.config_obj
     if not config_obj:
         print("Error: --config required for cleanup commands", file=sys.stderr)
         sys.exit(1)
 
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file, ray_init=True)):
         print("Running cleanup iteration...")
-        deleted = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=True)
-        if deleted:
-            print(f"Deleted {len(deleted)} preempted TPUs: {deleted}")
-        else:
-            print("No preempted TPUs found")
-
-
-@cli.command("clean-preempted-tpus")
-@click.option("--dry-run", is_flag=True, help="Show what would be cleaned")
-@click.pass_context
-def clean_preempted_tpus(ctx, dry_run):
-    """Clean preempted TPU nodes."""
-    config_obj = ctx.obj.config_obj
-    deleted = gcp.cleanup_preempted_tpus(config_obj.project_id, config_obj.zone, dry_run)
-    action = "Would delete" if dry_run else "Deleted"
-    print(f"{action} {len(deleted)} preempted TPUs: {deleted}")
+        results = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=dry_run)
+        print(f"Result: {results}")
 
 
 # Top-level commands
@@ -492,9 +487,10 @@ def open_dashboard(ctx, port):
             urls = f"{direct_url} | {proxy_url}" if proxy_url else direct_url
             print(f"  {name} ({info.zone}) - {urls}")
             print(f"    IP: {info.external_ip} ({info.head_ip})")
-            print(
-                f"    Dashboard: http://localhost:{ports.dashboard_port} | GCS: localhost:{ports.gcs_port} | API: localhost:{ports.api_port}"
-            )
+            dashboard_url = f"http://localhost:{ports.dashboard_port}"
+            gcs_url = f"localhost:{ports.gcs_port}"
+            api_url = f"localhost:{ports.api_port}"
+            print(f"    Dashboard: {dashboard_url} | GCS: {gcs_url} | API: {api_url}")
             print()
 
         if conn.proxy:
