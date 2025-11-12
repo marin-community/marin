@@ -329,36 +329,38 @@ def consolidate_shard_caches(
     """
     logger.info(f"Consolidating {len(shard_cache_paths)} shard caches into {output_path}")
 
+    # Initialize data_offset_tree to zero
+    first_cache = TreeStore.open(exemplar, shard_cache_paths[0], mode="r", cache_metadata=True)
+    data_offset_tree = jax.tree.map(lambda x: 0, first_cache.tree)
+
     # Compute data offsets for each shard
     shard_info = []
-    cumulative_rows = 0
-    data_offset_tree = None
+    total_rows = 0
 
     logger.info("Computing data offsets for each shard")
     for shard_path in shard_cache_paths:
-        logger.info("Processing shard: {shard_path}")
+        logger.info(f"Processing shard: {shard_path}")
         ledger = CacheLedger.load(shard_path)
 
-        if data_offset_tree is None:
-            cache = TreeStore.open(exemplar, shard_path, mode="r", cache_metadata=True)
-            data_offset_tree = jax.tree.map(lambda x: x.data_size, cache.tree)
-
+        # Store this shard's info with current offsets
         shard_info.append(
             {
                 "path": shard_path,
-                "row_offset": cumulative_rows,
+                "row_offset": total_rows,
                 "data_offset_tree": copy.deepcopy(data_offset_tree),
             }
         )
 
-        cumulative_rows += ledger.total_num_rows
+        total_rows += ledger.total_num_rows
 
         # Update offsets for next shard
         this_cache = TreeStore.open(exemplar, shard_path, mode="r", cache_metadata=True)
         this_offsets = jax.tree.map(lambda x: x.data_size, this_cache.tree)
         data_offset_tree = jax.tree.map(operator.add, data_offset_tree, this_offsets)
 
-    logger.info(f"Computed offsets for {len(shard_info)} shards, total rows: {cumulative_rows}")
+    logger.info(f"Computed offsets for {len(shard_info)} shards, total rows: {total_rows}")
+
+    logger.info("Copying shard data and metadata to final cache.")
 
     def copy_one_shard(info: dict):
         asyncio.run(
@@ -372,26 +374,39 @@ def consolidate_shard_caches(
             )
         )
 
-    logger.info("Copying shard data and metadata to final cache.")
-    flow_backend().execute(Dataset.from_list(shard_info).map(copy_one_shard))
+    # TODO(power) - add the skip_existing option here
+    # Copy shards in parallel to the final cache
+    list(flow_backend().execute(Dataset.from_list(shard_info).map(copy_one_shard)))
 
+    logger.info("Merging ledgers into final ledger.")
     ledgers = []
     for shard_path in shard_cache_paths:
         ledgers.append(CacheLedger.load(shard_path))
 
-    logger.info("Merging ledgers")
     final_ledger = ledgers[0]
-    final_ledger.is_finished = False  # mark as unfinished during merge
+    final_ledger.is_finished = False
     for ledger in ledgers[1:]:
         merge_ledgers(final_ledger, ledger)
 
     final_ledger.is_finished = True
     final_ledger._serialize_and_commit(output_path)
 
-    logger.info(f"Exposing {cumulative_rows} rows in final cache")
-    expose_cache_rows(output_path, exemplar, cumulative_rows)
+    logger.info(f"Exposing {total_rows} rows in final cache")
+    expose_cache_rows(output_path, exemplar, total_rows)
 
-    logger.info(f"Consolidation complete: {cumulative_rows} total rows across {len(shard_info)} shards")
+    logger.info(f"Consolidation complete: {total_rows} total rows across {len(shard_info)} shards")
+
+    # I should probably stick this somewhere at the end, it's computed by levanter somewhere,
+    # but the shard writers don't give me a place to put it.
+    # metadata = {
+    #     "append_bos": False,
+    #     "append_eos": True,
+    #     "max_length": 131072,
+    #     "padding": False,
+    #     "return_attention_mask": False,
+    #     "tokenizer": "marin-community/marin-tokenizer",
+    #     "vocab_size": 128256,
+    # }
 
     # now we can delete our temporary shards
     _ = list(
@@ -455,27 +470,14 @@ def tokenize(config: TokenizeConfigBase):
             )
         )
         file_groups = list(_bundle_files_by_size(file_stats, config.window_size_bytes))
-        logger.info(f"Grouped {len(paths)} files into {len(file_groups)} groups by size")
+        logger.info(f"Grouped {len(paths)} files into {len(file_groups)} groups by size.")
 
-        # compute the levanter per-shard cache
         prefix = os.path.join(config.cache_path, split_name)
         ds = Dataset.from_list(file_groups).flat_map(lambda file_list: file_list).flat_map(load_file)
 
         if config.sample_count is not None:
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
-
-        # I should probably stick this somewhere at the end, it's computed by levanter somewhere,
-        # but the shard writers don't give me a place to put it.
-        # metadata = {
-        #     "append_bos": False,
-        #     "append_eos": True,
-        #     "max_length": 131072,
-        #     "padding": False,
-        #     "return_attention_mask": False,
-        #     "tokenizer": "marin-community/marin-tokenizer",
-        #     "vocab_size": 128256,
-        # }
 
         initial_shards = (
             ds.batch(100)

@@ -163,10 +163,12 @@ def load_file(file_path: str, columns: list[str] | None = None, **parquet_kwargs
     if (
         file_path.endswith(".jsonl")
         or file_path.endswith(".jsonl.gz")
+        or file_path.endswith(".jsonl.zst")
         or file_path.endswith(".jsonl.zstd")
         or file_path.endswith(".jsonl.xz")
         or file_path.endswith(".json")
         or file_path.endswith(".json.gz")
+        or file_path.endswith(".json.zst")
         or file_path.endswith(".json.zstd")
         or file_path.endswith(".json.xz")
     ):

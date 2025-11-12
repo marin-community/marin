@@ -183,17 +183,16 @@ def main(config: TrainLmConfig):
         if len(tagged_eval_datasets) == 0:
             logger.warning("No evaluation datasets provided.")
         else:
-            pass
-            # cb = levanter.eval.cb_tagged_lm_evaluate(
-            #     EvalBatch,
-            #     tagged_eval_datasets,
-            #     tokenizer,
-            #     trainer.device_mesh,
-            #     compute_axis_mapping,
-            #     max_eval_examples_per_ds,
-            #     mp=config.trainer.mp,
-            # )
-            # trainer.add_hook(cb, every=config.trainer.steps_per_eval)
+            cb = levanter.eval.cb_tagged_lm_evaluate(
+                EvalBatch,
+                tagged_eval_datasets,
+                tokenizer,
+                trainer.device_mesh,
+                compute_axis_mapping,
+                max_eval_examples_per_ds,
+                mp=config.trainer.mp,
+            )
+            trainer.add_hook(cb, every=config.trainer.steps_per_eval)
 
         flops_per_token = config.model.flops_per_token(vocab_size)
         flops_per_example = 3 * flops_per_token * Pos.size if flops_per_token is not None else None
