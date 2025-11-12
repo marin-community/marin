@@ -437,8 +437,12 @@ def test_load_from_checkpoint_allows_partial_checkpoints():
 def test_checkpoint_backward_compatibility_with_old_tensorstore():
     """
     Test that checkpoints saved with old TensorStore format (non-OCDBT) can still be loaded
-    with the new Orbax-based system.
+    with the new Orbax-based system that has OCDBT enabled by default.
     """
+    import orbax.checkpoint as ocp
+
+    from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore
+
     In = Axis("in", 2)
     Out = Axis("out", 1)
 
@@ -452,11 +456,37 @@ def test_checkpoint_backward_compatibility_with_old_tensorstore():
         model0 = eqx.filter_jit(init_fn)(k0)
         model1 = eqx.filter_jit(init_fn)(k1)
 
-        # Save using the new OCDBT-enabled system
-        save_checkpoint(eqx.filter(model0, True), step=0, checkpoint_path=tmpdir)
+        filtered_model0 = eqx.filter(model0, True)
 
-        # Load back and verify
-        loaded = load_checkpoint(eqx.filter(model1, True), checkpoint_path=tmpdir, discover_latest=True)
+        # Save using OLD format (use_ocdbt=False) to simulate existing checkpoints
+        def _unwrap_named_array(x):
+            from haliax.util import is_named_array
+
+            if is_named_array(x):
+                return x.array
+            return x
+
+        import jax.tree_util as jtu
+
+        unwrapped = jtu.tree_map(_unwrap_named_array, filtered_model0, is_leaf=lambda x: is_named_array(x))
+
+        # Save with OLD non-OCDBT format
+        old_handler = ocp.PyTreeCheckpointHandler(use_ocdbt=False)
+        old_checkpointer = ocp.Checkpointer(old_handler)
+        old_checkpointer.save(tmpdir, unwrapped)
+        old_checkpointer.wait_until_finished()
+
+        # Also save metadata as the checkpoint system expects it
+        import json
+        import os
+
+        metadata = {"step": 0, "timestamp": "2024-01-01T00:00:00", "is_temporary": False}
+        with open(os.path.join(tmpdir, "metadata.json"), "w") as f:
+            json.dump(metadata, f)
+
+        # Now load using the NEW system (use_ocdbt=True by default in tree_deserialize_leaves_tensorstore)
+        # This tests that OCDBT-enabled Orbax can still read old non-OCDBT checkpoints
+        loaded = load_checkpoint(eqx.filter(model1, True), checkpoint_path=tmpdir, discover_latest=False)
         loaded = eqx.combine(loaded, model1)
 
         # Verify the loaded model matches the original
