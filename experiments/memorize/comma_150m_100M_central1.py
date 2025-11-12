@@ -35,9 +35,10 @@ if __name__ == "__main__":
     # Build the desired steps here so we can pass the timestamp argument.
     steps = [
         #runner(200, timestamp="20251013_141440"),
-        runner(300, timestamp="20251013_141440"),
-        # runner(500, timestamp=RUNNER_TIMESTAMP),
+        #runner(300, timestamp="20251013_141440"),
+        # runner(500, timestamp="20251013_141440"),
         # runner(750, timestamp="20251013_141440"),
+        runner(1000),
     ]
 
     executor_main(

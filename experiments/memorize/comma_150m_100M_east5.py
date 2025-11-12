@@ -39,12 +39,14 @@ train_200epoch = runner(200)
 train_300epoch = runner(300)
 train_500epoch = runner(500)
 train_750epoch = runner(750)
+train_1000epoch = runner(1000)
 
 
 if __name__ == "__main__":
     executor_main(
         #steps=[train_20epoch, train_50epoch, train_75epoch, train_100epoch, train_200epoch],
         #steps=[train_150epoch, train_300epoch, train_500epoch, train_750epoch],
-        steps=[train_1epoch, train_2epoch, train_5epoch, train_10epoch, train_20epoch, train_50epoch, train_75epoch, train_100epoch],
+        #steps=[train_1epoch, train_2epoch, train_5epoch, train_10epoch, train_20epoch, train_50epoch, train_75epoch, train_100epoch],
+        steps=[train_1000epoch],
         description="150M on ~100M COMMA seed set (us-east5).",
     )
