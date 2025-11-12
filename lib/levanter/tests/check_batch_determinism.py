@@ -82,5 +82,13 @@ if __name__ == "__main__":
             print(f'[train] logits: {logits}')
             if previous_logits is not None:
                 print('Checking logits match...')
+                # Verify all logits in the batch are identical
+                batch_logits = logits.array  # Shape: [batch, position, vocab]
+                first_logit = batch_logits[0]  # Shape: [position, vocab]
+                for b in range(1, batch_size):
+                    assert jnp.allclose(batch_logits[b], first_logit), f"Batch {b} logits differ from batch 0"
+                print(f"✓ All {batch_size} logits in batch are identical")
+
+                # Verify logits are identical to previous batch
                 assert jnp.allclose(logits.array, previous_logits.array)
             previous_logits = logits
