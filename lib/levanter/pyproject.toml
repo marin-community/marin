@@ -45,6 +45,7 @@ dependencies = [
     "jmp>=0.0.3",
     "fsspec[http]>=2024.2,<2026",
     "tensorstore>=0.1.73",
+    "orbax-checkpoint>=0.9.0",
     "pytimeparse>=1.1.8",
     "humanfriendly==10.0",
     "safetensors[numpy]>=0.4.2,<0.7.0",

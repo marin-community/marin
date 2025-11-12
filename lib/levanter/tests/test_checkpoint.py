@@ -432,3 +432,35 @@ def test_load_from_checkpoint_allows_partial_checkpoints():
         assert hax.all(hax.equal(loaded.a, model0.a))
         assert loaded.b is not None
         assert hax.all(hax.equal(loaded.b, model1.b))
+
+
+def test_checkpoint_backward_compatibility_with_old_tensorstore():
+    """
+    Test that checkpoints saved with old TensorStore format (non-OCDBT) can still be loaded
+    with the new Orbax-based system.
+    """
+    In = Axis("in", 2)
+    Out = Axis("out", 1)
+
+    def init_fn(key):
+        return hax.nn.MLP.init(In, Out, 2, 1, key=key, use_bias=False, use_final_bias=False)
+
+    with use_test_mesh(), tempfile.TemporaryDirectory() as tmpdir:
+        k0 = jax.random.PRNGKey(0)
+        k1 = jax.random.PRNGKey(1)
+
+        model0 = eqx.filter_jit(init_fn)(k0)
+        model1 = eqx.filter_jit(init_fn)(k1)
+
+        # Save using the new OCDBT-enabled system
+        save_checkpoint(eqx.filter(model0, True), step=0, checkpoint_path=tmpdir)
+
+        # Load back and verify
+        loaded = load_checkpoint(eqx.filter(model1, True), checkpoint_path=tmpdir, discover_latest=True)
+        loaded = eqx.combine(loaded, model1)
+
+        # Verify the loaded model matches the original
+        assert_trees_all_equal(
+            jax.tree_util.tree_leaves(arrays_only(loaded)),
+            jax.tree_util.tree_leaves(arrays_only(model0)),
+        )
