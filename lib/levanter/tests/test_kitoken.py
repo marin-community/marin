@@ -76,12 +76,12 @@ def test_kitoken_vs_hf_tokenizer_valid_text():
         assert len(hf_tokens) == len(kitoken_tokens), f"Token count mismatch for text: {text!r}"
         assert hf_tokens == kitoken_tokens, f"Token mismatch for text: {text!r}\nHF: {hf_tokens}\nKitoken: {kitoken_tokens}"
 
-        # Test decoding
+        # Test decoding - must be exact match
         hf_decoded = hf_tokenizer.decode(hf_tokens, skip_special_tokens=True)
         kitoken_decoded = kitoken_encoder.decode(kitoken_tokens, skip_special_tokens=True)
 
-        # Decoded text should match (allowing for minor whitespace differences)
-        assert hf_decoded.strip() == kitoken_decoded.strip(), f"Decoded text mismatch for: {text!r}\nHF: {hf_decoded!r}\nKitoken: {kitoken_decoded!r}"
+        # Decoded text must match exactly
+        assert hf_decoded == kitoken_decoded, f"Decoded text mismatch for: {text!r}\nHF: {hf_decoded!r}\nKitoken: {kitoken_decoded!r}"
 
 
 @pytest.mark.skipif(not KITOKEN_AVAILABLE, reason="Kitoken not installed")
@@ -226,5 +226,5 @@ def test_kitoken_decode_equivalence():
         hf_decoded = hf_tokenizer.decode(tokens, skip_special_tokens=True)
         kitoken_decoded = kitoken_encoder.decode(tokens, skip_special_tokens=True)
 
-        # Allow for minor whitespace differences
-        assert hf_decoded.strip() == kitoken_decoded.strip(), f"Decode mismatch for tokens: {tokens}"
+        # Must match exactly
+        assert hf_decoded == kitoken_decoded, f"Decode mismatch for tokens: {tokens}"
