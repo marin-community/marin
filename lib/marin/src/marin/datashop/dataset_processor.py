@@ -55,7 +55,7 @@ class DatasetOutputProcessor:
     def convert_dataset(self):
         backend = flow_backend()
         pipeline = (
-            Dataset.from_files(self.input_path, "**/*.jsonl.gz")
+            Dataset.from_files(f"{self.input_path}/**/*.jsonl.gz")
             .flat_map(load_jsonl)
             .map(lambda example: convert_labeled_document_to_score(example, extract_score_fn=self.extract_score))
             .filter(lambda record: record is not None)

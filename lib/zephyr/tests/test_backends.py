@@ -14,10 +14,14 @@
 
 """Tests for backend implementations."""
 
-import ray
+import gzip
+import io
+import json
 
+import ray
 from zephyr.backend_factory import flow_backend
 from zephyr.backends import RayBackend, format_shard_path
+from zephyr.writers import write_jsonl_file
 
 
 def test_format_shard_path_basic():
@@ -75,18 +79,14 @@ def test_format_shard_path_basename_placeholder():
 
 def test_write_jsonl_infers_compression_from_gz_extension(tmp_path):
     """Test that .gz extension triggers gzip compression."""
-    from zephyr.backends import write_records_to_jsonl
-
     records = [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]
     output_path = str(tmp_path / "test.jsonl.gz")
 
-    result = write_records_to_jsonl(records, output_path)
-    assert result == output_path
+    result = write_jsonl_file(records, output_path)
+    assert result["path"] == output_path
+    assert result["count"] == 2
 
     # Verify file was created and is gzip compressed
-    import gzip
-    import json
-
     with gzip.open(output_path, "rt") as f:
         lines = f.readlines()
         assert len(lines) == 2
@@ -96,17 +96,14 @@ def test_write_jsonl_infers_compression_from_gz_extension(tmp_path):
 
 def test_write_jsonl_no_compression_without_gz_extension(tmp_path):
     """Test that files without .gz extension are not compressed."""
-    from zephyr.backends import write_records_to_jsonl
-
     records = [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]
     output_path = str(tmp_path / "test.jsonl")
 
-    result = write_records_to_jsonl(records, output_path)
-    assert result == output_path
+    result = write_jsonl_file(records, output_path)
+    assert result["path"] == output_path
+    assert result["count"] == 2
 
     # Verify file was created and is NOT compressed
-    import json
-
     with open(output_path, "r") as f:
         lines = f.readlines()
         assert len(lines) == 2
@@ -125,3 +122,25 @@ def test_flow_backend_defaults_to_ray_when_initialized():
         assert isinstance(backend, RayBackend)
     finally:
         ray.shutdown()
+
+
+def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):
+    """Test that .zst extension triggers zstd compression."""
+    records = [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]
+    output_path = str(tmp_path / "test.jsonl.zst")
+
+    result = write_jsonl_file(records, output_path)
+    assert result["path"] == output_path
+    assert result["count"] == 2
+
+    # Verify file was created and is zstd compressed
+    import zstandard as zstd
+
+    dctx = zstd.ZstdDecompressor()
+    with open(output_path, "rb") as raw_f:
+        with dctx.stream_reader(raw_f) as reader:
+            text_f = io.TextIOWrapper(reader, encoding="utf-8")
+            lines = text_f.readlines()
+            assert len(lines) == 2
+            assert json.loads(lines[0]) == {"id": 1, "text": "hello"}
+            assert json.loads(lines[1]) == {"id": 2, "text": "world"}

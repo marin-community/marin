@@ -61,7 +61,7 @@ def filter_dolmino(config: FilterDolminoConfig):
 
     # Build streaming pipeline
     pipeline = (
-        Dataset.from_files(config.input_path, f"data/{config.split}/**/*.json.gz")
+        Dataset.from_files(f"{config.input_path}/data/{config.split}/**/*.json.gz")
         .flat_map(load_jsonl)  # Stream records from each file
         .filter(meets_length_threshold)  # Apply length filter
         .write_jsonl(f"{config.output_path}/{{shard:05d}}.jsonl.gz")
