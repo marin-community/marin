@@ -24,6 +24,7 @@ import huggingface_hub
 import humanfriendly
 import jax
 import jax.numpy as jnp
+import kitoken
 import mergedeep
 import numpy as np
 import transformers.utils.hub
@@ -1086,6 +1087,11 @@ class KitokenWrapper:
     This provides faster tokenization while maintaining compatibility with the HF tokenizer interface.
     """
 
+    _hf_tokenizer: HfTokenizer
+    _kitoken: kitoken.Kitoken
+    _prefix_tokens: list[int]
+    _suffix_tokens: list[int]
+
     def __init__(self, hf_tokenizer: HfTokenizer):
         """
         Initialize the Kitoken wrapper and load Kitoken encoder immediately.
@@ -1099,9 +1105,6 @@ class KitokenWrapper:
 
     def _load_kitoken(self):
         """Load Kitoken encoder from HF tokenizer's backend."""
-        import tempfile
-
-        import kitoken
 
         if self._hf_tokenizer.backend_tokenizer is None:
             raise ValueError("HF tokenizer does not have a backend_tokenizer (not a Fast tokenizer)")
@@ -1153,7 +1156,7 @@ class KitokenWrapper:
             result = result + self._suffix_tokens
             return result
         else:
-            # No special tokens, just concatenate if pair
+            # No special tokens, just concatenate
             if token_ids_1 is not None:
                 return token_ids_0 + token_ids_1
             return token_ids_0
