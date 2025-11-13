@@ -1107,7 +1107,7 @@ class KitokenWrapper:
 
         # Save tokenizer JSON to temp file and load with Kitoken
         tokenizer_str = self._hf_tokenizer.backend_tokenizer.to_str()
-        with tempfile.NamedTemporaryFile(mode='w', suffix=".json", prefix="kitoken_", delete=True) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix="kitoken_", delete=True) as f:
             f.write(tokenizer_str)
             f.flush()
             return kitoken.Kitoken.from_file(f.name)
@@ -1119,23 +1119,25 @@ class KitokenWrapper:
         self._suffix_tokens = []
 
         # Parse templates to find special tokens to add
-        templates = config.get('templates', [])
+        templates = config.get("templates", [])
         for template in templates:
-            position = template.get('position')
-            content = template.get('content')
-            if content and hasattr(self._hf_tokenizer, 'convert_tokens_to_ids'):
+            position = template.get("position")
+            content = template.get("content")
+            if content and hasattr(self._hf_tokenizer, "convert_tokens_to_ids"):
                 token_id = self._hf_tokenizer.convert_tokens_to_ids(content)
                 if token_id is not None:
-                    if position in ('Start', 'SubSequenceStart'):
+                    if position in ("Start", "SubSequenceStart"):
                         self._prefix_tokens.append(token_id)
-                    elif position in ('End', 'SubSequenceEnd'):
+                    elif position in ("End", "SubSequenceEnd"):
                         self._suffix_tokens.append(token_id)
 
     def encode(self, text, add_special_tokens=True, text_pair=None, **kwargs):
         """Encode text to token IDs using Kitoken with optional special token addition."""
         # For unsupported kwargs, fall back to HF tokenizer
         if kwargs:
-            return self._hf_tokenizer.encode(text, text_pair=text_pair, add_special_tokens=add_special_tokens, **kwargs)
+            return self._hf_tokenizer.encode(
+                text, text_pair=text_pair, add_special_tokens=add_special_tokens, **kwargs
+            )
 
         # Use Kitoken for fast encoding (handles special tokens in text with encode_specials=True)
         token_ids_0 = self._kitoken.encode(text, encode_specials=True)
@@ -1176,8 +1178,9 @@ class KitokenWrapper:
             input_ids = self.encode(text, text_pair=text_pair, add_special_tokens=add_special_tokens)
 
         from transformers import BatchEncoding
+
         return BatchEncoding({"input_ids": input_ids})
-    
+
     def batch_encode(self, texts, **kwargs):
         """Batch encode texts using Kitoken."""
         assert kwargs["pair_texts"] is None, "pair_texts not supported in KitokenWrapper.batch_encode"
@@ -1191,6 +1194,12 @@ class KitokenWrapper:
     def __getattr__(self, name):
         return getattr(self._hf_tokenizer, name)
 
+    def __setattr__(self, name, value):
+        if name in {"_hf_tokenizer", "_kitoken", "_prefix_tokens", "_suffix_tokens"}:
+            super().__setattr__(name, value)
+        else:
+            setattr(self._hf_tokenizer, name, value)
+
     def __len__(self):
         return len(self._hf_tokenizer)
 
@@ -1198,9 +1207,7 @@ class KitokenWrapper:
         return f"KitokenWrapper({self._hf_tokenizer.__repr__()})"
 
 
-def load_tokenizer(
-    model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True
-) -> HfTokenizer:
+def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
     """
     Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec.
     Always wraps the tokenizer with Kitoken for faster encoding/decoding.

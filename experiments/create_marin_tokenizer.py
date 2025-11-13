@@ -26,12 +26,12 @@ import os
 import tempfile
 
 import numpy as np
+from levanter.compat.hf_checkpoints import load_tokenizer
 from transformers import PreTrainedTokenizer
 
 from experiments.llama import llama3_tokenizer as llama3_tokenizer_hf_path
 from experiments.marin_models import MARIN_CHAT_TEMPLATE, MARIN_CUSTOM_SPECIAL_TOKENS
 from experiments.marin_models import marin_tokenizer as marin_tokenizer_hf_path
-from levanter.compat.hf_checkpoints import load_tokenizer
 
 
 def _inject_special_tokens(
@@ -95,13 +95,7 @@ def create_marin_tokenizer(
     """
     # Inject special tokens
     marin_tokenizer = _inject_special_tokens(tokenizer, MARIN_CUSTOM_SPECIAL_TOKENS)
-
-    # Assign marin template to the underlying HF tokenizer if wrapped with Kitoken
-    if hasattr(marin_tokenizer, '_hf_tokenizer'):
-        marin_tokenizer._hf_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
-    else:
-        marin_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
-
+    marin_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
     return marin_tokenizer
 
 
