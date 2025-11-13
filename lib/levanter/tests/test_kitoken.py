@@ -3,21 +3,20 @@
 
 """
 Tests for Kitoken integration and compatibility with HuggingFace tokenizers.
+These tests validate that the KitokenWrapper produces identical results to the underlying HF tokenizer.
 """
 
 import pytest
+from transformers import AutoTokenizer
 
 from levanter.compat.hf_checkpoints import load_tokenizer
 from test_utils import skip_if_hf_model_not_accessible
 
 
-@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
-def test_kitoken_wrapper_valid_text():
-    """Test that KitokenWrapper correctly encodes and decodes valid text."""
-    tokenizer = load_tokenizer("NousResearch/Llama-2-7b-hf")
-
-    # Test cases with valid text
-    test_texts = [
+@pytest.fixture
+def valid_texts():
+    """Fixture providing a variety of valid text samples for testing."""
+    return [
         "Hello, world!",
         "The quick brown fox jumps over the lazy dog.",
         "Machine learning is fascinating.",
@@ -31,28 +30,11 @@ def test_kitoken_wrapper_valid_text():
         "A very long sentence that contains multiple words and should test the tokenizer's ability to handle longer sequences of text without any issues whatsoever.",
     ]
 
-    for text in test_texts:
-        # Test encoding
-        tokens = tokenizer.encode(text, add_special_tokens=False)
-        assert isinstance(tokens, list)
-        assert all(isinstance(t, int) for t in tokens)
 
-        # Test decoding round-trip
-        decoded = tokenizer.decode(tokens, skip_special_tokens=True)
-        assert isinstance(decoded, str)
-
-        # Test __call__ interface
-        result = tokenizer(text, add_special_tokens=False)
-        assert result["input_ids"] == tokens
-
-
-@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
-def test_kitoken_wrapper_garbage_data():
-    """Test that KitokenWrapper handles garbage/malformed data."""
-    tokenizer = load_tokenizer("NousResearch/Llama-2-7b-hf")
-
-    # Test cases with garbage/edge case data
-    garbage_texts = [
+@pytest.fixture
+def edge_case_texts():
+    """Fixture providing edge case and challenging text samples."""
+    return [
         "\x00\x01\x02\x03",  # Control characters
         "�" * 10,  # Replacement characters
         "\uffff" * 5,  # Invalid unicode
@@ -65,28 +47,121 @@ def test_kitoken_wrapper_garbage_data():
         "\t\t\t\t\t" * 20,  # Many tabs
     ]
 
-    for text in garbage_texts:
-        # Should not crash
-        tokens = tokenizer.encode(text, add_special_tokens=False)
-        decoded = tokenizer.decode(tokens, skip_special_tokens=True)
-        assert isinstance(decoded, str)
 
-
-@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
-def test_kitoken_wrapper_batch_decode():
-    """Test batch decoding."""
-    tokenizer = load_tokenizer("NousResearch/Llama-2-7b-hf")
-
-    batch_texts = [
+@pytest.fixture
+def batch_texts():
+    """Fixture providing a batch of texts for batch processing tests."""
+    return [
         "First sentence.",
         "Second sentence with more words.",
         "Third one is short.",
+        "Fourth has some numbers: 42, 1337.",
+        "Fifth contains unicode: 日本語テスト",
     ]
 
-    # Encode all
-    token_sequences = [tokenizer.encode(text, add_special_tokens=False) for text in batch_texts]
 
-    # Batch decode
-    decoded = tokenizer.batch_decode(token_sequences, skip_special_tokens=True)
-    assert len(decoded) == len(batch_texts)
-    assert all(isinstance(d, str) for d in decoded)
+@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
+def test_kitoken_single_encode_matches_hf(valid_texts):
+    """Test that single text encoding matches HF tokenizer exactly."""
+    kitoken_wrapper = load_tokenizer("NousResearch/Llama-2-7b-hf")
+    hf_tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
+
+    for text in valid_texts:
+        kitoken_tokens = kitoken_wrapper.encode(text, add_special_tokens=False)
+        hf_tokens = hf_tokenizer.encode(text, add_special_tokens=False)
+
+        assert kitoken_tokens == hf_tokens, f"Encoding mismatch for text: {text!r}"
+
+
+@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
+def test_kitoken_single_decode_matches_hf(valid_texts):
+    """Test that single sequence decoding matches HF tokenizer exactly."""
+    kitoken_wrapper = load_tokenizer("NousResearch/Llama-2-7b-hf")
+    hf_tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
+
+    for text in valid_texts:
+        # Use HF tokenizer to get tokens for consistent starting point
+        tokens = hf_tokenizer.encode(text, add_special_tokens=False)
+
+        kitoken_decoded = kitoken_wrapper.decode(tokens, skip_special_tokens=False)
+        hf_decoded = hf_tokenizer.decode(tokens, skip_special_tokens=False)
+
+        assert kitoken_decoded == hf_decoded, f"Decoding mismatch for tokens from text: {text!r}"
+
+
+@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
+def test_kitoken_call_interface_matches_hf(valid_texts):
+    """Test that __call__ interface matches HF tokenizer exactly."""
+    kitoken_wrapper = load_tokenizer("NousResearch/Llama-2-7b-hf")
+    hf_tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
+
+    for text in valid_texts:
+        kitoken_result = kitoken_wrapper(text, add_special_tokens=False)
+        hf_result = hf_tokenizer(text, add_special_tokens=False)
+
+        assert kitoken_result["input_ids"] == hf_result["input_ids"], f"__call__ mismatch for text: {text!r}"
+
+
+@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
+def test_kitoken_batch_encode_matches_hf(batch_texts):
+    """Test that batch encoding matches HF tokenizer exactly."""
+    kitoken_wrapper = load_tokenizer("NousResearch/Llama-2-7b-hf")
+    hf_tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
+
+    # Test using __call__ with list of texts
+    kitoken_result = kitoken_wrapper(batch_texts, add_special_tokens=False)
+    hf_result = hf_tokenizer(batch_texts, add_special_tokens=False)
+
+    assert kitoken_result["input_ids"] == hf_result["input_ids"], "Batch encoding mismatch"
+
+
+@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
+def test_kitoken_batch_decode_matches_hf(batch_texts):
+    """Test that batch decoding matches HF tokenizer exactly."""
+    kitoken_wrapper = load_tokenizer("NousResearch/Llama-2-7b-hf")
+    hf_tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
+
+    # Encode all texts using HF tokenizer for consistent starting point
+    token_sequences = [hf_tokenizer.encode(text, add_special_tokens=False) for text in batch_texts]
+
+    kitoken_decoded = kitoken_wrapper.batch_decode(token_sequences, skip_special_tokens=False)
+    hf_decoded = hf_tokenizer.batch_decode(token_sequences, skip_special_tokens=False)
+
+    assert kitoken_decoded == hf_decoded, "Batch decoding mismatch"
+
+
+@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
+def test_kitoken_edge_cases_matches_hf(edge_case_texts):
+    """Test that edge cases and garbage data are handled identically to HF tokenizer."""
+    kitoken_wrapper = load_tokenizer("NousResearch/Llama-2-7b-hf")
+    hf_tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
+
+    for text in edge_case_texts:
+        # Test encoding
+        kitoken_tokens = kitoken_wrapper.encode(text, add_special_tokens=False)
+        hf_tokens = hf_tokenizer.encode(text, add_special_tokens=False)
+        assert kitoken_tokens == hf_tokens, f"Edge case encoding mismatch for: {text!r}"
+
+        # Test decoding round-trip
+        kitoken_decoded = kitoken_wrapper.decode(kitoken_tokens, skip_special_tokens=False)
+        hf_decoded = hf_tokenizer.decode(hf_tokens, skip_special_tokens=False)
+        assert kitoken_decoded == hf_decoded, f"Edge case decoding mismatch for: {text!r}"
+
+
+@skip_if_hf_model_not_accessible("NousResearch/Llama-2-7b-hf")
+def test_kitoken_round_trip_consistency(valid_texts):
+    """Test encode-decode round-trip consistency between Kitoken and HF."""
+    kitoken_wrapper = load_tokenizer("NousResearch/Llama-2-7b-hf")
+    hf_tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
+
+    for text in valid_texts:
+        # Kitoken round-trip
+        kitoken_tokens = kitoken_wrapper.encode(text, add_special_tokens=False)
+        kitoken_decoded = kitoken_wrapper.decode(kitoken_tokens, skip_special_tokens=False)
+
+        # HF round-trip
+        hf_tokens = hf_tokenizer.encode(text, add_special_tokens=False)
+        hf_decoded = hf_tokenizer.decode(hf_tokens, skip_special_tokens=False)
+
+        # Both should match
+        assert kitoken_decoded == hf_decoded, f"Round-trip mismatch for text: {text!r}"
