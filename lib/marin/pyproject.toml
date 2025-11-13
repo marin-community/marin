@@ -24,6 +24,7 @@ dependencies = [
     "haliax>=1.4.dev443",
     "levanter[serve]",
     "lz4",
+    "markdownify==0.12.1",
     "multiprocess==0.70.16",
     "numpy",
     "openai",
