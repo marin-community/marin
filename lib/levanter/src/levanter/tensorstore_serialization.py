@@ -1,26 +1,30 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# This module provides checkpoint serialization using Orbax with OCDBT support.
-# OCDBT (Ordered Concurrent Distributed B-Tree) consolidates checkpoint files,
-# reducing file count and improving save/restore performance.
+# References:
+# * Orbax: https://github.com/google/orbax/blob/11d2934ecfff77e86b5e07d0fef02b67eff4511b/orbax/checkpoint/pytree_checkpoint_handler.py#L312
 import logging
 import os
+from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import equinox
-import haliax as hax
 import jax
+import jax.experimental.array_serialization.serialization as array_ser
 import jax.numpy as jnp
 import jax.tree_util as jtu
 import numpy as np
-import orbax.checkpoint as ocp
+from jax.sharding import Mesh, Sharding
+from jaxtyping import PyTree
+
+import haliax as hax
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
-from jax.sharding import Mesh, Sharding
-from jaxtyping import PyTree
+
+from levanter.utils import fsspec_utils, jax_utils
+
 
 logger = logging.getLogger(__name__)
 
@@ -32,52 +36,55 @@ def _is_named_or_none(x):
 def tree_serialize_leaves_tensorstore(
     checkpoint_dir,
     pytree,
+    manager: Optional[array_ser.GlobalAsyncCheckpointManager] = None,
     *,
     commit_callback: Optional[Callable] = None,
 ):
-    """
-    Serialize a PyTree to a checkpoint directory using Orbax with OCDBT.
+    if manager is None:
+        manager = array_ser.GlobalAsyncCheckpointManager()
+        manager_was_none = True
+    else:
+        manager_was_none = False
 
-    Args:
-        checkpoint_dir: Directory path to save the checkpoint
-        pytree: The PyTree to serialize
-        commit_callback: Optional callback to call after checkpoint is committed
-    """
+    leaf_key_paths = jax_utils.leaf_key_paths(pytree, is_leaf=is_named_array)
+    assert len(jax.tree.leaves(leaf_key_paths, is_leaf=is_named_array)) == len(
+        jax.tree.leaves(pytree, is_leaf=is_named_array)
+    )
 
-    # Convert NamedArrays to regular arrays for serialization
-    def _unwrap_named_array(x):
-        if is_named_array(x):
-            return x.array
-        return x
+    paths = _fs_paths_from_key_paths(checkpoint_dir, leaf_key_paths)
 
-    unwrapped_tree = jtu.tree_map(_unwrap_named_array, pytree, is_leaf=is_named_array)
+    # make a dataclass since tuples are pytrees
+    @dataclass
+    class Pair:
+        path: str
+        leaf: Any
 
-    # Filter to only array-like leaves
-    def _is_saveable(x):
+    zipped = jax.tree.map(lambda x, y: Pair(x, y), paths, pytree, is_leaf=lambda x: x is None)
+    paired_leaves = jax.tree.leaves(zipped)
+    paths = [p.path for p in paired_leaves]
+    leaves = [p.leaf.array if is_named_array(p.leaf) else p.leaf for p in paired_leaves]
+
+    # ok, not all of these are arrays, but we'll deal with that in the async function
+    def _ensure_is_array(x):
         if isinstance(x, (int, float, bool, complex)):
             return jnp.array(x)
-        elif equinox.is_array_like(x):
-            return x
         else:
-            return None
+            return x
 
-    saveable_tree = jtu.tree_map(_is_saveable, unwrapped_tree)
+    arrays = [_ensure_is_array(x) for x in leaves]
 
-    # Create async checkpointer
-    handler = ocp.PyTreeCheckpointHandler(use_ocdbt=True)
-    async_checkpointer = ocp.AsyncCheckpointer(handler, timeout_secs=60 * 30)
+    # filter out the None leaves and paths (must be zip)
+    filtered = [(a, p) for a, p in zip(arrays, paths) if equinox.is_array_like(a)]
+    arrays = [a for a, _ in filtered]
+    paths = [p for _, p in filtered]
 
-    # Create save args for async checkpointing
-    save_args = jtu.tree_map(lambda x: ocp.SaveArgs() if x is not None else None, saveable_tree)
+    if commit_callback is None:
+        commit_callback = lambda: logger.info("Committed checkpoint to Tensorstore")  # noqa
 
-    # Save asynchronously with force=True to allow overwriting existing checkpoints
-    async_checkpointer.save(checkpoint_dir, saveable_tree, save_args=save_args, force=True)
+    manager.serialize_with_paths(arrays, paths, on_commit_callback=commit_callback)
 
-    # Wait for completion
-    async_checkpointer.wait_until_finished()
-    logger.info(f"Committed checkpoint to {checkpoint_dir} using OCDBT")
-    if commit_callback is not None:
-        commit_callback()
+    if manager_was_none:
+        manager.wait_until_finished()
 
 
 def _fs_paths_from_key_paths(checkpoint_dir, leaf_key_paths):
@@ -113,83 +120,95 @@ def tree_deserialize_leaves_tensorstore(
     pytree,
     axis_mapping: Optional[ResourceMapping] = None,
     mesh: Optional[Mesh] = None,
+    manager: Optional[array_ser.GlobalAsyncCheckpointManager] = None,
     *,
     allow_missing: bool = False,
 ):
     """
-    Deserialize a PyTree from a checkpoint directory using Orbax.
-
-    This function supports loading both old TensorStore checkpoints and new OCDBT checkpoints.
-    It will automatically detect the format and load accordingly.
+    Deserializes a PyTree of Arrays and NamedArrays from a Tensorstore checkpoint, returning a pytree with the same shape
+    as the one provided. This method is capable of deserializing NamedArrays that are the result of an eval_shape call
+    (i.e. they are not yet arrays but are ShapedDtypeStructs), provided you pass in the axis_mapping and mesh (or
+    they are available by context)
 
     Args:
-        checkpoint_dir: the directory containing the checkpoint, can be a local path or a GCS path
-        pytree: the exemplar pytree structure to restore into
-        axis_mapping: optional, the axis mapping for the NamedArrays
-        mesh: optional, the mesh for the NamedArrays
-        manager: Deprecated parameter, kept for backward compatibility
+        checkpoint_dir: the directory containing the tensorstore checkpoint, can be a local path or a GCS path
+        pytree: the exemplar pytree
+        axis_mapping: optional, the axis mapping for the NamedArrays (if they are not yet arrays)
+        mesh: optional, the mesh for the NamedArrays (if they are not yet arrays)
+        manager: optional, the checkpoint manager to use. If not provided, a new one will be created
         allow_missing: if True, missing leaves will be allowed and kept as-is
 
     Returns:
-        A pytree with the same structure as the exemplar pytree, with arrays loaded from the checkpoint
+        A pytree with the same shape as the exemplar pytree, but with the arrays deserialized from the checkpoint
     """
-    # Compute shardings for all leaves
+    if manager is None:
+        manager = array_ser.GlobalAsyncCheckpointManager()
+
     shardings: PyTree[Optional[Sharding]] = jtu.tree_map(
         partial(_sharding_from_leaf, axis_mapping=axis_mapping, mesh=mesh), pytree, is_leaf=_is_named_or_none
     )
 
-    # Convert NamedArrays to regular arrays for the exemplar tree
-    def _unwrap_named_array(x):
-        if is_named_array(x):
-            return x.array
-        return x
+    # TODO: support ShapeDtypeStructs that are not NamedArrays
+    leaf_key_paths = jax_utils.leaf_key_paths(shardings, is_leaf=_is_named_or_none)
+    paths = _fs_paths_from_key_paths(checkpoint_dir, leaf_key_paths)
+    paths = jtu.tree_leaves(paths, is_leaf=lambda x: x is None)
 
-    unwrapped_tree = jtu.tree_map(_unwrap_named_array, pytree, is_leaf=is_named_array)
+    shardings_leaves, shardings_structure = jtu.tree_flatten(shardings, is_leaf=_is_named_or_none)
 
-    # Create restore args with shardings
-    def _create_restore_arg(sharding, value):
-        if sharding is not None and value is not None:
-            return ocp.ArrayRestoreArgs(sharding=sharding)
-        return None
+    assert len(shardings_leaves) == len(paths)
+    # ok, so, jax really doesn't want any Nones in the leaves here, so we need to temporarily partition the pytree
+    real_indices = [i for i, x in enumerate(shardings_leaves) if x is not None]
+    paths_to_load = []
+    indices_to_load = []
+    shardings_to_load = []
 
-    restore_args = jtu.tree_map(_create_restore_arg, shardings, unwrapped_tree)
+    missing_paths = []
+    missing_indices = []
 
-    # Create Orbax checkpointer with OCDBT enabled
-    # Note: use_ocdbt=True also allows reading old non-OCDBT checkpoints
-    handler = ocp.PyTreeCheckpointHandler(use_ocdbt=True)
-    checkpointer = ocp.Checkpointer(handler)
+    for i in real_indices:
+        path = paths[i]
 
-    # Restore the checkpoint
-    try:
-        restored_tree = checkpointer.restore(checkpoint_dir, item=unwrapped_tree, restore_args=restore_args)
-    except (FileNotFoundError, ValueError) as e:
-        if allow_missing:
-            logger.warning(f"Could not fully restore checkpoint from {checkpoint_dir}: {e}")
-            restored_tree = unwrapped_tree
+        if not fsspec_utils.exists(path):
+            missing_paths.append(path)
+            missing_indices.append(i)
+            continue
+
+        paths_to_load.append(path)
+        indices_to_load.append(i)
+        shardings_to_load.append(shardings_leaves[i])
+
+    # ok now check for missing paths
+    if missing_paths:
+        if not allow_missing:
+            raise FileNotFoundError(f"Missing paths: {missing_paths}")
         else:
-            raise
+            to_log = f"Several keys were missing from the checkpoint directory {checkpoint_dir}:"
+            leaf_paths = jtu.tree_leaves(leaf_key_paths, is_leaf=_is_named_or_none)
+            for i in missing_indices:
+                to_log += f"\n  - {leaf_paths[i]}"
+            logger.warning(to_log)
 
-    # Check for None values that were in the checkpoint but not in the exemplar
-    # This handles the case where a field was None when saved but has a value in the exemplar
-    def _check_missing_values(exemplar_val, restored_val):
-        # If checkpoint has None but exemplar has a value, this is a missing field
-        if restored_val is None and exemplar_val is not None:
-            if not allow_missing:
-                raise FileNotFoundError(
-                    "Checkpoint is missing a required field (saved as None, but exemplar has a value)"
-                )
-            # If allow_missing, keep the exemplar value
-            return exemplar_val
-        return restored_val
+    deser_leaves = manager.deserialize_with_paths(shardings=shardings_to_load, paths=paths_to_load)
 
-    restored_tree = jtu.tree_map(_check_missing_values, unwrapped_tree, restored_tree)
+    # now we need to recreate the original structure
 
-    # Rebuild NamedArrays from the restored arrays
+    out_leaves = jax.tree.leaves(pytree, is_leaf=_is_named_or_none)
+    assert len(out_leaves) == len(shardings_leaves)
+    # out_leaves = [None] * len(shardings_leaves)
+    for i, x in zip(indices_to_load, deser_leaves):
+        out_leaves[i] = x
+
+    deser_arrays = jtu.tree_unflatten(shardings_structure, out_leaves)
+
+    # deser_arrays only has arrays for the deserialized arrays, but we need named arrays for at least some.
+    # The original pytree has the structure we want, so we'll use that to rebuild the named arrays
     def _rebuild_named_array(like, array):
         if is_named_array(array):
             return array
+
         if is_named_array(like):
             return hax.NamedArray(array, like.axes)
-        return array
+        else:
+            return array
 
-    return jtu.tree_map(_rebuild_named_array, pytree, restored_tree, is_leaf=_is_named_or_none)
+    return jtu.tree_map(_rebuild_named_array, pytree, deser_arrays, is_leaf=_is_named_or_none)

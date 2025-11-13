@@ -12,6 +12,7 @@ from typing import Optional, Union
 
 import fsspec
 import jax.numpy as jnp
+from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 
 import levanter
 from levanter.checkpoint import save_checkpoint
@@ -97,15 +98,18 @@ def main(config: ImportHfConfig):
         fs.makedirs(config.output_path)
         logger.info(f"Created output directory: {config.output_path}")
 
-    logger.info(f"Saving checkpoint using Orbax with OCDBT: {config.output_path}")
+    logger.info(f"Saving checkpoint to Tensorstore format: {config.output_path}")
+
+    manager = GlobalAsyncCheckpointManager()
 
     def commit_callback():
         elapsed = time.time() - start_time
-        logger.info(f"Checkpoint committed successfully! Total time: {elapsed:.2f}s")
+        logger.info(f"Checkpoint committed to Tensorstore successfully! Total time: {elapsed:.2f}s")
 
     save_checkpoint(
         tree=model,
         checkpoint_path=config.output_path,
+        manager=manager,
         commit_callback=commit_callback,
         step=0,
         is_temporary=False,

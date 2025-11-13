@@ -23,6 +23,7 @@ import jax.numpy as jnp
 from draccus import field
 from fsspec import AbstractFileSystem
 from haliax.jax_utils import is_in_jit, is_jax_array_like
+from jax.experimental.array_serialization.serialization import GlobalAsyncCheckpointManager
 from jaxtyping import PyTree
 
 from levanter.tensorstore_serialization import (
@@ -30,8 +31,8 @@ from levanter.tensorstore_serialization import (
     tree_serialize_leaves_tensorstore,
 )
 from levanter.utils import fsspec_utils
-from levanter.utils.jax_utils import broadcast_one_to_all
 from levanter.utils.types import FilterSpec
+from levanter.utils.jax_utils import broadcast_one_to_all
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,9 @@ class Checkpointer:
                 continue
             if prev_until >= until:
                 raise ValueError("Step policies must be sorted by 'until' value")
+
+        # The default of 5 minutes is too short even for modestly sized models for some reason
+        self._manager = GlobalAsyncCheckpointManager(timeout_secs=60 * 30)
 
         if jax.process_index() == 0:
             self._async_checkpoint_remover_queue: queue.Queue[str] = queue.Queue(maxsize=-1)
@@ -249,7 +253,7 @@ class Checkpointer:
         return current_policy.every
 
     def wait_until_finished(self):
-        # Async waiting is handled within tree_serialize_leaves_tensorstore
+        self._manager.wait_until_finished()
         if jax.process_index() == 0:
             while self._checkpoint_being_removed is not None or not self._async_checkpoint_remover_queue.empty():
                 time.sleep(0.2)
@@ -288,6 +292,7 @@ class Checkpointer:
             state,
             step=info.step,
             checkpoint_path=path,
+            manager=self._manager,
             commit_callback=commit_callback,
             is_temporary=is_temporary,
         )
@@ -344,21 +349,25 @@ def save_checkpoint(
     tree: M,
     step: int,
     checkpoint_path: PathLike,
+    manager: Optional[GlobalAsyncCheckpointManager] = None,
     *,
     commit_callback: Optional[Callable[[], None]] = None,
     is_temporary: bool = True,
 ):
     """
-    Save a checkpoint to a given path using Orbax with OCDBT.
+    Save a checkpoint to a given path using TensorStore.
 
     If the path does not exist, it will be created.
 
-    This method is jax.Array-aware and will save shards in a way that can be restored.
+    If training_state is None, no training state will be saved.
+
+    This method is jax.Array-aware and will save shards in a way that can be restored
 
     Args:
         tree: the PyTree to save
         step: the step to save the checkpoint at
         checkpoint_path: the path to save the checkpoint to
+        manager: the GlobalAsyncCheckpointManager to use for saving the checkpoint
         commit_callback: a callback to call after the checkpoint has been saved
         is_temporary: whether the checkpoint is temporary
     """
@@ -379,7 +388,7 @@ def save_checkpoint(
 
     tree = equinox.filter(tree, lambda x: is_jax_array_like(x) or isinstance(x, (int, float, bool, complex)))
 
-    tree_serialize_leaves_tensorstore(checkpoint_path, tree, commit_callback=my_callback)
+    tree_serialize_leaves_tensorstore(checkpoint_path, tree, manager, commit_callback=my_callback)
 
     return checkpoint_path
 
