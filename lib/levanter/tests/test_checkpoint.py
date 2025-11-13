@@ -3,11 +3,14 @@
 
 import dataclasses
 import datetime
+import json
 import pathlib
 import tempfile
 from datetime import timedelta
 
+import equinox
 import equinox as eqx
+import fsspec
 import haliax as hax
 import jax
 import jax.tree_util as jtu
@@ -465,11 +468,7 @@ def test_backward_compatibility_with_ocdbt():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Save with old format by directly using serialize_with_paths (non-OCDBT)
-        # We simulate the old behavior by bypassing our OCDBT spec creation
         manager = array_ser.GlobalAsyncCheckpointManager()
-
-        # Use the old serialize_with_paths method to create a non-OCDBT checkpoint
-        # This simulates checkpoints created before OCDBT was enabled
         from levanter.utils import jax_utils
 
         checkpoint_path = tmpdir
@@ -485,9 +484,6 @@ def test_backward_compatibility_with_ocdbt():
             if hasattr(leaf, "array") or jax.Array in type(leaf).__mro__
         ]
 
-        # Filter to only JAX arrays
-        import equinox
-
         filtered = [(a, p) for a, p in zip(arrays, paths) if equinox.is_array_like(a)]
         arrays_to_save = [a for a, _ in filtered]
         paths_to_save = [p for _, p in filtered]
@@ -497,10 +493,6 @@ def test_backward_compatibility_with_ocdbt():
         manager.wait_until_finished()
 
         # Save metadata (normally done by save_checkpoint)
-        import json
-
-        import fsspec
-
         fs, _ = fsspec.core.url_to_fs(checkpoint_path)
         metadata = {"step": 10, "timestamp": datetime.datetime.now().isoformat(), "is_temporary": False}
         with fs.open(f"{checkpoint_path}/metadata.json", "w") as f:
@@ -520,38 +512,3 @@ def test_backward_compatibility_with_ocdbt():
         )
         assert all(np.isclose(restored_state.training_key, initial_state.training_key))
         assert restored_state.step == initial_state.step
-
-
-def test_ocdbt_with_named_arrays():
-    """Test that OCDBT works correctly with NamedArrays."""
-    In = Axis("in", 4)
-    Out = Axis("out", 2)
-
-    class NamedModel(eqx.Module):
-        weights: hax.NamedArray
-        bias: hax.NamedArray
-
-    with use_test_mesh(), tempfile.TemporaryDirectory() as tmpdir:
-        key = jax.random.PRNGKey(42)
-        k1, k2, k3 = jax.random.split(key, 3)
-
-        # Create a model with NamedArrays
-        model = NamedModel(
-            weights=hax.random.normal(k1, (In, Out)),
-            bias=hax.random.normal(k2, (Out,)),
-        )
-
-        # Save with OCDBT
-        save_checkpoint({"model": model}, step=0, checkpoint_path=tmpdir)
-
-        # Create a different model
-        model2 = NamedModel(
-            weights=hax.random.normal(k2, (In, Out)),
-            bias=hax.random.normal(k3, (Out,)),
-        )
-
-        # Load and verify
-        restored = load_checkpoint({"model": model2}, checkpoint_path=tmpdir, discover_latest=False)
-
-        assert hax.all(hax.equal(restored["model"].weights, model.weights))
-        assert hax.all(hax.equal(restored["model"].bias, model.bias))

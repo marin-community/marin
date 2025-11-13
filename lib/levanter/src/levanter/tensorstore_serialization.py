@@ -6,6 +6,7 @@
 import asyncio
 import logging
 import os
+import urllib.parse
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Optional
@@ -29,81 +30,41 @@ from levanter.utils import fsspec_utils, jax_utils
 logger = logging.getLogger(__name__)
 
 
-def _create_ocdbt_spec(checkpoint_base_path: str, array_path: str) -> dict:
+def _create_ocdbt_spec(checkpoint_root: str, array_path: str | None) -> dict:
     """
     Create a TensorStore spec with OCDBT (Optionally-Cooperative Distributed B-Tree) enabled.
 
-    All arrays in a checkpoint share the same OCDBT base (checkpoint directory), with each array
-    having a unique path within that OCDBT database.
-
     Args:
-        checkpoint_base_path: Base path for the checkpoint (e.g., "/checkpoints/step-100")
+        checkpoint_root: Base path for the checkpoint (e.g., "/checkpoints/step-100")
         array_path: Relative path for this specific array (e.g., "model/layer0/weight")
 
     Returns:
         TensorStore spec dict with OCDBT kvstore driver
     """
-    import urllib.parse
+    parsed = urllib.parse.urlparse(checkpoint_root)
 
-    parsed = urllib.parse.urlparse(checkpoint_base_path)
+    spec: dict[str, Any] = {"driver": "zarr3", "kvstore": {"driver": "ocdbt", "base": {}}}
 
-    spec: dict[str, Any] = {"driver": "zarr3", "kvstore": {"driver": "ocdbt", "base": {}, "path": ""}}
-
-    # Configure the base kvstore based on the path protocol
     if parsed.scheme in ("", "file"):
-        # Local filesystem: all arrays share the same OCDBT base (checkpoint directory)
-        spec["kvstore"]["base"] = {"driver": "file", "path": checkpoint_base_path}
-        spec["kvstore"]["path"] = array_path
-
+        spec["kvstore"]["base"] = {"driver": "file", "path": checkpoint_root}
     elif parsed.scheme == "gs":
-        # GCS path: gs://bucket/path/to/checkpoint
         bucket = parsed.netloc
         gcs_path = parsed.path.lstrip("/")
-
-        spec["kvstore"]["base"] = {"driver": "gcs", "bucket": bucket}
-        if gcs_path:
-            spec["kvstore"]["base"]["path"] = gcs_path
-
-        spec["kvstore"]["path"] = array_path
-
+        spec["kvstore"]["base"] = {"driver": "gcs", "bucket": bucket, "path": gcs_path}
     else:
         raise ValueError(f"Unsupported protocol: {parsed.scheme}. Supported: file, gs")
+
+    if array_path:
+        spec["kvstore"]["path"] = array_path
 
     return spec
 
 
-async def _list_ocdbt_keys(checkpoint_base_path: str) -> list[str]:
-    """
-    Open the OCDBT KVStore for a checkpoint and list all keys.
-
-    Args:
-        checkpoint_base_path: Base path for the checkpoint (e.g., "/checkpoints/step-100")
-
-    Returns:
-        List of key paths (as strings) in the OCDBT kvstore
-    """
-    import urllib.parse
-
-    parsed = urllib.parse.urlparse(checkpoint_base_path)
-
-    kvstore_spec: dict[str, Any] = {"driver": "ocdbt"}
-
-    # Configure the base kvstore based on the path protocol
-    if parsed.scheme in ("", "file"):
-        kvstore_spec["base"] = {"driver": "file", "path": checkpoint_base_path}
-    elif parsed.scheme == "gs":
-        bucket = parsed.netloc
-        gcs_path = parsed.path.lstrip("/")
-        kvstore_spec["base"] = {"driver": "gcs", "bucket": bucket}
-        if gcs_path:
-            kvstore_spec["base"]["path"] = gcs_path
-    else:
-        raise ValueError(f"Unsupported protocol: {parsed.scheme}. Supported: file, gs")
-
-    # Open the kvstore and list keys
+async def _list_ocdbt_keys(checkpoint_root: str) -> list[str]:
+    """List all keys in an OCDBT TensorStore kvstore."""
+    kvstore_spec = _create_ocdbt_spec(checkpoint_root, array_path=None)["kvstore"]
     kvstore = await ts.KvStore.open(kvstore_spec)
     keys_bytes = await kvstore.list()
-    # Convert bytes to strings
     return [key.decode("utf-8") for key in keys_bytes]
 
 
@@ -129,7 +90,10 @@ def tree_serialize_leaves_tensorstore(
         jax.tree.leaves(pytree, is_leaf=is_named_array)
     )
 
-    paths = _fs_paths_from_key_paths(checkpoint_dir, leaf_key_paths)
+    def path_from_key_path(key_path):
+        return "/".join(key_path.split("."))
+
+    paths = jtu.tree_map(path_from_key_path, leaf_key_paths)
 
     # make a dataclass since tuples are pytrees
     @dataclass
@@ -160,28 +124,15 @@ def tree_serialize_leaves_tensorstore(
         commit_callback = lambda: logger.info("Committed checkpoint to Tensorstore")  # noqa
 
     # Create specs for each array
-    # All arrays share the same OCDBT base (checkpoint directory)
     tspecs = []
     for path in paths:
-        # Compute relative path from checkpoint_dir
-        assert path.startswith(checkpoint_dir)
-        relative_path = path[len(checkpoint_dir) :].lstrip(os.sep)
-
-        spec = _create_ocdbt_spec(checkpoint_dir, relative_path)
+        spec = _create_ocdbt_spec(checkpoint_dir, path)
         tspecs.append(spec)
 
     manager.serialize(arrays, tspecs, on_commit_callback=commit_callback)
 
     if manager_was_none:
         manager.wait_until_finished()
-
-
-def _fs_paths_from_key_paths(checkpoint_dir, leaf_key_paths):
-    def path_from_key_path(key_path):
-        return os.path.join(checkpoint_dir, *key_path.split("."))
-
-    paths = jtu.tree_map(path_from_key_path, leaf_key_paths)
-    return paths
 
 
 def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Sharding]:
@@ -213,24 +164,9 @@ def _restore_ocdbt(
     manager: array_ser.GlobalAsyncCheckpointManager,
     allow_missing: bool,
 ) -> tuple[list, list[int]]:
-    """
-    Restore arrays from an OCDBT checkpoint.
-
-    Args:
-        checkpoint_root: Root path of the OCDBT checkpoint (where manifest.ocdbt is located)
-        paths: Full paths for all arrays
-        real_indices: Indices of non-None shardings
-        shardings_leaves: Flattened list of shardings
-        leaf_key_paths: Key paths for logging
-        manager: Checkpoint manager
-        allow_missing: Whether to allow missing arrays
-
-    Returns:
-        Tuple of (deserialized_leaves, indices_to_load)
-    """
+    """Restore arrays from an OCDBT checkpoint."""
     # List all keys in the OCDBT kvstore to check existence
-    existing_keys = asyncio.run(_list_ocdbt_keys(checkpoint_root))
-    existing_keys_set = set(existing_keys)
+    existing_keys = set(asyncio.run(_list_ocdbt_keys(checkpoint_root)))
 
     paths_to_load = []
     indices_to_load = []
@@ -240,14 +176,10 @@ def _restore_ocdbt(
 
     for i in real_indices:
         path = paths[i]
-        # Compute relative path from checkpoint_root (where OCDBT kvstore is based)
-        assert path.startswith(checkpoint_root)
-        relative_path = path[len(checkpoint_root) :].lstrip(os.sep)
-
         # Check if this relative path exists in the kvstore
-        zarr_metadata_key = f"{relative_path}/zarr.json"
+        zarr_metadata_key = f"{path}/zarr.json"
 
-        if zarr_metadata_key not in existing_keys_set:
+        if zarr_metadata_key not in existing_keys:
             missing_paths.append(path)
             missing_indices.append(i)
             continue
@@ -267,15 +199,11 @@ def _restore_ocdbt(
                 to_log += f"\n  - {leaf_paths[i]}"
             logger.warning(to_log)
 
-    # Create OCDBT TensorStore specs for deserialization
     tspecs_to_load = []
     for path in paths_to_load:
-        assert path.startswith(checkpoint_root)
-        relative_path = path[len(checkpoint_root) :].lstrip(os.sep)
-        spec = _create_ocdbt_spec(checkpoint_root, relative_path)
+        spec = _create_ocdbt_spec(checkpoint_root, path)
         tspecs_to_load.append(spec)
 
-    # Deserialize using OCDBT specs
     deser_leaves = manager.deserialize(shardings=shardings_to_load, tensorstore_specs=tspecs_to_load)
     return deser_leaves, indices_to_load
 
@@ -304,6 +232,8 @@ def _restore_old_ts(
     Returns:
         Tuple of (deserialized_leaves, indices_to_load)
     """
+    paths = [os.path.join(checkpoint_dir, p) for p in paths]
+
     paths_to_load = []
     indices_to_load = []
     shardings_to_load = []
@@ -334,7 +264,6 @@ def _restore_old_ts(
                 to_log += f"\n  - {leaf_paths[i]}"
             logger.warning(to_log)
 
-    # Use old deserialize_with_paths for backward compatibility
     deser_leaves = manager.deserialize_with_paths(shardings=shardings_to_load, paths=paths_to_load)
     return deser_leaves, indices_to_load
 
@@ -374,7 +303,7 @@ def tree_deserialize_leaves_tensorstore(
 
     # TODO: support ShapeDtypeStructs that are not NamedArrays
     leaf_key_paths = jax_utils.leaf_key_paths(shardings, is_leaf=_is_named_or_none)
-    paths = _fs_paths_from_key_paths(checkpoint_dir, leaf_key_paths)
+    paths = jtu.tree_map(lambda kp: "/".join(kp.split(".")), leaf_key_paths)
     paths = jtu.tree_leaves(paths, is_leaf=lambda x: x is None)
 
     shardings_leaves, shardings_structure = jtu.tree_flatten(shardings, is_leaf=_is_named_or_none)
@@ -383,10 +312,8 @@ def tree_deserialize_leaves_tensorstore(
     # ok, so, jax really doesn't want any Nones in the leaves here, so we need to temporarily partition the pytree
     real_indices = [i for i, x in enumerate(shardings_leaves) if x is not None]
 
-    # Check if this is an OCDBT checkpoint by looking for manifest.ocdbt (sentinel file)
-    # OCDBT manifests are at the checkpoint root, not in subpaths
-    # So we need to check upwards from checkpoint_dir to find the manifest
-    # The checkpoint root should have a metadata.json file
+    # Check if this is an OCDBT checkpoint by looking for manifest.ocdbt
+    # If the user gave us a subpath, we need to walk up to find the root
     def find_checkpoint_root(path):
         """Find the checkpoint root by looking for metadata.json"""
         current = path
