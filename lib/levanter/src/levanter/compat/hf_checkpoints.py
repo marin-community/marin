@@ -14,37 +14,36 @@ import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Generic, Optional, Tuple, Type, TypeVar, Union, cast, Callable
+from typing import Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
 import fsspec
+import haliax
 import huggingface_hub
 import humanfriendly
 import jax
 import jax.numpy as jnp
-from jax._src.mesh import get_concrete_mesh
 import mergedeep
 import numpy as np
 import transformers.utils.hub
 from fsspec import AbstractFileSystem
-from fsspec.asyn import get_loop, sync as fsspec_sync
+from fsspec.asyn import get_loop
+from fsspec.asyn import sync as fsspec_sync
+from haliax import Axis
 from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like
-from haliax.state_dict import StateDict
+from haliax.partitioning import ResourceMapping
+from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
 from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download
 from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError, RepositoryNotFoundError
 from jax import ShapeDtypeStruct
+from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from tqdm_loggable.auto import tqdm
-
-import haliax
-from haliax import Axis
-from haliax.partitioning import ResourceMapping
-from haliax.state_dict import from_torch_compatible_state_dict, save_state_dict
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
@@ -52,31 +51,27 @@ from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
-from levanter.utils.jax_utils import best_effort_sharding, use_cpu_device, sync_global_devices
+from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import dataclass_with_default_init
 
-
 silence_transformer_nag()
-from transformers import (  # noqa: E402
+from transformers import (  # noqa: E402  # noqa: E402
     AutoConfig,
     AutoModel,
     AutoModelForCausalLM,
     AutoProcessor,
     AutoTokenizer,
     FeatureExtractionMixin,
-)
-from transformers import PretrainedConfig as HfConfig  # noqa: E402
-from transformers import (  # noqa: E402
     PreTrainedTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
     ProcessorMixin,
 )
+from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers.dynamic_module_utils import get_class_from_dynamic_module  # noqa: E402
 from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
-
 
 DEFAULT_MAX_SHARD_SIZE = int(10e9)
 
@@ -444,8 +439,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
             )
         else:
             pass
-
-        assert isinstance(tokenizer, (PreTrainedTokenizer, PreTrainedTokenizerFast))
 
         return tokenizer
 
@@ -1104,8 +1097,9 @@ class KitokenWrapper:
 
     def _load_kitoken(self):
         """Load Kitoken encoder from HF tokenizer's backend."""
-        import kitoken
         import tempfile
+
+        import kitoken
 
         if self._hf_tokenizer.backend_tokenizer is None:
             raise ValueError("HF tokenizer does not have a backend_tokenizer (not a Fast tokenizer)")
@@ -1123,22 +1117,31 @@ class KitokenWrapper:
 
     def encode(self, text, add_special_tokens=True, **kwargs):
         """Encode text to token IDs using Kitoken."""
-        return self._kitoken.encode(text, add_special_tokens=add_special_tokens)
+        return self._kitoken.encode(text) # add_special_tokens=add_special_tokens)
 
     def decode(self, token_ids, skip_special_tokens=False, **kwargs):
         """Decode token IDs to text using Kitoken."""
-        return self._kitoken.decode(token_ids, skip_special_tokens=skip_special_tokens)
+        return self._hf_tokenizer.decode(token_ids, skip_special_tokens=skip_special_tokens)
+        # return self._kitoken.decode(token_ids, skip_special_tokens=skip_special_tokens)
 
     def __call__(self, text, **kwargs):
         """Tokenize text using Kitoken."""
-        add_special_tokens = kwargs.get("add_special_tokens", True)
-        input_ids = self._kitoken.encode(text, add_special_tokens=add_special_tokens)
+        assert "text_pair" not in kwargs, "text_pair not supported in KitokenWrapper.__call__"
+        if isinstance(text, list):
+            input_ids = [self._kitoken.encode(t) for t in text]
+        else:
+            input_ids = self._kitoken.encode(text)
         from transformers import BatchEncoding
         return BatchEncoding({"input_ids": input_ids})
+    
+    def batch_encode(self, texts, **kwargs):
+        """Batch encode texts using Kitoken."""
+        assert kwargs["pair_texts"] is None, "pair_texts not supported in KitokenWrapper.batch_encode"
+        return [self._kitoken.encode(text) for text in texts]
 
     def batch_decode(self, sequences, skip_special_tokens=False, **kwargs):
         """Batch decode token sequences using Kitoken."""
-        return [self._kitoken.decode(seq, skip_special_tokens=skip_special_tokens) for seq in sequences]
+        return [self._hf_tokenizer.decode(seq, skip_special_tokens=skip_special_tokens) for seq in sequences]
 
     # Delegate all other attributes/methods to the wrapped HF tokenizer
     def __getattr__(self, name):

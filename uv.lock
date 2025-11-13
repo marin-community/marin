@@ -3103,6 +3103,29 @@ version = "0.2.0"
 source = { git = "https://github.com/kpu/kenlm?rev=4cb443e60b7bf2c0ddf3c745378f76cb59e254e5#4cb443e60b7bf2c0ddf3c745378f76cb59e254e5" }
 
 [[package]]
+name = "kitoken"
+version = "0.10.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/6c/807e82084c691b0a6b5a659a49761709c2a0adfe1cb5bf77708eed158c70/kitoken-0.10.1.tar.gz", hash = "sha256:ecca8a68a63e11e048f8f8a6e3dabe32e914466d9f59d26ce664681c9c1f0cc5", size = 59995, upload-time = "2024-12-20T03:07:14.686Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/46/ef/9d4447541f23a71c49c65c83ebffe034e468d2c431b359934b2685d35ab9/kitoken-0.10.1-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:e8535845d96746951c105a3ce1ddba0f7a2a70c39aa4405261dc321d06c953c3", size = 1381993, upload-time = "2024-12-20T03:07:04.92Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/9b/da0915143d3b45ee8331e20dd00b9924e1413e3bcca731b3a2953fdf1eae/kitoken-0.10.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:ead6759319e6d799eaa39b2d4a88042e55f8068e256772be9a05c99a0772a896", size = 1251260, upload-time = "2024-12-20T03:07:00.414Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/f3/72dca0e41e7919bdb5cc0b03b485b0d7ef56349b3022583799d75f3795ed/kitoken-0.10.1-cp310-abi3-macosx_13_0_arm64.whl", hash = "sha256:e15b096aee408786f01271426965c941d029012b26b1cc20a5af7fc25b381c66", size = 1303317, upload-time = "2025-10-10T10:44:14.262Z" },
+    { url = "https://files.pythonhosted.org/packages/92/10/17fb156cf72291b7cdddca594d112fc8c1f5e13ba62fd2df7b3eff711b9f/kitoken-0.10.1-cp310-abi3-macosx_13_0_x86_64.whl", hash = "sha256:e4460021b25f2bb1be1ebf58b3f98bea7fbe1e109528f907b3bfc114d6ce1189", size = 1430407, upload-time = "2025-10-10T10:44:15.751Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/6d/adb3a6b2b363033d27bf7560d63e62efcc0c3589a9ee91ed341290e1be47/kitoken-0.10.1-cp310-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:7a6a1d7b9220ae09d6022f5b408f55cb5e2fe2fa7984cb993461a7db1cce3d70", size = 1331069, upload-time = "2024-12-20T03:06:49.98Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/af/d23e0b03a836c8b7a61d029a27aa98a09b28abf20b44d3a9dc55af4f6322/kitoken-0.10.1-cp310-abi3-manylinux_2_28_armv7l.whl", hash = "sha256:617201015aec6d3d76bf7cd26a8b6de997e59ca1d6a0b5fd24578e406a36828f", size = 1332397, upload-time = "2024-12-20T03:06:52.817Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/10/628393bd6ba59a4959c8df0fafb5d5ba3d0a90163018c7398e6e89225acd/kitoken-0.10.1-cp310-abi3-manylinux_2_28_i686.whl", hash = "sha256:3dbda305b095e1b896a1145fad1a6739cfd83c974a8eebbfa1fe4484cd4ae412", size = 1490170, upload-time = "2024-12-20T03:06:57.221Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/bb/c5c0092b219f5750f9ed5c2c27640c4765794b211304c21f03937ef84da3/kitoken-0.10.1-cp310-abi3-manylinux_2_28_ppc64le.whl", hash = "sha256:82346b7aedbf6b976cd2ee6eaca8777136ed2831e333b90800724086ebaf56b8", size = 1492945, upload-time = "2024-12-20T03:06:54.488Z" },
+    { url = "https://files.pythonhosted.org/packages/34/3e/15a79166cf69cad15696404696b70e878aa45e21ab87b1efa91a29321452/kitoken-0.10.1-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:8c781e0a07ae7fe9a4bb633bda705fcb323454f694dbee12d08bca898d4ae3bb", size = 1464504, upload-time = "2024-12-20T03:06:58.898Z" },
+    { url = "https://files.pythonhosted.org/packages/93/69/5c7a83a2da768836c0a37e254d116f859f6ac2ceab344a1902021ee8de78/kitoken-0.10.1-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:1d43d595ca405a9ea85ee532c09bd615f7745fff762d61eadbe3c249da52e05e", size = 1328149, upload-time = "2024-12-20T03:07:06.456Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/25/992213aefcba4f289e5f00d0dd6c2234bf5a7b5096ad3a5e8759ef3c22e3/kitoken-0.10.1-cp310-abi3-musllinux_1_2_armv7l.whl", hash = "sha256:e98044200b329ed9e1a59dcb031e00d013b838786331c4fbed1916828a121b1b", size = 1330461, upload-time = "2024-12-20T03:07:07.863Z" },
+    { url = "https://files.pythonhosted.org/packages/46/63/22ba3ee485dfe542d5bdc20792e5ec2fba4c48f866d64ab3243b1c7bad5e/kitoken-0.10.1-cp310-abi3-musllinux_1_2_i686.whl", hash = "sha256:84fde9161ede36fcf000178eaaa0c501e6a28fe9be8d9a489de9533b7035ea34", size = 1449885, upload-time = "2024-12-20T03:07:09.402Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/3a/13f22496bad7f4ec4a3cb8333bc211b031386716697356374a31998f83e1/kitoken-0.10.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:e9474e6e3fbd1c71a6d76f21433247c27e6c2d92400bb10708766cb6eaea8171", size = 1461828, upload-time = "2024-12-20T03:07:12.099Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/2b/6ac41cfcd2d3348dce3c941b09828d6cc04ede398c0a62882ad50cae9d04/kitoken-0.10.1-cp310-abi3-win32.whl", hash = "sha256:8c2243783ef68a5422daaadea7c364f3b8e26e922fab84f5c87fa245d2949293", size = 1250855, upload-time = "2024-12-20T03:07:18.746Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/a4/da01d3e81fad306f20c68a3e1bce4e905df67ee16c29aee4cdec9accf55d/kitoken-0.10.1-cp310-abi3-win_amd64.whl", hash = "sha256:0f255791d9bc73228683df853693362d6100cc61986dc01c1dd299ec9e9c6eb8", size = 1273075, upload-time = "2024-12-20T03:07:15.721Z" },
+]
+
+[[package]]
 name = "kiwisolver"
 version = "1.4.9"
 source = { registry = "https://pypi.org/simple" }
@@ -3233,6 +3256,7 @@ dependencies = [
     { name = "jaxtyping" },
     { name = "jinja2" },
     { name = "jmp" },
+    { name = "kitoken" },
     { name = "lenses" },
     { name = "matplotlib" },
     { name = "optax" },
@@ -3340,6 +3364,7 @@ requires-dist = [
     { name = "jaxtyping", specifier = ">=0.2.34" },
     { name = "jinja2" },
     { name = "jmp", specifier = ">=0.0.3" },
+    { name = "kitoken", specifier = ">=0.1.0" },
     { name = "lenses" },
     { name = "lm-eval", marker = "extra == 'lm-eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness.git?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "matplotlib", specifier = ">=3.7.0" },
