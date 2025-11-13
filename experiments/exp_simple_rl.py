@@ -207,7 +207,7 @@ def main():
         help="HuggingFace checkpoint to load",
     )
     parser.add_argument("--num-steps", type=int, default=100, help="Number of training steps")
-    parser.add_argument("--group-size", type=int, default=4, help="Number of samples per prompt for GRPO")
+    parser.add_argument("--group-size", type=int, default=16, help="Number of samples per prompt for GRPO")
     parser.add_argument("--max-gen-tokens", type=int, default=1, help="Maximum tokens to generate")
     parser.add_argument("--learning-rate", type=float, default=1e-5, help="Learning rate")
     parser.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature")
@@ -255,8 +255,8 @@ def main():
         print("Model loaded successfully!")
         
         # Setup training
-        prompt = "The first president of the United States's last name was"
-        expected_answer = " Washington"
+        prompt = "The number of Rs in the word strawberry is"
+        expected_answer = " three"
         
         # Tokenize
         prompt_tokens_list = tokenizer.encode(prompt, add_special_tokens=False)
@@ -315,14 +315,15 @@ def main():
             
             # 6. Logging
             mean_reward = float(rewards.mean())
-            if step % 10 == 0 or step < 5:
-                print(f"Step {step:3d}: loss={float(loss):7.4f}, mean_reward={mean_reward:.2f}")
-                
-                # Decode first completion for inspection
-                first_completion = tokenizer.decode(completions[0], skip_special_tokens=True)
-                print(f"  Sample: '{first_completion}'")
-                print(f"  Rewards: {[float(r) for r in rewards]}")
-                print(f"  Advantages: {[float(a) for a in advantages]}")
+
+            print(f"Step {step:3d}: loss={float(loss):7.4f}, mean_reward={mean_reward:.2f}")
+            
+            # Decode all completions for inspection
+            decoded_completions = [tokenizer.decode(comp, skip_special_tokens=True) for comp in completions]
+            completions_str = ", ".join(f"'{comp}'" for comp in decoded_completions)
+            print(f"  Samples: {completions_str}")
+            print(f"  Rewards: {[float(r) for r in rewards]}")
+            print(f"  Advantages: {[float(a) for a in advantages]}")
         
         print("\n" + "=" * 80)
         print("Training complete!")
