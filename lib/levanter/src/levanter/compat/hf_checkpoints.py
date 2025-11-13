@@ -1132,7 +1132,7 @@ class KitokenWrapper:
                     elif position in ("End", "SubSequenceEnd"):
                         self._suffix_tokens.append(token_id)
 
-    def encode(self, text, add_special_tokens=True, text_pair=None, **kwargs):
+    def encode(self, text, text_pair=None, add_special_tokens=True, **kwargs):
         """Encode text to token IDs using Kitoken with optional special token addition."""
         # For unsupported kwargs, fall back to HF tokenizer
         if kwargs:
@@ -1179,17 +1179,6 @@ class KitokenWrapper:
 
         return BatchEncoding({"input_ids": input_ids})
 
-    def batch_encode_plus(self, texts, **kwargs):
-        return [self.encode(text, **kwargs) for text in texts]
-
-    def batch_encode(self, texts, **kwargs):
-        return [self.encode(text, **kwargs) for text in texts]
-
-    def batch_decode(self, sequences, skip_special_tokens=False, **kwargs):
-        """Batch decode token sequences using Kitoken."""
-        return [self._hf_tokenizer.decode(seq, skip_special_tokens=skip_special_tokens) for seq in sequences]
-
-    # Delegate all other attributes/methods to the wrapped HF tokenizer
     def __getattr__(self, name):
         return getattr(self._hf_tokenizer, name)
 
@@ -1209,7 +1198,6 @@ class KitokenWrapper:
 def load_tokenizer(model_name_or_path, revision=None, local_cache_dir=None, trust_remote_code=True) -> HfTokenizer:
     """
     Like AutoTokenizer.from_pretrained, but works with gs:// paths or anything on fsspec.
-    Always wraps the tokenizer with Kitoken for faster encoding/decoding.
 
     Args:
         model_name_or_path: Model name or path

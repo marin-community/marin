@@ -184,7 +184,7 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
         return await self.dataset.async_len()
 
 
-def _maybe_force_tokenizer_parallelism(tokenizer: PreTrainedTokenizerBase):
+def _maybe_force_tokenizer_parallelism(tokenizer: HfTokenizer):
     if tokenizer.is_fast and os.getenv("TOKENIZERS_PARALLELISM") is None:
         # if we're using a fast tokenizer, we want to force parallelism
         # to be the number of CPUs
@@ -271,9 +271,7 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
                 truncation=True,
             )  # type: ignore
         else:
-            encoding = self.tokenizer(
-                batch_text, return_attention_mask=self.return_attention_mask, verbose=False
-            )  # type: ignore
+            encoding = self.tokenizer(batch_text, return_attention_mask=self.return_attention_mask, verbose=False)  # type: ignore
 
         if needs_merge:
             new_encoding = self._merge_split_encodings(batch_text, encoding, needs_merge)
@@ -577,7 +575,7 @@ class LMTaskConfig(abc.ABC):
     @cached_property
     def the_tokenizer(self) -> HfTokenizer:
         if self.tokenizer == "passthrough":
-            return PassthroughTokenizer(self.vocab_size)
+            return PassthroughTokenizer(self.vocab_size)  # type: ignore[return-value]
         else:
             return load_tokenizer(self.tokenizer)
 
@@ -679,9 +677,13 @@ def dataset_for_format(
         case ChatLmDatasetFormat(single_turn=single_turn, pack=pack, mask_user_turns=mask_user_turns):
             if single_turn:
                 # We treat single turn like supervised
-                return SupervisedDataset(cache, Pos, max_segments_per_example=64 if pack else 1, mask_inputs=mask_user_turns)  # type: ignore
+                return SupervisedDataset(
+                    cache, Pos, max_segments_per_example=64 if pack else 1, mask_inputs=mask_user_turns
+                )  # type: ignore
             else:
-                return MultiturnChatDataset(cache, Pos, max_segments_per_example=64 if pack else 1, mask_user_turns=mask_user_turns)  # type: ignore
+                return MultiturnChatDataset(
+                    cache, Pos, max_segments_per_example=64 if pack else 1, mask_user_turns=mask_user_turns
+                )  # type: ignore
         case SupervisedLmDatasetFormat(pack=pack, mask_inputs=mask_inputs):
             return SupervisedDataset(cache, Pos, max_segments_per_example=64 if pack else 1, mask_inputs=mask_inputs)  # type: ignore
         case _:
@@ -743,9 +745,7 @@ SupervisedSourceConfig: TypeAlias = Union[SupervisedHfSourceConfig, SupervisedUr
 LMSupervisedDatasetConfig: TypeAlias = SupervisedUrlSourceConfig
 
 
-def _preprocess_supervised_example(
-    batch, tokenizer: PreTrainedTokenizerBase, input_field: str, output_field: str
-) -> dict:
+def _preprocess_supervised_example(batch, tokenizer: HfTokenizer, input_field: str, output_field: str) -> dict:
     sources = [example[input_field] for example in batch]
 
     targets = [example[output_field] for example in batch]
@@ -762,7 +762,7 @@ def _preprocess_supervised_example(
     }
 
 
-def _prepare_supervised_examples(ex: list[dict], tokenizer: PreTrainedTokenizerBase, Pos: hax.Axis) -> list[LmExample]:
+def _prepare_supervised_examples(ex: list[dict], tokenizer: HfTokenizer, Pos: hax.Axis) -> list[LmExample]:
     """
     Prepare examples for training. This function converts the (cached) encodings into an LmExample.
 
@@ -806,7 +806,6 @@ def _mk_sup_example_jit(Pos, input_ids: hax.NamedArray, sources_len, pad_token_i
 def mk_supervised_dataset(
     config: SupervisedSourceConfigBase, split: str, tokenizer: HfTokenizer, Pos: hax.Axis
 ) -> AsyncDataset[LmExample]:
-
     source = config.get_shard_source(split)
 
     if source is None:
@@ -853,7 +852,7 @@ class ChatUrlDataSourceConfig:
         )
 
 
-def preprocess_legacy_chat_template(batch, tokenizer: PreTrainedTokenizerBase, should_append_eos: bool) -> dict:
+def preprocess_legacy_chat_template(batch, tokenizer: HfTokenizer, should_append_eos: bool) -> dict:
     """
     Preprocess chat examples to match the format of preprocess_supervised_example.
     Returns a dict with input_ids and sources_len like the supervised case.
@@ -992,7 +991,7 @@ def load_lm_dataset_cache(
 
 
 def mk_chat_sft_dataset(
-    config: ChatUrlDataSourceConfig, tokenizer: PreTrainedTokenizerBase, Pos: hax.Axis
+    config: ChatUrlDataSourceConfig, tokenizer: HfTokenizer, Pos: hax.Axis
 ) -> AsyncDataset[LmExample]:
     """Creates a dataset from JSONL files containing chat format data for SFT."""
     source = config.get_shard_source("train")
