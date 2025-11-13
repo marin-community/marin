@@ -6,26 +6,21 @@
 # reducing file count and improving save/restore performance.
 import logging
 import os
-from dataclasses import dataclass
 from functools import partial
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 import equinox
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import jax.tree_util as jtu
 import numpy as np
 import orbax.checkpoint as ocp
-from jax.sharding import Mesh, Sharding
-from jaxtyping import PyTree
-
-import haliax as hax
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
-
-from levanter.utils import fsspec_utils, jax_utils
-
+from jax.sharding import Mesh, Sharding
+from jaxtyping import PyTree
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +32,6 @@ def _is_named_or_none(x):
 def tree_serialize_leaves_tensorstore(
     checkpoint_dir,
     pytree,
-    manager: Optional[Any] = None,  # Deprecated, kept for backward compatibility
     *,
     commit_callback: Optional[Callable] = None,
 ):
@@ -47,9 +41,9 @@ def tree_serialize_leaves_tensorstore(
     Args:
         checkpoint_dir: Directory path to save the checkpoint
         pytree: The PyTree to serialize
-        manager: Deprecated parameter, kept for backward compatibility
         commit_callback: Optional callback to call after checkpoint is committed
     """
+
     # Convert NamedArrays to regular arrays for serialization
     def _unwrap_named_array(x):
         if is_named_array(x):
@@ -69,23 +63,21 @@ def tree_serialize_leaves_tensorstore(
 
     saveable_tree = jtu.tree_map(_is_saveable, unwrapped_tree)
 
-    # Create Orbax checkpointer with OCDBT enabled
+    # Create async checkpointer
     handler = ocp.PyTreeCheckpointHandler(use_ocdbt=True)
-    checkpointer = ocp.Checkpointer(handler)
+    async_checkpointer = ocp.AsyncCheckpointer(handler, timeout_secs=60 * 30)
 
     # Create save args for async checkpointing
     save_args = jtu.tree_map(lambda x: ocp.SaveArgs() if x is not None else None, saveable_tree)
 
-    # Save asynchronously
-    checkpointer.save(checkpoint_dir, saveable_tree, save_args=save_args)
+    # Save asynchronously with force=True to allow overwriting existing checkpoints
+    async_checkpointer.save(checkpoint_dir, saveable_tree, save_args=save_args, force=True)
 
-    # Wait for completion and call callback
-    checkpointer.wait_until_finished()
-
+    # Wait for completion
+    async_checkpointer.wait_until_finished()
+    logger.info(f"Committed checkpoint to {checkpoint_dir} using OCDBT")
     if commit_callback is not None:
         commit_callback()
-    else:
-        logger.info(f"Committed checkpoint to {checkpoint_dir} using OCDBT")
 
 
 def _fs_paths_from_key_paths(checkpoint_dir, leaf_key_paths):
@@ -121,7 +113,6 @@ def tree_deserialize_leaves_tensorstore(
     pytree,
     axis_mapping: Optional[ResourceMapping] = None,
     mesh: Optional[Mesh] = None,
-    manager: Optional[Any] = None,  # Deprecated, kept for backward compatibility
     *,
     allow_missing: bool = False,
 ):
@@ -177,6 +168,21 @@ def tree_deserialize_leaves_tensorstore(
             restored_tree = unwrapped_tree
         else:
             raise
+
+    # Check for None values that were in the checkpoint but not in the exemplar
+    # This handles the case where a field was None when saved but has a value in the exemplar
+    def _check_missing_values(exemplar_val, restored_val):
+        # If checkpoint has None but exemplar has a value, this is a missing field
+        if restored_val is None and exemplar_val is not None:
+            if not allow_missing:
+                raise FileNotFoundError(
+                    "Checkpoint is missing a required field (saved as None, but exemplar has a value)"
+                )
+            # If allow_missing, keep the exemplar value
+            return exemplar_val
+        return restored_val
+
+    restored_tree = jtu.tree_map(_check_missing_values, unwrapped_tree, restored_tree)
 
     # Rebuild NamedArrays from the restored arrays
     def _rebuild_named_array(like, array):

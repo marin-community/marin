@@ -441,8 +441,6 @@ def test_checkpoint_backward_compatibility_with_old_tensorstore():
     """
     import orbax.checkpoint as ocp
 
-    from levanter.tensorstore_serialization import tree_deserialize_leaves_tensorstore
-
     In = Axis("in", 2)
     Out = Axis("out", 1)
 
@@ -459,22 +457,21 @@ def test_checkpoint_backward_compatibility_with_old_tensorstore():
         filtered_model0 = eqx.filter(model0, True)
 
         # Save using OLD format (use_ocdbt=False) to simulate existing checkpoints
-        def _unwrap_named_array(x):
-            from haliax.util import is_named_array
+        from haliax.util import is_named_array
 
+        def _unwrap_named_array(x):
             if is_named_array(x):
                 return x.array
             return x
 
         import jax.tree_util as jtu
 
-        unwrapped = jtu.tree_map(_unwrap_named_array, filtered_model0, is_leaf=lambda x: is_named_array(x))
+        unwrapped = jtu.tree_map(_unwrap_named_array, filtered_model0, is_leaf=is_named_array)
 
         # Save with OLD non-OCDBT format
         old_handler = ocp.PyTreeCheckpointHandler(use_ocdbt=False)
         old_checkpointer = ocp.Checkpointer(old_handler)
-        old_checkpointer.save(tmpdir, unwrapped)
-        old_checkpointer.wait_until_finished()
+        old_checkpointer.save(tmpdir, unwrapped, force=True)
 
         # Also save metadata as the checkpoint system expects it
         import json

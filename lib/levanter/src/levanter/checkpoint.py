@@ -30,8 +30,8 @@ from levanter.tensorstore_serialization import (
     tree_serialize_leaves_tensorstore,
 )
 from levanter.utils import fsspec_utils
-from levanter.utils.types import FilterSpec
 from levanter.utils.jax_utils import broadcast_one_to_all
+from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +109,6 @@ class Checkpointer:
                 continue
             if prev_until >= until:
                 raise ValueError("Step policies must be sorted by 'until' value")
-
-        # Note: Orbax handles async checkpointing internally, no need for explicit manager
 
         if jax.process_index() == 0:
             self._async_checkpoint_remover_queue: queue.Queue[str] = queue.Queue(maxsize=-1)
@@ -251,7 +249,7 @@ class Checkpointer:
         return current_policy.every
 
     def wait_until_finished(self):
-        # Orbax handles async waiting internally
+        # Async waiting is handled within tree_serialize_leaves_tensorstore
         if jax.process_index() == 0:
             while self._checkpoint_being_removed is not None or not self._async_checkpoint_remover_queue.empty():
                 time.sleep(0.2)
@@ -356,7 +354,6 @@ def save_checkpoint(
     If the path does not exist, it will be created.
 
     This method is jax.Array-aware and will save shards in a way that can be restored.
-    Uses OCDBT format which consolidates checkpoint files for better performance.
 
     Args:
         tree: the PyTree to save
