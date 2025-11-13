@@ -191,7 +191,9 @@ def _restore_ocdbt(
     # Check for missing paths
     if missing_paths:
         if not allow_missing:
-            raise FileNotFoundError(f"Missing {len(missing_paths)} arrays in OCDBT checkpoint: {missing_paths}")
+            raise FileNotFoundError(
+                f"Missing {len(missing_paths)} arrays in OCDBT checkpoint: {missing_paths}. Found: {existing_keys}"
+            )
         else:
             to_log = f"Several keys were missing from the OCDBT checkpoint {checkpoint_root}:"
             leaf_paths = jtu.tree_leaves(leaf_key_paths, is_leaf=_is_named_or_none)
@@ -312,8 +314,8 @@ def tree_deserialize_leaves_tensorstore(
     # ok, so, jax really doesn't want any Nones in the leaves here, so we need to temporarily partition the pytree
     real_indices = [i for i, x in enumerate(shardings_leaves) if x is not None]
 
-    # Check if this is an OCDBT checkpoint by looking for manifest.ocdbt
-    # If the user gave us a subpath, we need to walk up to find the root
+    # The checkpoint code has munged our paths to add the subpath in explicitly to the `checkpoint_dir`.
+    # For OCDBT, we need to determine the actual root and then adjust the requests tensor paths accordingly.
     def find_checkpoint_root(path):
         """Find the checkpoint root by looking for metadata.json"""
         current = path
@@ -329,6 +331,10 @@ def tree_deserialize_leaves_tensorstore(
     is_ocdbt_checkpoint = fsspec_utils.exists(ocdbt_manifest_path)
 
     if is_ocdbt_checkpoint:
+        subpath = os.path.relpath(checkpoint_dir, start=find_checkpoint_root(checkpoint_dir))
+        if subpath != ".":
+            logger.info("Adjusting paths for OCDBT checkpoint with subpath: %s", subpath)
+            paths = [os.path.join(subpath, p) for p in paths]
         deser_leaves, indices_to_load = _restore_ocdbt(
             checkpoint_root, paths, real_indices, shardings_leaves, leaf_key_paths, manager, allow_missing
         )
