@@ -3,30 +3,69 @@
 
 # References:
 # * Orbax: https://github.com/google/orbax/blob/11d2934ecfff77e86b5e07d0fef02b67eff4511b/orbax/checkpoint/pytree_checkpoint_handler.py#L312
+import asyncio
 import logging
 import os
+import urllib.parse
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, Optional
 
 import equinox
+import haliax as hax
 import jax
 import jax.experimental.array_serialization.serialization as array_ser
 import jax.numpy as jnp
 import jax.tree_util as jtu
 import numpy as np
-from jax.sharding import Mesh, Sharding
-from jaxtyping import PyTree
-
-import haliax as hax
+import tensorstore as ts
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
 from haliax.util import is_named_array
+from jax.sharding import Mesh, Sharding
+from jaxtyping import PyTree
 
 from levanter.utils import fsspec_utils, jax_utils
 
-
 logger = logging.getLogger(__name__)
+
+
+def _create_ocdbt_spec(checkpoint_root: str, array_path: str | None) -> dict:
+    """
+    Create a TensorStore spec with OCDBT (Optionally-Cooperative Distributed B-Tree) enabled.
+
+    Args:
+        checkpoint_root: Base path for the checkpoint (e.g., "/checkpoints/step-100")
+        array_path: Relative path for this specific array (e.g., "model/layer0/weight")
+
+    Returns:
+        TensorStore spec dict with OCDBT kvstore driver
+    """
+    parsed = urllib.parse.urlparse(checkpoint_root)
+
+    spec: dict[str, Any] = {"driver": "zarr3", "kvstore": {"driver": "ocdbt", "base": {}}}
+
+    if parsed.scheme in ("", "file"):
+        spec["kvstore"]["base"] = {"driver": "file", "path": checkpoint_root}
+    elif parsed.scheme == "gs":
+        bucket = parsed.netloc
+        gcs_path = parsed.path.lstrip("/")
+        spec["kvstore"]["base"] = {"driver": "gcs", "bucket": bucket, "path": gcs_path}
+    else:
+        raise ValueError(f"Unsupported protocol: {parsed.scheme}. Supported: file, gs")
+
+    if array_path:
+        spec["kvstore"]["path"] = array_path
+
+    return spec
+
+
+async def _list_ocdbt_keys(checkpoint_root: str) -> list[str]:
+    """List all keys in an OCDBT TensorStore kvstore."""
+    kvstore_spec = _create_ocdbt_spec(checkpoint_root, array_path=None)["kvstore"]
+    kvstore = await ts.KvStore.open(kvstore_spec)
+    keys_bytes = await kvstore.list()
+    return [key.decode("utf-8") for key in keys_bytes]
 
 
 def _is_named_or_none(x):
@@ -51,7 +90,10 @@ def tree_serialize_leaves_tensorstore(
         jax.tree.leaves(pytree, is_leaf=is_named_array)
     )
 
-    paths = _fs_paths_from_key_paths(checkpoint_dir, leaf_key_paths)
+    def path_from_key_path(key_path):
+        return "/".join(key_path.split("."))
+
+    paths = jtu.tree_map(path_from_key_path, leaf_key_paths)
 
     # make a dataclass since tuples are pytrees
     @dataclass
@@ -81,18 +123,16 @@ def tree_serialize_leaves_tensorstore(
     if commit_callback is None:
         commit_callback = lambda: logger.info("Committed checkpoint to Tensorstore")  # noqa
 
-    manager.serialize_with_paths(arrays, paths, on_commit_callback=commit_callback)
+    # Create specs for each array
+    tspecs = []
+    for path in paths:
+        spec = _create_ocdbt_spec(checkpoint_dir, path)
+        tspecs.append(spec)
+
+    manager.serialize(arrays, tspecs, on_commit_callback=commit_callback)
 
     if manager_was_none:
         manager.wait_until_finished()
-
-
-def _fs_paths_from_key_paths(checkpoint_dir, leaf_key_paths):
-    def path_from_key_path(key_path):
-        return os.path.join(checkpoint_dir, *key_path.split("."))
-
-    paths = jtu.tree_map(path_from_key_path, leaf_key_paths)
-    return paths
 
 
 def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Sharding]:
@@ -113,6 +153,121 @@ def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Shard
 
 def _fully_replicated_sharding(mesh):
     return hax.partitioning.sharding_for_axis((), {}, mesh)
+
+
+def _restore_ocdbt(
+    checkpoint_root: str,
+    paths: list[str],
+    real_indices: list[int],
+    shardings_leaves: list,
+    leaf_key_paths,
+    manager: array_ser.GlobalAsyncCheckpointManager,
+    allow_missing: bool,
+) -> tuple[list, list[int]]:
+    """Restore arrays from an OCDBT checkpoint."""
+    # List all keys in the OCDBT kvstore to check existence
+    existing_keys = set(asyncio.run(_list_ocdbt_keys(checkpoint_root)))
+
+    paths_to_load = []
+    indices_to_load = []
+    shardings_to_load = []
+    missing_paths = []
+    missing_indices = []
+
+    for i in real_indices:
+        path = paths[i]
+        # Check if this relative path exists in the kvstore
+        zarr_metadata_key = f"{path}/zarr.json"
+
+        if zarr_metadata_key not in existing_keys:
+            missing_paths.append(path)
+            missing_indices.append(i)
+            continue
+
+        paths_to_load.append(path)
+        indices_to_load.append(i)
+        shardings_to_load.append(shardings_leaves[i])
+
+    # Check for missing paths
+    if missing_paths:
+        if not allow_missing:
+            raise FileNotFoundError(
+                f"Missing {len(missing_paths)} arrays in OCDBT checkpoint: {missing_paths}. Found: {existing_keys}"
+            )
+        else:
+            to_log = f"Several keys were missing from the OCDBT checkpoint {checkpoint_root}:"
+            leaf_paths = jtu.tree_leaves(leaf_key_paths, is_leaf=_is_named_or_none)
+            for i in missing_indices:
+                to_log += f"\n  - {leaf_paths[i]}"
+            logger.warning(to_log)
+
+    tspecs_to_load = []
+    for path in paths_to_load:
+        spec = _create_ocdbt_spec(checkpoint_root, path)
+        tspecs_to_load.append(spec)
+
+    deser_leaves = manager.deserialize(shardings=shardings_to_load, tensorstore_specs=tspecs_to_load)
+    return deser_leaves, indices_to_load
+
+
+def _restore_old_ts(
+    checkpoint_dir: str,
+    paths: list[str],
+    real_indices: list[int],
+    shardings_leaves: list,
+    leaf_key_paths,
+    manager: array_ser.GlobalAsyncCheckpointManager,
+    allow_missing: bool,
+) -> tuple[list, list[int]]:
+    """
+    Restore arrays from an old (non-OCDBT) tensorstore checkpoint.
+
+    Args:
+        checkpoint_dir: Directory containing the checkpoint
+        paths: Full paths for all arrays
+        real_indices: Indices of non-None shardings
+        shardings_leaves: Flattened list of shardings
+        leaf_key_paths: Key paths for logging
+        manager: Checkpoint manager
+        allow_missing: Whether to allow missing arrays
+
+    Returns:
+        Tuple of (deserialized_leaves, indices_to_load)
+    """
+    paths = [os.path.join(checkpoint_dir, p) for p in paths]
+
+    paths_to_load = []
+    indices_to_load = []
+    shardings_to_load = []
+
+    missing_paths = []
+    missing_indices = []
+
+    for i in real_indices:
+        path = paths[i]
+
+        if not fsspec_utils.exists(path):
+            missing_paths.append(path)
+            missing_indices.append(i)
+            continue
+
+        paths_to_load.append(path)
+        indices_to_load.append(i)
+        shardings_to_load.append(shardings_leaves[i])
+
+    # Check for missing paths
+    if missing_paths:
+        if not allow_missing:
+            raise FileNotFoundError(f"Missing paths: {missing_paths}")
+        else:
+            to_log = f"Several keys were missing from the checkpoint directory {checkpoint_dir}:"
+            leaf_paths = jtu.tree_leaves(leaf_key_paths, is_leaf=_is_named_or_none)
+            for i in missing_indices:
+                to_log += f"\n  - {leaf_paths[i]}"
+            logger.warning(to_log)
+
+    deser_leaves = manager.deserialize_with_paths(shardings=shardings_to_load, paths=paths_to_load)
+    return deser_leaves, indices_to_load
 
 
 def tree_deserialize_leaves_tensorstore(
@@ -150,7 +305,7 @@ def tree_deserialize_leaves_tensorstore(
 
     # TODO: support ShapeDtypeStructs that are not NamedArrays
     leaf_key_paths = jax_utils.leaf_key_paths(shardings, is_leaf=_is_named_or_none)
-    paths = _fs_paths_from_key_paths(checkpoint_dir, leaf_key_paths)
+    paths = jtu.tree_map(lambda kp: "/".join(kp.split(".")), leaf_key_paths)
     paths = jtu.tree_leaves(paths, is_leaf=lambda x: x is None)
 
     shardings_leaves, shardings_structure = jtu.tree_flatten(shardings, is_leaf=_is_named_or_none)
@@ -158,40 +313,37 @@ def tree_deserialize_leaves_tensorstore(
     assert len(shardings_leaves) == len(paths)
     # ok, so, jax really doesn't want any Nones in the leaves here, so we need to temporarily partition the pytree
     real_indices = [i for i, x in enumerate(shardings_leaves) if x is not None]
-    paths_to_load = []
-    indices_to_load = []
-    shardings_to_load = []
 
-    missing_paths = []
-    missing_indices = []
+    # The checkpoint code has munged our paths to add the subpath in explicitly to the `checkpoint_dir`.
+    # For OCDBT, we need to determine the actual root and then adjust the requests tensor paths accordingly.
+    def find_checkpoint_root(path):
+        """Find the checkpoint root by looking for metadata.json"""
+        current = path
+        while current and current != os.path.dirname(current):
+            metadata_path = os.path.join(current, "metadata.json")
+            if fsspec_utils.exists(metadata_path):
+                return current
+            current = os.path.dirname(current)
+        return path  # fallback to original path
 
-    for i in real_indices:
-        path = paths[i]
+    checkpoint_root = find_checkpoint_root(checkpoint_dir)
+    ocdbt_manifest_path = os.path.join(checkpoint_root, "manifest.ocdbt")
+    is_ocdbt_checkpoint = fsspec_utils.exists(ocdbt_manifest_path)
 
-        if not fsspec_utils.exists(path):
-            missing_paths.append(path)
-            missing_indices.append(i)
-            continue
-
-        paths_to_load.append(path)
-        indices_to_load.append(i)
-        shardings_to_load.append(shardings_leaves[i])
-
-    # ok now check for missing paths
-    if missing_paths:
-        if not allow_missing:
-            raise FileNotFoundError(f"Missing paths: {missing_paths}")
-        else:
-            to_log = f"Several keys were missing from the checkpoint directory {checkpoint_dir}:"
-            leaf_paths = jtu.tree_leaves(leaf_key_paths, is_leaf=_is_named_or_none)
-            for i in missing_indices:
-                to_log += f"\n  - {leaf_paths[i]}"
-            logger.warning(to_log)
-
-    deser_leaves = manager.deserialize_with_paths(shardings=shardings_to_load, paths=paths_to_load)
+    if is_ocdbt_checkpoint:
+        subpath = os.path.relpath(checkpoint_dir, start=find_checkpoint_root(checkpoint_dir))
+        if subpath != ".":
+            logger.info("Adjusting paths for OCDBT checkpoint with subpath: %s", subpath)
+            paths = [os.path.join(subpath, p) for p in paths]
+        deser_leaves, indices_to_load = _restore_ocdbt(
+            checkpoint_root, paths, real_indices, shardings_leaves, leaf_key_paths, manager, allow_missing
+        )
+    else:
+        deser_leaves, indices_to_load = _restore_old_ts(
+            checkpoint_dir, paths, real_indices, shardings_leaves, leaf_key_paths, manager, allow_missing
+        )
 
     # now we need to recreate the original structure
-
     out_leaves = jax.tree.leaves(pytree, is_leaf=_is_named_or_none)
     assert len(out_leaves) == len(shardings_leaves)
     # out_leaves = [None] * len(shardings_leaves)

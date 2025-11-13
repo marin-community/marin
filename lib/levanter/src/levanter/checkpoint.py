@@ -31,8 +31,8 @@ from levanter.tensorstore_serialization import (
     tree_serialize_leaves_tensorstore,
 )
 from levanter.utils import fsspec_utils
-from levanter.utils.types import FilterSpec
 from levanter.utils.jax_utils import broadcast_one_to_all
+from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
 
@@ -355,13 +355,12 @@ def save_checkpoint(
     is_temporary: bool = True,
 ):
     """
-    Save a checkpoint to a given path using TensorStore.
+    Save a checkpoint to a given path using TensorStore with OCDBT.
+    Old checkpoints (non-OCDBT) can still be loaded for backward compatibility.
 
     If the path does not exist, it will be created.
 
-    If training_state is None, no training state will be saved.
-
-    This method is jax.Array-aware and will save shards in a way that can be restored
+    This method is jax.Array-aware and will save shards in a way that can be restored.
 
     Args:
         tree: the PyTree to save
@@ -411,10 +410,14 @@ def load_checkpoint(
     allow_partial: bool = False,
 ) -> M:
     """
-    Load a checkpoint from a given path. If discover_latest is True, then the latest checkpoint
-    in a subdirectory of the given path will be loaded. If subpath is not None, then the checkpoint
-    loads only that subpath of the checkpoint. This is useful for loading, e.g., just the model and not
-    the entire training state.
+    Load a checkpoint from a given path using TensorStore.
+
+    Supports both OCDBT (new format) and non-OCDBT (old format) checkpoints through automatic
+    format detection.
+
+    If discover_latest is True, then the latest checkpoint in a subdirectory of the given path
+    will be loaded. If subpath is not None, then the checkpoint loads only that subpath of the
+    checkpoint. This is useful for loading, e.g., just the model and not the entire training state.
 
     Args:
         tree: an exemplar of the tree to load. Can be a PyTree[ShapeDTypeStruct] instead of a PyTree[Any]
