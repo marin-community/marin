@@ -1094,6 +1094,7 @@ class KitokenWrapper:
         """
         self._hf_tokenizer = hf_tokenizer
         self._kitoken = self._load_kitoken()
+        self._load_special_token_config()
 
     def _load_kitoken(self):
         """Load Kitoken encoder from HF tokenizer's backend."""
@@ -1106,31 +1107,74 @@ class KitokenWrapper:
 
         # Save tokenizer JSON to temp file and load with Kitoken
         tokenizer_str = self._hf_tokenizer.backend_tokenizer.to_str()
-        with tempfile.NamedTemporaryFile(mode='w', suffix=".json", prefix="kitoken_", delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix=".json", prefix="kitoken_", delete=True) as f:
             f.write(tokenizer_str)
-            temp_path = f.name
+            f.flush()
+            return kitoken.Kitoken.from_file(f.name)
 
-        try:
-            return kitoken.Kitoken.from_file(temp_path)
-        finally:
-            os.unlink(temp_path)
+    def _load_special_token_config(self):
+        """Extract special token configuration from Kitoken templates."""
+        config = self._kitoken.config()
+        self._prefix_tokens = []
+        self._suffix_tokens = []
 
-    def encode(self, text, add_special_tokens=True, **kwargs):
-        """Encode text to token IDs using Kitoken."""
-        return self._kitoken.encode(text) # add_special_tokens=add_special_tokens)
+        # Parse templates to find special tokens to add
+        templates = config.get('templates', [])
+        for template in templates:
+            position = template.get('position')
+            content = template.get('content')
+            if content and hasattr(self._hf_tokenizer, 'convert_tokens_to_ids'):
+                token_id = self._hf_tokenizer.convert_tokens_to_ids(content)
+                if token_id is not None:
+                    if position in ('Start', 'SubSequenceStart'):
+                        self._prefix_tokens.append(token_id)
+                    elif position in ('End', 'SubSequenceEnd'):
+                        self._suffix_tokens.append(token_id)
+
+    def encode(self, text, add_special_tokens=True, text_pair=None, **kwargs):
+        """Encode text to token IDs using Kitoken with optional special token addition."""
+        # For unsupported kwargs, fall back to HF tokenizer
+        if kwargs:
+            return self._hf_tokenizer.encode(text, text_pair=text_pair, add_special_tokens=add_special_tokens, **kwargs)
+
+        # Use Kitoken for fast encoding (handles special tokens in text with encode_specials=True)
+        token_ids_0 = self._kitoken.encode(text, encode_specials=True)
+        token_ids_1 = self._kitoken.encode(text_pair, encode_specials=True) if text_pair is not None else None
+
+        # Add prefix/suffix special tokens if requested
+        if add_special_tokens:
+            result = self._prefix_tokens + token_ids_0
+            if token_ids_1 is not None:
+                # For pairs, add prefix before second sequence too
+                result = result + self._prefix_tokens + token_ids_1
+            result = result + self._suffix_tokens
+            return result
+        else:
+            # No special tokens, just concatenate if pair
+            if token_ids_1 is not None:
+                return token_ids_0 + token_ids_1
+            return token_ids_0
 
     def decode(self, token_ids, skip_special_tokens=False, **kwargs):
-        """Decode token IDs to text using Kitoken."""
-        return self._hf_tokenizer.decode(token_ids, skip_special_tokens=skip_special_tokens)
-        # return self._kitoken.decode(token_ids, skip_special_tokens=skip_special_tokens)
+        """Decode token IDs to text using HF tokenizer."""
+        return self._hf_tokenizer.decode(token_ids, skip_special_tokens=skip_special_tokens, **kwargs)
 
-    def __call__(self, text, **kwargs):
-        """Tokenize text using Kitoken."""
-        assert "text_pair" not in kwargs, "text_pair not supported in KitokenWrapper.__call__"
+    def __call__(self, text, text_pair=None, add_special_tokens=True, **kwargs):
+        """Tokenize text using Kitoken with optional special token addition."""
+        # For unsupported kwargs, fall back to HF tokenizer
+        if kwargs:
+            return self._hf_tokenizer(text, text_pair=text_pair, add_special_tokens=add_special_tokens, **kwargs)
+
+        # Use Kitoken for fast encoding
         if isinstance(text, list):
-            input_ids = [self._kitoken.encode(t) for t in text]
+            input_ids = []
+            for i, t in enumerate(text):
+                t_pair = text_pair[i] if text_pair is not None else None
+                ids = self.encode(t, text_pair=t_pair, add_special_tokens=add_special_tokens)
+                input_ids.append(ids)
         else:
-            input_ids = self._kitoken.encode(text)
+            input_ids = self.encode(text, text_pair=text_pair, add_special_tokens=add_special_tokens)
+
         from transformers import BatchEncoding
         return BatchEncoding({"input_ids": input_ids})
     
