@@ -436,24 +436,30 @@ def test_load_from_checkpoint_allows_partial_checkpoints():
         assert hax.all(hax.equal(loaded.b, model1.b))
 
 
-def test_ocdbt_checkpoint_creates_manifest():
+def test_ocdbt_merges_files():
     """Test that OCDBT checkpoints create manifest.ocdbt file."""
-    key0 = jax.random.PRNGKey(0)
-    initial_state = _make_state(10, key0)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        save_checkpoint(
-            initial_state,
-            step=initial_state.step,
-            checkpoint_path=tmpdir,
-        )
+    for depth in [1, 5, 20]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            key0 = jax.random.PRNGKey(0)
+            initial_state = _make_state(10, key0, depth=depth)
+            save_checkpoint(
+                initial_state,
+                step=initial_state.step,
+                checkpoint_path=tmpdir,
+            )
 
-        # Check that manifest.ocdbt exists
-        # The manifest should be in one of the checkpoint subdirectories
-        checkpoint_dir = pathlib.Path(tmpdir)
-        manifest_files = list(checkpoint_dir.rglob("manifest.ocdbt"))
+            # Check that manifest.ocdbt exists
+            # The manifest should be in one of the checkpoint subdirectories
+            checkpoint_dir = pathlib.Path(tmpdir)
+            checkpoint_files = list(checkpoint_dir.rglob("*"))
+            assert (
+                len(checkpoint_files) < 20
+            ), f"There should be fewer than 20 files in the checkpoint directory: {checkpoint_files}"
+            print(depth, len(checkpoint_files), checkpoint_files)
 
-        assert len(manifest_files) > 0, "OCDBT manifest.ocdbt file should exist in checkpoint"
+            manifest_files = list(checkpoint_dir.rglob("manifest.ocdbt"))
+            assert len(manifest_files) > 0, "OCDBT manifest.ocdbt file should exist in checkpoint"
 
 
 def test_backward_compatibility_with_ocdbt():
