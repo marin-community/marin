@@ -44,6 +44,7 @@ from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from tqdm_loggable.auto import tqdm
+from transformers import BatchEncoding
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
@@ -1167,7 +1168,6 @@ class KitokenWrapper:
         if kwargs:
             return self._hf_tokenizer(text, text_pair=text_pair, add_special_tokens=add_special_tokens, **kwargs)
 
-        # Use Kitoken for fast encoding
         if isinstance(text, list):
             input_ids = []
             for i, t in enumerate(text):
@@ -1177,14 +1177,13 @@ class KitokenWrapper:
         else:
             input_ids = self.encode(text, text_pair=text_pair, add_special_tokens=add_special_tokens)
 
-        from transformers import BatchEncoding
-
         return BatchEncoding({"input_ids": input_ids})
 
+    def batch_encode_plus(self, texts, **kwargs):
+        return [self.encode(text, **kwargs) for text in texts]
+
     def batch_encode(self, texts, **kwargs):
-        """Batch encode texts using Kitoken."""
-        assert kwargs["pair_texts"] is None, "pair_texts not supported in KitokenWrapper.batch_encode"
-        return [self._kitoken.encode(text) for text in texts]
+        return [self.encode(text, **kwargs) for text in texts]
 
     def batch_decode(self, sequences, skip_special_tokens=False, **kwargs):
         """Batch decode token sequences using Kitoken."""
