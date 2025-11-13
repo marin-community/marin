@@ -52,8 +52,7 @@ from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -64,6 +63,7 @@ from marin.execution.executor import (
     unwrap_versioned_value,
 )
 from marin.processing.tokenize import (
+    HfDatasetSpec,
     TokenizeConfig,
     TokenizerStep,
     add_validation_sets_to_mixture,
@@ -121,7 +121,7 @@ def default_download(
 
 def default_tokenize(
     name: str,
-    dataset: InputName | ExecutorStep | str,
+    dataset: InputName | ExecutorStep | str | HfDatasetSpec,
     tokenizer: str,
     options: CacheOptions | None = None,
     format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
@@ -134,8 +134,9 @@ def default_tokenize(
     Args:
         name: The name of the tokenized dataset. This is used to form the output path for the executor step.
             `tokenized/` will be prepended to the name.
-        dataset:  The dataset to tokenize. This can be an InputName, ExecutorStep, or a string as a
-            path to the dataset or a HuggingFace dataset ID.
+        dataset:  The dataset to tokenize. This can be an InputName, ExecutorStep, a string as a
+            path to the dataset or a HuggingFace dataset ID, or ``HfDatasetSpec`` to specify a
+            dataset with a particular subset name.
         tokenizer: string HuggingFace tokenizer name. Should be the same as you intend to use in the tokenizer
             spec for the training run.
         options: CacheOptions to use for tokenization. You typically don't need to set this.
@@ -149,7 +150,15 @@ def default_tokenize(
     """
 
     # sniff out if it's a HuggingFace dataset
-    if isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
+    if isinstance(dataset, HfDatasetSpec):
+        config = HfTokenizeConfig(
+            id=dataset.id,
+            name=dataset.name,
+            cache_path=this_output_path(),
+            tokenizer=ensure_versioned(tokenizer),
+            format=format,
+        )
+    elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
         config = HfTokenizeConfig(
             id=dataset,
             cache_path=this_output_path(),
@@ -179,7 +188,13 @@ def default_tokenize(
 
 @lru_cache  # LRU to make the executor happier
 def default_validation_sets(tokenizer: str, base_path: str = "tokenized/") -> dict[str, TokenizerStep]:
-    return paloma_tokenized(base_path=base_path, tokenizer=tokenizer)
+    # Avoid circular dependencies
+    # TODO: Will - break apart defaults a bit
+    from experiments.evals.exp1600_uncheatable_evals import uncheatable_eval_tokenized
+
+    validation_sets = dict(paloma_tokenized(base_path=base_path, tokenizer=tokenizer))
+    validation_sets.update(uncheatable_eval_tokenized(base_path=base_path, tokenizer=tokenizer))
+    return validation_sets
 
 
 def simulated_epoching_train(
@@ -330,6 +345,9 @@ def default_train(
             quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             watch=train_config.watch,
+            profiler=train_config.profiler,
+            profiler_start_step=train_config.profiler_start_step,
+            profiler_num_steps=train_config.profiler_num_steps,
             axis_resources={
                 # Special axes for MoEs
                 "token": (ResourceAxis.REPLICA, ResourceAxis.DATA),
@@ -388,7 +406,7 @@ def default_train(
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size) :,} parameter model for "
+            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
             f"{model_config.seq_len} (seq_len) "
@@ -579,7 +597,11 @@ def _prepare_data_config(
         validation_sets = {}
 
     if isinstance(tokenized, InputName | ExecutorStep):
-        pretraining_data = lm_data_config(training_set=tokenized, validation_sets=validation_sets)
+        pretraining_data = lm_data_config(
+            training_set=tokenized,
+            validation_sets=validation_sets,
+            permutation_type="feistel",
+        )
     else:
         # TODO: would be better to expose hooks in levanter instead of relying on mixtures
         pretraining_data = tokenized

@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# dependencies = ["PyGithub>=2.3.0", "wandb"]
+# ///
 # Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,8 +20,7 @@
 This script updates the `docs/reports/index.md` file with new experiment GitHub issues.
 
 Usage:
-pip install PyGithub
-python scripts/itemize_experiment_issues.py
+    ./scripts/pm/itemize_experiment_issues.py
 """
 
 import os
@@ -136,7 +138,9 @@ def update_reports_md(new_reports):
         new_content += f"- {title}\n"
 
         # Add GitHub issue link
-        new_content += f"    - [GitHub Issue #{report['issue_num']}](https://github.com/marin-community/marin/issues/{report['issue_num']}) [![#{report['issue_num']}]({report['badge_url']})](https://github.com/marin-community/marin/issues/{report['issue_num']})\n"
+        issue_url = f"https://github.com/marin-community/marin/issues/{report['issue_num']}"
+        badge_link = f"[![#{report['issue_num']}]({report['badge_url']})]({issue_url})"
+        new_content += f"    - [GitHub Issue #{report['issue_num']}]({issue_url}) {badge_link}\n"
 
         # Add WandB links if present
         for url in report["urls"]["wandb"]:

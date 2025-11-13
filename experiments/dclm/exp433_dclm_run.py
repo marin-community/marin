@@ -68,10 +68,14 @@ DCLM_MIXTURE_COMPONENTS_NEOX_WRONG = {
 # Define a mixture that has only dclm_baseline data; set the weights of the other datasets to 0
 
 dclm_mixture_config_wrong = lm_mixture_data_config(
-    components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG, weights=DCLM_MIXTURE_WEIGHTS
+    components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG,
+    weights=DCLM_MIXTURE_WEIGHTS,
+    permutation_type="linear",
 )
 dclm_baseline_only_config_wrong = lm_mixture_data_config(
-    components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG, weights=DCLM_BASELINE_ONLY_MIXTURE
+    components=DCLM_MIXTURE_COMPONENTS_NEOX_WRONG,
+    weights=DCLM_BASELINE_ONLY_MIXTURE,
+    permutation_type="linear",
 )
 
 ### Define the model and training configurations

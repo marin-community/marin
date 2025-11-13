@@ -1,0 +1,102 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "haliax"
+# Set for release builds
+#version = "1.3"
+authors = [
+  { name="David Hall", email="dlwh@cs.stanford.edu" },
+]
+description = "Named Tensors for Legible Deep Learning in JAX"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+]
+dependencies = [
+     "jax >= 0.6.2",
+    "equinox>=0.10.6",
+    "jaxtyping>=0.2.20",
+    "jmp>=0.0.4",
+    "safetensors>=0.4.3",
+    "aqtp>=0.8.2",
+]
+dynamic =[ "version" ]
+
+
+[dependency-groups]
+dev = [
+    "pytest >= 7.4.0",
+    "mypy >= 0.910",
+    "mkdocs >= 1.4.3",
+    "mkdocs-material >= 7.3.3",
+    "mkdocstrings >= 0.22.0",
+    "mkdocs-literate-nav >= 0.6.0",
+    "mkdocs-macros-plugin >= 0.7.0",
+    "mkdocstrings-python >= 1.1.2",
+    "mkdocs-include-markdown-plugin",
+    "pymdown-extensions",
+    "pygments",
+    "chex>=0.1.86",
+    "safetensors>=0.4.3",
+    "pre-commit",
+]
+
+
+[tool.hatch.version]
+path = "src/haliax/__about__.py"
+
+[options]
+packages = ["haliax", "haliax.*"]
+
+[options.package_data]
+haliax = ["src/haliax/*"]
+
+[tool.black]
+line-length = 119
+target-version = ["py311"]
+preview = true
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+lines_after_imports = 2
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+line_length = 119
+src_paths = ["src", "tests"]
+
+[project.urls]
+"Homepage" = "https://github.com/stanford-crfm/haliax"
+"Bug Tracker" = "https://github.com/stanford-crfm/haliax/issues/"
+"Documentation" = "https://haliax.readthedocs.io/en/latest/"
+
+[tool.ruff.lint]
+ignore = [ "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741" ]
+
+[tool.setuptools.package-data]
+"haliax" = ["*.pyi"]
+
+[tool.coverage.report]
+exclude_also = [
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+    "[.][.][.]"
+    ]

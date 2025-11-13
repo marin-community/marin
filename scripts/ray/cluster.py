@@ -25,17 +25,19 @@ Usage:
 from dataclasses import dataclass
 import json
 import logging
-import stat
+import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
-from typing import Optional
 
 import click
+import yaml
 
-from src.marin.cluster import cleanup, gcp, monitoring, ray
-from src.marin.cluster.config import (
+from marin.cluster import gcp, monitoring, ray
+from marin.cluster.cleanup import cleanup_iteration, submit_cleanup_cron_job
+from marin.cluster.config import (
     RayClusterConfig,
     find_config_by_region,
     list_available_configs,
@@ -52,9 +54,8 @@ def check_cluster_head_running(config_path: str) -> bool:
     """
     try:
         # Try to connect to the dashboard to see if cluster is running
-        with ray.ray_dashboard(config_path):
-            # If we can get cluster resources, the head is running
-            ray.get_ray_cluster_resources()
+        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+            ray.print_cluster_status()
             return True
     except Exception:
         # Any exception means we couldn't connect to a running cluster
@@ -64,19 +65,33 @@ def check_cluster_head_running(config_path: str) -> bool:
 @dataclass
 class Context:
     verbose: bool = False
-    config_file: Optional[str] = None
-    config_obj: Optional[RayClusterConfig] = None
+    config_file: str | None = None
+    config_obj: RayClusterConfig | None = None
 
 
 # Context object to pass global options between commands
 @click.group()
-@click.option("--config", help="Path to cluster config file")
+@click.option("--config", help="Path to Ray cluster config file (infra/marin-*.yaml)")
 @click.option("--cluster", help="Cluster name to connect to")
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
 @click.pass_context
 def cli(ctx, config, cluster, verbose):
     """Marin cluster management CLI."""
     ctx.ensure_object(Context)
+    # Auto-load shared env from .marin.yaml if present (common workflow)
+    try:
+        marin_yaml = Path(".marin.yaml")
+        if marin_yaml.exists():
+            with open(marin_yaml, "r") as f:
+                data = yaml.safe_load(f) or {}
+            env = data.get("env", {}) or {}
+            if isinstance(env, dict):
+                for k, v in env.items():
+                    if k not in os.environ:
+                        os.environ[k] = "" if v is None else str(v)
+                logger.debug(f"Loaded env vars from {marin_yaml}")
+    except Exception as e:
+        logger.warning(f"Failed to load .marin.yaml: {e}")
     if cluster:
         config = find_config_by_region(cluster)
 
@@ -100,7 +115,6 @@ def start_cluster(ctx):
         print("Error: --config required for cluster commands", file=sys.stderr)
         sys.exit(1)
 
-    # Check if cluster head is already running
     if check_cluster_head_running(config_path):
         print(f"Warning: Cluster head for {config_obj.cluster_name} appears to already be running.")
         print("This may cause conflicts or unexpected behavior.")
@@ -110,6 +124,16 @@ def start_cluster(ctx):
 
     print(f"Starting cluster {config_obj.cluster_name}...")
     subprocess.run(["ray", "up", "-y", config_path], check=True)
+
+    print("Starting automated cleanup cron...")
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+        job_id = submit_cleanup_cron_job(
+            project=config_obj.project_id,
+            cluster=config_obj.cluster_name,
+            zone=config_obj.zone,
+            interval=600,
+        )
+        print(f"Cleanup cron job started: {job_id}")
 
 
 @cli.command("stop-cluster")
@@ -121,14 +145,37 @@ def stop_cluster(ctx):
         print("Error: --config required for cluster commands", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Stopping cluster {config_obj.cluster_name}...")
-    subprocess.run(["ray", "down", "-y", config_path], check=True)
+    _stop_cluster_internal(config_obj, config_path)
     print("Cluster stopped successfully!")
+
+
+def _stop_cluster_internal(config_obj: RayClusterConfig, config_path: str):
+    """Terminate a Ray cluster.
+
+    N.B. We terminate the Ray coordinator node first to avoid restarting any new TPUs while
+    shutting down. We then explicitly shut down the TPU nodes in parallel. Ray serializes this
+    and often times out by default.
+
+    Finally we call ray down to finish up any leftover resources.
+    """
+    print(f"Terminating coordinator node for cluster {config_obj.cluster_name}...")
+    terminated_head = gcp.terminate_head_node(config_obj.cluster_name, config_obj.project_id, config_obj.zone)
+    if terminated_head:
+        print(f"Terminated head node: {terminated_head}")
+
+    print(f"Terminating TPUs for cluster {config_obj.cluster_name} in zone {config_obj.zone}...")
+    terminated_tpus = gcp.terminate_tpus_in_cluster(config_obj.project_id, config_obj.zone, config_obj.cluster_name)
+    if terminated_tpus:
+        print(f"Terminated {len(terminated_tpus)} TPUs")
+
+    print(f"Cleaning up Ray cluster state for {config_obj.cluster_name}...")
+    subprocess.run(["ray", "down", "-y", config_path], check=False)  # check=False since instances may already be gone
 
 
 @cli.command("restart-cluster")
 @click.pass_context
-def restart_cluster(ctx):
+@click.option("--preserve-jobs", help="Whether to preserve jobs during restart", default=True)
+def restart_cluster(ctx, preserve_jobs):
     """Restart cluster with job preservation."""
     config_obj, config_path = ctx.obj.config_obj, ctx.obj.config_file
     if not config_obj or not config_path:
@@ -136,24 +183,49 @@ def restart_cluster(ctx):
         sys.exit(1)
 
     print(f"Restarting cluster {config_obj.cluster_name}...")
+    backup_dir = tempfile.TemporaryDirectory()
 
-    # Backup jobs
-    print("Backing up jobs...")
-    with tempfile.TemporaryDirectory() as backup_dir:
-        with ray.ray_dashboard(config_path):
-            ray.backup_jobs(config_path, backup_dir)
+    if preserve_jobs:
+        print("Backing up jobs...")
+        try:
+            with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+                ray.backup_jobs(config_path, str(backup_dir))
+        except Exception as e:
+            print()
+            print("=" * 60)
+            print(
+                f"Failed to back up jobs from cluster {config_obj.cluster_name} ({e}) "
+                + "(disable with --preserve-jobs=0)"
+            )
+            print("=" * 60)
+            print("Proceed with shutdown? (y/n): ", end="")
+            choice = input().strip().lower()
+            if choice != "y":
+                print("Aborting cluster restart.")
+                return
+            print("Proceeding with cluster restart without job preservation.")
 
-        # Restart cluster
-        print("Stopping cluster...")
-        subprocess.run(["ray", "down", "-y", config_path], check=True)
+    print("Stopping cluster...")
+    _stop_cluster_internal(config_obj, config_path)
 
-        print("Starting cluster...")
-        subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
+    print("Starting cluster...")
+    subprocess.run(["ray", "up", "-y", "--no-config-cache", config_path], check=True)
 
-        # Restore jobs
+    if preserve_jobs:
         print("Restoring jobs...")
-        with ray.ray_dashboard(config_path):
-            ray.restore_jobs(config_path, backup_dir)
+        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+            ray.restore_jobs(str(backup_dir))
+
+    # Auto-start cleanup cron
+    print("Starting automated cleanup cron...")
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+        job_id = submit_cleanup_cron_job(
+            project=config_obj.project_id,
+            cluster=config_obj.cluster_name,
+            zone=config_obj.zone,
+            interval=600,
+        )
+        print(f"Cleanup cron job started: {job_id}")
 
     print("Cluster restarted successfully!")
 
@@ -163,7 +235,7 @@ def restart_cluster(ctx):
 @click.pass_context
 def cluster_backup_jobs(ctx, backup_dir):
     """Backup Ray jobs to specified directory."""
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         Path(backup_dir).mkdir(parents=True, exist_ok=True)
         ray.backup_jobs(ctx.obj.config_file, backup_dir)
         print(f"Jobs backed up successfully to {backup_dir}")
@@ -174,8 +246,8 @@ def cluster_backup_jobs(ctx, backup_dir):
 @click.pass_context
 def cluster_restore_jobs(ctx, backup_dir):
     """Restore Ray jobs from specified directory."""
-    with ray.ray_dashboard(ctx.obj.config_file):
-        ray.restore_jobs(ctx.obj.config_file, backup_dir)
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        ray.restore_jobs(backup_dir)
         print(f"Jobs restored successfully from {backup_dir}")
 
 
@@ -183,9 +255,35 @@ def cluster_restore_jobs(ctx, backup_dir):
 @click.pass_context
 def get_status(ctx):
     """Get cluster status."""
-    with ray.ray_dashboard(ctx.obj.config_file):
-        status_result = ray.get_ray_cluster_resources()
-        print(json.dumps(status_result, indent=2))
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        ray.print_cluster_status()
+
+
+@cli.command("cluster-info")
+@click.pass_context
+def cluster_info(ctx):
+    """Display cluster information. Shows all clusters if no config specified."""
+    config_path = ctx.obj.config_file
+
+    if config_path:
+        # Show info for specific cluster
+        info = ray.load_cluster_info(config_path)
+        clusters = {info.cluster_name: info}
+    else:
+        # Discover and show all active clusters
+        clusters = ray.discover_active_clusters()
+        if not clusters:
+            print("No active clusters found")
+            return
+
+    print(f"Active Clusters ({len(clusters)}):")
+    for name, info in sorted(clusters.items()):
+        print(f"\n{name}:")
+        print(f"  Config: {info.config_path}")
+        print(f"  Zone: {info.zone}")
+        print(f"  Project: {info.project}")
+        print(f"  Internal IP: {info.head_ip}")
+        print(f"  External IP: {info.external_ip}")
 
 
 @cli.command("list-configs")
@@ -253,7 +351,7 @@ def ssh_head(ctx, extra_args):
 @click.pass_context
 def list_workers(ctx):
     """List Ray workers."""
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         print(json.dumps(ray.list_workers(), indent=2))
 
 
@@ -262,7 +360,7 @@ def list_workers(ctx):
 @click.pass_context
 def list_jobs(ctx):
     """List Ray jobs."""
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         print(json.dumps(ray.list_jobs(), indent=2))
 
 
@@ -275,30 +373,56 @@ def submit_job(ctx, entrypoint, working_dir, runtime_env):
     """Submit a Ray job."""
     runtime_env_dict = json.loads(runtime_env) if runtime_env else None
 
-    with ray.ray_dashboard(ctx.obj.config_file):
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
         job_id = ray.submit_job(entrypoint, working_dir, runtime_env_dict)
         print(f"Job submitted with ID: {job_id}")
 
 
-# Clean commands
-@cli.command("clean-tpu-processes")
-@click.option("--tpu-type", default="v4-8", help="TPU type (default: v4-8)")
+@cli.command("stop-job")
+@click.argument("job_id")
 @click.pass_context
-def clean_tpu_processes(ctx, tpu_type):
-    """Kill straggling TPU processes."""
-    cleanup.kill_tpu_processes(tpu_type)
-    print(f"Submitted cleanup job for TPU type {tpu_type}")
+def stop_job(ctx, job_id):
+    """Stop a running Ray job."""
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        ray.stop_job(job_id)
+        print(f"Job {job_id} stop requested")
 
 
-@cli.command("clean-preempted-tpus")
+# Clean commands
+@cli.command("start-cleanup")
+@click.option("--interval", default=600, help="Cleanup check interval in seconds (default: 600)")
+@click.pass_context
+def start_cleanup(ctx, interval):
+    """Start automated cleanup cron job."""
+    config_obj = ctx.obj.config_obj
+    if not config_obj:
+        print("Error: --config required for cleanup commands", file=sys.stderr)
+        sys.exit(1)
+
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        job_id = submit_cleanup_cron_job(
+            project=config_obj.project_id,
+            cluster=config_obj.cluster_name,
+            zone=config_obj.zone,
+            interval=interval,
+        )
+        print(f"Cleanup cron job started: {job_id}")
+
+
+@cli.command("run-cleanup")
 @click.option("--dry-run", is_flag=True, help="Show what would be cleaned")
 @click.pass_context
-def clean_preempted_tpus(ctx, dry_run):
-    """Clean preempted TPU nodes."""
+def run_cleanup(ctx, dry_run):
+    """Run a single cleanup iteration."""
     config_obj = ctx.obj.config_obj
-    deleted = gcp.cleanup_preempted_tpus(config_obj.project_id, config_obj.zone, dry_run)
-    action = "Would delete" if dry_run else "Deleted"
-    print(f"{action} {len(deleted)} preempted TPUs: {deleted}")
+    if not config_obj:
+        print("Error: --config required for cleanup commands", file=sys.stderr)
+        sys.exit(1)
+
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file, ray_init=True)):
+        print("Running cleanup iteration...")
+        results = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=dry_run)
+        print(f"Result: {results}")
 
 
 # Top-level commands
@@ -321,7 +445,7 @@ def add_worker(ctx, tpu_type, capacity, name):
 
 
 @cli.command("init-worker")
-@click.option("--name")
+@click.argument("name")
 @click.pass_context
 def init_worker(ctx, name):
     """Initialize Ray on a manual TPU worker."""
@@ -331,19 +455,51 @@ def init_worker(ctx, name):
     print("Worker initialized successfully!")
 
 
-@cli.command("open-dashboard")
+@cli.command("dashboard")
+@click.option("--port", default=9999, help="Proxy dashboard port")
 @click.pass_context
-def open_dashboard(ctx):
-    """Open Ray dashboard in browser."""
-    with ray.ray_dashboard(ctx.obj.config_file) as dashboard_url:
-        print(f"Ray dashboard is running at: {dashboard_url}")
-        print("Press Ctrl+C to stop the dashboard.")
-        # Keep the context manager alive until interrupted
-        try:
-            while True:
-                pass
-        except KeyboardInterrupt:
-            print("Stopping Ray dashboard...")
+def open_dashboard(ctx, port):
+    """Open dashboard for all active Ray clusters."""
+    config_obj = ctx.obj.config_obj
+    if config_obj:
+        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)) as dashboard:
+            print(f"Connected to {config_obj.cluster_name} dashboard at {dashboard.get_dashboard_url()}")
+            try:
+                time.sleep(86400)
+            except KeyboardInterrupt:
+                print("\nShutting down...")
+        return
+
+    with ray.ray_dashboard(ray.DashboardConfig(proxy_port=port)) as conn:
+        if not conn.clusters:
+            print("No active clusters found")
+            return
+
+        if conn.proxy:
+            print(f"📊 Proxy dashboard: {conn.get_dashboard_url()}")
+            print()
+
+        print(f"Connected to {len(conn.clusters)} clusters:")
+        for name, info in conn.clusters.items():
+            ports = conn.port_mappings[name]
+            direct_url = f"http://localhost:{ports.dashboard_port}"
+            proxy_url = f"http://localhost:{conn.proxy.proxy_port}/{name}/" if conn.proxy else ""
+            urls = f"{direct_url} | {proxy_url}" if proxy_url else direct_url
+            print(f"  {name} ({info.zone}) - {urls}")
+            print(f"    IP: {info.external_ip} ({info.head_ip})")
+            dashboard_url = f"http://localhost:{ports.dashboard_port}"
+            gcs_url = f"localhost:{ports.gcs_port}"
+            api_url = f"localhost:{ports.api_port}"
+            print(f"    Dashboard: {dashboard_url} | GCS: {gcs_url} | API: {api_url}")
+            print()
+
+        if conn.proxy:
+            print("\nPress Ctrl+C to stop")
+
+            try:
+                time.sleep(86400)
+            except KeyboardInterrupt:
+                print("\nShutting down...")
 
 
 @cli.command("monitor-cluster")
@@ -357,12 +513,13 @@ def monitor_cluster(ctx, wandb):
         sys.exit(1)
 
     config_zones = {config_obj.region: [config_obj.zone]}
-    health_data = monitoring.monitor_cluster_health(
-        config_zones=config_zones, project=config_obj.project_id, log_to_wandb=wandb
-    )
+    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+        health_data = monitoring.monitor_cluster_health(
+            config_zones=config_zones, project=config_obj.project_id, log_to_wandb=wandb
+        )
 
-    summary = monitoring.get_cluster_health_summary(health_data)
-    print(summary)
+        summary = monitoring.get_cluster_health_summary(health_data)
+        print(summary)
 
     if wandb:
         print("Metrics logged to wandb")

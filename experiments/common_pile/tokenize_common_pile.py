@@ -14,12 +14,11 @@
 
 """Tokenization and mixture configs for the Common Pile v0.1 dataset."""
 
-from __future__ import annotations
+from levanter.data.dataset import PermType
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
 
@@ -312,6 +311,18 @@ stackv2_html_filtered = ExecutorStep(
     override_output_path="raw/common_pile/stackv2_html_filtered-92c9fa8",
 )
 
+stackv2 = ExecutorStep(
+    name="raw/common_pile/stackv2",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="common-pile/stackv2",
+        revision="d0e3266",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="raw/common_pile/stackv2-d0e3266",
+)
+
 ubuntu_irc_filtered = ExecutorStep(
     name="raw/common_pile/ubuntu_irc_filtered",
     fn=download_hf,
@@ -434,57 +445,57 @@ COMMON_PILE_DATASETS: dict[str, TokenizerStep] = {
 # Effective token counts for the main training stage (in teratokens)
 # Weights pulled from https://huggingface.co/datasets/common-pile/comma_v0.1_training_dataset under Main stage
 COMMA_MAIN_MIXTURE_WEIGHTS = {
-    "comma/arxiv_abstracts": 0.00342,
-    "comma/arxiv_papers": 0.036,
-    "comma/biodiversity_heritage_library": 0.00245,
-    "comma/caselaw_access_project": 0.0197,
-    "comma/cccc": 0.0912,
-    "comma/data_provenance_initiative": 0.00552,
-    "comma/doab": 0.018,
-    "comma/foodista": 0.00015,
-    "comma/github_archive": 0.066,
-    "comma/library_of_congress": 0.00237,
-    "comma/libretexts": 0.00056,
-    "comma/news": 0.00038,
-    "comma/oercommons": 0.00007,
-    "comma/peS2o": 0.2598,
-    "comma/pre_1929_books": 0.0124,
-    "comma/pressbooks": 0.00084,
-    "comma/project_gutenberg": 0.0057,
-    "comma/public_domain_review": 0.00001,
-    "comma/pubmed": 0.0366,
-    "comma/python_enhancement_proposals": 0.00002,
-    "comma/regulations": 0.0084,
-    "comma/stackexchange": 0.1434,
-    "comma/stackv2_edu": 0.1356,
-    "comma/stackv2_html": 0.0024,
-    "comma/ubuntu_irc": 0.0114,
-    "comma/uk_hansard": 0.0138,
-    "comma/usgpo": 0.0022,
-    "comma/uspto": 0.03935,
-    "comma/wikimedia": 0.0948,
-    "comma/wikiteam": 0.0172,
-    "comma/youtube": 0.0047,
+    "common_pile/arxiv_abstracts": 0.00342,
+    "common_pile/arxiv_papers": 0.036,
+    "common_pile/biodiversity_heritage_library": 0.00245,
+    "common_pile/caselaw_access_project": 0.0197,
+    "common_pile/cccc": 0.0912,
+    "common_pile/data_provenance_initiative": 0.00552,
+    "common_pile/doab": 0.018,
+    "common_pile/foodista": 0.00015,
+    "common_pile/github_archive": 0.066,
+    "common_pile/library_of_congress": 0.00237,
+    "common_pile/libretexts": 0.00056,
+    "common_pile/news": 0.00038,
+    "common_pile/oercommons": 0.00007,
+    "common_pile/peS2o": 0.2598,
+    "common_pile/pre_1929_books": 0.0124,
+    "common_pile/pressbooks": 0.00084,
+    "common_pile/project_gutenberg": 0.0057,
+    "common_pile/public_domain_review": 0.00001,
+    "common_pile/pubmed": 0.0366,
+    "common_pile/python_enhancement_proposals": 0.00002,
+    "common_pile/regulations": 0.0084,
+    "common_pile/stackexchange": 0.1434,
+    "common_pile/stackv2_edu": 0.1356,
+    "common_pile/stackv2_html": 0.0024,
+    "common_pile/ubuntu_irc": 0.0114,
+    "common_pile/uk_hansard": 0.0138,
+    "common_pile/usgpo": 0.0022,
+    "common_pile/uspto": 0.03935,
+    "common_pile/wikimedia": 0.0948,
+    "common_pile/wikiteam": 0.0172,
+    "common_pile/youtube": 0.0047,
 }
 
 # Effective token counts for the cooldown stage (in teratokens)
 # Weights pulled from https://huggingface.co/datasets/common-pile/comma_v0.1_training_dataset under Cooldown stage
 COMMA_COOLDOWN_MIXTURE_WEIGHTS = {
-    "comma/arxiv_papers": 0.003,
-    "comma/cccc": 0.00456,
-    "comma/data_provenance_initiative": 0.00184,
-    "comma/doab": 0.006,
-    "comma/foodista": 0.00005,
-    "comma/libretexts": 0.00019,
-    "comma/news": 0.00013,
-    "comma/oercommons": 0.00002,
-    "comma/peS2o": 0.00433,
-    "comma/pressbooks": 0.00028,
-    "comma/public_domain_review": 0.0,
-    "comma/python_enhancement_proposals": 0.00001,
-    "comma/stackexchange": 0.00597,
-    "comma/stackv2_edu": 0.00678,
-    "comma/wikimedia": 0.00632,
+    "common_pile/arxiv_papers": 0.003,
+    "common_pile/cccc": 0.00456,
+    "common_pile/data_provenance_initiative": 0.00184,
+    "common_pile/doab": 0.006,
+    "common_pile/foodista": 0.00005,
+    "common_pile/libretexts": 0.00019,
+    "common_pile/news": 0.00013,
+    "common_pile/oercommons": 0.00002,
+    "common_pile/peS2o": 0.00433,
+    "common_pile/pressbooks": 0.00028,
+    "common_pile/public_domain_review": 0.0,
+    "common_pile/python_enhancement_proposals": 0.00001,
+    "common_pile/stackexchange": 0.00597,
+    "common_pile/stackv2_edu": 0.00678,
+    "common_pile/wikimedia": 0.00632,
 }
 
 
@@ -500,18 +511,26 @@ def common_pile_tokenized(*, tokenizer: str = llama3_tokenizer) -> dict[str, Tok
     return tokenized
 
 
-def comma_main_mixture(*, tokenizer: str = llama3_tokenizer):
+def comma_main_mixture(*, tokenizer: str = llama3_tokenizer, permutation_type: PermType = "feistel"):
     """LmMixtureDatasetConfig for the main training stage."""
     tokenized = common_pile_tokenized(tokenizer=tokenizer)
     components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
-    return lm_mixture_data_config(components=components, weights=COMMA_MAIN_MIXTURE_WEIGHTS)
+    return lm_mixture_data_config(
+        components=components,
+        weights=COMMA_MAIN_MIXTURE_WEIGHTS,
+        permutation_type=permutation_type,
+    )
 
 
-def comma_cooldown_mixture(*, tokenizer: str = llama3_tokenizer):
+def comma_cooldown_mixture(*, tokenizer: str = llama3_tokenizer, permutation_type="feistel"):
     """LmMixtureDatasetConfig for the cooldown stage."""
     tokenized = common_pile_tokenized(tokenizer=tokenizer)
     components = {f"common_pile/{dataset}": tokenized[f"common_pile/{dataset}"] for dataset in COMMON_PILE_DATASETS}
-    return lm_mixture_data_config(components=components, weights=COMMA_COOLDOWN_MIXTURE_WEIGHTS)
+    return lm_mixture_data_config(
+        components=components,
+        weights=COMMA_COOLDOWN_MIXTURE_WEIGHTS,
+        permutation_type=permutation_type,
+    )
 
 
 if __name__ == "__main__":

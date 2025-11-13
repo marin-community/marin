@@ -35,6 +35,7 @@ from experiments.llama import compute_num_parameters
 from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
+from experiments.common_pile.tokenize_common_pile import comma_main_mixture
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.resources import TpuPodConfig
 
@@ -263,6 +264,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
     """Generate executor steps for an ISOFlop sweep."""
 
     steps: list[ExecutorStep] = []
+    metadata = []
     vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
 
     for budget in config.budgets:
@@ -319,9 +321,10 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                     f"tpu={tpu_type}",
                 ),
             )
+            metadata.append((budget, hidden_size, num_layers, batch_size, train_steps))
             steps.append(step)
 
-    return steps
+    return steps, metadata
 
 
 def generate_isoflop_sweep(
@@ -330,11 +333,19 @@ def generate_isoflop_sweep(
     **kwargs,
 ) -> list[ExecutorStep]:
     sweep_cfg = IsoFlopSweepConfig(tokenized_dataset=tokenized, **kwargs)
-    steps = generate_isoflop_steps(sweep_cfg, experiment_name)
+    steps, metadata = generate_isoflop_steps(sweep_cfg, experiment_name)
 
-    return steps
+    return steps, metadata
 
+
+MARIN_SCALING_SUITES = {
+    "nemotron": generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt"),
+    "common_pile": generate_isoflop_sweep(comma_main_mixture(permutation_type="linear"), experiment_name="comma-mix"),
+    "common_pile_feistel": generate_isoflop_sweep(
+        comma_main_mixture(permutation_type="feistel"), experiment_name="comma-mix-feistel"
+    ),
+}
 
 if __name__ == "__main__":
-    steps = generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt")
-    executor_main(steps=steps)
+    steps = MARIN_SCALING_SUITES["common_pile"]
+    executor_main(steps=steps[0])

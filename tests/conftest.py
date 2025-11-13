@@ -13,22 +13,12 @@
 # limitations under the License.
 
 import os
-import sys
+import shutil
 import time
-from pathlib import Path
 
-import fasteners
 import pytest
 import ray
 from pydantic import BaseModel
-
-from marin.evaluation.evaluators.evaluator import ModelConfig
-
-default_engine_kwargs = {"enforce_eager": True, "max_model_len": 1024}
-
-large_model_engine_kwargs = {"max_model_len": 1024, "tensor_parallel_size": 8}
-
-default_generation_params = {"max_tokens": 16}
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
@@ -39,35 +29,8 @@ class WorkerConfig(BaseModel):
     cluster_address: str | None = None
 
 
-@pytest.fixture(scope="module")
-def model_config():
-    config = ModelConfig(
-        name="test-llama-200m",
-        path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
-        engine_kwargs=default_engine_kwargs,
-        generation_params=default_generation_params,
-    )
-    yield config
-    config.destroy()
-
-
 @pytest.fixture
-def gcsfuse_mount_model_path():
-    return "/opt/gcsfuse_mount/perplexity-models/llama-200m"
-
-
-@pytest.fixture
-def gcsfuse_mount_llama_70b_model_path():
-    return "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
-
-
-@pytest.fixture
-def gcsfuse_mount_llama_8b_model_path():
-    return "/opt/gcsfuse_mount/models/meta-llama--Llama-3-1-8B-Instruct"
-
-
-@pytest.fixture
-def test_file_path():
+def test_crawl_file_path():
     return "gs://marin-us-east5/documents/chris-test/test_50.jsonl.gz"
 
 
@@ -81,104 +44,75 @@ def current_date_time():
 
 @pytest.fixture(scope="session")
 def ray_tpu_cluster(tmp_path_factory, worker_id):
-    if os.getenv("PYTEST_XDIST_WORKER_COUNT") is None or "1":
-        # Single worker, start Ray locally
-        if os.getenv("START_RAY_TPU_CLUSTER") == "true":
-            ray.init(
-                namespace="marin",
-                resources={"TPU": 8, "TPU-v6e-8-head": 1, "head_node": 1},
-                num_cpus=120,
-                ignore_reinit_error=True,
-            )
-        elif os.getenv("START_RAY_CPU_CLUSTER") == "true":
-            ray.init(namespace="marin", num_cpus=8, resources={"head_node": 1}, ignore_reinit_error=True)
-        else:
-            ray.init(namespace="marin", num_cpus=8, resources={"head_node": 1}, ignore_reinit_error=True)
-        yield
-        ray.shutdown()
-        return
+    """Start a Ray cluster for testing.
 
-    root_tmp_dir = tmp_path_factory.getbasetemp().parent
+    When running under pytest-xdist, we need to ensure each cluster is isolated
+    by specifying unique temp directories and ports.
 
-    # best effort isolation in case we fail to clean up between test runs
-    # pytest doesn't provide a unique temp path for a session when running
-    # in xdist. we round to 100 seconds to reduce the risk of workers
-    # getting different timestamps
-    tmp_timestamp = time.time() // 100000
-    root_tmp_dir = root_tmp_dir / f"ray_cluster_{tmp_timestamp}"
-    root_tmp_dir.mkdir(parents=True, exist_ok=True)
-    config_file = Path(root_tmp_dir) / "ray_cluster_config.json"
-    lock_file = Path(root_tmp_dir) / "ray_cluster_config.lock"
-    rw_lock = fasteners.InterProcessReaderWriterLock(str(lock_file))
+    We additionally set the "RAY_LOCAL_CLUSTER" environment variable to signal to code like
+    executor that this is a test cluster. This allows us to skip things like dependency collection
+    that are unnecessary in a test environment.
+    """
+    # make ray less noisy
+    os.environ["RAY_USAGE_STATS_ENABLED"] = "0"
+    os.environ["RAY_SCHEDULER_EVENTS"] = "0"
+    if not worker_id or worker_id == "master":
+        worker_id = 0
+    else:
+        worker_id = int(worker_id.replace("gw", ""))
+    worker_offset = 10 * worker_id
 
-    def _start_cluster():
-        print(f"Worker {worker_id} starting Ray cluster...", file=sys.stderr)
+    # N.B. We cannot use the default temp directory as Ray will complain with:
+    # AF_UNIX path length cannot exceed 103 bytes
+    tmp_path = f"/tmp/ray_tests/{os.getpid()}/{worker_id}"
 
-        if os.getenv("START_RAY_TPU_CLUSTER") == "true":
-            ray.init(
-                namespace="marin",
-                resources={"TPU": 8, "TPU-v6e-8-head": 1, "head_node": 1},
-                num_cpus=120,
-                ignore_reinit_error=True,
-            )
-        elif os.getenv("START_RAY_CPU_CLUSTER") == "true":
-            ray.init(namespace="marin", num_cpus=8, resources={"head_node": 1}, ignore_reinit_error=True)
-        else:
-            ray.init(namespace="marin", num_cpus=8, resources={"head_node": 1}, ignore_reinit_error=True)
-        return ray.worker._global_node.address
+    init_args = {
+        "address": "local",
+        "namespace": "marin",
+        # In case the user is running a Ray cluster already
+        "dashboard_port": 10265 + worker_offset,
+        "_temp_dir": tmp_path,
+        "ignore_reinit_error": True,
+    }
+    print("Starting on worker_id", worker_id, "with init_args", init_args)
+    if os.getenv("START_RAY_TPU_CLUSTER") == "true":
+        tpu_resource_name = "TPU-v5litepod-4-head"
+        chip_count = 4
 
-    def _init_worker():
-        with rw_lock.write_lock():
-            if not config_file.exists():
-                # First worker to acquire lock - initialize cluster
-                config = WorkerConfig(cluster_address=_start_cluster(), worker_count=1)
-                with open(config_file, "w") as f:
-                    f.write(config.model_dump_json())
-                return config
+        print(f"Starting TPU Ray cluster with resources TPU:{chip_count}, {tpu_resource_name}:1")
+        ctx = ray.init(
+            resources={"TPU": chip_count, tpu_resource_name: 1, "head_node": 1},
+            num_cpus=120,
+            **init_args,
+        )
+    elif os.getenv("START_RAY_CPU_CLUSTER") == "true":
+        ctx = ray.init(
+            **init_args,
+            num_cpus=8,
+            resources={"head_node": 1},
+        )
+    else:
+        ctx = ray.init(
+            **init_args,
+            num_cpus=8,
+            resources={"head_node": 1},
+        )
 
-            # Config file exists, increment worker count and connect to existing cluster
-            with open(config_file, "r") as f:
-                content = f.read().strip()
-            current_config = WorkerConfig.model_validate_json(content)
-            current_config.worker_count += 1
+    # update environment variable to pass Ray address to subprocesses
+    os.environ["RAY_ADDRESS"] = ctx.address_info["address"]
+    if ctx.address_info["webui_url"] is not None:
+        os.environ["RAY_DASHBOARD_URL"] = ctx.address_info["webui_url"]
+    os.environ["RAY_API_SERVER_ADDRESS"] = ctx.address_info["gcs_address"]
+    os.environ["RAY_LOCAL_CLUSTER"] = "1"
 
-            # Connect to the existing cluster
-            ray.init(
-                address=current_config.cluster_address,
-                namespace="marin",
-                ignore_reinit_error=True,
-            )
+    print(
+        f"Initialized ray with address={ctx.address_info['address']}",
+        f"webui_url={ctx.address_info['webui_url']}, gcs_address={ctx.address_info['gcs_address']}",
+    )
 
-            print(
-                f"Worker {worker_id} connected to cluster at {current_config.cluster_address}, "
-                f"worker count {current_config.worker_count}",
-                file=sys.stderr,
-            )
-            with open(config_file, "w") as f:
-                f.write(current_config.model_dump_json())
-
-            return current_config
-
-    def _shutdown_worker():
-        with rw_lock.write_lock():
-            with open(config_file, "r") as f:
-                content = f.read().strip()
-            current_config = WorkerConfig.model_validate_json(content)
-            current_config.worker_count -= 1
-            print(
-                f"Worker {worker_id} shutting down... worker count {current_config.worker_count}",
-                file=sys.stderr,
-            )
-            if current_config.worker_count == 0:
-                # Delete file under lock
-                config_file.unlink()
-                print("Last worker shutting down Ray cluster...", file=sys.stderr)
-                ray.shutdown()
-            else:
-                with open(config_file, "w") as f:
-                    f.write(current_config.model_dump_json())
-
-    config = _init_worker()
-    os.environ["RAY_ADDRESS"] = config.cluster_address
     yield
-    _shutdown_worker()
+
+    # cleanup temp directory
+    # Use _exiting_interpreter=True to force shutdown even if workers are hung
+    ray.shutdown(_exiting_interpreter=True)
+    shutil.rmtree(tmp_path, ignore_errors=True)

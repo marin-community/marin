@@ -14,26 +14,49 @@
 
 """Test whether vLLM can generate simple completions"""
 
-import os
+
+import shutil
 
 import pytest
-import ray
+
+from marin.evaluation.evaluators.evaluator import ModelConfig
 
 try:
-    from tests.vllm.utils import run_vllm_inference
+    from vllm import LLM, SamplingParams
 except ImportError:
     pytest.skip("vLLM is not installed", allow_module_level=True)
 
 
-@ray.remote(resources={"TPU-v6e-8-head": 1})
-def _test_llm_func(model_config):
-    model_path = model_config.ensure_downloaded("/tmp/test-llama-eval")
+def run_vllm_inference(model_path, **model_init_kwargs):
+    llm = LLM(model=model_path, **model_init_kwargs)
 
-    run_vllm_inference(model_path, **model_config.engine_kwargs)
+    sampling_params = SamplingParams(
+        max_tokens=100,
+        temperature=0.7,
+    )
 
-    model_config.destroy()
+    generated_texts = llm.generate(
+        "Hello, how are you?",
+        sampling_params=sampling_params,
+    )
+
+    return generated_texts
 
 
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
-def test_local_llm_inference(ray_tpu_cluster, model_config):
-    ray.get(_test_llm_func.remote(model_config))
+@pytest.mark.tpu_ci
+def test_local_llm_inference(ray_tpu_cluster):
+    config = ModelConfig(
+        name="test-llama-200m",
+        path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
+        engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
+        generation_params={"max_tokens": 16},
+    )
+    model_path = config.ensure_downloaded("/tmp/test-llama-eval")
+    run_vllm_inference(model_path, **config.engine_kwargs)
+    shutil.rmtree("/tmp/test-llama-eval")
+
+
+@pytest.mark.tpu_ci
+def test_large_model_inference():
+    gcsfuse_mount_llama_70b_model_path = "/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-70B-Instruct"
+    return run_vllm_inference(gcsfuse_mount_llama_70b_model_path, max_model_len=1024, tensor_parallel_size=8)

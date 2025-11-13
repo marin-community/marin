@@ -19,7 +19,6 @@ help:
 init:
 	conda install -c conda-forge pandoc
 	npm install -g pandiff
-	pre-commit install
 	uv sync
 	huggingface-cli login
 
@@ -28,16 +27,18 @@ clean:
 	find . -name "__pycache__" | xargs rm -rf
 
 check:
-	ruff check --output-format concise .
-	black --check .
-	mypy .
+	uv run python infra/pre-commit.py
 
-autoformat:
-	ruff check --fix --show-fixes .
-	black .
+fix:
+	@FILES=$$(git diff --name-only HEAD); \
+	if [ -n "$$FILES" ]; then \
+		uv run python infra/pre-commit.py --fix $$FILES && git add $$FILES; \
+	else \
+		echo "No modified files to fix"; \
+	fi
 
 lint:
-	pre-commit run --all-files
+	uv run python infra/pre-commit.py --all-files
 
 test:
 	export HUGGING_FACE_HUB_TOKEN=$HF_TOKEN
@@ -61,7 +62,7 @@ endif
 # Target to build the Docker image and tag it appropriately
 cluster_docker_build:
 	@echo "Building Docker image using Dockerfile: $(DOCKERFILE)"
-	docker buildx build --platform linux/amd64 -t '$(DOCKER_IMAGE_NAME):latest' -f $(DOCKERFILE) .
+	docker buildx build --platform linux/amd64 --output "type=docker,compression=zstd" -t '$(DOCKER_IMAGE_NAME):latest' -f $(DOCKERFILE) .
 	@echo "Tagging Docker image for each region and version..."
 	$(foreach region,$(CLUSTER_REPOS), \
 		$(foreach version,$(TAG_VERSIONS), \
@@ -69,10 +70,14 @@ cluster_docker_build:
 	@echo "Docker image build and tagging complete, updating config.py with latest version..."
 
 cluster_tag:
-	sed -i '' "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		sed -i '' -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" lib/marin/src/marin/cluster/config.py; \
+	else \
+		sed -i -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" lib/marin/src/marin/cluster/config.py; \
+	fi
 
 # Target to push the tagged Docker images to their respective Artifact Registries
-cluster_docker_push:
+cluster_docker_push: cluster_tag
 	@echo "Authenticating and preparing repositories..."
 	$(foreach region,$(CLUSTER_REPOS), \
 		gcloud auth configure-docker $(region)-docker.pkg.dev;)
@@ -83,9 +88,6 @@ cluster_docker_push:
 	$(foreach region,$(CLUSTER_REPOS), \
 		$(foreach version,$(TAG_VERSIONS), \
 			docker push '$(region)-docker.pkg.dev/hai-gcp-models/marin/$(DOCKER_IMAGE_NAME):$(version)';))
-	@echo "##################################################################"
-	@echo "Don't forget to update the tags in infra/update-cluster-configs.py"
-	@echo "##################################################################"
 
 cluster_docker_ghcr_push: cluster_docker_build
 	@echo "Pushing Docker image to GitHub Container Registry..."
@@ -112,13 +114,47 @@ configure_gcp_registry_all:
 
 
 # stuff for setting up locally
+install_uv:
+	@if ! command -v uv > /dev/null 2>&1; then \
+		echo "Installing uv..."; \
+		curl -LsSf https://astral.sh/uv/install.sh | sh; \
+		echo "uv installed. Please restart your shell or run: source ~/.cargo/env"; \
+	else \
+		echo "uv is already installed."; \
+	fi
+
+install_gcloud:
+	@if ! command -v gcloud > /dev/null 2>&1; then \
+		echo "Installing gcloud CLI..."; \
+		mkdir -p ~/.local; \
+		if [ "$$(uname)" = "Darwin" ]; then \
+			if [ "$$(uname -m)" = "arm64" ]; then \
+				GCLOUD_ARCHIVE="google-cloud-cli-darwin-arm.tar.gz"; \
+			else \
+				GCLOUD_ARCHIVE="google-cloud-cli-darwin-x86_64.tar.gz"; \
+			fi; \
+		else \
+			GCLOUD_ARCHIVE="google-cloud-cli-linux-x86_64.tar.gz"; \
+		fi; \
+		cd ~/.local && \
+		curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/$$GCLOUD_ARCHIVE && \
+		tar -xzf $$GCLOUD_ARCHIVE && \
+		rm $$GCLOUD_ARCHIVE && \
+		./google-cloud-sdk/install.sh --quiet --usage-reporting=false --path-update=true --command-completion=true && \
+		echo "gcloud installed. Please restart your shell or run: source ~/.zshrc (or ~/.bashrc)"; \
+	else \
+		echo "gcloud is already installed."; \
+	fi
+
+	gcloud config set project hai-gcp-models
+
 
 # get secret ssh key from gcp secrets
-get_secret_key:
+get_secret_key: install_gcloud
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PRIVATE_KEY > ~/.ssh/marin_ray_cluster.pem && \
 	chmod 600 ~/.ssh/marin_ray_cluster.pem
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
 
-dev_setup: get_secret_key
+dev_setup: install_uv install_gcloud get_secret_key
 	echo "Dev setup complete."

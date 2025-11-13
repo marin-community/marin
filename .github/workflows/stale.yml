@@ -1,0 +1,57 @@
+name: Close Stale Issues and PRs
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          # Issues: Mark stale after 83 days, close 7 days later (90 days total = 3 months)
+          days-before-issue-stale: 83
+          days-before-issue-close: 7
+
+          # PRs: Mark stale after 23 days, close 7 days later (30 days total = 1 month)
+          days-before-pr-stale: 23
+          days-before-pr-close: 7
+
+          # Stale issue configuration
+          stale-issue-label: 'stale'
+          stale-issue-message: |
+            This issue has been inactive for 83 days and is marked as stale.
+            If there is no further activity within 7 days, it will be automatically closed.
+            If you believe this issue is still relevant, please add a comment to keep it open.
+
+          close-issue-message: |
+            This issue has been automatically closed due to inactivity.
+            If you believe this issue is still relevant, please reopen it or create a new issue with updated information.
+
+          # Stale PR configuration
+          stale-pr-label: 'stale'
+          stale-pr-message: |
+            This pull request has been inactive for 23 days and is marked as stale.
+            If there is no further activity within 7 days, it will be automatically closed.
+            If you believe this PR should remain open, please add a comment or update the PR.
+
+          close-pr-message: |
+            This pull request has been automatically closed due to inactivity.
+            If you would like to continue working on this, please reopen it or create a new PR.
+
+          # Remove stale label when there is activity
+          remove-stale-when-updated: true
+
+          # Increase operations limit for larger repos
+          operations-per-run: 300
+
+          # Exempt issues/PRs with these labels from being marked stale
+          exempt-issue-labels: 'pinned,security,bug,enhancement'
+          exempt-pr-labels: 'pinned,security,work-in-progress,wip'

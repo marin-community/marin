@@ -15,8 +15,8 @@
 import pytest
 
 try:
+    from marin.post_training.environments.load_environments import load_environment_from_spec
     from marin.post_training.environments.olym_math_env import OlymMathEnv
-    from marin.post_training.load_environments import load_environment_from_spec
 except ImportError:
     pytest.skip("Post training dependencies not available in CI.", allow_module_level=True)
 

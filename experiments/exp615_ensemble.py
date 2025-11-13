@@ -69,7 +69,9 @@ class ExperimentConfig:
     experiment_name: str
     quality_classifier_model_paths: list[str | ExecutorStep]
     keep_fraction: float = 0.1  # Keep 20% of the documents
-    cooldown_config: QualityAblationConfig = field(default_factory=lambda: QualityAblationConfig())
+    cooldown_config: QualityAblationConfig = field(
+        default_factory=lambda: QualityAblationConfig(permutation_type="linear")
+    )
 
 
 def get_model_path(model_path: str | ExecutorStep):
@@ -141,7 +143,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         attribute_path=output_path_of(ensemble_step, input_basename),
                         name=versioned(f"{config.experiment_name}-quality"),
                         label="score",
-                        threshold=versioned(None),
+                        lower_threshold=versioned(None),
                         keep_fraction=versioned(config.keep_fraction),
                     ),
                 ],

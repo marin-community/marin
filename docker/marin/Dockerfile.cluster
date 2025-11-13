@@ -1,4 +1,21 @@
-FROM rayproject/ray:2.45.0-py311-cpu
+# Google Cloud SDK
+FROM ubuntu:22.04 AS gcloud-sdk
+RUN apt-get update && apt-get install -y \
+    curl \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp
+RUN curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz && tar -xf google-cloud-cli-linux-x86_64.tar.gz
+RUN /tmp/google-cloud-sdk/install.sh --quiet --path-update false --command-completion false
+RUN /tmp/google-cloud-sdk/bin/gcloud components install alpha --quiet
+
+# Rust toolchain
+FROM rust:1.82-slim AS rust-builder
+
+
+# Main build
+FROM rayproject/ray:2.49.2-py311-cpu
 ARG VLLM_VERSION=0.6.6.post1
 
 # For some reason, ray destroys the apt sources list, so we need to restore it
@@ -6,84 +23,75 @@ RUN sudo rm -rf /var/lib/apt/lists/* \
  && sudo apt-get update \
  && sudo apt-get install -y --no-install-recommends \
       apt-transport-https \
+      build-essential \
       ca-certificates \
-      gnupg \
-      ubuntu-keyring \
- && sudo apt-get update \
- && sudo apt-get install -y --no-install-recommends \
       clang \
+      cmake \
       curl \
+      docker.io \
+      fuse \
       g++ \
-      vim \
+      gnupg \
+      liblz4-dev \
       libpython3.11 \
       libpython3.11-dev \
-      docker.io \
-      cmake \
+      libre2-dev \
+      libssl-dev \
+      libuchardet-dev \
+      lsb-release \
+      pkg-config \
+      ubuntu-keyring \
+      vim \
+      zlib1g-dev \
  && sudo rm -rf /var/lib/apt/lists/*
 
-# Install general dependencies
-RUN sudo apt-get update && sudo apt-get install -y clang curl g++ vim libpython3.11 libpython3.11-dev docker.io cmake
-
-# Setup gcsfuse
-RUN sudo apt install lsb-release -y
+# Setup gcsfuse repository and install
 RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
 RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-RUN sudo apt-get update && sudo apt-get install fuse gcsfuse -y
-RUN sudo mkdir /opt/gcsfuse_mount
-RUN sudo chown -R $(whoami) /opt/gcsfuse_mount
+RUN sudo apt-get update && sudo apt-get install -y gcsfuse
+RUN sudo mkdir /opt/gcsfuse_mount && sudo chown -R ray /opt/gcsfuse_mount
 
-# Install resiliparse build dependencies (requires libre2-dev>=2022-04-01)
-RUN sudo apt-get install -y build-essential zlib1g-dev liblz4-dev libuchardet-dev libre2-dev
-# Install lexbor from source, since the apt package for jammy is corrupted
-RUN set && curl -Lf https://github.com/lexbor/lexbor/archive/refs/tags/v2.3.0.tar.gz > lexbor.tar.gz \
-    && tar -xf lexbor.tar.gz \
-    && (cd lexbor-* && mkdir build \
-        && cmake \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr \
-            -DLEXBOR_BUILD_SHARED=ON \
-            -DLEXBOR_BUILD_STATIC=OFF \
-            -DLEXBOR_OPTIMIZATION_LEVEL=-O3 \
-            -B build \
-        && sudo cmake --build build -j$(nproc) --target install) \
-    && rm -rf lexbor*
+# Copy Google Cloud SDK from gcloud stage
+COPY --from=gcloud-sdk --chown=ray /tmp/google-cloud-sdk /home/ray/google-cloud-sdk
+ENV PATH=$PATH:/home/ray/google-cloud-sdk/bin
 
+# Copy Rust toolchain from rust stage
+COPY --from=rust-builder --chown=ray /usr/local/cargo /home/ray/.cargo
+COPY --from=rust-builder --chown=ray /usr/local/rustup /home/ray/.rustup
+ENV PATH=/home/ray/.cargo/bin:$PATH
+ENV RUSTUP_HOME=/home/ray/.rustup
+ENV CARGO_HOME=/home/ray/.cargo
 
 RUN sudo mkdir -p /opt/marin/
-RUN sudo chown -R $(whoami) /opt/marin/
+RUN sudo chown -R ray /opt/marin/
+
 # Ray uses conda
-ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/bin:/home/ray/anaconda3/condabin:$PATH
-
-# gcloud
-RUN conda install conda-forge::google-cloud-sdk -y
-RUN gcloud components install alpha
-
-RUN conda install -c conda-forge ncurses -y
-
-# install rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH=$HOME/.cargo/bin:$PATH
-
-WORKDIR /tmp/marin
-COPY pyproject.toml /tmp/marin
-RUN mkdir -p src/marin && touch src/marin/__init__.py && touch README.md && touch LICENSE
-RUN uv pip install -e .[dev,tpu,gcp] --system --torch-backend=cpu
-WORKDIR /opt/marin
-RUN rm -rf /tmp/marin
+ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/condabin:$PATH
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
 # outputs a noisy warning because it doesn't include version information.
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu/
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
-ENV PATH=$PATH:/home/ray/anaconda3/bin
+ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/:/home/ray/anaconda3/lib
 
 COPY docker/marin/preemptible-fix.patch .
 # apply the patch to fix preemptible GCP in Ray in the installed ray package
 RUN patch -d /home/ray/anaconda3/lib/python3.11/site-packages/ -p2 < preemptible-fix.patch
 
-
 # to run docker containers, we need to be in the docker group
-RUN sudo usermod -aG docker $(whoami)
+RUN sudo usermod -aG docker ray
+
+# Set UV to use system Python
+ENV UV_SYSTEM_PYTHON=1
+
+# Install into the system Python environment b/c Ray will use this as a base
+COPY --chown=ray pyproject.toml /tmp/marin/
+COPY --chown=ray lib/ /tmp/marin/lib/
+WORKDIR /tmp/marin
+RUN mkdir -p src/marin/\
+  && touch src/marin/__init__.py\
+  && touch README.md\
+  && touch LICENSE\
+  && uv pip install -e .[dev,tpu,gcp] --system --torch-backend=cpu\
+  && rm -rf /tmp/marin
 
 WORKDIR /opt/marin

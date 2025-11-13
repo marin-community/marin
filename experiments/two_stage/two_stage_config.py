@@ -255,6 +255,7 @@ class TwoStageConfig:
         data_config = lm_varying_mixture_data_config(
             components=components,
             weights_list=weights_list,
+            permutation_type="linear",
             max_train_batches=max_train_batches,
             num_validation_sequences=num_validation_sequences,
         )
@@ -265,13 +266,13 @@ class TwoStageConfig:
         """Format total number of tokens in B/M/K notation."""
         tokens = self.total_tokens
         if tokens >= 1_000_000_000:
-            return f"{tokens/1_000_000_000:.1f}B"
+            return f"{tokens / 1_000_000_000:.1f}B"
         elif tokens >= 10_000_000:
-            return f"{int(tokens/1_000_000)}M"
+            return f"{int(tokens / 1_000_000)}M"
         elif tokens >= 1_000_000:
-            return f"{tokens/1_000_000:.1f}M"
+            return f"{tokens / 1_000_000:.1f}M"
         elif tokens >= 1_000:
-            return f"{tokens/1_000:.1f}K"
+            return f"{tokens / 1_000:.1f}K"
         return str(tokens)
 
     def format_sci(self, val):

@@ -96,7 +96,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         attribute_path=output_path_of(inference_step, input_basename),
                         name=versioned(f"{config.experiment_name}-quality"),
                         label="__label__hq",
-                        threshold=versioned(None),
+                        lower_threshold=versioned(None),
                         keep_fraction=versioned(config.keep_fraction),
                     ),
                 ],
@@ -117,7 +117,11 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
         tokenized[input_data_source] = tokenize_step
         weights[input_data_source] = 1.0
 
-    data_config = lm_mixture_data_config(components=tokenized, weights=weights)
+    data_config = lm_mixture_data_config(
+        components=tokenized,
+        weights=weights,
+        permutation_type="linear",
+    )
 
     train_step = default_train(
         name=f"quality_filtering/{config.experiment_name}",

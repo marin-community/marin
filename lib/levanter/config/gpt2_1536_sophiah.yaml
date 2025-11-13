@@ -1,0 +1,29 @@
+data:
+  train_urls:
+    - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz"
+  validation_urls:
+    - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz"
+  cache_dir: "gs://levanter-data/tokenized/openwebtext/"
+  tokenizer: "gpt2"
+model:
+  type: gpt2
+  hidden_dim: 1536
+  num_heads: 24
+  num_layers: 48
+  seq_len: 1024
+  gradient_checkpointing: true
+  scale_attn_by_inverse_layer_idx: true
+trainer:
+  tracker:
+    project: "levanter"
+    tags: [ "openwebtext", "gpt2"]
+
+  mp: p=f32,c=bfloat16
+  model_axis_size: 1
+optimizer:
+  type: sophia-h
+  learning_rate: 2E-4
+  weight_decay: 0.2
+  min_lr_ratio: 0.1
+  gamma: 0.01
+  warmup: 2000

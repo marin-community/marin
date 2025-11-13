@@ -21,8 +21,6 @@ import draccus
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-
-from experiments.defaults import default_tokenize
 from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
@@ -41,9 +39,11 @@ from marin.processing.tokenize import lm_data_config
 from marin.resources import CpuOnlyConfig, TpuPodConfig
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, transform
+from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
 from marin.utilities.ray_utils import is_local_ray_cluster
 from marin.utils import is_in_ci
+
+from experiments.defaults import default_tokenize
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     transform_hq_data_step = ExecutorStep(
         name=os.path.join(prefix, "hq-transformed"),
-        fn=transform,
+        fn=html_to_md,
         config=SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "pos"),
             output_path=this_output_path(),
@@ -67,7 +67,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     transform_lq_data_step = ExecutorStep(
         name=os.path.join(prefix, "lq-transformed"),
-        fn=transform,
+        fn=html_to_md,
         config=SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "neg"),
             output_path=this_output_path(),
@@ -215,7 +215,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             output_path=this_output_path(),
             resources=pod_config,
             train_config=TrainLmConfig(
-                data=lm_data_config(tokenize_step),
+                data=lm_data_config(tokenize_step, permutation_type="linear"),
                 hf_save_steps=1,
                 model=Gpt2Config(
                     num_layers=2,

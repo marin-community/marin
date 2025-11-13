@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
+# /// script
+# dependencies = ["PyGithub>=2.3.0", "openai"]
+# ///
 # Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,8 +23,7 @@ This script:
 - Writes the summary to `docs/reports/summary.md`.
 
 Usage:
-pip install PyGithub openai
-python scripts/generate_experiment_summary.py
+    ./scripts/generate_experiment_summary.py
 """
 
 import os
@@ -68,11 +70,13 @@ Please generate a report describing the issues.  Please keep the following in mi
 - The report should be in markdown format.
 - The report should link to each of the issues (e.g., `[#123](https://github.com/marin-community/marin/issues/123)`).
 - The report should contain the following sections:
-  1. Overview: create a subsection for each topic and put all the issues for that topic in that subsection.
-     Summarize the findings for each topic.  An issue might belong to more than one topic.
-  2. Timeline: create a subsection for each month of the year (sorted in chronological order), and list all the issues that were **closed** during that month.
-     Create a final subsection corresponding to open issues.
-     Important: **all** issues must be included in the timeline, and each issue should appear exactly once.
+  1. Overview: create a subsection for each topic and put all the issues for that topic in
+     that subsection. Summarize the findings for each topic.  An issue might belong to more
+     than one topic.
+  2. Timeline: create a subsection for each month of the year (sorted in chronological order),
+     and list all the issues that were **closed** during that month. Create a final subsection
+     corresponding to open issues. Important: **all** issues must be included in the timeline,
+     and each issue should appear exactly once.
 """
 
 

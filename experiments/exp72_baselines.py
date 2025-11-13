@@ -36,6 +36,7 @@ llama_300m_train_config_debug = SimpleTrainConfig(
 )
 
 slimpajama_6b_tokenized = default_tokenize(name="SlimPajama-6B", dataset=slimpajama_6b, tokenizer=llama3_tokenizer)
+slimpajama_6b_config = lm_data_config(slimpajama_6b_tokenized, permutation_type="linear")
 slimpajama_6b_model = default_train(
     name="SlimPajama-6B-300m-debug-baselines-6-19-v1",
     tokenized=slimpajama_6b_tokenized,
