@@ -255,8 +255,8 @@ def main():
         print("Model loaded successfully!")
         
         # Setup training
-        prompt = "The capital of France is"
-        expected_answer = " Paris"
+        prompt = "The first president of the United States's last name was"
+        expected_answer = " Washington"
         
         # Tokenize
         prompt_tokens_list = tokenizer.encode(prompt, add_special_tokens=False)
