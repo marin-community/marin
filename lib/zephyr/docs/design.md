@@ -334,10 +334,6 @@ ds = (Dataset
 )
 ```
 
-- Input files must have shard numbers in their names (e.g., `data-00001.jsonl`)
-- Call `skip_existing_outputs()` immediately after `from_files()`, before any transformations
-- Use `skip_existing=True` in `write_jsonl()` or `write_parquet()` to prevent overwrites
-
 For example, if you have 5 input files and outputs for shards 1 and 3 already
 exist, the pipeline will:
 - Process shards 0, 2, and 4 (creating new outputs)
