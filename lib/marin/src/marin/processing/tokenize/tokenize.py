@@ -345,11 +345,13 @@ def consolidate_shard_caches(
         )
 
     logger.info("Copying shard data and metadata to final cache.")
-    list(flow_backend().execute(
-      Dataset
-        .from_list(shard_info)
-        .map(copy_shard)
-        .write_jsonl(f"{output_path}/.copy/copy-shard-{{shard:05d}}.jsonl", skip_existing=True)))
+    list(
+        flow_backend().execute(
+            Dataset.from_list(shard_info)
+            .map(copy_shard)
+            .write_jsonl(f"{output_path}/.copy/copy-shard-{{shard:05d}}.jsonl", skip_existing=True)
+        )
+    )
 
     logger.info("Merging ledgers into final ledger.")
     ledgers = []
