@@ -14,10 +14,8 @@
 
 import dataclasses
 import logging
-import os
 from dataclasses import dataclass
 from typing import Any
-
 import levanter.infra.cli_helpers
 import ray
 from levanter.checkpoint import discover_latest_checkpoint
