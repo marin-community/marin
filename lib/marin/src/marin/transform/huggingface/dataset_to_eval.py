@@ -35,7 +35,6 @@ uv run zephyr --backend=sync \
     --answer_labels A B C D
 """
 
-import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -425,9 +424,7 @@ def transform_example_to_qa(example: dict, idx: int, dataset_meta: DatasetWithMe
     answer_labels = get_nested_item(example, cfg.answer_labels_key, cfg.answer_labels)
     # get the list of options in standardized form (list of options)
     options = standardize_options(
-        get_nested_item(
-            example, cfg.options_key, [get_nested_item(example, key, {}) for key in cfg.options_keys]
-        )
+        get_nested_item(example, cfg.options_key, [get_nested_item(example, key, {}) for key in cfg.options_keys])
     )
 
     # first pass attempt to populate answer_text, answer_idx, answer_label
@@ -496,9 +493,7 @@ def transform_example_to_qa(example: dict, idx: int, dataset_meta: DatasetWithMe
     elif cfg.output_format.value == "evaluation":
         # evaluation format wants prompt, response
         if answer_labels and options:
-            prompt, response = format_prompt_response(
-                question_text, options, answer_labels, answer_idx, answer_text
-            )
+            prompt, response = format_prompt_response(question_text, options, answer_labels, answer_idx, answer_text)
         else:
             prompt = question_text + "\n\n"
             response = answer_text
@@ -534,8 +529,8 @@ def hf_dataset_to_jsonl(cfg: DatasetConversionConfig) -> None:
     This function processes datasets according to the configuration specified in the
     `DatasetConversionConfig`. It loads the datasets for each subset and split, formats
     the data into a structured format, and writes the results to compressed `.jsonl.gz`
-    output files using zephyr's Dataset API. The format of the output depends on the
-    selected `output_format` (either 'decontamination' or 'evaluation').
+    output files. The format of the output depends on the selected `output_format`
+    (either 'decontamination' or 'evaluation').
 
     Args:
         cfg (DatasetConversionConfig): The configuration object specifying dataset
@@ -544,7 +539,7 @@ def hf_dataset_to_jsonl(cfg: DatasetConversionConfig) -> None:
 
     Process Overview:
     - Loads datasets specified in the configuration for each subset and split.
-    - Uses zephyr Dataset API to transform examples into QAExample objects.
+    - Transforms examples into QAExample objects with appropriate formatting.
     - Populates question, options, answer text, and other relevant metadata based on
       configuration keys.
     - Supports two output formats:
@@ -552,7 +547,7 @@ def hf_dataset_to_jsonl(cfg: DatasetConversionConfig) -> None:
         - **Evaluation**: Writes the formatted prompt and response based on the question
           and multiple-choice options.
     - Saves the output as compressed `.jsonl.gz` files in the specified output path,
-      with one file per (subset, split) pair.
+      with one or more files per (subset, split) pair.
 
     Raises:
         ValueError: If no valid answer text is found for a particular example, indicating
@@ -588,32 +583,24 @@ def hf_dataset_to_jsonl(cfg: DatasetConversionConfig) -> None:
 
     # Process each (subset, split) pair
     for dataset_meta in datasets:
-        # Create output path pattern with shard placeholder
-        # The {shard:05d} placeholder allows zephyr to create multiple files when needed
+        # Create output path pattern with shard placeholder for potential multi-file output
         output_pattern = os.path.join(
             cfg.output_path,
-            f"{cfg.dataset_name}-{dataset_meta.subset}-{dataset_meta.split}-{cfg.output_format.value}-{{shard:05d}}.jsonl.gz"
+            f"{cfg.dataset_name}-{dataset_meta.subset}-{dataset_meta.split}-{cfg.output_format.value}-{{shard:05d}}.jsonl.gz",
         )
 
-        # Create zephyr Dataset from HuggingFace dataset
         # Convert to list of dicts with idx and example for processing
-        enumerated_examples = [
-            {"idx": idx, "example": example} for idx, example in enumerate(dataset_meta.dataset)
-        ]
+        enumerated_examples = [{"idx": idx, "example": example} for idx, example in enumerate(dataset_meta.dataset)]
 
         pipeline = (
             Dataset.from_list(enumerated_examples)
-            .map(lambda item: wrap_transform(item, dataset_meta, cfg))
+            .map(lambda item, dm=dataset_meta, c=cfg: wrap_transform(item, dm, c))
             .filter(lambda record: record is not None)
             .write_jsonl(output_pattern)  # Compression auto-detected from .gz extension
         )
 
         list(backend.execute(pipeline))
         logger.info(f"Wrote to {output_pattern}")
-
-
-# Keep old function name as alias for backward compatibility
-raw2json = hf_dataset_to_jsonl
 
 
 @draccus.wrap()

@@ -518,7 +518,6 @@ const stepRenderers = {
   "marin.download.huggingface.download_gated_manual.download_and_upload_to_store": renderDownloadStep,
   "marin.download.nemotron_cc.download_nemotron_cc.download_nemotron_cc": renderDownloadNemotronCCStep,
   "marin.download.filesystem.transfer.transfer_files": renderTransferStep,
-  "marin.transform.huggingface.dataset_to_eval.raw2json": renderRaw2JsonStep,
   "marin.transform.huggingface.dataset_to_eval.hf_dataset_to_jsonl": renderRaw2JsonStep,
   "marin.transform.conversation.transform_conversation.transform_hf_dataset": renderRaw2JsonStep,
   "marin.transform.fasttext.transform.main": renderFastTextTransformStep,

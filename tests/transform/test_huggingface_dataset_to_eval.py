@@ -16,13 +16,7 @@
 
 import gzip
 import json
-import tempfile
-from pathlib import Path
-
-try:
-    import pytest
-except ImportError:
-    pytest = None
+from unittest.mock import patch
 
 from marin.transform.huggingface.dataset_to_eval import (
     DatasetConversionConfig,
@@ -44,14 +38,12 @@ class MockDataset:
 
 def test_hf_dataset_to_jsonl_evaluation_format(tmp_path):
     """Test end-to-end transformation to evaluation format."""
-    # Create mock dataset
     examples = [
         {"question": "What is 2+2?", "choices": ["3", "4", "5"], "answer": 1},
         {"question": "What is 3+3?", "choices": ["5", "6", "7"], "answer": 1},
     ]
     mock_dataset = MockDataset(examples)
 
-    # Create config
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -69,21 +61,13 @@ def test_hf_dataset_to_jsonl_evaluation_format(tmp_path):
         answer_labels=["A", "B", "C"],
     )
 
-    # Mock load_datasets to return our mock dataset
-    import marin.transform.huggingface.dataset_to_eval as module
-
-    original_load_datasets = module.load_datasets
-
     def mock_load_datasets(config):
         return [DatasetWithMetaData(mock_dataset, "arithmetic", "test", "main")]
 
-    module.load_datasets = mock_load_datasets
-
-    try:
-        # Run transformation
+    with patch("marin.transform.huggingface.dataset_to_eval.load_datasets", mock_load_datasets):
         hf_dataset_to_jsonl(cfg)
 
-        # Find all shard files (e.g., *-00000.jsonl.gz, *-00001.jsonl.gz)
+        # Find all shard files
         shard_files = sorted((output_dir / "test").glob("math-arithmetic-test-evaluation-*.jsonl.gz"))
         assert len(shard_files) > 0, f"No output files created in {output_dir / 'test'}"
 
@@ -106,21 +90,16 @@ def test_hf_dataset_to_jsonl_evaluation_format(tmp_path):
         second = json.loads(all_lines[1])
         assert "What is 3+3?" in second["prompt"], "Question not in prompt"
         assert second["response"] == "B. 6", f"Expected 'B. 6', got '{second['response']}'"
-    finally:
-        # Restore original function
-        module.load_datasets = original_load_datasets
 
 
 def test_hf_dataset_to_jsonl_decontamination_format(tmp_path):
     """Test end-to-end transformation to decontamination format."""
-    # Create mock dataset
     examples = [
         {"question": "Question 1", "choices": ["A", "B"], "answer": 0},
         {"question": "Question 2", "choices": ["C", "D"], "answer": 1},
     ]
     mock_dataset = MockDataset(examples)
 
-    # Create config
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -138,21 +117,13 @@ def test_hf_dataset_to_jsonl_decontamination_format(tmp_path):
         answer_labels=["A", "B"],
     )
 
-    # Mock load_datasets
-    import marin.transform.huggingface.dataset_to_eval as module
-
-    original_load_datasets = module.load_datasets
-
     def mock_load_datasets(config):
         return [DatasetWithMetaData(mock_dataset, "subset1", "train", "main")]
 
-    module.load_datasets = mock_load_datasets
-
-    try:
-        # Run transformation
+    with patch("marin.transform.huggingface.dataset_to_eval.load_datasets", mock_load_datasets):
         hf_dataset_to_jsonl(cfg)
 
-        # Find all shard files (e.g., *-00000.jsonl.gz, *-00001.jsonl.gz)
+        # Find all shard files
         shard_files = sorted((output_dir / "test").glob("dataset-subset1-train-decontamination-*.jsonl.gz"))
         assert len(shard_files) > 0, f"No output files created in {output_dir / 'test'}"
 
@@ -171,12 +142,3 @@ def test_hf_dataset_to_jsonl_decontamination_format(tmp_path):
 
         second = json.loads(all_lines[1])
         assert second["text"] == "Question 2", f"Expected 'Question 2', got '{second['text']}'"
-    finally:
-        module.load_datasets = original_load_datasets
-
-
-if __name__ == "__main__":
-    if pytest is not None:
-        pytest.main([__file__, "-v"])
-    else:
-        print("pytest not available, run with: uv run pytest tests/transform/test_huggingface_dataset_to_eval.py")
