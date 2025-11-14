@@ -23,7 +23,7 @@ from warcio.statusandheaders import StatusAndHeaders
 from warcio.warcwriter import WARCWriter
 from zephyr import create_backend, set_flow_backend
 
-from marin.schemas.web.convert import HtmlToMarkdownConfig
+from marin.convert import HtmlToMarkdownConfig
 from marin.transform.fineweb.process_parquet_fw import process_one_warc_file
 
 SAMPLE_HTML_PAGES = {

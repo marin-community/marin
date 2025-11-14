@@ -15,7 +15,7 @@
 """Tests for HTML conversion transforms."""
 
 from bs4 import BeautifulSoup
-from marin.schemas.web.convert import HtmlToMarkdownConfig
+from marin.convert import HtmlToMarkdownConfig
 from marin.transform.ar5iv.transform_ar5iv import clean_html as ar5iv_clean_html
 from marin.transform.ar5iv.transform_ar5iv import process_record as ar5iv_process_record
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
@@ -23,7 +23,7 @@ from marin.transform.wikipedia.transform_wikipedia import (
     clean_wiki_html,
     process_record as wiki_process_record,
 )
-from marin.web.convert import convert_page
+from marin.convert import convert_page
 
 SAMPLE_AR5IV_HTML = """<!DOCTYPE html>
 <html>

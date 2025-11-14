@@ -4,7 +4,7 @@ import random
 
 from tqdm import tqdm
 
-from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
+from marin.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
 from marin.transform.stackexchange.transform_stackexchange import prepare_md_template
 
 
