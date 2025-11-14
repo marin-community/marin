@@ -3,44 +3,25 @@
 import jax.numpy as jnp
 import jax
 
-def test_logprob_sequence_independence():
-    """Test if logprobs differ when computed all at once vs one at a time."""
-    
-    # Create dummy data: 5 tokens, vocab size 100
-    seq_len = 5
-    vocab_size = 100
-    
-    logits = jnp.array([
-        [1.0, 2.0, 0.5] + [0.0] * (vocab_size - 3),  # token 0
-        [0.3, 1.5, 2.1] + [0.0] * (vocab_size - 3),  # token 1
-        [2.0, 0.1, 1.0] + [0.0] * (vocab_size - 3),  # token 2
-        [0.5, 3.0, 0.2] + [0.0] * (vocab_size - 3),  # token 3
-        [1.2, 0.8, 2.5] + [0.0] * (vocab_size - 3),  # token 4
-    ], dtype=jnp.float32)
-    
-    labels = jnp.array([1, 2, 0, 1, 2], dtype=jnp.int32)
-    
-    # Compute all at once
-    logprobs_all = jax.nn.logsumexp(logits, axis=logits.ndim-1)
-    
-    # Compute one at a time
-    logprobs_individual = []
-    for i in range(seq_len):
-        logprob = jax.nn.logsumexp(logits[i:i+1], axis=logits[i:i+1].ndim-1)
-        logprobs_individual.append(logprob[0])
-    
-    logprobs_individual = jnp.array(logprobs_individual)
-    
-    # Compare
-    print("All at once:", logprobs_all)
-    print("One at a time:", logprobs_individual)
-    print("Difference:", logprobs_all - logprobs_individual)
-    print("Max absolute difference:", jnp.max(jnp.abs(logprobs_all - logprobs_individual)))
-    
-    # Assert they're identical (or very close)
-    assert jnp.allclose(logprobs_all, logprobs_individual, atol=1e-6), \
-        f"Logprobs differ! Max diff: {jnp.max(jnp.abs(logprobs_all - logprobs_individual))}"
+K = 3
+M = 10
+key = jax.random.PRNGKey(0)
+a = jax.random.uniform(key, shape=(K,M), minval=0, maxval=1.0, dtype=jnp.float32)
 
+batched_a = jnp.array([a, a])
+batched_res = jax.nn.logsumexp(batched_a, axis=batched_a.ndim-1)[0]
 
-if __name__ == "__main__":
-    test_logprob_sequence_independence()
+res = jax.nn.logsumexp(a, axis=a.ndim-1)
+
+print("Individual logsumexp result:")
+print(res)
+print("\nBatched logsumexp result:")
+print(batched_res)
+print("Max absolute difference:", jnp.max(jnp.abs(batched_res - res)))
+
+# Show one example of diverging results
+max_diff_idx = jnp.argmax(jnp.abs(batched_res - res))
+print(f"\nExample diverging pair at index {max_diff_idx}:")
+print(f"  Individual: {res[max_diff_idx]}")
+print(f"  Batched:    {batched_res[max_diff_idx]}")
+print(f"  Difference: {batched_res[max_diff_idx] - res[max_diff_idx]}")
