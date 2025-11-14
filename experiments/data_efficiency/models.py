@@ -35,6 +35,15 @@ llama_1_5b_config = LlamaConfig(
     num_layers=36,
 )
 
+llama_3_2b_config = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=2048,
+    intermediate_dim=7168,
+    num_heads=16,
+    num_kv_heads=8,
+    num_layers=48,
+)
+
 SEQ_LEN = 4096
 
 llama_150m_4096_config = dataclasses.replace(llama_150m, seq_len=SEQ_LEN)
@@ -43,6 +52,7 @@ llama_600m_4096_config = dataclasses.replace(llama_600m, seq_len=SEQ_LEN)
 llama_1_4b_4096_config = dataclasses.replace(llama_1_4b, seq_len=SEQ_LEN)
 llama_1_9b_4096_config = dataclasses.replace(llama_1_9b, seq_len=SEQ_LEN)
 llama_1_5b_4096_config = dataclasses.replace(llama_1_5b_config, seq_len=SEQ_LEN)
+llama_3_2b_4096_config = dataclasses.replace(llama_3_2b_config, seq_len=SEQ_LEN)
 
 llama_3b_config = LlamaConfig(
     seq_len=SEQ_LEN,  # Seq len set to reproduce Tulu SFT
@@ -142,4 +152,5 @@ model_dict = {
     "300moe": moe_8x_300m,
     "moedebug": moe_debug,
     "1_5b4k": llama_1_5b_4096_config,
+    "3_2b4k": llama_3_2b_4096_config,
 }
