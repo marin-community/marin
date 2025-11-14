@@ -20,7 +20,7 @@ many epochs of StackExchange with a model trained on a single epoch of FineWeb.
 """
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
+from experiments.pretraining_datasets import tokenize_dolma_steps
 from experiments.evals.evals import default_eval
 from experiments.exp596_stackexchange_classifier import stackexchange_experiment_config
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config

@@ -13,23 +13,32 @@
 # limitations under the License.
 
 """
-Tokenizes the Nemotron CC dataset splits.
+NEMOTRON CC dataset definitions and tokenization.
 
-This module defines a function that returns tokenization steps for each dataset split available in the
-Nemotron CC dataset.
+This module defines the raw NEMOTRON CC dataset download and tokenization
+logic for all 7 quality-based splits.
 """
 
 import os.path
 
 from levanter.store.cache import CacheOptions
 
-from experiments.llama import llama3_tokenizer
-from experiments.pretraining_datasets import nemotron_cc
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
+from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
+from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-nemotron_cc_path = output_path_of(nemotron_cc, "contrib/Nemotron/Nemotron-CC/data-jsonl/")
+# Raw dataset download step
+nemotron_cc = ExecutorStep(
+    name="raw/nemotro-cc",
+    fn=download_nemotron_cc,
+    config=NemotronIngressConfig(
+        output_path=this_output_path(),
+    ),
+    pip_dependency_groups=["download_transform"],
+)
+
+_nemotron_cc_path = output_path_of(nemotron_cc, "contrib/Nemotron/Nemotron-CC/data-jsonl/")
 
 # The following dataset splits define file patterns for each split.
 NEMOTRON_DATASETS = {
@@ -55,7 +64,7 @@ NEMOTRON_WEIGHTS = {
 }
 
 # NB: we changed how hashes were computed for this corpus and we'd like to avoid recomputing them
-NEMOTRON_LLAMA3_OVERIDES = {
+NEMOTRON_LLAMA3_OVERRIDES = {
     "hq_actual": "tokenized/nemotron_cc/hq_actual-5af4cc",
     "hq_synth": "tokenized/nemotron_cc/hq_synth-3525e2",
     "low_actual": "tokenized/nemotron_cc/low_actual-cb3f2c",
@@ -66,7 +75,19 @@ NEMOTRON_LLAMA3_OVERIDES = {
 }
 
 
-def tokenize_nemotron_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:
+def _get_nemotron_split_paths(split: str):
+    """Helper to get file paths for a nemotron split."""
+    patterns = NEMOTRON_DATASETS[split]
+    return [_nemotron_cc_path / pattern for pattern in patterns]
+
+
+def tokenize_nemotron_steps(*, base_path="tokenized/", tokenizer: str | None = None) -> dict[str, TokenizerStep]:
+    """Generate tokenization steps for all Nemotron CC dataset splits."""
+    if tokenizer is None:
+        from experiments.llama import llama3_tokenizer
+
+        tokenizer = llama3_tokenizer
+
     nemotron_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for split in NEMOTRON_DATASETS:
         nemotron_split_output_path = os.path.join(base_path, "nemotron_cc", split)
@@ -84,8 +105,11 @@ def tokenize_nemotron_steps(*, base_path="tokenized/", tokenizer=llama3_tokenize
             pip_dependency_groups=["sentencepiece"],
         )
 
-        if tokenizer == llama3_tokenizer and split in NEMOTRON_LLAMA3_OVERIDES:
-            step = step.with_output_path(NEMOTRON_LLAMA3_OVERIDES[split])
+        # Check if we need to use override path for llama3
+        from experiments.llama import llama3_tokenizer
+
+        if tokenizer == llama3_tokenizer and split in NEMOTRON_LLAMA3_OVERRIDES:
+            step = step.with_output_path(NEMOTRON_LLAMA3_OVERRIDES[split])
 
         nemotron_steps[os.path.join("nemotron_cc", split)] = step
 
@@ -93,19 +117,7 @@ def tokenize_nemotron_steps(*, base_path="tokenized/", tokenizer=llama3_tokenize
     return nemotron_steps
 
 
-def _get_nemotron_split_paths(split):
-    patterns = NEMOTRON_DATASETS[split]
-    nemotron_split_paths = [nemotron_cc_path / pattern for pattern in patterns]
-    return nemotron_split_paths
-
-
-def get_nemotron_step(split: str) -> ExecutorStep[TokenizeConfig]:
-    assert (
-        split in NEMOTRON_DATASETS
-    ), f"Split {split} not found in {NEMOTRON_DATASETS}, \
-        Check marin.experiments.nemotron_cc.tokenize_nemotron.NEMOTRON_DATASETS for which splits are supported."
-    return tokenize_nemotron_steps()[f"nemotron_cc/{split}"]
-
-
-if __name__ == "__main__":
-    executor_main(steps=list(tokenize_nemotron_steps().values()), description="Tokenize Nemotron dataset")
+def get_nemotron_step(split: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
+    """Get a specific nemotron split tokenization step."""
+    assert split in NEMOTRON_DATASETS, f"Split {split} not found in NEMOTRON_DATASETS"
+    return tokenize_nemotron_steps(tokenizer=tokenizer)[f"nemotron_cc/{split}"]

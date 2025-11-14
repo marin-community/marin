@@ -32,7 +32,7 @@ from experiments.tootsie.exp1395_qwen3_32b import (
 )
 from experiments.evals.evals import default_base_eval
 from experiments.models import ModelConfig, download_model_step
-from experiments.nemotron_cc.tokenize_nemotron import (
+from experiments.pretraining_datasets import (
     NEMOTRON_WEIGHTS,
     tokenize_nemotron_steps,
 )

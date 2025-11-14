@@ -12,9 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Simple single-corpus dataset definitions and tokenization.
+
+This module defines raw dataset downloads and their tokenized versions
+for simple datasets that don't have multiple splits.
+"""
+
+import os.path
+
+from levanter.data.text import TextLmDatasetFormat
+from levanter.store.cache import CacheOptions
+
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
-from marin.execution.executor import ExecutorStep, this_output_path
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
+from marin.processing.tokenize import TokenizeConfig, tokenize
+
+# ============================================================================
+# RAW DATASETS
+# ============================================================================
 
 fineweb = ExecutorStep(
     name="raw/fineweb",
@@ -64,19 +80,6 @@ slimpajama_6b = ExecutorStep(
     override_output_path="raw/SlimPajama-6B-be35b7",
 ).cd("b5f90f4/huggingface.co/datasets/DKYoon/SlimPajama-6B/resolve/b5f90f4")
 
-dolma = ExecutorStep(
-    name="raw/dolma",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="allenai/dolma",
-        revision="7f48140",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-    override_output_path="raw/dolma",
-)
-
-
 dclm_baseline_wrong = ExecutorStep(
     name="raw/dclm-baseline-1.0",
     fn=download_hf,
@@ -89,7 +92,6 @@ dclm_baseline_wrong = ExecutorStep(
     ),
     override_output_path="raw/dclm_WRONG_20250211/",
 )
-
 
 dclm_baseline = ExecutorStep(
     name="raw/dclm-baseline-1.0",
@@ -154,26 +156,87 @@ starcoderdata = ExecutorStep(
     override_output_path="raw/starcoderdata-720c8c",
 )
 
-dolmino = (
-    ExecutorStep(
-        name="raw/dolmino-mix-1124",
-        fn=download_hf,
-        config=DownloadConfig(
-            hf_dataset_id="allenai/dolmino-mix-1124",
-            revision="bb54cab",
-            gcs_output_path=this_output_path(),
-            wait_for_completion=True,
-        ),
+
+# ============================================================================
+# TOKENIZED DATASETS
+# ============================================================================
+
+
+def _tokenize_simple(
+    name: str,
+    raw_dataset: ExecutorStep,
+    tokenizer: str | None = None,
+    override_path: str | None = None,
+    text_format: TextLmDatasetFormat = TextLmDatasetFormat(),
+    cache_options: CacheOptions | None = None,
+) -> ExecutorStep[TokenizeConfig]:
+    """Helper to create a simple tokenized dataset."""
+    if tokenizer is None:
+        from experiments.llama import llama3_tokenizer
+
+        tokenizer = llama3_tokenizer
+
+    config = TokenizeConfig(
+        train_paths=[raw_dataset],
+        validation_paths=versioned([]),
+        cache_path=this_output_path(),
+        tokenizer=versioned(tokenizer),
+        format=text_format,
     )
-    .with_output_path("raw/dolmino-mix-1124-157960")
-    .cd("bb54cab")
+
+    if cache_options is not None:
+        config = TokenizeConfig(
+            train_paths=config.train_paths,
+            validation_paths=config.validation_paths,
+            cache_path=config.cache_path,
+            tokenizer=config.tokenizer,
+            format=config.format,
+            cache_options=cache_options,
+        )
+
+    step = ExecutorStep(
+        name=os.path.join("tokenized", name),
+        fn=tokenize,
+        config=config,
+        pip_dependency_groups=["sentencepiece"],
+    )
+
+    if override_path is not None:
+        step = step.with_output_path(override_path)
+
+    return step
+
+
+# DCLM baseline
+dclm_baseline_tokenized_llama3 = _tokenize_simple(
+    "dclm_baseline",
+    dclm_baseline,
+    override_path="tokenized/dclm_baseline-0206f1/",
 )
 
-nemotron_cc = ExecutorStep(
-    name="raw/nemotro-cc",
-    fn=download_nemotron_cc,
-    config=NemotronIngressConfig(
-        output_path=this_output_path(),
-    ),
-    pip_dependency_groups=["download_transform"],
+# StarCoder data (uses "content" as text key)
+starcoderdata_tokenized_llama3 = _tokenize_simple(
+    "starcoderdata",
+    starcoderdata,
+    text_format=TextLmDatasetFormat(text_key="content"),
+    override_path="tokenized/starcoderdata-12f018/",
+)
+
+# ProofPile 2
+proofpile_2_tokenized_llama3 = _tokenize_simple(
+    "proofpile_2",
+    proofpile_2,
+    override_path="tokenized/proofpile_2-4a35c7/",
+)
+
+# SlimPajama 6B
+slimpajama_6b_tokenized_llama3 = _tokenize_simple(
+    "SlimPajama-6B",
+    slimpajama_6b,
+)
+
+# FineWeb-Edu
+fineweb_edu_tokenized_llama3 = _tokenize_simple(
+    "fineweb-edu",
+    fineweb_edu,
 )
