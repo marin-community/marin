@@ -25,6 +25,16 @@ from levanter.models.mixtral import MixtralConfig
 
 from experiments.llama import llama_1_4b, llama_1_9b, llama_150m, llama_300m, llama_600m
 
+
+llama_1_5b_config = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=1536,
+    intermediate_dim=5376,
+    num_heads=16,
+    num_kv_heads=8,
+    num_layers=36,
+)
+
 SEQ_LEN = 4096
 
 llama_150m_4096_config = dataclasses.replace(llama_150m, seq_len=SEQ_LEN)
@@ -32,6 +42,7 @@ llama_300m_4096_config = dataclasses.replace(llama_300m, seq_len=SEQ_LEN)
 llama_600m_4096_config = dataclasses.replace(llama_600m, seq_len=SEQ_LEN)
 llama_1_4b_4096_config = dataclasses.replace(llama_1_4b, seq_len=SEQ_LEN)
 llama_1_9b_4096_config = dataclasses.replace(llama_1_9b, seq_len=SEQ_LEN)
+llama_1_5b_4096_config = dataclasses.replace(llama_1_5b_config, seq_len=SEQ_LEN)
 
 llama_3b_config = LlamaConfig(
     seq_len=SEQ_LEN,  # Seq len set to reproduce Tulu SFT
@@ -130,4 +141,5 @@ model_dict = {
     "olmoe": olmoe_8x_1_4b,
     "300moe": moe_8x_300m,
     "moedebug": moe_debug,
+    "1_5b4k": llama_1_5b_4096_config,
 }

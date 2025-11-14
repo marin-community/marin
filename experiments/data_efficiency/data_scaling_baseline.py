@@ -40,11 +40,11 @@ train_steps = [
         )
     )
     for base_train_steps in [800]
-    for epochs in [13]
-    for weight_decay in [1.17]
+    for epochs in [4]
+    for weight_decay in [0.1]
     for batch_size in [64]
     for model_name, lr in [
-        ("300m4k", 3e-3),
+        ("moedebug", 1e-3),
     ]
 ]
 
