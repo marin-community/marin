@@ -9286,7 +9286,7 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
     { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-5-marin-dev' or extra != 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
     { name = "ray" },
-    { name = "tqdm" },
+    { name = "tqdm-loggable" },
     { name = "typing-extensions" },
     { name = "zstandard" },
 ]
@@ -9314,7 +9314,7 @@ requires-dist = [
     { name = "msgspec", specifier = ">=0.18.0" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "ray", specifier = ">=2.45" },
-    { name = "tqdm", specifier = ">=4.0" },
+    { name = "tqdm-loggable", specifier = ">=0.2" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "zstandard", specifier = ">=0.22.0" },
 ]

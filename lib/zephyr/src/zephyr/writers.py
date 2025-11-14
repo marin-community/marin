@@ -24,7 +24,6 @@ from typing import Any
 
 import fsspec
 import msgspec
-from tqdm import tqdm
 
 
 @contextmanager
@@ -84,17 +83,17 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
             cctx = zstd.ZstdCompressor(level=2, threads=1)
             with fsspec.open(temp_path, "wb", block_size=64 * 1024 * 1024) as raw_f:
                 with cctx.stream_writer(raw_f) as f:
-                    for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):
+                    for record in records:
                         f.write(encoder.encode(record) + b"\n")
                         count += 1
         elif output_path.endswith(".gz"):
             with fsspec.open(temp_path, "wb", compression="gzip", compresslevel=1, block_size=64 * 1024 * 1024) as f:
-                for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):
+                for record in records:
                     f.write(encoder.encode(record) + b"\n")
                     count += 1
         else:
             with fsspec.open(temp_path, "wb", block_size=64 * 1024 * 1024) as f:
-                for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):
+                for record in records:
                     f.write(encoder.encode(record) + b"\n")
                     count += 1
 
@@ -174,7 +173,7 @@ def write_parquet_file(
     with atomic_rename(output_path) as temp_path:
         with pq.ParquetWriter(temp_path, actual_schema) as writer:
             batch = [first_record]
-            for record in tqdm(record_iter, desc=f"write_parquet {output_path}", mininterval=10):
+            for record in record_iter:
                 batch.append(record)
                 count += 1
                 if len(batch) >= batch_size:

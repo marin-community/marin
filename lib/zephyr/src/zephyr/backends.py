@@ -35,7 +35,7 @@ import msgspec
 import numpy as np
 import ray
 import zstandard as zstd
-from tqdm import tqdm
+from tqdm_loggable.auto import tqdm
 
 from zephyr.dataset import (
     Dataset,
