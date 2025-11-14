@@ -1,0 +1,53 @@
+name: "Community Experiment Submission"
+description: "Propose an experiment; a branch and starter code will be created for you automatically."
+labels: ["community-experiment-submission"]
+body:
+  - type: input
+    id: author_name
+    attributes:
+      label: Your name
+    validations:
+      required: true
+  - type: input
+    id: affiliation
+    attributes:
+      label: Affiliation
+    validations:
+      required: true
+  - type: input
+    id: url
+    attributes:
+      label: Link to your profile/site
+    validations:
+      required: true
+  - type: input
+    id: title
+    attributes:
+      label: Experiment Title
+      placeholder: e.g., The effects of QK Normalization
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: One-sentence description of your experiment
+    validations:
+      required: true
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis / Goal
+      description: What are you trying to learn or achieve? What do you expect to find before running the experiment?
+    validations:
+      required: true
+  - type: input
+    id: branch_name
+    attributes:
+      label: Name of your branch
+      placeholder: my-experiment-branch
+      description: Lowercase letters, numbers, hyphens only.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "<!-- community-experiment:onboarding v1 -->"
