@@ -96,14 +96,6 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
     )
     env = _add_run_env_variables(env)
 
-    if "JAX_COMPILATION_CACHE_DIR" not in env:
-        marin_prefix = os.environ.get("MARIN_PREFIX")
-        if marin_prefix:
-            env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
-            logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
-        else:
-            logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
-
     hw_config = config.resources.with_env_vars(env)
 
     @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1)
