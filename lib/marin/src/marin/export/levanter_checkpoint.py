@@ -101,7 +101,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
         export_lm_to_hf.main(convert_config)
 
     if isinstance(hw_config, TpuPodConfig):
-        assert (hw_config.slice_count == 1, "Export currently works on single slices at present.")
+        assert hw_config.slice_count == 1, "Export currently works on single slices at present."
         return run_on_pod_resumable(convert_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
 
     return ray.get(convert_task.remote())
