@@ -109,7 +109,7 @@ class TokenizeConfig(TokenizeConfigBase):
     The format of the dataset. This is used to determine how to tokenize the data.
     See Levanter's documentation for more details.
     """
-    window_size_bytes: int = 1_000_000_000
+    window_size_bytes: int = 10_000_000_000
     allow_test_in_train: bool = False
     """
     If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
@@ -167,7 +167,7 @@ class HfTokenizeConfig(TokenizeConfigBase):
     name: str | None = None  # HF dataset name
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
-    window_size_bytes: int = 1_000_000_000
+    window_size_bytes: int = 10_000_000_000
 
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
@@ -344,10 +344,12 @@ def consolidate_shard_caches(
             )
         )
 
-    # TODO(power) - add the skip_existing option here
     logger.info("Copying shard data and metadata to final cache.")
-
-    list(flow_backend().execute(Dataset.from_list(shard_info).map(copy_shard)))
+    list(flow_backend().execute(
+      Dataset
+        .from_list(shard_info)
+        .map(copy_shard)
+        .write_jsonl(f"{output_path}/.copy/copy-shard-{{shard:05d}}.jsonl", skip_existing=True)))
 
     logger.info("Merging ledgers into final ledger.")
     ledgers = []
