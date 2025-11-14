@@ -23,7 +23,8 @@ Use this recipe when old experiment scripts need to be retired without losing th
 4. If an older tag (e.g., `exp_cleaning/YYYYMMDD`) described the same snapshot, delete it locally and remotely so only the `archive/` tag remains.
 
 ### 2. Post the canonical archive comment on each issue
-1. Confirm the cleanup PR number (`PR_NUM`); if nobody has provided one yet, ping the human operator for it before continuing. For the current archive batch this is `1999`.
+1. Confirm the cleanup PR number (`PR_NUM`); if nobody has provided one yet, ping the human operator for it before continuing.
+   <!-- Example: For a previous batch, the PR number was `1999`. -->
 2. For every experiment issue, build the file URL: `https://github.com/marin-community/marin/tree/${TAG}/experiments/<filename>`.
 3. Use the standardized note below, swapping in the filename-specific URL and PR reference:
    ```
