@@ -30,7 +30,7 @@ Reference Issue: https://github.com/marin-community/marin/issues/818
 """
 
 from experiments.defaults import default_train
-from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
+from experiments.pretraining_datasets import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
 from experiments.evals.evals import default_eval
 from experiments.exp575_wikipedia_markdownify import wikipedia_resiliparse_custom_fork
 from experiments.exp579_ar5iv_markdownify import ar5iv_no_problem_resiliparse_custom_fork

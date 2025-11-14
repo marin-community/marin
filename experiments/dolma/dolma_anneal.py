@@ -20,8 +20,8 @@ Link to issue: https://github.com/marin-community/marin/issues/820
 
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
-from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
-from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
+from experiments.pretraining_datasets import tokenize_dolma_steps
+from experiments.pretraining_datasets import get_dolmino_step_llama3
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 

@@ -27,7 +27,7 @@ import os
 from dataclasses import dataclass, field
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
+from experiments.pretraining_datasets import get_dolmino_step_llama3
 from experiments.exp274_mmlu_quality_classifier import (
     dclm_negative_examples_in_dolma_format,
     mmlu_eval_aux_in_dolma_format,
