@@ -20,11 +20,11 @@ Link to issue: https://github.com/marin-community/marin/issues/820
 
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
-from experiments.pretraining_datasets import get_dolmino_step_llama3
+from experiments.pretraining_datasets import get_dolmino_step
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
-dolmino_dclm = get_dolmino_step_llama3("dclm")
+dolmino_dclm = get_dolmino_step("dclm")
 
 # Control model is 100% dolmino DCLM dataset
 control_dataset_config = lm_mixture_data_config(
@@ -42,7 +42,7 @@ control_model = default_anneal(
     anneal_config=control_anneal_config,
 )
 
-stackexchange_tokenized = get_dolmino_step_llama3("stackexchange")
+stackexchange_tokenized = get_dolmino_step("stackexchange")
 
 dataset_config = lm_mixture_data_config(
     components={
@@ -70,7 +70,7 @@ stackexchange_anneal_model = default_anneal(
 #     evals=MMLU_TASKS,
 # )
 
-wiki_tokenized = get_dolmino_step_llama3("wiki")
+wiki_tokenized = get_dolmino_step("wiki")
 wiki_dataset_config = lm_mixture_data_config(
     components={"wiki": wiki_tokenized, "dolmino_dclm": dolmino_dclm},
     weights={"wiki": 0.3, "dolmino_dclm": 0.7},

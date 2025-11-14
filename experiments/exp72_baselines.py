@@ -22,11 +22,9 @@ import os
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config, llama_300m, llama_300m_train_config
 from experiments.pretraining_datasets import (
-    fineweb_edu,
     fineweb_edu_tokenized_llama3,
     nemotron_cc,
     slimpajama,
-    slimpajama_6b,
     slimpajama_6b_tokenized_llama3,
 )
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned

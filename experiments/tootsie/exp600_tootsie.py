@@ -35,7 +35,7 @@ from experiments.cooldown_anneal import dolmino_dclm
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3_old
 from experiments.defaults import default_train
 from experiments.pretraining_datasets import tokenize_dolma_steps
-from experiments.pretraining_datasets import dolmino_math_tokenized_llama3, get_dolmino_step_llama3
+from experiments.pretraining_datasets import dolmino_math_tokenized_llama3, get_dolmino_step
 from experiments.evals.evals import default_base_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
@@ -288,7 +288,7 @@ llama_8b_tootsie_phase3 = dataclasses.replace(
 ## TinyGSM-Mind
 
 dessert_dolmino_sets = {
-    s: get_dolmino_step_llama3(s)
+    s: get_dolmino_step(s)
     for s in [
         "flan",
         "math/dolmino_math_synth",

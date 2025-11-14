@@ -16,7 +16,6 @@ from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets import (
-    slimpajama_6b,
     slimpajama_6b_tokenized_llama3,
     tokenize_dolma_steps,
 )
