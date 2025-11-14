@@ -47,6 +47,34 @@ def maybe_fused_next_token_loss(
     Returns:
         NamedArray: Computed loss.
     """
+
+    # Check if this is an ensemble case (both have "model" axis)
+    Pos = pred_embeddings.resolve_axis(Pos.name)
+    Vocab = pred_lm_head.resolve_axis(Vocab)
+    has_model_axis = (pred_embeddings.axes[0].name == "model" and pred_lm_head.axes[0].name == "model")
+
+    if has_model_axis:
+        model_axis = pred_embeddings.axes[0]
+        logits_list = []
+
+        for i in range(model_axis.size):
+            # Get activations and lm_head for this model
+            embeddings_i = pred_embeddings[model_axis, i]
+            lm_head_i = pred_lm_head[model_axis, i]
+
+            # Compute logits for this model
+            logits_i = hax.dot(embeddings_i, lm_head_i, axis=Embed)
+            if dtype is not None:
+                logits_i = logits_i.astype(dtype)
+            logits_list.append(logits_i)
+
+        # Average the logits (ensemble step)
+        stacked_logits = hax.stack("model", logits_list)
+        logits = hax.mean(stacked_logits, axis="model")
+
+        # Continue with standard loss computation
+        return next_token_loss(Pos, Vocab, logits, true_ids, loss_mask, reduction, reduction_axis, logsumexp_weight)
+
     # Resolve axes
     Pos = pred_embeddings.resolve_axis(Pos.name)
     Vocab = pred_lm_head.resolve_axis(Vocab)
