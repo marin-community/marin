@@ -34,12 +34,13 @@ def simple_autoregressive_inference(model, prompt_tokens, max_new_tokens, key):
     batch_axis = current_tokens.axes[0]
     position_axis = current_tokens.axes[1]
     response_logprobs_list = []
+    response_logits_list = []
     
-    for _ in range(max_new_tokens):
+    for i in range(max_new_tokens):
         # Run model on full sequence (no KV cache)
-        print(f'[simple_autoregressive_inference] current tokens: {current_tokens}')
+        print(f'[decode {i}] current tokens: {current_tokens}')
         logits = model(input_ids=current_tokens, attn_mask=AttentionMask.causal(), key=key)
-        print(f'[simple_autoregressive_inference] inference model logits: {logits}')
+        print(f'[decode {i}] decode logits: {logits}')
         
         # Get logits for last position using Haliax axis indexing
         logits_position_axis = logits.axes[1]
@@ -50,11 +51,13 @@ def simple_autoregressive_inference(model, prompt_tokens, max_new_tokens, key):
         
         # Compute logprob using the same method as line 142
         next_token_squeezed = next_token.squeeze(-1)  # [batch]
+        print(f"[decode {i}] {next_token_squeezed=}")
         logprob = optax.softmax_cross_entropy_with_integer_labels(
             next_token_logits.array.astype(jnp.float32), next_token_squeezed
         )
         logprob = -1 * logprob  # Negate to get log probability
         response_logprobs_list.append(logprob)
+        response_logits_list.append(next_token_logits.array.astype(jnp.float32))
         
         # Concatenate with current tokens by working with raw arrays
         current_array = current_tokens.array  # [batch, seq_len]
@@ -66,8 +69,11 @@ def simple_autoregressive_inference(model, prompt_tokens, max_new_tokens, key):
     
     # Stack logprobs into a single array [batch, max_new_tokens]
     response_logprobs = jnp.stack(response_logprobs_list, axis=-1)
+    response_logits = jnp.stack(response_logits_list, axis=1)
+
+    print(f"{response_logits.shape=}")
     
-    return current_tokens, response_logprobs
+    return current_tokens, response_logprobs, response_logits
 
 
 if __name__ == "__main__":
@@ -82,12 +88,12 @@ if __name__ == "__main__":
     import equinox as eqx
     from haliax import Axis
     from haliax.partitioning import round_axis_for_partitioning
+    from jax.sharding import Mesh
     
     from levanter.checkpoint import load_checkpoint
     from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
     from levanter.models.lm_model import LmConfig
     from levanter.models.llama import LlamaConfig
-    from levanter.trainer import TrainerConfig
     
     parser = argparse.ArgumentParser(description="Check train vs inference logprobs")
     parser.add_argument("--checkpoint", type=str, default="meta-llama/Llama-3.2-1B-Instruct",
@@ -97,9 +103,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     print(f"Loading model from {args.checkpoint}...")
-    
-    # Set up configuration
-    trainer_config = TrainerConfig()
     
     # Load tokenizer first to encode the prompt
     tokenizer = load_tokenizer(args.checkpoint)
@@ -117,8 +120,15 @@ if __name__ == "__main__":
     
     vocab_size = len(tokenizer)
     
-    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), trainer_config.compute_axis_mapping)
+    # Create a simple mesh with all devices as replicas (no data parallelism requirement)
+    # This allows batch_size=1 to work without sharding constraints
+    num_devices = jax.device_count()
+    devices = jax.devices()
+    mesh = Mesh(np.array(devices).reshape(num_devices, 1, 1), axis_names=("replica", "data", "model"))
+    axis_mapping = {"batch": "data", "embed": "model"}
+    
+    with hax.axis_mapping(axis_mapping), mesh:
+        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), axis_mapping)
         
         print("Loading HF checkpoint...")
         converter = HFCheckpointConverter(
@@ -135,25 +145,21 @@ if __name__ == "__main__":
             model_config.model_type,
             ref=args.checkpoint,
             config=model_config,
-            dtype=trainer_config.mp.compute_dtype,
-            axis_mapping=trainer_config.parameter_axis_mapping,
+            dtype=jnp.float32,
+            axis_mapping=axis_mapping,
         )
         
         print("Model loaded successfully!")
         
         # Run simple autoregressive inference
         print(f"\nGenerating {args.max_tokens} tokens...")
-        # Replicate batch to match data parallelism (typically 4)
-        batch_size = 4
+        # Use single batch for simple testing
+        batch_size = 1
         prompt_array = np.array([prompt_tokens] * batch_size, dtype=np.int32).reshape(batch_size, -1)
         prompt_named = hax.named(prompt_array, ["batch", "position"])
         prompt_named = hax.shard(prompt_named)
-
-        print(f"\nBatch verification for inference input:")
-        print(f"Batch shape: {prompt_named.axes}")
-        print(f"Batch sharding: {prompt_named.array.sharding}")
         
-        generated, response_logprobs = simple_autoregressive_inference(
+        generated, response_logprobs, response_logits = simple_autoregressive_inference(
             model, prompt_named, args.max_tokens, jax.random.PRNGKey(0)
         )
 
@@ -168,18 +174,16 @@ if __name__ == "__main__":
         response_token_ids = generated.array[0][len(prompt_tokens):].tolist()
 
         input = generated[generated.axes[1], :-1]
-
-        print(f"\nBatch verification for forward input:")
-        print(f"Batch shape: {input.axes}")
-        print(f"Batch sharding: {input.array.sharding}")
-
-        print(f'[train] input: {input}')
+        print(f'[forward] input: {input}')
         logits = model(input_ids=input, attn_mask=AttentionMask.causal(), key=jax.random.PRNGKey(0))
-        print(f'[train] logits: {logits}')
+        print(f'[forward] logits: {logits}')
+
+        print(f"{logits.array.shape=}")
 
         # [bsz, seq_len, vocab_size]
-        logits = logits.array.astype(jnp.float32).reshape(4, -1, logits.array.shape[-1])
-        labels = generated.array[:, 1:].reshape(4, -1)
+        logits = logits.array.astype(jnp.float32)
+        labels = generated.array[:, 1:].reshape(batch_size, -1)
+        print(f"[forward] {labels=}")
         logprobs = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
         logprobs = -1 * logprobs
         response_logprobs_levanter = logprobs[0, len(prompt_tokens)-1:]
@@ -190,4 +194,10 @@ if __name__ == "__main__":
         print("Response logprobs levanter: ", response_logprobs_levanter)
         print("Response logprobs mean difference: ", np.mean(np.abs(response_logprobs - response_logprobs_levanter)))
         print("Response logprobs max difference: ", np.max(np.abs(response_logprobs - response_logprobs_levanter)))
+
+        print("Response logits: ", response_logits[0, ])
+        print("Response logits levanter: ", logits[0, len(prompt_tokens)-1:])
+        print("Response logits mean difference: ", np.mean(np.abs(response_logits - logits[0, len(prompt_tokens)-1:])))
+        print("Response logits max difference: ", np.max(np.abs(response_logits - logits[0, len(prompt_tokens)-1:])))
+        
         # print("Prompt and response tokens: ", prompt_tokens + response_token_ids)
