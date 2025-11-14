@@ -28,7 +28,7 @@ from levanter.callbacks.watch import WatchConfig
 
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_sft, default_train
-from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
+from experiments.pretraining_datasets import get_dolmino_step_llama3
 from experiments.exp606_sft import tulu3_llama_data_old, tulu_sft_config
 from experiments.llama import llama_8b
 from experiments.posttrain.instruction_datasets import (

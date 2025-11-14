@@ -18,7 +18,12 @@ from levanter.data.text import TextLmDatasetFormat
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from experiments.pretraining_datasets import dclm_baseline, dclm_baseline_wrong, proofpile_2, starcoderdata
+from experiments.pretraining_datasets import (
+    dclm_baseline_tokenized_llama3,
+    dclm_baseline_wrong,
+    proofpile_2_tokenized_llama3,
+    starcoderdata_tokenized_llama3,
+)
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
@@ -38,28 +43,9 @@ DCLM_BASELINE_ONLY_MIXTURE = {
 
 
 dclm_components_llama3 = {
-    "dclm_baseline": dataclasses.replace(
-        default_tokenize(
-            name="dclm_baseline",
-            dataset=dclm_baseline,
-            tokenizer=llama3_tokenizer,
-        ).with_output_path("tokenized/dclm_baseline-0206f1/"),
-    ),
-    "starcoderdata": (
-        default_tokenize(
-            name="starcoderdata",
-            dataset=starcoderdata,
-            tokenizer=llama3_tokenizer,
-            format=TextLmDatasetFormat(text_key="content"),
-        ).with_output_path("tokenized/starcoderdata-12f018/")
-    ),
-    "proofpile_2": (
-        default_tokenize(
-            name="proofpile_2",
-            dataset=proofpile_2,
-            tokenizer=llama3_tokenizer,
-        ).with_output_path("tokenized/proofpile_2-4a35c7/")
-    ),
+    "dclm_baseline": dclm_baseline_tokenized_llama3,
+    "starcoderdata": starcoderdata_tokenized_llama3,
+    "proofpile_2": proofpile_2_tokenized_llama3,
 }
 dclm_mixture_config_llama3_old = lm_mixture_data_config(
     components=dclm_components_llama3,

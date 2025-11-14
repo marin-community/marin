@@ -28,7 +28,7 @@ Reference Issue: https://github.com/marin-community/marin/issues/647
 
 import logging
 
-from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
+from experiments.pretraining_datasets import tokenize_dolma_steps
 from experiments.exp575_wikipedia_markdownify import wikipedia_readability, wikipedia_resiliparse_with_pf
 from experiments.html2text.utils import dolma_pipeline_with_modified_dataset
 from marin.execution.executor import executor_main

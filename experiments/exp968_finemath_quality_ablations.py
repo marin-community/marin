@@ -26,7 +26,7 @@ from experiments.anneal_config import AnnealConfig
 from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
 from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal, default_tokenize
-from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
+from experiments.pretraining_datasets import tokenize_dolma_steps
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MMLU_TASKS
 from experiments.llama import llama3_tokenizer

@@ -19,7 +19,7 @@ Evaluates the quality of finemath: shows boost in GSM8K and MMLU mathematics.
 
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
-from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
+from experiments.pretraining_datasets import get_dolmino_step_llama3
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MMLU_TASKS
 from experiments.midtraining_datasets import finemath_3_plus_tokenized

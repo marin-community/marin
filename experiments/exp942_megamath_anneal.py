@@ -23,7 +23,7 @@ import dataclasses
 
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
-from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
+from experiments.pretraining_datasets import get_dolmino_step_llama3
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MMLU_TASKS
 from experiments.midtraining_datasets import megamath_real_only, megamath_tokenized, megamath_token_counts

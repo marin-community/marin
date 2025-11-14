@@ -21,11 +21,18 @@ import os
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config, llama_300m, llama_300m_train_config
-from experiments.pretraining_datasets import fineweb_edu, nemotron_cc, slimpajama, slimpajama_6b
+from experiments.pretraining_datasets import (
+    fineweb_edu,
+    fineweb_edu_tokenized_llama3,
+    nemotron_cc,
+    slimpajama,
+    slimpajama_6b,
+    slimpajama_6b_tokenized_llama3,
+)
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
 
-slimpajama_6b_tokenized = default_tokenize(name="SlimPajama-6B", dataset=slimpajama_6b, tokenizer=llama3_tokenizer)
+slimpajama_6b_tokenized = slimpajama_6b_tokenized_llama3
 slimpajama_6b_config = lm_data_config(slimpajama_6b_tokenized, permutation_type="linear")
 slimpajama_6b_model = default_train(
     name="SlimPajama-6B-300m",
@@ -52,7 +59,7 @@ slimpajama_model = default_train(
     train_config=llama_1_4b_train_config,
 )
 
-fineweb_edu_tokenized = default_tokenize(name="fineweb-edu", dataset=fineweb_edu, tokenizer=llama3_tokenizer)
+fineweb_edu_tokenized = fineweb_edu_tokenized_llama3
 fineweb_edu_config = lm_data_config(fineweb_edu_tokenized, permutation_type="linear")
 fineweb_edu_model = default_train(
     name="fineweb-edu-1.4b",

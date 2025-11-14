@@ -27,7 +27,7 @@ Reference Issue: https://github.com/marin-community/marin/issues/648
 
 import logging
 
-from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
+from experiments.pretraining_datasets import tokenize_dolma_steps
 from experiments.exp579_ar5iv_markdownify import (
     ar5iv_no_problem_resiliparse_no_references_no_links,
     ar5iv_no_problem_resiliparse_no_references_with_links,
