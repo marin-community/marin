@@ -1,7 +1,7 @@
-.PHONY: help clean check autoformat cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit
+.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit
 .DEFAULT: help
 
-# Help, clean, check and autoformat targets remain unchanged
+
 help:
 	@echo "make clean"
 	@echo "    Remove all temporary pyc/pycache files"
@@ -159,7 +159,7 @@ get_secret_key: install_gcloud
 setup_pre_commit:
 	@HOOK_PATH=.git/hooks/pre-commit; \
 	mkdir -p .git/hooks; \
-	printf '%s\n' '#!/bin/sh' 'set -e' 'REPO_ROOT="$$(git rev-parse --show-toplevel)"' 'cd "$$REPO_ROOT"' 'uv run python infra/pre-commit.py --fix "$$@"' > $$HOOK_PATH; \
+	printf '%s\n' '#!/bin/sh' 'set -e' 'REPO_ROOT="$$(git rev-parse --show-toplevel)"' 'cd "$$REPO_ROOT"' 'uv run python infra/pre-commit.py --fix' > $$HOOK_PATH; \
 	chmod +x $$HOOK_PATH; \
 	echo "Installed git pre-commit hook -> $$HOOK_PATH"
 
