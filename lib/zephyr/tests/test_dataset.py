@@ -69,7 +69,11 @@ def test_take_per_shard(backend):
     assert result == []
 
     # Create 3 shards with 5 items each
-    ds = Dataset.from_list([[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14]]).flat_map(lambda x: x).take(2)
+    ds = (
+        Dataset.from_list([[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14]])
+        .flat_map(lambda x: x)
+        .take_per_shard(2)
+    )
 
     result = sorted(list(backend.execute(ds)))
     # Each of 3 shards contributes 2 items = 6 total

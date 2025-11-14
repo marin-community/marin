@@ -21,6 +21,7 @@ import logging
 import os
 import pickle
 import re
+import time
 import zlib
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
@@ -60,6 +61,60 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+
+class ShardMonitor:
+    """Monitor progress across multiple pipeline stages within a shard.
+
+    Periodically logs a single line showing progress across all active stages.
+    Example: "shard 3/10: FlatMap[process] (1234) Map[transform] (5678) Filter[quality] (234)"
+    """
+
+    def __init__(self, shard_idx: int, total_shards: int, interval: float = 10.0):
+        """Initialize shard monitor.
+
+        Args:
+            shard_idx: Index of this shard (0-based)
+            total_shards: Total number of shards
+            interval: Logging interval in seconds
+        """
+        self.shard_idx = shard_idx
+        self.total_shards = total_shards
+        self.interval = interval
+        self.stage_counts: dict[str, int] = {}
+        self.last_log_time = 0
+
+    def _maybe_log(self):
+        """Log status if interval has elapsed."""
+        now = time.time()
+        if now - self.last_log_time >= self.interval:
+            self._log_status()
+            self.last_log_time = now
+
+    def _log_status(self):
+        """Log current progress across all stages."""
+        stages = " ".join(f"{stage} ({count})" for stage, count in self.stage_counts.items())
+        logger.info(f"shard {self.shard_idx + 1}/{self.total_shards}: {stages}")
+
+    def wrap(self, items: Iterable[T], stage_name: str) -> Iterator[T]:
+        """Wrap an iterable to track progress for a specific stage.
+
+        Args:
+            items: Items to iterate over
+            stage_name: Name of the stage (e.g., "FlatMap[process]")
+
+        Yields:
+            Items from the input iterable
+        """
+        self.stage_counts[stage_name] = 0
+        try:
+            for item in items:
+                self.stage_counts[stage_name] += 1
+                self._maybe_log()
+                yield item
+        finally:
+            # Stage complete - remove from active stages
+            self.stage_counts.pop(stage_name, None)
 
 
 def msgpack_encode(obj: Any) -> bytes:
@@ -420,7 +475,9 @@ def process_shard_fused(
         List of output shards (single shard for most ops, multiple for GroupByLocalOp)
     """
     op_names = "|".join([str(op) for op in operations])
-    logger.info(f"fused[{len(operations)}]: shard {ctx.shard_idx + 1}/{ctx.total_shards}")
+    logger.info(f"fused[{op_names}]: shard {ctx.shard_idx}/{ctx.total_shards}")
+
+    monitor = ShardMonitor(ctx.shard_idx, ctx.total_shards)
 
     # we first build a stream of all of the fused operations.
     # if we have a group by or reduction, we then apply them at the end
@@ -439,8 +496,8 @@ def process_shard_fused(
 
         op, *rest = ops
 
-        # attach a tqdm progress bar to each operation
-        stream_input = tqdm(stream_input, desc=str(op), mininterval=10)
+        # Wrap stream with monitor for this operation
+        stream_input = monitor.wrap(stream_input, str(op))
 
         if isinstance(op, MapOp):
             yield from build_stream((op.fn(item) for item in stream_input), rest, op_index + 1)
@@ -507,11 +564,7 @@ def process_shard_fused(
         if num_output_shards <= 0:
             num_output_shards = ctx.total_shards
 
-        stream = tqdm(
-            build_stream(ctx.shard, pre_ops),
-            desc=f"fused[{op_names}]: shard {ctx.shard_idx + 1}/{ctx.total_shards}",
-            mininterval=10,
-        )
+        stream = monitor.wrap(build_stream(ctx.shard, pre_ops), str(group_by_local_op))
 
         output_chunks = _group_items_by_hash(
             stream, group_by_local_op.key_fn, num_output_shards, ctx.chunk_size, ctx.shard.context
@@ -523,11 +576,7 @@ def process_shard_fused(
         reduce_local_op = operations[-1]
         pre_ops = operations[:-1]
 
-        stream = tqdm(
-            build_stream(ctx.shard, pre_ops),
-            desc=f"fused[{op_names}]: shard {ctx.shard_idx + 1}/{ctx.total_shards}",
-            mininterval=10,
-        )
+        stream = monitor.wrap(build_stream(ctx.shard, pre_ops), str(reduce_local_op))
 
         result = reduce_local_op.local_reducer(stream)
         return [Shard.from_items([result], ctx.chunk_size, ctx.shard.context, idx=ctx.shard_idx)]
@@ -535,11 +584,7 @@ def process_shard_fused(
     # No grouping or reduction at the end, just build the shard directly
     return [
         Shard.from_items(
-            tqdm(
-                build_stream(ctx.shard, operations),
-                desc=f"fused[{op_names}]: shard {ctx.shard_idx + 1}/{ctx.total_shards}",
-                mininterval=10,
-            ),
+            build_stream(ctx.shard, operations),
             ctx.chunk_size,
             ctx.shard.context,
             idx=ctx.shard_idx,
@@ -915,11 +960,6 @@ class Backend:
         elif len(shards) != len(aux_shards_per_shard):
             raise ValueError(f"Mismatch: {len(shards)} shards but {len(aux_shards_per_shard)} aux_shards entries")
 
-        aux_str = "with aux data" if any(aux_shards for aux_shards in aux_shards_per_shard) else ""
-        print(
-            f"Running {process_fn.__name__} on {len(shards)} shards {aux_str} "
-            f"with max parallelism {self.config.max_parallelism}".strip()
-        )
         total = len(shards)
         pending = set()
         finished = []
