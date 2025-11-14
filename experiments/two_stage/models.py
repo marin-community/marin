@@ -35,8 +35,6 @@ llama_8b_config = LlamaConfig(
     use_bias=False,
     use_layer_norm_weight=True,
     initializer_range=0.02,
-    # use_flash_attention=True,
-    flash_attention_block_size=512,
     rope=Llama3RotaryEmbeddingsConfig(
         # Using Llama3 defaults from the code
         theta=500000,

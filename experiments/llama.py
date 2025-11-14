@@ -221,7 +221,7 @@ llama_150m_train_config = SimpleTrainConfig(
 llama_300m_train_config = SimpleTrainConfig(
     resources=TpuPodConfig(tpu_type="v4-64"),
     train_batch_size=1024,
-    num_train_steps=1800,  # 1024 * 1024 * 18000 = 18B tokens
+    num_train_steps=18000,  # 1024 * 1024 * 18000 = 18B tokens
     learning_rate=3e-3,
     weight_decay=0.1,
 )

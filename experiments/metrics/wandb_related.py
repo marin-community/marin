@@ -157,8 +157,6 @@ def get_vocab_size_for_tokenizer(tokenizer: str) -> int | None:
         vocab_size = 32_000
     elif tokenizer == "gpt2":
         vocab_size = 50_257
-    elif tokenizer == "stanford-crfm/marin-tokenizer":
-        vocab_size = 128_256
     else:
         logger.error(f"Unknown tokenizer: {tokenizer}")
         return None
