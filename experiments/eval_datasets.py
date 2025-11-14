@@ -16,7 +16,7 @@ import dataclasses
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, raw2json
+from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
 
 from experiments.defaults import default_download
 
@@ -202,7 +202,7 @@ class EvalDataset:
 # This creates a JSON file representing the auxiliary training data subset of MMLU
 mmlu_aux_eval = ExecutorStep(
     name="evaluation/mmlu-eval-aux",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["all"],
@@ -221,7 +221,7 @@ mmlu_aux_eval = ExecutorStep(
 # This creates one file per subject from MMLU, excluding the all and auxiliary training subsets
 mmlu_subject_eval = ExecutorStep(
     name="evaluation/mmlu-eval-subject",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["*"],
@@ -241,7 +241,7 @@ mmlu_subject_eval = ExecutorStep(
 # This creates a JSON file representing the train and validation data subset of boolq
 boolq_eval = ExecutorStep(
     name="evaluation/boolq-eval",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="google/boolq",
         subsets=["*"],
@@ -260,7 +260,7 @@ boolq_eval = ExecutorStep(
 # This creates a JSON file representing the training and validation data subset of piqa
 piqa_eval = ExecutorStep(
     name="evaluation/piqa",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="ybisk/piqa",
         subsets=["*"],
@@ -279,7 +279,7 @@ piqa_eval = ExecutorStep(
 # This creates a JSON file representing the training and validation data subset of winogrande_xl
 winogrande_eval = ExecutorStep(
     name="evaluation/winogrande",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="allenai/winogrande",
         subsets=["default"],
@@ -298,7 +298,7 @@ winogrande_eval = ExecutorStep(
 # This creates a JSON file representing the train and validation splits of ARC-Easy
 arc_easy_eval = ExecutorStep(
     name="evaluation/arc-easy",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="allenai/ai2_arc",
         subsets=["ARC-Easy"],
@@ -317,7 +317,7 @@ arc_easy_eval = ExecutorStep(
 # This creates a JSON file representing the train and validation splits of ARC-Challenge
 arc_challenge_eval = ExecutorStep(
     name="evaluation/arc-challenge",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="allenai/ai2_arc",
         subsets=["ARC-Challenge"],
@@ -336,7 +336,7 @@ arc_challenge_eval = ExecutorStep(
 # This creates a JSON file for the train and validation subsets of OpenBookQA
 openbookqa_eval = ExecutorStep(
     name="evaluation/openbookqa-eval",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="allenai/openbookqa",
         subsets=["main"],
@@ -355,7 +355,7 @@ openbookqa_eval = ExecutorStep(
 # This creates a JSON file representing the training and validation splits for hellaswag
 hellaswag_eval = ExecutorStep(
     name="evaluation/hellaswag-eval",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="Rowan/hellaswag",
         subsets=["*"],
@@ -374,7 +374,7 @@ hellaswag_eval = ExecutorStep(
 # This creates a JSON file representing the test and validation splits for MMLU-Pro
 mmlu_pro_eval = ExecutorStep(
     name="evaluation/MMLU-Pro-eval",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="TIGER-Lab/MMLU-Pro",
         subsets=["*"],
@@ -393,7 +393,7 @@ mmlu_pro_eval = ExecutorStep(
 # This creates a JSON file representing the test and validation splits for openai_humaneval
 humaneval_eval = ExecutorStep(
     name="evaluation/humaneval-eval",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="openai/openai_humaneval",
         subsets=["*"],
@@ -410,7 +410,7 @@ humaneval_eval = ExecutorStep(
 # This creates a JSON file representing the train, test, and validation splits for mbpp
 mbpp_eval = ExecutorStep(
     name="evaluation/mbpp-eval",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="google-research-datasets/mbpp",
         subsets=["*"],
@@ -444,7 +444,7 @@ eval_datasets = [
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
 mmlu_convert_dolma = ExecutorStep(
     name="decontamination/mmlu-dolma",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["all"],
