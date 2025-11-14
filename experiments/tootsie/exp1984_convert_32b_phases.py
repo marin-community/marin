@@ -20,9 +20,9 @@ Export checkpoints for every Marin 32B "Tootsie" phase described in
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Sequence
 
 from levanter.trainer import TrainerConfig
 

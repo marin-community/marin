@@ -20,7 +20,7 @@ import levanter.infra.cli_helpers
 import ray
 from levanter.checkpoint import discover_latest_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
-from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
+from levanter.infra.ray_tpu import run_on_pod_resumable
 from levanter.main import export_lm_to_hf
 from levanter.main.export_lm_to_hf import ConvertLmConfig
 from levanter.models.lm_model import LmConfig
@@ -101,14 +101,8 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
         export_lm_to_hf.main(convert_config)
 
     if isinstance(hw_config, TpuPodConfig):
-        if hw_config.slice_count == 1:
-            return run_on_pod_resumable(convert_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
-        return run_on_pod_multislice_resumable(
-            convert_task,
-            config.resources.accelerator_descriptor(),
-            hw_config.slice_count,
-            max_retries_failure=10,
-        )
+        assert (hw_config.slice_count == 1, "Export currently works on single slices at present.")
+        return run_on_pod_resumable(convert_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
 
     return ray.get(convert_task.remote())
 
