@@ -1284,8 +1284,8 @@ async def extend_cache_with_other_cache(
     try:
 
         logger.info(f"Copying data from {source_path} to {dest_path}.")
-        dest = TreeStore.open(examplar, dest_path, mode="a", cache_metadata=False)
-        source = TreeStore.open(examplar, source_path, mode="r", cache_metadata=True)
+        dest = TreeStore.open(exemplar, dest_path, mode="a", cache_metadata=False)
+        source = TreeStore.open(exemplar, source_path, mode="r", cache_metadata=True)
 
         source_num_rows = await source.async_len()
 
@@ -1334,13 +1334,13 @@ async def _copy_in_batches(dest_array, dest_offset, src_array, src_len, elems_pe
 
 
 async def extend_cache_metadata_with_other(
-    dest_path: str, source_path: str, examplar: dict, data_offset_tree: PyTree[int], row_offset
+    dest_path: str, source_path: str, exemplar: dict, data_offset_tree: PyTree[int], row_offset
 ) -> int:
     """Copies just the offsets and shapes (if present)"""
     try:
         logger.info(f"Copying metadata from {source_path} to {dest_path}.")
-        dest = TreeStore.open(examplar, dest_path, mode="a")
-        source = TreeStore.open(examplar, source_path, mode="r", cache_metadata=True)
+        dest = TreeStore.open(exemplar, dest_path, mode="a")
+        source = TreeStore.open(exemplar, source_path, mode="r", cache_metadata=True)
 
         source_num_rows = await source.async_len()
 
