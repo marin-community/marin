@@ -40,16 +40,11 @@ from jax.sharding import PartitionSpec
 from jaxtyping import PRNGKeyArray
 
 try:
-    from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds  # type: ignore[import-not-found]
-    from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_kernel import (
-        _splash_attention as _splash_attention_impl,
-    )
-except Exception:  # pragma: no cover - optional dep
-    SegmentIds = None
+    from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_kernel import _splash_attention
+except Exception:
     _SPLASH_KERNEL_SUPPORTS_SINKS = False
 else:
-    _SPLASH_KERNEL_SUPPORTS_SINKS = "sinks" in inspect.signature(_splash_attention_impl).parameters
-    del _splash_attention_impl
+    _SPLASH_KERNEL_SUPPORTS_SINKS = "sinks" in inspect.signature(_splash_attention).parameters
 
 from ..inference.page_table import PageBatchInfo, PageTableSpec
 from .kv_cache import KvPageCache
@@ -733,17 +728,18 @@ def _bin_and_group_axes_by_function(q, k, v, QPos, KPos, Key):
     return q_class, k_class, v_class
 
 
+def _maybe_flatten(q, axes, name):
+    if axes:
+        q = q.flatten_axes(axes, name)
+    else:
+        q = q.broadcast_axis(Axis(name, 1))
+    return q
+
+
 def _reshape_axes_for_bshd_bins(q, q_class, output_order=("B", "S", "H", "D")):
     """
     Reshape the axes of a qkv as BSHD to match the bins in q_class
     """
-
-    def _maybe_flatten(q, axes, name):
-        if axes:
-            q = q.flatten_axes(axes, name)
-        else:
-            q = q.broadcast_axis(Axis(name, 1))
-        return q
 
     q = _maybe_flatten(q, q_class["B"], "B")
     q = _maybe_flatten(q, q_class["S"], "S")
@@ -777,14 +773,14 @@ def _prepare_sinks_for_splash(attn_sink: NamedArray, q_class, physical_axes_q: P
             sink_axis_names.add(ax.name)
 
     if batch_axes:
-        sink = sink.flatten_axes(tuple(ax.name for ax in batch_axes), "splash_batch")
+        sink = _maybe_flatten(sink, batch_axes, "splash_batch")
     else:
-        sink = sink.broadcast_axis(Axis("splash_batch", 1))
+        sink = _maybe_flatten(sink, (), "splash_batch")
 
     if head_axes:
-        sink = sink.flatten_axes(tuple(ax.name for ax in head_axes), "splash_head")
+        sink = _maybe_flatten(sink, head_axes, "splash_head")
     else:
-        sink = sink.broadcast_axis(Axis("splash_head", 1))
+        sink = _maybe_flatten(sink, (), "splash_head")
 
     sink = sink.rearrange(("splash_batch", "splash_head"))
 
