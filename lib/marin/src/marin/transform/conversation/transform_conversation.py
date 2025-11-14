@@ -38,8 +38,7 @@ import fsspec
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
 from marin.utils import fsspec_mkdirs
-from zephyr import Dataset, flow_backend
-from zephyr.writers import write_jsonl_file
+from zephyr import Dataset, atomic_rename, flow_backend, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
 
@@ -311,11 +310,13 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
 def process_shard_task(task: ShardTask) -> dict:
     """Process a single shard of a dataset subset/split.
 
-    Loads a specific shard from HuggingFace Hub, transforms records, and writes to a single output file.
+    Loads a specific shard from HuggingFace Hub, transforms records, and writes to output file.
     """
     adapter = unwrap_versioned_value(task.cfg.adapter).copy()
     if adapter is None:
         raise ValueError("Transform configuration requires an adapter.")
+
+    output_filename = _shard_filename(task.output_path, task.shard_idx)
 
     dataset_kwargs: dict[str, object] = {
         "path": task.source,
@@ -329,9 +330,6 @@ def process_shard_task(task: ShardTask) -> dict:
     dataset = datasets.load_dataset(**dataset_kwargs)
     shard_dataset = dataset.shard(num_shards=task.num_shards, index=task.shard_idx)
 
-    subset_name = task.subset or "default"
-    output_filename = _shard_filename(task.output_path, task.shard_idx)
-
     def transform_records():
         """Generator that yields transformed records."""
         for raw_row in shard_dataset:
@@ -339,8 +337,10 @@ def process_shard_task(task: ShardTask) -> dict:
             if transformed_row is not None:
                 yield transformed_row.model_dump()
 
-    result = write_jsonl_file(transform_records(), output_filename)
+    with atomic_rename(output_filename) as tmp_filename:
+        result = write_jsonl_file(transform_records(), tmp_filename)
 
+    subset_name = task.subset or "default"
     logging.info(
         f"Wrote {result['count']} rows to {result['path']} "
         f"for subset={subset_name} split={task.split} shard={task.shard_idx}"
@@ -361,19 +361,27 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
 
     Streams dataset from HuggingFace Hub and processes each shard in parallel using Zephyr.
     Each shard is processed independently and written to a separate output file.
+    Skips processing for shards with existing metrics files.
     """
     backend = flow_backend()
 
-    # Get all shard tasks and process in parallel
-    tasks = list(get_dataset_tasks(cfg))
-    logger.info(f"Processing {len(tasks)} shards across all subset/split combinations")
-    pipeline = Dataset.from_list(tasks).map(process_shard_task)
-    results = list(backend.execute(pipeline))
+    all_tasks = list(get_dataset_tasks(cfg))
+    logger.info(f"Found {len(all_tasks)} total shards across all subset/split combinations")
 
+    metrics_path = os.path.join(cfg.output_path, "metrics")
+    pipeline = (
+        Dataset.from_list(all_tasks)
+        .map(process_shard_task)
+        .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
+    )
+    metric_files = list(backend.execute(pipeline))
+
+    # Log summary by subset/split
     from collections import defaultdict
 
     by_subset_split = defaultdict(list)
-    for result in results:
+    for metric_file in metric_files:
+        result = next(iter(load_jsonl(metric_file)))
         key = (result["subset"], result["split"])
         by_subset_split[key].append(result)
 
