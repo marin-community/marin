@@ -7,7 +7,7 @@ Provide **actionable feedback on real bugs and logic errors**. Focus on issues t
 
 ### Critical Issues (Always Flag)
 - **Logic errors**: Off-by-one errors, incorrect loop conditions, wrong operators
-- **Bugs that cause crashes**: Null pointer dereferences, index out of bounds, type mismatches
+- **Bugs that cause crashes**: None value errors (e.g., AttributeError on None), index out of bounds, type mismatches
 - **Data flow errors**: Variables used before initialization, incorrect data transformations
 - **Algorithmic correctness**: Mathematical errors, incorrect tensor shapes/dimensions, wrong model behavior
 - **Security vulnerabilities**: SQL injection, XSS, command injection, exposed secrets
