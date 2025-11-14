@@ -16,13 +16,16 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-import braceexpand
 import fsspec
+from braceexpand import braceexpand
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -80,6 +83,7 @@ class WriteDataOp:
     batch_size: int = 1000  # For parquet
     tokenizer_name: str | None = None  # For levanter_cache
     format: object | None = None  # For levanter_cache (LmDatasetFormatBase)
+    skip_existing: bool = False  # Skip writing if output file already exists
 
 
 @dataclass
@@ -301,7 +305,7 @@ class Dataset(Generic[T]):
         protocol = fsspec.core.split_protocol(pattern)[0]
 
         files = []
-        for expanded in braceexpand.braceexpand(pattern):
+        for expanded in braceexpand(pattern):
             for f in fs.glob(expanded):
                 if protocol:
                     files.append(f"{protocol}://{f}")
@@ -526,26 +530,49 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, ReshardOp(num_shards)])
 
-    def write_jsonl(self, output_pattern: str) -> Dataset[str]:
+    def write_jsonl(self, output_pattern: str, skip_existing: bool = False) -> Dataset[str]:
         """Write records as JSONL files.
 
         Compression is automatically inferred from the file extension.
+
+        Args:
+            output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}.jsonl.gz")
+            skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
         """
-        return Dataset(self.source, [*self.operations, WriteDataOp(output_pattern, writer_type="jsonl")])
+        return Dataset(
+            self.source,
+            [*self.operations, WriteDataOp(output_pattern, writer_type="jsonl", skip_existing=skip_existing)],
+        )
 
     def write_parquet(
         self,
         output_pattern: str,
         schema: object | None = None,
         batch_size: int = 1000,
+        skip_existing: bool = False,
     ) -> Dataset[str]:
         """Write records as Parquet files.
 
         Schema can be provided or inferred from the first record or dataclass type.
+
+        Args:
+            output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}.parquet")
+            schema: PyArrow schema (optional, will be inferred if not provided)
+            batch_size: Number of records to batch before writing (default: 1000)
+            skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
         """
         return Dataset(
             self.source,
-            [*self.operations, WriteDataOp(output_pattern, writer_type="parquet", schema=schema, batch_size=batch_size)],
+            [
+                *self.operations,
+                WriteDataOp(
+                    output_pattern,
+                    writer_type="parquet",
+                    schema=schema,
+                    batch_size=batch_size,
+                    skip_existing=skip_existing,
+                ),
+            ],
         )
 
     def write_levanter_cache(

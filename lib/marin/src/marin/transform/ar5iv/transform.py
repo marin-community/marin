@@ -271,7 +271,7 @@ def main(cfg: Config) -> None:
         Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
         .map(clean_ar5iv_record)
-        .write_jsonl(f"{cfg.output_path}/html_clean/{{shard:05d}}.jsonl.gz")
+        .write_jsonl(f"{cfg.output_path}/html_clean/{{shard:05d}}.jsonl.gz", skip_existing=True)
     )
     list(backend.execute(clean_pipeline))
 
@@ -281,7 +281,7 @@ def main(cfg: Config) -> None:
         Dataset.from_files(f"{cfg.output_path}/html_clean/**/*.jsonl.gz")
         .flat_map(load_jsonl)
         .map(markdownify_ar5iv_record)
-        .write_jsonl(f"{cfg.output_path}/md/{{shard:05d}}.jsonl.gz")
+        .write_jsonl(f"{cfg.output_path}/md/{{shard:05d}}.jsonl.gz", skip_existing=True)
     )
     list(backend.execute(markdown_pipeline))
 

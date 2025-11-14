@@ -318,3 +318,24 @@ in parallel.
 
 The implementation is best-effort and redistributes chunks across shards in
 round-robin fashion without splitting individual chunks.
+
+### Resuming from Failures
+
+For a pure map pipeline, you can leverage Zephyr's `skip_existing` functionality
+to skip working on shards that have already been processed. As an optimization,
+any operations _before_ the output file are also skipped.
+
+```python
+ds = (Dataset
+    .from_files("gs://input/*.jsonl")
+    .flat_map(load_jsonl)
+    .map(expensive_transform)
+    .write_jsonl("gs://output/processed-{shard:05d}-of-{total:05d}.jsonl", skip_existing=True)
+)
+```
+
+For example, if you have 5 input files and outputs for shards 1 and 3 already
+exist, the pipeline will:
+- Process shards 0, 2, and 4 (creating new outputs)
+- Skip processing shards 1 and 3 (preserving empty shards internally)
+- Skip writing to existing output files for shards 1 and 3

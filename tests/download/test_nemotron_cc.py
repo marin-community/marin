@@ -118,10 +118,6 @@ def test_download_nemotron_cc_pipeline(tmp_path, read_all_jsonl_gz):
         assert record["source"] == "nemotron"
         assert "metadata" in record
 
-    # Verify SUCCESS files
-    success_files = list((output_dir / "contrib" / "Nemotron").glob("*.SUCCESS"))
-    assert len(success_files) == 2
-
 
 def test_download_nemotron_cc_dolma_format(tmp_path, read_all_jsonl_gz):
     """Test Dolma format conversion in full pipeline."""

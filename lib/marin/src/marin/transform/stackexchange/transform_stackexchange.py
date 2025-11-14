@@ -162,6 +162,6 @@ def process_stackexchange_dump(cfg: StackExchangeExtractionConfig) -> None:
             )
         )
         .filter(lambda record: record is not None)
-        .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+        .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
     )
     list(backend.execute(pipeline))

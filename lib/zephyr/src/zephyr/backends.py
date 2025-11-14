@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from itertools import groupby
 from typing import Any, Literal, Protocol, TypeVar
 
+import fsspec
 import msgspec
 import numpy as np
 import ray
@@ -459,6 +460,17 @@ def process_shard_fused(
             yield from build_stream(make_windows(stream_input, op.folder_fn, op.initial_state), rest, op_index + 1)
         elif isinstance(op, WriteDataOp):
             output_path = format_shard_path(op.output_pattern, ctx.shard_idx, ctx.total_shards)
+
+            # Check if we should skip writing because file already exists
+            if op.skip_existing:
+                fs = fsspec.core.url_to_fs(output_path)[0]
+                if fs.exists(output_path):
+                    logger.info(f"Skipping write, output exists: {output_path}")
+                    # Don't consume stream - lazy evaluation means upstream processing is skipped
+                    yield from build_stream(iter([output_path]), rest, op_index + 1)
+                    return
+
+            # Write the file
             if op.writer_type == "jsonl":
                 result = write_jsonl_file(stream_input, output_path)["path"]
             elif op.writer_type == "parquet":
