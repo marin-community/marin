@@ -24,7 +24,6 @@ from haliax.partitioning import round_axis_for_partitioning
 from jax.sharding import Mesh
 
 import haliax as hax
-from levanter.checkpoint import load_checkpoint
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
 from levanter.layers.attention import AttentionMask, AttentionBackend
 from levanter.models.llama import LlamaConfig
@@ -128,10 +127,6 @@ def sample_completion(
         
         # Append to sequence
         current_tokens = jnp.concatenate([current_tokens, jnp.array([sampled_token])])
-        
-        # Stop if we hit EOS (optional)
-        # if int(sampled_token) == eos_token_id:
-        #     break
     
     return np.array(generated_tokens), log_probs
 
@@ -140,7 +135,6 @@ def compute_policy_gradient_loss(
     model,
     prompt_tokens: jax.Array,
     completions_tokens: list[np.ndarray],
-    old_log_probs_list: list[list[float]],
     advantages: jnp.ndarray,
     key: jax.random.PRNGKey,
 ) -> jax.Array:
@@ -151,7 +145,6 @@ def compute_policy_gradient_loss(
         model: Current policy model
         prompt_tokens: Named array of prompt tokens
         completions_tokens: List of generated token arrays (one per sample)
-        old_log_probs_list: List of per-token log probs from rollout
         advantages: GRPO advantages [group_size]
         key: JAX random key
     
@@ -184,7 +177,7 @@ def compute_policy_gradient_loss(
         log_probs_dist = jax.nn.log_softmax(relevant_logits, axis=-1)
         
         # Extract log probs for actual tokens
-        token_log_probs = log_probs_dist[jnp.arange(completion_len), completion_tokens]
+        token_log_probs = log_probs_dist[:, completion_tokens]
         
         # Sum over sequence
         total_log_prob = jnp.sum(token_log_probs)
@@ -285,15 +278,13 @@ def main():
             
             # 1. Rollout: Generate group_size samples
             completions = []
-            log_probs_list = []
             
             for i in range(args.group_size):
                 key, subkey = jax.random.split(key)
-                tokens, lps = sample_completion(
+                tokens, _ = sample_completion(
                     model, prompt_named, args.max_gen_tokens, subkey, args.temperature
                 )
                 completions.append(tokens)
-                log_probs_list.append(lps)
             
             # 2. Compute rewards (exact token match)
             rewards = jnp.array([compute_reward(comp, expected_tokens) for comp in completions])
@@ -304,7 +295,7 @@ def main():
             # 4. Compute loss and gradients
             def loss_fn(model):
                 return compute_policy_gradient_loss(
-                    model, prompt_named, completions, log_probs_list, advantages, key
+                    model, prompt_named, completions, advantages, key
                 )
             
             loss, grads = jax.value_and_grad(loss_fn)(model)
