@@ -1,8 +1,7 @@
 """Minimal experiment to test if softmax_cross_entropy varies with sequence length."""
 
 import jax.numpy as jnp
-import optax
-
+import jax
 
 def test_logprob_sequence_independence():
     """Test if logprobs differ when computed all at once vs one at a time."""
@@ -22,14 +21,12 @@ def test_logprob_sequence_independence():
     labels = jnp.array([1, 2, 0, 1, 2], dtype=jnp.int32)
     
     # Compute all at once
-    logprobs_all = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
+    logprobs_all = jax.nn.logsumexp(logits, axis=logits.ndim-1)
     
     # Compute one at a time
     logprobs_individual = []
     for i in range(seq_len):
-        logprob = optax.softmax_cross_entropy_with_integer_labels(
-            logits[i:i+1], labels[i:i+1]
-        )
+        logprob = jax.nn.logsumexp(logits[i:i+1], axis=logits[i:i+1].ndim-1)
         logprobs_individual.append(logprob[0])
     
     logprobs_individual = jnp.array(logprobs_individual)
