@@ -266,7 +266,7 @@ def _restore_old_ts(
                 to_log += f"\n  - {leaf_paths[i]}"
             logger.warning(to_log)
 
-    deser_leaves = manager.deserialize_with_paths(shardings=shardings_to_load, paths=paths_to_load)
+    deser_leaves = manager.deserialize_with_paths(shardings=shardings_to_load, paths=paths_to_load, concurrent_gb=300)
     return deser_leaves, indices_to_load
 
 
