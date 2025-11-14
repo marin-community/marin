@@ -59,7 +59,6 @@ class TreeStore(Generic[T]):
         """
         Open a TreeStoreBuilder from a file.
         """
-        print("Exemplar? ", exemplar)
         tree = _construct_builder_tree(exemplar, path, mode, cache_metadata)
         return TreeStore(tree, path, mode)
 

@@ -19,28 +19,18 @@ Supports both regular file paths and HuggingFace datasets. For HF datasets, down
 them first then tokenizes the downloaded files.
 
 Usage:
-    # Tokenize a single file for testing
     uv run zephyr --entry-point=main \
         --backend=ray --cluster=us-central2 --max-parallelism=10 --memory=2GB \
         lib/marin/src/marin/processing/tokenize/tokenize.py \
-        --train_paths '["gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-d1522a/0001.jsonl.gz"]' \
+        --train_paths '["gs://marin-us-central2/raw/dclm/a3b142c/huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_04_of_10/local-shard_0_of_10/*.zst"]' \
         --cache_path gs://marin-us-central2/cache/test-tokenize \
-        --tokenizer gpt2 \
-        --validation_paths '[]'
-
-    # Tokenize entire directory
-    uv run zephyr --entry-point=main \
-        --backend=ray --cluster=us-central2 --max-parallelism=500 --memory=4GB \
-        lib/marin/src/marin/processing/tokenize/tokenize.py \
-        --train_paths '["gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-d1522a/"]' \
-        --cache_path gs://marin-us-central2/cache/ar5iv-gpt2 \
-        --tokenizer gpt2 \
+        --tokenizer meta-llama/Meta-Llama-3-8B \
         --validation_paths '[]'
 
 The tokenized data will be written to:
     {cache_path}/train/     - Training cache
     {cache_path}/validation/ - Validation cache (if provided)
-"""
+"""  # noqa: E501
 
 import abc
 import asyncio
@@ -119,7 +109,7 @@ class TokenizeConfig(TokenizeConfigBase):
     The format of the dataset. This is used to determine how to tokenize the data.
     See Levanter's documentation for more details.
     """
-    window_size_bytes: int = 10_000_000_000
+    window_size_bytes: int = 1_000_000_000
     allow_test_in_train: bool = False
     """
     If True, allows 'test' or 'validation' in the train_paths. This is useful for datasets that have
@@ -177,7 +167,7 @@ class HfTokenizeConfig(TokenizeConfigBase):
     name: str | None = None  # HF dataset name
     tags: list[str] = dataclasses.field(default_factory=list)  # tags to be added to config
     format: LmDatasetFormatBase = TextLmDatasetFormat()  # noqa: RUF009
-    window_size_bytes: int = 10_000_000_000
+    window_size_bytes: int = 1_000_000_000
 
     sample_count: int | None = None
     """Number of samples to tokenize. If None, tokenize all samples."""
@@ -463,7 +453,7 @@ def tokenize(config: TokenizeConfigBase):
         temp_shards = (
             ds.batch(64)
             .map_shard(lambda batches: _tokenize_batches(config, batches))
-            .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={})
+            .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
         shard_paths = list(backend.execute(temp_shards))

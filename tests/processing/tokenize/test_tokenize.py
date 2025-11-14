@@ -128,10 +128,11 @@ def test_mixed_paths_one_invalid_inputname():
 def test_tokenize_full_pipeline_integration(tmp_path):
     """Integration test for the full tokenization pipeline."""
     config = HfTokenizeConfig(
-        id="dlwh/wikitext_2_detokenized",
+        id="dlwh/wikitext_103_detokenized",
         cache_path=str(tmp_path / "cache"),
         tokenizer="gpt2",
         sample_count=100,
+        window_size_bytes=1_000_000,
         format=TextLmDatasetFormat(),
     )
 

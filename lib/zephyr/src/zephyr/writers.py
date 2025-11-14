@@ -44,7 +44,8 @@ def atomic_rename(output_path: str) -> Iterable[str]:
 
     try:
         yield temp_path
-        fs.mv(temp_path, output_path)
+        # not so atomic if on a remote FS and recursive, but ...
+        fs.mv(temp_path, output_path, recursive=True)
     except Exception:
         # Try to cleanup if something went wrong
         try:
@@ -207,10 +208,14 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
 
     count = 1
     with atomic_rename(output_path) as tmp_path:
-        with SerialCacheWriter(tmp_path, exemplar, metadata) as writer:
+        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=metadata) as writer:
             writer.write_batch([exemplar])
-            for record in records:
-                writer.write_batch([record])
-                count += 1
+            for batch in batchify(records):
+                writer.write_batch(batch)
+                count += len(batch)
+
+    # write success sentinel
+    with fsspec.open(f"{output_path}/.success", "w") as f:
+        f.write("")
 
     return {"path": output_path, "count": count}

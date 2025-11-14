@@ -20,7 +20,7 @@ import logging
 import re
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 import fsspec
 from braceexpand import braceexpand
@@ -88,7 +88,7 @@ class WriteDataOp:
     """
 
     output_pattern: str
-    writer_type: str  # "jsonl", "parquet", or "levanter_cache"
+    writer_type: Literal["jsonl", "parquet", "levanter_cache"]
 
     # Format-specific parameters (only used by relevant writer)
     levanter_metadata: dict[str, Any] | None = None
@@ -623,6 +623,7 @@ class Dataset(Generic[T]):
         self,
         output_pattern: str,
         metadata: dict[str, Any],
+        skip_existing: bool = False,
     ) -> Dataset[str]:
         """Write tokenized records to Levanter cache format.
 
@@ -635,9 +636,7 @@ class Dataset(Generic[T]):
             [
                 *self.operations,
                 WriteDataOp(
-                    output_pattern,
-                    writer_type="levanter_cache",
-                    levanter_metadata=metadata,
+                    output_pattern, writer_type="levanter_cache", levanter_metadata=metadata, skip_existing=skip_existing
                 ),
             ],
         )

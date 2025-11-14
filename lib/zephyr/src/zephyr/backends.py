@@ -419,13 +419,12 @@ def process_shard_fused(
     Returns:
         List of output shards (single shard for most ops, multiple for GroupByLocalOp)
     """
-    op_names = "|".join(op.__class__.__name__.replace("Op", "") for op in operations)
+    op_names = "|".join([str(op) for op in operations])
     logger.info(f"fused[{len(operations)}]: shard {ctx.shard_idx + 1}/{ctx.total_shards}")
 
     # we first build a stream of all of the fused operations.
     # if we have a group by or reduction, we then apply them at the end
     # if not, we yield our final shard directly.
-
     def build_stream(stream_input, ops, op_index=0):
         """Recursively build the generator pipeline.
 
@@ -439,6 +438,9 @@ def process_shard_fused(
             return
 
         op, *rest = ops
+
+        # attach a tqdm progress bar to each operation
+        stream_input = tqdm(stream_input, desc=str(op), mininterval=10)
 
         if isinstance(op, MapOp):
             yield from build_stream((op.fn(item) for item in stream_input), rest, op_index + 1)
@@ -463,7 +465,13 @@ def process_shard_fused(
             # Check if we should skip writing because file already exists
             if op.skip_existing:
                 fs = fsspec.core.url_to_fs(output_path)[0]
-                if fs.exists(output_path):
+                # levanter writes directories, so use a sentinel file to check for existence
+                if op.writer_type == "levanter_cache":
+                    test_path = os.path.join(output_path, ".success")
+                else:
+                    test_path = output_path
+
+                if fs.exists(test_path):
                     logger.info(f"Skipping write, output exists: {output_path}")
                     # Don't consume stream - lazy evaluation means upstream processing is skipped
                     yield from build_stream(iter([output_path]), rest, op_index + 1)
