@@ -1266,13 +1266,13 @@ class _MetadataCopier:
         with log_failures_to(self.parent):
             asyncio.run(
                 extend_cache_metadata_with_other(
-                    dest_path, source_path, processor.output_examplar, data_offset_tree, rows_so_far
+                    dest_path, source_path, processor.output_exemplar, data_offset_tree, rows_so_far
                 )
             )
 
 
 async def extend_cache_with_other_cache(
-    dest_path: str, source_path: str, examplar: dict, data_offset_tree: PyTree[int], row_offset
+    dest_path: str, source_path: str, exemplar: dict, data_offset_tree: PyTree[int], row_offset
 ) -> int:
     """
     Copies the data from one cache to another, appending it to the end of the destination cache.

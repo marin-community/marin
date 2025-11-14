@@ -299,9 +299,9 @@ def process_file_shard(shard, filters: list[FilterConfig], input_base: str) -> I
         attrs[filt_name] = attr_dict
 
     logger.info(f"Processing {input_path}")
-    keep = True
     for doc in load_file(input_path):
         doc_id = extract_id(doc, corpus_type)
+        keep = True
 
         for filt in filters:
             filt_attrs = attrs.get(filt.name, {}).get(doc_id)
