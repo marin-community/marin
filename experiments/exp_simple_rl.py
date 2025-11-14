@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 Simple RL training system in Levanter.
 
@@ -19,13 +33,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
-from haliax import Axis
-from haliax.partitioning import round_axis_for_partitioning
 from jax.sharding import Mesh
 
 import haliax as hax
+from haliax import Axis
+from haliax.partitioning import round_axis_for_partitioning
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
-from levanter.layers.attention import AttentionMask, AttentionBackend
+from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.models.llama import LlamaConfig
 
 
@@ -33,14 +47,14 @@ def compute_grpo_advantages(rewards: jnp.ndarray, group_size: int = 4) -> jnp.nd
     """
     Compute advantages using GRPO-style group ranking.
     Direct port from spirl simple_rl.py
-    
+
     GRPO groups samples from the same prompt and ranks them by reward.
     This is a simplified version that just uses mean-centering within groups.
-    
+
     Args:
         rewards: [batch] where batch = num_groups * group_size
         group_size: Number of samples per prompt
-    
+
     Returns:
         advantages: [batch]
     """
@@ -63,11 +77,11 @@ def compute_grpo_advantages(rewards: jnp.ndarray, group_size: int = 4) -> jnp.nd
 def compute_reward(generated_tokens: np.ndarray, expected_tokens: np.ndarray) -> float:
     """
     Compute reward based on exact token ID match.
-    
+
     Args:
         generated_tokens: Array of generated token IDs
         expected_tokens: Array of expected token IDs (e.g., tokenized "Paris")
-    
+
     Returns:
         1.0 if expected_tokens appear consecutively in generated_tokens, else 0.0
     """
@@ -86,14 +100,14 @@ def sample_completion(
 ) -> tuple[np.ndarray, list[float]]:
     """
     Sample tokens autoregressively and track logprobs.
-    
+
     Args:
         model: The language model
         prompt_tokens: Named array of prompt token IDs [position]
         max_tokens: Maximum number of tokens to generate
         key: JAX random key
         temperature: Sampling temperature
-    
+
     Returns:
         tokens: Generated token IDs (numpy array, not including prompt)
         log_probs: Per-token log probabilities (list of floats)
@@ -140,14 +154,14 @@ def compute_policy_gradient_loss(
 ) -> jax.Array:
     """
     Compute policy gradient loss by re-evaluating completions under current policy.
-    
+
     Args:
         model: Current policy model
         prompt_tokens: Named array of prompt tokens
         completions_tokens: List of generated token arrays (one per sample)
         advantages: GRPO advantages [group_size]
         key: JAX random key
-    
+
     Returns:
         loss: Scalar loss value
     """
@@ -171,7 +185,7 @@ def compute_policy_gradient_loss(
         completion_len = len(completion_tokens)
 
         # Extract relevant logits
-        relevant_logits = logits_array[prompt_len-1:prompt_len+completion_len-1, :]
+        relevant_logits = logits_array[prompt_len - 1 : prompt_len + completion_len - 1, :]
 
         # Compute log probs
         log_probs_dist = jax.nn.log_softmax(relevant_logits, axis=-1)
@@ -222,8 +236,6 @@ def main():
     print(f"Using {num_devices} devices in simple mesh configuration")
 
     with hax.axis_mapping(axis_mapping), mesh:
-        Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), axis_mapping)
-
         print("Loading HF checkpoint...")
         converter = HFCheckpointConverter(
             LlamaConfig,
@@ -233,9 +245,7 @@ def main():
 
         # Load config and override attention backend
         hf_config = converter.hf_config_from_hf_checkpoint(args.checkpoint)
-        model_config = converter.config_from_hf_config(
-            hf_config, overrides={"attn_backend": AttentionBackend.VANILLA}
-        )
+        model_config = converter.config_from_hf_config(hf_config, overrides={"attn_backend": AttentionBackend.VANILLA})
 
         model = converter.load_pretrained(
             model_config.model_type,
@@ -279,11 +289,9 @@ def main():
             # 1. Rollout: Generate group_size samples
             completions = []
 
-            for i in range(args.group_size):
+            for _ in range(args.group_size):
                 key, subkey = jax.random.split(key)
-                tokens, _ = sample_completion(
-                    model, prompt_named, args.max_gen_tokens, subkey, args.temperature
-                )
+                tokens, _ = sample_completion(model, prompt_named, args.max_gen_tokens, subkey, args.temperature)
                 completions.append(tokens)
 
             # 2. Compute rewards (exact token match)
@@ -293,10 +301,8 @@ def main():
             advantages = compute_grpo_advantages(rewards, args.group_size)
 
             # 4. Compute loss and gradients
-            def loss_fn(model):
-                return compute_policy_gradient_loss(
-                    model, prompt_named, completions, advantages, key
-                )
+            def loss_fn(model, completions=completions, advantages=advantages, key=key):
+                return compute_policy_gradient_loss(model, prompt_named, completions, advantages, key)
 
             loss, grads = jax.value_and_grad(loss_fn)(model)
 
