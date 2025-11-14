@@ -52,7 +52,7 @@ Provide **actionable feedback on real bugs and logic errors**. Focus on issues t
 ## Review Guidelines
 
 ### Prioritization
-1. **Stop if you find >3 issues**: If there are many minor issues, provide ONLY the 3 most critical ones and stop
+1. **Limit feedback to 3 issues unless multiple critical bugs are found**: If there are many minor issues, provide ONLY the 3 most critical ones. If you find multiple critical bugs (e.g., security vulnerabilities, logic errors), report all of them.
 2. **One comment per significant issue**: Combine related minor issues into a single comment
 3. **Skip nitpicking entirely**: If all issues are minor, provide NO feedback rather than overwhelm the developer
 
