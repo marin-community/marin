@@ -37,7 +37,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import lm_data_config
-from marin.schemas.web.convert import HtmlToMarkdownConfig
+from marin.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
 from marin.utilities.ray_utils import is_local_ray_cluster

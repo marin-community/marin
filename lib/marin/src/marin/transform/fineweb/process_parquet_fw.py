@@ -51,9 +51,8 @@ from datetime import datetime
 import draccus
 import fsspec
 import pandas as pd
-from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
+from marin.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig, convert_page
 from marin.utils import fsspec_glob, fsspec_rm
-from marin.web.convert import convert_page
 from warcio import ArchiveIterator
 from zephyr import Dataset, flow_backend
 from zephyr.writers import atomic_rename

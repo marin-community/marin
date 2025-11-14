@@ -31,9 +31,9 @@ from dataclasses import dataclass
 import draccus
 from zephyr import Dataset, flow_backend, load_jsonl
 
-from marin.schemas.web.convert import ExtractionConfig
+from marin.convert import ExtractionConfig
 from marin.utils import fsspec_glob
-from marin.web.convert import convert_page
+from marin.convert import convert_page
 
 logger = logging.getLogger("ray")
 

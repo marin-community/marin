@@ -14,7 +14,7 @@
 
 from pathlib import Path
 
-from marin.schemas.web.convert import TrafilaturaConfig
+from marin.convert import TrafilaturaConfig
 from marin.transform.stackexchange.filter_stackexchange import (
     FilterStackExchangeConfig,
     _process_file_with_filtering,

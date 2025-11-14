@@ -5,9 +5,9 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from experiments.exp579_ar5iv_markdownify import ARXIV_BLACKLISTED_SELECTORS
-from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
+from marin.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
 from marin.transform.ar5iv.transform_ar5iv import clean_html
-from marin.web.convert import convert_page
+from marin.convert import convert_page
 
 
 def prepare_expected_output(html: str, extract_method: str, extract_config: ExtractionConfig) -> str:

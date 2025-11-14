@@ -26,7 +26,7 @@ import logging
 from dataclasses import dataclass, field
 
 import draccus
-from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
+from marin.convert import ExtractionConfig, HtmlToMarkdownConfig
 from zephyr import Dataset, flow_backend, load_jsonl
 
 logger = logging.getLogger("ray")
@@ -43,7 +43,7 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
     Returns:
         Transformed record with markdown content
     """
-    from marin.web.convert import convert_page
+    from marin.convert import convert_page
 
     data_id = data["id"]
     html = data["text"]

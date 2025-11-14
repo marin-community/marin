@@ -29,7 +29,7 @@ from dataclasses import dataclass
 
 import draccus
 from bs4 import BeautifulSoup
-from marin.schemas.web.convert import ExtractionConfig
+from marin.convert import ExtractionConfig
 from marin.transform.ar5iv.transform import (
     clean_li,
     deconstruct_eqn,
@@ -47,7 +47,7 @@ from marin.transform.ar5iv.transform import (
     unwrap_eqn,
 )
 from marin.utils import fsspec_glob
-from marin.web.convert import convert_page
+from marin.convert import convert_page
 from zephyr import Dataset, flow_backend, load_jsonl
 
 logger = logging.getLogger("ray")
