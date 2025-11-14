@@ -36,8 +36,6 @@ import optax
 from jax.sharding import Mesh
 
 import haliax as hax
-from haliax import Axis
-from haliax.partitioning import round_axis_for_partitioning
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, load_tokenizer
 from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.models.llama import LlamaConfig
@@ -224,7 +222,6 @@ def main():
 
     # Load tokenizer
     tokenizer = load_tokenizer(args.checkpoint)
-    vocab_size = len(tokenizer)
 
     # Create simple mesh with all devices as replicas (no data parallelism requirement)
     # This allows batch_size=1 to work without sharding constraints
