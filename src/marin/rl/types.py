@@ -77,6 +77,9 @@ class Rollout(eqx.Module):
     episode_reward: float
     """The overall reward for the episode."""
 
+    temperature: float
+    """The temperature used to sample the response."""
+
     metadata: RolloutMetadata = RolloutMetadata()
     """Metadata about when/where this rollout was generated."""
 
@@ -113,6 +116,7 @@ class TrainingBatch(eqx.Module):
     loss_weights: ht.Float[NamedArray, "batch position"]
     loss_masks: ht.Int[NamedArray, "batch position"]
     policy_logprobs: ht.Float[NamedArray, "batch position"]
+    temperature: ht.Float[NamedArray, "batch"]
 
     def __len__(self) -> int:
         return self.input_ids.axis_size("batch")

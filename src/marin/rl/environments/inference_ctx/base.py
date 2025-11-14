@@ -108,6 +108,7 @@ class BaseInferenceContext:
         env_name: str,
         env_example_id: str,
         reward: float,
+        temperature: float,
         correctness_reward: float | None = None,
     ) -> Rollout:
         """Construct Rollout from a choice with validation."""
@@ -140,4 +141,5 @@ class BaseInferenceContext:
             token_rewards=token_rewards,
             episode_reward=float(reward),
             correctness_reward=correctness_reward,
+            temperature=temperature,
         )

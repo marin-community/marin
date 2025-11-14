@@ -249,6 +249,7 @@ class MathEnv(MarinEnv):
                     env_example_id=example.example_id,
                     reward=token_reward,
                     correctness_reward=correct_score,
+                    temperature=temperature,
                 )
 
                 group_rollouts.append(rollout)

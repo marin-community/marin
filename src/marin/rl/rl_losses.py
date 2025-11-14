@@ -22,8 +22,6 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-import haliax.haxtyping as ht
-from haliax import NamedArray
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmHeadModel
 
@@ -57,33 +55,41 @@ def compute_metadata_metrics(
 ) -> dict[str, jax.Array]:
     """Compute metadata metrics for the loss function."""
     batch_size, _ = policy_logprobs_array.shape
+
+    mean_ratio_difference = jnp.sum(
+        jnp.exp(current_logprobs - policy_logprobs_array) * loss_masks_array, axis=1
+    ) / jnp.sum(loss_masks_array, axis=1)
+    mean_ratio_difference = jnp.mean(mean_ratio_difference)
+
+    policy_entropy = -jnp.sum(
+        jnp.exp(policy_logprobs_array) * policy_logprobs_array * loss_masks_array, axis=1
+    ) / jnp.sum(loss_masks_array, axis=1)
+    policy_entropy = jnp.mean(policy_entropy)
+
+    mean_advantages = jnp.sum(loss_weights_array * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
+    mean_advantages = jnp.mean(mean_advantages)
+
     return {
-        "max_ratio_difference": jnp.max((current_logprobs - policy_logprobs_array) * loss_masks_array),
-        "mean_ratio_difference": (
-            jnp.sum((current_logprobs - policy_logprobs_array) * loss_masks_array) / jnp.sum(loss_masks_array)
-        ),
+        "max_ratio_difference": jnp.max(jnp.exp(current_logprobs - policy_logprobs_array) * loss_masks_array),
+        "mean_ratio_difference": mean_ratio_difference,
         "max_advantages": jnp.max(loss_weights_array),
-        "mean_advantages": jnp.mean(loss_weights_array),
-        "policy_entropy": (
-            -jnp.sum(jnp.exp(policy_logprobs_array) * policy_logprobs_array * loss_masks_array)
-            / jnp.sum(loss_masks_array)
-        ),
+        "mean_advantages": mean_advantages,
+        "policy_entropy": policy_entropy,
         "response_tokens_length": jnp.sum(loss_masks_array) / batch_size,
     }
 
 
 def compute_logprobs(
     model: LmHeadModel,
-    input_ids: ht.Int[NamedArray, "batch position"],
-    position_ids: ht.Int[NamedArray, "batch position"],
+    batch: TrainingBatch,
     key: jax.Array | None,
 ):
-    batch_size, seq_len = input_ids.array.shape
+    batch_size, seq_len = batch.input_ids.array.shape
 
     model_output = model(
-        input_ids=input_ids,
+        input_ids=batch.input_ids,
         attn_mask=AttentionMask.causal(),
-        pos_ids=position_ids,
+        pos_ids=batch.position_ids,
         key=key,
     )
 
@@ -91,14 +97,19 @@ def compute_logprobs(
     # We want logprob[j] = P(token[j] | tokens[0:j])
     # This comes from logits[j-1] indexed by token[j]
     logits_array = model_output.array.astype(jnp.float32)[:, :-1, :]  # Drop last position [batch, seq_len-1, vocab]
-    target_ids_array = input_ids.array[:, 1:]  # Drop first position [batch, seq_len-1]
-    log_probs = jax.nn.log_softmax(logits_array, axis=-1)
-    batch_idx = jnp.arange(batch_size)[:, None]
-    pos_idx = jnp.arange(seq_len - 1)
+    target_ids_array = batch.input_ids.array[:, 1:]  # Drop first position [batch, seq_len-1]
 
-    # Extract logprobs for the actual tokens
-    logprobs_shifted = log_probs[batch_idx, pos_idx, target_ids_array]  # [batch, seq_len-1]
-    logprobs = jnp.concatenate([jnp.zeros((batch_size, 1)), logprobs_shifted], axis=1)
+    safe_temperature = jnp.where(batch.temperature.array == 0, 1.0, batch.temperature.array).reshape(batch_size, 1, 1)
+    logits_array = logits_array / safe_temperature.astype(jnp.float32)
+
+    log_probs = jax.nn.log_softmax(logits_array, axis=-1)
+    logprobs_shifted = jnp.take_along_axis(log_probs, target_ids_array[..., None], axis=-1).squeeze(
+        -1
+    )  # [batch, seq_len-1]
+
+    logprobs = jnp.concatenate(
+        [jnp.zeros((logprobs_shifted.shape[0], 1), dtype=logprobs_shifted.dtype), logprobs_shifted], axis=1
+    )  # [batch, seq_len]
 
     return logprobs
 
@@ -121,8 +132,13 @@ def compute_ppo_loss_objective(
     if trainer_inference_importance_sampling_ratio is not None:
         loss_objective = trainer_inference_importance_sampling_ratio * loss_objective
     # Mean over response tokens per batch
-    loss = -1 * jnp.mean(jnp.sum(loss_objective, axis=1) / jnp.sum(loss_masks, axis=1))
-    return loss
+    loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
+
+    metadata = {
+        "loss_max_over_batch": -jnp.max(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)),
+        "loss_std_over_batch": jnp.std(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)),
+    }
+    return loss, metadata
 
 
 def cispo_loss_with_importance_sampling(
@@ -176,6 +192,18 @@ def cispo_loss_with_importance_sampling(
     }
 
 
+def current_and_policy_importance_sampling_ratio(
+    current_logprobs: jax.Array,
+    policy_logprobs_array: jax.Array,
+    loss_masks_array: jax.Array,
+    *,
+    clip_epsilon: float,
+) -> jax.Array:
+    current_logprobs = jax.lax.stop_gradient(current_logprobs)
+    prob_difference = jnp.exp(current_logprobs - policy_logprobs_array) * loss_masks_array
+    return jnp.clip(prob_difference, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon)
+
+
 def rloo_loss_with_importance_sampling(
     model: LmHeadModel,
     reference_model: LmHeadModel,
@@ -185,7 +213,6 @@ def rloo_loss_with_importance_sampling(
     kl_coef: float,
     clip_epsilon: float,
     do_trainer_inference_mismatch_importance_sampling: bool = False,
-    divide_by_entire_length: bool = False,
     synchronous: bool = False,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
@@ -206,11 +233,11 @@ def rloo_loss_with_importance_sampling(
 
     batch_size, seq_len = batch.input_ids.array.shape
     # Get logits from current policy
-    current_logprobs = compute_logprobs(model, batch.input_ids, batch.position_ids, key)
+    current_logprobs = compute_logprobs(model, batch, key)
     current_logprobs = current_logprobs * loss_masks_array
 
     if synchronous:
-        ratio = jnp.exp(current_logprobs - jax.lax.stop_gradient(current_logprobs))
+        ratio = jnp.exp(current_logprobs - jax.lax.stop_gradient(current_logprobs)) * loss_masks_array
     else:
         ratio = jnp.exp(current_logprobs - policy_logprobs_array)
 
@@ -220,17 +247,19 @@ def rloo_loss_with_importance_sampling(
 
     # Compute fraction of ratios that were clipped
     is_clipped = jnp.logical_or(ratio > 1.0 + clip_epsilon, ratio < 1.0 - clip_epsilon)
-    clip_fraction = jnp.mean(jnp.sum(is_clipped, axis=1) / jnp.sum(loss_masks_array, axis=1))
+    clip_fraction = jnp.mean(jnp.sum(is_clipped * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1))
 
     if do_trainer_inference_mismatch_importance_sampling:
-        trainer_inference_importance_sampling_ratio = (
-            jnp.exp(current_logprobs - policy_logprobs_array) * loss_masks_array
+        trainer_inference_importance_sampling_ratio = current_and_policy_importance_sampling_ratio(
+            current_logprobs,
+            policy_logprobs_array,
+            loss_masks_array,
+            clip_epsilon=clip_epsilon,
         )
-        trainer_inference_importance_sampling_ratio = jnp.minimum(trainer_inference_importance_sampling_ratio, 2.0)
     else:
         trainer_inference_importance_sampling_ratio = jnp.ones_like(current_logprobs)
 
-    reinforce_loss = compute_ppo_loss_objective(
+    reinforce_loss, metadata = compute_ppo_loss_objective(
         importance_sampling_ratio=ratio,
         loss_weights=loss_weights_array,
         loss_masks=loss_masks_array,
@@ -244,7 +273,7 @@ def rloo_loss_with_importance_sampling(
     # KL regularization
 
     if kl_coef > 0:
-        reference_logprobs = compute_logprobs(reference_model, batch.input_ids, batch.position_ids, key)
+        reference_logprobs = compute_logprobs(reference_model, batch, key)
         reference_logprobs = reference_logprobs * loss_masks_array
         # log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
         kl_penalty = jnp.exp(reference_logprobs - current_logprobs) - (reference_logprobs - current_logprobs) - 1
@@ -257,8 +286,18 @@ def rloo_loss_with_importance_sampling(
 
     loss = reinforce_loss + kl_loss
 
+    trainer_inference_importance_sampling_ratio_mean = jnp.mean(
+        jnp.sum(trainer_inference_importance_sampling_ratio * loss_masks_array, axis=1)
+        / jnp.sum(loss_masks_array, axis=1)
+    )
+    trainer_inference_importance_sampling_ratio_min = jnp.min(trainer_inference_importance_sampling_ratio)
     ratio_mean_over_responses_only = jnp.mean(jnp.sum(ratio, axis=1) / jnp.sum(loss_masks_array, axis=1))
-    clipped_ratio_mean_over_responses_only = jnp.mean(jnp.sum(clipped_ratio, axis=1) / jnp.sum(loss_masks_array, axis=1))
+    clipped_ratio_mean_over_responses_only = jnp.mean(
+        jnp.sum(clipped_ratio * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
+    )
+    kl_penalty_over_responses_only = jnp.mean(
+        jnp.sum(kl_penalty * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
+    )
 
     return loss, {
         "ratio_mean": ratio_mean_over_responses_only,
@@ -266,8 +305,11 @@ def rloo_loss_with_importance_sampling(
         "clip_fraction": clip_fraction,
         "reinforce_loss": reinforce_loss,
         "kl_loss": kl_loss,
-        "kl_penalty": jnp.mean(kl_penalty),
+        "kl_penalty": kl_penalty_over_responses_only,
+        "trainer_inference_importance_sampling_ratio_mean": trainer_inference_importance_sampling_ratio_mean,
+        "trainer_inference_importance_sampling_ratio_min": trainer_inference_importance_sampling_ratio_min,
         **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
+        **metadata,
     }
 
 

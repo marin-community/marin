@@ -145,7 +145,7 @@ qwen_32B_annotated_open_thoughts_4_science = ExecutorStep(
         model_type="vllm",
         attribute_name="open_thoughts_4_science_qwen3_32b_annotated",
         filetype="parquet",
-        batch_size=512,
+        batch_size=128,
         resume=True,
         runtime=RuntimeConfig(memory_limit_gb=16),
         num_batches_per_upload=1,

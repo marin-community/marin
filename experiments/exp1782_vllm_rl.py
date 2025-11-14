@@ -130,10 +130,18 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
 
     default_sampling = SamplingParams(
         temperature=1.0,
-        n_prompts=32,
-        n_generations_per_prompt=8,
+        n_prompts=16,
+        n_generations_per_prompt=64,
         max_tokens=MAX_OUTPUT_TOKENS,
         # stop_tokens=stop_tokens(experiment_config.model_config.tokenizer),
+        stop_tokens=None,
+    )
+
+    story_sampling = SamplingParams(
+        temperature=1.0,
+        n_prompts=8,
+        n_generations_per_prompt=8,
+        max_tokens=MAX_OUTPUT_TOKENS,
         stop_tokens=None,
     )
 
@@ -184,13 +192,22 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
             # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
             sampling_params=default_sampling,
         ),
+        # "story_generation": LessonConfig(
+        #     lesson_id="story_generation",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "story_generation", "seed": 42},
+        #     ),
+        #     dependencies=[],
+        #     sampling_params=story_sampling,
+        # ),
     }
 
     return CurriculumConfig(
         lessons=lessons,
-        eval_frequency=100,
+        eval_frequency=10,
         actor_name=f"curriculum-{run_id}",
-        eval_n_examples=100,  # for math500
+        eval_n_examples=500,  # for math500
     )
 
 
@@ -218,7 +235,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         # Set the train batch size to num_rollout_workers * n_generations * n_prompts
         # to ensure we accept an entire training batch from the rollout workers.
-        train_batch_size=256,
+        train_batch_size=1024,
         # microbatch to avoid OOM
         per_device_parallelism=16,
         num_train_steps=500,
@@ -290,7 +307,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=name,
-        log_freq=10,
+        log_freq=1,
         run_config=RunConfig(
             train_tpu_type="v5p-8",
             num_train_slices=1,
@@ -316,7 +333,8 @@ def main():
     # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
     experiment_configs = [
         ExperimentConfig(
-            model_config=llama_3_1_8b,
+            # model_config=llama_3_1_8b,
+            model_config=llama1b,
             rl_loss=RLOOLoss(
                 kl_coef=0.01, clip_epsilon=0.2, synchronous=True, do_trainer_inference_mismatch_importance_sampling=True
             ),
@@ -342,11 +360,12 @@ def main():
         # ),
     ]
     experiments = []
+    datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     for experiment_config in experiment_configs:
         model_base_name = experiment_config.model_config.name.split("/")[-1].lower()
         experiments.append(
             rl_train(
-                name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-sync-{experiment_config.experiment_name_suffix}",
+                name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-sync-{experiment_config.experiment_name_suffix}-{datestamp}",
                 experiment_config=experiment_config,
             ),
         )

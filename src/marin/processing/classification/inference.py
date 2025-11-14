@@ -91,6 +91,7 @@ def process_file_with_quality_classifier_streaming(
     total_processed = len(finished_ids)
     total_skipped = 0
 
+    # TODO fix
     task_queue = Queue()
     result_queue = Queue()
 

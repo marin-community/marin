@@ -247,6 +247,86 @@ class SequentialDigitsTask:
         return digit_count / len(actual_tokens) + order_count / len(actual_tokens)
 
 
+class StoryGenerationTask:
+    """Train model to produce a story.
+
+    Rewards responses that contain increasing digit sequences.
+    Examples:
+      - "12345" = high reward
+      - "0123456789" = very high reward
+      - "5231" = low/negative reward
+      - "catcat" = very negative reward
+    """
+
+    def __init__(self, difficulty: str = "medium"):
+        pass
+
+    def generate_examples(self, n_examples: int, rng: np.random.Generator, tokenizer=None) -> list[dict[str, str]]:
+        """Generate examples that ask for sequential digits."""
+        examples = []
+
+        adjectives = [
+            "happy",
+            "sad",
+            "angry",
+            "hungry",
+            "thirsty",
+            "sleepy",
+            "hungry",
+            "thirsty",
+            "sleepy",
+        ]
+        # 8 different animals
+        animals = [
+            "cat",
+            "dog",
+            "bird",
+            "fish",
+            "horse",
+            "rabbit",
+            "snake",
+            "lion",
+        ]
+
+        places = [
+            "park",
+            "beach",
+            "forest",
+            "city",
+            "mountain",
+            "river",
+            "lake",
+            "ocean",
+            "desert",
+            "jungle",
+            "cave",
+            "volcano",
+            "island",
+        ]
+
+        for _ in range(n_examples):
+            animal = rng.choice(animals)
+            adjective = rng.choice(adjectives)
+            place = rng.choice(places)
+            prompt = f"Write a story about a {adjective} {animal} in {place}:"
+            answer = "N/A"  # NOTE(chris): Not important
+            examples.append({"prompt": prompt, "answer": answer})
+
+        return examples
+
+    def compute_reward(self, correct_answer: str, actual_response: str, tokenizer: PreTrainedTokenizer) -> float:
+        """Compute reward based on story length."""
+        if not actual_response:
+            return -1
+
+        DESIRED_NUM_TOKENS = 64.0
+        MAX_OUTPUT_TOKENS = 2048.0
+        num_tokens = len(tokenizer.encode(actual_response, add_special_tokens=False))
+        length_diff = float(num_tokens - DESIRED_NUM_TOKENS)
+
+        return -float(length_diff / (MAX_OUTPUT_TOKENS - DESIRED_NUM_TOKENS))
+
+
 # Task mappings
 TASKS = {
     "cats": MoarCatsTask,
@@ -254,6 +334,7 @@ TASKS = {
     "opposites": OppositesTask,
     "number_comparison": NumberComparisonTask,
     "sequential_digits": SequentialDigitsTask,
+    "story_generation": StoryGenerationTask,
 }
 
 
@@ -334,7 +415,12 @@ class MockEnv(MarinEnv):
                 reward = self.task.compute_reward(true_answer, choice.message.content, tokenizer=inference_ctx.tokenizer)
 
                 rollout = inference_ctx.create_rollout_from_choice(
-                    prompt, choice, env_name=f"mock_env:{self.task_type}", env_example_id=hash(prompt), reward=reward
+                    prompt,
+                    choice,
+                    env_name=f"mock_env:{self.task_type}",
+                    env_example_id=hash(prompt),
+                    reward=reward,
+                    temperature=temperature,
                 )
 
                 group.append(rollout)
