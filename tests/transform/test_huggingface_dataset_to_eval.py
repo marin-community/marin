@@ -83,26 +83,29 @@ def test_hf_dataset_to_jsonl_evaluation_format(tmp_path):
         # Run transformation
         hf_dataset_to_jsonl(cfg)
 
-        # Check output file exists
-        output_file = output_dir / "test/math-arithmetic-test-evaluation.jsonl.gz"
-        assert output_file.exists(), f"Output file not created: {output_file}"
+        # Find all shard files (e.g., *-00000.jsonl.gz, *-00001.jsonl.gz)
+        shard_files = sorted((output_dir / "test").glob("math-arithmetic-test-evaluation-*.jsonl.gz"))
+        assert len(shard_files) > 0, f"No output files created in {output_dir / 'test'}"
 
-        # Read and verify contents
-        with gzip.open(output_file, "rt") as f:
-            lines = f.readlines()
-            assert len(lines) == 2, f"Expected 2 lines, got {len(lines)}"
+        # Read and combine all shards
+        all_lines = []
+        for shard_file in shard_files:
+            with gzip.open(shard_file, "rt") as f:
+                all_lines.extend(f.readlines())
 
-            # Check first example
-            first = json.loads(lines[0])
-            assert "What is 2+2?" in first["prompt"], "Question not in prompt"
-            assert first["response"] == "B. 4", f"Expected 'B. 4', got '{first['response']}'"
-            assert first["metadata"]["answer_idx"] == 1, "Answer index mismatch"
-            assert first["source"] == "test/math", "Source mismatch"
+        assert len(all_lines) == 2, f"Expected 2 lines total, got {len(all_lines)}"
 
-            # Check second example
-            second = json.loads(lines[1])
-            assert "What is 3+3?" in second["prompt"], "Question not in prompt"
-            assert second["response"] == "B. 6", f"Expected 'B. 6', got '{second['response']}'"
+        # Check first example
+        first = json.loads(all_lines[0])
+        assert "What is 2+2?" in first["prompt"], "Question not in prompt"
+        assert first["response"] == "B. 4", f"Expected 'B. 4', got '{first['response']}'"
+        assert first["metadata"]["answer_idx"] == 1, "Answer index mismatch"
+        assert first["source"] == "test/math", "Source mismatch"
+
+        # Check second example
+        second = json.loads(all_lines[1])
+        assert "What is 3+3?" in second["prompt"], "Question not in prompt"
+        assert second["response"] == "B. 6", f"Expected 'B. 6', got '{second['response']}'"
     finally:
         # Restore original function
         module.load_datasets = original_load_datasets
@@ -149,22 +152,25 @@ def test_hf_dataset_to_jsonl_decontamination_format(tmp_path):
         # Run transformation
         hf_dataset_to_jsonl(cfg)
 
-        # Check output file
-        output_file = output_dir / "test/dataset-subset1-train-decontamination.jsonl.gz"
-        assert output_file.exists(), f"Output file not created: {output_file}"
+        # Find all shard files (e.g., *-00000.jsonl.gz, *-00001.jsonl.gz)
+        shard_files = sorted((output_dir / "test").glob("dataset-subset1-train-decontamination-*.jsonl.gz"))
+        assert len(shard_files) > 0, f"No output files created in {output_dir / 'test'}"
 
-        # Read and verify contents
-        with gzip.open(output_file, "rt") as f:
-            lines = f.readlines()
-            assert len(lines) == 2, f"Expected 2 lines, got {len(lines)}"
+        # Read and combine all shards
+        all_lines = []
+        for shard_file in shard_files:
+            with gzip.open(shard_file, "rt") as f:
+                all_lines.extend(f.readlines())
 
-            first = json.loads(lines[0])
-            assert first["text"] == "Question 1", f"Expected 'Question 1', got '{first['text']}'"
-            assert "prompt" not in first, "Should not have 'prompt' field in decontamination format"
-            assert "response" not in first, "Should not have 'response' field in decontamination format"
+        assert len(all_lines) == 2, f"Expected 2 lines total, got {len(all_lines)}"
 
-            second = json.loads(lines[1])
-            assert second["text"] == "Question 2", f"Expected 'Question 2', got '{second['text']}'"
+        first = json.loads(all_lines[0])
+        assert first["text"] == "Question 1", f"Expected 'Question 1', got '{first['text']}'"
+        assert "prompt" not in first, "Should not have 'prompt' field in decontamination format"
+        assert "response" not in first, "Should not have 'response' field in decontamination format"
+
+        second = json.loads(all_lines[1])
+        assert second["text"] == "Question 2", f"Expected 'Question 2', got '{second['text']}'"
     finally:
         module.load_datasets = original_load_datasets
 

@@ -402,110 +402,128 @@ def transform_example_to_qa(example: dict, idx: int, dataset_meta: DatasetWithMe
         cfg: Configuration for the conversion
 
     Returns:
+        Dictionary with transformed QA example
+
+    Raises:
+        Exception: If transformation fails
+    """
+    # create base document
+    document = QAExample(
+        id=f"{cfg.dataset_name}-{dataset_meta.subset}-{dataset_meta.split}-{cfg.output_format.value}-{idx}",
+        source=cfg.dataset_name,
+        metadata=QAExampleMetadata(
+            subset=dataset_meta.subset,
+            split=dataset_meta.split,
+            revision=dataset_meta.revision,
+            provenance=f"https://huggingface.co/datasets/{cfg.hf_path}",
+        ),
+    )
+
+    # get the question text
+    question_text = get_nested_item(example, cfg.prompt_key)
+    # get answer labels
+    answer_labels = get_nested_item(example, cfg.answer_labels_key, cfg.answer_labels)
+    # get the list of options in standardized form (list of options)
+    options = standardize_options(
+        get_nested_item(
+            example, cfg.options_key, [get_nested_item(example, key, {}) for key in cfg.options_keys]
+        )
+    )
+
+    # first pass attempt to populate answer_text, answer_idx, answer_label
+    # if there is a direct key to answer text, use this
+    answer_text = get_nested_item(example, cfg.answer_text_key) if cfg.answer_text_key else ""
+    # if there is a direct key for the idx into choices of correct answer, use this
+    answer_idx = get_nested_item(example, cfg.answer_idx_key) if cfg.answer_idx_key else None
+    # if there is a direct key for the label of the correct answer, use this
+    answer_label = get_nested_item(example, cfg.answer_label_key) if cfg.answer_label_key else ""
+
+    # try to populate answer_text, answer_idx, answer_label based on initial retrieved values
+    if answer_idx is None:
+        if answer_label is not None and answer_labels:
+            # try to infer answer_idx from answer_label (label or numeric index)
+            try:
+                answer_idx = answer_labels.index(answer_label)
+            except ValueError:
+                try:
+                    # fallback if answer_label is a numeric string (1-based indexing)
+                    numeric = int(answer_label)
+                    answer_idx = numeric - 1
+                except Exception:
+                    answer_idx = None
+        elif answer_text and options:
+            # infer answer_idx (e.g. 0) from answer_text and options list
+            answer_idx = options.index(answer_text)
+    else:
+        # if answer_idx is provided, make sure it is an int
+        answer_idx = int(answer_idx)
+
+    if not answer_label:
+        if answer_idx is not None and isinstance(answer_idx, int) and cfg.answer_labels:
+            # infer answer_label (e.g. A) from answer_label and list of potential labels
+            answer_label = answer_labels[answer_idx]
+
+    if not answer_text:
+        if answer_idx is not None and isinstance(answer_idx, int) and options:
+            answer_text = options[answer_idx]
+        elif cfg.answer_text_ignore:
+            answer_text = ""
+            options = ["" for _ in range(len(cfg.answer_labels))]
+        elif cfg.output_format.value == "evaluation":
+            # Evaluations Need Answers
+            raise ValueError("No answer text was found. Please review config.")
+
+    # set various metadata
+    if options:
+        # list of potential answers
+        document.metadata.options = options
+    if answer_idx:
+        # index into list of potential answers of correct answer
+        document.metadata.answer_idx = answer_idx
+    if answer_label:
+        # label of correct answer (e.g. "A")
+        document.metadata.answer_label = answer_label
+    if answer_text:
+        # answer text of correct answer
+        document.metadata.answer = answer_text
+    if answer_labels:
+        # list of potential labels (e.g. ["A", "B", "C", 'D'])
+        document.metadata.answer_labels = answer_labels
+
+    if cfg.output_format.value == "decontamination":
+        # decontamination output format is dolma with text as the key
+        document.text = question_text
+    elif cfg.output_format.value == "evaluation":
+        # evaluation format wants prompt, response
+        if answer_labels and options:
+            prompt, response = format_prompt_response(
+                question_text, options, answer_labels, answer_idx, answer_text
+            )
+        else:
+            prompt = question_text + "\n\n"
+            response = answer_text
+        document.prompt = prompt
+        document.response = response
+
+    return asdict_without_nones(document)
+
+
+def wrap_transform(item: dict, dataset_meta: DatasetWithMetaData, cfg: DatasetConversionConfig):
+    """
+    Wrapper that transforms a HuggingFace dataset example to QA format with error handling.
+
+    Args:
+        item: Dict with "idx" and "example" keys
+        dataset_meta: Metadata about the dataset (subset, split, revision)
+        cfg: Configuration for the conversion
+
+    Returns:
         Dictionary with transformed QA example, or None if transformation fails
     """
     try:
-        # create base document
-        document = QAExample(
-            id=f"{cfg.dataset_name}-{dataset_meta.subset}-{dataset_meta.split}-{cfg.output_format.value}-{idx}",
-            source=cfg.dataset_name,
-            metadata=QAExampleMetadata(
-                subset=dataset_meta.subset,
-                split=dataset_meta.split,
-                revision=dataset_meta.revision,
-                provenance=f"https://huggingface.co/datasets/{cfg.hf_path}",
-            ),
-        )
-
-        # get the question text
-        question_text = get_nested_item(example, cfg.prompt_key)
-        # get answer labels
-        answer_labels = get_nested_item(example, cfg.answer_labels_key, cfg.answer_labels)
-        # get the list of options in standardized form (list of options)
-        options = standardize_options(
-            get_nested_item(
-                example, cfg.options_key, [get_nested_item(example, key, {}) for key in cfg.options_keys]
-            )
-        )
-
-        # first pass attempt to populate answer_text, answer_idx, answer_label
-        # if there is a direct key to answer text, use this
-        answer_text = get_nested_item(example, cfg.answer_text_key) if cfg.answer_text_key else ""
-        # if there is a direct key for the idx into choices of correct answer, use this
-        answer_idx = get_nested_item(example, cfg.answer_idx_key) if cfg.answer_idx_key else None
-        # if there is a direct key for the label of the correct answer, use this
-        answer_label = get_nested_item(example, cfg.answer_label_key) if cfg.answer_label_key else ""
-
-        # try to populate answer_text, answer_idx, answer_label based on initial retrieved values
-        if answer_idx is None:
-            if answer_label is not None and answer_labels:
-                # try to infer answer_idx from answer_label (label or numeric index)
-                try:
-                    answer_idx = answer_labels.index(answer_label)
-                except ValueError:
-                    try:
-                        # fallback if answer_label is a numeric string (1-based indexing)
-                        numeric = int(answer_label)
-                        answer_idx = numeric - 1
-                    except Exception:
-                        answer_idx = None
-            elif answer_text and options:
-                # infer answer_idx (e.g. 0) from answer_text and options list
-                answer_idx = options.index(answer_text)
-        else:
-            # if answer_idx is provided, make sure it is an int
-            answer_idx = int(answer_idx)
-
-        if not answer_label:
-            if answer_idx is not None and isinstance(answer_idx, int) and cfg.answer_labels:
-                # infer answer_label (e.g. A) from answer_label and list of potential labels
-                answer_label = answer_labels[answer_idx]
-
-        if not answer_text:
-            if answer_idx is not None and isinstance(answer_idx, int) and options:
-                answer_text = options[answer_idx]
-            elif cfg.answer_text_ignore:
-                answer_text = ""
-                options = ["" for _ in range(len(cfg.answer_labels))]
-            elif cfg.output_format.value == "evaluation":
-                # Evaluations Need Answers
-                raise ValueError("No answer text was found. Please review config.")
-
-        # set various metadata
-        if options:
-            # list of potential answers
-            document.metadata.options = options
-        if answer_idx:
-            # index into list of potential answers of correct answer
-            document.metadata.answer_idx = answer_idx
-        if answer_label:
-            # label of correct answer (e.g. "A")
-            document.metadata.answer_label = answer_label
-        if answer_text:
-            # answer text of correct answer
-            document.metadata.answer = answer_text
-        if answer_labels:
-            # list of potential labels (e.g. ["A", "B", "C", 'D'])
-            document.metadata.answer_labels = answer_labels
-
-        if cfg.output_format.value == "decontamination":
-            # decontamination output format is dolma with text as the key
-            document.text = question_text
-        elif cfg.output_format.value == "evaluation":
-            # evaluation format wants prompt, response
-            if answer_labels and options:
-                prompt, response = format_prompt_response(
-                    question_text, options, answer_labels, answer_idx, answer_text
-                )
-            else:
-                prompt = question_text + "\n\n"
-                response = answer_text
-            document.prompt = prompt
-            document.response = response
-
-        return asdict_without_nones(document)
+        return transform_example_to_qa(item["example"], item["idx"], dataset_meta, cfg)
     except Exception as e:
-        logger.warning(f"Failed to transform example {idx}: {e}")
+        logger.warning(f"Failed to transform example {item['idx']}: {e}")
         return None
 
 
@@ -570,26 +588,28 @@ def hf_dataset_to_jsonl(cfg: DatasetConversionConfig) -> None:
 
     # Process each (subset, split) pair
     for dataset_meta in datasets:
-        output_path = os.path.join(
+        # Create output path pattern with shard placeholder
+        # The {shard:05d} placeholder allows zephyr to create multiple files when needed
+        output_pattern = os.path.join(
             cfg.output_path,
-            f"{cfg.dataset_name}-{dataset_meta.subset}-{dataset_meta.split}-{cfg.output_format.value}.jsonl.gz"
+            f"{cfg.dataset_name}-{dataset_meta.subset}-{dataset_meta.split}-{cfg.output_format.value}-{{shard:05d}}.jsonl.gz"
         )
 
         # Create zephyr Dataset from HuggingFace dataset
-        # We use enumerate to track indices for creating unique IDs
-        def enumerate_dataset(hf_dataset):
-            for idx, example in enumerate(hf_dataset):
-                yield (idx, example)
+        # Convert to list of dicts with idx and example for processing
+        enumerated_examples = [
+            {"idx": idx, "example": example} for idx, example in enumerate(dataset_meta.dataset)
+        ]
 
         pipeline = (
-            Dataset.from_iter(lambda: enumerate_dataset(dataset_meta.dataset))
-            .map(lambda item: transform_example_to_qa(item[1], item[0], dataset_meta, cfg))
+            Dataset.from_list(enumerated_examples)
+            .map(lambda item: wrap_transform(item, dataset_meta, cfg))
             .filter(lambda record: record is not None)
-            .write_jsonl(output_path, compression="gzip")
+            .write_jsonl(output_pattern)  # Compression auto-detected from .gz extension
         )
 
         list(backend.execute(pipeline))
-        logger.info(f"Wrote {output_path}")
+        logger.info(f"Wrote to {output_pattern}")
 
 
 # Keep old function name as alias for backward compatibility
