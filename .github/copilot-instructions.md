@@ -79,7 +79,7 @@ log_probs = jax.nn.log_softmax(logits / temperature, axis=-1)
 ### ✅ GOOD: Logic Error
 ```
 `compute_reward` docstring claims substring matching but implements exact equality (line 78).
-This will fail for partial matches. Use: if expected_answer in generated_text.lower()
+This will fail for partial matches. Use: if expected_answer.lower() in generated_text.lower()
 ```
 
 ### ❌ BAD: Import Nitpicking
