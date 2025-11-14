@@ -49,7 +49,7 @@ from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
-from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
+from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, raw2json
 from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
 
 # Unfortunately, the international corpus of english is not publicly accessible and cannot be redistributed.

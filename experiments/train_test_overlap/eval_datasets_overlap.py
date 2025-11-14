@@ -14,7 +14,7 @@
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
+from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 from experiments.eval_datasets import (
     arc_raw as ai2_arc_raw,

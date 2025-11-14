@@ -1649,7 +1649,7 @@
       "column": 50,
       "stop_line": 300,
       "stop_column": 54,
-      "path": "lib/marin/src/marin/raw2json/huggingface/qa/raw2json.py",
+      "path": "lib/marin/src/marin/transform/huggingface/dataset_to_eval.py",
       "code": -2,
       "name": "bad-return",
       "description": "Function declared to return `list[Unknown]`, but one or more paths are missing an explicit `return`",
