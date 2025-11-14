@@ -8,13 +8,21 @@ Dev Installation
 
 First follow the same instructions as provided for the [Levanter README](README.md) to install Levanter.
 
-The main addition for a dev environment is to install [`pre-commit`](https://pre-commit.com/):
+The main addition for a dev environment is to install the Git hook that runs our repo-wide
+`infra/pre-commit.py` checks:
 
-    pre-commit install
+```bash
+cat <<'EOF' > .git/hooks/pre-commit
+#!/bin/sh
+set -e
+cd "$(git rev-parse --show-toplevel)"
+uv run python infra/pre-commit.py --fix
+EOF
+chmod +x .git/hooks/pre-commit
+```
 
-This will set up git hook scripts that ensure your code is formatted in a manner consistent with
-the repo. If any problems are found, the appropriate files will be updated with fixes. You will
-need to review and commit the fixed files.
+This hook ensures your code is formatted and linted in a manner consistent with the repo. If any problems
+are found, the appropriate files will be updated with fixes. You will need to review and commit the fixed files.
 
 Forking The Repo
 ----------------
@@ -51,12 +59,12 @@ Implement Your Changes
 ----------------------
 
 As you implement your changes in your feature branch, the git hook scripts will check your
-code for proper formatting as you make commits. Make sure you have run `pre-commit install`
+code for proper formatting as you make commits. Make sure you have installed the hook above
 before you start making commits.
 
 You can also check all files in the current branch with this command:
 
-    pre-commit run --all-files
+    uv run python infra/pre-commit.py --all-files
 
 When your changes are operational you should verify that the current tests are passing.
 

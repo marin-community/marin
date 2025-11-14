@@ -1,16 +1,16 @@
-.PHONY: help clean check autoformat cluster_docker cluster_docker_build cluster_docker_push
+.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit
 .DEFAULT: help
 
-# Help, clean, check and autoformat targets remain unchanged
+
 help:
 	@echo "make clean"
 	@echo "    Remove all temporary pyc/pycache files"
 	@echo "make check"
 	@echo "    Run code style and linting (black, ruff) *without* changing files!"
-	@echo "make autoformat"
-	@echo "    Run code styling (black, ruff) and update in place - committing with pre-commit also does this."
+	@echo "make fix"
+	@echo "    Run infra/pre-commit.py --fix on your modified files and re-stage them."
 	@echo "make lint"
-	@echo "    Run linter including changing files"
+	@echo "    Run infra/pre-commit.py --all-files (no auto-fixing)."
 	@echo "make test"
 	@echo "    Run all tests"
 	@echo "make init"
@@ -156,5 +156,12 @@ get_secret_key: install_gcloud
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
 
-dev_setup: install_uv install_gcloud get_secret_key
-	echo "Dev setup complete."
+setup_pre_commit:
+	@HOOK_PATH=.git/hooks/pre-commit; \
+	mkdir -p .git/hooks; \
+	printf '%s\n' '#!/bin/sh' 'set -e' 'REPO_ROOT="$$(git rev-parse --show-toplevel)"' 'cd "$$REPO_ROOT"' 'uv run python infra/pre-commit.py --fix' > $$HOOK_PATH; \
+	chmod +x $$HOOK_PATH; \
+	echo "Installed git pre-commit hook -> $$HOOK_PATH"
+
+dev_setup: install_uv install_gcloud get_secret_key setup_pre_commit
+	@echo "Dev setup complete."
