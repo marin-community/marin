@@ -21,7 +21,9 @@ from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import (
     dclm_baseline_tokenized_llama3,
     dclm_baseline_wrong,
+    proofpile_2,
     proofpile_2_tokenized_llama3,
+    starcoderdata,
     starcoderdata_tokenized_llama3,
 )
 from marin.execution.executor import executor_main

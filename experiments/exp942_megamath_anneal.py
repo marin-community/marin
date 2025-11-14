@@ -23,7 +23,7 @@ import dataclasses
 
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
-from experiments.pretraining_datasets import get_dolmino_step_llama3
+from experiments.pretraining_datasets import get_dolmino_step
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MMLU_TASKS
 from experiments.midtraining_datasets import megamath_real_only, megamath_tokenized, megamath_token_counts
@@ -32,7 +32,7 @@ from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.processing.tokenize.data_configs import interpolate_mixture_configs
 
-dolmino_dclm = get_dolmino_step_llama3("dclm")
+dolmino_dclm = get_dolmino_step("dclm")
 
 pure_dolmino_mixture = lm_mixture_data_config(
     components={"dolmino/dclm": dolmino_dclm},
