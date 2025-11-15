@@ -34,20 +34,13 @@ If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    ```
 
-   or with conda:
-   ```bash
-   conda create --name marin python=3.11 pip
-   conda activate marin
-   ```
-
 3. Install the package and dependencies
 
-   === "Recommended"
    Use `uv sync` to install dependencies and the local Marin package (editable) in one step:
 
    ```bash
    # Resolve and install dependencies + local package (editable)
-   uv sync
+   uv sync --all-packages
    ```
 
 4. Setup [Weights and Biases (WandB)](https://wandb.ai) so you can monitor your runs:
@@ -71,7 +64,7 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
     === "CPU"
         ```bash
         # Install CPU-specific dependencies (local package included)
-        uv sync --extra=cpu
+        uv sync --all-packages --extra=cpu
         ```
 
     === "GPU"
@@ -97,14 +90,14 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
 
          ```bash
          # Install GPU-specific dependencies (local package included)
-         uv sync --extra=cuda12
+         uv sync --all-packages --extra=cuda12
          ```
 
     === "TPU"
 
         ```bash
-        # Install TPU-specific dependencies (local package included)
-        uv sync --extra=tpu
+        # Install TPU-specific dependencies
+        uv sync --all-packages --extra=tpu
         ```
 
 ### Notes on Ray jobs and code changes
