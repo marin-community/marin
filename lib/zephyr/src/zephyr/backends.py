@@ -19,22 +19,20 @@ from __future__ import annotations
 import heapq
 import logging
 import os
-import pickle
 import re
 import time
 import zlib
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
-from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from itertools import groupby, islice
-from typing import Any, Literal, Protocol, TypeVar
+from typing import Any, TypeVar
 
 import fsspec
 import msgspec
 import numpy as np
-import ray
 import zstandard as zstd
+from fray import ExecutionContext
 from tqdm_loggable.auto import tqdm
 
 from zephyr.dataset import (
@@ -133,172 +131,17 @@ def msgpack_decode(data: bytes) -> Any:
 
 @dataclass
 class BackendConfig:
-    """Configuration for backend creation.
+    """Configuration for backend execution.
 
     Attributes:
-        backend_type: Type of backend (ray, threadpool, or sync)
         max_parallelism: Maximum number of concurrent tasks
-        memory: Memory requirement per task in bytes
-        num_cpus: Number of CPUs per task for Ray backend
-        num_gpus: Number of GPUs per task for Ray backend
         chunk_size: Number of items per chunk in Shard
-        ray_options: Additional Ray remote options
         dry_run: If True, show optimization plan without executing
     """
 
-    backend_type: Literal["ray", "threadpool", "sync"]
     max_parallelism: int = 1000000
     chunk_size: int = 1000
-    memory: int | None = None
-    num_cpus: float | None = None
-    num_gpus: float | None = None
-    ray_options: dict = field(default_factory=dict)
     dry_run: bool = False
-
-
-class ExecutionContext(Protocol):
-    """Protocol for execution contexts that abstract put/get/run/wait primitives.
-
-    This allows different backends (Ray, ThreadPool, Sync) to share the same
-    Shard-based execution logic while using different execution strategies.
-    """
-
-    def put(self, obj: Any) -> Any:
-        """Store an object and return a reference to it."""
-        ...
-
-    def get(self, ref: Any) -> Any:
-        """Retrieve an object from its reference."""
-        ...
-
-    def run(self, fn: Callable, *args) -> Any:
-        """Execute a function with arguments and return a future.
-
-        Args:
-            fn: Function to execute
-            *args: Arguments to pass to function
-
-        Returns:
-            Future representing the execution (type depends on context)
-        """
-        ...
-
-    def wait(self, futures: list, num_returns: int = 1) -> tuple[list, list]:
-        """Wait for futures to complete.
-
-        Args:
-            futures: List of futures to wait on
-            num_returns: Number of futures to wait for
-
-        Returns:
-            Tuple of (ready_futures, pending_futures)
-        """
-        ...
-
-
-class _ImmediateFuture:
-    """Wrapper for immediately available results to match Future interface."""
-
-    def __init__(self, result: Any):
-        self._result = result
-
-    def result(self):
-        return self._result
-
-
-class RayContext:
-    """Execution context using Ray for distributed execution."""
-
-    def __init__(self, ray_options: dict | None = None):
-        """Initialize Ray context.
-
-        Args:
-            ray_options: Options to pass to ray.remote() (e.g., memory, num_cpus, num_gpus)
-        """
-        self.ray_options = ray_options or {}
-
-    def put(self, obj: Any) -> ray.ObjectRef:
-        """Store an object in Ray object store."""
-        serialized = msgpack_encode(obj)
-        return ray.put(serialized)
-
-    def get(self, ref: ray.ObjectRef) -> Any:
-        """Retrieve and decode object from Ray object store."""
-        result = ray.get(ref)
-        if isinstance(result, bytes):
-            return msgpack_decode(result)
-        return result
-
-    def run(self, fn: Callable, *args) -> ray.ObjectRef:
-        """Execute function remotely with configured Ray options.
-
-        Uses SPREAD scheduling strategy to distribute work across worker nodes.
-        """
-        if self.ray_options:
-            remote_fn = ray.remote(**self.ray_options)(fn)
-        else:
-            remote_fn = ray.remote(fn)
-        return remote_fn.options(scheduling_strategy="SPREAD").remote(*args)
-
-    def wait(self, futures: list[ray.ObjectRef], num_returns: int = 1) -> tuple[list, list]:
-        ready, pending = ray.wait(futures, num_returns=num_returns)
-        return list(ready), list(pending)
-
-
-class LocalContext:
-    """Base class for local execution contexts (sync and thread-based)."""
-
-    def put(self, obj: Any) -> Any:
-        """No-op for local contexts - objects are already in memory."""
-        return obj
-
-    def get(self, ref: Any) -> Any:
-        """Get result, unwrapping Future/_ImmediateFuture if needed."""
-        if isinstance(ref, (Future, _ImmediateFuture)):
-            return ref.result()
-        return ref
-
-
-class SyncContext(LocalContext):
-    """Execution context for synchronous (single-threaded) execution."""
-
-    def run(self, fn: Callable, *args) -> _ImmediateFuture:
-        """Execute function immediately and wrap result."""
-        fn_copy = pickle.loads(pickle.dumps(fn))
-        result = fn_copy(*args)
-        return _ImmediateFuture(result)
-
-    def wait(self, futures: list[_ImmediateFuture], num_returns: int = 1) -> tuple[list, list]:
-        """All futures are immediately ready."""
-        return futures[:num_returns], futures[num_returns:]
-
-
-class ThreadContext(LocalContext):
-    """Execution context using ThreadPoolExecutor for parallel execution."""
-
-    def __init__(self, max_workers: int):
-        """Initialize thread pool context.
-
-        Args:
-            max_workers: Maximum number of worker threads
-        """
-        self.executor = ThreadPoolExecutor(max_workers=max_workers)
-
-    def run(self, fn: Callable, *args) -> Future:
-        """Submit function to thread pool."""
-        fn_copy = pickle.loads(pickle.dumps(fn))
-        return self.executor.submit(fn_copy, *args)
-
-    def wait(self, futures: list[Future], num_returns: int = 1) -> tuple[list, list]:
-        """Wait for futures to complete."""
-        if num_returns >= len(futures):
-            done, pending = wait(futures, return_when="ALL_COMPLETED")
-        else:
-            done, pending = wait(futures, return_when="FIRST_COMPLETED")
-
-        done_list = list(done)[:num_returns]
-        pending_list = list(pending) + done_list[num_returns:]
-        return done_list, pending_list
 
 
 @dataclass
@@ -988,63 +831,3 @@ class Backend:
         # Recompact into final output shards
         shard_lists = [self.context.get(future) for future in finished]
         return recompact_shards(self.context, shard_lists)
-
-
-class RayBackend(Backend):
-    """Ray-based distributed execution backend.
-
-    Uses Ray remote tasks with bounded parallelism to prevent OOM.
-
-    Example:
-        >>> from zephyr import create_backend, Dataset
-        >>> backend = create_backend("ray", max_parallelism=10, memory="2GB")
-        >>> ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-        >>> results = list(backend.execute(ds))
-    """
-
-    def __init__(self, config: BackendConfig):
-        # Build ray_options dict
-        options = {}
-        if config.memory is not None:
-            options["memory"] = config.memory
-        if config.num_cpus is not None:
-            options["num_cpus"] = config.num_cpus
-        if config.num_gpus is not None:
-            options["num_gpus"] = config.num_gpus
-        options.update(config.ray_options)
-
-        # Create Ray context and initialize base backend
-        context = RayContext(ray_options=options)
-        super().__init__(context, config)
-
-
-class ThreadPoolBackend(Backend):
-    """ThreadPoolExecutor-based backend for I/O-bound parallelism.
-
-    Example:
-        >>> from zephyr import create_backend, Dataset
-        >>> backend = create_backend("threadpool", max_parallelism=4)
-        >>> ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-        >>> results = list(backend.execute(ds))
-    """
-
-    def __init__(self, config: BackendConfig):
-        context = ThreadContext(max_workers=min(config.max_parallelism, os.cpu_count()))
-        super().__init__(context, config)
-
-
-class SyncBackend(Backend):
-    """Synchronous backend for testing and debugging.
-
-    Executes all operations sequentially in the current thread.
-
-    Example:
-        >>> from zephyr import create_backend, Dataset
-        >>> backend = create_backend("sync")
-        >>> ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-        >>> results = list(backend.execute(ds))
-    """
-
-    def __init__(self, config: BackendConfig):
-        context = SyncContext()
-        super().__init__(context, config)

@@ -58,10 +58,10 @@ test = [
     "openai-responses",
 ]
 lint = [
-    "ruff>=0.5.7",
-    "black>=24.8.0",
+    "ruff==0.14.3",
+    "black==25.9.0",
     "mypy>=1.4.1",
-    "pyrefly>=0.40.0",
+    "pyrefly==0.40.0",
     "types-PyYAML",
     "types-requests",
     "types-six",

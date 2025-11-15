@@ -9,7 +9,7 @@ description = "Lightweight dataset library for distributed data processing"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "ray>=2.45",
+    "fray[ray]",
     "typing-extensions>=4.0",
     "click>=8.0",
     "humanfriendly>=10.0",
@@ -49,3 +49,6 @@ log_level = "INFO"
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 log_cli_level = "INFO"
+
+[tool.uv.sources]
+fray = { workspace = true }
