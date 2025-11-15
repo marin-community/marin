@@ -1770,12 +1770,26 @@ ray = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-5-marin-dev' or extra != 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "ray", extra = ["default"] },
 ]
-test = [
+fray-test = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-5-marin-dev' or extra != 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
     { name = "pytest" },
     { name = "pytest-timeout" },
+    { name = "ray", extra = ["default"] },
+]
+fray-tpu-test = [
+    { name = "jax", extra = ["tpu"] },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-5-marin-dev' or extra != 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "ray", extra = ["default"] },
 ]
 
 [package.metadata]
@@ -1793,12 +1807,23 @@ provides-extras = ["ray"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "numpy" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "ray", extras = ["default"] },
 ]
-test = [
+fray-test = [
+    { name = "numpy" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
+    { name = "ray", extras = ["default"] },
+]
+fray-tpu-test = [
+    { name = "jax", extras = ["tpu"] },
+    { name = "numpy" },
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-timeout" },
+    { name = "ray", extras = ["default"] },
 ]
 
 [[package]]
@@ -2818,9 +2843,9 @@ cuda12 = [
     { name = "jaxlib", marker = "extra == 'extra-5-marin-cuda12' or extra == 'extra-8-levanter-gpu' or (extra == 'extra-5-marin-crawl' and extra == 'group-5-marin-dev')" },
 ]
 tpu = [
-    { name = "jaxlib", marker = "extra == 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-8-levanter-tpu')" },
-    { name = "libtpu", marker = "extra == 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-8-levanter-tpu')" },
-    { name = "requests", marker = "extra == 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-8-levanter-tpu')" },
+    { name = "jaxlib" },
+    { name = "libtpu" },
+    { name = "requests" },
 ]
 
 [[package]]
@@ -3154,6 +3179,7 @@ dependencies = [
     { name = "draccus" },
     { name = "equinox" },
     { name = "filelock" },
+    { name = "fray" },
     { name = "fsspec", extra = ["http"] },
     { name = "gcsfs" },
     { name = "haliax" },
@@ -3255,6 +3281,7 @@ requires-dist = [
     { name = "equinox", specifier = ">=0.11.7,!=0.12.0" },
     { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.100.0" },
     { name = "filelock", specifier = "~=3.13" },
+    { name = "fray", editable = "lib/fray" },
     { name = "fsspec", extras = ["http"], specifier = ">=2024.2,<2026" },
     { name = "gcsfs", specifier = ">=2024.2,<2026" },
     { name = "google-api-python-client", marker = "extra == 'gcp'", specifier = ">=2.175.0" },
@@ -3536,6 +3563,7 @@ dependencies = [
     { name = "draccus" },
     { name = "fasteners" },
     { name = "flask" },
+    { name = "fray" },
     { name = "fsspec" },
     { name = "gcsfs" },
     { name = "google-api-python-client" },
@@ -3798,6 +3826,7 @@ requires-dist = [
     { name = "flask" },
     { name = "flax", marker = "extra == 'crawl'" },
     { name = "flax", marker = "extra == 'post-training'", specifier = "==0.10.0" },
+    { name = "fray", editable = "lib/fray" },
     { name = "fsspec", specifier = ">=2025.3.0" },
     { name = "gcsfs" },
     { name = "gcsfs", marker = "extra == 'post-training'" },

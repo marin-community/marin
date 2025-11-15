@@ -16,12 +16,17 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.scripts]
+fray = "fray.cli:main"
+
 [project.optional-dependencies]
 ray = ["ray>=2.45"]
 
 [dependency-groups]
-test = ["pytest>=8.3.2", "pytest-timeout"]
-dev = [{ include-group = "test" }]
+fray_test = ["pytest>=8.3.2", "pytest-timeout", "ray[default]", "numpy",]
+fray_tpu_test = ["jax[tpu]", { include-group = "fray_test" }]
+
+dev = [{ include-group = "fray_test" }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fray"]

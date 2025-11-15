@@ -17,19 +17,58 @@ Uses Levanter's viz_lm functionality to visualize log probabilities of a languag
 """
 
 import dataclasses
+import logging
+import multiprocessing
+import sys
 from dataclasses import dataclass
+from queue import Empty
 
 import ray
+import tblib
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
-from levanter.infra.ray_tpu import _separate_process_fn
 from levanter.main.viz_logprobs import VizLmConfig as LevanterVizLmConfig
 from levanter.main.viz_logprobs import main as viz_lm_main
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.ray_utils import ExceptionInfo
 
 from marin.execution.executor import this_output_path
 from marin.utils import remove_tpu_lockfile_on_exit
+
+logger = logging.getLogger(__name__)
+
+
+def execute_in_subprocess(underlying_function, args, kwargs):
+    def target_fn(queue, args, kwargs):
+        try:
+            # Call the original function
+            result = underlying_function(*args, **kwargs)
+            queue.put((True, result))  # Success, put the result
+        except Exception as e:
+            # Capture and return the full traceback in case of an exception
+            exc_info = sys.exc_info()
+            exception_info = ExceptionInfo(ex=e, tb=tblib.Traceback(exc_info[2]))
+            queue.put((False, exception_info))
+
+    queue = multiprocessing.Queue()
+    process = multiprocessing.Process(target=target_fn, args=(queue, args, kwargs))
+    process.start()
+    process.join()
+
+    # Retrieve the result or error from the queue
+    logger.info("Process finished")
+    try:
+        success, value = queue.get(timeout=1)
+    except Empty:
+        logger.error("Process timed out")
+        process.terminate()
+        raise TimeoutError("Process timed out") from None
+
+    if success:
+        return value
+    else:
+        value.reraise()
 
 
 @dataclass
@@ -59,7 +98,7 @@ def do_viz_lm(config: LevanterVizLmConfig) -> None:
         config (VizLmConfig): The configuration for visualizing log probabilities.
     """
     # remove_tpu_lockfile_on_exit() isn't sufficient now?
-    _separate_process_fn(viz_lm_main, (config,), {})
+    execute_in_subprocess(viz_lm_main, (config,), {})
 
 
 def visualize_lm_log_probs(config: VizLmConfig) -> None:
