@@ -267,7 +267,12 @@ class ExecutorStep(Generic[ConfigT]):
     doesn't match the automatically computed one."""
 
     pip_dependency_groups: list[str] | None = None
-    """List of `extra` dependencies from pyproject.toml to include with this step."""
+    """List of dependency specifications for this step.
+
+    Entries can be either:
+    - Extra group names (e.g., "eval", "tpu") from pyproject.toml
+    - Direct pip packages with "pip:" prefix (e.g., "pip:package-name==1.0.0")
+    """
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""

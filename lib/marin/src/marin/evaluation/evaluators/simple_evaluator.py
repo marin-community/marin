@@ -17,9 +17,10 @@ import traceback
 from dataclasses import dataclass
 from typing import ClassVar
 
-from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
+from openai import OpenAI
+
+from marin.evaluation.evaluation_config import EvalTaskConfig, ModelConfig
+from marin.evaluation.evaluators.evaluator import Evaluator
 
 
 @dataclass(frozen=True)
@@ -34,10 +35,11 @@ class TestPlan:
     temperature: float = 0
 
 
-class SimpleEvaluator(VllmTpuEvaluator):
+class SimpleEvaluator(Evaluator):
     """
     A simple evaluator for testing purposes.
     Runs inference with a given model on some prompts and computes the total inference time.
+    Uses the inference pool via OpenAI-compatible API.
     """
 
     QUICK_TEST_PLAN: TestPlan = TestPlan(
@@ -136,17 +138,24 @@ class SimpleEvaluator(VllmTpuEvaluator):
         self,
         model: ModelConfig,
         evals: list[EvalTaskConfig],
+        openai_base_url: str,
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
     ) -> None:
-        try:
-            from vllm import LLM, SamplingParams
+        """Run evaluation using the inference pool via OpenAI API.
 
-            # Download and load the model with vLLM
-            # Use the model name if a path is not specified (e.g., for Hugging Face models)
-            model_name_or_path: str = self.download_model(model)
-            llm = LLM(model=model_name_or_path, enforce_eager=False, trust_remote_code=True)
+        Args:
+            model: Model configuration
+            evals: List of test plan names to run
+            openai_base_url: Base URL for the OpenAI-compatible inference pool API
+            output_path: Path to write results
+            max_eval_instances: Maximum number of instances (unused)
+            wandb_tags: WandB tags (unused)
+        """
+        try:
+            # Create OpenAI client pointing to the inference pool
+            client = OpenAI(base_url=openai_base_url, api_key="unused")
 
             inference_times: dict[str, float] = {}
             for eval_config in evals:
@@ -154,31 +163,28 @@ class SimpleEvaluator(VllmTpuEvaluator):
                 assert eval_name in SimpleEvaluator.NAME_TO_TEST_PLAN, f"Unknown eval: {eval_name}"
                 test_plan: TestPlan = SimpleEvaluator.NAME_TO_TEST_PLAN[eval_name]
 
-                # Set sampling parameters based on the test plan
-                sampling_params = SamplingParams(
-                    temperature=test_plan.temperature,
-                    n=test_plan.num_outputs,
-                    max_tokens=test_plan.max_tokens,
-                    # Currently, top-p sampling is disabled. `top_p` should be 1.0.
-                    top_p=1.0,
-                )
-
                 # Run inference and time it
                 start_time: float = time.time()
-                outputs = llm.generate(test_plan.prompts, sampling_params)
-                inference_times[eval_name] = time.time() - start_time
 
-                # Print the outputs for debugging
-                for output in outputs:
-                    prompt: str = output.prompt
+                for prompt in test_plan.prompts:
+                    response = client.chat.completions.create(
+                        model=model.name,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=test_plan.temperature,
+                        max_tokens=test_plan.max_tokens,
+                        n=test_plan.num_outputs,
+                        top_p=1.0,
+                    )
+
+                    # Print the outputs for debugging
                     print(f"Prompt: {prompt!r}")
-                    for i, generation in enumerate(output.outputs):
-                        print(f"Generation (#{i + 1} of {test_plan.num_outputs}): {generation.text!r}")
+                    for i, choice in enumerate(response.choices):
+                        print(f"Generation (#{i + 1} of {test_plan.num_outputs}): {choice.message.content!r}")
                     print("-" * 100)
+
+                inference_times[eval_name] = time.time() - start_time
 
             print(f"Inference times (in seconds): {inference_times}")
         except Exception as e:
             traceback.print_exc()
             raise RuntimeError("SimpleEvaluator failed. Please check the logs for more information.") from e
-        finally:
-            self.cleanup(model)

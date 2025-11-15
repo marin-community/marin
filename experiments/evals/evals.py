@@ -18,8 +18,26 @@ Canonical set of evals.
 
 import logging
 
+from fray.cluster.base import ResourceConfig
+from marin.evaluation.evaluation_config import (
+    EvalTaskConfig,
+    EvaluationConfig,
+    InferencePoolConfig,
+    ModelConfig,
+    infer_device_from_resource_config,
+)
+from marin.evaluation.run import evaluate
+from marin.execution.executor import (
+    ExecutorStep,
+    InputName,
+    get_executor_step,
+    output_path_of,
+    this_output_path,
+    versioned,
+)
+
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
-from fray.cluster import ResourceConfig
+from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V6E_8
 from experiments.evals.task_configs import (
     BASE_GENERATION_TASKS,
     CORE_TASKS,
@@ -32,61 +50,103 @@ from experiments.evals.task_configs import (
     OPEN_LM_LEADERBOARD_GEN,
     OPEN_LM_LEADERBOARD_MCQ,
 )
-from marin.evaluation.evaluation_config import EvalTaskConfig, EvaluationConfig
-from marin.evaluation.run import evaluate
-from marin.execution.executor import (
-    ExecutorStep,
-    InputName,
-    get_executor_step,
-    output_path_of,
-    this_output_path,
-    versioned,
-)
 
 logger = logging.getLogger(__name__)
 
 
-def evaluate_helm(model_name: str, model_path: str, evals: list[EvalTaskConfig]) -> ExecutorStep:
-    """
-    Create an ExecutorStep to evaluate the model using HELM.
+def evaluate_helm(
+    model_name: str,
+    model_path: str,
+    evals: list[EvalTaskConfig],
+    resource_config: ResourceConfig,
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = None,
+) -> ExecutorStep:
+    """Create an ExecutorStep to evaluate the model using HELM.
 
     Args:
-        model_name (str): Name of the model.
-        model_path (str): Path to the model.
-        evals (list[str]): List of evaluations to run with HELM, e.g, ["mmlu", "lite"].
+        model_name: Name of the model
+        model_path: Path to the model
+        evals: List of evaluations to run with HELM, e.g, ["mmlu", "lite"]
+        resource_config: Fray ResourceConfig for pool workers (TPU/GPU resources)
+        max_eval_instances: Maximum number of evaluation instances to run
+        engine_kwargs: Additional keyword arguments to pass to the vLLM engine
     """
+    device = infer_device_from_resource_config(resource_config)
+
+    model_config = ModelConfig(
+        name=model_name,
+        path=model_path,
+        device=device,
+        engine_kwargs=engine_kwargs or {},
+        apply_chat_template=False,
+    )
+
+    pool_config = InferencePoolConfig(
+        resource_config=resource_config,
+        model_config=model_config,
+    )
+
     return ExecutorStep(
         name=f"evaluation/helm/{model_name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="helm",
+            pool_config=pool_config,
             model_name=model_name,
             model_path=model_path,
             evaluation_path=this_output_path(),
             evals=evals,
+            max_eval_instances=max_eval_instances,
         ),
+        pip_dependency_groups=["eval"],
     )
 
 
 def evaluate_helm_on_step(
-    step: ExecutorStep | InputName, evals: list[EvalTaskConfig], max_eval_instances: int | None = None
+    step: ExecutorStep | InputName,
+    evals: list[EvalTaskConfig],
+    resource_config: ResourceConfig,
+    max_eval_instances: int | None = None,
+    engine_kwargs: dict | None = None,
 ) -> ExecutorStep:
-    """
-    Create an ExecutorStep to evaluate the model using HELM on a step.
+    """Create an ExecutorStep to evaluate the model using HELM on a training step.
 
     Args:
-        step (ExecutorStep | InputName): Executor Step to evaluate.
-        evals (list[str]): List of evaluations to run with HELM, e.g, ["mmlu", "lite"].
+        step: Executor Step to evaluate
+        evals: List of evaluations to run with HELM, e.g, ["mmlu", "lite"]
+        resource_config: Fray ResourceConfig for pool workers (TPU/GPU resources)
+        max_eval_instances: Maximum number of evaluation instances to run
+        engine_kwargs: Additional keyword arguments to pass to the vLLM engine
     """
     # TODO: support evaluating all checkpoints in a run
     executor_step = get_executor_step(step)
     model_step_path = output_path_of(executor_step)
+
+    # Auto-detect device from resource config
+    device = infer_device_from_resource_config(resource_config)
+
+    # Build ModelConfig (model name will be imputed from path)
+    model_config = ModelConfig(
+        name=executor_step.name,
+        path=model_step_path,  # type: ignore
+        device=device,
+        engine_kwargs=engine_kwargs or {},
+        apply_chat_template=False,
+    )
+
+    # Build InferencePoolConfig
+    pool_config = InferencePoolConfig(
+        resource_config=resource_config,
+        model_config=model_config,
+    )
 
     return ExecutorStep(
         name=f"evaluation/helm/{executor_step.name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="helm",
+            pool_config=pool_config,
             model_name=None,
             model_path=model_step_path,  # type: ignore
             evaluation_path=this_output_path(),
@@ -94,6 +154,7 @@ def evaluate_helm_on_step(
             discover_latest_checkpoint=True,
             max_eval_instances=max_eval_instances,
         ),
+        pip_dependency_groups=["eval"],
     )
 
 
