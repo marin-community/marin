@@ -13,8 +13,8 @@
 # limitations under the License.
 
 """
-32B Qwen cooldown-style SFT that reuses the Mantis mixture and warmstarts from
-the step-191999 checkpoint of ``tootsie-32b-cooldown-mantis-adamc-v2``.
+32B Qwen cooldown-style SFT that warmstarts from the step-191999 checkpoint of ``tootsie-32b-cooldown-mantis-adamc-v2``
+and uses the mixture frmo 1880
 """
 
 import dataclasses
@@ -25,10 +25,10 @@ from experiments.evals.resource_configs import TPU_V4_8
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.tootsie.exp1529_32b_mantis_cooldown import (
-    mantis_cooldown_mixture,
     qwen3_32b_remat,
     tootsie_32b_cooldown_mantis,
 )
+from experiments.exp1880_sft_baseline import mixture_config
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 
@@ -54,7 +54,7 @@ mantis_sft_config = SimpleSFTConfig(
 
 tootsie_32b_mantis_sft = default_sft(
     name="tootsie-32b-mantis-sft-exp1994",
-    tokenized=mantis_cooldown_mixture,
+    tokenized=mixture_config,
     model_config=qwen3_32b_remat_8k,
     sft_config=mantis_sft_config,
     tags=["qwen", "32b", "exp1994", "mantis", "cooldown"],
