@@ -12,20 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Ray-based cluster implementation."""
+"""Local implementations for cluster components."""
 
-from fray.cluster.ray.cluster import RayCluster
-from fray.cluster.ray.dashboard import (
-    DashboardConfig,
-    DashboardConnection,
-    ray_dashboard,
-)
-from fray.cluster.ray.queue import RayQueue
+from fray.cluster.local_cluster import LocalCluster
+from fray.cluster.local.queue import LocalQueue
 
-__all__ = [
-    "DashboardConfig",
-    "DashboardConnection",
-    "RayCluster",
-    "RayQueue",
-    "ray_dashboard",
-]
+__all__ = ["LocalCluster", "LocalQueue"]

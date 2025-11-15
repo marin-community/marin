@@ -22,6 +22,7 @@ from fray.job_context import (
     ThreadContext,
     create_context,
 )
+from fray.worker_pool import WorkerPool, WorkerPoolConfig
 
 __all__ = [
     "ContextConfig",
@@ -29,5 +30,7 @@ __all__ = [
     "RayContext",
     "SyncContext",
     "ThreadContext",
+    "WorkerPool",
+    "WorkerPoolConfig",
     "create_context",
 ]

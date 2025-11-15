@@ -12,20 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Ray-based cluster implementation."""
-
-from fray.cluster.ray.cluster import RayCluster
-from fray.cluster.ray.dashboard import (
-    DashboardConfig,
-    DashboardConnection,
-    ray_dashboard,
-)
-from fray.cluster.ray.queue import RayQueue
-
-__all__ = [
-    "DashboardConfig",
-    "DashboardConnection",
-    "RayCluster",
-    "RayQueue",
-    "ray_dashboard",
-]
+"""Example workers for Fray worker pool."""

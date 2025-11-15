@@ -36,6 +36,7 @@ from fray.cluster.base import (
     TpuConfig,
     create_environment,
 )
+from fray.cluster.queue import Queue
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
 from fray.fn_thunk import create_thunk_entrypoint
@@ -250,6 +251,19 @@ class RayCluster(Cluster):
                 )
             )
         return result
+
+    def create_queue(self, name: str) -> Queue:
+        """Create a Ray-based distributed queue.
+
+        Args:
+            name: Unique name for this queue
+
+        Returns:
+            RayQueue implementation
+        """
+        from fray.cluster.ray.queue import RayQueue
+
+        return RayQueue(name)
 
     def get_ray_resources(self, request: JobRequest) -> dict[str, float]:
         """Convert ResourceConfig to Ray resource specification.

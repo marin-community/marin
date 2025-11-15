@@ -22,6 +22,8 @@ from fray.cluster import LocalCluster, RayCluster
 
 @pytest.fixture(scope="module")
 def ray_cluster():
+    if RayCluster is None:
+        pytest.skip("RayCluster not available")
     if not ray.is_initialized():
         ray.init(
             address="local",
@@ -36,6 +38,8 @@ def ray_cluster():
 
 @pytest.fixture(scope="module")
 def local_cluster():
+    if LocalCluster is None:
+        pytest.skip("LocalCluster not available")
     yield LocalCluster()
 
 
