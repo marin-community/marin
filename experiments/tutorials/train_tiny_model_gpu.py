@@ -23,24 +23,39 @@ This script demonstrates how to:
 For CPU training, see train_tiny_model_cpu.py
 """
 
-from experiments.defaults import default_tokenize, default_train
+import os
+
+from levanter.data.text import TextLmDatasetFormat
+from marin.execution.executor import ExecutorStep, ensure_versioned, executor_main, this_output_path, versioned
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, tokenize
+from marin.resources import GpuConfig
+
+from experiments.defaults import default_train
 from experiments.llama import llama_nano
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
-from marin.resources import GpuConfig
 
+# 1. Choose a dataset
 wikitext_hf_id = "dlwh/wikitext_2_detokenized"
-wikitext_tokenized = default_tokenize(
-    name="wikitext_2_detokenized",  # path to store the tokenized data inside PREFIX. `tokenized/` will be prepended
-    dataset=wikitext_hf_id,  # dataset can be a step for downloaded data, or a raw HF id
-    tokenizer=marin_tokenizer,  # the marin tokenizer is the llama3 tokenizer with a custom chat template
+
+# For this tutorial, we limit to 1000 documents per shard
+wikitext_tokenized = ExecutorStep(
+    name=os.path.join("tokenized", wikitext_hf_id),
+    description=f"Tokenize Wikitext-2 with 1000 samples per shard using {marin_tokenizer}",
+    fn=tokenize,
+    config=HfTokenizeConfig(
+        id=wikitext_hf_id,
+        cache_path=this_output_path(),
+        tokenizer=ensure_versioned(marin_tokenizer),
+        format=TextLmDatasetFormat(),
+        sample_count=versioned(1000),
+    ),
+    pip_dependency_groups=["tokenize_train"],
 )
 
 
 nano_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
-    # TODO: AutoResources
     resources=GpuConfig(gpu_count=1),
     train_batch_size=32,
     num_train_steps=100,
@@ -50,7 +65,7 @@ nano_train_config = SimpleTrainConfig(
 
 nano_wikitext_model = default_train(
     name="llama-nano-wikitext",
-    # Steps can depend on other steps: wikitext_tokenized depends on wikitext
+    # Steps can depend on other steps: nano_wikitext_model depends on wikitext_tokenized
     tokenized=wikitext_tokenized,
     model_config=llama_nano,
     train_config=nano_train_config,

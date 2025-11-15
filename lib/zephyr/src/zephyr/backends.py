@@ -21,12 +21,13 @@ import logging
 import os
 import pickle
 import re
+import time
 import zlib
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from itertools import groupby
+from itertools import groupby, islice
 from typing import Any, Literal, Protocol, TypeVar
 
 import fsspec
@@ -34,7 +35,7 @@ import msgspec
 import numpy as np
 import ray
 import zstandard as zstd
-from tqdm import tqdm
+from tqdm_loggable.auto import tqdm
 
 from zephyr.dataset import (
     Dataset,
@@ -49,7 +50,7 @@ from zephyr.dataset import (
     ReduceLocalOp,
     ReshardOp,
     SortedMergeJoinOp,
-    TakeOp,
+    TakePerShardOp,
     WindowOp,
     WriteDataOp,
 )
@@ -60,6 +61,60 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+
+class ShardMonitor:
+    """Monitor progress across multiple pipeline stages within a shard.
+
+    Periodically logs a single line showing progress across all active stages.
+    Example: "shard 3/10: FlatMap[process] (1234) Map[transform] (5678) Filter[quality] (234)"
+    """
+
+    def __init__(self, shard_idx: int, total_shards: int, interval: float = 10.0):
+        """Initialize shard monitor.
+
+        Args:
+            shard_idx: Index of this shard (0-based)
+            total_shards: Total number of shards
+            interval: Logging interval in seconds
+        """
+        self.shard_idx = shard_idx
+        self.total_shards = total_shards
+        self.interval = interval
+        self.stage_counts: dict[str, int] = {}
+        self.last_log_time = 0
+
+    def _maybe_log(self):
+        """Log status if interval has elapsed."""
+        now = time.time()
+        if now - self.last_log_time >= self.interval:
+            self._log_status()
+            self.last_log_time = now
+
+    def _log_status(self):
+        """Log current progress across all stages."""
+        stages = " ".join(f"{stage} ({count})" for stage, count in self.stage_counts.items())
+        logger.info(f"shard {self.shard_idx + 1}/{self.total_shards}: {stages}")
+
+    def wrap(self, items: Iterable[T], stage_name: str) -> Iterator[T]:
+        """Wrap an iterable to track progress for a specific stage.
+
+        Args:
+            items: Items to iterate over
+            stage_name: Name of the stage (e.g., "FlatMap[process]")
+
+        Yields:
+            Items from the input iterable
+        """
+        self.stage_counts[stage_name] = 0
+        try:
+            for item in items:
+                self.stage_counts[stage_name] += 1
+                self._maybe_log()
+                yield item
+        finally:
+            # Stage complete - remove from active stages
+            self.stage_counts.pop(stage_name, None)
 
 
 def msgpack_encode(obj: Any) -> bytes:
@@ -419,13 +474,14 @@ def process_shard_fused(
     Returns:
         List of output shards (single shard for most ops, multiple for GroupByLocalOp)
     """
-    op_names = "|".join(op.__class__.__name__.replace("Op", "") for op in operations)
-    logger.info(f"fused[{len(operations)}]: shard {ctx.shard_idx + 1}/{ctx.total_shards}")
+    op_names = "|".join([str(op) for op in operations])
+    logger.info(f"fused[{op_names}]: shard {ctx.shard_idx}/{ctx.total_shards}")
+
+    monitor = ShardMonitor(ctx.shard_idx, ctx.total_shards)
 
     # we first build a stream of all of the fused operations.
     # if we have a group by or reduction, we then apply them at the end
     # if not, we yield our final shard directly.
-
     def build_stream(stream_input, ops, op_index=0):
         """Recursively build the generator pipeline.
 
@@ -440,6 +496,9 @@ def process_shard_fused(
 
         op, *rest = ops
 
+        # Wrap stream with monitor for this operation
+        stream_input = monitor.wrap(stream_input, str(op))
+
         if isinstance(op, MapOp):
             yield from build_stream((op.fn(item) for item in stream_input), rest, op_index + 1)
         elif isinstance(op, FlatMapOp):
@@ -451,9 +510,8 @@ def process_shard_fused(
         elif isinstance(op, FilterOp):
             filter_iter = (item for item in stream_input if op.predicate(item))
             yield from build_stream(filter_iter, rest, op_index + 1)
-        elif isinstance(op, TakeOp):
-            from itertools import islice
-
+        elif isinstance(op, TakePerShardOp):
+            logger.info(f"Taking first {op.n} items from shard {ctx.shard_idx}")
             take_iter = islice(stream_input, op.n)
             yield from build_stream(take_iter, rest, op_index + 1)
         elif isinstance(op, WindowOp):
@@ -464,7 +522,13 @@ def process_shard_fused(
             # Check if we should skip writing because file already exists
             if op.skip_existing:
                 fs = fsspec.core.url_to_fs(output_path)[0]
-                if fs.exists(output_path):
+                # levanter writes directories, so use a sentinel file to check for existence
+                if op.writer_type == "levanter_cache":
+                    test_path = os.path.join(output_path, ".success")
+                else:
+                    test_path = output_path
+
+                if fs.exists(test_path):
                     logger.info(f"Skipping write, output exists: {output_path}")
                     # Don't consume stream - lazy evaluation means upstream processing is skipped
                     yield from build_stream(iter([output_path]), rest, op_index + 1)
@@ -476,7 +540,7 @@ def process_shard_fused(
             elif op.writer_type == "parquet":
                 result = write_parquet_file(stream_input, output_path, op.schema, op.batch_size)["path"]
             elif op.writer_type == "levanter_cache":
-                result = write_levanter_cache(stream_input, output_path, op.tokenizer_name, op.format)["path"]
+                result = write_levanter_cache(stream_input, output_path, op.levanter_metadata)["path"]
             else:
                 raise ValueError(f"Unknown writer_type: {op.writer_type}")
             yield from build_stream(iter([result]), rest, op_index + 1)
@@ -500,11 +564,7 @@ def process_shard_fused(
         if num_output_shards <= 0:
             num_output_shards = ctx.total_shards
 
-        stream = tqdm(
-            build_stream(ctx.shard, pre_ops),
-            desc=f"fused[{op_names}]: shard {ctx.shard_idx + 1}/{ctx.total_shards}",
-            mininterval=10,
-        )
+        stream = monitor.wrap(build_stream(ctx.shard, pre_ops), str(group_by_local_op))
 
         output_chunks = _group_items_by_hash(
             stream, group_by_local_op.key_fn, num_output_shards, ctx.chunk_size, ctx.shard.context
@@ -516,11 +576,7 @@ def process_shard_fused(
         reduce_local_op = operations[-1]
         pre_ops = operations[:-1]
 
-        stream = tqdm(
-            build_stream(ctx.shard, pre_ops),
-            desc=f"fused[{op_names}]: shard {ctx.shard_idx + 1}/{ctx.total_shards}",
-            mininterval=10,
-        )
+        stream = monitor.wrap(build_stream(ctx.shard, pre_ops), str(reduce_local_op))
 
         result = reduce_local_op.local_reducer(stream)
         return [Shard.from_items([result], ctx.chunk_size, ctx.shard.context, idx=ctx.shard_idx)]
@@ -528,11 +584,7 @@ def process_shard_fused(
     # No grouping or reduction at the end, just build the shard directly
     return [
         Shard.from_items(
-            tqdm(
-                build_stream(ctx.shard, operations),
-                desc=f"fused[{op_names}]: shard {ctx.shard_idx + 1}/{ctx.total_shards}",
-                mininterval=10,
-            ),
+            build_stream(ctx.shard, operations),
             ctx.chunk_size,
             ctx.shard.context,
             idx=ctx.shard_idx,
@@ -736,17 +788,20 @@ class Backend:
     def chunk_size(self) -> int:
         return self.config.chunk_size
 
-    def execute(self, dataset: Dataset) -> Iterator:
+    def execute(self, dataset: Dataset, verbose: bool = False) -> Iterator:
         """Execute a dataset and return an iterator over results.
 
         Args:
             dataset: Dataset to execute
+            verbose: Print additional logging and optimization stats
 
         Returns:
             Iterator over dataset results
         """
         optimized_ops = self._optimize_operations(dataset.operations)
-        self._print_optimization_plan(dataset.operations, optimized_ops)
+
+        if verbose:
+            self._print_optimization_plan(dataset.operations, optimized_ops)
 
         if self.dry_run:
             return
@@ -788,26 +843,24 @@ class Backend:
             original_ops: Original operation chain
             optimized_ops: Optimized operation chain with fused operations
         """
-        print("\n=== ML-Flow Optimization Plan ===\n")
-        print(f"Original operations: {len(original_ops)}")
-        print(f"Optimized operations: {len(optimized_ops)}")
-        print(f"Fusion savings: {len(original_ops) - len(optimized_ops)} operations fused\n")
+        logger.info("\n=== ML-Flow Optimization Plan ===\n")
+        logger.info(f"Original operations: {len(original_ops)}")
+        logger.info(f"Optimized operations: {len(optimized_ops)}")
+        logger.info(f"Fusion savings: {len(original_ops) - len(optimized_ops)} operations fused\n")
 
-        print("Original pipeline:")
+        logger.info("Original pipeline:")
         for i, op in enumerate(original_ops, 1):
-            op_name = op.__class__.__name__.replace("Op", "")
-            print(f"  {i}. {op_name}")
+            logger.info(f"  {i}. {op}")
 
-        print("\nOptimized pipeline:")
+        logger.info("\nOptimized pipeline:")
         for i, op in enumerate(optimized_ops, 1):
             if isinstance(op, FusedMapOp):
-                fused_names = [fused_op.__class__.__name__.replace("Op", "") for fused_op in op.operations]
-                print(f"  {i}. FusedMap[{' → '.join(fused_names)}] ({len(op.operations)} operations)")
+                fused_names = [str(op) for op in op.operations]
+                logger.info(f"  {i}. FusedMap[{' → '.join(fused_names)}] ({len(op.operations)} operations)")
             else:
-                op_name = op.__class__.__name__.replace("Op", "")
-                print(f"  {i}. {op_name}")
+                logger.info(f"  {i}. {op}")
 
-        print("\n=== End Optimization Plan ===\n")
+        logger.info("\n=== End Optimization Plan ===\n")
 
     def _run_operations_on_shards(self, source: Iterable, optimized_ops: list) -> list[Shard]:
         """Core execution logic - executes already-optimized operations on shards.
@@ -907,11 +960,6 @@ class Backend:
         elif len(shards) != len(aux_shards_per_shard):
             raise ValueError(f"Mismatch: {len(shards)} shards but {len(aux_shards_per_shard)} aux_shards entries")
 
-        aux_str = "with aux data" if any(aux_shards for aux_shards in aux_shards_per_shard) else ""
-        print(
-            f"Running {process_fn.__name__} on {len(shards)} shards {aux_str} "
-            f"with max parallelism {self.config.max_parallelism}".strip()
-        )
         total = len(shards)
         pending = set()
         finished = []

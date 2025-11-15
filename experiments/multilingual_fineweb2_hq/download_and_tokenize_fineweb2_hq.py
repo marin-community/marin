@@ -21,7 +21,6 @@ Fineweb2 dataset.
 
 import os.path
 
-from levanter.store.cache import CacheOptions
 
 from experiments.llama import llama3_tokenizer
 from experiments.multilingual_fineweb2_hq.constants import FINEWEB2_DATASETS
@@ -66,7 +65,6 @@ def tokenize_fineweb2hq_steps(*, base_path="tokenized/", tokenizer=llama3_tokeni
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
-                cache_options=CacheOptions(num_shard_groups=256),
             ),
         )
         steps[f"fineweb2_hq/{split}"] = step

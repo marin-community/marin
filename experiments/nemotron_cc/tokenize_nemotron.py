@@ -21,7 +21,6 @@ Nemotron CC dataset.
 
 import os.path
 
-from levanter.store.cache import CacheOptions
 
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import nemotron_cc
@@ -79,7 +78,6 @@ def tokenize_nemotron_steps(*, base_path="tokenized/", tokenizer=llama3_tokenize
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
-                cache_options=CacheOptions(num_shard_groups=256),
             ),
             pip_dependency_groups=["sentencepiece"],
         )
