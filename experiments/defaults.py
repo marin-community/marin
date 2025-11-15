@@ -157,7 +157,7 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
-            sample_count=sample_count,
+            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
     elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
         config = HfTokenizeConfig(
@@ -165,7 +165,7 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
-            sample_count=sample_count,
+            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
     else:
         config = TokenizeConfig(
@@ -174,7 +174,7 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
-            sample_count=sample_count,
+            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
 
     return ExecutorStep(

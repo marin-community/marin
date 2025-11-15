@@ -42,7 +42,7 @@ tinystories_tokenized = default_tokenize(
     dataset=tinystories_hf_id,
     tokenizer=marin_tokenizer,
     format=TextLmDatasetFormat(),
-    sample_count=versioned(1000),
+    sample_count=1000,
 )
 
 
@@ -64,7 +64,7 @@ nano_tinystories_model = default_train(
     name="marin-nano-tinystories",
     # Steps can depend on other steps: nano_tinystories_model depends on tinystories_tokenized
     tokenized=tinystories_tokenized,
-    model_config=llama_nano,
+    model_config=versioned(llama_nano),
     train_config=nano_train_config,
     # wandb tags
     tags=["llama", "nano", "tinystories", "tutorial"],
