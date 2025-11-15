@@ -56,6 +56,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
+    VersionedValue,
     ensure_versioned,
     get_executor_step,
     this_output_path,
@@ -124,6 +125,7 @@ def default_tokenize(
     tokenizer: str,
     format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
     *,
+    sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
 ) -> ExecutorStep:
     """
@@ -141,6 +143,7 @@ def default_tokenize(
 
             See [Levanter's documentation](https://levanter.readthedocs.io/en/latest/reference/Data-Formats/)
             for more details.
+        sample_count: Optional limit on the number of samples to tokenize per shard. If ``None``, tokenize everything.
         is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
     Returns:
         An ExecutorStep that represents the tokenized dataset.
@@ -154,6 +157,7 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
+            sample_count=sample_count,
         )
     elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
         config = HfTokenizeConfig(
@@ -161,6 +165,7 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
+            sample_count=sample_count,
         )
     else:
         config = TokenizeConfig(
@@ -169,6 +174,7 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
+            sample_count=sample_count,
         )
 
     return ExecutorStep(
