@@ -20,7 +20,7 @@ import levanter.infra.cli_helpers
 import ray
 from levanter.checkpoint import discover_latest_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
-from levanter.infra.ray_tpu import run_on_pod_resumable
+from fray.cluster.ray.tpu import run_on_pod_resumable
 from levanter.main import export_lm_to_hf
 from levanter.main.export_lm_to_hf import ConvertLmConfig
 from levanter.models.lm_model import LmConfig

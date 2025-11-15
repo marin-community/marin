@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 import ray
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
-from levanter.infra.ray_tpu import run_on_pod_ray
+from fray.cluster.ray.tpu import run_on_pod_ray
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import TrainerConfig

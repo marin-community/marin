@@ -23,7 +23,7 @@ import draccus
 import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
-from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
+from fray.cluster.ray.tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
 from levanter.main import train_lm
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
