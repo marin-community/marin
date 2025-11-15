@@ -49,13 +49,17 @@ This function takes a dataset and a tokenizer and returns an `ExecutorStep` that
 The tokenized dataset is a directory containing one file per shard of the dataset.
 
 ```python
-from experiments.llama import llama3_tokenizer
+from levanter.data.text import TextLmDatasetFormat
+from marin.execution.executor import versioned
 from experiments.defaults import default_tokenize
+from experiments.marin_models import marin_tokenizer
 
 tinystories_tokenized = default_tokenize(
     name=tinystories_hf_id,  # path to write tokenized files (tokenized/ will be prepended)
     dataset=tinystories_hf_id,  # HF dataset id
-    tokenizer=llama3_tokenizer,
+    tokenizer=marin_tokenizer,
+    format=TextLmDatasetFormat(),
+    sample_count=versioned(1000),  # keep tutorial fast by tokenizing 1k samples per shard
 )
 ```
 
@@ -102,13 +106,11 @@ This class defines basic training configuration that is sufficient for most expe
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
             resources=GpuConfig(gpu_count=1),
-            train_batch_size=4,
+            train_batch_size=32,
             num_train_steps=100,
             # set hyperparameters
             learning_rate=6e-4,
             weight_decay=0.1,
-            # keep eval quick for tutorial
-            max_eval_batches=4,
         )
         ```
 
@@ -143,7 +145,7 @@ from experiments.llama import llama_nano
 from experiments.defaults import default_train
 
 nano_tinystories_model = default_train(
-    name="marin-tutorial-nano-tinystories",
+    name="marin-nano-tinystories",
     tokenized=tinystories_tokenized,
     model_config=llama_nano,
     train_config=nano_train_config,
@@ -191,12 +193,12 @@ To run the experiment locally, we can run the script directly:
 
 === "CPU"
     ```bash
-    python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
+    uv run python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
     ```
 
 === "GPU"
     ```bash
-    python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
+    uv run python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
     ```
 
 The `--prefix` argument specifies the output directory for the experiment. It can be a local directory or anything [fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports,
