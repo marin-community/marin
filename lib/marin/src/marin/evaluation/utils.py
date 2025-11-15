@@ -20,8 +20,8 @@ import time
 import fsspec
 import psutil
 import yaml
-from fsspec.implementations.local import LocalFileSystem
 from fsspec.callbacks import TqdmCallback
+from fsspec.implementations.local import LocalFileSystem
 
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_mtime
 
@@ -72,8 +72,8 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
     """
     Uploads a folder `local_path` to Google Cloud Storage (GCS).
     """
-    print(f"Uploading {local_path}.")
-    fs = fsspec.filesystem("gcs")
+    logger.info(f"Uploading {local_path} to {gcs_path}.")
+    fs = fsspec.url_to_fs(gcs_path)[0]
     # The slash is needed to upload the contents of the folder to `gcs_path`
     fs.put(local_path + "/", gcs_path, recursive=True)
     logger.info(f"Uploaded {local_path} to {gcs_path}.")
@@ -91,29 +91,13 @@ def run_bash_command(command: list[str], check: bool = True, verbose: bool = Tru
             # Use Popen for real-time output streaming when verbose is True
             process = subprocess.Popen(
                 command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=None,
+                stderr=None,
                 text=True,
                 bufsize=1,
                 universal_newlines=True,
             )
-
-            # Stream output in real-time
-            while True:
-                stdout_line = process.stdout.readline() if process.stdout else ""
-                stderr_line = process.stderr.readline() if process.stderr else ""
-
-                if stdout_line:
-                    print(f"STDOUT: {stdout_line.rstrip()}", flush=True)
-                if stderr_line:
-                    print(f"STDERR: {stderr_line.rstrip()}", flush=True)
-
-                # Break if process has finished and no more output
-                if process.poll() is not None and not stdout_line and not stderr_line:
-                    break
-
-            # Get return code and handle errors
-            return_code = process.poll()
+            return_code = process.wait()
             elapsed_time_seconds: float = time.time() - start_time
             print(f"COMPLETED: {command_str} ({elapsed_time_seconds}s)", flush=True)
 
