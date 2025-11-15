@@ -17,7 +17,7 @@
 import logging
 
 from zephyr.backend_factory import create_backend, flow_backend, set_flow_backend
-from zephyr.backends import Backend, RayBackend, SyncBackend, ThreadPoolBackend
+from zephyr.backends import Backend
 from zephyr.dataset import Dataset
 from zephyr.readers import load_file, load_jsonl, load_parquet, load_zip_members
 from zephyr.worker_pool import WorkerPool, WorkerPoolConfig
@@ -29,9 +29,6 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "Backend",
     "Dataset",
-    "RayBackend",
-    "SyncBackend",
-    "ThreadPoolBackend",
     "WorkerPool",
     "WorkerPoolConfig",
     "atomic_rename",
