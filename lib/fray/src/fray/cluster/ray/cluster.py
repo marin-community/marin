@@ -18,10 +18,12 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import cast
 
+import humanfriendly
 import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
@@ -36,6 +38,7 @@ from fray.cluster.base import (
     TpuConfig,
     create_environment,
 )
+from fray.cluster.ray.config import find_config_by_region
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
 from fray.fn_thunk import create_thunk_entrypoint
@@ -49,6 +52,7 @@ class RayCluster(Cluster):
         address: str = "auto",
         dashboard_address: str | None = None,
         config_path: str | None = None,
+        namespace: str | None = None,
     ):
         """Initialize Ray cluster connection.
 
@@ -58,15 +62,58 @@ class RayCluster(Cluster):
                              (if None, derived from address)
             config_path: Path to cluster config YAML for SSH tunnel setup
                        (if None, no SSH tunnel will be created)
+            namespace: Ray namespace for actor isolation
+                      (if None, creates a unique namespace)
         """
         self._address = os.environ.get("RAY_ADDRESS", "auto") if address == "auto" else address
         self._config_path = config_path
+
+        # Use provided namespace or create a unique one
+        if namespace is None:
+            self._namespace = f"fray_{uuid.uuid4().hex[:8]}"
+            logger.info(f"Created new namespace: {self._namespace}")
+        else:
+            self._namespace = namespace
+            logger.info(f"Using provided namespace: {self._namespace}")
+
         self._dashboard_address = dashboard_address or self._get_dashboard_address()
         self._tpu_jobs: dict[str, dict] = {}  # Track TPU jobs: job_id -> {ref, name, start_time}
 
+    @classmethod
+    def from_spec(cls, spec: str) -> "RayCluster":
+        namespace = None
+        config_path = None
+        address = "auto"
+
+        # parse query params to dictionary
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(spec)
+        query_params = parse_qs(parsed.query)
+        if "namespace" in query_params:
+            namespace = query_params["namespace"][0]
+
+        if "cluster" in query_params:
+            config_path = find_config_by_region(query_params["cluster"][0])
+
+        return cls(address=address, config_path=config_path, namespace=namespace)
+
     def _job_client(self) -> JobSubmissionClient:
-        """Create JobSubmissionClient on demand (after connect() establishes tunnel)."""
         return JobSubmissionClient(self._dashboard_address)
+
+    def _get_cluster_spec(self) -> str:
+        if self._address == "auto":
+            base = "ray"
+        elif self._config_path:
+            base = f"ray:{self._config_path}"
+        else:
+            base = "ray"
+
+        # Append namespace as query param if present
+        if self._namespace:
+            base += f"?namespace={self._namespace}"
+
+        return base
 
     def launch(self, request: JobRequest) -> JobId:
         """Launch job on Ray cluster, returning job identifier."""
@@ -74,26 +121,28 @@ class RayCluster(Cluster):
 
         # We currently only launch TPU jobs from an existing Ray cluster. The TPU slice actor
         # bouncing prevents us from using a traditional job submission for TPU workloads.
-        if request.entrypoint.callable is not None:
-            if isinstance(request.resources.device, TpuConfig):
-                # TPU jobs execute callable directly via run_on_pod
-                return self._launch_tpu_job(request)
-            else:
-                # Non-TPU callable: use thunk helper
-                return self._launch_callable_job(request)
+        if isinstance(request.resources.device, TpuConfig):
+            return self._launch_tpu_job(request)
 
-        # Command-line entrypoint
+        if request.entrypoint.callable is not None:
+            entrypoint = create_thunk_entrypoint(
+                request.entrypoint.callable,
+                prefix=f"/tmp/{request.name}",
+                function_args=request.entrypoint.function_args,
+            )
+        else:
+            entrypoint = request.entrypoint
+
         runtime_env = self._get_runtime_env(request)
-        entrypoint = f"{request.entrypoint.binary} {' '.join(request.entrypoint.args)}"
-        logger.info("Submitting job with entrypoint: %s", entrypoint)
+        entrypoint_cmd = f"{entrypoint.binary} {' '.join(entrypoint.args)}"
+        logger.info("Submitting job with entrypoint: %s", entrypoint_cmd)
         logger.debug("Runtime env: %s", runtime_env)
 
-        # Map ResourceConfig to Ray entrypoint parameters
         entrypoint_params = self._get_entrypoint_params(request)
         logger.debug("Entrypoint params: %s", entrypoint_params)
 
         submission_id = self._job_client().submit_job(
-            entrypoint=entrypoint,
+            entrypoint=entrypoint_cmd,
             runtime_env=runtime_env,
             metadata={"name": request.name},
             **entrypoint_params,
@@ -102,52 +151,38 @@ class RayCluster(Cluster):
         return JobId(submission_id)
 
     def _get_runtime_env(self, request: JobRequest) -> dict | None:
-        """Build Ray runtime environment for the given job request.
-
-        For local clusters (address='auto'), returns None to skip runtime_env setup
-        since dependencies are already available in the current environment.
-        For remote clusters, builds full runtime_env with package dependencies.
-        """
-        # Skip runtime_env for local clusters - dependencies already available
-        if self._address == "auto":
-            return None
-
+        """Build Ray runtime environment for the given job request."""
         environment = request.environment if request.environment else create_environment()
 
+        env_vars = dict(environment.env_vars)
+
+        if "FRAY_CLUSTER_SPEC" not in env_vars:
+            env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
+
         runtime_env = build_runtime_env_for_packages(
-            extra=list(environment.extra_dependency_groups),
+            extra=list(environment.extras),
             pip_packages=list(environment.pip_packages),
-            env_vars=dict(environment.env_vars),
+            env_vars=env_vars,
         )
 
-        # Set working directory and excludes
-        if environment.workspace:
-            runtime_env["working_dir"] = environment.workspace
+        runtime_env["working_dir"] = environment.workspace
         runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
         runtime_env["config"] = {"setup_timeout_seconds": 1800}
-
         return runtime_env
 
     def _get_entrypoint_params(self, request: JobRequest) -> dict:
-        """Map ResourceConfig to Ray entrypoint parameters."""
-        import humanfriendly
-
         params = {}
 
-        # Map CPU count
         if request.resources.cpu > 0:
             params["entrypoint_num_cpus"] = float(request.resources.cpu)
 
-        # Map memory
         if request.resources.ram:
             params["entrypoint_memory"] = humanfriendly.parse_size(request.resources.ram, binary=True)
 
-        # Map device-specific resources
         device = request.resources.device
         if isinstance(device, GpuConfig):
             params["entrypoint_num_gpus"] = float(device.count)
         elif isinstance(device, TpuConfig):
-            # Build TPU resources dict
             params["entrypoint_resources"] = {
                 f"TPU-{device.type}-head": 1.0,
                 "TPU": float(device.count),
@@ -171,7 +206,6 @@ class RayCluster(Cluster):
                 yield line
             logger.info("Finished tailing logs for job %s, got %d lines", job_id, line_count)
 
-        # Consume async generator and yield results
         async def _consume():
             results = []
             async for line in _tail_logs():
@@ -287,42 +321,30 @@ class RayCluster(Cluster):
         }
         return cast(JobStatus, mapping.get(ray_status, "failed"))
 
-    def _launch_callable_job(self, request: JobRequest) -> JobId:
-        """Launch non-TPU callable job using thunk helper."""
-        entrypoint = request.entrypoint
-        thunk_entrypoint = create_thunk_entrypoint(entrypoint.callable, prefix=f"/tmp/{request.name}")
-        runtime_env = self._get_runtime_env(request)
-        entrypoint_cmd = f"{thunk_entrypoint.binary} {' '.join(thunk_entrypoint.args)}"
-        entrypoint_params = self._get_entrypoint_params(request)
-
-        submission_id = self._job_client().submit_job(
-            entrypoint=entrypoint_cmd,
-            runtime_env=runtime_env,
-            metadata={"name": request.name},
-            **entrypoint_params,
-        )
-        return JobId(submission_id)
-
     def _launch_tpu_job(self, request: JobRequest) -> JobId:
-        """Launch TPU job using run_on_pod."""
         entrypoint = request.entrypoint
         assert entrypoint.callable is not None, "TPU jobs require callable entrypoint"
 
         device = request.resources.device
-        assert isinstance(device, TpuConfig), "TPU job requires TpuConfig"
-
         runtime_env = self._get_runtime_env(request)
 
-        # Wrap callable with ray.remote
-        remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(entrypoint.callable)
+        # For nested ray.remote() calls, filter out job-level keys that can only be set via ray.init().
+        # These include working_dir, excludes, and config which are already set at the job level.
+        nested_runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
 
-        # Submit to TPU execution
+        if entrypoint.function_args:
+            remote_fn = ray.remote(max_calls=1, runtime_env=nested_runtime_env)(
+                lambda: entrypoint.callable(**entrypoint.function_args)
+            )
+        else:
+            remote_fn = ray.remote(max_calls=1, runtime_env=nested_runtime_env)(entrypoint.callable)
+
         object_ref = run_on_pod_ray.remote(
             remote_fn,
             tpu_type=device.type,
-            num_slices=device.num_slices,
+            num_slices=request.resources.replicas,
             max_retries_preemption=10000,
-            max_retries_failure=10,
+            max_retries_failure=1,
         )
 
         # Track via ObjectRef
@@ -377,22 +399,20 @@ class RayCluster(Cluster):
             del self._tpu_jobs[job_id]
 
     def _get_dashboard_address(self) -> str:
-        if self._address == "auto":
+        """Get Ray dashboard address for job submission.
+
+        When running inside a Ray worker, we can't access the dashboard URL
+        directly, so we fall back to using the Ray GCS address or the
+        configured address.
+        """
+        if ray.is_initialized():
             try:
-                ray.init(address="auto", ignore_reinit_error=True)
-                dashboard_url = ray.get_runtime_context().dashboard_url
-                if dashboard_url:
-                    logger.info("Using Ray dashboard at: %s", dashboard_url)
-                    return dashboard_url
-            except Exception as e:
-                logger.warning("Failed to get dashboard URL from Ray context: %s", e)
-
-            default_url = "http://127.0.0.1:8265"
-            logger.info("Using default dashboard URL: %s", default_url)
-            return default_url
-
-        # For remote addresses, assume dashboard is on port 8265
-        logger.info("Using remote dashboard address: %s", self._address)
+                # Try to get the GCS address, which we can use for job submission
+                ctx = ray.get_runtime_context()
+                if hasattr(ctx, "gcs_address"):
+                    return ctx.gcs_address
+            except Exception:
+                pass
         return self._address
 
     @contextmanager
@@ -409,5 +429,4 @@ class RayCluster(Cluster):
             with ray_dashboard(dashboard_cfg):
                 yield
         else:
-            # Local cluster or no config path specified
             yield

@@ -14,7 +14,7 @@ dependencies = [
     "mergedeep",
     "pyyaml>=6.0",
     "typing-extensions>=4.0",
-    "zstandard>=0.22.0",
+    "zstandard>=0.18.0",
 ]
 
 [project.scripts]
