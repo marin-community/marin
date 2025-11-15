@@ -41,9 +41,9 @@ train_steps = [
     ]
     for candidate_hparams in [
         # Fixed regularized
-        (800, 4, 1e-3, 3.2, "3_2b4k"),
-        # (800, 4, 3e-4, 0.1, "3_2b4k", False),
+        (800, 8, 3e-3, 1.6, "300moe"),
         # Fixed unregularized
+        (800, 4, 1e-3, 0.1, "300moe", False),
     ]
 ]
 
