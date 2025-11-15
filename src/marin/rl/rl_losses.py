@@ -57,7 +57,7 @@ def compute_metadata_metrics(
     batch_size, _ = policy_logprobs_array.shape
 
     mean_ratio_difference = jnp.sum(
-        jnp.exp(current_logprobs - policy_logprobs_array) * loss_masks_array, axis=1
+        (jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array)) * loss_masks_array, axis=1
     ) / jnp.sum(loss_masks_array, axis=1)
     mean_ratio_difference = jnp.mean(mean_ratio_difference)
 
@@ -70,7 +70,7 @@ def compute_metadata_metrics(
     mean_advantages = jnp.mean(mean_advantages)
 
     return {
-        "max_ratio_difference": jnp.max(jnp.exp(current_logprobs - policy_logprobs_array) * loss_masks_array),
+        "max_ratio_difference": jnp.max((jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array)) * loss_masks_array),
         "mean_ratio_difference": mean_ratio_difference,
         "max_advantages": jnp.max(loss_weights_array),
         "mean_advantages": mean_advantages,
@@ -132,7 +132,11 @@ def compute_ppo_loss_objective(
     if trainer_inference_importance_sampling_ratio is not None:
         loss_objective = trainer_inference_importance_sampling_ratio * loss_objective
     # Mean over response tokens per batch
-    loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
+    # loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
+
+    # Dr GRPO loss, token-level loss
+    MAX_OUTPUT_TOKENS = 2048
+    loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / MAX_OUTPUT_TOKENS)
 
     metadata = {
         "loss_max_over_batch": -jnp.max(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)),

@@ -194,6 +194,9 @@ class ReplayBuffer:
         current_time = time.time()
 
         for batch in new_batches:
+            # R[num_groups, num_rollouts_per_group]
+            batch_rewards = np.zeros((len(batch.groups), len(batch.groups[0].rollouts)), dtype=np.float32)
+
             if not batch.groups or not batch.groups[0].rollouts:
                 continue
 
@@ -210,14 +213,24 @@ class ReplayBuffer:
 
             self._total_batches_added += 1
 
-            for group in batch.groups:
+            for group_idx, group in enumerate(batch.groups):
                 # Compute RLOO advantages for the group
                 advantages = self.loss_module.compute_advantages(group.rollouts)
-                for rollout, advantage in zip(group.rollouts, advantages, strict=True):
+                maybe_used_rollouts = []
+                for rollout_idx, (rollout, advantage) in enumerate(zip(group.rollouts, advantages, strict=True)):
                     individual = RolloutWithCount(
                         rollout=rollout, advantage=advantage, usage_count=0, weight_step=rollout_step
                     )
-                    env_examples[rollout.env_name].append(individual)
+                    maybe_used_rollouts.append(individual)
+                    batch_rewards[group_idx, rollout_idx] = rollout.episode_reward
+
+                if np.std(batch_rewards[group_idx]) > 0.0:
+                    env_examples[rollout.env_name].extend(maybe_used_rollouts)
+                else:
+                    logger.info(f"Group {group_idx} has no variance in rewards, skipping")
+
+            logger.info(f"Reward mean across all groups: {batch_rewards.mean()}")
+            logger.info(f"Reward std across all groups: {batch_rewards.std(axis=1).mean()}")
 
         with self._lock:
             for env_name, examples in env_examples.items():
