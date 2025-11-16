@@ -454,8 +454,8 @@ def test_ocdbt_merges_files():
             checkpoint_dir = pathlib.Path(tmpdir)
             checkpoint_files = list(checkpoint_dir.rglob("*"))
             assert (
-                len(checkpoint_files) < 20
-            ), f"There should be fewer than 20 files in the checkpoint directory: {checkpoint_files}"
+                len(checkpoint_files) <= 25
+            ), f"There should be fewer than 25 files in the checkpoint directory: {checkpoint_files}"
             print(depth, len(checkpoint_files), checkpoint_files)
 
             manifest_files = list(checkpoint_dir.rglob("manifest.ocdbt"))

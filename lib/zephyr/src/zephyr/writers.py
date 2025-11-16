@@ -16,17 +16,18 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 from collections.abc import Iterable
 from contextlib import contextmanager
+from typing import Any
 
 import fsspec
 import msgspec
-from tqdm import tqdm
 
 
 @contextmanager
-def atomic_rename(output_path: str):
+def atomic_rename(output_path: str) -> Iterable[str]:
     """Context manager for atomic write-and-rename.
 
     Yields a temporary path to write to. On successful exit, atomically renames
@@ -42,7 +43,8 @@ def atomic_rename(output_path: str):
 
     try:
         yield temp_path
-        fs.mv(temp_path, output_path)
+        # not so atomic if on a remote FS and recursive, but ...
+        fs.mv(temp_path, output_path, recursive=True)
     except Exception:
         # Try to cleanup if something went wrong
         try:
@@ -81,17 +83,17 @@ def write_jsonl_file(records: Iterable, output_path: str) -> dict:
             cctx = zstd.ZstdCompressor(level=2, threads=1)
             with fsspec.open(temp_path, "wb", block_size=64 * 1024 * 1024) as raw_f:
                 with cctx.stream_writer(raw_f) as f:
-                    for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):
+                    for record in records:
                         f.write(encoder.encode(record) + b"\n")
                         count += 1
         elif output_path.endswith(".gz"):
             with fsspec.open(temp_path, "wb", compression="gzip", compresslevel=1, block_size=64 * 1024 * 1024) as f:
-                for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):
+                for record in records:
                     f.write(encoder.encode(record) + b"\n")
                     count += 1
         else:
             with fsspec.open(temp_path, "wb", block_size=64 * 1024 * 1024) as f:
-                for record in tqdm(records, desc=f"write_json {output_path}", mininterval=10):
+                for record in records:
                     f.write(encoder.encode(record) + b"\n")
                     count += 1
 
@@ -171,7 +173,7 @@ def write_parquet_file(
     with atomic_rename(output_path) as temp_path:
         with pq.ParquetWriter(temp_path, actual_schema) as writer:
             batch = [first_record]
-            for record in tqdm(record_iter, desc=f"write_parquet {output_path}", mininterval=10):
+            for record in record_iter:
                 batch.append(record)
                 count += 1
                 if len(batch) >= batch_size:
@@ -186,34 +188,33 @@ def write_parquet_file(
     return {"path": output_path, "count": count}
 
 
-def write_levanter_cache(
-    records: Iterable,
-    output_path: str,
-    tokenizer_name: str,
-    format: object,  # LmDatasetFormatBase  # noqa: A002
-) -> dict:
-    """Write tokenized records to Levanter cache format.
+def batchify(batch: Iterable, n: int = 1024) -> Iterable:
+    iterator = iter(batch)
+    while batch := tuple(itertools.islice(iterator, n)):
+        yield batch
 
-    Uses SerialCacheWriter to write records in the TreeStore/JaggedArrayStore format.
-    """
+
+def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, metadata: dict[str, Any]) -> dict:
+    """Write tokenized records to Levanter cache format."""
     from levanter.store.cache import SerialCacheWriter
 
     ensure_parent_dir(output_path)
 
-    # Collect records to get exemplar and write
     try:
         exemplar = next(iter(records))
     except StopIteration:
         return {"path": output_path, "count": 0}
 
-    metadata = {"tokenizer": tokenizer_name, "format": str(format)}
-
-    count = 0
+    count = 1
     with atomic_rename(output_path) as tmp_path:
-        with SerialCacheWriter(tmp_path, exemplar, metadata) as writer:
+        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=metadata) as writer:
             writer.write_batch([exemplar])
-            for record in records:
-                writer.write_batch([record])
-                count += 1
+            for batch in batchify(records):
+                writer.write_batch(batch)
+                count += len(batch)
+
+    # write success sentinel
+    with fsspec.open(f"{output_path}/.success", "w") as f:
+        f.write("")
 
     return {"path": output_path, "count": count}
