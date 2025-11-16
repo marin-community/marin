@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 from zephyr import Dataset, create_backend, load_file, load_parquet
-from zephyr.dataset import FilterOp, MapOp, TakeOp, WindowOp
+from zephyr.dataset import FilterOp, MapOp, WindowOp
 
 
 @pytest.fixture(autouse=True)
@@ -59,25 +59,26 @@ def test_filter(sample_data, backend):
     assert list(backend.execute(ds)) == [2, 4, 6, 8, 10]
 
 
-def test_take_basic(backend):
-    """Test basic take operation."""
-    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take(5)
+def test_take_per_shard(backend):
+    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take_per_shard(5)
     result = list(backend.execute(ds))
     assert result == [0, 1, 2, 3, 4]
 
-
-def test_take_more_than_available(backend):
-    """Test take when n > dataset size."""
-    ds = Dataset.from_list([list(range(5))]).flat_map(lambda x: x).take(10)
-    result = list(backend.execute(ds))
-    assert result == [0, 1, 2, 3, 4]
-
-
-def test_take_zero(backend):
-    """Test take with n=0."""
-    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take(0)
+    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take_per_shard(0)
     result = list(backend.execute(ds))
     assert result == []
+
+    # Create 3 shards with 5 items each
+    ds = (
+        Dataset.from_list([[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14]])
+        .flat_map(lambda x: x)
+        .take_per_shard(2)
+    )
+
+    result = sorted(list(backend.execute(ds)))
+    # Each of 3 shards contributes 2 items = 6 total
+    # Shard 0: [0, 1], Shard 1: [5, 6], Shard 2: [10, 11]
+    assert result == [0, 1, 5, 6, 10, 11]
 
 
 def test_take_with_filter_and_map(backend):
@@ -86,30 +87,11 @@ def test_take_with_filter_and_map(backend):
         Dataset.from_list([list(range(20))])
         .flat_map(lambda x: x)
         .filter(lambda x: x % 2 == 0)  # [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
-        .take(5)  # [0, 2, 4, 6, 8]
+        .take_per_shard(5)  # [0, 2, 4, 6, 8]
         .map(lambda x: x * 2)  # [0, 4, 8, 12, 16]
     )
     result = list(backend.execute(ds))
     assert result == [0, 4, 8, 12, 16]
-
-
-def test_take_per_shard(backend):
-    """Test that take operates independently per shard."""
-    # Create 3 shards with 5 items each
-    ds = Dataset.from_list([[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14]]).flat_map(lambda x: x).take(2)
-
-    result = sorted(list(backend.execute(ds)))
-    # Each of 3 shards contributes 2 items = 6 total
-    # Shard 0: [0, 1], Shard 1: [5, 6], Shard 2: [10, 11]
-    assert result == [0, 1, 5, 6, 10, 11]
-
-
-def test_take_operation_is_dataclass():
-    """Test that take operation is stored as inspectable dataclass."""
-    ds = Dataset.from_list([1, 2, 3]).take(5)
-    assert len(ds.operations) == 1
-    assert isinstance(ds.operations[0], TakeOp)
-    assert ds.operations[0].n == 5
 
 
 def test_batch(backend):
