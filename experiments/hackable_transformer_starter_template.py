@@ -350,7 +350,7 @@ class HackableLMHeadModel(
         return self.embeddings.token_embeddings.weight if self.lm_head is None else self.lm_head.weight
 
     def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "HackableLMHeadModel":
-        pass
+        raise NotImplementedError("resize_vocab is not implemented for HackableLMHeadModel")
 
 
 # =========================
