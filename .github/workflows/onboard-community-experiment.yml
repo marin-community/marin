@@ -2,7 +2,8 @@ name: Onboard Community Experiment
 
 on:
   issues:
-    types: [opened]
+    types: [opened, edited]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,7 +16,7 @@ concurrency:
 
 jobs:
   onboard:
-    if: contains(join(fromJson(toJson(github.event.issue.labels)).*.name, ','), 'community-experiment-submission') || contains(github.event.issue.body, '<!-- community-experiment:onboarding v1 -->')
+    if: contains(github.event.issue.body, '<!-- community-experiment:onboarding') || contains(github.event.issue.body, '### Name of your branch')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
