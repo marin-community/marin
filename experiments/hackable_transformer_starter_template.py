@@ -19,9 +19,6 @@ This file is intentionally self-contained:
 - Defines a compact, Llama-ish transformer that implements Levanter's LmHeadModel
 - Provides a ready-to-run speedrun sweep across multiple model sizes
 
-The onboarding workflow will duplicate this file into your branch and fill in
-the placeholders for author, branch name, description, and import path.
-
 How to run:
   1) Set env vars (WANDB_API_KEY, HF_TOKEN, etc.) as in the tutorial:
      https://marin.readthedocs.io/en/latest/tutorials/submitting-speedrun/
@@ -360,7 +357,7 @@ class HackableLMHeadModel(
 AUTHOR = Author(
     name=SUBMISSION_AUTHOR_NAME,
     affiliation=SUBMISSION_AUTHOR_AFFILIATION,
-    url=(None if SUBMISSION_AUTHOR_URL in ("", "__SUBMISSION_AUTHOR_URL__") else SUBMISSION_AUTHOR_URL),
+    url=(SUBMISSION_AUTHOR_URL or None),
 )
 
 

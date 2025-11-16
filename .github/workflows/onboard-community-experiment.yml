@@ -58,7 +58,7 @@ jobs:
           branch_slug="$(printf '%s' "$branch_name" | to_slug)"
 
           # Compose branch and directory names
-          branch_ref="${author_slug}/${branch_slug}"
+          branch_ref="${author_slug}/${branch_slug}-${{ github.event.issue.number }}"
           dir_name="${branch_slug}"
           import_path="experiments.speedrun.${dir_name}.main"
 
@@ -99,16 +99,21 @@ jobs:
 
           DEST="experiments/speedrun/${DIR}"
           mkdir -p "$DEST"
+          # Only create starter if it doesn't already exist
+          if [ ! -f "$DEST/main.py" ]; then
           cp "experiments/hackable_transformer_starter_template.py" "$DEST/main.py"
 
           # Patch placeholders using environment variables (safe for quotes/newlines)
-          SUBMISSION_IMPORT_PATH="${{ steps.parse.outputs.import_path }}" \
-          SUBMISSION_BRANCH="${{ steps.parse.outputs.branch_ref }}" \
-          SUBMISSION_DESCRIPTION="${{ steps.parse.outputs.description }}" \
-          SUBMISSION_AUTHOR_NAME="${{ steps.parse.outputs.author_name }}" \
-          SUBMISSION_AUTHOR_AFFILIATION="${{ steps.parse.outputs.affiliation }}" \
-          SUBMISSION_AUTHOR_URL="${{ steps.parse.outputs.url }}" \
-          python - "$DEST/main.py" <<'PY'
+          export SUBMISSION_IMPORT_PATH="${{ steps.parse.outputs.import_path }}"
+          export SUBMISSION_BRANCH="${{ steps.parse.outputs.branch_ref }}"
+          export SUBMISSION_DESCRIPTION="${{ steps.parse.outputs.description }}"
+          export SUBMISSION_AUTHOR_NAME="${{ steps.parse.outputs.author_name }}"
+          export SUBMISSION_AUTHOR_AFFILIATION="${{ steps.parse.outputs.affiliation }}"
+          export SUBMISSION_AUTHOR_URL="${{ steps.parse.outputs.url }}"
+
+          TMP_PY="$(mktemp)"
+          # Strip 12 leading spaces from the embedded Python, write to temp file (keeps YAML tidy)
+          sed -e 's/^ \{10\}//' > "$TMP_PY" <<'PY'
           import io, os, sys
           p = sys.argv[1]
           with io.open(p, 'r', encoding='utf-8') as f:
@@ -126,9 +131,15 @@ jobs:
           with io.open(p, 'w', encoding='utf-8') as f:
               f.write(s)
           PY
+            python "$TMP_PY" "$DEST/main.py"
+            rm -f "$TMP_PY"
+          else
+          echo "Starter already exists at $DEST/main.py; leaving as-is."
+          fi
 
           # Minimal README with how-to-run
-          cat > "$DEST/README.md" <<'EOF'
+          if [ ! -f "$DEST/README.md" ]; then
+            cat > "$DEST/README.md" <<'EOF'
           # ${{ steps.parse.outputs.branch_name }}
 
           ${{ steps.parse.outputs.description }}
@@ -140,9 +151,14 @@ jobs:
             python -m ${{ steps.parse.outputs.import_path }}
           ```
           EOF
+          fi
 
           git add "$DEST"
-          git commit -m "community: initialize starter for ${{ steps.parse.outputs.author_slug }}/${{ steps.parse.outputs.branch_slug }}"
+          if git diff --staged --quiet; then
+            echo "No changes to commit in $DEST"
+          else
+            git commit -m "community: initialize starter for ${{ steps.parse.outputs.author_slug }}/${{ steps.parse.outputs.branch_slug }}"
+          fi
           git push origin "$BRANCH"
 
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
