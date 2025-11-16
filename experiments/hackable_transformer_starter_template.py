@@ -530,5 +530,3 @@ if __name__ == "__main__":
         name, cfg = build_run(s, use_gpu=use_gpu)
         steps.extend(default_speedrun(name, cfg))
     executor_main(steps=steps, description=SUBMISSION_DESCRIPTION)
-
-
