@@ -354,7 +354,7 @@ def view():
         # jsonl files
         if sanitized_path.endswith(".jsonl"):
             return jsonify(read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count))
-        if sanitized_path.endswith(".json.gz") or sanitized_path.endswith(".ndjson.gz") or sanitized_path.endswith(".jsonl.gz"):
+        if any(sanitized_path.endswith(ext) for ext in [".json.gz", ".ndjson.gz", ".jsonl.gz"]):
             # json.gz is because Dolma files are named like this (should be jsonl.gz)
             return jsonify(read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count, gzipped=True))
         if sanitized_path.endswith(".jsonl.zstd") or sanitized_path.endswith(".jsonl.zst"):
