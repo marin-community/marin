@@ -23,15 +23,14 @@ Install dependencies:
 
 ```bash
 cd data_browser
-uv venv
-uv pip install -e .
+uv sync
 npm install
 ```
 
 **Note**: If you get `ModuleNotFoundError` when running the server, ensure dependencies are installed or run via uv:
 
 ```bash
-DEV=true uv run python server.py --config conf/local.conf
+DEV=true uv run server.py --config conf/local.conf
 ```
 
 ## Development Setup
@@ -41,9 +40,22 @@ The data browser consists of two components that need to run simultaneously:
 1. **Backend server (Flask)** - Handles file access and API endpoints
 2. **Frontend server (React)** - Provides the web interface
 
-### Option 1: Full Development Setup (Recommended)
+### Option 1: One-Command Dev Loop (Recommended)
 
-Run both servers in separate terminals:
+Use the helper launcher to start both servers together:
+
+```bash
+cd data_browser
+uv run python run-dev.py --config conf/local.conf
+```
+
+This script sets `DEV=true`, starts the Flask backend on the `port` defined in your config (default `5000`, `5050` in `conf/local.conf`), and runs `npm start` for the React app on port 3000. While the React dev server keeps listening on `3000`, all `/api/...` requests are automatically proxied to whatever backend port your config selects. Press `Ctrl+C` once to stop both services. Pass `--backend-only` if you only need the API, or `--config conf/gcp.conf` to point at a different dataset configuration.
+
+**Access**: open `http://localhost:<port>` using the same port declared in your config (`http://localhost:5050` when using `conf/local.conf`).
+
+### Option 2: Manual Control
+
+If you prefer to manage the processes yourself, run them in separate terminals:
 
 **Terminal 1: Backend Server**
 ```bash
@@ -57,18 +69,16 @@ cd data_browser
 npm start
 ```
 
-**Access**: [http://localhost:3000](http://localhost:3000)
+### Option 3: API-Only Testing
 
-### Option 2: API-Only Testing
-
-If you only need to test the API endpoints or the React server won't start:
+When you only need the REST API (or the React server won't start), launch just the backend:
 
 ```bash
 cd data_browser
 DEV=true uv run python server.py --config conf/local.conf
 ```
 
-**Access**: [http://localhost:5000/api/view?path=../local_store](http://localhost:5000/api/view?path=../local_store)
+**Access**: `http://localhost:<port>/api/view?path=../local_store` (replace `<port>` with the value from your config; `5050` for `conf/local.conf`).
 
 ## Configuration Details
 
@@ -88,16 +98,20 @@ blocked_paths:  # Optional: paths to block access to
 - gs://marin-us-central2/private-data/
 max_lines: 100
 max_size: 10000000
+port: 5050  # optional; defaults to 5000 when omitted
 ```
 
 **Note**: GCP configuration requires valid Google Cloud credentials (service account or gcloud auth).
+
+!!! note "Changing the backend port"
+    Port `5000` is already used by AirPlay on some macOS installs. If you see a 403 error right after the UI loads, add `port: 5050` (or another free port) to your config file and restart the dev server. Run `run-dev.py` again and visit `http://localhost:<port>`—the launcher now reads the config file and keeps the React dev server's proxy in sync automatically.
 
 ## Troubleshooting
 
 ### React Server Won't Start
 If you get "Connection refused" errors, the React dev server may not be running properly. You can still:
 
-1. **Use API directly**: Access `http://localhost:5000/api/view?path=YOUR_PATH`
+1. **Use API directly**: Access `http://localhost:<port>/api/view?path=YOUR_PATH` (match the config's port)
 2. **Check React server**: Ensure `npm start` is running without errors
 3. **Port conflicts**: Check if port 3000 is available
 
