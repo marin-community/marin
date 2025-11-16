@@ -147,7 +147,7 @@ from experiments.defaults import default_train
 nano_tinystories_model = default_train(
     name="marin-nano-tinystories",
     tokenized=tinystories_tokenized,
-    model_config=llama_nano,
+    model_config=versioned(llama_nano),
     train_config=nano_train_config,
     tags=["llama", "nano", "tinystories", "tutorial"],
     eval_harness_tasks=[],
@@ -212,13 +212,10 @@ At the end, you should see a message like this:
 ```
 2025-05-07 23:00:24,099	INFO executor.py:1036 -- Executor run took 263.37s
 2025-05-07 23:00:24,099	INFO executor.py:1037 -- Experiment info written to local_store/experiments/train_tiny_model_cpu-0b39f4.json
-2025-05-07 23:00:24,099	INFO executor.py:1038 -- View the experiment at https://localhost:5000/experiment?path=gs%3A%2F%2Fmarin-us-central2%2Fexperiments%2Ftrain_tiny_model_cpu-0b39f4.json
+2025-05-07 23:00:24,099	INFO executor.py:1038 -- View the experiment at https://localhost:3000/experiment?path=gs%3A%2F%2Fmarin-us-central2%2Fexperiments%2Ftrain_tiny_model_cpu-0b39f4.json
 ```
 
-The JSON file contains a record of the experiment, including the steps and dependencies.
-(Note that this link won't work unless you [start the data browser](data-browser.md).)
 
-If you were to rerun this experiment, the executor would detect that the training step has already been run and skip it.
 
 ### Inspecting the Output
 
@@ -240,6 +237,27 @@ roneneldan
 The `experiments` directory contains the experiment JSON file (which tracks all the steps and their dependencies).
 The `checkpoints` directory contains the trained model.
 The `tokenized` directory contains the tokenized dataset.
+
+### Inspecting the Experiment in the Data Browser
+
+The JSON file contains a record of the experiment, including the steps and dependencies.
+(Note that this link won't work unless you [start the data browser](data-browser.md), and you'll need to replace `3000` with whatever port your config uses.)
+
+You can do that by running:
+
+```bash
+cd data_browser
+uv run python run-dev.py --config conf/local.conf
+```
+
+which should start a browser pointed at [http://localhost:3000](http://localhost:3000).
+
+From there, you can click on the first link to select the prefix directory, then navigate to the experiment JSON file (experiments -> `train_tiny_model_cpu-xxxxxx.json`).
+Then click on "Go to experiment" to see the details of your experiment.
+
+You can see the steps that were run, their dependencies, and their outputs.
+
+If you were to rerun this experiment, the executor would detect that the training step has already been run and skip it.
 
 ## Next Steps
 

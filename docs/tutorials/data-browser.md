@@ -49,9 +49,7 @@ cd data_browser
 uv run python run-dev.py --config conf/local.conf
 ```
 
-This script sets `DEV=true`, starts the Flask backend on the `port` defined in your config (default `5000`, `5050` in `conf/local.conf`), and runs `npm start` for the React app on port 3000. While the React dev server keeps listening on `3000`, all `/api/...` requests are automatically proxied to whatever backend port your config selects. Press `Ctrl+C` once to stop both services. Pass `--backend-only` if you only need the API, or `--config conf/gcp.conf` to point at a different dataset configuration.
-
-**Access**: open `http://localhost:<port>` using the same port declared in your config (`http://localhost:5050` when using `conf/local.conf`).
+This script sets `DEV=true`, starts the Flask backend on the `port` defined in your config (default `5000`, `5050` in `conf/local.conf`), and runs `npm start` for the React app on port 3000 (or the next free port if 3000 is busy). The React dev server automatically opens your browser window, and it proxies every `/api/...` call to the backend port from your config, so you normally do all browsing at `http://localhost:3000` regardless of the backend port. Press `Ctrl+C` once to stop both services. Pass `--backend-only` if you only need the API, or `--config conf/gcp.conf` to point at a different dataset configuration.
 
 ### Option 2: Manual Control
 
@@ -104,7 +102,7 @@ port: 5050  # optional; defaults to 5000 when omitted
 **Note**: GCP configuration requires valid Google Cloud credentials (service account or gcloud auth).
 
 !!! note "Changing the backend port"
-    Port `5000` is already used by AirPlay on some macOS installs. If you see a 403 error right after the UI loads, add `port: 5050` (or another free port) to your config file and restart the dev server. Run `run-dev.py` again and visit `http://localhost:<port>`—the launcher now reads the config file and keeps the React dev server's proxy in sync automatically.
+    Port `5000` is already used by AirPlay on some macOS installs. If you see a 403 error right after the UI loads, add `port: 5050` (or another free port) to your config file and restart the dev server. Run `run-dev.py` again—the launcher reads the config file, keeps the proxy in sync automatically, and the React UI at `http://localhost:3000` will keep working without any URL changes.
 
 ## Troubleshooting
 
