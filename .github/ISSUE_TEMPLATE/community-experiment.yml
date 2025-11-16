@@ -48,6 +48,7 @@ body:
       description: Lowercase letters, numbers, hyphens only.
     validations:
       required: true
+      pattern: '^[a-z0-9-]+$'
   - type: markdown
     attributes:
       value: "<!-- community-experiment:onboarding v1 -->"
