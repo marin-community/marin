@@ -2,8 +2,7 @@ name: Onboard Community Experiment
 
 on:
   issues:
-    types: [opened, edited]
-  workflow_dispatch:
+    types: [opened]
 
 permissions:
   contents: write
@@ -16,7 +15,7 @@ concurrency:
 
 jobs:
   onboard:
-    if: contains(github.event.issue.body, '<!-- community-experiment:onboarding') || contains(github.event.issue.body, '### Name of your branch')
+    if: contains(join(fromJson(toJson(github.event.issue.labels)).*.name, ','), 'community-experiment-submission') || contains(github.event.issue.body, '<!-- community-experiment:onboarding')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -93,6 +92,11 @@ jobs:
             git checkout -b "$BRANCH"
           fi
 
+          # Configure committer identity for this repo
+          git config user.name "github-actions[bot]"
+          # https://github.com/orgs/community/discussions/26560
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           DEST="experiments/speedrun/${DIR}"
           mkdir -p "$DEST"
           cp "experiments/hackable_transformer_starter_template.py" "$DEST/main.py"
@@ -131,10 +135,10 @@ jobs:
 
           How to run:
 
-          \`\`\`bash
-          python marin/run/ray_run.py -- \\
+          ```bash
+          python marin/run/ray_run.py -- \
             python -m ${{ steps.parse.outputs.import_path }}
-          \`\`\`
+          ```
           EOF
 
           git add "$DEST"
@@ -152,7 +156,7 @@ jobs:
             const issue = context.payload.issue;
             const head = '${{ steps.create.outputs.branch }}';
             const title = `Community experiment: ${'${{ steps.parse.outputs.branch_name }}'}`;
-            const body = `Closes #${issue.number}\n\nAuto-generated from community submission.\n\nHow to run:\n\`\`\`bash\npython marin/run/ray_run.py -- \\\n  python -m ${'${{ steps.parse.outputs.import_path }}'}\n\`\`\``;
+            const body = `Closes #${issue.number} (auto-generated)\n\nHow to run:\n\`\`\`bash\npython marin/run/ray_run.py -- \\\n  python -m ${'${{ steps.parse.outputs.import_path }}'}\n\`\`\``;
             const base = context.payload.repository?.default_branch || 'main';
             const pr = await github.rest.pulls.create({
               owner: context.repo.owner,
@@ -171,11 +175,12 @@ jobs:
           script: |
             const prUrl = '${{ steps.pr.outputs.url }}';
             const branch = '${{ steps.create.outputs.branch }}';
+            const dest = '${{ steps.create.outputs.dest }}';
             const importPath = '${{ steps.parse.outputs.import_path }}';
             const body = [
               "Welcome! Your branch is ready.",
               "",
-              `- Branch: https://github.com/${context.repo.owner}/${context.repo.repo}/tree/${branch}`,
+              `- Branch & Starter File: https://github.com/${context.repo.owner}/${context.repo.repo}/tree/${branch}/${dest}`,
               `- PR: ${prUrl}`,
               "",
               "Run locally:",
