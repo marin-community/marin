@@ -119,6 +119,7 @@ def default_rl_train(
     learning_rate: float = 5e-7,
     num_train_steps: int = 2048,
     wandb_project: str = "marin_post_training",
+    max_output_length: int = 512,
     **kwargs,
 ) -> ExecutorStep:
     """
@@ -155,12 +156,12 @@ def default_rl_train(
         bf16_momentum=False,
         multiply_by_parameter_scale=False,
         weight_decay_exclusions=[],
-        schedule="cos",
-        grad_accum_steps=16,
+        schedule="constant",
+        grad_accum_steps=1,
     )
 
     generation_config = GenerationConfig(
-        max_output_length=1025,
+        max_output_length=max_output_length,
         temperature=1.0,
         stop_tokens=[
             [524, 9399],
@@ -180,7 +181,7 @@ def default_rl_train(
     )
 
     test_generation_config = GenerationConfig(
-        max_output_length=1025,
+        max_output_length=max_output_length,
         temperature=0.0,
         stop_tokens=[
             [524, 9399],
@@ -236,7 +237,7 @@ def default_rl_train(
         hyperparameters=TrainingHyperparameters(
             num_train_steps=num_train_steps,
             max_input_length=256,
-            max_output_length=1025,
+            max_output_length=max_output_length,
             train_bsize=train_bsize,
             decode_bsize=1024,
             prefill_bsize=16,
@@ -247,8 +248,8 @@ def default_rl_train(
             kl_coef=kl_coef,
         ),
         logging=LoggingConfig(
-            log_freq=10,
-            num_eval_examples=8,
+            log_freq=1,
+            num_eval_examples=500,
             wandb_project=wandb_project,
             save_initial_checkpoint=False,
             log_initial_step=True,
@@ -260,8 +261,8 @@ def default_rl_train(
         ),
         environment=EnvironmentConfig(),
         distributed=DistributedConfig(
-            train_sharding=[1, 4, 1, -1],
-            inference_sharding=[1, 4, 1, -1],
+            train_sharding=[1, -1, 1, 1],
+            inference_sharding=[1, -1, 1, 1],
             physical_axis_splitting=False,
             jax_distributed_initialize_config={},
         ),
@@ -296,13 +297,15 @@ def main():
 
     experiments = [
         default_rl_train(
-            name="all-math500-v4-64",
+            name="math500",
             model_paths=model_paths,
-            tpu_type="v4-64",
-            train_bsize=64,
-            kl_coef=1e-3,
-            learning_rate=5e-7,
+            tpu_type="v5p-16",
+            train_bsize=16,
+            kl_coef=0.0,
+            learning_rate=2e-06,
             num_train_steps=2048,
+            # Splash attention requires (max_input_length + max_output_length - 1) to be a multiple of 128.
+            max_output_length=513,
         ),
     ]
 

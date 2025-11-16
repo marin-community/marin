@@ -440,6 +440,18 @@ class Trainer:
         # Training loop
         rng = jax.random.PRNGKey(0)
 
+        # Evaluate before first training iteration if requested
+        if self.config.logging.log_initial_step and latest_checkpoint_step < 0:
+            if self.config.logging.num_eval_examples > 0:
+                print("Evaluating before first training step...")
+                rng, subrng = jax.random.split(rng)
+                eval_metrics = self.evaluate_data_from_environment(train_state.params, subrng)
+                log_metrics = {"step": -1}
+                log_metrics.update(eval_metrics)
+                log_metrics = jax.device_get(log_metrics)
+                self.logger.log(log_metrics)
+                print(log_metrics)
+
         for step in tqdm(
             range(max(0, latest_checkpoint_step), self.config.hyperparameters.num_train_steps),
             total=self.config.hyperparameters.num_train_steps,

@@ -52,9 +52,31 @@ def warmup_linear_decay_schedule(
     return optax.join_schedules(schedules, [warmup_steps])
 
 
+def constant_schedule(
+    init_value: float,
+    peak_value: float,
+    warmup_steps: int,
+    decay_steps: int,
+    end_value: float = 0.0,
+) -> optax.Schedule:
+    """Constant learning rate schedule (no warmup or decay).
+
+    Args:
+      init_value: Ignored for constant schedule.
+      peak_value: The constant learning rate value.
+      warmup_steps: Ignored for constant schedule.
+      decay_steps: Ignored for constant schedule.
+      end_value: Ignored for constant schedule.
+    Returns:
+      schedule: A function that always returns peak_value.
+    """
+    return optax.constant_schedule(peak_value)
+
+
 schedule_by_name = dict(
     cos=optax.warmup_cosine_decay_schedule,
     linear=warmup_linear_decay_schedule,
+    constant=constant_schedule,
 )
 
 
