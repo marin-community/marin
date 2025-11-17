@@ -316,10 +316,11 @@ def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
     This method cannot handle InputName, OutputName, or ExecutorStep instances inside VersionedValue as
     their values depend on execution results.
     """
+
     def recurse(obj: Any):
         if isinstance(obj, VersionedValue):
             return recurse(obj.value)
-        if isinstance(obj, OutputName|InputName|ExecutorStep):
+        if isinstance(obj, OutputName | InputName | ExecutorStep):
             raise ValueError(f"Cannot unwrap VersionedValue containing {type(obj)}: {obj}")
         if is_dataclass(obj):
             result = {}
