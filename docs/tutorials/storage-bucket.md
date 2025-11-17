@@ -37,7 +37,7 @@ gcloud storage buckets create "$BUCKET" \
   --project "$PROJECT_ID" \
   --location "$REGION" \
   --uniform-bucket-level-access \
-  --default-storage-class=STANDARD  # add --autoclass to enable automated tiering when you can tolerate slower cold reads
+  --default-storage-class=STANDARD  # add --enable-autoclass to enable automated tiering when you can tolerate slower cold reads
 
 # Grant yourself (or a service account) Storage Admin if needed.
 gcloud storage buckets add-iam-policy-binding "$BUCKET" \
@@ -77,16 +77,10 @@ Large experimentation buckets benefit from automatic cleanup. For example, delet
     {
       "action": {"type": "Delete"},
       "condition": {"age": 7, "matchesPrefix": ["tmp/"]}
-    },
-    {
-      "action": {"type": "SetStorageClass", "storageClass": "ARCHIVE"},
-      "condition": {"age": 30, "matchesPrefix": ["checkpoints/"]}
     }
   ]
 }
 ```
-
-If you chose autoclass storage, you can skip the second rule since Google handles tiering automatically.
 
 Save this as `lifecycle.json` and apply it:
 
