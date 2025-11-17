@@ -76,6 +76,29 @@ jobs:
             echo "import_path=$import_path"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Post placeholder comment
+        id: placeholder
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.payload.issue.number;
+            const body = [
+              "⚓ Thanks for your submission!",
+              "",
+              "We are provisioning your starter branch and PR now... ⏳",
+              "",
+              "_This comment will update automatically once everything is ready._",
+            ].join("\n");
+            const comment = await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body,
+            });
+            core.setOutput("comment_id", String(comment.data.id));
+
       - name: Create branch and files
         id: create
         shell: bash
@@ -101,7 +124,7 @@ jobs:
           mkdir -p "$DEST"
           # Only create starter if it doesn't already exist
           if [ ! -f "$DEST/main.py" ]; then
-          cp "experiments/hackable_transformer_starter_template.py" "$DEST/main.py"
+            cp "experiments/hackable_transformer_starter_template.py" "$DEST/main.py"
 
           # Patch placeholders using environment variables (safe for quotes/newlines)
           export SUBMISSION_IMPORT_PATH="${{ steps.parse.outputs.import_path }}"
@@ -134,7 +157,7 @@ jobs:
             python "$TMP_PY" "$DEST/main.py"
             rm -f "$TMP_PY"
           else
-          echo "Starter already exists at $DEST/main.py; leaving as-is."
+            echo "Starter already exists at $DEST/main.py; leaving as-is."
           fi
 
           # Minimal README with how-to-run
@@ -185,10 +208,11 @@ jobs:
             });
             core.setOutput('url', pr.data.html_url);
 
-      - name: Comment on issue
+      - name: Update onboarding comment
         uses: actions/github-script@v7
         with:
           script: |
+            const commentId = '${{ steps.placeholder.outputs.comment_id }}';
             const prUrl = '${{ steps.pr.outputs.url }}';
             const branch = '${{ steps.create.outputs.branch }}';
             const dest = '${{ steps.create.outputs.dest }}';
@@ -232,9 +256,19 @@ jobs:
               `  python -m ${importPath}`,
               "```",
             ].join("\n");
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.issue.number,
+            const params = {
+              owner,
+              repo,
               body,
-            });
+            };
+            if (commentId) {
+              await github.rest.issues.updateComment({
+                ...params,
+                comment_id: Number(commentId),
+              });
+            } else {
+              await github.rest.issues.createComment({
+                ...params,
+                issue_number: context.payload.issue.number,
+              });
+            }
