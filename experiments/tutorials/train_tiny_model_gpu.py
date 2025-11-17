@@ -23,14 +23,11 @@ This script demonstrates how to:
 For CPU training, see train_tiny_model_cpu.py
 """
 
-import os
-
 from levanter.data.text import TextLmDatasetFormat
-from marin.execution.executor import ExecutorStep, ensure_versioned, executor_main, this_output_path, versioned
-from marin.processing.tokenize.tokenize import HfTokenizeConfig, tokenize
+from marin.execution.executor import executor_main, versioned
 from marin.resources import GpuConfig
 
-from experiments.defaults import default_train
+from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_nano
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
@@ -39,18 +36,12 @@ from experiments.simple_train_config import SimpleTrainConfig
 wikitext_hf_id = "dlwh/wikitext_2_detokenized"
 
 # For this tutorial, we limit to 1000 documents per shard
-wikitext_tokenized = ExecutorStep(
-    name=os.path.join("tokenized", wikitext_hf_id),
-    description=f"Tokenize Wikitext-2 with 1000 samples per shard using {marin_tokenizer}",
-    fn=tokenize,
-    config=HfTokenizeConfig(
-        id=wikitext_hf_id,
-        cache_path=this_output_path(),
-        tokenizer=ensure_versioned(marin_tokenizer),
-        format=TextLmDatasetFormat(),
-        sample_count=versioned(1000),
-    ),
-    pip_dependency_groups=["tokenize_train"],
+wikitext_tokenized = default_tokenize(
+    name=wikitext_hf_id,
+    dataset=wikitext_hf_id,
+    tokenizer=marin_tokenizer,
+    format=TextLmDatasetFormat(),
+    sample_count=versioned(1000),
 )
 
 
