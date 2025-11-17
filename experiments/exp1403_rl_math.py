@@ -182,7 +182,7 @@ def default_rl_train(
 
     test_generation_config = GenerationConfig(
         max_output_length=max_output_length,
-        temperature=0.0,
+        temperature=1.0,
         stop_tokens=[
             [524, 9399],
             [694, 9399],
