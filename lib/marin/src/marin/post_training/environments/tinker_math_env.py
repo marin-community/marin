@@ -61,6 +61,9 @@ class TinkerMathEnv(MarinEnv):
         self.tokenizer = tokenizer
         self.grader = grader
         self.timeout = timeout
+        
+        # Get few-shot prefix from TinkerMathEnvBase
+        self.fewshot_prefix = TinkerMathEnvBase.standard_fewshot_prefix()
 
         self.train_examples = [
             {"prompt": ex.processed_prompt, "answer": ex.processed_answer} for ex in self.training_data()
@@ -244,7 +247,19 @@ class TinkerMathEnv(MarinEnv):
         boxed_answer = last_boxed_only_string(raw_answer)
         # Use Tinker's normalize_answer instead of our own
         cleaned_answer = normalize_answer(boxed_answer) if boxed_answer else normalize_answer(raw_answer)
-        processed_prompt = self.add_instruction(latex_to_text(raw_prompt))
+        
+        # Build chat messages with few-shot examples
+        question_text = self.add_instruction(latex_to_text(raw_prompt))
+        messages = self.fewshot_prefix + [
+            {"role": "user", "content": question_text}
+        ]
+        
+        # Apply chat template to get the formatted prompt
+        processed_prompt = self.tokenizer.apply_chat_template(
+            messages, 
+            tokenize=False, 
+            add_generation_prompt=True
+        )
 
         return DataExample(
             raw_prompt=raw_prompt,
