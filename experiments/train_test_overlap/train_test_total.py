@@ -20,14 +20,10 @@ checking) over large training datasets.
 
 For each dataset listed in `DATASET_CONFIGS` this script constructs a single
 `ExecutorStep` that:
-    • Passes the entire dataset directory to dedupe (Zephyr discovers files internally).
-    • Uses Zephyr's built-in parallelism for efficient file processing.
+    • Passes the entire dataset directory to dedupe
     • Automatically resolves evaluation dataset paths using the executor framework.
     • Writes attribute files containing n-gram overlap annotations under
       `<prefix>/train_test_overlap/dolma/total/<dataset_name>/**/15/…`.
-
-Ray parallelism is only at the dataset level - multiple datasets can run
-in parallel as separate Ray tasks.
 
 The evaluation datasets are automatically imported from `eval_datasets_overlap.py`
 and their paths are resolved dynamically by the executor framework, removing the
@@ -39,10 +35,8 @@ Usage (local example):
 
 Notes
 -----
-1. The heavy lifting is performed by Zephyr via `marin.processing.classification.dedupe.dedupe`.
-2. Zephyr handles file discovery and parallelism automatically.
-3. To add a new dataset simply append a DatasetConfig to `DATASET_CONFIGS`.
-4. Evaluation datasets are automatically resolved from EVAL_DATASET_STEPS in eval_datasets_overlap.py.
+1. To add a new dataset simply append a DatasetConfig to `DATASET_CONFIGS`.
+2. Evaluation datasets are automatically resolved from EVAL_DATASET_STEPS in eval_datasets_overlap.py.
 """
 
 import logging
@@ -57,7 +51,6 @@ from experiments.pretraining_datasets import (
 )
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
