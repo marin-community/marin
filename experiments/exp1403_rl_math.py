@@ -19,6 +19,7 @@ RL training experiment following marin patterns.
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime
 
 import ray
 
@@ -198,6 +199,10 @@ def default_rl_train(
 
     resources = TpuPodConfig(tpu_type=tpu_type)
 
+    # Generate unique experiment ID with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    experiment_id = f"{timestamp}"
+
     training_config = TrainingConfig(
         model=ModelConfig(
             model_paths=model_paths_config,
@@ -236,7 +241,7 @@ def default_rl_train(
             online=True,
             prefix=name,
             prefix_to_id=True,
-            experiment_id=name,
+            experiment_id=experiment_id,
         ),
         environment=EnvironmentConfig(),
         distributed=DistributedConfig(
