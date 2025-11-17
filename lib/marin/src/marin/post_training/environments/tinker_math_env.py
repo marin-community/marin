@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -56,11 +55,13 @@ class TinkerMathEnv(MarinEnv):
         tokenizer,
         grader: Literal["sympy", "math_verify"] = "sympy",
         timeout: float = 1.0,
+        format_coef: float = 0.1,
         **kwargs,
     ):
         self.tokenizer = tokenizer
         self.grader = grader
         self.timeout = timeout
+        self.format_coef = format_coef
         
         # Get few-shot prefix from TinkerMathEnvBase
         self.fewshot_prefix = TinkerMathEnvBase.standard_fewshot_prefix()
@@ -169,27 +170,14 @@ class TinkerMathEnv(MarinEnv):
 
                 true_answer = examples[i]["answer"].strip()
 
+                # Follows: https://github.com/thinking-machines-lab/tinker-cookbook/blob/5469e4a2453cf8ecd950a0e66f5bb0a1ee898b9a/tinker_cookbook/rl/problem_env.py#L62
                 # Check format using Tinker's extract_boxed
-                format_valid = self.check_format(decoded_response)
-
-                # give a weak correct response if the answer is contained anywhere in the response
-                if re.search(rf"\b{re.escape(true_answer)}\b", decoded_response):
-                    weak_correct = 1.0
-                else:
-                    weak_correct = 0.0
+                format_valid = float(self.check_format(decoded_response))
 
                 # Grade using Tinker's grading
-                if format_valid:
-                    grade = float(self.check_answer(decoded_response, true_answer))
-                else:
-                    # try the last token to see if we get a hit
-                    splits = decoded_response.split()
-                    if len(splits) > 0:
-                        grade = float(grade_answer(decoded_response.split()[-1], true_answer))
-                    else:
-                        grade = 0.0
+                correct_answer = float(self.check_answer(decoded_response, true_answer))
 
-                reward = 0.3 * weak_correct + 0.1 * float(format_valid) + 0.8 * grade
+                reward = self.format_coef * (format_valid - 1) + correct_answer
 
                 if i == 0 and j == 0:
                     print("=" * 25)
@@ -204,15 +192,14 @@ class TinkerMathEnv(MarinEnv):
                         except ValueError:
                             pass
                     print(f"Extracted answer: {extracted_answer}")
-                    print(f"Weak correct: {weak_correct}")
                     print(f"Valid format: {format_valid}")
-                    print(f"Grade: {grade}")
+                    print(f"Correct: {correct_answer}")
                     print(f"Reward: {reward}")
                     print("=" * 25)
 
                 group_rewards.append(reward)
                 group_format_rewards.append(float(format_valid))
-                group_correct_rewards.append(float(grade))
+                group_correct_rewards.append(correct_answer)
 
             all_rewards.append(group_rewards)
             all_format_rewards.append(group_format_rewards)
