@@ -169,14 +169,14 @@ class RLDataset:
         prompt_tokens = np.stack(prompt_tokens_list, axis=0)
         prompt_masks = np.stack(prompt_masks_list, axis=0)
 
-        all_rloo_advantages = []
+        all_advantages = []
         for rewards_group in rewards:
-            advantages = compute_rloo_advantages_for_group(rewards_group)
-            all_rloo_advantages.append(advantages)
-        all_rloo_advantages = np.concatenate(all_rloo_advantages, axis=0)
+            advantages = compute_drgrpo_advantages_for_group(rewards_group)
+            all_advantages.append(advantages)
+        all_advantages = np.concatenate(all_advantages, axis=0)
 
         # Compute returns (repeat advantages for each token position)
-        all_returns = jnp.repeat(all_rloo_advantages[..., None], output_masks.shape[1], axis=1)
+        all_returns = jnp.repeat(all_advantages[..., None], output_masks.shape[1], axis=1)
 
         data_items = {
             "returns": all_returns,
@@ -297,6 +297,19 @@ def compute_rloo_advantages_for_group(rewards: np.ndarray) -> np.ndarray:
     # Add random noise to avoid failure cases when all rewards are identical/zero
     generator = np.random.default_rng()
     advantages += generator.normal(loc=0.0, scale=1e-6, size=advantages.shape)
+    return advantages
+
+
+def compute_drgrpo_advantages_for_group(rewards: np.ndarray) -> np.ndarray:
+    """Compute Dr.GRPO advantages for a group of rewards by centering them.
+
+    Args:
+        rewards: Array of rewards for a group
+
+    Returns:
+        Centered advantages (rewards - mean)
+    """
+    advantages = rewards - rewards.mean()
     return advantages
 
 
