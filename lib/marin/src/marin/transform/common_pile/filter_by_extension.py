@@ -142,7 +142,7 @@ def filter_dataset_by_metadata_extension(config: FilterByMetadataExtensionConfig
 
     backend = flow_backend()
     pipeline = (
-        Dataset.from_files(config.input_path, config.input_glob)
+        Dataset.from_files(f"{config.input_path}/{config.input_glob}")
         .flat_map(load_jsonl)
         .map(lambda record: _filter_record_by_metadata_extension(record, config=config))
         .filter(lambda record: record is not None)

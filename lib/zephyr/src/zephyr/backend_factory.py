@@ -18,13 +18,12 @@ from __future__ import annotations
 
 import logging
 from contextvars import ContextVar
-from dataclasses import replace
 from typing import Literal
 
 import humanfriendly
-import ray
+from fray import create_context
 
-from zephyr.backends import Backend, BackendConfig, RayBackend, SyncBackend, ThreadPoolBackend
+from zephyr.backends import Backend, BackendConfig
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,7 @@ _backend_context: ContextVar[Backend | None] = ContextVar("zephyr_backend", defa
 
 
 def create_backend(
-    backend_type: Literal["ray", "threadpool", "sync"],
+    backend_type: Literal["ray", "threadpool", "sync", "auto"] = "auto",
     max_parallelism: int = 100,
     memory: str | None = None,
     num_cpus: float | None = None,
@@ -44,7 +43,7 @@ def create_backend(
     """Create backend instance from configuration parameters.
 
     Args:
-        backend_type: Type of backend (ray, threadpool, or sync)
+        backend_type: Type of backend (ray, threadpool, sync, or auto). Default: "auto"
         max_parallelism: Maximum number of concurrent tasks (default: 100)
         memory: Memory requirement per task (e.g., "2GB", "512MB")
         num_cpus: Number of CPUs per task for Ray backend
@@ -56,36 +55,28 @@ def create_backend(
     Returns:
         Backend instance
 
-    Raises:
-        ValueError: If backend_type is invalid
-
     Examples:
+        >>> backend = create_backend()  # Auto-detect
         >>> backend = create_backend("sync")
         >>> backend = create_backend("ray", max_parallelism=100, memory="2GB")
         >>> backend = create_backend("ray", max_parallelism=10, max_retries=3)
     """
-    # Parse memory string to bytes
     memory_bytes = humanfriendly.parse_size(memory, binary=True) if memory else None
-
-    config = BackendConfig(
-        backend_type=backend_type,
-        max_parallelism=max_parallelism,
+    context = create_context(
+        context_type=backend_type,
+        max_workers=max_parallelism,
         memory=memory_bytes,
         num_cpus=num_cpus,
         num_gpus=num_gpus,
-        ray_options=ray_options,
-        dry_run=dry_run,
-        chunk_size=chunk_size,
+        **ray_options,
     )
 
-    if config.backend_type == "ray":
-        return RayBackend(config)
-    elif config.backend_type == "threadpool":
-        return ThreadPoolBackend(config)
-    elif config.backend_type == "sync":
-        return SyncBackend(config)
-    else:
-        raise ValueError(f"Unknown backend type: {config.backend_type}. Supported: 'ray', 'threadpool', 'sync'")
+    config = BackendConfig(
+        max_parallelism=max_parallelism,
+        chunk_size=chunk_size,
+        dry_run=dry_run,
+    )
+    return Backend(context, config)
 
 
 def set_flow_backend(backend: Backend) -> None:
@@ -111,10 +102,9 @@ def flow_backend(
     """Get the current backend from context, or create a new one with custom parameters.
 
     If no parameters are provided, returns the current backend from context (or a default
-    ThreadPoolBackend if none is configured).
+    backend if none is configured).
 
-    If parameters are provided, creates a new backend of the same type as the current
-    backend with the specified parameters.
+    If parameters are provided, creates a new backend with the specified parameters.
 
     Args:
         max_parallelism: Maximum number of concurrent tasks
@@ -140,51 +130,28 @@ def flow_backend(
     """
     current = _backend_context.get()
 
-    # No parameters provided: return current backend or default
+    # No parameters provided: return current backend or create default
     has_params = (
         any(v is not None for v in [max_parallelism, memory, num_cpus, num_gpus, chunk_size, dry_run]) or backend_options
     )
     if not has_params:
         if current is None:
-            # Default to Ray backend if Ray is already initialized
-            if ray.is_initialized():
-                logger.info("Ray is initialized, using RayBackend as default.")
-                return create_backend("ray")
-            else:
-                logger.warning("No backend configured in context, using ThreadPoolBackend as default.")
-                return create_backend("threadpool")
+            logger.info("No backend configured in context, auto-detecting backend type.")
+            return create_backend("auto")
         return current
 
-    # Parameters provided: create new backend with merged config
-    if current is None:
-        # No current backend, create default based on Ray availability
-        if ray.is_initialized():
-            current = create_backend("ray")
-        else:
-            current = create_backend("threadpool")
+    # Build parameters, using current config as defaults
+    params = {
+        "backend_type": "auto",
+        "max_parallelism": (
+            max_parallelism if max_parallelism is not None else (current.config.max_parallelism if current else 100)
+        ),
+        "memory": memory,
+        "num_cpus": num_cpus,
+        "num_gpus": num_gpus,
+        "chunk_size": chunk_size if chunk_size is not None else (current.config.chunk_size if current else 1000),
+        "dry_run": dry_run if dry_run is not None else (current.config.dry_run if current else False),
+        **backend_options,
+    }
 
-    # Build override dict, only including non-None values
-    overrides = {}
-    if max_parallelism is not None:
-        overrides["max_parallelism"] = max_parallelism
-    if memory is not None:
-        overrides["memory"] = humanfriendly.parse_size(memory, binary=True)
-    if num_cpus is not None:
-        overrides["num_cpus"] = num_cpus
-    if num_gpus is not None:
-        overrides["num_gpus"] = num_gpus
-    if chunk_size is not None:
-        overrides["chunk_size"] = chunk_size
-    if dry_run is not None:
-        overrides["dry_run"] = dry_run
-    if backend_options:
-        # Merge ray_options if present
-        if "ray_options" in overrides or current.config.ray_options:
-            merged_ray_options = {**current.config.ray_options, **backend_options}
-            overrides["ray_options"] = merged_ray_options
-        else:
-            overrides["ray_options"] = backend_options
-
-    # Clone backend with merged config
-    new_config = replace(current.config, **overrides)
-    return type(current)(new_config)  # type: ignore
+    return create_backend(**params)

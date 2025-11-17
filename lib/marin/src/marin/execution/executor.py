@@ -1098,6 +1098,10 @@ class ExecutorMainConfig:
     """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
 
 
+def _setup_logging():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
@@ -1109,6 +1113,7 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
         namespace="marin",
         ignore_reinit_error=True,
         resources={"head_node": 1} if is_local_ray_cluster() else None,
+        runtime_env={"worker_process_setup_hook": _setup_logging},
     )  # We need to init ray here to make sure we have the correct namespace for actors
     # (status_actor in particular)
     time_out = time.time()
