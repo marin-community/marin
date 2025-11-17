@@ -261,17 +261,21 @@ class Trainer:
                 ).logits
                 logits = logits.astype(jnp.float32)
                 token_loss = softmax_cross_entropy_with_integer_labels(logits, batch["target_ids"])
-                log_ratio = jnp.exp((-token_loss) - jax.lax.stop_gradient(-token_loss))
-                weighted_log_ratio = log_ratio * batch["loss_weights"]
-                reinforce_loss = jnp.mean(-weighted_log_ratio, where=batch["loss_masks"] > 0.0)
+                
+                # Compute probability ratio: exp(target_logprobs - sampling_logprobs)
+                target_logprobs = -token_loss
+                sampling_logprobs = batch["policy_logprobs"]
+                prob_ratio = jnp.exp(target_logprobs - sampling_logprobs)
+                
+                # Compute importance-weighted REINFORCE loss
+                reinforce_loss = -jnp.mean(prob_ratio * batch["loss_weights"], where=batch["loss_masks"] > 0.0)
                 ref_log_ratio = batch["reference_logprobs"] + token_loss
                 kl_loss = jnp.exp(ref_log_ratio) - 1 - ref_log_ratio
                 kl_loss = jnp.mean(kl_loss, where=batch["loss_masks"] > 0.0)
                 loss = reinforce_loss + self.kl_coef * kl_loss
                 
                 # Compute KL divergence metrics between sampling and training logprobs
-                training_logprobs = -token_loss
-                sampling_logprobs = batch["policy_logprobs"]
+                training_logprobs = target_logprobs
                 action_mask = batch["loss_masks"] > 0.0
                 
                 logprob_diff = sampling_logprobs - training_logprobs
