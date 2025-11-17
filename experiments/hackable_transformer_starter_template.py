@@ -23,8 +23,7 @@ How to run:
   1) Set env vars (WANDB_API_KEY, HF_TOKEN, etc.) as in the tutorial:
      https://marin.readthedocs.io/en/latest/tutorials/submitting-speedrun/
   2) From repo root:
-       python marin/run/ray_run.py -- \\
-         python -m __SUBMISSION_IMPORT_PATH__
+       python marin/run/ray_run.py -- python -m __SUBMISSION_IMPORT_PATH__
   3) Optional: SR_USE_GPU=1 to use GPU resource presets.
 """
 

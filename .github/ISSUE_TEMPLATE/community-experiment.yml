@@ -2,6 +2,9 @@ name: "Community Experiment Submission"
 description: "Propose an experiment; a branch and starter code will be created for you automatically."
 labels: ["community-experiment-submission"]
 body:
+  - type: markdown
+    attributes:
+      value: "Welcome to Marin! Please enter the title of your experiment. Tell us who you are, what your experiment is, and what you are trying to investigate. Your branch and starter code will be automatically set up."
   - type: input
     id: author_name
     attributes:
