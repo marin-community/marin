@@ -17,17 +17,65 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+import pytest
 
-from marin.rl.alerts import (
+from marin.rl.curriculum import (
+    Curriculum,
+    CurriculumConfig,
     GraduationRegressionAlert,
+    LessonConfig,
     PerformanceVolatilityAlert,
     TrainingStalledAlert,
 )
-from marin.rl.curriculum import Curriculum, CurriculumConfig, LessonConfig
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 
 logger = logging.getLogger(__name__)
+
+
+class TrackedLogger:
+    """Helper class to simplify checking logger calls in tests."""
+
+    def __init__(self, mock_logger: MagicMock):
+        self.mock_logger = mock_logger
+
+    def warning_calls(self, contains: str | None = None) -> list:
+        """Get warning calls, optionally filtered by substring."""
+        calls = self.mock_logger.warning.call_args_list
+        if contains:
+            return [call for call in calls if contains in str(call)]
+        return calls
+
+    def critical_calls(self, contains: str | None = None) -> list:
+        """Get critical calls, optionally filtered by substring."""
+        calls = self.mock_logger.critical.call_args_list
+        if contains:
+            return [call for call in calls if contains in str(call)]
+        return calls
+
+    def info_calls(self, contains: str | None = None) -> list:
+        """Get info calls, optionally filtered by substring."""
+        calls = self.mock_logger.info.call_args_list
+        if contains:
+            return [call for call in calls if contains in str(call)]
+        return calls
+
+    def reset(self):
+        """Reset the mock logger."""
+        self.mock_logger.reset_mock()
+
+
+@pytest.fixture
+def mock_curriculum_logger():
+    """Fixture that provides a TrackedLogger context manager for curriculum logger mocking."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _mock_logger():
+        with patch("marin.rl.curriculum.logger") as mock_logger:
+            yield TrackedLogger(mock_logger)
+
+    return _mock_logger
 
 
 def create_test_rollout_stats(episode_reward: float, lesson_id: str = "test") -> RolloutStats:
@@ -63,7 +111,7 @@ def create_test_curriculum_with_alerts(alerts=None):
 class TestGraduationRegressionAlert:
     """Test graduation regression detection behavior."""
 
-    def test_alert_triggers_on_regression(self):
+    def test_alert_triggers_on_regression(self, mock_curriculum_logger):
         """Test that alert triggers when graduated lesson performance drops."""
         curriculum = create_test_curriculum_with_alerts(
             [GraduationRegressionAlert(regression_threshold=0.85, critical_threshold=0.70)]
@@ -83,16 +131,27 @@ class TestGraduationRegressionAlert:
 
         assert "lesson1" in curriculum.graduated
 
-        # Now cause regression
-        with patch("marin.rl.curriculum.logger") as mock_logger:
+        # Now cause regression - alert should fire once
+        with mock_curriculum_logger() as tracked_logger:
             for step in range(120, 130):
                 rewards = [0.7] * 10  # Performance drops below threshold
                 rollout_stats = [create_test_rollout_stats(r, "lesson1") for r in rewards]
                 curriculum.update_lesson_stats(rollout_stats, "eval", step)
 
-            # Check that warning was logged
-            warning_calls = [call for call in mock_logger.warning.call_args_list if "performance dropped" in str(call)]
-            assert len(warning_calls) > 0
+            # Check that warning was logged exactly once (fire_once=True by default)
+            warning_calls = tracked_logger.warning_calls(contains="performance dropped")
+            assert len(warning_calls) == 1, f"Expected 1 alert call, got {len(warning_calls)}"
+
+            # Verify alert won't fire again even if condition persists
+            tracked_logger.reset()
+            for step in range(130, 150):
+                rewards = [0.6] * 10  # Still below threshold
+                rollout_stats = [create_test_rollout_stats(r, "lesson1") for r in rewards]
+                curriculum.update_lesson_stats(rollout_stats, "eval", step)
+
+            # No new alerts should be fired
+            warning_calls = tracked_logger.warning_calls(contains="performance dropped")
+            assert len(warning_calls) == 0, f"Expected 0 alert calls after fire_once, got {len(warning_calls)}"
 
     def test_graduation_performance_stored(self):
         """Test that graduation performance is stored when lesson graduates."""
@@ -124,9 +183,9 @@ class TestGraduationRegressionAlert:
 class TestTrainingStalledAlert:
     """Test training stagnation detection behavior."""
 
-    def test_alert_triggers_on_stagnation(self):
+    def test_alert_triggers_on_stagnation(self, mock_curriculum_logger):
         """Test that alert triggers when training plateaus."""
-        curriculum = create_test_curriculum_with_alerts([TrainingStalledAlert(stagnation_window=30, plateau_window=20)])
+        curriculum = create_test_curriculum_with_alerts([TrainingStalledAlert(plateau_window=20, plateau_threshold=0.01, stagnation_window=30)])
 
         # Train with improving performance
         for step in range(50):
@@ -136,19 +195,19 @@ class TestTrainingStalledAlert:
             curriculum.update_lesson_stats(rollout_stats, "training", step)
 
         # Now plateau for many steps
-        with patch("marin.rl.curriculum.logger") as mock_logger:
+        with mock_curriculum_logger() as tracked_logger:
             for step in range(50, 100):
                 rewards = [0.8] * 5  # Flat performance
                 rollout_stats = [create_test_rollout_stats(r, "lesson1") for r in rewards]
                 curriculum.update_lesson_stats(rollout_stats, "training", step)
 
             # Should detect stagnation
-            warning_calls = [call for call in mock_logger.warning.call_args_list if "no progress" in str(call)]
+            warning_calls = tracked_logger.warning_calls(contains="no progress")
             assert len(warning_calls) > 0
 
     def test_alert_does_not_trigger_during_improvement(self):
         """Test that alert doesn't trigger when performance is improving."""
-        curriculum = create_test_curriculum_with_alerts([TrainingStalledAlert(stagnation_window=30, plateau_window=20)])
+        curriculum = create_test_curriculum_with_alerts([TrainingStalledAlert(plateau_window=20, plateau_threshold=0.01, stagnation_window=30)])
 
         with patch("marin.rl.curriculum.logger") as mock_logger:
             # Continuously improving performance
@@ -210,7 +269,7 @@ class TestAlertIntegration:
         """Test that multiple alerts can be configured for one lesson."""
         curriculum = create_test_curriculum_with_alerts(
             [
-                TrainingStalledAlert(stagnation_window=30),
+                TrainingStalledAlert(plateau_window=20, plateau_threshold=0.01, stagnation_window=30),
                 PerformanceVolatilityAlert(volatility_threshold=0.2),
             ]
         )
@@ -230,7 +289,7 @@ class TestAlertIntegration:
             assert len(volatility_calls) > 0
 
         # Test stagnation alert triggers (separate scenario)
-        curriculum2 = create_test_curriculum_with_alerts([TrainingStalledAlert(stagnation_window=30, plateau_window=20)])
+        curriculum2 = create_test_curriculum_with_alerts([TrainingStalledAlert(plateau_window=20, plateau_threshold=0.01, stagnation_window=30)])
         with patch("marin.rl.curriculum.logger") as mock_logger:
             curriculum2._last_alert_time.clear()
             # Flat performance (plateaued)
@@ -248,7 +307,7 @@ class TestAlertIntegration:
         curriculum = create_test_curriculum_with_alerts(
             [
                 GraduationRegressionAlert(),
-                TrainingStalledAlert(stagnation_window=30),
+                TrainingStalledAlert(plateau_window=20, plateau_threshold=0.01, stagnation_window=30),
             ]
         )
 
@@ -325,7 +384,7 @@ class TestAlertIntegration:
 
     def test_alert_evaluation_uses_existing_stats(self):
         """Test that alerts use curriculum's existing statistics, not duplicated logic."""
-        curriculum = create_test_curriculum_with_alerts([TrainingStalledAlert(stagnation_window=30, plateau_window=20)])
+        curriculum = create_test_curriculum_with_alerts([TrainingStalledAlert(plateau_window=20, plateau_threshold=0.01, stagnation_window=30)])
 
         # Train lesson
         for step in range(50):
@@ -342,8 +401,9 @@ class TestAlertIntegration:
         with patch("marin.rl.curriculum.logger") as mock_logger:
             # Continue plateau - need enough steps to trigger alert after cooldown
             # Alert has cooldown_steps=200, so we need to ensure it triggers
-            # Reset cooldown by ensuring we're past any previous alert
+            # Reset cooldown and fired alerts by ensuring we're past any previous alert
             curriculum._last_alert_time.clear()
+            curriculum._fired_alerts.clear()
 
             for step in range(50, 80):
                 rewards = [0.5] * 5

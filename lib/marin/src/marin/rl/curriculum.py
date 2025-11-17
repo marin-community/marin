@@ -23,16 +23,15 @@ lessons and tracking progress to maximize learning efficiency.
 import json
 import logging
 import os
+import time
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
-
-from typing import TYPE_CHECKING
+from enum import Enum
+from typing import Any
 
 import fsspec
 import numpy as np
-
-if TYPE_CHECKING:
-    from marin.rl.alerts import Alert
 
 from marin.rl.environments.base import EnvConfig
 from marin.rl.robust_actor import RobustActor
@@ -121,6 +120,393 @@ class LessonConfig:
 
     alerts: list["Alert"] = field(default_factory=list)
     """Alerts to monitor for this lesson. Evaluated using existing curriculum statistics."""
+
+    def add_training_stalled_alert(
+        self,
+        stagnation_window: int = 100,
+        plateau_window: int | None = None,
+        plateau_threshold: float | None = None,
+        cooldown_steps: int = 200,
+        fire_once: bool = True,
+    ) -> "Alert":
+        """Add a training stalled alert with defaults filled from lesson config.
+
+        Args:
+            stagnation_window: Number of steps without progress before alerting.
+            plateau_window: Window size for plateau detection. If None, uses self.plateau_window.
+            plateau_threshold: Threshold for plateau detection. If None, uses self.plateau_threshold.
+            cooldown_steps: Steps between repeated alerts of this type.
+            fire_once: If True, fire this alert only once. Defaults to True.
+
+        Returns:
+            The created alert instance.
+        """
+        alert = TrainingStalledAlert(
+            stagnation_window=stagnation_window,
+            plateau_window=plateau_window if plateau_window is not None else self.plateau_window,
+            plateau_threshold=plateau_threshold if plateau_threshold is not None else self.plateau_threshold,
+            cooldown_steps=cooldown_steps,
+            fire_once=fire_once,
+        )
+        self.alerts.append(alert)
+        return alert
+
+    def add_graduation_regression_alert(
+        self,
+        regression_threshold: float = 0.85,
+        critical_threshold: float = 0.70,
+        cooldown_steps: int = 200,
+        fire_once: bool = True,
+    ) -> "Alert":
+        """Add a graduation regression alert.
+
+        Args:
+            regression_threshold: Warn if performance drops below this fraction of graduation level.
+            critical_threshold: Critical warning if performance drops below this fraction.
+            cooldown_steps: Steps between repeated alerts of this type.
+            fire_once: If True, fire this alert only once. Defaults to True for graduation regression.
+
+        Returns:
+            The created alert instance.
+        """
+        alert = GraduationRegressionAlert(
+            regression_threshold=regression_threshold,
+            critical_threshold=critical_threshold,
+            cooldown_steps=cooldown_steps,
+            fire_once=fire_once,
+        )
+        self.alerts.append(alert)
+        return alert
+
+    def add_performance_volatility_alert(
+        self,
+        volatility_threshold: float = 0.15,
+        window: int = 30,
+        cooldown_steps: int = 200,
+        fire_once: bool = True,
+    ) -> "Alert":
+        """Add a performance volatility alert.
+
+        Args:
+            volatility_threshold: Coefficient of variation threshold for alerting.
+            window: Number of recent samples to analyze.
+            cooldown_steps: Steps between repeated alerts of this type.
+            fire_once: If True, fire this alert only once. Defaults to True.
+
+        Returns:
+            The created alert instance.
+        """
+        alert = PerformanceVolatilityAlert(
+            volatility_threshold=volatility_threshold,
+            window=window,
+            cooldown_steps=cooldown_steps,
+            fire_once=fire_once,
+        )
+        self.alerts.append(alert)
+        return alert
+
+
+# Alert system for curriculum learning
+# Alerts are configured per lesson and evaluated using existing curriculum statistics,
+# providing a natural extension of environment testing without duplicating logic.
+
+class HealthStatus(Enum):
+    """Health status levels for alerts."""
+
+    HEALTHY = "healthy"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+@dataclass
+class AlertResult:
+    """Result of evaluating an alert condition."""
+
+    should_fire: bool
+    """Whether this alert should be fired (logged/sent)."""
+
+    message: str
+    """Human-readable message describing the alert."""
+
+    health_status: HealthStatus
+    """Health status indicating the severity of the alert."""
+
+    metrics: dict[str, Any] = field(default_factory=dict)
+    """Additional metrics associated with the alert."""
+
+    timestamp: float = field(default_factory=time.time)
+    """When the alert was triggered."""
+
+
+class Alert(ABC):
+    """Base class for lesson alerts.
+
+    Alerts are evaluated using existing curriculum statistics and provide
+    a way to monitor lesson health without duplicating statistical logic.
+    """
+
+    @abstractmethod
+    def evaluate(
+        self,
+        lesson_id: str,
+        stats: LessonStats,
+        lesson_config: LessonConfig,
+        current_step: int,
+        lesson_state: str,  # "locked", "active", "graduated"
+        graduation_performance: float | None = None,
+    ) -> AlertResult | None:
+        """Evaluate whether this alert condition is met.
+
+        Args:
+            lesson_id: ID of the lesson being evaluated.
+            stats: Current lesson statistics.
+            lesson_config: Configuration for this lesson.
+            current_step: Current training step.
+            lesson_state: Current state of the lesson.
+            graduation_performance: Performance at graduation (if graduated).
+
+        Returns:
+            AlertResult if condition is met, None otherwise.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Name of this alert type."""
+        pass
+
+
+@dataclass
+class GraduationRegressionAlert(Alert):
+    """Alert when a graduated lesson's performance regresses below a threshold.
+
+    This alert monitors graduated lessons to detect if performance has dropped
+    significantly from the graduation baseline.
+    """
+
+    regression_threshold: float = 0.85
+    """Warn if performance drops below this fraction of graduation level."""
+
+    critical_threshold: float = 0.70
+    """Critical warning if performance drops below this fraction of graduation level."""
+
+    cooldown_steps: int = 200
+    """Steps between repeated alerts of this type."""
+
+    fire_once: bool = True
+    """If True, fire this alert only once. Once fired, it will not fire again."""
+
+    @property
+    def name(self) -> str:
+        return "graduation_regression"
+
+    def evaluate(
+        self,
+        lesson_id: str,
+        stats: LessonStats,
+        lesson_config: LessonConfig,
+        current_step: int,
+        lesson_state: str,
+        graduation_performance: float,
+    ) -> AlertResult | None:
+        if lesson_state != "graduated":
+            return None
+
+        # Skip monitoring if graduation performance was already very low
+        if graduation_performance <= 1e-6:
+            return None
+
+        # For graduated lessons, compare recent mean eval reward (not all-time mean)
+        # Use recent window to detect current regression
+        if len(stats.eval_stats.reward_history) > 0:
+            eval_rewards = stats.eval_stats.reward_history
+            # Use recent eval rewards (last 20 samples) for current performance
+            recent_window = min(20, len(eval_rewards))
+            current_perf = float(np.mean(eval_rewards[-recent_window:]))
+        else:
+            # Fallback to training stats if no eval data
+            if len(stats.training_stats.reward_history) > 0:
+                train_rewards = stats.training_stats.reward_history
+                recent_window = min(20, len(train_rewards))
+                current_perf = float(np.mean(train_rewards[-recent_window:]))
+            else:
+                return None
+
+        if current_perf < graduation_performance * self.regression_threshold:
+            health_status = (
+                HealthStatus.CRITICAL
+                if current_perf < graduation_performance * self.critical_threshold
+                else HealthStatus.WARNING
+            )
+
+            # Calculate performance ratio (we know graduation_performance > 1e-6 from early return)
+            performance_ratio = current_perf / graduation_performance
+            ratio_pct = performance_ratio * 100
+
+            return AlertResult(
+                should_fire=True,
+                message=(
+                    f"Graduated lesson '{lesson_id}' performance dropped from "
+                    f"{graduation_performance:.3f} to {current_perf:.3f} "
+                    f"({ratio_pct:.1f}% of graduation level)"
+                ),
+                health_status=health_status,
+                metrics={
+                    "graduation_performance": graduation_performance,
+                    "current_performance": current_perf,
+                    "performance_ratio": performance_ratio,
+                },
+            )
+
+        return None
+
+
+@dataclass
+class TrainingStalledAlert(Alert):
+    """Alert when training shows no progress for an extended period.
+
+    Detects stagnation by checking if performance has plateaued and hasn't
+    improved beyond a threshold for a specified number of steps.
+
+    Note: This alert is primarily for monitoring/metrics (e.g., wandb visualization)
+    rather than urgent notifications. In the future, we may consider auto-graduating
+    lessons that stall instead of alerting.
+    """
+
+    plateau_window: int
+    """Window size for plateau detection."""
+
+    plateau_threshold: float
+    """Threshold for plateau detection."""
+
+    stagnation_window: int = 100
+    """Number of steps without progress before alerting."""
+
+    cooldown_steps: int = 200
+    """Steps between repeated alerts of this type."""
+
+    fire_once: bool = True
+    """If True, fire this alert only once. Once fired, it will not fire again."""
+
+    @property
+    def name(self) -> str:
+        return "training_stalled"
+
+    def evaluate(
+        self,
+        lesson_id: str,
+        stats: LessonStats,
+        lesson_config: LessonConfig,
+        current_step: int,
+        lesson_state: str,
+        graduation_performance: float | None = None,
+    ) -> AlertResult | None:
+        if lesson_state != "active":
+            return None
+
+        # Check if we have enough samples
+        if len(stats.training_stats.reward_history) < self.stagnation_window:
+            return None
+
+        # Check if performance has plateaued
+        if not is_plateaued(stats, window=self.plateau_window, threshold=self.plateau_threshold):
+            return None
+
+        # Check if we've been stuck for the stagnation window
+        # If overall stats have plateaued and we have enough samples in the stagnation window,
+        # we've been stuck for at least that long
+        recent_rewards = stats.training_stats.reward_history[-self.stagnation_window :]
+
+        # If we've plateaued and have enough samples, alert
+        # The plateau check already ensures performance isn't improving
+        current_perf = compute_success_ratio(stats, current_step)
+
+        return AlertResult(
+            should_fire=True,
+            message=(
+                f"Lesson '{lesson_id}' showing no progress for "
+                f"{self.stagnation_window} steps "
+                f"(current performance: {current_perf:.3f})"
+            ),
+            health_status=HealthStatus.WARNING,
+            metrics={
+                "steps_without_progress": self.stagnation_window,
+                "current_performance": current_perf,
+                "mean_recent_performance": float(np.mean(recent_rewards)),
+            },
+        )
+
+
+@dataclass
+class PerformanceVolatilityAlert(Alert):
+    """Alert when performance shows high volatility/variance.
+
+    Detects unstable performance by computing coefficient of variation
+    over recent samples.
+    """
+
+    volatility_threshold: float = 0.15
+    """Coefficient of variation threshold for alerting."""
+
+    window: int = 30
+    """Number of recent samples to analyze."""
+
+    cooldown_steps: int = 200
+    """Steps between repeated alerts of this type."""
+
+    fire_once: bool = True
+    """If True, fire this alert only once. Once fired, it will not fire again."""
+
+    @property
+    def name(self) -> str:
+        return "performance_volatility"
+
+    def evaluate(
+        self,
+        lesson_id: str,
+        stats: LessonStats,
+        lesson_config: LessonConfig,
+        current_step: int,
+        lesson_state: str,
+        graduation_performance: float | None = None,
+    ) -> AlertResult | None:
+        if lesson_state not in ["active", "graduated"]:
+            return None
+
+        # Use training stats for active, eval stats for graduated
+        reward_history = (
+            stats.eval_stats.reward_history if lesson_state == "graduated" else stats.training_stats.reward_history
+        )
+
+        if len(reward_history) < self.window:
+            return None
+
+        recent = np.array(reward_history[-self.window :])
+        mean_perf = np.mean(recent)
+        std_perf = np.std(recent)
+
+        if abs(mean_perf) <= 1e-6:
+            return None
+
+        cv = std_perf / abs(mean_perf)
+        if cv > self.volatility_threshold:
+            mode = "eval" if lesson_state == "graduated" else "training"
+            return AlertResult(
+                should_fire=True,
+                message=(
+                    f"Lesson '{lesson_id}' showing high performance volatility " f"(CV={cv:.3f}) in {mode} mode"
+                ),
+                health_status=HealthStatus.WARNING,
+                metrics={
+                    "coefficient_of_variation": float(cv),
+                    "mean_performance": float(mean_perf),
+                    "std_performance": float(std_perf),
+                    "state": lesson_state,
+                },
+            )
+
+        return None
 
 
 @dataclass
@@ -355,6 +741,9 @@ class Curriculum:
         # Track last alert time per lesson+alert for cooldown
         self._last_alert_time: dict[tuple[str, str], int] = {}
 
+        # Track which alerts have fired once (for fire_once=True alerts)
+        self._fired_alerts: set[tuple[str, str]] = set()
+
         # Track graduation performance for regression detection
         self.graduation_performances: dict[str, float] = {}
 
@@ -579,9 +968,15 @@ class Curriculum:
 
             for alert in lesson_config.alerts:
                 alert_name = alert.name
+                alert_key = (lesson_id, alert_name)
+
+                # Check if alert should fire only once
+                fire_once = getattr(alert, "fire_once", False)
+                if fire_once and alert_key in self._fired_alerts:
+                    # Already fired once, skip this alert
+                    continue
 
                 # Check cooldown before evaluating alert
-                alert_key = (lesson_id, alert_name)
                 if alert_key in self._last_alert_time:
                     steps_since_last = self.current_step - self._last_alert_time[alert_key]
                     cooldown_steps = getattr(alert, "cooldown_steps", None)
@@ -601,7 +996,7 @@ class Curriculum:
                     graduation_performance=graduation_perf,  # Use stored value if available
                 )
 
-                if result and result.triggered:
+                if result and result.should_fire:
                     self._handle_alert(lesson_id, alert_name, result)
 
     def _handle_alert(self, lesson_id: str, alert_name: str, result) -> None:
@@ -612,11 +1007,19 @@ class Curriculum:
             alert_name: Name of the alert type.
             result: Alert result with details.
         """
-        from marin.rl.alerts import HealthStatus  # Import here to avoid circular import
-
         # Update last alert time (cooldown check already done before evaluation)
         alert_key = (lesson_id, alert_name)
         self._last_alert_time[alert_key] = self.current_step
+
+        # Mark as fired if fire_once is enabled
+        # Get the alert instance to check fire_once attribute
+        lesson_config = self.config.lessons[lesson_id]
+        for alert in lesson_config.alerts:
+            if alert.name == alert_name:
+                fire_once = getattr(alert, "fire_once", False)
+                if fire_once:
+                    self._fired_alerts.add(alert_key)
+                break
 
         # Log alert
         log_msg = f"[ALERT] {lesson_id}: {result.message}"
@@ -637,8 +1040,6 @@ class Curriculum:
             alert_name: Name of the alert type.
             result: Alert result with details.
         """
-        from marin.rl.alerts import HealthStatus  # Import here to avoid circular import
-
         try:
             import wandb
 
@@ -716,6 +1117,7 @@ class Curriculum:
             "last_alert_time": {
                 f"{lesson_id}:{alert_name}": step for (lesson_id, alert_name), step in self._last_alert_time.items()
             },
+            "fired_alerts": [f"{lesson_id}:{alert_name}" for (lesson_id, alert_name) in self._fired_alerts],
             "graduation_performances": self.graduation_performances,
         }
 
@@ -768,6 +1170,17 @@ class Curriculum:
         else:
             # Backward compatibility: initialize empty if not in checkpoint
             self._last_alert_time = {}
+
+        # Restore fired alerts
+        if "fired_alerts" in checkpoint_data:
+            self._fired_alerts = set()
+            for key in checkpoint_data["fired_alerts"]:
+                parts = key.split(":", 1)
+                if len(parts) == 2:
+                    self._fired_alerts.add((parts[0], parts[1]))
+        else:
+            # Backward compatibility: initialize empty if not in checkpoint
+            self._fired_alerts = set()
 
         # Restore graduation performances
         if "graduation_performances" in checkpoint_data:

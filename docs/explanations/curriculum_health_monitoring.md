@@ -11,17 +11,18 @@ The Curriculum Alert System provides comprehensive monitoring and alerting for R
 Alerts are configured directly in `LessonConfig`, making them a natural part of lesson definition:
 
 ```python
-from marin.rl.alerts import GraduationRegressionAlert, TrainingStalledAlert
-from marin.rl.curriculum import LessonConfig
+from marin.rl.curriculum import (
+    GraduationRegressionAlert,
+    LessonConfig,
+    TrainingStalledAlert,
+)
 
 lesson = LessonConfig(
     lesson_id="math_task",
     env_config=env_config,
-    alerts=[
-        GraduationRegressionAlert(regression_threshold=0.85),
-        TrainingStalledAlert(stagnation_window=100),
-    ],
 )
+lesson.add_graduation_regression_alert(regression_threshold=0.85)
+lesson.add_training_stalled_alert(stagnation_window=100)
 ```
 
 ### 2. Alert Types
@@ -41,8 +42,8 @@ Monitors graduated lessons to detect performance regression below graduation bas
 Detects when training shows no progress for an extended period.
 
 - **`stagnation_window`**: Number of steps without progress before alerting (default: 100)
-- **`plateau_window`**: Window size for plateau detection. If None, uses lesson's `plateau_window` (default: None)
-- **`plateau_threshold`**: Threshold for plateau detection. If None, uses lesson's `plateau_threshold` (default: None)
+- **`plateau_window`**: Window size for plateau detection (required, defaults to lesson's `plateau_window` when using `add_training_stalled_alert()`)
+- **`plateau_threshold`**: Threshold for plateau detection (required, defaults to lesson's `plateau_threshold` when using `add_training_stalled_alert()`)
 - **`cooldown_steps`**: Steps between repeated alerts (default: 200)
 
 #### `PerformanceVolatilityAlert`
@@ -86,22 +87,24 @@ wandb.alert(
 ### Basic Configuration
 
 ```python
-from marin.rl.alerts import GraduationRegressionAlert, TrainingStalledAlert
-from marin.rl.curriculum import LessonConfig, CurriculumConfig
+from marin.rl.curriculum import (
+    CurriculumConfig,
+    GraduationRegressionAlert,
+    LessonConfig,
+    TrainingStalledAlert,
+)
 
-# Configure alerts per lesson
+# Configure alerts per lesson (recommended: use helper methods)
 lesson = LessonConfig(
     lesson_id="math_task",
     env_config=env_config,
-    alerts=[
-        GraduationRegressionAlert(
-            regression_threshold=0.85,  # Warn at 85% of graduation performance
-            critical_threshold=0.70,    # Critical at 70%
-        ),
-        TrainingStalledAlert(
-            stagnation_window=100,  # Steps without progress
-        ),
-    ],
+)
+lesson.add_graduation_regression_alert(
+    regression_threshold=0.85,  # Warn at 85% of graduation performance
+    critical_threshold=0.70,    # Critical at 70%
+)
+lesson.add_training_stalled_alert(
+    stagnation_window=100,  # Steps without progress
 )
 
 # Create curriculum with wandb alerts enabled
@@ -115,43 +118,43 @@ curriculum_config = CurriculumConfig(
 ### Advanced Configuration
 
 ```python
-from marin.rl.alerts import (
+from marin.rl.curriculum import (
     GraduationRegressionAlert,
-    TrainingStalledAlert,
     PerformanceVolatilityAlert,
-    ProlongedTrainingAlert,
+    TrainingStalledAlert,
 )
+# Note: ProlongedTrainingAlert doesn't exist yet
 
 lesson = LessonConfig(
     lesson_id="complex_task",
     env_config=env_config,
-    alerts=[
-        # Monitor for regression after graduation
-        GraduationRegressionAlert(
-            regression_threshold=0.85,
-            critical_threshold=0.70,
-            cooldown_steps=200,
-        ),
-        # Detect training stagnation
-        TrainingStalledAlert(
-            stagnation_window=100,
-            plateau_window=50,  # Custom plateau window
-            plateau_threshold=0.01,
-            cooldown_steps=200,
-        ),
-        # Monitor performance volatility
-        PerformanceVolatilityAlert(
-            volatility_threshold=0.15,
-            window=30,
-            cooldown_steps=200,
-        ),
-        # Alert if training too long
-        ProlongedTrainingAlert(
-            max_training_steps=1000,
-            cooldown_steps=500,
-        ),
-    ],
 )
+# Monitor for regression after graduation
+lesson.add_graduation_regression_alert(
+    regression_threshold=0.85,
+    critical_threshold=0.70,
+    cooldown_steps=200,
+)
+# Detect training stagnation
+lesson.add_training_stalled_alert(
+    stagnation_window=100,
+    plateau_window=50,  # Custom plateau window
+    plateau_threshold=0.01,
+    cooldown_steps=200,
+)
+# Monitor performance volatility
+lesson.add_performance_volatility_alert(
+    volatility_threshold=0.15,
+    window=30,
+    cooldown_steps=200,
+)
+# Alert if training too long (manual creation since no helper method yet)
+# Note: ProlongedTrainingAlert doesn't exist yet
+# from marin.rl.curriculum import ProlongedTrainingAlert
+# lesson.alerts.append(ProlongedTrainingAlert(
+    max_training_steps=1000,
+    cooldown_steps=500,
+))
 ```
 
 ## Usage
@@ -161,15 +164,18 @@ lesson = LessonConfig(
 Alerts are automatically evaluated when lesson statistics are updated:
 
 ```python
-from marin.rl.curriculum import Curriculum, CurriculumConfig
-from marin.rl.alerts import GraduationRegressionAlert
+from marin.rl.curriculum import (
+    Curriculum,
+    CurriculumConfig,
+    GraduationRegressionAlert,
+)
 
 # Configure lesson with alerts
 lesson = LessonConfig(
     lesson_id="math_task",
     env_config=env_config,
-    alerts=[GraduationRegressionAlert(regression_threshold=0.85)],
 )
+lesson.add_graduation_regression_alert(regression_threshold=0.85)
 
 # Create curriculum
 curriculum_config = CurriculumConfig(
@@ -191,19 +197,17 @@ You can configure different alerts for different lessons:
 easy_lesson = LessonConfig(
     lesson_id="easy_task",
     env_config=easy_env_config,
-    alerts=[
-        TrainingStalledAlert(stagnation_window=50),  # Shorter window for easy tasks
-    ],
 )
+easy_lesson.add_training_stalled_alert(stagnation_window=50)  # Shorter window for easy tasks
 
 hard_lesson = LessonConfig(
     lesson_id="hard_task",
     env_config=hard_env_config,
-    alerts=[
-        TrainingStalledAlert(stagnation_window=200),  # Longer window for hard tasks
-        ProlongedTrainingAlert(max_training_steps=2000),  # More patience
-    ],
 )
+hard_lesson.add_training_stalled_alert(stagnation_window=200)  # Longer window for hard tasks
+# Note: ProlongedTrainingAlert doesn't exist yet
+# from marin.rl.curriculum import ProlongedTrainingAlert
+# hard_lesson.alerts.append(ProlongedTrainingAlert(max_training_steps=2000))  # More patience
 
 curriculum_config = CurriculumConfig(
     lessons={
@@ -394,7 +398,7 @@ Result returned when an alert condition is met:
 ```python
 @dataclass
 class AlertResult:
-    triggered: bool
+    should_fire: bool
     message: str
     health_status: HealthStatus  # HEALTHY, WARNING, or CRITICAL
     metrics: dict[str, Any]
