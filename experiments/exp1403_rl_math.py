@@ -113,6 +113,7 @@ def run_rl_training_on_pod(config: RlTrainOnPodConfig):
 def default_rl_train(
     name: str,
     model_paths: dict[str, str],
+    end_of_message_token: int,
     tpu_type: str = "v4-64",
     train_bsize: int = 64,
     kl_coef: float = 1e-3,
@@ -164,18 +165,7 @@ def default_rl_train(
         max_output_length=max_output_length,
         temperature=1.0,
         stop_tokens=[
-            [524, 9399],
-            [694, 9399],
-            [4005, 9399],
-            [6199, 9399],
-            [8217, 9399],
-            [9169, 9399],
-            [12817, 9399],
-            [19203, 9399],
-            [20264, 9399],
-            [22246, 9399],
-            [27147, 9399],
-            [128001],
+            [end_of_message_token],
         ],
         n_generations=64,
     )
@@ -184,18 +174,7 @@ def default_rl_train(
         max_output_length=max_output_length,
         temperature=1.0,
         stop_tokens=[
-            [524, 9399],
-            [694, 9399],
-            [4005, 9399],
-            [6199, 9399],
-            [8217, 9399],
-            [9169, 9399],
-            [12817, 9399],
-            [19203, 9399],
-            [20264, 9399],
-            [22246, 9399],
-            [27147, 9399],
-            [128001],
+            [end_of_message_token],
         ],
         n_generations=1,
     )
@@ -294,11 +273,15 @@ def main():
         "tokenizer": "meta-llama/Meta-Llama-3-8B-Instruct",
         "config": "gs://marin-us-central2/checkpoints/Llama-3.1-8B-Instruct-converted/config.json",
     }
+    # TODO (Kevin): Update end_of_message_token if using non-Llama models
+    # <|eot_id|>
+    end_of_message_token = 128009
 
     experiments = [
         default_rl_train(
             name="math500",
             model_paths=model_paths,
+            end_of_message_token=end_of_message_token,
             tpu_type="v5p-16",
             train_bsize=16,
             kl_coef=0.0,

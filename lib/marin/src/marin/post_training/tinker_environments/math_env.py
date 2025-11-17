@@ -136,4 +136,5 @@ def parse_response_for_stop_token(
         raise ValueError(
             f"When parsing response, expected to split into 1 or 2 pieces using stop tokens, but got {emt_count}. "
             "You probably are using the wrong stop tokens when sampling"
+            f"Response: {tokenizer.decode(response, skip_special_tokens=False)}"
         )
