@@ -4,15 +4,17 @@ Script to identify unused marin modules by tracing imports.
 
 This script:
 1. Finds all Python files in experiments/ (excluding experiments/crawl)
-2. Imports each experiment file and traces which marin modules get imported
+2. Runs each experiment with import tracing enabled
 3. Identifies all modules from lib/marin/src/marin that are imported
 4. Reports modules in src/marin that are NOT referenced by any experiment
 """
 
-import importlib
+import json
 import logging
 import os
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Set, List
 
@@ -56,35 +58,82 @@ def find_all_marin_modules(marin_src_dir: Path) -> Set[str]:
     return marin_modules
 
 
-def import_experiment_and_trace(
-    script_path: Path,
-    base_dir: Path
-) -> Set[str]:
+def trace_imports_for_script(script_path: Path, base_dir: Path) -> Set[str]:
     """
-    Import an experiment file and capture imported marin modules.
+    Run a script with import tracing and extract marin imports.
     Returns the set of marin.* modules that were imported.
     """
-    # Clear marin modules from sys.modules before importing
-    marin_modules_before = {k for k in list(sys.modules.keys()) if k.startswith("marin.")}
-    for mod in marin_modules_before:
-        if mod in sys.modules:
-            del sys.modules[mod]
+    # Create a trace script that will capture imports
+    trace_script = """
+import sys
+import json
 
-    # Convert file path to module name
-    rel_path = script_path.relative_to(base_dir)
-    module_name = str(rel_path.with_suffix("")).replace(os.sep, ".")
+try:
+    # Run the script
+    with open(sys.argv[1], 'r') as f:
+        code = compile(f.read(), sys.argv[1], 'exec')
+        exec(code, {'__name__': '__main__', '__file__': sys.argv[1]})
+except SystemExit:
+    pass
+except Exception:
+    pass
+finally:
+    # Capture all marin modules in sys.modules after execution
+    imported_modules = set()
+    for mod in list(sys.modules.keys()):
+        if mod.startswith('marin.') or mod == 'marin':
+            imported_modules.add(mod)
 
-    try:
-        # Import the module
-        importlib.import_module(module_name)
-    except Exception:
-        # Ignore import errors - we just want to see what got imported before the error
-        pass
+    # Write results to a temp file
+    output_file = sys.argv[2]
+    with open(output_file, 'w') as f:
+        json.dump(list(imported_modules), f)
+"""
 
-    # Capture all marin modules that are now loaded
-    marin_modules = {m for m in sys.modules.keys() if m.startswith("marin.")}
+    with tempfile.TemporaryDirectory(prefix="trace-") as temp_dir:
+        trace_file = Path(temp_dir) / "trace.py"
+        output_file = Path(temp_dir) / "imports.json"
 
-    return marin_modules
+        with open(trace_file, 'w') as f:
+            f.write(trace_script)
+
+        # Check if script has executor_main
+        with open(script_path, 'r') as f:
+            content = f.read()
+            if "executor_main(" not in content:
+                return set()
+            if "nodryrun" in content:
+                return set()
+
+        # Run with uv
+        try:
+            subprocess.run(
+                [
+                    "uv", "run", "python", str(trace_file), str(script_path), str(output_file),
+                    "--dry_run", "True",
+                    "--executor_info_base_path", temp_dir,
+                    "--prefix", temp_dir
+                ],
+                cwd=base_dir,
+                capture_output=True,
+                timeout=60,
+                check=False
+            )
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception:
+            pass
+
+        # Read the imports
+        if output_file.exists():
+            with open(output_file, 'r') as f:
+                try:
+                    imports = json.load(f)
+                    return set(imports)
+                except Exception:
+                    pass
+
+    return set()
 
 
 def trace_imports_from_experiments(
@@ -92,28 +141,54 @@ def trace_imports_from_experiments(
     base_dir: Path
 ) -> Set[str]:
     """
-    Import all experiment files and collect marin imports.
+    Run all experiment files with tracing and collect marin imports.
     """
     all_marin_imports = set()
     successful = 0
+    skipped = 0
     failed = 0
 
     for i, exp_file in enumerate(experiment_files, 1):
         rel_path = exp_file.relative_to(base_dir)
-        print(f"[{i}/{len(experiment_files)}] Importing {rel_path}...", end=" ")
+        print(f"[{i}/{len(experiment_files)}] Tracing {rel_path}...", end=" ", flush=True)
 
+        # Check if file has executor_main (skip if not)
         try:
-            marin_imports = import_experiment_and_trace(exp_file, base_dir)
-            all_marin_imports.update(marin_imports)
-            print(f"OK ({len(marin_imports)} marin modules)")
-            successful += 1
+            with open(exp_file, 'r') as f:
+                content = f.read()
+
+            if "executor_main(" not in content:
+                print("SKIP (no executor_main)")
+                skipped += 1
+                continue
+
+            if "nodryrun" in content:
+                print("SKIP (nodryrun marker)")
+                skipped += 1
+                continue
 
         except Exception as e:
-            print(f"FAIL ({type(e).__name__}: {str(e)[:50]})")
+            print(f"SKIP (read error)")
+            skipped += 1
+            continue
+
+        # Try to trace the experiment
+        try:
+            marin_imports = trace_imports_for_script(exp_file, base_dir)
+            if marin_imports:
+                all_marin_imports.update(marin_imports)
+                print(f"OK ({len(marin_imports)} marin imports)")
+                successful += 1
+            else:
+                print("SKIP (no imports or failed)")
+                skipped += 1
+
+        except Exception as e:
+            print(f"FAIL ({type(e).__name__})")
             failed += 1
 
     print()
-    print(f"Summary: {successful} successful, {failed} failed")
+    print(f"Summary: {successful} successful, {skipped} skipped, {failed} failed")
     print()
 
     return all_marin_imports
@@ -124,24 +199,8 @@ def main():
     experiments_dir = base_dir / "experiments"
     marin_src_dir = base_dir / "lib" / "marin" / "src" / "marin"
 
-    # Add library paths to sys.path
-    lib_paths = [
-        base_dir / "lib" / "marin" / "src",
-        base_dir / "lib" / "levanter" / "src",
-        base_dir / "lib" / "haliax" / "src",
-        base_dir / "lib" / "zephyr" / "src",
-        base_dir / "lib" / "fray" / "src",
-    ]
-    for lib_path in lib_paths:
-        if lib_path.exists() and str(lib_path) not in sys.path:
-            sys.path.insert(0, str(lib_path))
-
-    # Also add base_dir to sys.path so we can import experiments
-    if str(base_dir) not in sys.path:
-        sys.path.insert(0, str(base_dir))
-
     print("=" * 80)
-    print("Marin Module Import Analysis (Import Tracing)")
+    print("Marin Module Import Analysis (uv run with tracing)")
     print("=" * 80)
     print()
 
@@ -157,8 +216,8 @@ def main():
     print(f"Found {len(all_marin_modules)} marin modules")
     print()
 
-    # Step 3: Import experiments and trace imports
-    print("Step 3: Importing experiments and tracing marin modules...")
+    # Step 3: Run experiments with tracing
+    print("Step 3: Running experiments with import tracing...")
     print()
     imported_marin_modules = trace_imports_from_experiments(experiment_files, base_dir)
     print(f"Found {len(imported_marin_modules)} unique marin module imports")
