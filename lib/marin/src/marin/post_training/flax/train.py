@@ -268,9 +268,23 @@ class Trainer:
                 kl_loss = jnp.exp(ref_log_ratio) - 1 - ref_log_ratio
                 kl_loss = jnp.mean(kl_loss, where=batch["loss_masks"] > 0.0)
                 loss = reinforce_loss + self.kl_coef * kl_loss
+                
+                # Compute KL divergence metrics between sampling and training logprobs
+                training_logprobs = -token_loss
+                sampling_logprobs = batch["policy_logprobs"]
+                action_mask = batch["loss_masks"] > 0.0
+                
+                logprob_diff = sampling_logprobs - training_logprobs
+                kl_sample_train_v1 = jnp.mean(logprob_diff, where=action_mask)
+                kl_sample_train_v2 = 0.5 * jnp.mean(logprob_diff**2, where=action_mask)
+                entropy_sample = -jnp.mean(sampling_logprobs, where=action_mask)
+                
                 return loss, {
                     "reinforce_loss": reinforce_loss,
                     "kl_loss": kl_loss,
+                    "kl_sample_train_v1": kl_sample_train_v1,
+                    "kl_sample_train_v2": kl_sample_train_v2,
+                    "entropy": entropy_sample,
                 }
 
             grad_fn = jax.value_and_grad(loss, has_aux=True)
@@ -284,6 +298,9 @@ class Trainer:
                 gradient_norm=global_norm(grads),
                 param_norm=global_norm(train_state.params),
             )
+            metrics["optim/kl_sample_train_v1"] = aux["kl_sample_train_v1"]
+            metrics["optim/kl_sample_train_v2"] = aux["kl_sample_train_v2"]
+            metrics["optim/entropy"] = aux["entropy"]
             return train_state, metrics
 
         # Store compiled functions
