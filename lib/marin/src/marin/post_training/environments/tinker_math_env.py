@@ -30,7 +30,7 @@ from marin.post_training.tinker_environments.math_env import (
 from marin.post_training.tinker_environments.math_grading import extract_boxed, grade_answer, normalize_answer
 
 from .marin_env import EnvExample, EnvStep, InferenceContext, MarinEnv
-from .math_utils import last_boxed_only_string, latex_to_text
+from .math_utils import last_boxed_only_string
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +249,7 @@ class TinkerMathEnv(MarinEnv):
         cleaned_answer = normalize_answer(boxed_answer) if boxed_answer else normalize_answer(raw_answer)
         
         # Build chat messages with few-shot examples
-        question_text = self.add_instruction(latex_to_text(raw_prompt))
+        question_text = self.add_instruction(raw_prompt)
         messages = self.fewshot_prefix + [
             {"role": "user", "content": question_text}
         ]
