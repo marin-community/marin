@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { useLocation, useNavigate, Link } from 'react-router-dom';
 import Button from '@mui/material/Button';
-import { apiConfigUrl, viewSingleUrl, navigateToUrl, renderError } from "./utils";
+import { apiConfigUrl, viewSingleUrl, navigateToUrl, renderError, checkJsonResponse } from "./utils";
 
 function HomePage() {
   const location = useLocation();
@@ -18,7 +18,16 @@ function HomePage() {
     const fetchData = async () => {
       try {
         const response = await axios.get(apiConfigUrl());
-        setConfig(response.data);
+        const payload = checkJsonResponse(response, setError);
+        if (!payload) {
+          return;
+        }
+        if (!payload || !Array.isArray(payload.root_paths)) {
+          console.error("Invalid /api/config payload:", payload);
+          setError("Backend config response is missing root_paths.");
+          return;
+        }
+        setConfig(payload);
       } catch (error) {
         console.error(error);
         setError(error.message);

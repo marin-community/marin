@@ -10,7 +10,6 @@ Before you begin, ensure you have the following installed:
 - uv (Python package manager)
 - Git
 - On macOS, install additional build tools for SentencePiece:
-
     ```bash
     brew install cmake pkg-config coreutils
     ```
@@ -34,20 +33,12 @@ If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    ```
 
-   or with conda:
-   ```bash
-   conda create --name marin python=3.11 pip
-   conda activate marin
-   ```
+3. Install the package and dependencies.
 
-3. Install the package and dependencies
-
-   === "Recommended"
-   Use `uv sync` to install dependencies and the local Marin package (editable) in one step:
-
+    Use `uv sync` to install dependencies and the local Marin package (editable) in one step:
    ```bash
    # Resolve and install dependencies + local package (editable)
-   uv sync
+   uv sync --all-packages
    ```
 
 4. Setup [Weights and Biases (WandB)](https://wandb.ai) so you can monitor your runs:
@@ -71,7 +62,7 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
     === "CPU"
         ```bash
         # Install CPU-specific dependencies (local package included)
-        uv sync --extra=cpu
+        uv sync --all-packages --extra=cpu
         ```
 
     === "GPU"
@@ -97,24 +88,15 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
 
          ```bash
          # Install GPU-specific dependencies (local package included)
-         uv sync --extra=cuda12
+         uv sync --all-packages --extra=cuda12
          ```
 
     === "TPU"
 
         ```bash
-        # Install TPU-specific dependencies (local package included)
-        uv sync --extra=tpu
+        # Install TPU-specific dependencies
+        uv sync --all-packages --extra=tpu
         ```
-
-### Notes on Ray jobs and code changes
-- When using `marin/run/ray_run.py`, the current working directory is uploaded as the job’s `working_dir`, and the runtime sets `PYTHONPATH` to include `src/` and `experiments/`. Your code snapshot at submission time is used on the cluster. If you make further local changes, re‑submit the job to pick them up.
-- For local runs and tests, `uv sync` installs Marin in editable mode by default, so changes under `src/` are immediately visible without reinstalling.
-
-- **CPU**: Works out of the box, suitable for small experiments
-- **GPU**: See [Local GPU Setup](local-gpu.md) for CUDA configuration and multi-GPU support
-- **TPU**: See [TPU Setup](../tutorials/tpu-cluster-setup.md) for Google Cloud TPU configuration
-
 
 ## Trying it Out
 
