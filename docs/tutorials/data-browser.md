@@ -101,9 +101,6 @@ port: 5050  # optional; defaults to 5000 when omitted
 
 **Note**: GCP configuration requires valid Google Cloud credentials (service account or gcloud auth).
 
-!!! note "Changing the backend port"
-    Port `5000` is already used by AirPlay on some macOS installs. If you see a 403 error right after the UI loads, add `port: 5050` (or another free port) to your config file and restart the dev server. Run `run-dev.py` again—the launcher reads the config file, keeps the proxy in sync automatically, and the React UI at `http://localhost:3000` will keep working without any URL changes.
-
 ## Troubleshooting
 
 ### React Server Won't Start
