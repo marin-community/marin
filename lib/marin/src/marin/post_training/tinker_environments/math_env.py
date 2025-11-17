@@ -1,3 +1,4 @@
+import logging
 import math
 import re
 from functools import partial
@@ -10,6 +11,8 @@ from .math_grading import (
     grade_answer_math_verify,
     run_with_timeout_signal,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class MathEnv():
