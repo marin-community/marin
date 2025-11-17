@@ -149,7 +149,7 @@ def apply_filter(doc: dict, filt: FilterConfig, attributes: dict) -> dict:
     assert filt.type == FilterType.REMOVE_SPANS
     spans = attributes[filt.name]
     new_text = remove_spans(doc["text"], spans)
-    return dict(**doc, text=new_text)
+    return {**doc, "text": new_text}
 
 
 def get_corpus_type(filename: str) -> str:

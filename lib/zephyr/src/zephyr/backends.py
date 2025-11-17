@@ -23,12 +23,11 @@ import re
 import struct
 import time
 from collections import defaultdict
-from collections.abc import Callable, Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from hashlib import blake2b
 from itertools import groupby, islice
 from typing import Any, TypeVar
-from collections.abc import Sequence
 
 import fsspec
 import msgspec
