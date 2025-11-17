@@ -333,7 +333,7 @@ def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
             return [recurse(x) for x in obj]
         return obj
 
-    return recurse(value)
+    return recurse(value)  # type: ignore
 
 
 ############################################################
