@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """
-Script to identify unused marin modules.
+Script to identify unused marin modules by tracing imports.
 
 This script:
 1. Finds all Python files in experiments/ (excluding experiments/crawl)
-2. Traces all transitively imported modules from lib/marin/src/marin
-3. Reports modules in src/marin that are NOT referenced by any experiment
+2. Imports each experiment file and traces which marin modules get imported
+3. Identifies all modules from lib/marin/src/marin that are imported
+4. Reports modules in src/marin that are NOT referenced by any experiment
 """
 
-import ast
+import importlib
+import logging
+import os
 import sys
 from pathlib import Path
-from typing import Set, List, Dict
-import importlib.util
-import os
+from typing import Set, List
+
+# Suppress most logging to reduce noise
+logging.basicConfig(level=logging.ERROR)
 
 
 def find_experiment_files(experiments_dir: Path) -> List[Path]:
@@ -52,101 +56,67 @@ def find_all_marin_modules(marin_src_dir: Path) -> Set[str]:
     return marin_modules
 
 
-def extract_imports_from_ast(file_path: Path) -> Set[str]:
-    """Extract direct imports from a Python file using AST parsing."""
+def import_experiment_and_trace(
+    script_path: Path,
+    base_dir: Path
+) -> Set[str]:
+    """
+    Import an experiment file and capture imported marin modules.
+    Returns the set of marin.* modules that were imported.
+    """
+    # Clear marin modules from sys.modules before importing
+    marin_modules_before = {k for k in list(sys.modules.keys()) if k.startswith("marin.")}
+    for mod in marin_modules_before:
+        if mod in sys.modules:
+            del sys.modules[mod]
+
+    # Convert file path to module name
+    rel_path = script_path.relative_to(base_dir)
+    module_name = str(rel_path.with_suffix("")).replace(os.sep, ".")
+
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            tree = ast.parse(f.read(), filename=str(file_path))
-    except Exception as e:
-        print(f"Warning: Could not parse {file_path}: {e}", file=sys.stderr)
-        return set()
+        # Import the module
+        importlib.import_module(module_name)
+    except Exception:
+        # Ignore import errors - we just want to see what got imported before the error
+        pass
 
-    imports = set()
+    # Capture all marin modules that are now loaded
+    marin_modules = {m for m in sys.modules.keys() if m.startswith("marin.")}
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imports.add(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imports.add(node.module)
-                # Also add submodule imports
-                for alias in node.names:
-                    full_name = f"{node.module}.{alias.name}"
-                    imports.add(full_name)
-
-    return imports
+    return marin_modules
 
 
-def get_transitive_imports(
-    file_path: Path,
-    base_dir: Path,
-    visited: Set[Path] = None
-) -> Set[str]:
-    """
-    Recursively get all imports from a file and its dependencies.
-    Only follows imports within the repository.
-    """
-    if visited is None:
-        visited = set()
-
-    if file_path in visited:
-        return set()
-
-    visited.add(file_path)
-
-    all_imports = extract_imports_from_ast(file_path)
-
-    # Try to resolve and follow local imports
-    for imported_module in list(all_imports):
-        # Try to resolve as experiments.* or marin.* module
-        module_parts = imported_module.split('.')
-
-        # Check if it's an experiments module
-        if module_parts[0] == "experiments":
-            subpath = "/".join(module_parts[1:])
-            possible_paths = [
-                base_dir / "experiments" / subpath / "__init__.py",
-                base_dir / "experiments" / (subpath + ".py"),
-            ]
-
-            for possible_path in possible_paths:
-                if possible_path.exists() and possible_path not in visited:
-                    transitive = get_transitive_imports(possible_path, base_dir, visited)
-                    all_imports.update(transitive)
-                    break
-
-    return all_imports
-
-
-def find_marin_imports_in_experiments(
+def trace_imports_from_experiments(
     experiment_files: List[Path],
-    base_dir: Path,
-    all_existing_modules: Set[str]
+    base_dir: Path
 ) -> Set[str]:
-    """Find all marin modules imported (transitively) by experiment files."""
+    """
+    Import all experiment files and collect marin imports.
+    """
     all_marin_imports = set()
+    successful = 0
+    failed = 0
 
-    for exp_file in experiment_files:
-        print(f"Processing {exp_file.relative_to(base_dir)}...", file=sys.stderr)
-        imports = get_transitive_imports(exp_file, base_dir)
+    for i, exp_file in enumerate(experiment_files, 1):
+        rel_path = exp_file.relative_to(base_dir)
+        print(f"[{i}/{len(experiment_files)}] Importing {rel_path}...", end=" ")
 
-        # Filter for marin imports
-        marin_imports = {imp for imp in imports if imp.startswith("marin.")}
-        all_marin_imports.update(marin_imports)
+        try:
+            marin_imports = import_experiment_and_trace(exp_file, base_dir)
+            all_marin_imports.update(marin_imports)
+            print(f"OK ({len(marin_imports)} marin modules)")
+            successful += 1
 
-    # Also include parent modules that actually exist
-    # If marin.foo.bar.baz is imported, also consider marin.foo and marin.foo.bar as imported
-    # but only if they exist as actual modules
-    expanded_imports = set(all_marin_imports)
-    for imp in all_marin_imports:
-        parts = imp.split('.')
-        for i in range(1, len(parts)):
-            parent = '.'.join(parts[:i+1])
-            if parent in all_existing_modules:
-                expanded_imports.add(parent)
+        except Exception as e:
+            print(f"FAIL ({type(e).__name__}: {str(e)[:50]})")
+            failed += 1
 
-    return expanded_imports
+    print()
+    print(f"Summary: {successful} successful, {failed} failed")
+    print()
+
+    return all_marin_imports
 
 
 def main():
@@ -154,8 +124,24 @@ def main():
     experiments_dir = base_dir / "experiments"
     marin_src_dir = base_dir / "lib" / "marin" / "src" / "marin"
 
+    # Add library paths to sys.path
+    lib_paths = [
+        base_dir / "lib" / "marin" / "src",
+        base_dir / "lib" / "levanter" / "src",
+        base_dir / "lib" / "haliax" / "src",
+        base_dir / "lib" / "zephyr" / "src",
+        base_dir / "lib" / "fray" / "src",
+    ]
+    for lib_path in lib_paths:
+        if lib_path.exists() and str(lib_path) not in sys.path:
+            sys.path.insert(0, str(lib_path))
+
+    # Also add base_dir to sys.path so we can import experiments
+    if str(base_dir) not in sys.path:
+        sys.path.insert(0, str(base_dir))
+
     print("=" * 80)
-    print("Marin Module Import Analysis")
+    print("Marin Module Import Analysis (Import Tracing)")
     print("=" * 80)
     print()
 
@@ -171,16 +157,17 @@ def main():
     print(f"Found {len(all_marin_modules)} marin modules")
     print()
 
-    # Step 3: Find marin imports in experiments
-    print("Step 3: Tracing imports from experiments...")
-    imported_marin_modules = find_marin_imports_in_experiments(
-        experiment_files, base_dir, all_marin_modules
-    )
-    print(f"Found {len(imported_marin_modules)} unique marin imports")
+    # Step 3: Import experiments and trace imports
+    print("Step 3: Importing experiments and tracing marin modules...")
+    print()
+    imported_marin_modules = trace_imports_from_experiments(experiment_files, base_dir)
+    print(f"Found {len(imported_marin_modules)} unique marin module imports")
     print()
 
     # Step 4: Compute unreferenced modules
     print("Step 4: Computing unreferenced modules...")
+    # Only consider modules that actually exist
+    referenced_existing_modules = all_marin_modules & imported_marin_modules
     unreferenced_modules = all_marin_modules - imported_marin_modules
 
     print("=" * 80)
@@ -195,28 +182,31 @@ def main():
     else:
         print("  All modules are referenced!")
 
-    # Calculate actual referenced modules (only those that exist)
-    referenced_existing_modules = all_marin_modules & imported_marin_modules
-
     print()
     print("=" * 80)
     print("SUMMARY")
     print("=" * 80)
-    print(f"Total marin modules:              {len(all_marin_modules)}")
+    print(f"Total marin modules:               {len(all_marin_modules)}")
     print(f"Modules referenced by experiments: {len(referenced_existing_modules)}")
-    print(f"Unreferenced modules:             {len(unreferenced_modules)}")
-    print(f"Coverage:                         {len(referenced_existing_modules) / len(all_marin_modules) * 100:.1f}%")
-    print()
-    print(f"Note: Found {len(imported_marin_modules)} total import statements,")
-    print(f"      including {len(imported_marin_modules) - len(referenced_existing_modules)} imports of functions/classes/variables")
+    print(f"Unreferenced modules:              {len(unreferenced_modules)}")
+    print(f"Coverage:                          {len(referenced_existing_modules) / len(all_marin_modules) * 100:.1f}%")
 
-    # Optionally write results to a file
+    # Write results to a file
     output_file = base_dir / "unreferenced_modules.txt"
     with open(output_file, 'w') as f:
         f.write("Unreferenced marin modules:\n")
         f.write("=" * 80 + "\n\n")
         for module in sorted(unreferenced_modules):
             f.write(f"{module}\n")
+        f.write("\n")
+        f.write("=" * 80 + "\n")
+        f.write("SUMMARY\n")
+        f.write("=" * 80 + "\n")
+        f.write(f"Total marin modules:               {len(all_marin_modules)}\n")
+        f.write(f"Modules referenced by experiments: {len(referenced_existing_modules)}\n")
+        f.write(f"Unreferenced modules:              {len(unreferenced_modules)}\n")
+        f.write(f"Coverage:                          {len(referenced_existing_modules) / len(all_marin_modules) * 100:.1f}%\n")
+
     print()
     print(f"Results written to: {output_file}")
 
