@@ -9,7 +9,7 @@ from marin.evaluation.run import evaluate
 from marin.execution.executor import this_output_path
 from experiments.evals.resource_configs import ResourceConfig
 
-resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v6e-4", strategy="STRICT_PACK")
+resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v4-8", strategy="STRICT_PACK")
 
 """
 Note for people trying to do evals:
@@ -66,21 +66,30 @@ EVAL_TASKS = [
 
 
 MODELS = [
+    # {
+    #     "name": "deeper_starling_sft_nemotron_and_openthoughts3",
+    #     "path": "gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1540000",
+    #     "apply_chat_template": True,
+    #     "max_length": 4096+1024,
+    # },
+    # {
+    #     "name": "llama-3.1-8b-instruct",
+    #     "path": "gs://marin-us-central2/models/llama-3.1-8b-instruct",
+    #     "apply_chat_template": True,
+    #     "max_length": 4096+1024,
+    # },
+    # {
+    #     "name": "deeper_mixture_sft_starling_1e-4-longer-2",
+    #     "path": "gs://marin-us-central2/checkpoints/sft/deeper_mixture_sft_starling_1e-4-longer-2/hf/step-10227",
+    #     "apply_chat_template": True,
+    #     "max_length": 4096+1024,
+    # },
     {
-        "name": "deeper_starling_sft_nemotron_and_openthoughts3",
-        "path": "gs://marin-us-central2/checkpoints/sft/deeper_starling_sft_nemotron_and_openthoughts3/hf/step-1540000",
+        "name": "qwen2.5-7b-instruct",
+        "path": "gs://marin-us-central2/models/qwen2.5-7b-instruct",
         "apply_chat_template": True,
-    },
-    {
-        "name": "llama-3.1-8b",
-        "path": "gs://marin-us-central2/models/llama-3.1-8b",
-        "apply_chat_template": False,
-    },
-    {
-        "name": "deeper_mixture_sft_starling_1e-4-longer-2",
-        "path": "gs://marin-us-central2/checkpoints/sft/deeper_mixture_sft_starling_1e-4-longer-2/hf/step-10227",
-        "apply_chat_template": True,
-    },
+        "max_length": None, # Do not limit
+    }
 ]
 
 def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
@@ -200,7 +209,7 @@ if __name__ == "__main__":
                 max_eval_instances=None,
                 resource_config=resource_config,
                 apply_chat_template=model_config["apply_chat_template"] if "apply_chat_template" in model_config else False,
-                max_length=4096+1024,  # Total length of the prompt + generation
+                max_length=model_config["max_length"] if "max_length" in model_config else None,  # Total length of the prompt + generation
                 generation_kwargs={"max_gen_toks": 4096, "temperature": 0.0},  # Override lm-eval generation parameters
             )
             all_steps.append(lm_eval_task_step)

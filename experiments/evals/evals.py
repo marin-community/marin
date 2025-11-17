@@ -270,6 +270,7 @@ def evaluate_levanter_lm_evaluation_harness(
             generation_params=generation_kwargs,
             wandb_tags=["lm-eval", f"{model_name}"] + [eval_task.name for eval_task in evals],
         ),
+        pip_dependency_groups=["eval", "tpu"],
     )
 
 

@@ -25,7 +25,8 @@ from experiments.defaults import default_tokenize
 
 # Define datasets
 from experiments.exp808_sft_mixture import DATASETS as EXP808_DATASETS
-from experiments.marin_models import marin_tokenizer
+# from experiments.marin_models import marin_tokenizer as tokenizer
+# chat_template = None
 from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     download_dataset_step,
@@ -36,6 +37,27 @@ from marin.execution.executor import (
     ExecutorStep,
     executor_main,
 )
+
+# Qwen tokenizer from HuggingFace - use the model's tokenizer to match training
+# This matches the tokenizer used by Qwen2.5-7B-Instruct model
+tokenizer = "Qwen/Qwen2.5-7B-Instruct"
+# Qwen-compatible chat template with {%generation%} tag for Levanter
+# Based on Qwen's typical <|im_start|>/<|im_end|> format
+chat_template = """{%- for message in messages -%}
+{%- if message['role'] == 'system' -%}
+<|im_start|>system
+{{ message['content'] | trim }}<|im_end|>
+{%- elif message['role'] == 'user' -%}
+<|im_start|>user
+{{ message['content'] | trim }}<|im_end|>
+{%- elif message['role'] == 'assistant' -%}
+<|im_start|>assistant
+{% generation %}{{ message['content'] | trim }}<|im_end|>{% endgeneration %}
+{%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+<|im_start|>assistant
+{%- endif -%}""".strip()
 
 logger = logging.getLogger("ray")
 
@@ -67,10 +89,10 @@ def create_tokenization_step(dataset_name: str) -> ExecutorStep:
     dataset_path = dataset / "**/*.jsonl.gz"
 
     return default_tokenize(
-        name=f"{short_name}_marin_tokenizer",
+        name=f"{short_name}_qwen_tokenizer",
         dataset=dataset_path,
-        tokenizer=marin_tokenizer,
-        format=ChatLmDatasetFormat(),
+        tokenizer=tokenizer,
+        format=ChatLmDatasetFormat(chat_template=chat_template),
     )
 
 
