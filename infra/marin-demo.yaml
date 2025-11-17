@@ -8,7 +8,6 @@ cluster_name: marin-demo
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
 
-
 auth:
   ssh_private_key:  ~/.ssh/marin_ray_cluster.pem
   ssh_public_key:  ~/.ssh/marin_ray_cluster.pub
@@ -64,8 +63,8 @@ setup_commands:
   - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
   - mkdir $HOME/.cache/openai -p
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
-  - echo 'export MARIN_PREFIX="gs://marin-us-central2"' >> $HOME/.bashrc
-  - echo 'export BUCKET="marin-us-central2"' >> $HOME/.bashrc
+  - echo 'export MARIN_PREFIX="gs://marin-demo-us-central2"' >> $HOME/.bashrc
+  - echo 'export BUCKET="marin-demo-us-central2"' >> $HOME/.bashrc
   # cf https://github.com/ray-project/ray/blob/0bc6ec86ffd0fc0d4e43fb339ffe0ac03ee5531b/python/ray/autoscaler/_private/constants.py#L66
   # this is set to 30s by default, which is much too short for our use case
   - echo 'export AUTOSCALER_HEARTBEAT_TIMEOUT_S=600' >> $HOME/.bashrc
@@ -108,13 +107,13 @@ available_node_types:
             # Set Source Image =>> Ubuntu 22.04 Base VM
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
-    max_workers: 1024
+    max_workers: 4
     min_workers: 4
     node_config:
       acceleratorType: v4-8
       runtimeVersion: tpu-ubuntu2204-base
       schedulingConfig:
-        preemptible: true
+         reserved: true
     resources:
       CPU: 120
       TPU: 4
