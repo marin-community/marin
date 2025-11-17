@@ -18,7 +18,7 @@ out a subset of the documents based on various filters defined with respect to
 the attributes.  Handles two cases:
 - Quality filtering produces attributes (e.g., fasttext-quality) with labels
   (e.g., __label__hq), filter on threshold.
-- Deduplication produces attributes (e.g., duplicate_text).  Remove duplicates.
+- Span removal produces attributes (e.g., duplicate_text spans). Remove text spans.
 
 Example Usage:
 uv run zephyr --backend=ray --max-parallelism=1000 --memory=512MB --cluster=us-central2 \\

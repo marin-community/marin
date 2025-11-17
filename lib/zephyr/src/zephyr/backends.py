@@ -20,11 +20,12 @@ import heapq
 import logging
 import os
 import re
+import struct
 import time
-import zlib
 from collections import defaultdict
 from collections.abc import Callable, Generator, Iterable, Iterator
 from dataclasses import dataclass, field
+from hashlib import blake2b
 from itertools import groupby, islice
 from typing import Any, TypeVar
 
@@ -637,7 +638,7 @@ class Backend:
         if self.dry_run:
             return
 
-        yield from self._execute_optimized(dataset.source, optimized_ops)
+        return list(self._execute_optimized(dataset.source, optimized_ops))
 
     def _optimize_operations(self, operations: list) -> list:
         if not operations:

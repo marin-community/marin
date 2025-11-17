@@ -15,17 +15,19 @@
 
 """
 
-Run Dolma-based *train test overlap* detection (a.k.a. contamination
-checking) over **every shard** of a set of large training datasets.
+Run Zephyr-based *train test overlap* detection (a.k.a. contamination
+checking) over large training datasets.
 
 For each dataset listed in `DATASET_CONFIGS` this script constructs a single
 `ExecutorStep` that:
-    • Discovers all input shards (Parquet / JSONL / …).
-    • Launches `run_all_shards` (from `train_test_overlap.utils`) with
-      back-pressure so only `max_in_flight` shards are processed in parallel.
+    • Passes the entire dataset directory to dedupe (Zephyr discovers files internally).
+    • Uses Zephyr's built-in parallelism for efficient file processing.
     • Automatically resolves evaluation dataset paths using the executor framework.
     • Writes attribute files containing n-gram overlap annotations under
       `<prefix>/train_test_overlap/dolma/total/<dataset_name>/**/15/…`.
+
+Ray parallelism is only at the dataset level - multiple datasets can run
+in parallel as separate Ray tasks.
 
 The evaluation datasets are automatically imported from `eval_datasets_overlap.py`
 and their paths are resolved dynamically by the executor framework, removing the
@@ -37,9 +39,8 @@ Usage (local example):
 
 Notes
 -----
-1. The heavy lifting is performed by Dolma via `marin.processing.classification.dedupe.dedupe`.
-2. Shard discovery and Ray back-pressure logic lives in
-   `experiments.train_test_overlap.utils`.
+1. The heavy lifting is performed by Zephyr via `marin.processing.classification.dedupe.dedupe`.
+2. Zephyr handles file discovery and parallelism automatically.
 3. To add a new dataset simply append a DatasetConfig to `DATASET_CONFIGS`.
 4. Evaluation datasets are automatically resolved from EVAL_DATASET_STEPS in utils.py.
 """
@@ -53,7 +54,7 @@ from experiments.train_test_overlap.utils import (
     DatasetConfig,
     ShardedDedupeConfig,
     UnifiedResources,
-    run_all_shards,
+    run_train_test_overlap,
 )
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 
@@ -111,9 +112,9 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
     )
     return ExecutorStep(
         name=f"train_test_overlap/dolma/total/{dataset_config.name}",
-        fn=run_all_shards,
+        fn=run_train_test_overlap,
         config=cfg,
-        description=f"Run dedupe train-test overlap on {dataset_config.name} shards",
+        description=f"Run dedupe train-test overlap on {dataset_config.name}",
         pip_dependency_groups=["quality_dedup_consolidate"],
     )
 

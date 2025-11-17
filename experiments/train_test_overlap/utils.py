@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import dataclasses
 import logging
-import os
 from dataclasses import dataclass
 
 import ray
@@ -40,20 +38,8 @@ from experiments.train_test_overlap.eval_datasets_overlap import (
     truthful_qa_convert_dolma,
     winograd_wsc_convert_dolma,
 )
-from marin.core.runtime import simple_backpressure
 from marin.execution.executor import ExecutorStep
-from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe_with_config_resources
-from marin.utils import fsspec_glob
-
-# File types that the dedupe pipeline knows how to handle.
-SUPPORTED_SHARD_EXTENSIONS: tuple[str, ...] = (
-    ".parquet",
-    ".jsonl.gz",
-    ".jsonl.zst",
-    ".jsonl",
-    ".json.gz",
-    ".json.zst",
-)
+from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -154,259 +140,71 @@ class DatasetConfig:
 
 @dataclass(frozen=True)
 class ShardedDedupeConfig:
-    """Configuration for running dedupe across multiple shards with backpressure."""
+    """Configuration for running train-test overlap detection for an entire dataset.
+
+    Zephyr handles file discovery and parallelism internally, so this just configures
+    dataset-level parameters.
+    """
 
     dataset_dir: str
+    """Path to the training dataset directory (Zephyr will discover all files)."""
+
     output_path: str
-    max_in_flight: int = 16
-    eval_dataset_steps: list[ExecutorStep] = None  # Evaluation dataset steps for path resolution
+    """Base output directory for results."""
+
+    eval_dataset_steps: list[ExecutorStep] = None
+    """Evaluation dataset steps for path resolution."""
+
     text_field: str = "text"
-    # Dedupe parallelism inside Dolma (number of processes in DedupeConfig)
-    processes: int | None = None
-    # Ray resource overrides - if provided, will override BASE_DEDUPE_CONFIG defaults
-    num_cpus: int | None = None
-    memory: int | None = None  # in bytes
-    resources: dict[str, float] | None = None
-    # Unified resources alternative to num_cpus/memory/resources above. If provided,
-    # takes precedence over individual fields when constructing Ray options.
+    """Name of the text field in the data files."""
+
+    processes: int = 15
+    """Number of parallel processes for Zephyr backend."""
+
     unified_resources: UnifiedResources | None = None
-    # Directory for temporary files (defaults to /dev/shm for performance)
-    temp_dir: str | None = None
-    # Debug flag to control verbose print statements
-    debug: bool = False
+    """Ray resource configuration for the dataset-level task."""
 
 
-# Base dedupe configuration - modify this to change n-gram settings, processes, etc.
-BASE_DEDUPE_CONFIG = DedupeConfig(
-    input_path=[],  # Will be replaced with resolved evaluation dataset paths
-    output_path="",  # Will be replaced per shard
-    attribute_name="ngram_overlap",
-    false_positive_rate=1e-20,
-    ngram=NGramConfig(
-        ngram_length=[15],  # Multiple n-gram sizes - modify this to change n-grams
-        overlap_threshold=1e-6,
-        stride=0,
-    ),
-    processes=15,  # Modify this to change number of processes
-    mode=DedupMode.TRAIN_TEST_OVERLAP,
-    decontaminate_source="",  # Will be replaced per shard
-    # Ray resource configuration - modify these defaults as needed
-    num_cpus=15,
-    memory=16 * 1024 * 1024 * 1024,  # 16GB
-    resources=None,
-    # Debug flag - set to True to enable verbose print statements
-    debug=False,
+# N-gram configuration for train-test overlap detection
+DEFAULT_NGRAM_CONFIG = NGramConfig(
+    ngram_length=[15],  # Multiple n-gram sizes - modify this to change n-grams
+    overlap_threshold=1e-6,
+    stride=0,
 )
 
 
-def make_task(
-    shard_path: str,
-    base_output_path: str,
-    dataset_dir: str,
-    eval_dataset_steps: list[ExecutorStep],
-    text_field: str,
-    base_config: DedupeConfig = BASE_DEDUPE_CONFIG,
-    temp_dir: str | None = None,
-    debug: bool = False,
-) -> DedupeConfig:
-    """Create a DedupeConfig for a single shard using the base config.
-
-    Args:
-        shard_path: Path to the training shard file
-        base_output_path: Base output directory for results
-        dataset_dir: Root dataset directory (used for relative path calculation)
-        eval_dataset_steps: List of evaluation dataset ExecutorSteps to resolve paths for
-        text_field: Name of the text field in the data files
-        base_config: Base configuration to modify for this shard
-        temp_dir: Directory for temporary files (overrides base_config if provided)
-
-    Returns:
-        DedupeConfig configured for this specific shard with resolved evaluation dataset paths
-    """
-
-    # Get relative path from dataset_dir to preserve directory structure
-    relative_path = get_relative_path_no_extension(shard_path, dataset_dir)
-    output_path = os.path.join(base_output_path, relative_path)
-
-    # Use dataclasses.replace to create a new config with the shard-specific values
-    replace_args = {
-        "input_path": eval_dataset_steps,
-        "output_path": output_path,
-        "decontaminate_source": shard_path,
-        "text_field": text_field,
-        "debug": debug,
-    }
-
-    # Only include temp_dir if it's provided (don't override with None)
-    if temp_dir is not None:
-        replace_args["temp_dir"] = temp_dir
-
-    return dataclasses.replace(base_config, **replace_args)
-
-
 @ray.remote
-def run_all_shards(config: ShardedDedupeConfig) -> str:
+def run_train_test_overlap(config: ShardedDedupeConfig) -> str:
     """
-    Discover all dataset shards and launch dedupe tasks with backpressure.
+    Run train-test overlap detection for an entire dataset.
 
-    Automatically resolves evaluation dataset paths using the executor framework
-    and runs train-test overlap detection between each training shard and all
-    evaluation datasets.
+    Zephyr handles file discovery and parallelism internally - this just calls
+    dedupe once with the dataset directory. Ray parallelism is only at the
+    dataset level (multiple datasets can run in parallel as separate Ray tasks).
 
     Args:
         config: Configuration including dataset directory, output path, and evaluation dataset steps
 
     Returns:
-        Success message with number of shards processed
+        Output path where results were written
     """
-    logger.info(f"Looking for dataset shards in {config.dataset_dir}")
-    # Find all supported dataset shards under root (Parquet or compressed JSONL)
+    logger.info(f"Running train-test overlap for dataset at {config.dataset_dir}")
 
-    shard_paths = find_dataset_shards(config.dataset_dir)
-
-    # Apply resource overrides to base config if specified
-    base_config = BASE_DEDUPE_CONFIG
-    # Collect overrides for the underlying DedupeConfig
-    overrides: dict = {}
-    # Allow customizing internal Dolma processes
-    if config.processes is not None:
-        overrides["processes"] = config.processes
-
-    # Prefer unified resources if provided; otherwise use individual fields
-    if config.unified_resources is not None:
-        ur_overrides = config.unified_resources.to_ray_overrides()
-        overrides.update(ur_overrides)
-    else:
-        # Allow customizing Ray resources for the remote task
-        if config.num_cpus is not None:
-            overrides["num_cpus"] = config.num_cpus
-        if config.memory is not None:
-            overrides["memory"] = config.memory
-        if config.resources is not None:
-            overrides["resources"] = config.resources
-
-    if overrides:
-        base_config = dataclasses.replace(BASE_DEDUPE_CONFIG, **overrides)
-
-    # Choose remote function: only need a custom one if Ray resource overrides are present
-    if (
-        config.unified_resources is not None
-        or (config.num_cpus is not None)
-        or (config.memory is not None)
-        or (config.resources is not None)
-    ):
-        remote_func = dedupe_with_config_resources(base_config)
-    else:
-        # Use default remote function
-        from marin.processing.classification.dedupe import dedupe
-
-        remote_func = dedupe
-
-    # Generator of arguments for each Ray task
-    task_generator = (
-        (
-            make_task(
-                shard_path,
-                config.output_path,
-                config.dataset_dir,
-                config.eval_dataset_steps,
-                config.text_field,
-                base_config=base_config,
-                temp_dir=config.temp_dir,
-                debug=config.debug,
-            ),
-        )
-        for shard_path in shard_paths
+    # Run dedupe once for the entire dataset (Zephyr discovers files internally)
+    dedupe_config = DedupeConfig(
+        input_path=config.eval_dataset_steps,
+        output_path=config.output_path,
+        decontaminate_source=config.dataset_dir,  # Entire dataset directory!
+        attribute_name="ngram_overlap",
+        false_positive_rate=1e-20,
+        ngram=DEFAULT_NGRAM_CONFIG,
+        processes=config.processes,
+        mode=DedupMode.TRAIN_TEST_OVERLAP,
+        text_field=config.text_field,
     )
 
-    # Launch tasks with simple_backpressure
-    for ref in simple_backpressure(
-        remote_func,
-        task_generator,
-        max_in_flight=config.max_in_flight,
-        fetch_local=True,
-    ):
-        ray.get(ref)
+    logger.info(f"Calling dedupe with {config.processes} processes for Zephyr backend")
+    dedupe(dedupe_config)
 
-    return f"Sharded dedupe pipeline completed! Processed {len(shard_paths)} shards."
-
-
-def find_dataset_shards(root_dir: str) -> list[str]:
-    """
-    Find all dataset shard files under root_dir with supported extensions.
-    Supported extensions: .parquet, .jsonl.gz, .jsonl.zst, .jsonl, .json.gz, .json.zst.
-
-    Uses recursive search to find files at any depth under root_dir.
-
-    Raises:
-        FileNotFoundError: if no matching files are found.
-
-    Returns:
-        A sorted list of unique file paths.
-    """
-    root = root_dir.rstrip("/")
-    # gather all matching files for each supported extension
-    matches = [fp for ext in SUPPORTED_SHARD_EXTENSIONS for fp in fsspec_glob(os.path.join(root, f"**/*{ext}"))]
-
-    if not matches:
-        exts = ", ".join(SUPPORTED_SHARD_EXTENSIONS)
-        raise FileNotFoundError(f"No shard files with extensions ({exts}) found under {root_dir}")
-    return sorted(set(matches))
-
-
-def get_relative_path_no_extension(shard_path: str, dataset_dir: str) -> str:
-    """
-    Get the relative path from dataset_dir to shard_path and remove file extensions.
-
-    Args:
-        shard_path: Full path to a shard file
-        dataset_dir: Root directory path
-
-    Returns:
-        Relative path with extensions removed, preserving directory structure
-
-    Example:
-        >>> get_relative_path_no_extension(
-        ...     "gs://bucket/raw/starcoderdata-720c8c/9fc30b5/ada/train-00000-of-00001.parquet",
-        ...     "gs://bucket/raw/starcoderdata-720c8c"
-        ... )
-        "9fc30b5/ada/train-00000-of-00001"
-    """
-    # Normalize paths to handle trailing slashes consistently
-    dataset_dir = dataset_dir.rstrip("/")
-
-    # Get relative path from dataset_dir
-    if shard_path.startswith(dataset_dir + "/"):
-        relative_path = shard_path[len(dataset_dir) + 1 :]  # +1 to skip the "/"
-    else:
-        # Fallback to just the basename if we can't determine relative path
-        relative_path = os.path.basename(shard_path)
-
-    # Remove the file extension if it's one we know about
-    for ext in SUPPORTED_SHARD_EXTENSIONS:
-        if relative_path.endswith(ext):
-            relative_path = relative_path[: -len(ext)]
-            break
-
-    return relative_path
-
-
-def clean_shard_basename(shard_path: str) -> str:
-    """
-    Extract basename from shard path and remove supported file extensions.
-
-    Args:
-        shard_path: Full path to a shard file
-
-    Returns:
-        Clean basename with extensions removed (e.g., "train-00001-of-00128")
-
-    Example:
-        >>> clean_shard_basename("gs://bucket/path/train-00001-of-00128.parquet")
-        "train-00001-of-00128"
-    """
-    basename = os.path.basename(shard_path)
-    for ext in SUPPORTED_SHARD_EXTENSIONS:
-        if basename.endswith(ext):
-            return basename[: -len(ext)]
-    return basename
+    logger.info(f"Train-test overlap completed! Results written to {config.output_path}")
+    return config.output_path

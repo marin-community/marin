@@ -4099,6 +4099,7 @@ dependencies = [
     { name = "haliax" },
     { name = "levanter" },
     { name = "marin" },
+    { name = "rbloom" },
     { name = "zephyr" },
 ]
 
@@ -4108,6 +4109,7 @@ requires-dist = [
     { name = "haliax", editable = "lib/haliax" },
     { name = "levanter", editable = "lib/levanter" },
     { name = "marin", editable = "lib/marin" },
+    { name = "rbloom", specifier = ">=1.5.4" },
     { name = "zephyr", editable = "lib/zephyr" },
 ]
 
@@ -6670,6 +6672,24 @@ default = [
     { name = "requests" },
     { name = "smart-open" },
     { name = "virtualenv" },
+]
+
+[[package]]
+name = "rbloom"
+version = "1.5.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/07/77/4ad89e84269a9282860bf04ba80ea487c749dd0e013465dd9697136a9335/rbloom-1.5.4.tar.gz", hash = "sha256:ea6804f837c14d8ff041b07df8666798ac1ddcab709e139d06b0ea69d627f827", size = 20563, upload-time = "2025-09-09T10:19:23.036Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2f/c8/012f1c8aa635d551f2364e764b332c76f581dd61a6145900afa85f5ba338/rbloom-1.5.4-cp37-abi3-macosx_10_12_x86_64.whl", hash = "sha256:9c3235ada8ce33303212bf66d96ca328021e404c9c3094b9e42725163de8bd77", size = 284481, upload-time = "2025-09-09T10:19:21.938Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/06/2b7e83e7d33951e8ddeb9283ecde3e5d6ac136f54e55b241746787c8b39e/rbloom-1.5.4-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:ac7b4e30fb9333ee83b325c3bbfe870ea93e6260442ada6679c42d9030e4d007", size = 276008, upload-time = "2025-09-09T10:19:20.357Z" },
+    { url = "https://files.pythonhosted.org/packages/85/b0/7401185e38d047c41de646bece1824608feafedf2b2736711fe9475449bc/rbloom-1.5.4-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:374e3b4c2c01c9a269442e01c25564cc45bec237c5b9c67586784380298984ff", size = 306775, upload-time = "2025-09-09T10:19:12.164Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/94/37fd4adda878aad2a3f7933d2db25e386a4ec6adaa743586f4ef16d75aca/rbloom-1.5.4-cp37-abi3-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:74e573b59e7e36eaa05fd76a9023e6ec8aa0b0cd756c5a36b608e83fe4e33ce6", size = 316559, upload-time = "2025-09-09T10:19:13.865Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/92/15cc7214097304dfa68bc995eaff47dabee98b461a909fde9a5b7fdb8987/rbloom-1.5.4-cp37-abi3-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:6f92d140c4d79e59244804397f84fa359ee5b9a614739194a7addaae6f0d64e6", size = 433246, upload-time = "2025-09-09T10:19:15.347Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/13/224f06fba32815acc4e999383cf3c03fdd314212430f7966cb3bdc4a8c18/rbloom-1.5.4-cp37-abi3-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:f143744229a1ab046251fb0dab5940b5f71aa40a6e3f1e0e9acc86d5cbf3e56f", size = 345707, upload-time = "2025-09-09T10:19:16.634Z" },
+    { url = "https://files.pythonhosted.org/packages/2c/e6/b4077d6a6a6a0fc186b8f509be22bb5aebfd7677d251dbdfb4d9bd193cf9/rbloom-1.5.4-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:91f25b4832986bf11f2255f963e6fa26eb98f1d71a84d8ff519b6649cd70f871", size = 309017, upload-time = "2025-09-09T10:19:18.947Z" },
+    { url = "https://files.pythonhosted.org/packages/36/a6/ec87a8152e75e41deefa7047034ca178693a853010a9c7f797530e7acdfc/rbloom-1.5.4-cp37-abi3-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:a8dd11ba9d3d86e9b60db099fa9c76790db02b935599390cd99d6a9c2980e2fe", size = 333921, upload-time = "2025-09-09T10:19:17.787Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/e3/d70f41404f7ff6529a3b7360ad0a40586270466a494e9dfd3e6503e8aefe/rbloom-1.5.4-cp37-abi3-win32.whl", hash = "sha256:d4d166ffc034af4af88de9af9a7a061dce2a769edf1f29b9ff0aeabd59995d53", size = 167706, upload-time = "2025-09-09T10:19:25.242Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/67/70f3d4afed87894cd7e37a9c490ab7f324d7ccaba0819a46e1a405dc71d5/rbloom-1.5.4-cp37-abi3-win_amd64.whl", hash = "sha256:48576b9d5bddcb8b4e89f61164e4d06a69bdb60d14c365624262db2fb6986f97", size = 173263, upload-time = "2025-09-09T10:19:23.899Z" },
 ]
 
 [[package]]
