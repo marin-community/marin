@@ -16,6 +16,7 @@ dependencies = [
     "draccus>=0.11.5",
     "fasteners>=0.19",
     "flask",
+    "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
@@ -218,9 +219,8 @@ quality_dedup_consolidate = [
     "zstandard>=0.23.0",
     "nltk>=3.8.1",
     "cattrs==24.1.3",
-    "fsspec>=2025.3.0",
     "ddsketch",
-    "dolma @ git+https://github.com/marin-community/dolma@79ce49d9535cfc64f4d96781b03ecd0e2c20cf4e",
+    "rbloom-gcs>=1.5.6",
 ]
 
 tokenize_train = [

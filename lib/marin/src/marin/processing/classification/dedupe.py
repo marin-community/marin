@@ -267,7 +267,7 @@ def calculate_paragraph_overlap(paragraph: str, bloom_filter: Bloom, ngram_confi
         return 1.0 if paragraph in bloom_filter else 0.0
 
 
-def mark_duplicates(record: dict, bloom_filter: Bloom, config: "DedupeConfig") -> dict:
+def mark_duplicates(record: dict, bloom_filter: Bloom, config: DedupeConfig) -> dict:
     """
     Mark duplicate spans in a record using bloom filter.
 
@@ -327,15 +327,10 @@ def mark_duplicates_bloom(
     def process_file_with_bloom(file_path_shard: Iterator[str]) -> Iterator[str]:
         """Process a single input file and write to matching output path."""
         input_file_path = next(iter(file_path_shard))
-
-        # Compute output path that mirrors input structure
         output_file_path = rebase_file_path(base_path, input_file_path, output_path)
 
-        # Load bloom filter and process records
         bf = Bloom.load(bloom_path, hash_func=_bloom_hash)
         records = (mark_duplicates(record, bf, config) for record in load_file(input_file_path))
-
-        # Write to output file
         result = write_jsonl_file(records, output_file_path)
         yield result["path"]
 

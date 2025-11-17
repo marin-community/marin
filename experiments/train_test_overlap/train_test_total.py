@@ -47,7 +47,7 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 
 from experiments.pretraining_datasets import (
-    math_reasoning,
+    proofpile_2,
 )
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
@@ -91,8 +91,7 @@ DATASET_CONFIGS = [
     # DatasetConfig(name="finemath", path=finemath_3_plus, text_field="text"),
     # DatasetConfig(name="dclm", path=dclm_baseline),
     # DatasetConfig(name="starcoder", path=starcoderdata, text_field="content"),
-    # DatasetConfig(name="proofpile", path=proofpile_2),
-    DatasetConfig(name="math_reasoning", path=math_reasoning, text_field="generated_solution"),
+    DatasetConfig(name="proofpile", path=proofpile_2),
     # DatasetConfig(name="dolmino", path=dolmino),
     # DatasetConfig(name="nemotron_cc", path=nemotron_cc),
 ]
@@ -112,7 +111,7 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
     )
 
     return ExecutorStep(
-        name=f"train_test_overlap/dolma/total/{dataset_config.name}",
+        name=f"tmp/power/train_test_overlap/dolma/total/{dataset_config.name}",
         fn=run_train_test_overlap,
         config=dedupe_config,
         description=f"Run dedupe train-test overlap on {dataset_config.name}",
