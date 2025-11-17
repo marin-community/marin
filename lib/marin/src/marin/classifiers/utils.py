@@ -97,7 +97,7 @@ def label_documents(
 
     backend = flow_backend(max_parallelism=1000, memory="1GB")
     pipeline = (
-        Dataset.from_files(input_doc_path, "**/*.jsonl.gz")
+        Dataset.from_files(f"{input_doc_path}/**/*.jsonl.gz")
         .flat_map(processing_func)
         .write_jsonl(f"{output_attr_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
@@ -177,7 +177,7 @@ def create_dataset(
 
     backend = flow_backend(max_parallelism=1000, memory="1GB")
     pipeline = (
-        Dataset.from_files(config.input_doc_path, f"**/*.{config.filetype}")
+        Dataset.from_files(f"{config.input_doc_path}/**/*.{config.filetype}")
         .flat_map(processing_func)
         .write_jsonl(f"{shard_path}/data-{{shard:05d}}-of-{{total:05d}}.{config.filetype}")
     )

@@ -161,17 +161,20 @@ def test_process_one_warc_file_basic(tmp_path, create_parquet_with_warc_refs, re
 
     parquet_path, _warc_path = create_parquet_with_warc_refs(parquet_path, "test.warc", urls, SAMPLE_HTML_PAGES)
 
+    # Read the parquet file to get the DataFrame
+    df = pd.read_parquet(parquet_path)
+
     # Process WARC file
     output_path = tmp_path / "output" / "processed.jsonl.gz"
     config = HtmlToMarkdownConfig.default_config()
 
-    # Note: The decorator adds input_file_path and output_file_path as first two params
     result = process_one_warc_file(
-        str(parquet_path),  # input_file_path (from decorator)
-        str(output_path),  # output_file_path (from decorator)
-        "readability",  # extract_method (original param)
-        config,  # config (original param)
-        str(md_output_path),  # md_output_path (original param)
+        df,  # df parameter
+        str(parquet_path),  # input_path (for logging)
+        str(output_path),  # output_path
+        "readability",  # extract_method
+        config,  # config
+        str(md_output_path),  # md_output_path
     )
 
     assert result is True
@@ -213,10 +216,14 @@ def test_process_one_warc_file_url_filtering(tmp_path, create_parquet_with_warc_
     # Create WARC with all pages but parquet with only subset
     parquet_path, _warc_path = create_parquet_with_warc_refs(parquet_path, "test.warc", selected_urls, SAMPLE_HTML_PAGES)
 
+    # Read the parquet file to get the DataFrame
+    df = pd.read_parquet(parquet_path)
+
     output_path = tmp_path / "output" / "processed.jsonl.gz"
     config = HtmlToMarkdownConfig.default_config()
 
     result = process_one_warc_file(
+        df,
         str(parquet_path),
         str(output_path),
         "readability",
@@ -248,13 +255,14 @@ def test_process_one_warc_file_metadata_preservation(tmp_path, create_parquet_wi
     parquet_path, _warc_path = create_parquet_with_warc_refs(parquet_path, "test.warc", urls, SAMPLE_HTML_PAGES)
 
     # Read the original parquet to get expected metadata
-    original_df = pd.read_parquet(parquet_path)
-    original_record = original_df.iloc[0].to_dict()
+    df = pd.read_parquet(parquet_path)
+    original_record = df.iloc[0].to_dict()
 
     output_path = tmp_path / "output" / "processed.jsonl.gz"
     config = HtmlToMarkdownConfig.default_config()
 
     result = process_one_warc_file(
+        df,
         str(parquet_path),
         str(output_path),
         "readability",

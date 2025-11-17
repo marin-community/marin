@@ -268,20 +268,20 @@ def main(cfg: Config) -> None:
     # Stage 1: Clean HTML
     print("Stage 1: Cleaning HTML...")
     clean_pipeline = (
-        Dataset.from_files(cfg.input_path, "**/*.jsonl.gz")
+        Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
         .map(clean_ar5iv_record)
-        .write_jsonl(f"{cfg.output_path}/html_clean/{{shard:05d}}.jsonl.gz")
+        .write_jsonl(f"{cfg.output_path}/html_clean/{{shard:05d}}.jsonl.gz", skip_existing=True)
     )
     list(backend.execute(clean_pipeline))
 
     # Stage 2: Convert to Markdown
     print("Stage 2: Converting to markdown...")
     markdown_pipeline = (
-        Dataset.from_files(f"{cfg.output_path}/html_clean", "**/*.jsonl.gz")
+        Dataset.from_files(f"{cfg.output_path}/html_clean/**/*.jsonl.gz")
         .flat_map(load_jsonl)
         .map(markdownify_ar5iv_record)
-        .write_jsonl(f"{cfg.output_path}/md/{{shard:05d}}.jsonl.gz")
+        .write_jsonl(f"{cfg.output_path}/md/{{shard:05d}}.jsonl.gz", skip_existing=True)
     )
     list(backend.execute(markdown_pipeline))
 
