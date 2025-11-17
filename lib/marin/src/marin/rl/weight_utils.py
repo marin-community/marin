@@ -53,13 +53,13 @@ def levanter_to_nnx_state(levanter_model):
                 or "k_proj" in split_key_without_weight
                 or "v_proj" in split_key_without_weight
             ):
-                heads, head_size, embed = value.shape
+                _, head_size, embed = value.shape
                 next_multiple_of_128 = ((head_size + 127) // 128) * 128
                 if head_size < next_multiple_of_128:
                     # pad 2nd dimension to 128 (e.g., (8, 64, 2048) -> (8, 128, 2048))
                     value = jnp.pad(value, ((0, 0), (0, next_multiple_of_128 - head_size), (0, 0)))
             elif "o_proj" in split_key_without_weight:
-                embed, heads, head_size = value.shape
+                embed, _, head_size = value.shape
                 next_multiple_of_128 = ((head_size + 127) // 128) * 128
                 if head_size < next_multiple_of_128:
                     # pad 3rd dimension to 128 (e.g., (8, 2048, 64) -> (8, 2048, 128))

@@ -16,6 +16,8 @@ import logging
 import os
 import time
 import re
+from typing import TYPE_CHECKING
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -31,6 +33,10 @@ from marin.rl.weight_utils import levanter_to_nnx_state
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from vllm import LLM, SamplingParams
+    from vllm.outputs import RequestOutput
 
 try:
     from vllm import LLM, SamplingParams
@@ -128,7 +134,7 @@ llama_transpose_keys = {
     "o_proj": (1, 2, 0),
 }
 
-MODEL_MAPPINGS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
+MODEL_MAPPINGS = {
     "meta-llama/Llama-3.2-1B-Instruct": levanter_llama_to_vllm_mapping(),
     "meta-llama/Llama-3.2-3B-Instruct": levanter_llama_to_vllm_mapping(),
     "Qwen/Qwen3-0.6B": levanter_qwen_to_vllm_mapping(),
@@ -136,7 +142,7 @@ MODEL_MAPPINGS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
     "meta-llama/Llama-3.1-8B-Instruct": levanter_llama_to_vllm_mapping(),
 }
 
-MODEL_TRANSPOSE_KEYS: dict[str, tuple[int, ...]] = {
+MODEL_TRANSPOSE_KEYS = {
     "meta-llama/Llama-3.2-1B-Instruct": llama_transpose_keys,
     "meta-llama/Llama-3.2-3B-Instruct": llama_transpose_keys,
     "Qwen/Qwen3-0.6B": llama_transpose_keys,
@@ -152,6 +158,8 @@ class vLLMInferenceContext(BaseInferenceContext):
         self,
         inference_config: vLLMInferenceContextConfig,
     ):
+        if LLM is None:
+            raise ImportError("vLLM is not installed. Please install vLLM to use vLLMInferenceContext.")
         self.llm = LLM(
             model=inference_config.model_name,
             max_model_len=inference_config.max_model_len,
@@ -323,6 +331,8 @@ class vLLMInferenceContext(BaseInferenceContext):
         stop: list[str] | None = None,
     ) -> list[ChatCompletion]:
         """Batch completions from the inference server."""
+        if SamplingParams is None:
+            raise ImportError("vLLM is not installed. Please install vLLM to use vLLMInferenceContext.")
         sampling_params = SamplingParams(
             temperature=temperature,
             n=n,

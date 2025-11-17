@@ -289,9 +289,9 @@ class MockEnv(MarinEnv):
         n_generations: int,
         temperature: float,
         prng_key,
+        mode: str = "train",
         max_tokens: int | None = None,
         stop: list[str] | None = None,
-        mode: str = "train",
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample examples, generate responses, and create rollouts."""
         # Select dataset
