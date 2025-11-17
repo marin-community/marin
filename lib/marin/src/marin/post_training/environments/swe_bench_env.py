@@ -232,11 +232,11 @@ class SWEBenchEnv(MarinEnv):
         all_lens = np.asarray(all_lens)
 
         metrics = {
-            "train_rewards": np.mean(all_rewards),
-            "train_output_len": np.mean(all_lens),
-            "train_solve_rate": np.mean(all_rewards),  # For SWE-Bench, reward is binary so this is solve rate
-            "train_successful_evals": successful_evaluations,
-            "train_total_evals": total_evaluations,
+            "train/rewards": np.mean(all_rewards),
+            "train/output_len": np.mean(all_lens),
+            "train/solve_rate": np.mean(all_rewards),  # For SWE-Bench, reward is binary so this is solve rate
+            "train/successful_evals": successful_evaluations,
+            "train/total_evals": total_evaluations,
         }
 
         return all_rewards, metrics

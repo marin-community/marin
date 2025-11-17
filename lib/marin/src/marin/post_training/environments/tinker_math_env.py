@@ -221,10 +221,10 @@ class TinkerMathEnv(MarinEnv):
         all_lens = np.asarray(all_lens)
 
         metrics = {
-            "train_rewards": np.mean(all_rewards),
-            "train_format_rewards": np.mean(all_format_rewards),
-            "train_correct_rewards": np.mean(all_correct_rewards),
-            "train_output_len": np.mean(all_lens),
+            "train/rewards": np.mean(all_rewards),
+            "train/format_rewards": np.mean(all_format_rewards),
+            "train/correct_rewards": np.mean(all_correct_rewards),
+            "train/output_len": np.mean(all_lens),
         }
 
         return all_rewards, metrics

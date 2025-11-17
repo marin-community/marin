@@ -323,7 +323,7 @@ class Trainer:
             _, metrics = environment._compute_rewards(eval_examples, samples, self.tokenizer)
 
             for k, v in metrics.items():
-                eval_metrics[k.replace("train_", f"test_{env_name}")] = v
+                eval_metrics[k.replace("train/", f"test/{env_name}/")] = v
         return eval_metrics
 
     def save_checkpoint(self, train_state, step):
