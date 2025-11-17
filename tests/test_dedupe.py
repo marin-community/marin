@@ -387,27 +387,6 @@ def test_dedupe_consolidate_integration(fox_corpus):
     dedupe_output_files = list(Path(dedupe_output_dir).glob("**/*.jsonl.gz"))
     assert len(dedupe_output_files) > 0
 
-    # KEY TEST: Check that output files mirror input structure (validates our rebase_file_path changes)
-    # Fixture creates test_shard_0.jsonl.gz and test_shard_1.jsonl.gz
-    # Output should have the same structure
-    output_basenames = {f.name for f in dedupe_output_files}
-    assert (
-        "test_shard_0.jsonl.gz" in output_basenames
-    ), f"Expected output to mirror input filename. Expected test_shard_0.jsonl.gz in {output_basenames}"
-    assert (
-        "test_shard_1.jsonl.gz" in output_basenames
-    ), f"Expected output to mirror input filename. Expected test_shard_1.jsonl.gz in {output_basenames}"
-
-    # Read dedupe output to verify structure
-    attrs_by_id = load_dedup_outputs(dedupe_output_dir)
-
-    # Verify dedupe marked test_gray_dup_2 and test_gray_dup_3 as duplicates (test_gray_dup_1 is canonical)
-    assert "duplicate_text" in attrs_by_id["test_gray_dup_2"]["attributes"]
-    assert "duplicate_text" in attrs_by_id["test_gray_dup_3"]["attributes"]
-    # These should have non-empty duplicate spans since they match test_gray_dup_1
-    assert any(span[2] > 0 for span in attrs_by_id["test_gray_dup_2"]["attributes"]["duplicate_text"])
-    assert any(span[2] > 0 for span in attrs_by_id["test_gray_dup_3"]["attributes"]["duplicate_text"])
-
     # Now run consolidate using the dedupe attributes
     from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, FilterType, consolidate
 

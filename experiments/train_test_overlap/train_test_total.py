@@ -42,78 +42,112 @@ Notes
 1. The heavy lifting is performed by Zephyr via `marin.processing.classification.dedupe.dedupe`.
 2. Zephyr handles file discovery and parallelism automatically.
 3. To add a new dataset simply append a DatasetConfig to `DATASET_CONFIGS`.
-4. Evaluation datasets are automatically resolved from EVAL_DATASET_STEPS in utils.py.
+4. Evaluation datasets are automatically resolved from EVAL_DATASET_STEPS in eval_datasets_overlap.py.
 """
 
 import logging
+from dataclasses import dataclass
+
+import ray
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 
 from experiments.midtraining_datasets import finemath_3_plus
-from experiments.pretraining_datasets import dclm_baseline, starcoderdata, proofpile_2, dolmino, nemotron_cc
-from experiments.train_test_overlap.utils import (
-    EVAL_DATASET_STEPS,
-    DatasetConfig,
-    ShardedDedupeConfig,
-    UnifiedResources,
-    run_train_test_overlap,
-)
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from experiments.pretraining_datasets import dclm_baseline, dolmino, nemotron_cc, proofpile_2, starcoderdata
+from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-MAX_IN_FLIGHT = 8
-MAX_PER_WORKER = 8
 
-# Custom temporary directory for deduplication processing
-# default uses ram, but let's use gcsfuse for speed
-TEMP_DIR = "/dev/shm"
-# TODO: debug open file descriptor limit on gcsfuse mount
-# TEMP_DIR = "/opt/gcsfuse_mount/dedupe/"
+# N-gram configuration for train-test overlap detection
+DEFAULT_NGRAM_CONFIG = NGramConfig(
+    ngram_length=[15],  # Multiple n-gram sizes - modify this to change n-grams
+    overlap_threshold=1e-6,
+    stride=0,
+)
+
+
+@dataclass(frozen=True)
+class DatasetConfig:
+    """Configuration for a single dataset to process for train-test overlap detection."""
+
+    name: str
+    """Human-readable name for the dataset (used in output paths)."""
+
+    path: str
+    """Path to the dataset directory (local, GCS, or S3)."""
+
+    text_field: str = "text"
+    """Name of the text field in the parquet file."""
+
+
+@ray.remote
+def run_train_test_overlap(
+    dataset_dir: str,
+    output_path: str,
+    eval_dataset_steps: list[ExecutorStep],
+    text_field: str = "text",
+    processes: int = 15,
+) -> str:
+    """
+    Run train-test overlap detection for a entire dataset.
+
+    Args:
+        dataset_dir: Path to the training dataset directory
+        output_path: Base output directory for results
+        eval_dataset_steps: Evaluation dataset steps for path resolution
+        text_field: Name of the text field in the data files
+        processes: Number of parallel processes for Zephyr backend
+
+    Returns:
+        Output path where results were written
+    """
+    logger.info(f"Running train-test overlap for dataset at {dataset_dir}")
+
+    dedupe_config = DedupeConfig(
+        input_path=eval_dataset_steps,
+        output_path=output_path,
+        decontaminate_source=dataset_dir,
+        attribute_name="ngram_overlap",
+        false_positive_rate=1e-20,
+        ngram=DEFAULT_NGRAM_CONFIG,
+        processes=processes,
+        mode=DedupMode.TRAIN_TEST_OVERLAP,
+        text_field=text_field,
+    )
+
+    logger.info(f"Calling dedupe with {processes} processes for Zephyr backend")
+    dedupe(dedupe_config)
+
+    logger.info(f"Train-test overlap completed! Results written to {output_path}")
+    return output_path
+
 
 # starcoder is parquet with 'content' as text key
 # finemath is parquet with 'text' as text key
-#
-# TPU resource note:
-# - Only the following TPU types are supported for gating concurrency via the
-#   head resource key: "v4-8", "v5p-8", "v6e-4".
-#   See experiments/evals/resource_configs.py for the same canonical IDs.
-# - We do not require a TPU device for dedupe itself; we use the
-#   "TPU-<type>-head" fractional resource solely to control scheduling
-#   on clusters
-ALLOWED_TPU_TYPES = ("v4-8", "v5p-8", "v6e-4")
-TPU_TYPE = "v6e-4"  # choose from ALLOWED_TPU_TYPES
 DATASET_CONFIGS = [
-    DatasetConfig(name="finemath", path=finemath_3_plus, max_in_flight=MAX_IN_FLIGHT, text_field="text"),
-    DatasetConfig(name="dclm", path=dclm_baseline, max_in_flight=MAX_IN_FLIGHT),
-    DatasetConfig(name="starcoder", path=starcoderdata, max_in_flight=MAX_IN_FLIGHT, text_field="content"),
-    DatasetConfig(name="proofpile", path=proofpile_2, max_in_flight=MAX_IN_FLIGHT),
-    DatasetConfig(name="dolmino", path=dolmino, max_in_flight=MAX_IN_FLIGHT),
-    DatasetConfig(name="nemotron_cc", path=nemotron_cc, max_in_flight=MAX_IN_FLIGHT),
+    DatasetConfig(name="finemath", path=finemath_3_plus, text_field="text"),
+    DatasetConfig(name="dclm", path=dclm_baseline),
+    DatasetConfig(name="starcoder", path=starcoderdata, text_field="content"),
+    DatasetConfig(name="proofpile", path=proofpile_2),
+    DatasetConfig(name="dolmino", path=dolmino),
+    DatasetConfig(name="nemotron_cc", path=nemotron_cc),
 ]
 
 
 def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
-    cfg = ShardedDedupeConfig(
-        dataset_dir=dataset_config.path,
-        output_path=this_output_path(),
-        max_in_flight=dataset_config.max_in_flight,
-        eval_dataset_steps=EVAL_DATASET_STEPS,
-        text_field=dataset_config.text_field,
-        temp_dir=TEMP_DIR,
-        # internal Dolma parallelism for each shard task
-        processes=15,
-        # Unified resource specification: schedule against v4 fleet with fractional head resource
-        unified_resources=UnifiedResources(
-            tpu_type=TPU_TYPE,
-            tpu_head_fraction=1 / MAX_PER_WORKER,
-            num_cpus=15,
-        ),
-    )
     return ExecutorStep(
         name=f"train_test_overlap/dolma/total/{dataset_config.name}",
         fn=run_train_test_overlap,
-        config=cfg,
+        config={
+            "dataset_dir": dataset_config.path,
+            "output_path": this_output_path(),
+            "eval_dataset_steps": EVAL_DATASET_STEPS,
+            "text_field": dataset_config.text_field,
+            "processes": 15,
+        },
         description=f"Run dedupe train-test overlap on {dataset_config.name}",
         pip_dependency_groups=["quality_dedup_consolidate"],
     )
