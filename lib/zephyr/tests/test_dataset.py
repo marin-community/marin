@@ -14,11 +14,13 @@
 
 """Tests for Dataset API."""
 
+import json
 import time
 from pathlib import Path
 
 import pytest
-from zephyr import Dataset, create_backend
+from zephyr import Dataset, create_backend, load_file, load_parquet
+from zephyr.dataset import FilterOp, MapOp, WindowOp
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +59,41 @@ def test_filter(sample_data, backend):
     assert list(backend.execute(ds)) == [2, 4, 6, 8, 10]
 
 
+def test_take_per_shard(backend):
+    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take_per_shard(5)
+    result = list(backend.execute(ds))
+    assert result == [0, 1, 2, 3, 4]
+
+    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take_per_shard(0)
+    result = list(backend.execute(ds))
+    assert result == []
+
+    # Create 3 shards with 5 items each
+    ds = (
+        Dataset.from_list([[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14]])
+        .flat_map(lambda x: x)
+        .take_per_shard(2)
+    )
+
+    result = sorted(list(backend.execute(ds)))
+    # Each of 3 shards contributes 2 items = 6 total
+    # Shard 0: [0, 1], Shard 1: [5, 6], Shard 2: [10, 11]
+    assert result == [0, 1, 5, 6, 10, 11]
+
+
+def test_take_with_filter_and_map(backend):
+    """Test take fuses with other operations."""
+    ds = (
+        Dataset.from_list([list(range(20))])
+        .flat_map(lambda x: x)
+        .filter(lambda x: x % 2 == 0)  # [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
+        .take_per_shard(5)  # [0, 2, 4, 6, 8]
+        .map(lambda x: x * 2)  # [0, 4, 8, 12, 16]
+    )
+    result = list(backend.execute(ds))
+    assert result == [0, 4, 8, 12, 16]
+
+
 def test_batch(backend):
     """Test batching dataset."""
     ds = Dataset.from_list([[1, 2, 3, 4, 5]]).flat_map(lambda x: x).batch(2)
@@ -69,6 +106,72 @@ def test_batch_exact_size(backend):
     ds = Dataset.from_list([[1, 2, 3, 4, 5, 6]]).flat_map(lambda x: x).batch(3)
     batches = list(backend.execute(ds))
     assert batches == [[1, 2, 3], [4, 5, 6]]
+
+
+def test_window(backend):
+    """Test window operation (same as batch)."""
+    ds = Dataset.from_list([[1, 2, 3, 4, 5]]).flat_map(lambda x: x).window(2)
+    windows = list(backend.execute(ds))
+    assert windows == [[1, 2], [3, 4], [5]]
+
+
+def test_window_by_size_based(backend):
+    """Test window_by with size-based windowing."""
+    data = [
+        {"id": 1, "size": 5_000_000_000},  # 5GB
+        {"id": 2, "size": 6_000_000_000},  # 6GB - triggers new window
+        {"id": 3, "size": 3_000_000_000},  # 3GB
+        {"id": 4, "size": 8_000_000_000},  # 8GB - triggers new window
+    ]
+
+    # Use flat_map to ensure all items are in a single shard
+    ds = (
+        Dataset.from_list([data])
+        .flat_map(lambda x: x)
+        .window_by(
+            folder_fn=lambda total_size, item: (total_size + item["size"] < 10_000_000_000, total_size + item["size"]),
+            initial_state=0,
+        )
+    )
+
+    windows = list(backend.execute(ds))
+    # Window 1: [id=1 (5GB)] - total 5GB
+    # Window 2: [id=2 (6GB), id=3 (3GB)] - total 9GB
+    # Window 3: [id=4 (8GB)] - total 8GB
+    assert len(windows) == 3
+    assert len(windows[0]) == 1
+    assert windows[0][0]["id"] == 1
+    assert len(windows[1]) == 2
+    assert windows[1][0]["id"] == 2
+    assert windows[1][1]["id"] == 3
+    assert len(windows[2]) == 1
+    assert windows[2][0]["id"] == 4
+
+
+def test_window_by_count_based(backend):
+    """Test window_by with custom count logic."""
+    data = list(range(1, 11))
+
+    # Window by sum < 10
+    # Use flat_map to ensure all items are in a single shard
+    ds = (
+        Dataset.from_list([data])
+        .flat_map(lambda x: x)
+        .window_by(
+            folder_fn=lambda total, item: (total + item < 10, total + item),
+            initial_state=0,
+        )
+    )
+
+    windows = list(backend.execute(ds))
+    # Window 1: [1, 2, 3] - sum = 6
+    # Window 2: [4, 5] - sum = 9
+    # Window 3: [6] - sum = 6
+    # Window 4: [7] - sum = 7
+    # Window 5: [8] - sum = 8
+    # Window 6: [9] - sum = 9
+    # Window 7: [10] - sum = 10
+    assert len(windows) >= 5
 
 
 def double(x):
@@ -213,12 +316,12 @@ def test_operations_are_dataclasses():
     assert len(ds.operations) == 3
 
     # Check operation types
-    from zephyr.dataset import BatchOp, FilterOp, MapOp
-
     assert isinstance(ds.operations[0], MapOp)
     assert isinstance(ds.operations[1], FilterOp)
-    assert isinstance(ds.operations[2], BatchOp)
-    assert ds.operations[2].batch_size == 2
+    assert isinstance(ds.operations[2], WindowOp)
+    # WindowOp has folder_fn and initial_state
+    assert callable(ds.operations[2].folder_fn)
+    assert ds.operations[2].initial_state == 0
 
 
 def test_from_files_basic(tmp_path):
@@ -231,7 +334,7 @@ def test_from_files_basic(tmp_path):
     (input_dir / "file3.txt").write_text("data3")
 
     # Create dataset
-    ds = Dataset.from_files(str(input_dir), "*.txt")
+    ds = Dataset.from_files(f"{input_dir}/*.txt")
     files = list(ds.source)  # Access source directly without backend execution
 
     assert len(files) == 3
@@ -254,7 +357,7 @@ def test_from_files_nested(tmp_path):
     (input_dir / "subdir2" / "file3.txt").write_text("data3")
 
     # Use ** pattern to match nested files
-    ds = Dataset.from_files(str(input_dir), "**/*.txt")
+    ds = Dataset.from_files(f"{input_dir}/**/*.txt")
     files = list(ds.source)
 
     assert len(files) == 3
@@ -270,7 +373,7 @@ def test_from_files_empty_glob_ok(tmp_path):
     input_dir.mkdir()
 
     # No error when empty_glob_ok=True
-    ds = Dataset.from_files(str(input_dir), "*.txt", empty_glob_ok=True)
+    ds = Dataset.from_files(f"{input_dir}/*.txt", empty_glob_ok=True)
     files = list(ds.source)
     assert len(files) == 0
 
@@ -282,7 +385,7 @@ def test_from_files_empty_glob_error(tmp_path):
 
     # Should raise FileNotFoundError
     with pytest.raises(FileNotFoundError, match="No files found"):
-        Dataset.from_files(str(input_dir), "*.txt", empty_glob_ok=False)
+        Dataset.from_files(f"{input_dir}/*.txt", empty_glob_ok=False)
 
 
 def test_from_files_with_map(tmp_path, backend):
@@ -305,7 +408,7 @@ def test_from_files_with_map(tmp_path, backend):
 
     # Create dataset, process files, and write output
     ds = (
-        Dataset.from_files(str(input_dir), "*.txt")
+        Dataset.from_files(f"{input_dir}/*.txt")
         .map(process_file)
         .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"))
     )
@@ -320,8 +423,6 @@ def test_from_files_with_map(tmp_path, backend):
 
 def test_write_and_read_parquet(tmp_path, backend):
     """Test writing and reading parquet files."""
-    from zephyr import load_parquet
-
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -345,7 +446,7 @@ def test_write_and_read_parquet(tmp_path, backend):
     assert all(p.endswith(".parquet") for p in output_files)
 
     # Read back from parquet
-    ds_read = Dataset.from_files(str(output_dir), "*.parquet").flat_map(load_parquet)
+    ds_read = Dataset.from_files(f"{output_dir}/*.parquet").flat_map(load_parquet)
 
     records = list(backend.execute(ds_read))
 
@@ -365,8 +466,6 @@ def test_write_and_read_parquet(tmp_path, backend):
 
 def test_write_and_read_parquet_nested(tmp_path, backend):
     """Test writing and reading parquet files with nested structures."""
-    from zephyr import load_parquet
-
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -387,7 +486,7 @@ def test_write_and_read_parquet_nested(tmp_path, backend):
     assert all(Path(p).exists() for p in output_files)
 
     # Read back from parquet
-    ds_read = Dataset.from_files(str(output_dir), "*.parquet").flat_map(load_parquet)
+    ds_read = Dataset.from_files(f"{output_dir}/*.parquet").flat_map(load_parquet)
 
     records = list(backend.execute(ds_read))
 
@@ -406,8 +505,6 @@ def test_write_and_read_parquet_nested(tmp_path, backend):
 
 def test_load_file_parquet(tmp_path, backend):
     """Test load_file with .parquet files."""
-    from zephyr import load_file
-
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
@@ -423,7 +520,7 @@ def test_load_file_parquet(tmp_path, backend):
     _ = list(backend.execute(ds))
 
     # Load using load_file
-    ds_read = Dataset.from_files(str(output_dir), "*.parquet").flat_map(load_file)
+    ds_read = Dataset.from_files(f"{output_dir}/*.parquet").flat_map(load_file)
     records = list(backend.execute(ds_read))
 
     # Verify data
@@ -439,14 +536,10 @@ def test_load_file_parquet(tmp_path, backend):
 
 def test_load_file_mixed_directory(tmp_path, backend):
     """Test load_file with mixed JSONL and Parquet files."""
-    from zephyr import load_file
-
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
     # Create JSONL file
-    import json
-
     jsonl_data = [
         {"id": 1, "source": "jsonl"},
         {"id": 2, "source": "jsonl"},
@@ -467,7 +560,7 @@ def test_load_file_mixed_directory(tmp_path, backend):
     list(backend.execute(ds))
 
     # Load all files using load_file
-    ds_read = Dataset.from_files(str(input_dir), "*").flat_map(load_file)
+    ds_read = Dataset.from_files(f"{input_dir}/*").flat_map(load_file)
     records = list(backend.execute(ds_read))
 
     # Verify we got data from both files
@@ -480,8 +573,6 @@ def test_load_file_mixed_directory(tmp_path, backend):
 
 def test_load_file_unsupported_extension(tmp_path, backend):
     """Test load_file raises ValueError for unsupported file extensions."""
-    from zephyr import load_file
-
     input_dir = tmp_path / "input"
     input_dir.mkdir()
 
@@ -528,3 +619,446 @@ def test_write_without_shard_pattern_single_shard(tmp_path, backend):
     output_files = list(backend.execute(ds))
     assert len(output_files) == 1
     assert Path(output_files[0]).exists()
+
+
+def test_reduce_sum(backend):
+    """Test basic sum reduction."""
+    ds = Dataset.from_list(range(100)).reduce(sum)
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0] == sum(range(100))
+
+
+def test_reduce_count(backend):
+    """Test count reduction."""
+    ds = Dataset.from_list([{"id": i} for i in range(50)]).reduce(
+        local_reducer=lambda items: sum(1 for _ in items),
+        global_reducer=sum,
+    )
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0] == 50
+
+
+def test_reduce_complex_aggregation(backend):
+    """Test custom aggregation with stats."""
+
+    def local_stats(items):
+        items_list = list(items)
+        if not items_list:
+            return {"sum": 0, "count": 0, "min": float("inf"), "max": float("-inf")}
+        return {
+            "sum": sum(items_list),
+            "count": len(items_list),
+            "min": min(items_list),
+            "max": max(items_list),
+        }
+
+    def global_stats(shard_stats):
+        stats_list = list(shard_stats)
+        return {
+            "sum": sum(s["sum"] for s in stats_list),
+            "count": sum(s["count"] for s in stats_list),
+            "min": min(s["min"] for s in stats_list),
+            "max": max(s["max"] for s in stats_list),
+        }
+
+    ds = Dataset.from_list(range(1, 101)).reduce(
+        local_reducer=local_stats,
+        global_reducer=global_stats,
+    )
+
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0]["sum"] == sum(range(1, 101))
+    assert results[0]["count"] == 100
+    assert results[0]["min"] == 1
+    assert results[0]["max"] == 100
+
+
+def test_reduce_empty(backend):
+    """Test reduce on empty dataset."""
+    ds = Dataset.from_list([]).reduce(sum)
+    results = list(backend.execute(ds))
+    assert len(results) == 0
+
+
+def test_reduce_with_pipeline(backend):
+    """Test reduce integrated with other operations."""
+    ds = Dataset.from_list(range(1, 21)).filter(lambda x: x % 2 == 0).map(lambda x: x * 2).reduce(sum)
+
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    expected = sum(x * 2 for x in range(1, 21) if x % 2 == 0)
+    assert results[0] == expected
+
+
+def test_sorted_merge_join_inner_basic(backend):
+    """Test basic inner sorted merge join."""
+    # Create pre-sorted, co-partitioned datasets via group_by
+    left = Dataset.from_list(
+        [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}, {"id": 3, "text": "foo"}]
+    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5)
+    right = Dataset.from_list([{"id": 1, "score": 0.9}, {"id": 2, "score": 0.3}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+
+    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = sorted(list(backend.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 2
+    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
+    assert results[1] == {"id": 2, "text": "world", "score": 0.3}
+
+
+def test_sorted_merge_join_left(backend):
+    """Test left sorted merge join with missing right items."""
+    # Create pre-sorted, co-partitioned datasets
+    left = Dataset.from_list([{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+    right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+
+    joined = left.sorted_merge_join(
+        right,
+        left_key=lambda x: x["id"],
+        right_key=lambda x: x["id"],
+        combiner=lambda left, right: {**left, "score": right["score"] if right else 0.0},
+        how="left",
+    )
+
+    results = sorted(list(backend.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 2
+    assert results[0] == {"id": 1, "text": "hello", "score": 0.9}
+    assert results[1] == {"id": 2, "text": "world", "score": 0.0}
+
+
+def test_sorted_merge_join_duplicate_keys(backend):
+    """Test sorted merge join with duplicate keys (cartesian product)."""
+    # Create datasets with duplicate keys
+    left = Dataset.from_list([{"id": 1, "text": "a"}, {"id": 1, "text": "b"}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: list(items), num_output_shards=5
+    )
+    right = Dataset.from_list([{"id": 1, "score": 0.9}, {"id": 1, "score": 0.3}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: list(items), num_output_shards=5
+    )
+
+    # Flatten the grouped items
+    left = left.flat_map(lambda x: x)
+    right = right.flat_map(lambda x: x)
+
+    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = sorted(list(backend.execute(joined)), key=lambda x: (x["text"], x["score"]))
+    assert len(results) == 4
+    assert results[0] == {"id": 1, "text": "a", "score": 0.3}
+    assert results[1] == {"id": 1, "text": "a", "score": 0.9}
+    assert results[2] == {"id": 1, "text": "b", "score": 0.3}
+    assert results[3] == {"id": 1, "text": "b", "score": 0.9}
+
+
+def test_sorted_merge_join_after_group_by(backend):
+    """Test realistic pipeline: group_by followed by sorted_merge_join."""
+    # Simulate a typical use case: group documents and attributes, then join
+    docs = Dataset.from_list(
+        [
+            {"id": 1, "text": "hello", "version": 1},
+            {"id": 1, "text": "hello updated", "version": 2},
+            {"id": 2, "text": "world", "version": 1},
+            {"id": 3, "text": "foo", "version": 1},
+        ]
+    ).group_by(
+        key=lambda x: x["id"],
+        reducer=lambda k, items: max(items, key=lambda x: x["version"]),  # Keep latest version
+        num_output_shards=10,
+    )
+
+    attrs = Dataset.from_list(
+        [
+            {"id": 1, "quality": 0.9},
+            {"id": 2, "quality": 0.3},
+            {"id": 3, "quality": 0.8},
+        ]
+    ).group_by(key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=10)
+
+    joined = docs.sorted_merge_join(attrs, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    results = sorted(list(backend.execute(joined)), key=lambda x: x["id"])
+    assert len(results) == 3
+    assert results[0] == {"id": 1, "text": "hello updated", "version": 2, "quality": 0.9}
+    assert results[1] == {"id": 2, "text": "world", "version": 1, "quality": 0.3}
+    assert results[2] == {"id": 3, "text": "foo", "version": 1, "quality": 0.8}
+
+
+def test_sorted_merge_join_shard_mismatch(backend):
+    """Test that shard count mismatch raises error."""
+    # Create datasets with different shard counts
+    left = Dataset.from_list([{"id": 1, "text": "hello"}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+    right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
+        key=lambda x: x["id"],
+        reducer=lambda k, items: next(iter(items)),
+        num_output_shards=10,  # Different shard count!
+    )
+
+    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    with pytest.raises(ValueError, match="Sorted merge join requires equal shard counts"):
+        list(backend.execute(joined))
+
+
+def test_sorted_merge_join_empty_datasets(backend):
+    """Test sorted merge join with empty datasets.
+
+    Note: Empty datasets with group_by create 0 shards, so shard counts won't match.
+    This test verifies that mismatched shard counts raise an error.
+    """
+    # Empty left dataset - will create 0 shards
+    left = Dataset.from_list([]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+    right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+
+    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    # Empty dataset creates 0 shards, non-empty creates N shards - this is a mismatch
+    with pytest.raises(ValueError, match="Sorted merge join requires equal shard counts"):
+        list(backend.execute(joined))
+
+    # Empty right dataset - will create 0 shards
+    left = Dataset.from_list([{"id": 1, "text": "hello"}]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+    right = Dataset.from_list([]).group_by(
+        key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
+    )
+
+    joined = left.sorted_merge_join(right, left_key=lambda x: x["id"], right_key=lambda x: x["id"], how="inner")
+
+    # Empty dataset creates 0 shards, non-empty creates N shards - this is a mismatch
+    with pytest.raises(ValueError, match="Sorted merge join requires equal shard counts"):
+        list(backend.execute(joined))
+
+
+def test_map_shard_stateful_deduplication(backend):
+    """Test map_shard for stateful within-shard deduplication."""
+
+    def deduplicate_shard(items):
+        seen = set()
+        for item in items:
+            key = item["id"]
+            if key not in seen:
+                seen.add(key)
+                yield item
+
+    data = [
+        {"id": 1, "val": "a"},
+        {"id": 2, "val": "b"},
+        {"id": 1, "val": "c"},  # Duplicate
+        {"id": 3, "val": "d"},
+        {"id": 2, "val": "e"},  # Duplicate
+    ]
+
+    ds = Dataset.from_list([data]).flat_map(lambda x: x).map_shard(deduplicate_shard)
+    result = sorted(list(backend.execute(ds)), key=lambda x: x["id"])
+
+    # Should keep first occurrence of each id
+    assert len(result) == 3
+    assert result[0] == {"id": 1, "val": "a"}
+    assert result[1] == {"id": 2, "val": "b"}
+    assert result[2] == {"id": 3, "val": "d"}
+
+
+def test_map_shard_empty_result(backend):
+    """Test map_shard that filters everything out."""
+
+    def filter_all(items):
+        for _ in items:
+            pass  # Consume but don't yield
+        return iter([])  # Return empty iterator
+
+    ds = Dataset.from_list([list(range(1, 6))]).flat_map(lambda x: x).map_shard(filter_all)
+    result = list(backend.execute(ds))
+    assert result == []
+
+
+def test_map_shard_error_propagation(backend):
+    """Test that exceptions in map_shard functions propagate correctly."""
+
+    def failing_generator(items):
+        for item in items:
+            if item == 3:
+                raise ValueError("Test error")
+            yield item
+
+    ds = Dataset.from_list([list(range(1, 6))]).flat_map(lambda x: x).map_shard(failing_generator)
+
+    with pytest.raises(ValueError, match="Test error"):
+        list(backend.execute(ds))
+
+
+class CallCounter:
+    """Helper to track function calls across test scenarios."""
+
+    def __init__(self):
+        self.flat_map_count = 0
+        self.map_count = 0
+        self.processed_ids = []
+
+    def reset(self):
+        self.flat_map_count = 0
+        self.map_count = 0
+        self.processed_ids = []
+
+    def counting_flat_map(self, path):
+        self.flat_map_count += 1
+        return load_file(path)
+
+    def counting_map(self, x):
+        self.map_count += 1
+        self.processed_ids.append(x["id"])
+        return {**x, "processed": True}
+
+
+def test_skip_existing_clean_run(tmp_path):
+    """Test skip_existing with no existing files - all shards process."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # Create input files
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    for i in range(3):
+        with open(input_dir / f"input-{i}.jsonl", "w") as f:
+            f.write(f'{{"id": {i}}}\n')
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_files(f"{input_dir}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert all(Path(p).exists() for p in result)
+    assert counter.flat_map_count == 3  # All files loaded
+    assert counter.map_count == 3  # All items mapped
+    assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
+
+
+def test_skip_existing_one_file_exists(tmp_path):
+    """Test skip_existing with one output file existing - only that shard skips."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # Create input files
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    for i in range(3):
+        with open(input_dir / f"input-{i}.jsonl", "w") as f:
+            f.write(f'{{"id": {i}}}\n')
+
+    # Manually create one output file (shard 1)
+    with open(output_dir / "output-00001.jsonl", "w") as f:
+        f.write('{"id": 1, "processed": true}\n')
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_files(f"{input_dir}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert all(Path(p).exists() for p in result)
+    assert counter.flat_map_count == 2  # Only 2 files loaded (shard 1 skipped)
+    assert counter.map_count == 2  # Only 2 items mapped
+    assert sorted(counter.processed_ids) == [0, 2]  # Only shards 0 and 2 ran
+
+
+def test_skip_existing_all_files_exist(tmp_path):
+    """Test skip_existing with all output files existing - all shards skip."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # Create input files
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    for i in range(3):
+        with open(input_dir / f"input-{i}.jsonl", "w") as f:
+            f.write(f'{{"id": {i}}}\n')
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_files(f"{input_dir}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    # First run: create all output files
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.flat_map_count == 3
+    assert counter.map_count == 3
+    assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
+
+    # Second run: all files exist, nothing should process
+    counter.reset()
+    ds = (
+        Dataset.from_files(f"{input_dir}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.flat_map_count == 0  # Nothing loaded
+    assert counter.map_count == 0  # Nothing mapped
+    assert counter.processed_ids == []  # No shards ran
+
+
+def test_skip_existing_parquet(tmp_path):
+    """Test skip_existing works with parquet files."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_list([{"id": 1}, {"id": 2}, {"id": 3}])
+        .map(counter.counting_map)
+        .write_parquet(str(output_dir / "output-{shard:05d}.parquet"), skip_existing=True)
+    )
+
+    # First run
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.map_count == 3
+    assert sorted(counter.processed_ids) == [1, 2, 3]  # All shards ran
+
+    # Second run: should skip
+    counter.reset()
+    ds = (
+        Dataset.from_list([{"id": 1}, {"id": 2}, {"id": 3}])
+        .map(counter.counting_map)
+        .write_parquet(str(output_dir / "output-{shard:05d}.parquet"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.map_count == 0
+    assert counter.processed_ids == []  # No shards ran

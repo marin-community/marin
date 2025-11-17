@@ -103,7 +103,6 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                         upper_threshold=versioned(0.9),  # Upper bound
                     ),
                 ],
-                ray_memory_limit_gb=12,
             ),
             pip_dependency_groups=["ddsketch", "lz4"],
         )

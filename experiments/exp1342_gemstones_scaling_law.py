@@ -45,7 +45,7 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter
 
 from experiments.defaults import default_tokenize, default_validation_sets
 from experiments.models import ModelConfig, download_model_step
-from marin.download.huggingface.download import DownloadConfig, download
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
@@ -183,7 +183,7 @@ def get_all_eval_sets(tokenizer):
     eval_sets = default_validation_sets(tokenizer=versioned(tokenizer))
     md3_raw = ExecutorStep(
         name="raw/WillHeld/MD3",
-        fn=download,
+        fn=download_hf,
         config=DownloadConfig(
             hf_dataset_id="WillHeld/MD3",
             revision=versioned("7c74e59"),
@@ -216,7 +216,7 @@ def get_all_eval_sets(tokenizer):
     if CAN_ACCESS_ICE:
         ice_raw = ExecutorStep(
             name="raw/WillHeld/ICE",
-            fn=download,
+            fn=download_hf,
             config=DownloadConfig(
                 hf_dataset_id="WillHeld/ICE_Cleaned",
                 revision=versioned("4c09dd9"),
@@ -247,7 +247,7 @@ def get_all_eval_sets(tokenizer):
 
     subreddits_raw = ExecutorStep(
         name="raw/WillHeld/paloma_subreddits",
-        fn=download,
+        fn=download_hf,
         config=DownloadConfig(
             hf_dataset_id="WillHeld/paloma_subreddits",
             revision=versioned("9561a2b"),
@@ -278,7 +278,7 @@ def get_all_eval_sets(tokenizer):
 
     pls_raw = ExecutorStep(
         name="raw/WillHeld/paloma_programming_languages",
-        fn=download,
+        fn=download_hf,
         config=DownloadConfig(
             hf_dataset_id="WillHeld/paloma_programming_languages",
             revision=versioned("6c08b5f"),

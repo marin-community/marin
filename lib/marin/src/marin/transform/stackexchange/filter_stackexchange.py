@@ -87,7 +87,7 @@ def filter_stackexchange(config: FilterStackExchangeConfig):
     backend = flow_backend()
 
     pipeline = (
-        Dataset.from_files(config.input_path, "*.jsonl.gz")
+        Dataset.from_files(f"{config.input_path}/*.jsonl.gz")
         .flat_map(lambda path: _process_file_with_filtering(path, config))
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
