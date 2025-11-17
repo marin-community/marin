@@ -87,6 +87,7 @@ def convert_rollout_to_training_format(rollout: Rollout, advantage: float, max_t
         "loss_masks": loss_mask,
         "policy_logprobs": policy_logprob,
         "temperature": rollout.temperature,
+        "truncated": rollout.is_truncated,
     }
 
 
@@ -136,6 +137,8 @@ def create_training_batch_from_rollouts(
         loss_masks=hax.named(stacked["loss_masks"], ["batch", "position"]),
         policy_logprobs=hax.named(stacked["policy_logprobs"], ["batch", "position"]),
         temperature=hax.named(stacked["temperature"], ["batch"]),
+        truncated=hax.named(stacked["truncated"], ["batch"]),
+        max_output_tokens=max_tokens,
     )
 
     return batch

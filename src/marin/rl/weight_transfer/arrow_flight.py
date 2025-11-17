@@ -28,6 +28,7 @@ We can likely extract a bit more performance by:
 
 import dataclasses
 import logging
+import math
 import os
 import socket
 import threading
@@ -136,7 +137,7 @@ def state_dict_to_batches(
             total_parts = 1
         else:
             assert value.ndim == 1, f"Expected flattened array for parameter {value.shape}"
-            splits = np.array_split(value, max(1, value.size // MAX_ELEMENTS_PER_RECORD))
+            splits = np.array_split(value, max(1, math.ceil(value.size / MAX_ELEMENTS_PER_RECORD)))
             total_parts = len(splits)
 
         # Create batches for each split

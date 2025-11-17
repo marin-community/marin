@@ -80,6 +80,9 @@ class Rollout(eqx.Module):
     temperature: float
     """The temperature used to sample the response."""
 
+    is_truncated: bool
+    """True if the rollout was truncated due to length. False otherwise."""
+
     metadata: RolloutMetadata = RolloutMetadata()
     """Metadata about when/where this rollout was generated."""
 
@@ -116,7 +119,9 @@ class TrainingBatch(eqx.Module):
     loss_weights: ht.Float[NamedArray, "batch position"]
     loss_masks: ht.Int[NamedArray, "batch position"]
     policy_logprobs: ht.Float[NamedArray, "batch position"]
-    temperature: ht.Float[NamedArray, "batch"]
+    temperature: ht.Float[NamedArray, "batch"]  # noqa: F821
+    truncated: jax.Array  # [batch] # Make this haxtyped array?
+    max_output_tokens: int
 
     def __len__(self) -> int:
         return self.input_ids.axis_size("batch")

@@ -134,6 +134,7 @@ MODEL_MAPPINGS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
     "Qwen/Qwen3-0.6B": levanter_qwen_to_vllm_mapping(),
     "Qwen/Qwen3-1.7B": levanter_qwen_to_vllm_mapping(),
     "meta-llama/Llama-3.1-8B-Instruct": levanter_llama_to_vllm_mapping(),
+    "Qwen/Qwen3-8B": levanter_qwen_to_vllm_mapping(),
 }
 
 MODEL_TRANSPOSE_KEYS: dict[str, tuple[int, ...]] = {
@@ -142,6 +143,7 @@ MODEL_TRANSPOSE_KEYS: dict[str, tuple[int, ...]] = {
     "Qwen/Qwen3-0.6B": llama_transpose_keys,
     "Qwen/Qwen3-1.7B": llama_transpose_keys,
     "meta-llama/Llama-3.1-8B-Instruct": llama_transpose_keys,
+    "Qwen/Qwen3-8B": llama_transpose_keys,
 }
 
 

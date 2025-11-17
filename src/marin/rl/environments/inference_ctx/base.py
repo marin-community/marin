@@ -131,6 +131,7 @@ class BaseInferenceContext:
             logger.error(f"Prompt tokenization failed for {env_example_id}")
 
         token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
+        is_truncated = choice.finish_reason == "length"
 
         return Rollout(
             env_name=env_name,
@@ -142,4 +143,5 @@ class BaseInferenceContext:
             episode_reward=float(reward),
             correctness_reward=correctness_reward,
             temperature=temperature,
+            is_truncated=is_truncated,
         )

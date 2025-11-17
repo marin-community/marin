@@ -120,7 +120,9 @@ def compute_ppo_loss_objective(
     loss_masks: jax.Array,
     *,
     clip_epsilon: float,
+    max_output_tokens: int,
     trainer_inference_importance_sampling_ratio: jax.Array | None = None,
+    response_truncated_array: jax.Array | None = None,  # [batch]
 ):
     """Compute PPO loss objective."""
     non_clipped_objective = importance_sampling_ratio * loss_weights * loss_masks
@@ -134,9 +136,12 @@ def compute_ppo_loss_objective(
     # Mean over response tokens per batch
     # loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
 
+    if response_truncated_array is not None:
+        batch_size, _ = loss_objective.shape
+        loss_objective = loss_objective * (1 - response_truncated_array.reshape(batch_size, 1))
+
     # Dr GRPO loss, token-level loss
-    MAX_OUTPUT_TOKENS = 2048
-    loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / MAX_OUTPUT_TOKENS)
+    loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / max_output_tokens)
 
     metadata = {
         "loss_max_over_batch": -jnp.max(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)),
@@ -218,6 +223,7 @@ def rloo_loss_with_importance_sampling(
     clip_epsilon: float,
     do_trainer_inference_mismatch_importance_sampling: bool = False,
     synchronous: bool = False,
+    do_overlong_filtering: bool = False,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
 
@@ -268,7 +274,9 @@ def rloo_loss_with_importance_sampling(
         loss_weights=loss_weights_array,
         loss_masks=loss_masks_array,
         clip_epsilon=clip_epsilon,
+        max_output_tokens=batch.max_output_tokens,
         trainer_inference_importance_sampling_ratio=trainer_inference_importance_sampling_ratio,
+        response_truncated_array=batch.truncated,
     )
 
     # RLOO loss with importance sampling
@@ -356,6 +364,7 @@ class RLOOLoss(RLLossModule):
     clip_epsilon: float = 0.2
     synchronous: bool = False
     do_trainer_inference_mismatch_importance_sampling: bool = False
+    do_overlong_filtering: bool = False
 
     def build(self, reference_model: eqx.Module) -> eqx.Module:
         """Initialize any learned components (e.g., value heads)."""
@@ -378,6 +387,7 @@ class RLOOLoss(RLLossModule):
                 clip_epsilon=self.clip_epsilon,
                 synchronous=self.synchronous,
                 do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
+                do_overlong_filtering=self.do_overlong_filtering,
             )
 
         return loss_fn

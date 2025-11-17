@@ -85,6 +85,15 @@ qwen3_1_7b = ModelConfig(
     checkpoint="Qwen/Qwen3-1.7B",
     config_class=Qwen3Config,
 )
+qwen3_8b = ModelConfig(
+    name="Qwen/Qwen3-8B",
+    type="qwen",
+    tokenizer="Qwen/Qwen3-8B",
+    checkpoint="Qwen/Qwen3-8B",
+    config_class=Qwen3Config,
+)
+
+
 qwen3_0_6b = ModelConfig(
     name="Qwen/Qwen3-0.6B",
     type="qwen",
@@ -130,20 +139,20 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
 
     default_sampling = SamplingParams(
         temperature=1.0,
-        n_prompts=24, # Overdo it since we know there are some with no signal?
+        n_prompts=24,  # Overdo it since we know there are some with no signal?
         n_generations_per_prompt=64,
         max_tokens=MAX_OUTPUT_TOKENS,
         # stop_tokens=stop_tokens(experiment_config.model_config.tokenizer),
         stop_tokens=None,
     )
 
-    story_sampling = SamplingParams(
-        temperature=1.0,
-        n_prompts=8,
-        n_generations_per_prompt=8,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        stop_tokens=None,
-    )
+    # story_sampling = SamplingParams(
+    #     temperature=1.0,
+    #     n_prompts=8,
+    #     n_generations_per_prompt=8,
+    #     max_tokens=MAX_OUTPUT_TOKENS,
+    #     stop_tokens=None,
+    # )
 
     lessons = {
         # "number_comparison": LessonConfig(
@@ -182,16 +191,16 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
         #     sampling_params=default_sampling,
         # ),
-        # "math_full": LessonConfig(
-        #     lesson_id="math_full",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.math_env.MathEnv",
-        #         env_args={"seed": 42},
-        #     ),
-        #     dependencies=[],
-        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
+        "math_full": LessonConfig(
+            lesson_id="math_full",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.math_env.MathEnv",
+                env_args={"seed": 42},
+            ),
+            dependencies=[],
+            # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+            sampling_params=default_sampling,
+        ),
         # "story_generation": LessonConfig(
         #     lesson_id="story_generation",
         #     env_config=EnvConfig(
@@ -201,16 +210,16 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         #     dependencies=[],
         #     sampling_params=story_sampling,
         # ),
-        "gsm8k" : LessonConfig(
-            lesson_id="gsm8k",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.gsm8k_env.GSM8KEnv",
-                env_args={"seed": 42},
-            ),
-            dependencies=[],
-            # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-            sampling_params=default_sampling,
-        ),
+        # "gsm8k" : LessonConfig(
+        #     lesson_id="gsm8k",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.gsm8k_env.GSM8KEnv",
+        #         env_args={"seed": 42},
+        #     ),
+        #     dependencies=[],
+        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+        #     sampling_params=default_sampling,
+        # ),
     }
 
     return CurriculumConfig(
@@ -343,9 +352,10 @@ def main():
     # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
     experiment_configs = [
         ExperimentConfig(
-            model_config=llama_3_1_8b,
+            # model_config=llama_3_1_8b,
             # model_config=llama1b,
             # model_config=qwen3_1_7b,
+            model_config=qwen3_8b,
             rl_loss=RLOOLoss(
                 kl_coef=0.01, clip_epsilon=0.2, synchronous=True, do_trainer_inference_mismatch_importance_sampling=True
             ),
@@ -376,7 +386,7 @@ def main():
         model_base_name = experiment_config.model_config.name.split("/")[-1].lower()
         experiments.append(
             rl_train(
-                name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-gsm8k-sync-{experiment_config.experiment_name_suffix}-{datestamp}",
+                name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-MATH-sync-{experiment_config.experiment_name_suffix}-{datestamp}",
                 experiment_config=experiment_config,
             ),
         )
