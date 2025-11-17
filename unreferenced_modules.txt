@@ -1,4 +1,5 @@
 Unreferenced marin modules:
+(Not referenced by experiments/ or infra/)
 ================================================================================
 
 marin.classifiers.bert
@@ -9,9 +10,8 @@ marin.classifiers.custom.registry
 marin.classifiers.fasttext
 marin.classifiers.fasttext.training
 marin.classifiers.fasttext.utils
-marin.classifiers.hf.launch_ray_training
 marin.classifiers.hf.monkey_patch_flash_attn
-marin.classifiers.hf.train_classifier
+marin.classifiers.types
 marin.cluster
 marin.cluster.cleanup
 marin.cluster.config
@@ -21,7 +21,6 @@ marin.cluster.monitoring
 marin.cluster.ray
 marin.core.conversation
 marin.core.data
-marin.core.runtime
 marin.crawl.common.convert_to_html
 marin.crawl.common.schemas
 marin.crawl.common.utils
@@ -48,25 +47,12 @@ marin.crawl.open_web_math.get_urls_and_scores_from_openwebmath_html
 marin.crawl.open_web_math.resample_openwebmath_urls_by_quality_score
 marin.crawl.sample_from_nonunique_outlinks
 marin.crawl.sample_from_unique_outlinks
-marin.datashop.dataset_processor
-marin.datashop.pipeline
 marin.datashop.templates
 marin.domains
 marin.domains.stackexchange
 marin.domains.stackexchange.utils
-marin.download
-marin.download.ar5iv.download
 marin.download.dclm_hq.download_dclm_hq_html
-marin.download.filesystem.transfer
-marin.download.huggingface.download_hf
-marin.download.huggingface.stream_remove_columns
-marin.download.huggingface.upload_gcs_to_hf
-marin.download.nemotron_cc.download_nemotron_cc
 marin.download.nemotron_cc.utils
-marin.download.uncheatable_eval.download
-marin.download.wikipedia.download
-marin.evaluation
-marin.evaluation.evaluation_config
 marin.evaluation.evaluators
 marin.evaluation.evaluators.alpaca_evaluator
 marin.evaluation.evaluators.evaluator
@@ -77,20 +63,12 @@ marin.evaluation.evaluators.levanter_tpu_evaluator
 marin.evaluation.evaluators.lm_evaluation_harness_evaluator
 marin.evaluation.evaluators.simple_evaluator
 marin.evaluation.evaluators.vllm_tpu_evaluator
-marin.evaluation.log_probs
-marin.evaluation.run
 marin.evaluation.utils
-marin.evaluation.visualize
-marin.execution
-marin.execution.executor
 marin.execution.executor_step_status
 marin.execution.status_actor
-marin.export
-marin.export.hf_upload
 marin.export.levanter_checkpoint
 marin.generation.chunk_utils
 marin.generation.dataset
-marin.generation.inference
 marin.generation.llm_generation
 marin.generation.pipeline
 marin.generation.ray_utils
@@ -124,20 +102,12 @@ marin.post_training.flax.utils
 marin.post_training.rl_dataset
 marin.post_training.scripts.hf_to_gcs
 marin.post_training.scripts.launcher
-marin.processing
 marin.processing.classification.autoscaler
-marin.processing.classification.bert.train_bert
 marin.processing.classification.checkpoint_utils
 marin.processing.classification.classifier
-marin.processing.classification.config.inference_config
-marin.processing.classification.consolidate
-marin.processing.classification.custom.custom_attribute
 marin.processing.classification.dataset_utils
-marin.processing.classification.dedupe
 marin.processing.classification.eval.annotations_server
 marin.processing.classification.eval.compare_classifiers
-marin.processing.classification.fasttext.train_fasttext
-marin.processing.classification.inference
 marin.processing.classification.utils
 marin.processing.open_web_math.extract
 marin.processing.open_web_math.latex_processing
@@ -147,30 +117,16 @@ marin.processing.open_web_math.text_normalizer
 marin.processing.open_web_math.tree_processing
 marin.processing.open_web_math.utils
 marin.processing.pubmed.convert
-marin.processing.tokenize
-marin.processing.tokenize.data_configs
-marin.processing.tokenize.download_pretokenized
-marin.processing.tokenize.tokenize
 marin.processing.wikipedia.convert
-marin.raw2json.huggingface.qa.raw2json
-marin.resources
 marin.resources_utils
-marin.rl.curriculum
-marin.rl.environments
 marin.rl.environments.base
-marin.rl.environments.math_env
-marin.rl.environments.mock_env
 marin.rl.environments.prime_intellect_env
 marin.rl.environments.process_vllm_results
 marin.rl.evaluate_environment
 marin.rl.inference_ctx
 marin.rl.math_utils
 marin.rl.model_utils
-marin.rl.replay_buffer
-marin.rl.rl_job
-marin.rl.rl_losses
 marin.rl.robust_actor
-marin.rl.rollout_storage
 marin.rl.rollout_worker
 marin.rl.scripts.export_env_prompts
 marin.rl.scripts.replay_completions
@@ -180,7 +136,6 @@ marin.rl.scripts.view_rollout
 marin.rl.train_batch
 marin.rl.train_worker
 marin.rl.types
-marin.rl.weight_transfer
 marin.rl.weight_transfer.arrow_flight
 marin.rl.weight_transfer.base
 marin.rl.weight_transfer.checkpoint
@@ -189,39 +144,18 @@ marin.run
 marin.run.ray_deps
 marin.run.ray_run
 marin.run.slurm_run
-marin.scaling_laws
-marin.scaling_laws.create_ladder_suite
-marin.scaling_laws.scaling_laws
 marin.scaling_laws.utils
-marin.schemas.web.convert
 marin.speedrun.create_leaderboard
 marin.speedrun.leaderboard
 marin.speedrun.paloma_local_download
 marin.speedrun.serve_leaderboard
-marin.speedrun.speedrun
-marin.tokenize.slice_cache
-marin.training
-marin.training.training
 marin.transform.ar5iv.transform
-marin.transform.ar5iv.transform_ar5iv
-marin.transform.common_pile.filter_by_extension
-marin.transform.conversation.adapters
-marin.transform.conversation.conversation_to_dolma
 marin.transform.conversation.preference_data_adapters
-marin.transform.conversation.transform_conversation
-marin.transform.conversation.transform_preference_data
 marin.transform.dolmino.filter_dolmino
 marin.transform.dolmino.transform_dclm_hq
-marin.transform.evaluation.eval_to_dolma
-marin.transform.fasttext.transform
-marin.transform.fineweb.process_parquet_fw
 marin.transform.lingoly.to_dolma
-marin.transform.medical.lavita_to_dolma
 marin.transform.simple_html_to_md.process
 marin.transform.stackexchange.filter_stackexchange
-marin.transform.stackexchange.transform_stackexchange
-marin.transform.wikipedia.transform_wikipedia
-marin.utilities
 marin.utilities.dataclass_utils
 marin.utilities.executor_utils
 marin.utilities.fn_utils
@@ -231,7 +165,6 @@ marin.utilities.metrics_utils
 marin.utilities.ray_utils
 marin.utilities.storage_transfer_utils
 marin.utilities.validation_utils
-marin.utilities.wandb_utils
 marin.validate.validate
 marin.validation.check_equality
 marin.validation.count_total_tokens
@@ -246,6 +179,6 @@ marin.web.utils
 SUMMARY
 ================================================================================
 Total marin modules:               245
-Modules referenced by experiments: 5
-Unreferenced modules:              240
-Coverage:                          2.0%
+Modules referenced by seed files:  73
+Unreferenced modules:              172
+Coverage:                          29.8%
