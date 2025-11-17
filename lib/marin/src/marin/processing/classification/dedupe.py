@@ -179,7 +179,7 @@ def build_filter(
     config: DedupeConfig,
 ) -> str:
     """
-    Build a bloom filter from input dataset using two-phase approach.
+    Build a bloom filter from input dataset.
 
     Phase 1: Build per-shard bloom filters in parallel
     Phase 2: Merge all shard blooms and save to bloom_path
@@ -202,38 +202,71 @@ def build_filter(
             for feature in extract_features(text, config.ngram):
                 bf.add(feature)
 
-        # Serialize to bytes using rbloom's save_bytes
         yield bf.save_bytes()
 
     all_files = collect_input_files(input_path)
 
-    # Execute phase 1: parallel shard bloom building
-    shard_blooms_data = list(
-        flow_backend().execute(
-            Dataset.from_iterable(all_files)
-            .flat_map(lambda path: load_file(path, columns=[config.text_field]))
-            .reshard(num_shards=config.processes)
-            .map_shard(build_shard_bloom)
-        )
+    # Build bloom filters for all shards in parallel
+    shard_blooms_data = flow_backend().execute(
+        Dataset.from_iterable(all_files)
+        .reshard(num_shards=config.processes)
+        .flat_map(lambda path: load_file(path, columns=[config.text_field]))
+        .map_shard(build_shard_bloom)
+        .write_binary(f"{bloom_path}-shard-{{shard:05d}}-of-{{total:05d}}.bin")
     )
 
-    # Phase 2: Merge all shard blooms
-    merged_bloom = None
-    for bloom_bytes in shard_blooms_data:
-        shard_bloom = Bloom.load_bytes(bloom_bytes, hash_func=_bloom_hash)
-        if merged_bloom is None:
-            merged_bloom = shard_bloom
-        else:
+    if len(shard_blooms_data) == 1:
+        return shard_blooms_data[0]
+
+    def _merge_bloom(bloom_files: Iterator[str]):
+        merged_bloom = Bloom(config.estimated_doc_count, config.false_positive_rate, hash_func=_bloom_hash)
+        for bloom_file_path in bloom_files:
+            with open(bloom_file_path, "rb") as f:
+                bloom_bytes = f.read()
+            shard_bloom = Bloom.load_bytes(bloom_bytes, hash_func=_bloom_hash)
             merged_bloom.union(shard_bloom)
+        yield merged_bloom.save_bytes()
 
-    merged_bloom.save(bloom_path)
+    # fold over shard blooms to merge into single bloom, using map_shard
+    merged_bloom = flow_backend().execute(
+        Dataset.from_iterable(shard_blooms_data).map_shard(_merge_bloom).write_binary(bloom_path)
+    )
 
-    return bloom_path
+    return merged_bloom[0]
+
+
+def calculate_paragraph_overlap(paragraph: str, bloom_filter: Bloom, ngram_config: NGramConfig | None) -> float:
+    """
+    Calculate overlap score for a paragraph against a bloom filter.
+
+    Uses n-gram matching if ngram_config is provided, otherwise exact paragraph matching.
+    For paragraphs too short for n-grams, falls back to exact matching.
+
+    Args:
+        paragraph: Text paragraph to check
+        bloom_filter: Bloom filter to check against
+        ngram_config: N-gram configuration, or None for exact paragraph matching
+
+    Returns:
+        Overlap score between 0.0 and 1.0
+    """
+    if ngram_config:
+        ngrams = list(extract_ngrams(paragraph, ngram_config.ngram_length, ngram_config.stride))
+        if not ngrams:
+            # Paragraph too short for n-grams - fall back to exact paragraph matching
+            return 1.0 if paragraph in bloom_filter else 0.0
+        else:
+            # N-gram matching
+            matches = sum(1 for ng in ngrams if ng in bloom_filter)
+            return matches / len(ngrams)
+    else:
+        # Exact paragraph matching
+        return 1.0 if paragraph in bloom_filter else 0.0
 
 
 def mark_duplicates(record: dict, bloom_filter: Bloom, config: "DedupeConfig") -> dict:
     """
-    Mark duplicate spans in a record using bloom filter (read-only).
+    Mark duplicate spans in a record using bloom filter.
 
     Args:
         record: Input record with text field
@@ -283,50 +316,22 @@ def apply_filter(
         List of output file paths
     """
 
-    def apply_bloom(record: dict) -> dict:
+    def apply_bloom_to_shard(records: Iterator[dict]) -> Iterator[dict]:
         bf = Bloom.load(bloom_path, hash_func=_bloom_hash)
-        return mark_duplicates(record, bf, config)
+        for record in records:
+            yield mark_duplicates(record, bf, config)
 
     all_files = collect_input_files(input_path)
 
     ds = (
         Dataset.from_iterable(all_files)
         .flat_map(lambda path: load_file(path))
-        .map(apply_bloom)
+        .map_shard(apply_bloom_to_shard)
         .write_jsonl(f"{output_path}/shard-{{shard:05d}}.jsonl.gz")
     )
 
     result = list(flow_backend().execute(ds))
     return result
-
-
-def calculate_paragraph_overlap(paragraph: str, bloom_filter: Bloom, ngram_config: NGramConfig | None) -> float:
-    """
-    Calculate overlap score for a paragraph against a bloom filter.
-
-    Uses n-gram matching if ngram_config is provided, otherwise exact paragraph matching.
-    For paragraphs too short for n-grams, falls back to exact matching.
-
-    Args:
-        paragraph: Text paragraph to check
-        bloom_filter: Bloom filter to check against
-        ngram_config: N-gram configuration, or None for exact paragraph matching
-
-    Returns:
-        Overlap score between 0.0 and 1.0
-    """
-    if ngram_config:
-        ngrams = list(extract_ngrams(paragraph, ngram_config))
-        if not ngrams:
-            # Paragraph too short for n-grams - fall back to exact paragraph matching
-            return 1.0 if paragraph in bloom_filter else 0.0
-        else:
-            # N-gram matching
-            matches = sum(1 for ng in ngrams if ng in bloom_filter)
-            return matches / len(ngrams)
-    else:
-        # Exact paragraph matching
-        return 1.0 if paragraph in bloom_filter else 0.0
 
 
 def _str_hash(s: str) -> str:
@@ -395,7 +400,7 @@ def _run_deduplication(config: DedupeConfig):
                 print(record["id"], hash_val, dup_map)
                 if hash_val in dup_map:
                     if record["id"] != dup_map[hash_val]["canonical"]:
-                        spans.append([offset, offset + len(para)])
+                        spans.append([offset, offset + len(para), 1.0])
                 offset = offset + len(para) + 1  # +1 for newline
 
             yield {
@@ -433,11 +438,7 @@ def _run_decontamination(config: DedupeConfig):
         raise ValueError("decontaminate_source is required in DECONTAMINATE mode")
 
     bloom_path = os.path.join(config.output_path, "bloom", "filter.bin")
-
-    # Step 1: Build filter from contamination source
-    build_filter(config.decontaminate_source, bloom_path, config)
-
-    # Step 2: Apply filter to input (read-only)
+    bloom_path = build_filter(config.decontaminate_source, bloom_path, config)
     apply_filter(config.input_path, bloom_path, config.output_path, config)
 
     return {
@@ -481,9 +482,7 @@ def _run_train_test_overlap(config: DedupeConfig):
         )
 
         bloom_path = os.path.join(config.output_path, "bloom", f"{ngram_len}.bin")
-
-        # Step 1: Build filter from training data
-        build_filter(config.decontaminate_source, bloom_path, train_config)
+        bloom_path = build_filter(config.decontaminate_source, bloom_path, train_config)
 
         # Step 2: Apply filter to test data
         test_config = DedupeConfig(

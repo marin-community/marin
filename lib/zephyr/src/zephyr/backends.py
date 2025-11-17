@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from hashlib import blake2b
 from itertools import groupby, islice
 from typing import Any, TypeVar
+from collections.abc import Sequence
 
 import fsspec
 import msgspec
@@ -53,7 +54,7 @@ from zephyr.dataset import (
     WriteDataOp,
 )
 
-from .writers import write_jsonl_file, write_levanter_cache, write_parquet_file
+from .writers import write_binary_file, write_jsonl_file, write_levanter_cache, write_parquet_file
 
 logger = logging.getLogger(__name__)
 
@@ -421,6 +422,8 @@ def process_shard_fused(
                 result = write_parquet_file(stream_input, output_path, op.schema, op.batch_size)["path"]
             elif op.writer_type == "levanter_cache":
                 result = write_levanter_cache(stream_input, output_path, op.levanter_metadata)["path"]
+            elif op.writer_type == "binary":
+                result = write_binary_file(stream_input, output_path)["path"]
             else:
                 raise ValueError(f"Unknown writer_type: {op.writer_type}")
             yield from build_stream(iter([result]), rest, op_index + 1)
@@ -620,7 +623,7 @@ class Backend:
     def chunk_size(self) -> int:
         return self.config.chunk_size
 
-    def execute(self, dataset: Dataset, verbose: bool = False) -> Iterator:
+    def execute(self, dataset: Dataset, verbose: bool = False) -> Sequence:
         """Execute a dataset and return an iterator over results.
 
         Args:

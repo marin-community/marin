@@ -82,13 +82,13 @@ class WindowOp:
 class WriteDataOp:
     """Unified write operation for all output formats.
 
-    Supports writing to JSONL, Parquet, or Levanter cache formats.
+    Supports writing to JSONL, Parquet, Levanter cache, or binary formats.
     The writer_type determines which writer function is used.
     Supports path patterns with {shard}, {total}, {basename} substitutions.
     """
 
     output_pattern: str
-    writer_type: Literal["jsonl", "parquet", "levanter_cache"]
+    writer_type: Literal["jsonl", "parquet", "levanter_cache", "binary"]
 
     # Format-specific parameters (only used by relevant writer)
     levanter_metadata: dict[str, Any] | None = None
@@ -577,8 +577,6 @@ class Dataset(Generic[T]):
     def write_jsonl(self, output_pattern: str, skip_existing: bool = False) -> Dataset[str]:
         """Write records as JSONL files.
 
-        Compression is automatically inferred from the file extension.
-
         Args:
             output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}.jsonl.gz")
             skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
@@ -586,6 +584,18 @@ class Dataset(Generic[T]):
         return Dataset(
             self.source,
             [*self.operations, WriteDataOp(output_pattern, writer_type="jsonl", skip_existing=skip_existing)],
+        )
+
+    def write_binary(self, output_pattern: str, skip_existing: bool = False) -> Dataset[str]:
+        """Write records directly as uninterpreted binary files.
+
+        Args:
+            output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}.bin")
+            skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
+        """
+        return Dataset(
+            self.source,
+            [*self.operations, WriteDataOp(output_pattern, writer_type="binary", skip_existing=skip_existing)],
         )
 
     def write_parquet(
