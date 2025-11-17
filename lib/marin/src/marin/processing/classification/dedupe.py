@@ -166,10 +166,13 @@ def collect_input_files(input_path: str | list[str]) -> list[str]:
     input_paths = input_path if isinstance(input_path, list) else [input_path]
     all_files = []
     for path in input_paths:
+        logger.info(f"Collecting files from path: {path}")
         files = fsspec_glob(f"{path.rstrip('/')}/**/*.{{jsonl,jsonl.gz,jsonl.zst,parquet}}")
         if files:
             all_files.extend(files)
         else:
+            if not path.endswith(("jsonl", "jsonl.gz", "jsonl.zst", "parquet")):
+                raise FileNotFoundError(f"No files found in path: {path}")
             all_files.append(path)  # Assume it's a single file
     return all_files
 

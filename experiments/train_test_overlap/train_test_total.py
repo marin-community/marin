@@ -52,8 +52,9 @@ import ray
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 
-from experiments.midtraining_datasets import finemath_3_plus
-from experiments.pretraining_datasets import dclm_baseline, dolmino, nemotron_cc, proofpile_2, starcoderdata
+from experiments.pretraining_datasets import (
+    math_reasoning,
+)
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
 # Configure logging
@@ -84,70 +85,43 @@ class DatasetConfig:
 
 
 @ray.remote
-def run_train_test_overlap(
-    dataset_dir: str,
-    output_path: str,
-    eval_dataset_steps: list[ExecutorStep],
-    text_field: str = "text",
-    processes: int = 15,
-) -> str:
-    """
-    Run train-test overlap detection for a entire dataset.
-
-    Args:
-        dataset_dir: Path to the training dataset directory
-        output_path: Base output directory for results
-        eval_dataset_steps: Evaluation dataset steps for path resolution
-        text_field: Name of the text field in the data files
-        processes: Number of parallel processes for Zephyr backend
-
-    Returns:
-        Output path where results were written
-    """
-    logger.info(f"Running train-test overlap for dataset at {dataset_dir}")
-
-    dedupe_config = DedupeConfig(
-        input_path=eval_dataset_steps,
-        output_path=output_path,
-        decontaminate_source=dataset_dir,
-        attribute_name="ngram_overlap",
-        false_positive_rate=1e-20,
-        ngram=DEFAULT_NGRAM_CONFIG,
-        processes=processes,
-        mode=DedupMode.TRAIN_TEST_OVERLAP,
-        text_field=text_field,
-    )
-
-    logger.info(f"Calling dedupe with {processes} processes for Zephyr backend")
-    dedupe(dedupe_config)
-
-    logger.info(f"Train-test overlap completed! Results written to {output_path}")
-    return output_path
+def run_train_test_overlap(config: DedupeConfig) -> str:
+    logger.info(f"Starting train-test overlap dedupe with config: {config}")
+    dedupe(config)
+    logger.info(f"Train-test overlap completed! Results written to {config.output_path}")
+    return config.output_path
 
 
 # starcoder is parquet with 'content' as text key
 # finemath is parquet with 'text' as text key
 DATASET_CONFIGS = [
-    DatasetConfig(name="finemath", path=finemath_3_plus, text_field="text"),
-    DatasetConfig(name="dclm", path=dclm_baseline),
-    DatasetConfig(name="starcoder", path=starcoderdata, text_field="content"),
-    DatasetConfig(name="proofpile", path=proofpile_2),
-    DatasetConfig(name="dolmino", path=dolmino),
-    DatasetConfig(name="nemotron_cc", path=nemotron_cc),
+    # DatasetConfig(name="finemath", path=finemath_3_plus, text_field="text"),
+    # DatasetConfig(name="dclm", path=dclm_baseline),
+    # DatasetConfig(name="starcoder", path=starcoderdata, text_field="content"),
+    # DatasetConfig(name="proofpile", path=proofpile_2),
+    DatasetConfig(name="math_reasoning", path=math_reasoning, text_field="generated_solution"),
+    # DatasetConfig(name="dolmino", path=dolmino),
+    # DatasetConfig(name="nemotron_cc", path=nemotron_cc),
 ]
 
 
 def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
+    dedupe_config = DedupeConfig(
+        input_path=EVAL_DATASET_STEPS,
+        output_path=this_output_path(),
+        decontaminate_source=dataset_config.path,
+        attribute_name="ngram_overlap",
+        false_positive_rate=1e-20,
+        ngram=DEFAULT_NGRAM_CONFIG,
+        processes=15,
+        mode=DedupMode.TRAIN_TEST_OVERLAP,
+        text_field=dataset_config.text_field,
+    )
+
     return ExecutorStep(
         name=f"train_test_overlap/dolma/total/{dataset_config.name}",
         fn=run_train_test_overlap,
-        config={
-            "dataset_dir": dataset_config.path,
-            "output_path": this_output_path(),
-            "eval_dataset_steps": EVAL_DATASET_STEPS,
-            "text_field": dataset_config.text_field,
-            "processes": 15,
-        },
+        config=dedupe_config,
         description=f"Run dedupe train-test overlap on {dataset_config.name}",
         pip_dependency_groups=["quality_dedup_consolidate"],
     )
