@@ -556,13 +556,15 @@ def main(config: TrainingConfig):
         prefill_model = build_prefill_model(llama_config, config)
 
         tokenizer = load_tokenizer(model_paths, config.model.tokenizer_override)
+        # TODO (Kevin): Update end_of_message_token if using non-Llama models
+        end_of_message_token = tokenizer.encode("<|eot_id|>", add_special_tokens=False)[0]
 
         # Initialize environment with tokenization parameters
         train_environments = load_environments_from_config(
-            Path(__file__).resolve().parent / config.environment.train_environments_path, tokenizer
+            Path(__file__).resolve().parent / config.environment.train_environments_path, tokenizer, end_of_message_token
         )
         test_environments = load_environments_from_config(
-            Path(__file__).resolve().parent / config.environment.test_environments_path, tokenizer
+            Path(__file__).resolve().parent / config.environment.test_environments_path, tokenizer, end_of_message_token
         )
 
         # Initialize logger

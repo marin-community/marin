@@ -5,6 +5,8 @@ from functools import partial
 from typing import Literal, Sequence, cast
 
 from datasets import Dataset, concatenate_datasets, get_dataset_config_names, load_dataset
+from transformers import PreTrainedTokenizer
+
 from .math_grading import (
     extract_boxed,
     grade_answer,
@@ -110,3 +112,28 @@ def _get_hendrycks_math_train() -> Dataset:
     full_dataset = concatenate_datasets(pieces)
 
     return full_dataset
+
+
+# Adapted from https://github.com/thinking-machines-lab/tinker-cookbook/blob/20e26a629797188aa8c6f34474b0d4757b20b90d/tinker_cookbook/renderers.py#L165
+def parse_response_for_stop_token(
+    response: list[int], tokenizer: PreTrainedTokenizer, stop_token: int
+) -> tuple[str, bool]:
+    """Parse response for a single stop token.
+
+    We expect a properly rendered response to have exactly one stop token; but it may have zero if e.g. the model
+    ran out of tokens when sampling, which will incur a format error. If there are > 1, there is likely a bug in the
+    sampler and we should error.
+    """
+    emt_count = response.count(stop_token)
+    if emt_count == 0:
+        str_response = tokenizer.decode(response)
+        logger.debug(f"Response is not a valid assistant response: {str_response}")
+        return str_response, False
+    elif emt_count == 1:
+        str_response = tokenizer.decode(response[: response.index(stop_token)])
+        return str_response, True
+    else:
+        raise ValueError(
+            f"When parsing response, expected to split into 1 or 2 pieces using stop tokens, but got {emt_count}. "
+            "You probably are using the wrong stop tokens when sampling"
+        )

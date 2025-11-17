@@ -204,8 +204,10 @@ def test_environment_loading():
     tokenizer = load_tokenizer(model_paths, tokenizer_override)
 
     # Load environments
+    # TODO (Kevin): Update end_of_message_token if using non-Llama models
+    end_of_message_token = tokenizer.encode("<|eot_id|>", add_special_tokens=False)[0]
     env_config_path = Path(__file__).parent.parent.parent / "src" / "marin" / "post_training" / "environments_test.json"
-    environments = load_environments_from_config(env_config_path, tokenizer)
+    environments = load_environments_from_config(env_config_path, tokenizer, end_of_message_token)
 
     assert len(environments) == 1
     env_name, env = environments[0]

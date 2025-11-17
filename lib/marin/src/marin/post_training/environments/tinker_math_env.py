@@ -25,6 +25,7 @@ from marin.post_training.tinker_environments.math_env import (
     MathEnv as TinkerMathEnvBase,
     _get_hendrycks_math_test,
     _get_hendrycks_math_train,
+    parse_response_for_stop_token,
 )
 from marin.post_training.tinker_environments.math_grading import extract_boxed, grade_answer, normalize_answer
 
@@ -53,12 +54,14 @@ class TinkerMathEnv(MarinEnv):
     def __init__(
         self,
         tokenizer,
+        end_of_message_token: int,
         grader: Literal["sympy", "math_verify"] = "sympy",
         timeout: float = 1.0,
         format_coef: float = 0.1,
         **kwargs,
     ):
         self.tokenizer = tokenizer
+        self.end_of_message_token = end_of_message_token
         self.grader = grader
         self.timeout = timeout
         self.format_coef = format_coef
@@ -165,14 +168,14 @@ class TinkerMathEnv(MarinEnv):
             group_format_rewards = []
             group_correct_rewards = []
             for j, inner_response in enumerate(response):
+                # Follows: https://github.com/thinking-machines-lab/tinker-cookbook/blob/5469e4a2453cf8ecd950a0e66f5bb0a1ee898b9a/tinker_cookbook/rl/problem_env.py#L62
                 all_lens.append(len(inner_response["tokens"]))
-                decoded_response = tokenizer.decode(inner_response["tokens"], skip_special_tokens=True)
+                decoded_response, parse_success = parse_response_for_stop_token(inner_response["tokens"], self.tokenizer, self.end_of_message_token)
 
                 true_answer = examples[i]["answer"].strip()
 
-                # Follows: https://github.com/thinking-machines-lab/tinker-cookbook/blob/5469e4a2453cf8ecd950a0e66f5bb0a1ee898b9a/tinker_cookbook/rl/problem_env.py#L62
                 # Check format using Tinker's extract_boxed
-                format_valid = float(self.check_format(decoded_response))
+                format_valid = float(parse_success) and float(self.check_format(decoded_response))
 
                 # Grade using Tinker's grading
                 correct_answer = float(self.check_answer(decoded_response, true_answer))

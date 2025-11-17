@@ -66,7 +66,7 @@ def str_to_val(v: str) -> Any:
         return v
 
 
-def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer):
+def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer, end_of_message_token: int):
     """
     Instantiate an environment from a spec string like 'OlymMathEnv:difficulty=easy,language=en'
     """
@@ -82,10 +82,10 @@ def load_environment_from_spec(spec: str, tokenizer: AutoTokenizer):
                 continue
             key, value = map(str.strip, pair.split("="))
             kwargs[key] = str_to_val(value)
-    return env_cls(tokenizer=tokenizer, **kwargs)
+    return env_cls(tokenizer=tokenizer, end_of_message_token=end_of_message_token, **kwargs)
 
 
-def load_environments_from_config(json_path: PathLike, tokenizer: AutoTokenizer):
+def load_environments_from_config(json_path: PathLike, tokenizer: AutoTokenizer, end_of_message_token: int):
     """
     Load environment entries from a JSON config file.
 
@@ -102,5 +102,5 @@ def load_environments_from_config(json_path: PathLike, tokenizer: AutoTokenizer)
     for entry in entries:
         if "environment" not in entry:
             raise ValueError("Each entry must have an 'environment' field.")
-        envs.append((entry["environment"], load_environment_from_spec(entry["environment"], tokenizer)))
+        envs.append((entry["environment"], load_environment_from_spec(entry["environment"], tokenizer, end_of_message_token)))
     return envs
