@@ -1,0 +1,28 @@
+name: Marin - Lint and Format Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-format:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install uv and Python
+      uses: astral-sh/setup-uv@v6
+      with:
+        version: "0.7.20"
+        python-version: "3.11"
+        enable-cache: true
+
+    - name: Set up Python
+      run: uv python install
+
+    - name: Run pre-commit checks
+      run: uv run python infra/pre-commit.py --all-files
