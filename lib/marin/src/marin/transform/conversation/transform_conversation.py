@@ -215,7 +215,7 @@ def copy_dataset_from_gcp_to_local(input_gcp_path: os.PathLike) -> os.PathLike:
         parsed_url = urlparse(input_gcp_path)
         bucket = parsed_url.netloc
         gcp_path = parsed_url.path.lstrip("/")
-        local_dir_path = os.path.join("/dev/shm", os.path.basename(gcp_path))
+        local_dir_path = os.path.join("/tmp", os.path.basename(gcp_path))
         # download the repo from GCP path into local directory which is basename of provided path (e.g. mmlu)
         try:
             download_directory_from_gcs(bucket, gcp_path, local_dir_path)

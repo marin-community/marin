@@ -43,7 +43,7 @@ from tqdm_loggable.auto import tqdm
 
 import haliax
 from haliax import Axis
-from haliax.partitioning import ResourceMapping
+from haliax.partitioning import ResourceMapping, round_axis_for_partitioning
 from haliax.state_dict import from_torch_compatible_state_dict, save_state_dict
 
 from levanter.callbacks import StepInfo
@@ -284,6 +284,147 @@ def _to_state_dict_with_dtype(
     state_dict = jax.lax.with_sharding_constraint(state_dict, PartitionSpec())
 
     return state_dict
+
+
+def _detect_vocab_size_from_state_dict(
+    state_dict: dict[str, Array | ShapeDtypeStruct], ignore_prefix: Optional[str] = None
+) -> Optional[int]:
+    """
+    Detect the actual vocab size from state dict weights by looking for common embedding/lm_head weight keys.
+    Returns None if no vocab-sized weights are found.
+    """
+    # Common keys that have vocab size as first dimension (without prefix)
+    base_vocab_size_keys = [
+        "lm_head.weight",
+        "model.embed_tokens.weight",
+        "embed_tokens.weight",
+        "transformer.wte.weight",
+        "wte.weight",
+        "embeddings.token_embeddings.weight",
+    ]
+
+    # Build list of keys to check, including with prefix if provided
+    vocab_size_keys = list(base_vocab_size_keys)
+    if ignore_prefix:
+        vocab_size_keys.extend([f"{ignore_prefix}.{k}" for k in base_vocab_size_keys])
+
+    for key in vocab_size_keys:
+        if key in state_dict:
+            weight = state_dict[key]
+            # Handle both JAX arrays and ShapeDtypeStruct
+            if hasattr(weight, "shape"):
+                shape = weight.shape
+            elif hasattr(weight, "get_shape"):
+                shape = weight.get_shape()
+            else:
+                continue
+
+            if len(shape) >= 2:
+                # First dimension is vocab size for embedding/lm_head weights
+                vocab_size = shape[0]
+                logger.debug(f"Detected vocab size {vocab_size} from state dict key '{key}' with shape {shape}")
+                return int(vocab_size)
+
+    # If no standard keys found, try to find any 2D weight with vocab-like first dimension
+    # (fallback for unusual model architectures)
+    # Check keys that might have the prefix stripped or not
+    for key, weight in state_dict.items():
+        # Skip if key starts with ignore_prefix (we already checked those)
+        if ignore_prefix and key.startswith(f"{ignore_prefix}."):
+            key_without_prefix = key[len(ignore_prefix) + 1 :]
+        else:
+            key_without_prefix = key
+
+        if "embed" in key_without_prefix.lower() or "lm_head" in key_without_prefix.lower() or "vocab" in key_without_prefix.lower():
+            if hasattr(weight, "shape"):
+                shape = weight.shape
+            elif hasattr(weight, "get_shape"):
+                shape = weight.get_shape()
+            else:
+                continue
+
+            if len(shape) == 2:
+                vocab_size = shape[0]
+                logger.debug(f"Detected vocab size {vocab_size} from state dict key '{key}' with shape {shape}")
+                return int(vocab_size)
+
+    logger.warning("Could not detect vocab size from state dict weights")
+    return None
+
+
+def _pad_vocab_weights_in_state_dict(
+    state_dict: dict[str, Array | ShapeDtypeStruct],
+    actual_vocab_size: int,
+    target_vocab_size: int,
+    ignore_prefix: Optional[str] = None,
+) -> dict[str, Array | ShapeDtypeStruct]:
+    """
+    Pad vocab-sized weights in the state dict from actual_vocab_size to target_vocab_size.
+    This is needed when we need to round the vocab size for partitioning but the checkpoint
+    has the unrounded size.
+    """
+    if actual_vocab_size >= target_vocab_size:
+        return state_dict
+
+    # Common keys that have vocab size as first dimension (without prefix)
+    base_vocab_size_keys = [
+        "lm_head.weight",
+        "model.embed_tokens.weight",
+        "embed_tokens.weight",
+        "transformer.wte.weight",
+        "wte.weight",
+        "embeddings.token_embeddings.weight",
+    ]
+
+    # Build list of keys to check, including with prefix if provided
+    vocab_size_keys = list(base_vocab_size_keys)
+    if ignore_prefix:
+        vocab_size_keys.extend([f"{ignore_prefix}.{k}" for k in base_vocab_size_keys])
+
+    padded_state_dict = state_dict.copy()
+    padding_size = target_vocab_size - actual_vocab_size
+
+    for key in vocab_size_keys:
+        if key in padded_state_dict:
+            weight = padded_state_dict[key]
+            # Handle both JAX arrays, numpy arrays, and ShapeDtypeStruct
+            if hasattr(weight, "shape"):
+                shape = weight.shape
+                if len(shape) >= 2 and shape[0] == actual_vocab_size:
+                    # This is a vocab-sized weight that needs padding
+                    if isinstance(weight, (jnp.ndarray, np.ndarray)):
+                        # Pad with zeros (these tokens won't be used)
+                        pad_shape = (padding_size,) + shape[1:]
+                        if isinstance(weight, jnp.ndarray):
+                            padding = jnp.zeros(pad_shape, dtype=weight.dtype)
+                            padded_weight = jnp.concatenate([weight, padding], axis=0)
+                        else:  # numpy array
+                            padding = np.zeros(pad_shape, dtype=weight.dtype)
+                            padded_weight = np.concatenate([weight, padding], axis=0)
+                        padded_state_dict[key] = padded_weight
+                        logger.info(
+                            f"Padded vocab weight '{key}' from shape {shape} to {(target_vocab_size,) + shape[1:]}"
+                        )
+                    elif isinstance(weight, ShapeDtypeStruct):
+                        # For ShapeDtypeStruct, we need to create a new one with the padded shape
+                        new_shape = (target_vocab_size,) + shape[1:]
+                        padded_state_dict[key] = ShapeDtypeStruct(new_shape, weight.dtype)
+                        logger.info(
+                            f"Updated ShapeDtypeStruct '{key}' from shape {shape} to {new_shape}"
+                        )
+            elif hasattr(weight, "get_shape"):
+                shape = weight.get_shape()
+                if len(shape) >= 2 and shape[0] == actual_vocab_size:
+                    # For ShapeDtypeStruct-like objects
+                    new_shape = (target_vocab_size,) + shape[1:]
+                    # Try to create a new ShapeDtypeStruct with the padded shape
+                    if hasattr(weight, "dtype"):
+                        padded_state_dict[key] = ShapeDtypeStruct(new_shape, weight.dtype)
+                        logger.info(
+                            f"Updated ShapeDtypeStruct-like '{key}' from shape {shape} to {new_shape}"
+                        )
+
+    return padded_state_dict
 
 
 @dataclass_with_default_init(frozen=True)
@@ -679,6 +820,14 @@ class HFCheckpointConverter(Generic[LevConfig]):
         # Vocab: first we have to resize the vocab as loaded from the checkpoint
         tokenizer_Vocab = self.Vocab
         Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
+        # Round Vocab axis for partitioning if axis_mapping is provided
+        if axis_mapping is not None:
+            original_vocab_size = Vocab.size
+            Vocab = round_axis_for_partitioning(Vocab, axis_mapping)
+            if Vocab.size != original_vocab_size:
+                logger.info(
+                    f"Rounding vocab size from {original_vocab_size} to {Vocab.size} for partitioning"
+                )
 
         # TODO: in an ideal world, we would only load the part of the array we needed, but
         # AFAICT neither torch state dicts nor safetensors support this.
@@ -690,6 +839,28 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 if k.startswith(f"{self.ignore_prefix}."):
                     ignore_prefix = self.ignore_prefix
                     break
+
+        # Detect actual vocab size from state dict weights (may differ from config)
+        actual_vocab_size = _detect_vocab_size_from_state_dict(state_dict, ignore_prefix=ignore_prefix)
+        if actual_vocab_size is not None and actual_vocab_size != Vocab.size:
+            logger.info(
+                f"Detected vocab size {actual_vocab_size} from state dict weights, "
+                f"which differs from config vocab size {Vocab.size}. Using actual vocab size."
+            )
+            Vocab = tokenizer_Vocab.resize(actual_vocab_size)
+            # Round for partitioning if needed (required for sharding to work)
+            if axis_mapping is not None:
+                original_vocab_size = Vocab.size
+                Vocab = round_axis_for_partitioning(Vocab, axis_mapping)
+                if Vocab.size != original_vocab_size:
+                    logger.info(
+                        f"Rounding vocab size from {original_vocab_size} to {Vocab.size} for partitioning. "
+                        f"Padding weights in state dict to match."
+                    )
+                    # Pad the vocab weights in the state dict to match the rounded size
+                    state_dict = _pad_vocab_weights_in_state_dict(
+                        state_dict, actual_vocab_size, Vocab.size, ignore_prefix=ignore_prefix
+                    )
 
         def load_from_state_dict(template, state_dict):
             lev_model = from_torch_compatible_state_dict(template, state_dict, prefix=ignore_prefix)
@@ -703,10 +874,21 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
             if Vocab.size != tokenizer_Vocab.size:
                 if resize_vocab_to_match_tokenizer:
+                    # Round tokenizer vocab size for partitioning if axis_mapping is provided
+                    target_vocab_size = tokenizer_Vocab.size
+                    if axis_mapping is not None:
+                        rounded_tokenizer_Vocab = round_axis_for_partitioning(
+                            Axis("vocab", target_vocab_size), axis_mapping
+                        )
+                        target_vocab_size = rounded_tokenizer_Vocab.size
+                        if target_vocab_size != tokenizer_Vocab.size:
+                            logger.info(
+                                f"Rounding tokenizer vocab size from {tokenizer_Vocab.size} to {target_vocab_size} for partitioning"
+                            )
                     logger.info(
-                        f"Resizing model from {Vocab.size} to {tokenizer_Vocab.size} to match tokenizer vocab size"
+                        f"Resizing model from {Vocab.size} to {target_vocab_size} to match tokenizer vocab size"
                     )
-                    lev_model = lev_model.resize_vocab(tokenizer_Vocab.size)
+                    lev_model = lev_model.resize_vocab(target_vocab_size)
                 else:
                     logger.warning(
                         f"Model vocab size ({Vocab.size}) does not match tokenizer vocab size ({tokenizer_Vocab.size})"
