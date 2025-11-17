@@ -448,8 +448,8 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
         except (requests.ConnectionError, requests.Timeout):
             return (cluster_name, False)
 
-    max_retries = 3
-    retry_delay = 1
+    max_retries = 5
+    retry_delay = 3
 
     results = {}
     for attempt in range(max_retries):
