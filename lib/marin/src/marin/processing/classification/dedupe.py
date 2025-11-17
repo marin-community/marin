@@ -199,12 +199,12 @@ def build_filter(
 
     def build_shard_bloom(records: Iterator[dict]) -> Iterator[bytes]:
         """Build bloom filter from a shard of records and yield serialized bytes."""
-        bf = Bloom(config.estimated_doc_count, config.false_positive_rate, hash_func=_bloom_hash)
+        bf = Bloom(config.estimated_doc_count, config.false_positive_rate)
 
         for record in records:
             text = record.get(config.text_field, "")
             for feature in extract_features(text, config.ngram):
-                bf.add(feature)
+                bf.add(_bloom_hash(feature))
 
         yield bf.save_bytes()
 
@@ -223,11 +223,11 @@ def build_filter(
         return shard_blooms_data[0]
 
     def _merge_bloom(bloom_files: Iterator[str]):
-        merged_bloom = Bloom(config.estimated_doc_count, config.false_positive_rate, hash_func=_bloom_hash)
+        merged_bloom = Bloom(config.estimated_doc_count, config.false_positive_rate)
         for bloom_file_path in bloom_files:
             with open(bloom_file_path, "rb") as f:
                 bloom_bytes = f.read()
-            shard_bloom = Bloom.load_bytes(bloom_bytes, hash_func=_bloom_hash)
+            shard_bloom = Bloom.load_bytes(bloom_bytes)
             merged_bloom.update(shard_bloom)
         yield merged_bloom.save_bytes()
 
@@ -257,14 +257,14 @@ def calculate_paragraph_overlap(paragraph: str, bloom_filter: Bloom, ngram_confi
         ngrams = list(extract_ngrams(paragraph, ngram_config.ngram_length, ngram_config.stride))
         if not ngrams:
             # Paragraph too short for n-grams - fall back to exact paragraph matching
-            return 1.0 if paragraph in bloom_filter else 0.0
+            return 1.0 if _bloom_hash(paragraph) in bloom_filter else 0.0
         else:
             # N-gram matching
-            matches = sum(1 for ng in ngrams if ng in bloom_filter)
+            matches = sum(1 for ng in ngrams if _bloom_hash(ng) in bloom_filter)
             return matches / len(ngrams)
     else:
         # Exact paragraph matching
-        return 1.0 if paragraph in bloom_filter else 0.0
+        return 1.0 if _bloom_hash(paragraph) in bloom_filter else 0.0
 
 
 def mark_duplicates(record: dict, bloom_filter: Bloom, config: DedupeConfig) -> dict:
@@ -329,7 +329,7 @@ def mark_duplicates_bloom(
         input_file_path = next(iter(file_path_shard))
         output_file_path = rebase_file_path(base_path, input_file_path, output_path)
 
-        bf = Bloom.load(bloom_path, hash_func=_bloom_hash)
+        bf = Bloom.load(bloom_path)
         records = (mark_duplicates(record, bf, config) for record in load_file(input_file_path))
         result = write_jsonl_file(records, output_file_path)
         yield result["path"]
