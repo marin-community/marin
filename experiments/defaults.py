@@ -403,6 +403,8 @@ def default_train(
         output_path=this_output_path(),
     )
 
+    model_config = unwrap_versioned_value(model_config)
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
