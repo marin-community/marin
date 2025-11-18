@@ -52,6 +52,8 @@ logger = logging.getLogger(__name__)
 
 
 def _bloom_hash(x: str) -> int:
+    if isinstance(x, bytes):
+        return int.from_bytes(hashlib.blake2b(x, digest_size=8).digest(), "big")
     return int.from_bytes(hashlib.blake2b(x.encode(), digest_size=8).digest(), "big")
 
 
