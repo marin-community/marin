@@ -19,12 +19,14 @@ This provides object storage and task management functions for use within a job.
 
 from __future__ import annotations
 
+import inspect
+import pickle
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, is_dataclass
 from typing import Any, Literal, Protocol
+from collections.abc import Generator
 
-import msgspec
 import zstandard as zstd
 
 try:
@@ -34,17 +36,17 @@ except ImportError:
 
 
 def msgpack_encode(obj: Any) -> bytes:
-    """Serialize with msgpack and compress with zstd."""
-    serialized = msgspec.msgpack.encode(obj)
+    """Serialize with pickle and compress with zstd."""
+    serialized = pickle.dumps(obj)
     cctx = zstd.ZstdCompressor(level=-10, threads=1)
     return cctx.compress(serialized)
 
 
 def msgpack_decode(data: bytes) -> Any:
-    """Decompress zstd and deserialize msgpack."""
+    """Decompress zstd and deserialize pickle."""
     dctx = zstd.ZstdDecompressor()
     decompressed = dctx.decompress(data)
-    return msgspec.msgpack.decode(decompressed)
+    return pickle.loads(decompressed)
 
 
 def _contains_dataclass(obj: Any) -> bool:
@@ -142,14 +144,28 @@ class SyncContext:
             return ref.result()
         return ref
 
-    def run(self, fn: Callable, *args) -> _ImmediateFuture:
+    def run(self, fn: Callable, *args) -> _ImmediateFuture | Generator[_ImmediateFuture, None, None]:
         """Execute function immediately and wrap result."""
         result = fn(*args)
-        return _ImmediateFuture(result)
+        if hasattr(result, "__iter__") and hasattr(result, "__next__"):
+            for item in result:
+                yield _ImmediateFuture(item)
+        else:
+            return _ImmediateFuture(result)
 
     def wait(self, futures: list[_ImmediateFuture], num_returns: int = 1) -> tuple[list, list]:
         """All futures are immediately ready."""
         return futures[:num_returns], futures[num_returns:]
+
+
+class GeneratorFuture(Future):
+    def __init__(self, future: Future):
+        super().__init__()
+        self.set_result(future.result())
+        self.iterator = iter(self.result())
+
+    def __next__(self) -> Any:
+        return next(self.iterator)
 
 
 class ThreadContext:
@@ -173,9 +189,14 @@ class ThreadContext:
             return ref.result()
         return ref
 
-    def run(self, fn: Callable, *args) -> Future:
-        """Submit function to thread pool."""
-        return self.executor.submit(fn, *args)
+    def run(self, fn: Callable, *args) -> Future | Generator[Future, None, None]:
+        """Submit function to thread pool, streaming results for generator functions."""
+        # is `fn` a generator function?
+        print(f"fn: {fn}, {hasattr(fn, '__iter__')}, {hasattr(fn, '__next__')}")
+        if inspect.isgeneratorfunction(fn):
+            return GeneratorFuture(self.executor.submit(lambda: list(fn(*args))))
+        else:
+            return self.executor.submit(fn, *args)
 
     def wait(self, futures: list[Future], num_returns: int = 1) -> tuple[list, list]:
         """Wait for futures to complete."""
@@ -222,6 +243,9 @@ class RayContext:
     def get(self, ref):
         """Retrieve an object from Ray's object store."""
         data = ray.get(ref)
+        # ray sometimes double encodes data from generators, so check if it's still an ObjectRef
+        if isinstance(data, ray.ObjectRef):
+            data = ray.get(data)
         # we may be retrieving results from a remote function return, these are not encoded
         if isinstance(data, bytes):
             return msgpack_decode(data)
@@ -230,13 +254,13 @@ class RayContext:
     def run(self, fn: Callable, *args):
         """Execute function remotely with configured Ray options.
 
-        Uses SPREAD scheduling strategy to avoid running on head node and
-        distribute work across worker nodes.
+        Uses SPREAD scheduling strategy to avoid running on head node.
         """
         if self.ray_options:
             remote_fn = ray.remote(**self.ray_options)(fn)
         else:
             remote_fn = ray.remote(fn)
+
         return remote_fn.options(scheduling_strategy="SPREAD").remote(*args)
 
     def wait(self, futures: list, num_returns: int = 1) -> tuple[list, list]:
