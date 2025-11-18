@@ -64,6 +64,8 @@ nav:
     - Installation: tutorials/installation.md
     - First Experiment: tutorials/first-experiment.md
     - Setting up a Local GPU Environment: tutorials/local-gpu.md
+    - Prepare a Storage Bucket: tutorials/storage-bucket.md
+    - Setting up a TPU Cluster: tutorials/tpu-cluster-setup.md
     - Executor 101: tutorials/executor-101.md
     - Data Browser: tutorials/data-browser.md
     - Using Data Shop: tutorials/datashop.md

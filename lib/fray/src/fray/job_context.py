@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass
 from typing import Any, Literal, Protocol
 
 import msgspec
@@ -45,6 +45,24 @@ def msgpack_decode(data: bytes) -> Any:
     dctx = zstd.ZstdDecompressor()
     decompressed = dctx.decompress(data)
     return msgspec.msgpack.decode(decompressed)
+
+
+def _contains_dataclass(obj: Any) -> bool:
+    """Recursively check whether an object tree contains a dataclass instance.
+
+    Ray + msgpack turns dataclasses into plain dicts on decode, so we bypass
+    msgpack when a dataclass is present to preserve type information.
+    """
+    if is_dataclass(obj):
+        return True
+
+    if isinstance(obj, dict):
+        return any(_contains_dataclass(k) or _contains_dataclass(v) for k, v in obj.items())
+
+    if isinstance(obj, (list, tuple, set)):
+        return any(_contains_dataclass(item) for item in obj)
+
+    return False
 
 
 class ExecutionContext(Protocol):
@@ -195,6 +213,10 @@ class RayContext:
 
     def put(self, obj: Any):
         """Store object on a worker node."""
+        # Msgpack drops dataclass types on decode; fall back to Ray's native
+        # serialization when a dataclass is present anywhere in the payload.
+        if _contains_dataclass(obj):
+            return ray.put(obj)
         return ray.put(msgpack_encode(obj))
 
     def get(self, ref):
