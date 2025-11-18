@@ -58,7 +58,7 @@ small_train_config = SimpleTrainConfig(
 # 4. Train the model
 tinystories_model_30m = default_train(
     name="marin-tinystories-30m",
-    # Steps can depend on other steps: nano_tinystories_model depends on tinystories_tokenized
+    # Steps can depend on other steps: tinystories_model_30m depends on tinystories_tokenized
     tokenized=tinystories_tokenized,
     model_config=versioned(llama_30m),
     train_config=small_train_config,
