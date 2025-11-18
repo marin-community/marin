@@ -159,7 +159,7 @@ def default_rl_train(
         multiply_by_parameter_scale=False,
         weight_decay_exclusions=[],
         schedule="constant",
-        grad_accum_steps=1,
+        grad_accum_steps=16,
     )
 
     generation_config = GenerationConfig(
@@ -288,7 +288,7 @@ def main():
             model_paths=model_paths,
             end_of_message_token=end_of_message_token,
             tpu_type="v5p-16",
-            train_bsize=16,
+            train_bsize=1024,
             kl_coef=0.0,
             learning_rate=2e-06,
             num_train_steps=2048,

@@ -251,16 +251,30 @@ class Trainer:
         )
         def train_step(train_state, rng, batch):
             def loss(params):
-                logits = self.train_model(
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    position_ids=batch["position_ids"],
-                    params=params,
-                    dropout_rng=rng,
-                    train=True,
-                ).logits
-                logits = logits.astype(jnp.float32)
-                token_loss = softmax_cross_entropy_with_integer_labels(logits, batch["target_ids"])
+                # Micro-batching to reduce forward pass memory
+                assert batch["input_ids"].shape[0] % self.grad_accum_steps == 0, "train_step: Batch size must be divisible by grad_accum_steps"
+                micro_batch_size = batch["input_ids"].shape[0] // self.grad_accum_steps
+                token_losses = []
+                
+                for i in range(self.grad_accum_steps):
+                    start_idx = i * micro_batch_size
+                    end_idx = (i + 1) * micro_batch_size
+                    
+                    micro_logits = self.train_model(
+                        input_ids=batch["input_ids"][start_idx:end_idx],
+                        attention_mask=batch["attention_mask"][start_idx:end_idx],
+                        position_ids=batch["position_ids"][start_idx:end_idx],
+                        params=params,
+                        dropout_rng=rng,
+                        train=True,
+                    ).logits
+                    micro_logits = micro_logits.astype(jnp.float32)
+                    micro_token_loss = softmax_cross_entropy_with_integer_labels(
+                        micro_logits, batch["target_ids"][start_idx:end_idx]
+                    )
+                    token_losses.append(micro_token_loss)
+                
+                token_loss = jnp.concatenate(token_losses, axis=0)
                 
                 # Compute probability ratio: exp(target_logprobs - sampling_logprobs)
                 target_logprobs = -token_loss
@@ -519,8 +533,12 @@ class Trainer:
             )
             del inference_params
 
+            num_batches = 0
             for batch in tqdm(rl_dataset.iterate_batches(batch_size=self.train_bsize, shuffle=True, loop=False)):
                 train_state, metrics = self.train_step(train_state, subrng, batch)
+                num_batches += 1
+                if num_batches > 1:
+                    raise ValueError("Only one batch should be generated per environment")
 
             if self.config.logging.log_freq > 0 and (
                 (step + 1) % self.config.logging.log_freq == 0 or (self.config.logging.log_initial_step and step == 0)
