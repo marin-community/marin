@@ -48,6 +48,7 @@ from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGra
 
 from experiments.pretraining_datasets import (
     proofpile_2,
+    # math_reasoning,
 )
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
@@ -94,14 +95,15 @@ DATASET_CONFIGS = [
     DatasetConfig(name="proofpile", path=proofpile_2),
     # DatasetConfig(name="dolmino", path=dolmino),
     # DatasetConfig(name="nemotron_cc", path=nemotron_cc),
+    # DatasetConfig(name="math_reasoning", path=math_reasoning),
 ]
 
 
 def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
     dedupe_config = DedupeConfig(
-        input_path=EVAL_DATASET_STEPS,
+        input_path=dataset_config.path,
         output_path=this_output_path(),
-        decontaminate_source=dataset_config.path,
+        decontaminate_source=EVAL_DATASET_STEPS,
         attribute_name="ngram_overlap",
         false_positive_rate=1e-20,
         ngram=DEFAULT_NGRAM_CONFIG,
