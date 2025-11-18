@@ -189,7 +189,7 @@ def restart_cluster(ctx, preserve_jobs):
         print("Backing up jobs...")
         try:
             with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-                ray.backup_jobs(config_path, str(backup_dir))
+                ray.backup_jobs(config_path, backup_dir.name)
         except Exception as e:
             print()
             print("=" * 60)
