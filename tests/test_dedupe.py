@@ -17,9 +17,13 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 from marin.utils import fsspec_exists
 from zephyr import load_jsonl, write_jsonl_file
+
+try:
+    from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
+except ImportError:
+    pytest.skip("Dedupe module not available", allow_module_level=True)
 
 
 def load_dedup_outputs(output_dir: str) -> dict[str, dict]:
