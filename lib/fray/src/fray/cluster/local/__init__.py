@@ -15,6 +15,5 @@
 """Local implementations for cluster components."""
 
 from fray.cluster.local_cluster import LocalCluster
-from fray.cluster.local.queue import LocalQueue
 
-__all__ = ["LocalCluster", "LocalQueue"]
+__all__ = ["LocalCluster"]

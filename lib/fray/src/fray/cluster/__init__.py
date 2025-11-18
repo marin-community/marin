@@ -31,6 +31,9 @@ Example:
     ...     print(line)
 """
 
+import logging
+from contextvars import ContextVar
+
 from fray.cluster.base import (
     Cluster,
     CpuConfig,
@@ -55,42 +58,55 @@ try:
 except ImportError:
     RayCluster = None
 
+logger = logging.getLogger(__name__)
 
-def create_cluster(cluster_spec: str) -> Cluster:
-    """Create a cluster from a specification string.
+# Context variable for current cluster
+_cluster_context: ContextVar[Cluster | None] = ContextVar("fray_cluster", default=None)
+
+
+def set_current_cluster(cluster: Cluster) -> None:
+    """Set the current cluster for this context.
+
+    Used to inject a cluster instance into worker processes, allowing them
+    to access queues via current_cluster() without explicit passing.
 
     Args:
-        cluster_spec: Cluster specification:
-            - "local" -> LocalCluster
-            - "ray:region_name" -> RayCluster with config from infra/marin-{region}.yaml
-            - "ray:/path/to/config.yaml" -> RayCluster with explicit config
+        cluster: Cluster instance to use
+    """
+    _cluster_context.set(cluster)
+
+
+def current_cluster() -> Cluster:
+    """Get the current cluster from context.
+
+    If no cluster is set in context but FRAY_CLUSTER_SPEC environment variable is present,
+    automatically creates and caches the cluster for this process.
 
     Returns:
-        Configured cluster instance
+        The cluster instance set via set_current_cluster() or auto-created from env var
 
-    Examples:
-        >>> create_cluster("local")
-        LocalCluster()
-        >>> create_cluster("ray:us-west2")
-        RayCluster(address="http://localhost:8265")
-        >>> create_cluster("ray:infra/my-cluster.yaml")
-        RayCluster(address="http://localhost:8265")
+    Raises:
+        RuntimeError: If no cluster has been set and FRAY_CLUSTER_SPEC is not present
     """
-    if cluster_spec == "local":
-        return LocalCluster()
+    cluster = _cluster_context.get()
+    if cluster is not None:
+        return cluster
 
-    if cluster_spec.startswith("ray"):
-        from fray.cluster.ray.cluster import RayCluster
-        from fray.cluster.ray.config import find_config_by_region
+    # Try to auto-create from environment variable
+    import os
 
-        if cluster_spec.startswith("ray:"):
-            config_or_region = cluster_spec[4:]
-            config_path = find_config_by_region(config_or_region)
-            return RayCluster(config_path=config_path)
-        else:
-            return RayCluster()
+    cluster_spec = os.environ.get("FRAY_CLUSTER_SPEC")
+    if cluster_spec is None:
+        raise RuntimeError(
+            "No cluster set in current context. Either call set_current_cluster() "
+            "or set FRAY_CLUSTER_SPEC environment variable."
+        )
 
-    raise ValueError(f"Unknown cluster spec: {cluster_spec}")
+    # Create and cache cluster
+    cluster = create_cluster(cluster_spec)
+    set_current_cluster(cluster)
+    logger.info(f"Auto-created cluster from FRAY_CLUSTER_SPEC={cluster_spec}")
+    return cluster
 
 
 def create_cluster(cluster_spec: str) -> Cluster:

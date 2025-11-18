@@ -14,13 +14,12 @@
 
 """Ray-based cluster implementation."""
 
-from fray.cluster.ray.cluster import RayCluster
+from fray.cluster.ray.cluster import RayCluster, RayQueue
 from fray.cluster.ray.dashboard import (
     DashboardConfig,
     DashboardConnection,
     ray_dashboard,
 )
-from fray.cluster.ray.queue import RayQueue
 
 __all__ = [
     "DashboardConfig",

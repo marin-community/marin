@@ -18,9 +18,10 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import cast
+from typing import Any, cast
 
 import ray
 from ray.job_submission import JobStatus as RayJobStatus
@@ -69,6 +70,22 @@ class RayCluster(Cluster):
         """Create JobSubmissionClient on demand (after connect() establishes tunnel)."""
         return JobSubmissionClient(self._dashboard_address)
 
+    def _get_cluster_spec(self) -> str:
+        """Get cluster spec string for this RayCluster instance.
+
+        Returns:
+            Cluster spec that can recreate this cluster via create_cluster()
+        """
+        if self._address == "auto":
+            return "ray"
+
+        # If we have a config path, encode it
+        if self._config_path:
+            return f"ray:{self._config_path}"
+
+        # Otherwise, just return "ray" (will use auto address)
+        return "ray"
+
     def launch(self, request: JobRequest) -> JobId:
         """Launch job on Ray cluster, returning job identifier."""
         logger.info("Launching job: %s", request.name)
@@ -105,20 +122,27 @@ class RayCluster(Cluster):
     def _get_runtime_env(self, request: JobRequest) -> dict | None:
         """Build Ray runtime environment for the given job request.
 
-        For local clusters (address='auto'), returns None to skip runtime_env setup
-        since dependencies are already available in the current environment.
-        For remote clusters, builds full runtime_env with package dependencies.
+        For local clusters (address='auto'), injects FRAY_CLUSTER_SPEC for auto-recreation.
+        For remote clusters, builds full runtime_env with package dependencies and cluster spec.
         """
-        # Skip runtime_env for local clusters - dependencies already available
-        if self._address == "auto":
-            return None
-
         environment = request.environment if request.environment else create_environment()
 
+        # Start with env_vars from environment config
+        env_vars = dict(environment.env_vars)
+
+        # Inject cluster spec for automatic recreation
+        if "FRAY_CLUSTER_SPEC" not in env_vars:
+            env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
+
+        # For local clusters, minimal runtime_env with just env vars
+        if self._address == "auto":
+            return {"env_vars": env_vars}
+
+        # For remote clusters, build full runtime_env
         runtime_env = build_runtime_env_for_packages(
             extra=list(environment.extra_dependency_groups),
             pip_packages=list(environment.pip_packages),
-            env_vars=dict(environment.env_vars),
+            env_vars=env_vars,
         )
 
         # Set working directory and excludes
@@ -261,8 +285,6 @@ class RayCluster(Cluster):
         Returns:
             RayQueue implementation
         """
-        from fray.cluster.ray.queue import RayQueue
-
         return RayQueue(name)
 
     def get_ray_resources(self, request: JobRequest) -> dict[str, float]:
@@ -425,3 +447,145 @@ class RayCluster(Cluster):
         else:
             # Local cluster or no config path specified
             yield
+
+
+@ray.remote
+class _RayQueueActor:
+    """Ray actor for distributed queue state management.
+
+    Maintains queue state in the actor's memory, accessible across
+    the Ray cluster. Uses lease semantics for reliable distributed
+    task processing.
+    """
+
+    def __init__(self):
+        """Initialize empty queue state."""
+        self._available: list[Any] = []
+        self._leased: dict[str, tuple[Any, float]] = {}
+
+    def push(self, item: Any) -> None:
+        """Add an item to the available queue."""
+        self._available.append(item)
+
+    def peek(self) -> Any | None:
+        """Return the next available item without leasing it."""
+        if not self._available:
+            return None
+        return self._available[0]
+
+    def pop(self) -> dict[str, Any] | None:
+        """Lease the next available item, returning lease data or None.
+
+        Returns:
+            Dict with keys 'item', 'lease_id', 'timestamp', or None if empty.
+        """
+        if not self._available:
+            return None
+
+        item = self._available.pop(0)
+        lease_id = str(uuid.uuid4())
+        timestamp = time.time()
+        self._leased[lease_id] = (item, timestamp)
+
+        return {
+            "item": item,
+            "lease_id": lease_id,
+            "timestamp": timestamp,
+        }
+
+    def done(self, lease_id: str) -> None:
+        """Remove a completed lease from tracking.
+
+        Args:
+            lease_id: The lease identifier to complete.
+
+        Raises:
+            ValueError: If the lease_id is not found in leased items.
+        """
+        if lease_id not in self._leased:
+            raise ValueError(f"Invalid lease: {lease_id}")
+        del self._leased[lease_id]
+
+    def release(self, lease_id: str) -> None:
+        """Release a lease and requeue the item.
+
+        Args:
+            lease_id: The lease identifier to release.
+
+        Raises:
+            ValueError: If the lease_id is not found in leased items.
+        """
+        if lease_id not in self._leased:
+            raise ValueError(f"Invalid lease: {lease_id}")
+
+        item, _ = self._leased[lease_id]
+        del self._leased[lease_id]
+        self._available.append(item)
+
+    def size(self) -> int:
+        """Return total number of items (available + leased)."""
+        return len(self._available) + len(self._leased)
+
+    def pending(self) -> int:
+        """Return number of available (unleased) items."""
+        return len(self._available)
+
+
+class RayQueue(Queue):
+    """Distributed queue implementation using Ray actors.
+
+    Provides a Queue interface backed by a Ray actor for distributed
+    state management. All operations are synchronous from the caller's
+    perspective, using ray.get() to wait for actor responses.
+
+    The actor handle is stored and all queue operations are delegated
+    to the actor via remote method calls.
+    """
+
+    def __init__(self, name: str):
+        """Initialize queue with a Ray actor backend.
+
+        Args:
+            name: Name identifier for the queue (currently not used for
+                  actor registration, but available for future routing).
+        """
+        self._name = name
+        self._actor = _RayQueueActor.remote()
+
+    def push(self, item: Any) -> None:
+        """Add an item to the queue."""
+        ray.get(self._actor.push.remote(item))
+
+    def peek(self) -> Any | None:
+        """View the next available item without acquiring a lease."""
+        return ray.get(self._actor.peek.remote())
+
+    def pop(self):
+        """Acquire a lease on the next available item."""
+        result = ray.get(self._actor.pop.remote())
+        if result is None:
+            return None
+
+        from fray.cluster.queue import Lease
+
+        return Lease(
+            item=result["item"],
+            lease_id=result["lease_id"],
+            timestamp=result["timestamp"],
+        )
+
+    def done(self, lease) -> None:
+        """Mark a leased task as completed and remove it from the queue."""
+        ray.get(self._actor.done.remote(lease.lease_id))
+
+    def release(self, lease) -> None:
+        """Release a lease and requeue the item for reprocessing."""
+        ray.get(self._actor.release.remote(lease.lease_id))
+
+    def size(self) -> int:
+        """Return the total number of items in the queue."""
+        return ray.get(self._actor.size.remote())
+
+    def pending(self) -> int:
+        """Return the number of items available for leasing."""
+        return ray.get(self._actor.pending.remote())

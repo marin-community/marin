@@ -19,6 +19,7 @@ import time
 import pytest
 
 from fray.cluster.local import LocalCluster
+from fray.examples.fake_llm_worker import worker_loop
 from fray.worker_pool import WorkerPool, WorkerPoolConfig
 
 
@@ -46,6 +47,7 @@ def test_worker_pool_local_inference(local_cluster):
     """
     # Create worker pool with autoscaling config
     config = WorkerPoolConfig(
+        worker_func=worker_loop,
         min_workers=1,
         max_workers=3,
         scale_up_threshold=0.5,  # Scale up when queue has >0.5 tasks per worker
@@ -55,7 +57,6 @@ def test_worker_pool_local_inference(local_cluster):
 
     pool = WorkerPool(
         cluster=local_cluster,
-        worker_module="fray.examples.fake_llm_worker",
         config=config,
     )
 
@@ -70,7 +71,10 @@ def test_worker_pool_local_inference(local_cluster):
         ]
 
         # Submit batch - this should trigger autoscaling
-        results = pool.map(problems, timeout=30.0)
+        for problem in problems:
+            pool.submit(problem)
+
+        results = pool.collect(num_results=len(problems), timeout=30.0)
 
         # Validate results
         assert len(results) == len(problems)
@@ -94,6 +98,7 @@ def test_worker_pool_local_inference(local_cluster):
 def test_worker_pool_autoscaling(local_cluster):
     """Test that worker pool scales up and down based on queue depth."""
     config = WorkerPoolConfig(
+        worker_func=worker_loop,
         min_workers=1,
         max_workers=4,
         scale_up_threshold=1.0,  # Scale up when >1 task per worker
@@ -103,7 +108,6 @@ def test_worker_pool_autoscaling(local_cluster):
 
     pool = WorkerPool(
         cluster=local_cluster,
-        worker_module="fray.examples.fake_llm_worker",
         config=config,
     )
 
@@ -146,13 +150,13 @@ def test_worker_pool_autoscaling(local_cluster):
 def test_worker_pool_shutdown(local_cluster):
     """Test graceful shutdown of worker pool."""
     config = WorkerPoolConfig(
+        worker_func=worker_loop,
         min_workers=2,
         max_workers=4,
     )
 
     pool = WorkerPool(
         cluster=local_cluster,
-        worker_module="fray.examples.fake_llm_worker",
         config=config,
     )
 

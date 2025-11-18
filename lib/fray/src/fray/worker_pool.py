@@ -20,13 +20,13 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any
 
-from fray.cluster.base import Cluster
+from fray.cluster.base import Cluster, CpuConfig, JobId, JobInfo, JobRequest, ResourceConfig, create_environment
 from fray.cluster.queue import Queue
-from fray.cluster.types import CpuConfig, JobId, JobInfo, JobRequest, ResourceConfig, create_environment
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,7 @@ class WorkerPoolConfig:
     """Configuration for worker pool autoscaling.
 
     Attributes:
+        worker_func: Callable that workers will execute (should accept task and result queue names)
         min_workers: Minimum number of workers to maintain
         max_workers: Maximum number of workers to scale up to
         scale_up_threshold: Tasks per worker to trigger scale up
@@ -43,8 +44,9 @@ class WorkerPoolConfig:
         scale_check_interval: How often to check scaling conditions (seconds)
     """
 
-    min_workers: int = 1
-    max_workers: int = 8
+    worker_func: Callable[[], None]
+    min_workers: int
+    max_workers: int
     scale_up_threshold: float = 0.8
     scale_down_threshold: float = 0.2
     scale_check_interval: float = 5.0
@@ -60,34 +62,21 @@ class WorkerPool:
     Unlike the Zephyr WorkerPool which uses Ray actors, this implementation uses
     the Cluster API to launch separate worker jobs. Workers consume tasks from a
     shared queue and publish results to a result queue.
-
-    Example:
-        >>> cluster = LocalCluster()
-        >>> pool = WorkerPool(
-        ...     cluster=cluster,
-        ...     worker_module="fray.examples.fake_llm_worker",
-        ...     config=WorkerPoolConfig(max_workers=4)
-        ... )
-        >>> results = pool.map([task1, task2, task3])
-        >>> pool.shutdown()
     """
 
     def __init__(
         self,
         cluster: Cluster,
-        worker_module: str,
-        config: WorkerPoolConfig | None = None,
+        config: WorkerPoolConfig,
     ):
         """Initialize worker pool.
 
         Args:
             cluster: Cluster backend to use for worker jobs
-            worker_module: Python module path for worker (e.g., 'fray.examples.fake_llm_worker')
-            config: Pool configuration (uses defaults if not provided)
+            config: Pool configuration including worker function and scaling parameters
         """
         self._cluster = cluster
-        self._worker_module = worker_module
-        self._config = config or WorkerPoolConfig()
+        self._config = config
 
         # Generate unique pool ID for queue names
         self._pool_id = str(uuid.uuid4())
@@ -116,21 +105,28 @@ class WorkerPool:
     def _create_worker(self) -> JobId:
         """Launch a new worker job.
 
+        The cluster will automatically inject FRAY_CLUSTER_SPEC, allowing
+        workers to call current_cluster() without manual setup.
+
         Returns:
             Job ID of the created worker
         """
+        from fray.cluster.base import Entrypoint
+
         task_queue_name = f"{self._pool_id}_tasks"
         result_queue_name = f"{self._pool_id}_results"
 
+        # Extract worker_func to avoid capturing self in the closure
+        worker_func = self._config.worker_func
+
+        # Create a simple closure that just calls worker function
+        # The worker will automatically get cluster via current_cluster()
+        def worker_closure():
+            worker_func(task_queue_name, result_queue_name)
+
         request = JobRequest(
             name=f"worker-{self._pool_id[:8]}",
-            entrypoint=self._worker_module,
-            entrypoint_args=[
-                "--task-queue",
-                task_queue_name,
-                "--result-queue",
-                result_queue_name,
-            ],
+            entrypoint=Entrypoint(callable=worker_closure),
             resources=ResourceConfig(device=CpuConfig()),
             environment=create_environment(),
         )
@@ -205,7 +201,6 @@ class WorkerPool:
                     logger.error(f"Error in autoscaler loop: {e}")
 
     def _start_background_threads(self) -> None:
-        """Start the autoscaler thread."""
         autoscaler_thread = threading.Thread(target=self._autoscale_loop, daemon=True, name="autoscaler")
         autoscaler_thread.start()
         self._threads.append(autoscaler_thread)
@@ -251,32 +246,7 @@ class WorkerPool:
 
         return results
 
-    def map(self, tasks: list[Any], timeout: float = 60.0) -> list[Any]:
-        """Process a list of tasks through the worker pool.
-
-        Submits all tasks and collects results. Note that results may not be in
-        the same order as input tasks.
-
-        Args:
-            tasks: List of tasks to process
-            timeout: Maximum time to wait for all results (seconds)
-
-        Returns:
-            List of results (order may differ from input)
-        """
-        # Submit all tasks
-        for task in tasks:
-            self.submit(task)
-
-        # Collect all results
-        return self.collect(num_results=len(tasks), timeout=timeout)
-
     def num_workers(self) -> int:
-        """Get current number of workers.
-
-        Returns:
-            Current worker count
-        """
         with self._metadata_lock:
             return len(self._workers)
 

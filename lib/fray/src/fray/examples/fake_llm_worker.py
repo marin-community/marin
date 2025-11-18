@@ -18,25 +18,18 @@ This worker is used for testing the WorkerPool without requiring actual LLM APIs
 It processes math problems from a task queue and returns mock answers.
 """
 
-import argparse
 import logging
 import random
 import time
 
-from fray.cluster.local.file_queue import FileQueue
+import click
+
+from fray.cluster import current_cluster
 
 logger = logging.getLogger(__name__)
 
 
 def process_task(task: dict) -> dict:
-    """Process a single task (simulate LLM inference).
-
-    Args:
-        task: Task dict with 'problem' and 'id' fields
-
-    Returns:
-        Result dict with 'problem_id' and 'answer' fields
-    """
     # Simulate processing time
     time.sleep(random.uniform(0.1, 0.5))
 
@@ -62,9 +55,10 @@ def worker_loop(task_queue_name: str, result_queue_name: str) -> None:
     """
     logger.info(f"Worker starting: task_queue={task_queue_name}, result_queue={result_queue_name}")
 
-    # Create queue connections
-    task_queue = FileQueue(name=task_queue_name)
-    result_queue = FileQueue(name=result_queue_name)
+    # Get queue connections from current cluster
+    cluster = current_cluster()
+    task_queue = cluster.create_queue(name=task_queue_name)
+    result_queue = cluster.create_queue(name=result_queue_name)
 
     # Process tasks until interrupted
     while True:
@@ -95,13 +89,10 @@ def worker_loop(task_queue_name: str, result_queue_name: str) -> None:
             task_queue.release(lease)
 
 
-def main():
-    """Worker entrypoint."""
-    parser = argparse.ArgumentParser(description="Fake LLM worker for testing")
-    parser.add_argument("--task-queue", required=True, help="Name of task queue")
-    parser.add_argument("--result-queue", required=True, help="Name of result queue")
-    args = parser.parse_args()
-
+@click.command()
+@click.option("--task-queue", required=True, help="Name of task queue")
+@click.option("--result-queue", required=True, help="Name of result queue")
+def main(task_queue: str, result_queue: str):
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
@@ -109,7 +100,7 @@ def main():
     )
 
     try:
-        worker_loop(args.task_queue, args.result_queue)
+        worker_loop(task_queue, result_queue)
     except KeyboardInterrupt:
         logger.info("Worker shutting down")
 

@@ -69,11 +69,21 @@ class FileQueue:
 
     def peek(self) -> Any | None:
         """View the next available item without acquiring a lease."""
-        files = sorted(self._available_dir.glob("*.json"))
+        files = list(self._available_dir.glob("*.json"))
         if not files:
             return None
 
-        with open(files[0]) as f:
+        # Sort by timestamp to maintain FIFO order
+        def get_timestamp(filepath: Path) -> float:
+            try:
+                with open(filepath) as f:
+                    data = json.load(f)
+                    return data.get("timestamp", 0)
+            except (FileNotFoundError, json.JSONDecodeError):
+                return 0
+
+        files_sorted = sorted(files, key=get_timestamp)
+        with open(files_sorted[0]) as f:
             data = json.load(f)
             return data["item"]
 
@@ -101,13 +111,24 @@ class FileQueue:
                 # File was removed or corrupted, skip
                 continue
 
-        # Find oldest available item
-        files = sorted(self._available_dir.glob("*.json"))
+        # Find oldest available item (sort by timestamp for FIFO)
+        files = list(self._available_dir.glob("*.json"))
         if not files:
             return None
 
+        # Sort by timestamp to maintain FIFO order
+        def get_timestamp(filepath: Path) -> float:
+            try:
+                with open(filepath) as f:
+                    data = json.load(f)
+                    return data.get("timestamp", 0)
+            except (FileNotFoundError, json.JSONDecodeError):
+                return 0
+
+        files_sorted = sorted(files, key=get_timestamp)
+
         # Try to move file to leased directory (atomic operation)
-        for file_path in files:
+        for file_path in files_sorted:
             lease_id = file_path.stem
             leased_path = self._leased_dir / f"{lease_id}.json"
 
@@ -154,9 +175,19 @@ class FileQueue:
         if not leased_path.exists():
             raise ValueError(f"Invalid lease: {lease.lease_id}")
 
-        # Move back to available
+        # Read the item and update timestamp to put it at the back of the queue
+        with open(leased_path) as f:
+            data = json.load(f)
+
+        data["timestamp"] = time.time()  # Update to current time
+
+        # Write back with new timestamp
         available_path = self._available_dir / f"{lease.lease_id}.json"
-        leased_path.rename(available_path)
+        with open(available_path, "w") as f:
+            json.dump(data, f)
+
+        # Remove the leased file
+        leased_path.unlink()
 
     def size(self) -> int:
         """Return the total number of items in the queue."""

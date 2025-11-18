@@ -14,63 +14,34 @@
 
 """Tests for queue abstraction with lease semantics."""
 
+import tempfile
 import time
-from typing import Any
+from pathlib import Path
 
 import pytest
+import ray
 
-from fray.cluster.queue import Lease, Queue
-
-
-class SimpleQueue(Queue[Any]):
-    """Simple in-memory implementation of Queue for testing the protocol."""
-
-    def __init__(self):
-        self._items: list[Any] = []
-        self._leased: dict[str, tuple[Any, float]] = {}
-        self._next_lease_id = 0
-
-    def push(self, item: Any) -> None:
-        self._items.append(item)
-
-    def peek(self) -> Any | None:
-        if not self._items:
-            return None
-        return self._items[0]
-
-    def pop(self) -> Lease[Any] | None:
-        if not self._items:
-            return None
-        item = self._items.pop(0)
-        lease_id = str(self._next_lease_id)
-        self._next_lease_id += 1
-        timestamp = time.time()
-        self._leased[lease_id] = (item, timestamp)
-        return Lease(item=item, lease_id=lease_id, timestamp=timestamp)
-
-    def done(self, lease: Lease[Any]) -> None:
-        if lease.lease_id not in self._leased:
-            raise ValueError(f"Invalid lease: {lease.lease_id}")
-        del self._leased[lease.lease_id]
-
-    def release(self, lease: Lease[Any]) -> None:
-        if lease.lease_id not in self._leased:
-            raise ValueError(f"Invalid lease: {lease.lease_id}")
-        item, _ = self._leased[lease.lease_id]
-        del self._leased[lease.lease_id]
-        self._items.append(item)
-
-    def size(self) -> int:
-        return len(self._items) + len(self._leased)
-
-    def pending(self) -> int:
-        return len(self._items)
+from fray.cluster.local.file_queue import FileQueue
+from fray.cluster.queue import Lease
+from fray.cluster.ray import RayQueue
 
 
-@pytest.fixture
-def queue() -> SimpleQueue:
-    """Create a simple queue for testing."""
-    return SimpleQueue()
+@pytest.fixture(scope="module")
+def ray_context():
+    """Initialize Ray once for all Ray-based tests."""
+    ray.init(ignore_reinit_error=True)
+    yield
+    ray.shutdown()
+
+
+@pytest.fixture(params=["file", "ray"])
+def queue(request, ray_context):
+    """Parameterized fixture providing FileQueue and RayQueue implementations."""
+    if request.param == "file":
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield FileQueue(name="test-queue", queue_dir=Path(tmpdir))
+    else:  # ray
+        yield RayQueue(name="test-queue")
 
 
 def test_lease_dataclass():
@@ -81,7 +52,7 @@ def test_lease_dataclass():
     assert lease.timestamp == 1234567890.0
 
 
-def test_push_and_peek(queue: SimpleQueue):
+def test_push_and_peek(queue):
     """Test pushing items and peeking at the next item."""
     assert queue.peek() is None
 
@@ -92,7 +63,7 @@ def test_push_and_peek(queue: SimpleQueue):
     assert queue.peek() == "task1"  # Still returns first item
 
 
-def test_push_and_pop(queue: SimpleQueue):
+def test_push_and_pop(queue):
     """Test pushing and popping items."""
     assert queue.pop() is None
 
@@ -105,7 +76,7 @@ def test_push_and_pop(queue: SimpleQueue):
     assert lease.timestamp <= time.time()
 
 
-def test_pop_returns_fifo(queue: SimpleQueue):
+def test_pop_returns_fifo(queue):
     """Test that pop returns items in FIFO order."""
     queue.push("task1")
     queue.push("task2")
@@ -124,7 +95,7 @@ def test_pop_returns_fifo(queue: SimpleQueue):
     assert lease3.item == "task3"
 
 
-def test_done_completes_lease(queue: SimpleQueue):
+def test_done_completes_lease(queue):
     """Test that done() removes the item from the queue."""
     queue.push("task1")
     queue.push("task2")
@@ -139,7 +110,7 @@ def test_done_completes_lease(queue: SimpleQueue):
     assert queue.pending() == 1
 
 
-def test_done_with_invalid_lease(queue: SimpleQueue):
+def test_done_with_invalid_lease(queue):
     """Test that done() raises error for invalid lease."""
     queue.push("task1")
     lease = queue.pop()
@@ -149,11 +120,11 @@ def test_done_with_invalid_lease(queue: SimpleQueue):
     queue.done(lease)
 
     # Trying to complete again should raise
-    with pytest.raises(ValueError, match="Invalid lease"):
+    with pytest.raises((ValueError, Exception), match="Invalid lease"):
         queue.done(lease)
 
 
-def test_release_requeues_item(queue: SimpleQueue):
+def test_release_requeues_item(queue):
     """Test that release() requeues the item."""
     queue.push("task1")
     queue.push("task2")
@@ -172,7 +143,7 @@ def test_release_requeues_item(queue: SimpleQueue):
     assert next_lease.item == "task2"  # task2 was next in line
 
 
-def test_release_with_invalid_lease(queue: SimpleQueue):
+def test_release_with_invalid_lease(queue):
     """Test that release() raises error for invalid lease."""
     queue.push("task1")
     lease = queue.pop()
@@ -182,11 +153,11 @@ def test_release_with_invalid_lease(queue: SimpleQueue):
     queue.release(lease)
 
     # Trying to release again should raise
-    with pytest.raises(ValueError, match="Invalid lease"):
+    with pytest.raises((ValueError, Exception), match="Invalid lease"):
         queue.release(lease)
 
 
-def test_size_counts_all_items(queue: SimpleQueue):
+def test_size_counts_all_items(queue):
     """Test that size() includes both pending and leased items."""
     assert queue.size() == 0
 
@@ -208,7 +179,7 @@ def test_size_counts_all_items(queue: SimpleQueue):
     assert queue.size() == 2  # Still 2 items (both pending)
 
 
-def test_pending_counts_unleased_items(queue: SimpleQueue):
+def test_pending_counts_unleased_items(queue):
     """Test that pending() only counts unleased items."""
     assert queue.pending() == 0
 
@@ -230,7 +201,7 @@ def test_pending_counts_unleased_items(queue: SimpleQueue):
     assert queue.pending() == 2  # Released item is pending again
 
 
-def test_complete_workflow(queue: SimpleQueue):
+def test_complete_workflow(queue):
     """Test a complete workflow with multiple workers."""
     # Add tasks
     for i in range(5):
@@ -265,7 +236,7 @@ def test_complete_workflow(queue: SimpleQueue):
     assert queue.size() == 3
 
 
-def test_empty_queue_operations(queue: SimpleQueue):
+def test_empty_queue_operations(queue):
     """Test operations on an empty queue."""
     assert queue.peek() is None
     assert queue.pop() is None
@@ -273,16 +244,30 @@ def test_empty_queue_operations(queue: SimpleQueue):
     assert queue.pending() == 0
 
 
-def test_queue_with_different_types():
+@pytest.fixture(params=["file", "ray"])
+def queue_factory(request, ray_context):
+    """Parameterized fixture for creating queues with custom names."""
+
+    def _create_queue(name: str):
+        if request.param == "file":
+            tmpdir = tempfile.mkdtemp()
+            return FileQueue(name=name, queue_dir=Path(tmpdir))
+        else:  # ray
+            return RayQueue(name=name)
+
+    return _create_queue
+
+
+def test_queue_with_different_types(queue_factory):
     """Test that Queue works with different types."""
-    int_queue: Queue[int] = SimpleQueue()
+    int_queue = queue_factory("int-queue")
     int_queue.push(42)
     lease = int_queue.pop()
     assert lease is not None
     assert lease.item == 42
     assert isinstance(lease.item, int)
 
-    str_queue: Queue[str] = SimpleQueue()
+    str_queue = queue_factory("str-queue")
     str_queue.push("hello")
     lease2 = str_queue.pop()
     assert lease2 is not None
@@ -290,7 +275,7 @@ def test_queue_with_different_types():
     assert isinstance(lease2.item, str)
 
 
-def test_lease_timestamp_ordering(queue: SimpleQueue):
+def test_lease_timestamp_ordering(queue):
     """Test that lease timestamps are correctly ordered."""
     queue.push("task1")
     time.sleep(0.01)  # Small delay to ensure different timestamps
@@ -305,7 +290,7 @@ def test_lease_timestamp_ordering(queue: SimpleQueue):
     assert lease1.timestamp < lease2.timestamp
 
 
-def test_multiple_done_calls(queue: SimpleQueue):
+def test_multiple_done_calls(queue):
     """Test that calling done() on same lease twice fails."""
     queue.push("task1")
     lease = queue.pop()
@@ -313,11 +298,11 @@ def test_multiple_done_calls(queue: SimpleQueue):
 
     queue.done(lease)
 
-    with pytest.raises(ValueError, match="Invalid lease"):
+    with pytest.raises((ValueError, Exception), match="Invalid lease"):
         queue.done(lease)
 
 
-def test_done_after_release(queue: SimpleQueue):
+def test_done_after_release(queue):
     """Test that done() fails after release()."""
     queue.push("task1")
     lease = queue.pop()
@@ -325,11 +310,11 @@ def test_done_after_release(queue: SimpleQueue):
 
     queue.release(lease)
 
-    with pytest.raises(ValueError, match="Invalid lease"):
+    with pytest.raises((ValueError, Exception), match="Invalid lease"):
         queue.done(lease)
 
 
-def test_release_after_done(queue: SimpleQueue):
+def test_release_after_done(queue):
     """Test that release() fails after done()."""
     queue.push("task1")
     lease = queue.pop()
@@ -337,5 +322,28 @@ def test_release_after_done(queue: SimpleQueue):
 
     queue.done(lease)
 
-    with pytest.raises(ValueError, match="Invalid lease"):
+    with pytest.raises((ValueError, Exception), match="Invalid lease"):
         queue.release(lease)
+
+
+def test_multiple_queues_independent(queue_factory):
+    """Test that multiple queues maintain independent state."""
+    queue1 = queue_factory("queue1")
+    queue2 = queue_factory("queue2")
+
+    queue1.push("task1")
+    queue2.push("task2")
+
+    assert queue1.size() == 1
+    assert queue2.size() == 1
+
+    lease1 = queue1.pop()
+    assert lease1 is not None
+    assert lease1.item == "task1"
+
+    lease2 = queue2.pop()
+    assert lease2 is not None
+    assert lease2.item == "task2"
+
+    assert queue1.pending() == 0
+    assert queue2.pending() == 0

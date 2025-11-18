@@ -25,7 +25,6 @@ from queue import Empty, Queue
 from threading import Thread
 
 from fray.cluster.base import Cluster, CpuConfig, EnvironmentConfig, JobId, JobInfo, JobRequest, JobStatus
-from fray.cluster.queue import Queue as QueueProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +135,7 @@ class LocalCluster(Cluster):
         """No-op connection for local cluster."""
         yield
 
-    def create_queue(self, name: str) -> QueueProtocol:
+    def create_queue(self, name: str):
         """Create a local queue using file-based storage for cross-subprocess support.
 
         Args:
@@ -177,6 +176,11 @@ class LocalCluster(Cluster):
 
         env = os.environ.copy()
         env.update(env_config.env_vars)
+
+        # Inject cluster spec for automatic cluster recreation in subprocess
+        if "FRAY_CLUSTER_SPEC" not in env:
+            env["FRAY_CLUSTER_SPEC"] = "local"
+
         return env
 
 
