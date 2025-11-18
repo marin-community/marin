@@ -31,8 +31,8 @@ fineweb_edu = ExecutorStep(
         revision="3c452cb",
         hf_urls_glob=["data/**/*.parquet"],
     ),
-    override_output_path="raw/fineweb-edu",
-)
+    override_output_path="raw/fineweb-edu-c2beb4",
+).cd("data")
 
 slimpajama = ExecutorStep(
     name="raw/SlimPajama-627B",
