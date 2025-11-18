@@ -34,10 +34,19 @@ import draccus
 import fsspec
 import msgspec
 from marin.utils import fsspec_glob, rebase_file_path
-from rbloom import Bloom
 from zephyr import Dataset, flow_backend, load_parquet
 from zephyr.readers import load_file
 from zephyr.writers import write_jsonl_file
+
+# handle optional rbloom dependency for dry runs.
+try:
+    from rbloom import Bloom
+except ImportError:
+
+    class Bloom:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("rbloom is required for deduplication. Please install rbloom.")
+
 
 logger = logging.getLogger(__name__)
 
