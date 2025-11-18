@@ -221,7 +221,7 @@ jobs:
             const repo = context.repo.repo;
             const author = context.payload.issue?.user?.login || 'your-github-username';
             const body = [
-              "Welcome! Your branch is ready.",
+              "⚓ Welcome to Marin! Your branch is ready.",
               "",
               `- Branch & Starter File: https://github.com/${owner}/${repo}/tree/${branch}/${dest}`,
               `- PR: ${prUrl}`,
@@ -242,10 +242,10 @@ jobs:
               "",
               "uv venv --python 3.11",
               ". .venv/bin/activate",
-              "uv sync",
+              "uv sync --all-packages",
               "",
               `cd ${dest}`,
-              `echo "\nWelcome! You're in your starter directory: $(pwd)"`,
+              `echo "\nWelcome to Marin! You are now in your starter directory: $(pwd)"`,
               "```",
               "",
               "3. Start hacking!",
