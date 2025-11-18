@@ -230,11 +230,13 @@ def build_filter(
         .reshard(num_shards=config.processes)
         .flat_map(lambda path: load_file(path, columns=[config.text_field]))
         .map_shard(build_shard_bloom)
-        .write_binary(f"{bloom_path}-{{shard:05d}}-of-{{total:05d}}.bin")
+        .write_binary(f"{bloom_path}-{{shard:05d}}-of-{{total:05d}}.bin", skip_existing=True)
     )
 
     if len(shard_blooms_data) == 1:
         return shard_blooms_data[0]
+
+    logger.info(f"Merging {len(shard_blooms_data)} shard bloom filters...")
 
     def _merge_bloom(bloom_files: Iterator[str]):
         merged_bloom = Bloom(config.estimated_doc_count, config.false_positive_rate)
@@ -247,7 +249,10 @@ def build_filter(
         yield merged_bloom.save_bytes()
 
     merged_bloom = flow_backend().execute(
-        Dataset.from_iterable(shard_blooms_data).reshard(num_shards=1).map_shard(_merge_bloom).write_binary(bloom_path)
+        Dataset.from_iterable(shard_blooms_data)
+        .reshard(num_shards=1)
+        .map_shard(_merge_bloom)
+        .write_binary(bloom_path, skip_existing=True)
     )
 
     return merged_bloom[0]
@@ -314,7 +319,8 @@ def mark_duplicates(record: dict, bloom_filter: Bloom, config: DedupeConfig) -> 
             continue
 
         overlap_score = calculate_paragraph_overlap(para, bloom_filter, config.ngram)
-        duplicate_spans.append([offset, offset + len(para), overlap_score])
+        if overlap_score > 0:
+            duplicate_spans.append([offset, offset + len(para), overlap_score])
         offset += len(para) + 1  # +1 for newline
 
     return {

@@ -125,7 +125,7 @@ class BackendConfig:
         dry_run: If True, show optimization plan without executing
     """
 
-    max_parallelism: int = 1000000
+    max_parallelism: int = 1024
     chunk_size: int = 1000
     dry_run: bool = False
 
@@ -771,7 +771,7 @@ class Backend:
             for shard in shards:
                 yield from shard
 
-        yield from tqdm(materialize_all(), desc=desc, unit="items")
+        yield from tqdm(materialize_all(), desc=desc, unit="items", total=len(shards))
 
     def _execute_on_shards(
         self, process_fn: Callable, fn_args: tuple, shards: list[Shard], aux_shards_per_shard: list[dict] | None = None

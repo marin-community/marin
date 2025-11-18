@@ -46,9 +46,13 @@ import ray
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 
+from experiments.midtraining_datasets import finemath_3_plus
 from experiments.pretraining_datasets import (
+    dclm_baseline,
+    dolmino,
+    nemotron_cc,
     proofpile_2,
-    # math_reasoning,
+    starcoderdata,
 )
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
@@ -89,13 +93,12 @@ def run_train_test_overlap(config: DedupeConfig) -> str:
 # starcoder is parquet with 'content' as text key
 # finemath is parquet with 'text' as text key
 DATASET_CONFIGS = [
-    # DatasetConfig(name="finemath", path=finemath_3_plus, text_field="text"),
-    # DatasetConfig(name="dclm", path=dclm_baseline),
-    # DatasetConfig(name="starcoder", path=starcoderdata, text_field="content"),
+    DatasetConfig(name="finemath", path=finemath_3_plus, text_field="text"),
+    DatasetConfig(name="dclm", path=dclm_baseline),
+    DatasetConfig(name="starcoder", path=starcoderdata, text_field="content"),
     DatasetConfig(name="proofpile", path=proofpile_2),
-    # DatasetConfig(name="dolmino", path=dolmino),
-    # DatasetConfig(name="nemotron_cc", path=nemotron_cc),
-    # DatasetConfig(name="math_reasoning", path=math_reasoning),
+    DatasetConfig(name="dolmino", path=dolmino),
+    DatasetConfig(name="nemotron_cc", path=nemotron_cc),
 ]
 
 

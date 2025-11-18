@@ -130,15 +130,3 @@ nemotron_cc = ExecutorStep(
     config=NemotronIngressConfig(),
     pip_dependency_groups=["download_transform"],
 )
-
-
-math_reasoning = ExecutorStep(
-    name="unsloth/OpenMathReasoning-mini",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="unsloth/OpenMathReasoning-mini",
-        revision="main",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-).cd("data")
