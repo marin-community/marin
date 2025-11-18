@@ -16,8 +16,8 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from marin.rl.inference_ctx import InferenceContext
 from marin.rl.types import RolloutGroup
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +32,14 @@ class MarinEnv(ABC):
     @abstractmethod
     def sample(
         self,
-        inference_ctx: InferenceContext,
+        inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
         temperature: float,
         prng_key,
         mode: str = "train",
+        max_tokens: int | None = None,
+        stop: list[str] | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample examples, generate responses, and create rollouts.
 
@@ -48,6 +50,8 @@ class MarinEnv(ABC):
             temperature: Sampling temperature for generation
             prng_key: JAX random key for sampling
             mode: "train" or "eval" - which dataset to sample from
+            max_tokens: Maximum number of tokens to generate
+            stop: Stop tokens to use for generation
 
         Returns:
             Tuple of (rollout_groups, metrics)

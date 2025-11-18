@@ -23,7 +23,7 @@ import jax
 import numpy as np
 from transformers import PreTrainedTokenizer
 
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
 
 from .base import MarinEnv
@@ -284,12 +284,14 @@ class MockEnv(MarinEnv):
 
     def sample(
         self,
-        inference_ctx: InferenceContext,
+        inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
         temperature: float,
         prng_key,
         mode: str = "train",
+        max_tokens: int | None = None,
+        stop: list[str] | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample examples, generate responses, and create rollouts."""
         # Select dataset
@@ -315,6 +317,8 @@ class MockEnv(MarinEnv):
             prompts=prompts,
             temperature=temperature,
             n=n_generations,
+            max_tokens=max_tokens,
+            stop=stop,
         )
 
         # Evaluate and create rollouts
@@ -322,12 +326,15 @@ class MockEnv(MarinEnv):
 
         for prompt, completion in zip(prompts, completions, strict=True):
             group = []
+
             for choice in completion.choices:
                 true_answer = sampled_examples[prompt]
                 reward = self.task.compute_reward(true_answer, choice.message.content, tokenizer=inference_ctx.tokenizer)
+
                 rollout = inference_ctx.create_rollout_from_choice(
                     prompt, choice, env_name=f"mock_env:{self.task_type}", env_example_id=hash(prompt), reward=reward
                 )
+
                 group.append(rollout)
             rollout_groups.append(RolloutGroup(rollouts=group))
 

@@ -31,7 +31,7 @@ try:
 except ImportError:
     pytest.skip("verifiers library not installed", allow_module_level=True)
 
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.environments.inference_ctx import LevanterInferenceContext
 
 
 def create_mock_chat_completion(response_text: str = "42") -> ChatCompletion:
@@ -65,7 +65,7 @@ def tokenizer():
 def inference_ctx(tokenizer):
     """Create a real inference context with mock openai_client."""
 
-    class DummyInferenceContext(InferenceContext):
+    class DummyInferenceContext(LevanterInferenceContext):
         def __init__(self, tokenizer):
             self.tokenizer = tokenizer
             self._stop_tokens = None
