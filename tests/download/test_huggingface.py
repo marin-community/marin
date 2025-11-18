@@ -109,6 +109,33 @@ def test_download_hf_basic(mock_hf_fs, tmp_path):
     assert len(provenance["links"]) == 3
 
 
+def test_download_hf_appends_sha_when_configured(mock_hf_fs, tmp_path):
+    """Ensure outputs are written under a revision subdirectory when requested."""
+
+    test_files = {
+        "datasets/test-org/test-dataset/data/file1.txt": b"Content 1",
+    }
+
+    hf_fs = mock_hf_fs(test_files)
+
+    base_output_path = tmp_path / "output"
+    revision = "abc1234"
+
+    cfg = DownloadConfig(
+        hf_dataset_id="test-org/test-dataset",
+        revision=revision,
+        gcs_output_path=str(base_output_path),
+        append_sha_to_path=True,
+    )
+
+    with patch("marin.download.huggingface.download_hf.HfFileSystem", return_value=hf_fs):
+        download_hf(cfg)
+
+    target_output = base_output_path / revision
+    assert (target_output / "data" / "file1.txt").exists()
+    assert (target_output / "provenance.json").exists()
+
+
 def test_prune_hf_dataset(tmp_path):
     """Test full dataset pruning pipeline."""
     # Create test parquet data

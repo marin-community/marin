@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 from zephyr import Dataset, create_backend, load_file, load_parquet
 from zephyr.dataset import FilterOp, MapOp, WindowOp
+from zephyr._test_helpers import SampleDataclass
 
 
 @pytest.fixture(autouse=True)
@@ -45,6 +46,20 @@ def test_from_list(sample_data, backend):
     """Test creating dataset from list."""
     ds = Dataset.from_list(sample_data)
     assert list(backend.execute(ds)) == sample_data
+
+
+def test_dataclass_round_trip_preserves_type(backend):
+    """Ensure dataclass items are not downcast to dicts during execution."""
+    items = [SampleDataclass("alpha", 1), SampleDataclass("beta", 2)]
+
+    ds = Dataset.from_list(items)
+    result = list(backend.execute(ds))
+
+    assert [item.name for item in result] == ["alpha", "beta"]
+    assert all(isinstance(item, SampleDataclass) for item in result)
+
+    doubled = Dataset.from_list(items).map(lambda x: x.value * 2)
+    assert list(backend.execute(doubled)) == [2, 4]
 
 
 def test_from_iterable(backend):
