@@ -368,7 +368,7 @@ def mark_duplicates_bloom(
 
     all_files = collect_input_files(input_path)
     ds = Dataset.from_iterable(all_files).map_shard(process_file_with_bloom)
-    result = list(flow_backend().execute(ds))
+    result = list(flow_backend(max_parallelism=config.processes).execute(ds))
     return result
 
 
