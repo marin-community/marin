@@ -4,8 +4,10 @@
 import dataclasses
 from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Type, Union
+import sys
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 from jaxtyping import PRNGKeyArray
@@ -181,7 +183,12 @@ class Gpt2Attention(eqx.Module):
     @named_call
     def __call__(self, x: NamedArray, mask: Optional[AttentionMask | NamedArray], layer_idx, *, key):
         k_drop, k_attn, k_out = hax.jax_utils.maybe_rng_split(key, 3)
+
         qkv_out = self.c_attn(x, key=k_attn).rearrange((..., "qkv", "heads", "position", "head_size"))
+        qkv_norm = jnp.linalg.norm(qkv_out.array)
+        qkv_has_nan = jnp.any(jnp.isnan(qkv_out.array))
+        # jax.debug.print("Attn layer {layer} qkv: norm={norm}, has_nan={nan}", layer=layer_idx, norm=qkv_norm, nan=qkv_has_nan)
+
         q, k, v = qkv_out.unbind("qkv")
 
         # Rename k and v's Pos as haliax doesn't support unnamed axes or duplicate axes
@@ -237,13 +244,44 @@ class Gpt2Block(eqx.Module):
     def __call__(self, x: NamedArray, mask: Optional[AttentionMask | NamedArray], layer_idx, *, key):
         k1, k2, k3, k4 = haliax.jax_utils.maybe_rng_split(key, 4)
 
-        attn_output = self.attn(self.ln_1(x), mask=mask, layer_idx=layer_idx, key=k1)
+        # Debug: input to block
+        x_norm = jnp.linalg.norm(x.array)
+        x_has_nan = jnp.any(jnp.isnan(x.array))
+        # jax.debug.print("Block {layer} input: norm={norm}, has_nan={nan}", layer=layer_idx, norm=x_norm, nan=x_has_nan)
+
+        ln1_out = self.ln_1(x)
+        ln1_norm = jnp.linalg.norm(ln1_out.array)
+        ln1_has_nan = jnp.any(jnp.isnan(ln1_out.array))
+        # jax.debug.print("Block {layer} ln_1: norm={norm}, has_nan={nan}", layer=layer_idx, norm=ln1_norm, nan=ln1_has_nan)
+
+        attn_output = self.attn(ln1_out, mask=mask, layer_idx=layer_idx, key=k1)
+        attn_norm = jnp.linalg.norm(attn_output.array)
+        attn_has_nan = jnp.any(jnp.isnan(attn_output.array))
+        # jax.debug.print("Block {layer} attn: norm={norm}, has_nan={nan}", layer=layer_idx, norm=attn_norm, nan=attn_has_nan)
+
         attn_output = self.resid_dropout(attn_output, key=k2)
         x = x + attn_output
 
-        ff_output = self.mlp(self.ln_2(x), key=k3)
+        post_attn_norm = jnp.linalg.norm(x.array)
+        post_attn_has_nan = jnp.any(jnp.isnan(x.array))
+        # jax.debug.print("Block {layer} post_attn: norm={norm}, has_nan={nan}", layer=layer_idx, norm=post_attn_norm, nan=post_attn_has_nan)
+
+        ln2_out = self.ln_2(x)
+        ln2_norm = jnp.linalg.norm(ln2_out.array)
+        ln2_has_nan = jnp.any(jnp.isnan(ln2_out.array))
+        # jax.debug.print("Block {layer} ln_2: norm={norm}, has_nan={nan}", layer=layer_idx, norm=ln2_norm, nan=ln2_has_nan)
+
+        ff_output = self.mlp(ln2_out, key=k3)
+        mlp_norm = jnp.linalg.norm(ff_output.array)
+        mlp_has_nan = jnp.any(jnp.isnan(ff_output.array))
+        # jax.debug.print("Block {layer} mlp: norm={norm}, has_nan={nan}", layer=layer_idx, norm=mlp_norm, nan=mlp_has_nan)
+
         ff_output = self.resid_dropout(ff_output, key=k4)
         x = x + ff_output
+
+        output_norm = jnp.linalg.norm(x.array)
+        output_has_nan = jnp.any(jnp.isnan(x.array))
+        # jax.debug.print("Block {layer} output: norm={norm}, has_nan={nan}", layer=layer_idx, norm=output_norm, nan=output_has_nan)
 
         return x
 
@@ -268,7 +306,16 @@ class Gpt2Transformer(ModuleWithStateDictSerialization):
     def __call__(self, x: NamedArray, attn_mask: Optional[AttentionMask | NamedArray], *, key=None) -> NamedArray:
         keys = hax.jax_utils.maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x = self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers), key=keys)
+
+        x_norm = jnp.linalg.norm(x.array)
+        x_has_nan = jnp.any(jnp.isnan(x.array))
+        # jax.debug.print("Before final ln: norm={norm}, has_nan={nan}", norm=x_norm, nan=x_has_nan)
+
         x = self.ln_f(x)
+
+        final_norm = jnp.linalg.norm(x.array)
+        final_has_nan = jnp.any(jnp.isnan(x.array))
+        # jax.debug.print("After final ln: norm={norm}, has_nan={nan}", norm=final_norm, nan=final_has_nan)
 
         return x
 
@@ -300,10 +347,28 @@ class Gpt2Embeddings(ModuleWithStateDictSerialization, eqx.Module):
 
     @named_call
     def embed(self, input_ids, *, key, pos_ids: NamedArray):
+        # jax.debug.print("input_ids: min={min}, max={max}, has_nan={nan}", min=jnp.min(input_ids.array), max=jnp.max(input_ids.array), nan=jnp.any(jnp.isnan(input_ids.array)))
+        # jax.debug.print("token_embeddings.weight: has_nan={nan}", nan=jnp.any(jnp.isnan(self.token_embeddings.weight.array)))
+
         input_embeds = self.token_embeddings(input_ids)
+        input_embeds_norm = jnp.linalg.norm(input_embeds.array)
+        input_embeds_has_nan = jnp.any(jnp.isnan(input_embeds.array))
+        # jax.debug.print("input_embeds: norm={norm}, has_nan={nan}", norm=input_embeds_norm, nan=input_embeds_has_nan)
+
         position_embeds = self.position_embeddings.embed(pos_ids)
+        pos_embeds_norm = jnp.linalg.norm(position_embeds.array)
+        pos_embeds_has_nan = jnp.any(jnp.isnan(position_embeds.array))
+        # jax.debug.print("position_embeds: norm={norm}, has_nan={nan}", norm=pos_embeds_norm, nan=pos_embeds_has_nan)
+
         x = input_embeds + position_embeds
+        x_norm = jnp.linalg.norm(x.array)
+        x_has_nan = jnp.any(jnp.isnan(x.array))
+        # jax.debug.print("embeds_sum: norm={norm}, has_nan={nan}", norm=x_norm, nan=x_has_nan)
+
         x = self.dropout(x, key=key)
+        x_dropout_norm = jnp.linalg.norm(x.array)
+        x_dropout_has_nan = jnp.any(jnp.isnan(x.array))
+        # jax.debug.print("embeds_after_dropout: norm={norm}, has_nan={nan}", norm=x_dropout_norm, nan=x_dropout_has_nan)
 
         return x
 
@@ -339,6 +404,8 @@ class Gpt2LMHeadModel(LmWithHfSerializationMixin[Gpt2Config]):
         k_t, k_embeddings = jrandom.split(key, 2)
         transformer = Gpt2Transformer.init(config, key=k_t)
         embeddings = Gpt2Embeddings.init(Vocab, config, key=k_embeddings)
+        # jax.debug.print("embeddings Vocab.size={}", Vocab.size)
+        # jax.debug.print("embeddings token_embeddings.weight.shape={}", embeddings.token_embeddings.weight.shape)
 
         return Gpt2LMHeadModel(transformer, embeddings)
 
@@ -353,7 +420,11 @@ class Gpt2LMHeadModel(LmWithHfSerializationMixin[Gpt2Config]):
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
         if pos_ids is None:
             pos_ids = hax.arange(input_ids.resolve_axis("position"), dtype=jnp.int32)
+        # jax.debug.print(f"input_ids={input_ids.array}")
+        # jax.debug.print(f"pos_ids={pos_ids.array}")
         x = self.embeddings.embed(input_ids, pos_ids=pos_ids, key=k_embed)
+        # jax.debug.print(f"embedded={x.array}")
+        # jax.debug.print(f"attn_mask={attn_mask}")
         x = self.transformer(x, attn_mask, key=k_transformer)
 
         return x

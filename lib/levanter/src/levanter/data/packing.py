@@ -432,7 +432,7 @@ def pack_documents(
 
 class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
     """
-    Prepacks a dataset into a new dataset where examples are packed into a single example.
+    Prepacks a dataset into a new dataset where a contiguous range of examples is packed into a single example.
 
     As per usual, I can't help but make this generic.
 
@@ -454,6 +454,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         max_segments_per_example: int | None = None,
         pad_with_zeros: bool = True,
         slice_strategy: Literal["left", "right", "raise"] = "raise",
+        packing_lengths: PyTree[np.ndarray] | None = None,
     ):
         """
         Args:
@@ -462,6 +463,16 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
             max_segments_per_example: Maximum number of documents that can be packed into a single example.
             pad_with_zeros: If True, pad examples to max_length with zeros. If False, return examples as-is.
             slice_strategy: One of "left", "right", or "raise". Determines how to handle examples that exceed max_length.
+            packing_lengths: An (optional) PyTree of numpy arrays. Each array should be of
+                length `n_docs`, the number of documents.
+                If supplied, when computing whether we can pack the i-th document into a batch, we
+                will use the length `packing_lengths[j][i]` instead of the true length.
+                If None, we just use the true lengths computed from `offsets`.
+                Added for UL2R because when we construct denoising data the length of each example
+                increases by an independent amount. But we want to turn one batch of original data
+                into one batch of denoising data so we need to reserve some space in the batch.
+                We DO NOT insert padding corresponding to `packing_lengths`; documents are still
+                contiguous.
         """
         super().__init__()
 
@@ -477,14 +488,19 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         _offsets = jax.tree.map(lambda store: store.offsets[0 : store.num_rows + 1].read(), self.dataset)
         self._offsets = jax.tree.map(lambda fut: fut.result(), _offsets)
 
-        def diff_offsets(offsets: np.ndarray):
-            # fine to mutate since we have a copy
-            # the array store has the number of rows in the 0th offset
-            offsets[0] = 0
-            return offsets[1:] - offsets[:-1]
 
-        # Convert offsets to lengths
-        self._lengths = jax.tree.map(diff_offsets, self._offsets)
+        if packing_lengths is not None:
+            self._lengths = packing_lengths
+        else:
+            def diff_offsets(offsets: np.ndarray):
+                # fine to mutate since we have a copy
+                # the array store has the number of rows in the 0th offset
+                offsets[0] = 0
+                return offsets[1:] - offsets[:-1]
+
+            # Convert offsets to lengths
+            self._lengths = jax.tree.map(diff_offsets, self._offsets)
+
 
         # Build pack indices
         self._pack_indices: list[range] = pack_documents(
@@ -513,11 +529,13 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
 
         Returns a list of tuples (data, segment_ids), where each is a PyTree (with the same structure as self.dataset),
         and each leaf is a numpy array representing the data or segment IDs for that packed example.
+
+        Segment IDs index into the original `dataset`.
         """
 
         pack_doc_ranges = [self._pack_indices[i] for i in indices]
 
-        async def get_data_for_leaf(store, offsets, allowed: int) -> tuple[list[np.ndarray], list[np.ndarray]]:
+        async def get_data_for_leaf(store, offsets, lengths, allowed: int) -> tuple[list[np.ndarray], list[np.ndarray]]:
             out_data = []
             out_segment_ids = []
             # Using ts.Batch to group reads.
@@ -577,7 +595,7 @@ class GreedyPrepackedDataset(AsyncDataset[tuple[T, T]]):
         # Use tree.map to combine the leaves from: dataset, max_length and, for each pack, its doc_range.
         # Note: jax.tree.map will map over each pack in parallel across the leaves.
         max_length_tree = tree_broadcast_to(self.max_length, self._offsets)
-        leaf_batch_futures = jax.tree.map(get_data_for_leaf, self.dataset, self._offsets, max_length_tree)
+        leaf_batch_futures = jax.tree.map(get_data_for_leaf, self.dataset, self._offsets, self._lengths, max_length_tree)
 
         # Flatten the resulting PyTree: each leaf is now an Awaitable returning a tuple of lists of np.ndarray—one per requested pack.
         leaves, treedef = jax.tree.flatten(leaf_batch_futures)

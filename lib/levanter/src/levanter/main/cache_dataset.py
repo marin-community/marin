@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import levanter
 from levanter.data.metrics_monitor import LoggingMetricsMonitor
-from levanter.data.text import BatchTokenizer, SingleDatasetLMConfigBase
+from levanter.data.text import BatchTokenizer, SingleDatasetLMConfig, SingleDatasetLMConfigBase
 from levanter.distributed import RayConfig
 from levanter.store.cache import build_or_load_cache
 from levanter.tracker import NoopConfig, TrackerConfig
@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class RayCachedLMDatasetConfig(SingleDatasetLMConfigBase, RayConfig):
+class RayCachedLMDatasetConfig(RayConfig):
+    data: SingleDatasetLMConfig = field(default_factory=SingleDatasetLMConfigBase)
     tracker: TrackerConfig = field(default_factory=NoopConfig)
 
 
@@ -28,14 +29,15 @@ def main(args: RayCachedLMDatasetConfig):
     init_logging(".", "cache_dataset.log")
     args.initialize()
 
-    tokenizer = args.the_tokenizer
+    data = args.data
+    tokenizer = data.the_tokenizer
 
     for split in ["train", "validation"]:
-        print(f"Caching {split} to {args.cache_dir}.")
+        print(f"Caching {split} to {data.cache_dir}.")
         # connect or start the actor
-        batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=args.enforce_eos)
-        split_cache_dir = os.path.join(args.cache_dir, split)  # type: ignore
-        source = args.get_shard_source(split)
+        batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=data.enforce_eos)
+        split_cache_dir = os.path.join(data.cache_dir, split)  # type: ignore
+        source = data.get_shard_source(split)
 
         if source is None:
             logger.warning(f"Skipping {split} because it is empty.")
