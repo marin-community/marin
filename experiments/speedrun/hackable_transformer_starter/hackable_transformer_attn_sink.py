@@ -477,7 +477,7 @@ def _batch_sizes() -> dict[str, int]:
 def _lr_multipliers(num: int = 5, start_exp: float = -2.0, stop_exp: float = 2.0) -> list[float]:
     # Base-2 logspace, exclude 1x and 2x (already swept)
     vals = np.logspace(start=start_exp, stop=stop_exp, num=num, base=2.0)
-    filtered = [float(v) for v in vals if not np.isclose(v, 1.0) and not np.isclose(v, 2.0)]
+    filtered = [float(v) for v in vals if not np.isclose(v, 1.0)]
     # Deduplicate while preserving order (in case ranges overlap)
     seen = set()
     out: list[float] = []
