@@ -17,12 +17,15 @@ from collections import deque
 from functools import partial
 from pathlib import Path
 
+import equinox as eqx
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import optax
 import tyro
 from flax.training.train_state import TrainState
 from jax.sharding import PartitionSpec as PS
+from levanter.grad_accum import microbatched
 from optax import softmax_cross_entropy_with_integer_labels
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 from tqdm.auto import tqdm
@@ -250,52 +253,45 @@ class Trainer:
             annotation_shardings=self.train_intermediate_sharding_rules,
         )
         def train_step(train_state, rng, batch):
-            def loss(params):
-                # Micro-batching to reduce forward pass memory
-                assert batch["input_ids"].shape[0] % self.grad_accum_steps == 0, "train_step: Batch size must be divisible by grad_accum_steps"
-                micro_batch_size = batch["input_ids"].shape[0] // self.grad_accum_steps
-                token_losses = []
-                
-                for i in range(self.grad_accum_steps):
-                    start_idx = i * micro_batch_size
-                    end_idx = (i + 1) * micro_batch_size
-                    
-                    micro_logits = self.train_model(
-                        input_ids=batch["input_ids"][start_idx:end_idx],
-                        attention_mask=batch["attention_mask"][start_idx:end_idx],
-                        position_ids=batch["position_ids"][start_idx:end_idx],
-                        params=params,
-                        dropout_rng=rng,
-                        train=True,
-                    ).logits
-                    micro_logits = micro_logits.astype(jnp.float32)
-                    micro_token_loss = softmax_cross_entropy_with_integer_labels(
-                        micro_logits, batch["target_ids"][start_idx:end_idx]
-                    )
-                    token_losses.append(micro_token_loss)
-                
-                token_loss = jnp.concatenate(token_losses, axis=0)
+            # Define Batch axis for gradient accumulation
+            batch_size = batch["input_ids"].shape[0]
+            microbatch_size = batch_size // self.grad_accum_steps
+            Batch = hax.Axis("Batch", batch_size)
+            
+            # Define loss function that operates on a single batch (or microbatch)
+            def loss_fn(params, input_ids, attention_mask, position_ids, target_ids,
+                       policy_logprobs, reference_logprobs, loss_weights, loss_masks, key):
+                # Forward pass
+                logits = self.train_model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    params=params,
+                    dropout_rng=key,
+                    train=True,
+                ).logits
+                logits = logits.astype(jnp.float32)
+                token_loss = softmax_cross_entropy_with_integer_labels(logits, target_ids)
                 
                 # Compute probability ratio: exp(target_logprobs - sampling_logprobs)
                 target_logprobs = -token_loss
-                sampling_logprobs = batch["policy_logprobs"]
-                prob_ratio = jnp.exp(target_logprobs - sampling_logprobs)
+                prob_ratio = jnp.exp(target_logprobs - policy_logprobs)
                 
                 # Compute importance-weighted REINFORCE loss
-                reinforce_loss = -jnp.mean(prob_ratio * batch["loss_weights"], where=batch["loss_masks"] > 0.0)
-                ref_log_ratio = batch["reference_logprobs"] + token_loss
+                reinforce_loss = -jnp.mean(prob_ratio * loss_weights, where=loss_masks > 0.0)
+                ref_log_ratio = reference_logprobs + token_loss
                 kl_loss = jnp.exp(ref_log_ratio) - 1 - ref_log_ratio
-                kl_loss = jnp.mean(kl_loss, where=batch["loss_masks"] > 0.0)
+                kl_loss = jnp.mean(kl_loss, where=loss_masks > 0.0)
                 loss = reinforce_loss + self.kl_coef * kl_loss
                 
                 # Compute KL divergence metrics between sampling and training logprobs
                 training_logprobs = target_logprobs
-                action_mask = batch["loss_masks"] > 0.0
+                action_mask = loss_masks > 0.0
                 
-                logprob_diff = sampling_logprobs - training_logprobs
+                logprob_diff = policy_logprobs - training_logprobs
                 kl_sample_train_v1 = jnp.mean(logprob_diff, where=action_mask)
                 kl_sample_train_v2 = 0.5 * jnp.mean(logprob_diff**2, where=action_mask)
-                entropy_sample = -jnp.mean(sampling_logprobs, where=action_mask)
+                entropy_sample = -jnp.mean(policy_logprobs, where=action_mask)
                 
                 return loss, {
                     "reinforce_loss": reinforce_loss,
@@ -304,9 +300,38 @@ class Trainer:
                     "kl_sample_train_v2": kl_sample_train_v2,
                     "entropy": entropy_sample,
                 }
-
-            grad_fn = jax.value_and_grad(loss, has_aux=True)
-            (loss, aux), grads = grad_fn(train_state.params)
+            
+            # Create gradient function and wrap with microbatched accumulation
+            grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
+            
+            # Axis mappings for sharding (params should stay on model sharding, data on data sharding)
+            param_axis_mapping = {}  # Params stay on their current sharding
+            data_axis_mapping = {}   # Data is on the batch dimension
+            
+            if self.grad_accum_steps > 1:
+                grad_fn = microbatched(
+                    grad_fn,
+                    Batch,
+                    microbatch_size,
+                    param_axis_mapping,
+                    data_axis_mapping,
+                    patch_in_rng_key="key",
+                )
+            
+            # Execute gradient computation
+            (loss, aux), grads = grad_fn(
+                train_state.params,
+                batch["input_ids"],
+                batch["attention_mask"],
+                batch["position_ids"],
+                batch["target_ids"],
+                batch["policy_logprobs"],
+                batch["reference_logprobs"],
+                batch["loss_weights"],
+                batch["loss_masks"],
+                key=rng,
+            )
+            
             train_state = train_state.apply_gradients(grads=grads)
             metrics = dict(
                 loss=loss,
