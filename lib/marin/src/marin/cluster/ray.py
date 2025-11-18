@@ -551,7 +551,9 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
             ray.init(address=f"ray://localhost:{api_port}", runtime_env={"working_dir": "."})
 
         yield connection
-
+    except Exception:
+        logger.info("Exception during Ray proxy connection, tearing down.", exc_info=1)
+        raise
     finally:
         # Cleanup
         if connection.proxy:

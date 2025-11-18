@@ -32,7 +32,6 @@ dependencies = [
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow>=22",
     "ray==2.45",
-    "rbloom",
     "regex",
     "requests",
     "s3fs>=2024",
@@ -131,8 +130,7 @@ torch = [
     # CUDA12 index only when --extra cuda12
     { index = "pytorch-cu128", extra = "cuda12" },
 ]
-
-rbloom = { index = "rbloom-index" }
+rbloom = { git = "https://github.com/marin-community/rbloom.git", rev = "v1.6.5" }
 
 
 [[tool.uv.index]]
@@ -218,15 +216,16 @@ download_transform = [
 ]
 
 quality_dedup_consolidate = [
+    "cattrs==24.1.3",
+    "datasets",
+    "ddsketch",
     "fasttext",
     "huggingface_hub",
-    "datasets",
-    "transformers",
     "hyperloglog",
-    "zstandard>=0.23.0",
     "nltk>=3.8.1",
-    "cattrs==24.1.3",
-    "ddsketch",
+    "rbloom",
+    "transformers",
+    "zstandard>=0.23.0",
 ]
 
 tokenize_train = [

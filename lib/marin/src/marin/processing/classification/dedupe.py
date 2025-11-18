@@ -32,6 +32,7 @@ from enum import Enum
 
 import draccus
 import fsspec
+import msgspec
 from marin.utils import fsspec_glob, rebase_file_path
 from rbloom import Bloom
 from zephyr import Dataset, flow_backend, load_parquet
@@ -218,7 +219,7 @@ def build_filter(
         .reshard(num_shards=config.processes)
         .flat_map(lambda path: load_file(path, columns=[config.text_field]))
         .map_shard(build_shard_bloom)
-        .write_binary(f"{bloom_path}-shard-{{shard:05d}}-of-{{total:05d}}.bin")
+        .write_binary(f"{bloom_path}-{{shard:05d}}-of-{{total:05d}}.bin")
     )
 
     if len(shard_blooms_data) == 1:
@@ -270,6 +271,15 @@ def calculate_paragraph_overlap(paragraph: str, bloom_filter: Bloom, ngram_confi
         return 1.0 if _bloom_hash(paragraph) in bloom_filter else 0.0
 
 
+def _record_id(record: dict) -> str:
+    if "id" in record:
+        return record["id"]
+    else:
+        # compute hash of the msgspec serialization of the record
+        s = msgspec.msgpack.encode(record, order="deterministic")
+        return str(_bloom_hash(s))
+
+
 def mark_duplicates(record: dict, bloom_filter: Bloom, config: DedupeConfig) -> dict:
     """
     Mark duplicate spans in a record using bloom filter.
@@ -297,8 +307,7 @@ def mark_duplicates(record: dict, bloom_filter: Bloom, config: DedupeConfig) -> 
         offset += len(para) + 1  # +1 for newline
 
     return {
-        "id": record.get("id", ""),
-        "source": record.get("source", ""),
+        "id": _record_id(record),
         "attributes": {config.attribute_name: duplicate_spans},
     }
 
@@ -356,11 +365,11 @@ def _run_deduplication(config: DedupeConfig):
     def _compute_hash(record: dict) -> Iterator[dict]:
         text = record.get(config.text_field, "")
         paras = text.split("\n")
-        # For deduplication, we use exact paragraph matching to find duplicates
+        record_id = _record_id(record)
         for para in paras:
             yield {
                 "hash": _str_hash(para),
-                "id": record["id"],
+                "id": record_id,
             }
 
     def _count_reduce(key, items):
@@ -411,19 +420,19 @@ def _run_deduplication(config: DedupeConfig):
         # Process records
         def mark_dups_in_file():
             for record in load_file(input_file_path):
+                record_id = _record_id(record)
                 spans = []
                 offset = 0
                 paras = record.get(config.text_field, "").split("\n")
                 for para in paras:
                     hash_val = _str_hash(para)
                     if hash_val in dup_map:
-                        if record["id"] != dup_map[hash_val]["canonical"]:
+                        if record_id != dup_map[hash_val]["canonical"]:
                             spans.append([offset, offset + len(para), 1.0])
                     offset = offset + len(para) + 1  # +1 for newline
 
                 yield {
-                    "id": record["id"],
-                    "source": record.get("source", ""),
+                    "id": record_id,
                     "attributes": {config.attribute_name: spans},
                 }
 
