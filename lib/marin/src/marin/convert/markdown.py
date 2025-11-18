@@ -23,7 +23,7 @@ from bs4 import BeautifulSoup, Comment, Doctype, NavigableString
 from markdownify import MarkdownConverter
 from regex import regex
 
-from marin.schemas.web.convert import HtmlToMarkdownConfig
+from .config import HtmlToMarkdownConfig
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +267,7 @@ class MyMarkdownConverter(MarkdownConverter):
         text = el.get_text()
         if not text:
             return None
-        from .guess_code import predict
+        from ._code_detection import predict
 
         lang = predict(text)[0][0]
         return lang.lower()
@@ -645,7 +645,7 @@ class MyMarkdownConverter(MarkdownConverter):
 
 _xslt_mml = None
 
-_xslt_mml_path = os.path.join(os.path.dirname(__file__), "xsl_yarosh/mmltex.xsl")
+_xslt_mml_path = os.path.join(os.path.dirname(__file__), "data/xsl/mmltex.xsl")
 
 
 # cf https://github.com/oerpub/mathconverter/blob/master/converter.py#L14

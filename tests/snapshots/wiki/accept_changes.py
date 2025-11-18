@@ -3,9 +3,9 @@ import os
 from tqdm import tqdm
 
 from experiments.exp575_wikipedia_markdownify import WIKI_BLACKLISTED_SELECTORS
-from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
+from marin.convert import ExtractionConfig, HtmlToMarkdownConfig, ResiliparseConfig
 from marin.transform.wikipedia.transform_wikipedia import clean_wiki_html
-from marin.web.convert import convert_page
+from marin.convert import convert_page
 
 
 def prepare_expected_output(html: str, extract_method: str, extract_config: ExtractionConfig) -> str:
