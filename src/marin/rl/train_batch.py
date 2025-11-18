@@ -137,7 +137,7 @@ def create_training_batch_from_rollouts(
         loss_masks=hax.named(stacked["loss_masks"], ["batch", "position"]),
         policy_logprobs=hax.named(stacked["policy_logprobs"], ["batch", "position"]),
         temperature=hax.named(stacked["temperature"], ["batch"]),
-        truncated=hax.named(stacked["truncated"], ["batch"]),
+        truncated=stacked["truncated"],
         max_output_tokens=max_tokens,
     )
 

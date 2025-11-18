@@ -201,16 +201,22 @@ def cispo_loss_with_importance_sampling(
     }
 
 
-def current_and_policy_importance_sampling_ratio(
+def importance_sampling_ratio(
     current_logprobs: jax.Array,
     policy_logprobs_array: jax.Array,
     loss_masks_array: jax.Array,
     *,
-    clip_epsilon: float,
+    stop_current_logprob_gradient: bool = False,
+    stop_policy_logprob_gradient: bool = True,
 ) -> jax.Array:
-    current_logprobs = jax.lax.stop_gradient(current_logprobs)
+    if stop_current_logprob_gradient:
+        current_logprobs = jax.lax.stop_gradient(current_logprobs)
+
+    if stop_policy_logprob_gradient:
+        policy_logprobs_array = jax.lax.stop_gradient(policy_logprobs_array)
+
     prob_difference = jnp.exp(current_logprobs - policy_logprobs_array) * loss_masks_array
-    return jnp.clip(prob_difference, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon)
+    return prob_difference
 
 
 def rloo_loss_with_importance_sampling(
@@ -247,9 +253,17 @@ def rloo_loss_with_importance_sampling(
     current_logprobs = current_logprobs * loss_masks_array
 
     if synchronous:
-        ratio = jnp.exp(current_logprobs - jax.lax.stop_gradient(current_logprobs)) * loss_masks_array
+        policy_logprobs_array_for_importance_sampling_calculation = current_logprobs
     else:
-        ratio = jnp.exp(current_logprobs - policy_logprobs_array)
+        policy_logprobs_array_for_importance_sampling_calculation = policy_logprobs_array
+
+    ratio = importance_sampling_ratio(
+        current_logprobs,
+        policy_logprobs_array_for_importance_sampling_calculation,
+        loss_masks_array,
+        stop_current_logprob_gradient=False,
+        stop_policy_logprob_gradient=True,
+    )
 
     # N.B. This should be enabled, but we seem to be training far enough
     # off of policy that we're not learning anything when we clip.
@@ -260,11 +274,15 @@ def rloo_loss_with_importance_sampling(
     clip_fraction = jnp.mean(jnp.sum(is_clipped * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1))
 
     if do_trainer_inference_mismatch_importance_sampling:
-        trainer_inference_importance_sampling_ratio = current_and_policy_importance_sampling_ratio(
+        trainer_inference_importance_sampling_ratio = importance_sampling_ratio(
             current_logprobs,
             policy_logprobs_array,
             loss_masks_array,
-            clip_epsilon=clip_epsilon,
+            stop_current_logprob_gradient=True,
+            stop_policy_logprob_gradient=True,
+        )
+        trainer_inference_importance_sampling_ratio = jnp.clip(
+            trainer_inference_importance_sampling_ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon
         )
     else:
         trainer_inference_importance_sampling_ratio = jnp.ones_like(current_logprobs)

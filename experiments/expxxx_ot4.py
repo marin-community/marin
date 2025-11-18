@@ -11,11 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from dataclasses import replace
 
 from marin.download.huggingface.download import DownloadConfig
 from marin.download.huggingface.download_hf import download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, executor_main
 from experiments.models import qwen3_32b, get_model_local_path
+from marin.export.hf_upload import upload_dir_to_hf
 from marin.processing.classification.inference import run_inference
 from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig, DatasetSchemaConfig
 from marin.processing.classification.autoscaler import AutoscalingActorPoolConfig
@@ -43,6 +45,19 @@ open_thoughts_4_science = ExecutorStep(
         wait_for_completion=True,
     ),
     override_output_path="raw/open-thoughts-4-science-7dae059",
+    pip_dependency_groups=["vllm"],
+).cd("data")
+
+open_thoughts_4_code = ExecutorStep(
+    name="raw/open-thoughts-4-code",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="mlfoundations-dev/hero_run_4_code",
+        revision="18bef55",
+        gcs_output_path=this_output_path(),
+        wait_for_completion=True,
+    ),
+    override_output_path="raw/open-thoughts-4-code-18bef55",
     pip_dependency_groups=["vllm"],
 ).cd("data")
 
@@ -183,25 +198,84 @@ qwen_32B_annotated_open_thoughts_4_science = ExecutorStep(
     pip_dependency_groups=["vllm"],
 )
 
-# qwen_32B_annotated_open_thoughts_4 = default_synthetic_data_generation(
-#     input_path=open_thoughts_4,
-#     output_path="documents/open-thoughts-4-qwen3-32b-annotated",
-#     model_name_or_path=get_model_local_path(qwen3_32b),
-#     data_generation_template="{example}",
-#     input_filetype="parquet",
-#     prompt_column="instruction_seed",
-#     resource_config=TPU_V6E_8_STRICT_PACK,
-#     engine_kwargs={
-#         "tensor_parallel_size": 8,
-#         "max_model_len": 8192,
-#     },
-#     generation_kwargs={
-#         "temperature": 0.8,
-#         "max_tokens": 7500,
-#     },
-# )
+ot4_code_input_columns = [
+    "id",
+    "instruction_seed",
+    "output",
+    "source",
+    "license",
+    "dataset",
+    "split",
+    "difficulty",
+    "solution",
+    "index",
+    "_source",
+    "difficulty_reasoning",
+    "__original_row_idx",
+    "ms_id",
+]
+
+open_thoughts_4_annotated_qwen3_32b_code = ExecutorStep(
+    name="documents/open-thoughts-4-code-qwen3-32b-annotated-o7500",
+    fn=run_inference,
+    config=InferenceConfig(
+        input_path=open_thoughts_4_code,
+        output_path=this_output_path(),
+        model_name=get_model_local_path(qwen3_32b),
+        model_type="vllm",
+        attribute_name="open_thoughts_4_code_qwen3_32b_annotated",
+        filetype="parquet",
+        batch_size=512,
+        resume=True,
+        runtime=RuntimeConfig(memory_limit_gb=16),
+        num_batches_per_upload=1,
+        dataset_schema=DatasetSchemaConfig(
+            input_columns=ot4_code_input_columns,
+            output_columns=[
+                *ot4_code_input_columns,
+                "generated_text",
+            ],
+            id_column=("ms_id",),
+        ),
+        autoscaling_actor_pool_config=AutoscalingActorPoolConfig(
+            min_actors=1,
+            max_actors=32,
+            scale_up_threshold=0.8,
+            scale_down_threshold=0.2,
+            scale_check_interval=1.0,
+            actor_kwargs={
+                "template": "{example}",
+                "post_process_fn": None,
+                "engine_kwargs": {
+                    "tensor_parallel_size": 8,
+                    "max_model_len": 8192,
+                },
+                "generation_kwargs": {
+                    "temperature": 0.8,
+                    "max_tokens": 7500,
+                },
+                "save_original_generation": True,
+                "prompt_column": "instruction_seed",  # TODO(chris): This should be in the dataset schema instead.
+            },
+            actor_options={"resources": {"TPU": 8}},
+        ),
+    ),
+    pip_dependency_groups=["vllm"],
+)
+
+upload_qwen32b_annotated_open_thoughts_4 = upload_dir_to_hf(
+    input_path=qwen_32B_annotated_open_thoughts_4,
+    repo_id="marin-community/open-thoughts-4-math-qwen3-32b-annotated",
+    repo_type="dataset",
+)
+
+#  HACK needed on the vLLM cluster to get things running on vLLM cluster
+upload_qwen32b_annotated_open_thoughts_4 = replace(
+    upload_qwen32b_annotated_open_thoughts_4, pip_dependency_groups=["vllm"]
+)
 
 if __name__ == "__main__":
     executor_main([qwen3_32b])
-    # executor_main([qwen_32B_annotated_open_thoughts_4])
-    executor_main([qwen_32B_annotated_open_thoughts_4_science])
+    # executor_main([upload_qwen32b_annotated_open_thoughts_4])
+    # executor_main([qwen_32B_annotated_open_thoughts_4_science])
+    executor_main([open_thoughts_4_annotated_qwen3_32b_code])

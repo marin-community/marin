@@ -357,7 +357,11 @@ def main():
             # model_config=qwen3_1_7b,
             model_config=qwen3_8b,
             rl_loss=RLOOLoss(
-                kl_coef=0.01, clip_epsilon=0.2, synchronous=True, do_trainer_inference_mismatch_importance_sampling=True
+                kl_coef=0.01,
+                clip_epsilon=0.2,
+                synchronous=True,
+                do_trainer_inference_mismatch_importance_sampling=True,
+                do_overlong_filtering=True,
             ),
             experiment_name_suffix="rloo-sync",
         ),
