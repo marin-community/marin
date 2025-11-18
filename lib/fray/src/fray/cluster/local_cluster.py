@@ -52,6 +52,14 @@ class LocalCluster(Cluster):
         self._queue_dir = queue_dir or (self._working_dir / "queues")
         self._jobs: dict[JobId, _LocalJob] = {}
 
+    def _get_cluster_spec(self) -> str:
+        """Get cluster spec string that can recreate this cluster.
+
+        Returns:
+            Cluster spec with queue_dir encoded
+        """
+        return f"local?queue_dir={self._queue_dir}"
+
     def launch(self, request: JobRequest) -> JobId:
         """Launch a job as a local subprocess."""
 
@@ -181,7 +189,7 @@ class LocalCluster(Cluster):
 
         # Inject cluster spec for automatic cluster recreation in subprocess
         if "FRAY_CLUSTER_SPEC" not in env:
-            env["FRAY_CLUSTER_SPEC"] = "local"
+            env["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
 
         return env
 

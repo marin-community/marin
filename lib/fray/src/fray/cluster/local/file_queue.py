@@ -120,39 +120,28 @@ class FileQueue:
         """Acquire a lease on the next available item. Lease deadline is encoded in the filename."""
         self._cleanup_expired_leases()
 
-        available_files = self._fs.glob(f"{self._available_dir}/*.ts-*.pkl")
-        if not available_files:
-            return None
+        # Keep trying until we successfully lease a file or run out
+        while files := self._fs.glob(f"{self._available_dir}/*.ts-*.pkl"):
+            files_sorted = sorted(files, key=lambda f: self._parse_available_filename(f)[1])
+            if not files_sorted:
+                break
 
-        def get_timestamp(filepath: str) -> float:
-            try:
-                _, timestamp = self._parse_available_filename(filepath)
-                return timestamp
-            except Exception:
-                return 0
-
-        files_sorted = sorted(available_files, key=get_timestamp)
-
-        # iterate through files and attempt to lease
-        # another worker may have leased the file between listing and now
-        for file_path in files_sorted:
+            file_path = files_sorted[0]
             item_id, _ = self._parse_available_filename(file_path)
             now = time.time()
             lease_deadline = now + lease_timeout
             leased_filename = self._make_leased_filename(item_id, lease_deadline)
             leased_path = f"{self._leased_dir}/{leased_filename}"
+
             try:
-                # Read item before moving to ensure we can return it
                 with self._fs.open(file_path, "rb") as f:
                     item = pickle.load(f)
                 self._fs.move(file_path, leased_path)
-                return Lease(
-                    item=item,
-                    lease_id=item_id,
-                    timestamp=now,
-                )
+                return Lease(item=item, lease_id=item_id, timestamp=now)
             except Exception:
+                # File might be gone (race) or corrupt, re-glob and try next
                 continue
+
         return None
 
     def done(self, lease: Lease[Any]) -> None:

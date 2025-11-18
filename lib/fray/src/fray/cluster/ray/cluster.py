@@ -505,7 +505,15 @@ class _RayQueueActor:
     def __init__(self):
         """Initialize empty queue state."""
         self._available: list[Any] = []
-        self._leased: dict[str, tuple[Any, float]] = {}
+        self._leased: dict[str, tuple[Any, float]] = {}  # lease_id -> (item, deadline)
+
+    def _cleanup_expired_leases(self):
+        """Move expired leases back to available queue."""
+        now = time.time()
+        expired = [lid for lid, (item, deadline) in self._leased.items() if now > deadline]
+        for lease_id in expired:
+            item, _ = self._leased.pop(lease_id)
+            self._available.insert(0, item)  # Re-queue at front
 
     def push(self, item: Any) -> None:
         """Add an item to the available queue."""
@@ -517,19 +525,25 @@ class _RayQueueActor:
             return None
         return self._available[0]
 
-    def pop(self) -> dict[str, Any] | None:
+    def pop(self, lease_timeout: float = 60.0) -> dict[str, Any] | None:
         """Lease the next available item, returning lease data or None.
+
+        Args:
+            lease_timeout: Seconds before lease expires and item is requeued
 
         Returns:
             Dict with keys 'item', 'lease_id', 'timestamp', or None if empty.
         """
+        self._cleanup_expired_leases()
+
         if not self._available:
             return None
 
         item = self._available.pop(0)
         lease_id = str(uuid.uuid4())
         timestamp = time.time()
-        self._leased[lease_id] = (item, timestamp)
+        deadline = timestamp + lease_timeout
+        self._leased[lease_id] = (item, deadline)
 
         return {
             "item": item,
@@ -609,10 +623,14 @@ class RayQueue(Queue):
         logger.info(f"Peeking item from {self}")
         return ray.get(self._actor.peek.remote())
 
-    def pop(self):
-        """Acquire a lease on the next available item."""
+    def pop(self, lease_timeout: float = 60.0):
+        """Acquire a lease on the next available item.
+
+        Args:
+            lease_timeout: Seconds before lease expires and item is requeued
+        """
         logger.info(f"Popping item from {self}")
-        result = ray.get(self._actor.pop.remote())
+        result = ray.get(self._actor.pop.remote(lease_timeout))
         if result is None:
             return None
 

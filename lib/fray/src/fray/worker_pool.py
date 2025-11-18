@@ -135,8 +135,8 @@ class WorkerPool:
 
             # Process tasks until terminated
             while True:
-                # Try to get a task
-                lease = task_queue.pop()
+                # Try to get a task with short lease timeout for faster recovery
+                lease = task_queue.pop(lease_timeout=5.0)
 
                 if lease is None:
                     # No tasks available, sleep and retry

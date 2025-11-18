@@ -113,12 +113,22 @@ def create_cluster(cluster_spec: str) -> Cluster:
     Args:
         cluster_spec: Cluster specification:
             - "local" -> LocalCluster
+            - "local?queue_dir=/path" -> LocalCluster with queue_dir
             - "ray?namespace=x" -> RayCluster
 
     Returns:
         Configured cluster instance
     """
-    if cluster_spec == "local":
+    if cluster_spec.startswith("local"):
+        from pathlib import Path
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(cluster_spec)
+        if parsed.query:
+            query_params = parse_qs(parsed.query)
+            queue_dir = query_params.get("queue_dir", [None])[0]
+            if queue_dir:
+                return LocalCluster(queue_dir=Path(queue_dir))
         return LocalCluster()
 
     if cluster_spec.startswith("ray"):

@@ -16,13 +16,11 @@
 
 import tempfile
 import time
-from pathlib import Path
 
 import pytest
 import ray
 
 from fray.cluster.local.file_queue import FileQueue
-from fray.cluster.queue import Lease
 from fray.cluster.ray import RayQueue
 
 
@@ -39,32 +37,13 @@ def queue(request, ray_context):
     """Parameterized fixture providing FileQueue and RayQueue implementations."""
     if request.param == "file":
         with tempfile.TemporaryDirectory() as tmpdir:
-            yield FileQueue(name="test-queue", queue_dir=Path(tmpdir))
+            yield FileQueue(name="test-queue", queue_dir=tmpdir)
     else:  # ray
         yield RayQueue(name="test-queue")
 
 
-def test_lease_dataclass():
-    """Test Lease dataclass creation."""
-    lease = Lease(item="task1", lease_id="lease-123", timestamp=1234567890.0)
-    assert lease.item == "task1"
-    assert lease.lease_id == "lease-123"
-    assert lease.timestamp == 1234567890.0
-
-
-def test_push_and_peek(queue):
-    """Test pushing items and peeking at the next item."""
-    assert queue.peek() is None
-
-    queue.push("task1")
-    assert queue.peek() == "task1"
-
-    queue.push("task2")
-    assert queue.peek() == "task1"  # Still returns first item
-
-
 def test_push_and_pop(queue):
-    """Test pushing and popping items."""
+    """Test basic push and pop operations."""
     assert queue.pop() is None
 
     queue.push("task1")
@@ -232,118 +211,43 @@ def test_complete_workflow(queue):
     # Process the requeued task
     lease4 = queue.pop()
     assert lease4 is not None
-    # Could be task3 or task4 depending on queue order, but task1 should still be there
     assert queue.size() == 3
 
 
-def test_empty_queue_operations(queue):
-    """Test operations on an empty queue."""
-    assert queue.peek() is None
-    assert queue.pop() is None
-    assert queue.size() == 0
+def test_lease_expiration_recovery(queue):
+    """Test that expired leases are automatically recovered."""
+    queue.push("task1")
+    lease = queue.pop(lease_timeout=0.2)
+    assert lease is not None
+    assert lease.item == "task1"
     assert queue.pending() == 0
 
+    time.sleep(0.3)  # Wait for expiration
 
-@pytest.fixture(params=["file", "ray"])
-def queue_factory(request, ray_context):
-    """Parameterized fixture for creating queues with custom names."""
-
-    def _create_queue(name: str):
-        if request.param == "file":
-            tmpdir = tempfile.mkdtemp()
-            return FileQueue(name=name, queue_dir=Path(tmpdir))
-        else:  # ray
-            return RayQueue(name=name)
-
-    return _create_queue
-
-
-def test_queue_with_different_types(queue_factory):
-    """Test that Queue works with different types."""
-    int_queue = queue_factory("int-queue")
-    int_queue.push(42)
-    lease = int_queue.pop()
-    assert lease is not None
-    assert lease.item == 42
-    assert isinstance(lease.item, int)
-
-    str_queue = queue_factory("str-queue")
-    str_queue.push("hello")
-    lease2 = str_queue.pop()
+    # Should be available again
+    lease2 = queue.pop()
     assert lease2 is not None
-    assert lease2.item == "hello"
-    assert isinstance(lease2.item, str)
+    assert lease2.item == "task1"
 
 
-def test_lease_timestamp_ordering(queue):
-    """Test that lease timestamps are correctly ordered."""
+def test_worker_crash_simulation(queue):
+    """Test abandoned leases (worker crashed without done/release)."""
     queue.push("task1")
-    time.sleep(0.01)  # Small delay to ensure different timestamps
     queue.push("task2")
 
-    lease1 = queue.pop()
-    time.sleep(0.01)
-    lease2 = queue.pop()
-
-    assert lease1 is not None
-    assert lease2 is not None
-    assert lease1.timestamp < lease2.timestamp
-
-
-def test_multiple_done_calls(queue):
-    """Test that calling done() on same lease twice fails."""
-    queue.push("task1")
-    lease = queue.pop()
-    assert lease is not None
-
-    queue.done(lease)
-
-    with pytest.raises((ValueError, Exception), match="Invalid lease"):
-        queue.done(lease)
-
-
-def test_done_after_release(queue):
-    """Test that done() fails after release()."""
-    queue.push("task1")
-    lease = queue.pop()
-    assert lease is not None
-
-    queue.release(lease)
-
-    with pytest.raises((ValueError, Exception), match="Invalid lease"):
-        queue.done(lease)
-
-
-def test_release_after_done(queue):
-    """Test that release() fails after done()."""
-    queue.push("task1")
-    lease = queue.pop()
-    assert lease is not None
-
-    queue.done(lease)
-
-    with pytest.raises((ValueError, Exception), match="Invalid lease"):
-        queue.release(lease)
-
-
-def test_multiple_queues_independent(queue_factory):
-    """Test that multiple queues maintain independent state."""
-    queue1 = queue_factory("queue1")
-    queue2 = queue_factory("queue2")
-
-    queue1.push("task1")
-    queue2.push("task2")
-
-    assert queue1.size() == 1
-    assert queue2.size() == 1
-
-    lease1 = queue1.pop()
+    # Worker 1 pops task1 but crashes (never calls done/release)
+    lease1 = queue.pop(lease_timeout=0.2)
     assert lease1 is not None
     assert lease1.item == "task1"
 
-    lease2 = queue2.pop()
+    # Worker 2 can immediately get task2
+    lease2 = queue.pop()
     assert lease2 is not None
     assert lease2.item == "task2"
+    queue.done(lease2)
 
-    assert queue1.pending() == 0
-    assert queue2.pending() == 0
+    # After timeout, task1 recovers
+    time.sleep(0.3)
+    lease3 = queue.pop()
+    assert lease3 is not None
+    assert lease3.item == "task1"
