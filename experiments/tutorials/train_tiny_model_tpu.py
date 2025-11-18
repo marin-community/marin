@@ -61,7 +61,7 @@ tinystories_model_30m = default_train(
     # Steps can depend on other steps: nano_tinystories_model depends on tinystories_tokenized
     tokenized=tinystories_tokenized,
     model_config=versioned(llama_30m),
-    train_config=llama_30m,
+    train_config=small_train_config,
     # wandb tags
     tags=["llama", "30m", "tinystories", "tutorial"],
     # We can run many [eval_harness](https://github.com/EleutherAI/lm-evaluation-harness) tasks in the loop
