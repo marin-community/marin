@@ -14,38 +14,60 @@
 
 """Tests for worker pool with autoscaling."""
 
+import logging
 import time
 
 import pytest
-
+import ray
+from fray.cluster import set_current_cluster
 from fray.cluster.local import LocalCluster
+from fray.cluster.ray import RayCluster
 from fray.examples.fake_llm_worker import worker_loop
 from fray.worker_pool import WorkerPool, WorkerPoolConfig
 
+# Enable debug logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
-@pytest.fixture
-def local_cluster():
-    """Fixture for local cluster."""
-    cluster = LocalCluster()
+
+@pytest.fixture(scope="module")
+def ray_context():
+    """Initialize Ray once for all Ray-based tests."""
+    ray.init(
+        address="local",
+        ignore_reinit_error=True,
+        namespace="fray_test",
+        num_cpus=8,
+        _memory=20 * 1024 * 1024 * 1024,  # 20GB total memory
+        object_store_memory=2 * 1024 * 1024 * 1024,  # 2GB object store
+        _system_config={"automatic_object_spilling_enabled": True},
+    )
+    yield
+    ray.shutdown()
+
+
+@pytest.fixture(params=["local", "ray"])
+def cluster(request, ray_context):
+    """Parameterized fixture providing LocalCluster and RayCluster implementations."""
+    if request.param == "local":
+        cluster = LocalCluster()
+    else:  # ray
+        cluster = RayCluster()
+
+    # Set current cluster context for workers
+    set_current_cluster(cluster)
+
     yield cluster
+
     # Cleanup any running jobs
     for job in cluster.list_jobs():
-        if job.status == "running":
+        if job.status == "running" and job.job_id is not None:
             cluster.terminate(job.job_id)
 
 
-def test_worker_pool_local_inference(local_cluster):
-    """Test worker pool with local cluster backend using fake LLM calls.
+def test_worker_pool_inference(cluster):
+    logger.info(f"Testing worker pool with cluster type: {type(cluster).__name__}")
 
-    This test exercises:
-    - LocalCluster backend
-    - Worker jobs launched via cluster.launch()
-    - Fake LLM inference (mock completions)
-    - Batch task submission via WorkerPool
-    - Result collection and validation
-    - Basic autoscaling (scale up)
-    """
-    # Create worker pool with autoscaling config
     config = WorkerPoolConfig(
         worker_func=worker_loop,
         min_workers=1,
@@ -56,9 +78,16 @@ def test_worker_pool_local_inference(local_cluster):
     )
 
     pool = WorkerPool(
-        cluster=local_cluster,
+        cluster=cluster,
         config=config,
     )
+
+    logger.info(f"Pool created, num_workers: {pool.num_workers()}")
+
+    jobs = cluster.list_jobs()
+    logger.info(f"Cluster jobs: {len(jobs)}")
+    for job in jobs:
+        logger.info(f"  Job {job.job_id}: status={job.status}, name={job.name}")
 
     try:
         # Submit a batch of fake math problems
@@ -74,12 +103,12 @@ def test_worker_pool_local_inference(local_cluster):
         for problem in problems:
             pool.submit(problem)
 
+        logger.info(f"Submitted {len(problems)} problems")
+        logger.info(f"Task queue size: {pool._task_queue.size()}, pending: {pool._task_queue.pending()}")
+        logger.info(f"Result queue size: {pool._result_queue.size()}, pending: {pool._result_queue.pending()}")
+
         results = pool.collect(num_results=len(problems), timeout=30.0)
-
-        # Validate results
         assert len(results) == len(problems)
-
-        # Each result should have the expected structure
         for result in results:
             assert "problem_id" in result
             assert "answer" in result
@@ -95,7 +124,7 @@ def test_worker_pool_local_inference(local_cluster):
         pool.shutdown(timeout=10.0)
 
 
-def test_worker_pool_autoscaling(local_cluster):
+def test_worker_pool_autoscaling(cluster):
     """Test that worker pool scales up and down based on queue depth."""
     config = WorkerPoolConfig(
         worker_func=worker_loop,
@@ -107,7 +136,7 @@ def test_worker_pool_autoscaling(local_cluster):
     )
 
     pool = WorkerPool(
-        cluster=local_cluster,
+        cluster=cluster,
         config=config,
     )
 
@@ -147,7 +176,7 @@ def test_worker_pool_autoscaling(local_cluster):
         pool.shutdown(timeout=10.0)
 
 
-def test_worker_pool_shutdown(local_cluster):
+def test_worker_pool_shutdown(cluster):
     """Test graceful shutdown of worker pool."""
     config = WorkerPoolConfig(
         worker_func=worker_loop,
@@ -156,7 +185,7 @@ def test_worker_pool_shutdown(local_cluster):
     )
 
     pool = WorkerPool(
-        cluster=local_cluster,
+        cluster=cluster,
         config=config,
     )
 
@@ -172,7 +201,7 @@ def test_worker_pool_shutdown(local_cluster):
     assert pool.num_workers() == 0
 
     # Cluster should have no running jobs
-    running_jobs = [j for j in local_cluster.list_jobs() if j.status == "running"]
+    running_jobs = [j for j in cluster.list_jobs() if j.status == "running"]
     # Filter to only worker jobs (they'll have specific naming pattern)
-    worker_jobs = [j for j in running_jobs if "worker" in j.job_id.lower()]
+    worker_jobs = [j for j in running_jobs if j.job_id is not None and "worker" in j.job_id.lower()]
     assert len(worker_jobs) == 0

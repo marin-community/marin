@@ -84,6 +84,7 @@ class WorkerPool:
         # Create queues for task distribution and result collection
         task_queue_name = f"{self._pool_id}_tasks"
         result_queue_name = f"{self._pool_id}_results"
+        logger.info(f"Creating queue from cluster {cluster}")
         self._task_queue: Queue = cluster.create_queue(task_queue_name)
         self._result_queue: Queue = cluster.create_queue(result_queue_name)
 
@@ -116,11 +117,8 @@ class WorkerPool:
         task_queue_name = f"{self._pool_id}_tasks"
         result_queue_name = f"{self._pool_id}_results"
 
-        # Extract worker_func to avoid capturing self in the closure
         worker_func = self._config.worker_func
 
-        # Create a simple closure that just calls worker function
-        # The worker will automatically get cluster via current_cluster()
         def worker_closure():
             worker_func(task_queue_name, result_queue_name)
 
@@ -234,7 +232,6 @@ class WorkerPool:
                 if timeout is not None and (time.time() - start_time) > timeout:
                     raise TimeoutError(f"Timeout collecting results: got {len(results)}/{num_results}")
 
-                # Try to get result from queue
                 lease = self._result_queue.pop()
                 if lease is not None:
                     results.append(lease.item)

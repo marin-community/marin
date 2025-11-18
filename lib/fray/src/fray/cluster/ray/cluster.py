@@ -37,7 +37,7 @@ from fray.cluster.base import (
     TpuConfig,
     create_environment,
 )
-from fray.cluster.queue import Queue
+from fray.cluster.queue import Lease, Queue
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
 from fray.fn_thunk import create_thunk_entrypoint
@@ -51,6 +51,7 @@ class RayCluster(Cluster):
         address: str = "auto",
         dashboard_address: str | None = None,
         config_path: str | None = None,
+        namespace: str | None = None,
     ):
         """Initialize Ray cluster connection.
 
@@ -60,11 +61,44 @@ class RayCluster(Cluster):
                              (if None, derived from address)
             config_path: Path to cluster config YAML for SSH tunnel setup
                        (if None, no SSH tunnel will be created)
+            namespace: Ray namespace for actor isolation
+                      (if None, detected from current context or uses Ray default)
         """
         self._address = os.environ.get("RAY_ADDRESS", "auto") if address == "auto" else address
         self._config_path = config_path
+        self._namespace = namespace
+
+        # Detect namespace from current Ray context if not provided
+        if self._namespace is None:
+            try:
+                self._namespace = ray.get_runtime_context().namespace
+            except Exception:
+                pass
+
         self._dashboard_address = dashboard_address or self._get_dashboard_address()
         self._tpu_jobs: dict[str, dict] = {}  # Track TPU jobs: job_id -> {ref, name, start_time}
+
+    @classmethod
+    def from_spec(cls, spec: str) -> "RayCluster":
+        """Create RayCluster from spec string."""
+        from fray.cluster.ray.config import find_config_by_region
+
+        namespace = None
+        config_path = None
+        address = "auto"
+
+        # parse query params to dictionary
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(spec)
+        query_params = parse_qs(parsed.query)
+        if "namespace" in query_params:
+            namespace = query_params["namespace"][0]
+
+        if "cluster" in query_params:
+            config_path = find_config_by_region(query_params["cluster"][0])
+
+        return cls(address=address, config_path=config_path, namespace=namespace)
 
     def _job_client(self) -> JobSubmissionClient:
         """Create JobSubmissionClient on demand (after connect() establishes tunnel)."""
@@ -76,15 +110,19 @@ class RayCluster(Cluster):
         Returns:
             Cluster spec that can recreate this cluster via create_cluster()
         """
+        # Build base spec
         if self._address == "auto":
-            return "ray"
+            base = "ray"
+        elif self._config_path:
+            base = f"ray:{self._config_path}"
+        else:
+            base = "ray"
 
-        # If we have a config path, encode it
-        if self._config_path:
-            return f"ray:{self._config_path}"
+        # Append namespace as query param if present
+        if self._namespace:
+            base += f"?namespace={self._namespace}"
 
-        # Otherwise, just return "ray" (will use auto address)
-        return "ray"
+        return base
 
     def launch(self, request: JobRequest) -> JobId:
         """Launch job on Ray cluster, returning job identifier."""
@@ -415,7 +453,13 @@ class RayCluster(Cluster):
     def _get_dashboard_address(self) -> str:
         if self._address == "auto":
             try:
-                ray.init(address="auto", ignore_reinit_error=True)
+                # Initialize Ray with the stored namespace
+                if self._namespace:
+                    logger.info("Initializing Ray with namespace: %s", self._namespace)
+                    ray.init(address="auto", namespace=self._namespace, ignore_reinit_error=True)
+                else:
+                    ray.init(address="auto", ignore_reinit_error=True)
+
                 dashboard_url = ray.get_runtime_context().dashboard_url
                 if dashboard_url:
                     logger.info("Using Ray dashboard at: %s", dashboard_url)
@@ -543,30 +587,26 @@ class RayQueue(Queue):
     """
 
     def __init__(self, name: str):
-        """Initialize queue with a Ray actor backend.
-
-        Args:
-            name: Name identifier for the queue (currently not used for
-                  actor registration, but available for future routing).
-        """
+        """Initialize queue with a Ray actor backend."""
         self._name = name
-        self._actor = _RayQueueActor.remote()
+        self._actor = _RayQueueActor.options(name=name, get_if_exists=True).remote()
 
     def push(self, item: Any) -> None:
         """Add an item to the queue."""
+        logger.info(f"Pushing item {item} to {self}")
         ray.get(self._actor.push.remote(item))
 
     def peek(self) -> Any | None:
         """View the next available item without acquiring a lease."""
+        logger.info(f"Peeking item from {self}")
         return ray.get(self._actor.peek.remote())
 
     def pop(self):
         """Acquire a lease on the next available item."""
+        logger.info(f"Popping item from {self}")
         result = ray.get(self._actor.pop.remote())
         if result is None:
             return None
-
-        from fray.cluster.queue import Lease
 
         return Lease(
             item=result["item"],
@@ -576,10 +616,12 @@ class RayQueue(Queue):
 
     def done(self, lease) -> None:
         """Mark a leased task as completed and remove it from the queue."""
+        logger.info(f"Marking lease done: {lease.lease_id} on {self}")
         ray.get(self._actor.done.remote(lease.lease_id))
 
     def release(self, lease) -> None:
         """Release a lease and requeue the item for reprocessing."""
+        logger.info(f"Releasing lease: {lease.lease_id} on {self}")
         ray.get(self._actor.release.remote(lease.lease_id))
 
     def size(self) -> int:

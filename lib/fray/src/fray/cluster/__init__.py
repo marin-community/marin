@@ -32,6 +32,7 @@ Example:
 """
 
 import logging
+import os
 from contextvars import ContextVar
 
 from fray.cluster.base import (
@@ -52,6 +53,7 @@ from fray.cluster.base import (
     create_environment,
 )
 from fray.cluster.local import LocalCluster
+from fray.cluster.queue import Lease, Queue
 
 try:
     from fray.cluster.ray.cluster import RayCluster
@@ -92,9 +94,6 @@ def current_cluster() -> Cluster:
     if cluster is not None:
         return cluster
 
-    # Try to auto-create from environment variable
-    import os
-
     cluster_spec = os.environ.get("FRAY_CLUSTER_SPEC")
     if cluster_spec is None:
         raise RuntimeError(
@@ -102,7 +101,6 @@ def current_cluster() -> Cluster:
             "or set FRAY_CLUSTER_SPEC environment variable."
         )
 
-    # Create and cache cluster
     cluster = create_cluster(cluster_spec)
     set_current_cluster(cluster)
     logger.info(f"Auto-created cluster from FRAY_CLUSTER_SPEC={cluster_spec}")
@@ -115,33 +113,18 @@ def create_cluster(cluster_spec: str) -> Cluster:
     Args:
         cluster_spec: Cluster specification:
             - "local" -> LocalCluster
-            - "ray:region_name" -> RayCluster with config from infra/marin-{region}.yaml
-            - "ray:/path/to/config.yaml" -> RayCluster with explicit config
+            - "ray?namespace=x" -> RayCluster
 
     Returns:
         Configured cluster instance
-
-    Examples:
-        >>> create_cluster("local")
-        LocalCluster()
-        >>> create_cluster("ray:us-west2")
-        RayCluster(address="http://localhost:8265")
-        >>> create_cluster("ray:infra/my-cluster.yaml")
-        RayCluster(address="http://localhost:8265")
     """
     if cluster_spec == "local":
         return LocalCluster()
 
     if cluster_spec.startswith("ray"):
         from fray.cluster.ray.cluster import RayCluster
-        from fray.cluster.ray.config import find_config_by_region
 
-        if cluster_spec.startswith("ray:"):
-            config_or_region = cluster_spec[4:]
-            config_path = find_config_by_region(config_or_region)
-            return RayCluster(config_path=config_path)
-        else:
-            return RayCluster()
+        return RayCluster.from_spec(cluster_spec)
 
     raise ValueError(f"Unknown cluster spec: {cluster_spec}")
 
@@ -158,12 +141,13 @@ __all__ = [
     "JobRequest",
     "JobStatus",
     "Lease",
+    "LocalCluster",
     "Queue",
     "ResourceConfig",
     "TpuConfig",
     "TpuType",
     "create_cluster",
     "create_environment",
-    "LocalCluster",
-    "RayCluster",
+    "current_cluster",
+    "set_current_cluster",
 ]

@@ -64,6 +64,7 @@ def worker_loop(task_queue_name: str, result_queue_name: str) -> None:
     while True:
         # Try to get a task
         lease = task_queue.pop()
+        logger.info("Popped task lease from queue")
 
         if lease is None:
             # No tasks available, sleep and retry
