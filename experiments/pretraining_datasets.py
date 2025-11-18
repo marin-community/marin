@@ -36,6 +36,7 @@ fineweb_edu = ExecutorStep(
         revision="3c452cb",
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
+        hf_urls_glob=["data/**/*.parquet"],
     ),
     override_output_path="raw/fineweb-edu-c2beb4",
 ).cd("3c452cb/huggingface.co/datasets/HuggingFaceFW/fineweb-edu/resolve/3c452cb")
