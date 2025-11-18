@@ -14,7 +14,7 @@
 
 """
 This is a tutorial script demonstrating how to perform a hyperparameter sweep
-while training a tiny model on the TinyStories dataset using TPU hardware.
+on a 30M parameter DCLM model using TPU hardware.
 """
 import dataclasses
 
@@ -40,6 +40,7 @@ small_train_config = SimpleTrainConfig(
     weight_decay=0.1,
 )
 
+# 4. Define an lr sweep
 sweep_configs = [
     dataclasses.replace(
         small_train_config,
@@ -50,7 +51,6 @@ sweep_configs = [
     for wd in [0.0, 0.1, 0.2]
 ]
 
-# 4. Define an lr sweep
 runs = []
 
 for config in sweep_configs:
