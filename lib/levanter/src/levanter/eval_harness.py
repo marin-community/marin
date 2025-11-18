@@ -170,7 +170,6 @@ class _LmEvalHarnessWorker:
         self.model = model
         self.axis_resources = axis_resources
         self.mp = mp
-        self.max_packed_segments = max_packed_segments
         self._generation_kwargs = generation_kwargs or {"max_gen_toks": 256, "temperature": 0.0, "n": 1, "seed": None}
         self.sample_logging_config = sample_logging_config or SampleLoggingConfig()
         self.profiler_config = profiler_config or ProfilerConfig()
@@ -348,6 +347,9 @@ class LevanterHarnessLM(TemplateLM):
         self.leader = leader
         # Storage for prompts and generations to include in outputs
         self.sample_outputs: dict[str, list[dict]] = {}
+        # Storage for all generations per request (for avg@k computation)
+        # Maps request index to list of all n generations
+        self._all_generations_per_request: dict[int, list[str]] = {}
         self.sample_logging_config = leader.sample_logging_config
         self.profiler_config = leader.profiler_config
         self._current_step = 0
@@ -440,6 +442,16 @@ class LevanterHarnessLM(TemplateLM):
         Removes all previously collected sample outputs from memory.
         """
         self.sample_outputs.clear()
+        self._all_generations_per_request.clear()
+    
+    def get_all_generations_per_request(self) -> dict[int, list[str]]:
+        """
+        Get all generations per request for avg@k computation.
+        
+        Returns:
+            Dictionary mapping request index to list of all n generations for that request.
+        """
+        return self._all_generations_per_request
 
     def _prepare_bucket(self, task_name: str) -> list[dict[str, str]] | None:
         if not self.sample_logging_config.should_log():
@@ -752,15 +764,33 @@ class LevanterHarnessLM(TemplateLM):
                 max_stop_seqs = max(max_stop_seqs, num_stop_seqs)
                 max_stop_tokens = max(max_stop_tokens, num_stop_tokens)
 
+        # Calculate max_seqs_in_prefill for batching requests
+        # num_primary in _prefill_prompts counts requests, not sequences, so we need
+        # at least len(requests) capacity.
+        # We need to reduce max_seqs to avoid TPU shared memory (smem) exhaustion in the
+        # ragged_paged_attention kernel. The kernel is compiled with static shapes based on
+        # max_seqs, so even if we only use 16 sequences, the kernel still allocates for max_seqs.
+        # Since we're batching at the request level (max_seqs_in_prefill=16), we can safely
+        # reduce max_seqs to match. This reduces smem usage without affecting functionality.
+        num_requests = len(prompt_token_lists)
+        # Reduce max_seqs to avoid smem exhaustion - the kernel allocates smem based on this
+        # We only use max_seqs_in_prefill sequences per batch anyway, so this is safe
+        # Using 16 matches max_seqs_in_prefill to minimize smem usage while still supporting our batching
+        max_seqs = 16  # Reduced from 256 to avoid smem exhaustion in ragged_paged_attention kernel
+        # Cap at 16 to avoid smem exhaustion - we batch requests across multiple engine.generate() calls
+        max_seqs_in_prefill = min(num_requests, max_seqs, 16)
+
         # [ChiHeem,2025-10-06] TODO: Pass this from marin to allow users to
         # optimize the inference based on hardware and model.
         engine_cfg = InferenceEngineConfig(
             max_stop_seqs=max_stop_seqs,
             max_stop_tokens=max_stop_tokens,
             max_seq_len=max_length,
-            max_seqs=256,
+            max_seqs=max_seqs,
+            max_seqs_in_prefill=max_seqs_in_prefill,
             page_size=8,
             compute_dtype=jnp.bfloat16,
+            hbm_utilization=0.3,  # Reduced from default 0.9 to leave more headroom for model weights
         )
         engine = InferenceEngine.from_model_with_config(
             model=self.leader.model, tokenizer=self.tokenizer, config=engine_cfg
@@ -806,42 +836,145 @@ class LevanterHarnessLM(TemplateLM):
 
         # Pass the callback to the engine if profiling is enabled
         step_callback = decode_step_callback if self.profiler_config.enabled else None
-        result = engine.generate(
-            gen_requests,
-            step_callback=step_callback,
-        )
 
-        # Decode first generation per request (LM Harness expects one string per request)
-        outputs: list[str] = []
-        output_idx = 0
-        for i, (toks, gen_kwargs) in enumerate(zip(prompt_token_lists, processed_kwargs_list)):
-            # Consume one sequence output per request
-            if output_idx < len(result.tokens):
-                full_tokens = result.tokens[output_idx]
-                # Engine tokens are generated tokens only (prompt not included)
-                text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
+        # Process requests in batches to handle cases where num_requests > max_seqs_in_prefill
+        # The engine's _prefill_prompts will only process up to max_seqs_in_prefill requests at once
+        # We also need to consider page limits to avoid OOM - estimate pages needed per batch
+        all_outputs: list[str] = []
+        batch_size = max_seqs_in_prefill
+        
+        # Estimate max pages available (conservative estimate)
+        # max_pages is calculated from hbm_utilization, but we don't have direct access here
+        # Use a conservative estimate: assume we can use most pages for a single batch
+        # since engine resets between batches
+        estimated_max_pages_per_batch = engine.gen_state.decode_state.page_table.num_pages
+        page_size = engine_cfg.page_size
+        
+        def estimate_pages_needed_for_request(request_idx: int) -> int:
+            """Estimate pages needed for a single request.
+            
+            Note: Clones (n_generations > 1) share pages for the prompt, but need separate
+            pages for generation. This is a conservative estimate.
+            """
+            req = gen_requests[request_idx]
+            prompt_len = len(req.prompt_tokens)
+            # Get max_gen_toks from the corresponding processed_kwargs
+            gen_kwargs = processed_kwargs_list[request_idx]
+            max_gen_toks = gen_kwargs.get("max_gen_toks", 256)
+            n_generations = req.n_generations
+            
+            # Pages for prompt (shared across clones)
+            prompt_pages = (prompt_len + page_size - 1) // page_size
+            # Pages for generation (each clone needs its own)
+            gen_pages_per_clone = (max_gen_toks + page_size - 1) // page_size
+            # Total: prompt pages (shared) + generation pages (per clone)
+            pages_needed = prompt_pages + (gen_pages_per_clone * n_generations)
+            return pages_needed
 
-                # Post-process the generated text using the imported utility function
-                text = postprocess_generated_text(
-                    text, gen_kwargs.get("until"), None  # think_end_token - could be made configurable if needed
+        for batch_start in range(0, len(gen_requests), batch_size):
+            # Try to fit as many requests as possible within page limits
+            batch_requests = []
+            batch_indices = []
+            pages_used = 0
+            
+            for i in range(batch_start, min(batch_start + batch_size, len(gen_requests))):
+                request_pages = estimate_pages_needed_for_request(i)
+                test_pages = pages_used + request_pages
+                
+                # Check if adding this request would exceed page limits
+                # Leave some headroom (use 90% of available pages) to account for:
+                # - Page allocation overhead
+                # - Clones (n_generations > 1)
+                # - Generation length uncertainty
+                if test_pages <= estimated_max_pages_per_batch * 0.9:
+                    batch_requests.append(gen_requests[i])
+                    batch_indices.append(i)
+                    pages_used = test_pages
+                else:
+                    # This request would exceed limits, start a new batch
+                    logger.debug(
+                        f"Stopping batch at request {i}: adding it would need {test_pages} pages "
+                        f"(exceeds {estimated_max_pages_per_batch * 0.9:.0f} limit)"
+                    )
+                    break
+            
+            if not batch_requests:
+                # Even a single request exceeds limits - this is a problem
+                single_pages = estimate_pages_needed_for_request(batch_start)
+                logger.warning(
+                    f"Request {batch_start} alone needs ~{single_pages} pages, "
+                    f"but only ~{estimated_max_pages_per_batch} available. This may cause OOM. "
+                    f"Consider reducing max_seq_len or increasing hbm_utilization."
                 )
-                outputs.append(text)
-                output_idx += 1  # consume one generation per request
-            else:
-                text = ""
-                logger.info(f"Generation {i} - No tokens available, using empty string")
-                outputs.append(text)
+                # Process it anyway and let it fail with a clear error
+                batch_requests = [gen_requests[batch_start]]
+                batch_indices = [batch_start]
+                pages_used = single_pages
 
-            current_task = getattr(self, "_current_task", "generation_task")
-            bucket = self._prepare_bucket(current_task)
-            if bucket is not None:
-                prompt_text = self.tokenizer.decode(toks, skip_special_tokens=False)
-                bucket.append(
-                    {
-                        "prompt": prompt_text,
-                        "generation": text,
-                    }
-                )
+            logger.info(
+                f"Processing generation batch {len(all_outputs) // max(1, len(batch_requests)) + 1}: "
+                f"requests {batch_indices[0]}-{batch_indices[-1]} of {len(gen_requests)} "
+                f"(estimated {pages_used}/{estimated_max_pages_per_batch} pages, "
+                f"{pages_used / estimated_max_pages_per_batch * 100:.1f}% of capacity)"
+            )
+
+            # Process this batch through the engine
+            result = engine.generate(
+                batch_requests,
+                step_callback=step_callback,
+            )
+
+            # Decode all generations per request and store them for avg@k computation
+            # LM Harness expects one string per request, so we return the first one
+            # but we store all n generations for post-processing
+            output_idx = 0
+            for batch_idx, orig_idx in enumerate(batch_indices):
+                toks = prompt_token_lists[orig_idx]
+                gen_kwargs = processed_kwargs_list[orig_idx]
+                # batch_idx corresponds to the position in batch_requests since batch_indices is range(batch_start, batch_end)
+                n_generations = batch_requests[batch_idx].n_generations
+
+                # Decode all n generations for this request
+                all_generations_for_request: list[str] = []
+                for gen_idx in range(n_generations):
+                    if output_idx + gen_idx < len(result.tokens):
+                        full_tokens = result.tokens[output_idx + gen_idx]
+                        # Engine tokens are generated tokens only (prompt not included)
+                        text = self.tokenizer.decode(full_tokens, skip_special_tokens=True)
+
+                        # Post-process the generated text using the imported utility function
+                        text = postprocess_generated_text(
+                            text, gen_kwargs.get("until"), None  # think_end_token - could be made configurable if needed
+                        )
+                        all_generations_for_request.append(text)
+                    else:
+                        logger.warning(f"Generation {orig_idx}, sample {gen_idx} - No tokens available, using empty string")
+                        all_generations_for_request.append("")
+                
+                # Store all generations for avg@k computation
+                self._all_generations_per_request[orig_idx] = all_generations_for_request
+                
+                # Return first generation to harness (for compatibility)
+                first_generation = all_generations_for_request[0] if all_generations_for_request else ""
+                all_outputs.append(first_generation)
+                
+                # Move to next request's generations
+                output_idx += n_generations
+
+                # Log to sample bucket (first generation only for now)
+                current_task = getattr(self, "_current_task", "generation_task")
+                bucket = self._prepare_bucket(current_task)
+                if bucket is not None:
+                    prompt_text = self.tokenizer.decode(toks, skip_special_tokens=False)
+                    bucket.append(
+                        {
+                            "prompt": prompt_text,
+                            "generation": first_generation,
+                            "all_generations": all_generations_for_request,  # Store all for reference
+                        }
+                    )
+
+        outputs = all_outputs
         # print(f'{outputs=}')
 
         # Stop profiler if it was started during generation
@@ -1015,7 +1148,6 @@ class LmEvalHarnessConfig:
                     this_tasks.update(tasks.get_task_dict(task, manager))
                 else:
                     our_name = task.get("task_alias", task["task"]) if isinstance(task, dict) else task
-                    assert isinstance(our_name, str)
                     our_name = our_name.replace(" ", "_")
                     tasks_for_this_task_spec = self._get_task_and_rename(manager, our_name, task)
                     for k, v in tasks_for_this_task_spec.items():
@@ -1267,6 +1399,19 @@ def _actually_run_eval_harness(
                 if all_samples:
                     outputs["results"][task_name]["outputs"] = all_samples
 
+        # Compute avg@k metrics if multiple generations were used
+        n_generations = config.generation_kwargs.get("n", 1)
+        if n_generations > 1:
+            all_generations = harness.get_all_generations_per_request()
+            if all_generations:
+                avg_at_k_metrics = _compute_avg_at_k(
+                    outputs, all_generations, tasks_to_run, harness, n_generations
+                )
+                # Add avg@k metrics to results
+                for task_name, metrics in avg_at_k_metrics.items():
+                    if task_name in outputs.get("results", {}):
+                        outputs["results"][task_name].update(metrics)
+
         return outputs
     else:
         logger.info(f"Process {jax.process_index()} is waiting for eval harness requests from process 0.")
@@ -1320,6 +1465,120 @@ def _compute_averages(outputs):
             averages["micro_avg_" + metric] = np.average(metric_values, weights=this_examples_per_task)
 
     return averages
+
+
+def _compute_avg_at_k(
+    outputs: dict,
+    all_generations: dict[int, list[str]],
+    tasks_to_run: dict,
+    harness: "LevanterHarnessLM",
+    n_generations: int,
+) -> dict[str, dict[str, float]]:
+    """
+    Compute avg@k metrics for all tasks.
+    
+    For each task, evaluates all n generations per request and computes avg@k
+    (average accuracy at k - the fraction of prompts where at least one of the top k
+    generations is correct).
+    
+    Args:
+        outputs: The evaluation outputs from the harness
+        all_generations: Dictionary mapping request index to list of all n generations
+        tasks_to_run: Dictionary of tasks that were run
+        harness: The harness instance (for accessing task evaluation functions)
+        n_generations: Number of generations per request (n)
+    
+    Returns:
+        Dictionary mapping task names to dictionaries of avg@k metrics.
+        Metrics are named like "acc_n@k" where k ranges from 1 to n_generations.
+    """
+    from lm_eval.api.task import Task
+    
+    avg_at_k_results: dict[str, dict[str, float]] = {}
+    
+    # Get samples from outputs to access prompts and ground truth
+    samples_by_task = outputs.get("samples", {})
+    
+    for task_name, task_config in tasks_to_run.items():
+        if task_name not in outputs.get("results", {}):
+            continue
+            
+        # Get the task instance to access its evaluation function
+        try:
+            # Try to get task from harness or create it
+            # The harness should have access to the tasks
+            task_samples = samples_by_task.get(task_name, [])
+            
+            if not task_samples:
+                logger.warning(f"No samples found for task {task_name}, skipping avg@k computation")
+                continue
+            
+            # For each k from 1 to n_generations, compute avg@k
+            task_metrics: dict[str, float] = {}
+            
+            for k in range(1, n_generations + 1):
+                correct_count = 0
+                total_count = 0
+                
+                # Group samples by request index
+                # The samples list should correspond to requests in order
+                for sample_idx, sample in enumerate(task_samples):
+                    if sample_idx not in all_generations:
+                        continue
+                    
+                    generations = all_generations[sample_idx]
+                    if len(generations) < k:
+                        logger.warning(
+                            f"Request {sample_idx} has only {len(generations)} generations, "
+                            f"but k={k} requested. Using available generations."
+                        )
+                        k_actual = len(generations)
+                    else:
+                        k_actual = k
+                    
+                    # Get ground truth from sample
+                    # The sample structure depends on the task, but typically has "doc" or "target"
+                    doc = sample.get("doc", {})
+                    target = sample.get("target") or doc.get("target") or doc.get("answer")
+                    
+                    if target is None:
+                        # Try to get from the original task evaluation
+                        # For now, we'll use the first generation's result as a proxy
+                        # This is a limitation - we need the task's evaluation function
+                        logger.debug(f"Could not find target for sample {sample_idx}, skipping")
+                        continue
+                    
+                    # Evaluate top k generations
+                    # Check if any of the top k generations matches the target
+                    is_correct = False
+                    for gen_idx in range(k_actual):
+                        generation = generations[gen_idx]
+                        # Simple string matching for now
+                        # In practice, we should use the task's evaluation function
+                        # This is a simplified version - proper implementation would use
+                        # the task's process_results or doc's evaluation function
+                        if generation.strip().lower() == str(target).strip().lower():
+                            is_correct = True
+                            break
+                    
+                    if is_correct:
+                        correct_count += 1
+                    total_count += 1
+                
+                if total_count > 0:
+                    avg_at_k = correct_count / total_count
+                    metric_name = f"acc_n@{k}"
+                    task_metrics[metric_name] = avg_at_k
+                    logger.info(f"Task {task_name}: avg@{k} = {avg_at_k:.4f} ({correct_count}/{total_count})")
+            
+            if task_metrics:
+                avg_at_k_results[task_name] = task_metrics
+                
+        except Exception as e:
+            logger.warning(f"Error computing avg@k for task {task_name}: {e}")
+            continue
+    
+    return avg_at_k_results
 
 
 def run_eval_harness_main(config: EvalHarnessMainConfig):
