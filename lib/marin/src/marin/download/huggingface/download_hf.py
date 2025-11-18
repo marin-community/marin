@@ -83,7 +83,7 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
     target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
     # Use larger chunk size for large files, such as 32B models
-    chunk_size = 16 * 1024 * 1024 * 1024
+    chunk_size = 256 * 1024 * 1024 * 1024
     max_retries = 10
 
     # Retry when there is an error, such as hf rate limit
@@ -95,7 +95,7 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
                     while chunk := src_file.read(chunk_size):
                         dest_file.write(chunk)
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path}")
-            return
+            return {"file_path": file_path, "status": "success"}
         except Exception as e:
             wait_time = (2**attempt) + random.uniform(0, 5)
             logger.warning(f"Attempt {attempt + 1} failed for {file_path}: {e}, retrying in {wait_time:.1f}s")
@@ -118,6 +118,7 @@ def download_hf(cfg: DownloadConfig) -> None:
         raise e
 
     # Initialize Hugging Face filesystem
+    logger.info("Identifying files to download from HuggingFace...")
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
     hf_repo_name_with_prefix = os.path.join(cfg.hf_repo_type_prefix, cfg.hf_dataset_id)
 
@@ -134,22 +135,22 @@ def download_hf(cfg: DownloadConfig) -> None:
     if not files:
         raise ValueError(f"No files found for dataset `{cfg.hf_dataset_id}. Used glob patterns: {cfg.hf_urls_glob}")
 
-    task_generator = []
+    download_tasks = []
 
     for file in files:
         try:
             fsspec_file_path = os.path.join(output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
             # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
-            task_generator.append((output_path, file, fsspec_file_path))
+            download_tasks.append((output_path, file, fsspec_file_path))
         except Exception as e:
             logging.exception(f"Error preparing task for {file}: {e}")
 
-    total_files = len(task_generator)
+    total_files = len(download_tasks)
     logger.info(f"Total number of files to process: {total_files}")
 
-    backend = flow_backend(max_parallelism=512)
+    backend = flow_backend(max_parallelism=16)
     pipeline = (
-        Dataset.from_list(task_generator)
+        Dataset.from_list(download_tasks)
         .map(lambda task: stream_file_to_fsspec(*task))
         .write_jsonl(
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True

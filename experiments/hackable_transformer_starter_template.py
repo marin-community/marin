@@ -13,30 +13,18 @@
 # limitations under the License.
 
 """
-Hackable transformer training speedrun sweep
+Hackable transformer training speedrun sweep (template)
 
 This file is intentionally self-contained:
 - Defines a compact, Llama-ish transformer that implements Levanter's LmHeadModel
 - Provides a ready-to-run speedrun sweep across multiple model sizes
 
-(this example allows comparing using / not using gpt-oss style attention sink)
-
-How to run (GPU or TPU):
+How to run:
   1) Set env vars (WANDB_API_KEY, HF_TOKEN, etc.) as in the tutorial:
      https://marin.readthedocs.io/en/latest/tutorials/submitting-speedrun/
   2) From repo root:
-       python marin/run/ray_run.py -- \
-         python -m experiments.speedrun.hackable_transformer_starter.hackable_transformer_attn_sink
+       python marin/run/ray_run.py -- python -m __SUBMISSION_IMPORT_PATH__
   3) Optional: SR_USE_GPU=1 to use GPU resource presets.
-
-The transformer is a pared-down version of levanter.models.llama; you can refer to it if you wish to
-add back functionality (like inference, HF exports)
-
-To edit this file for your speedrun:
-  1) Copy and rename the file in your location under experiments.speedrun
-  2) Make changes to the architecture or configurations
-  3) Add your author information
-  4) Submit (see "How to run" above)
 """
 
 # nodryrun
@@ -48,7 +36,6 @@ from dataclasses import dataclass
 from collections.abc import Callable
 
 import equinox as eqx
-import numpy as np
 import jax.random as jrandom
 from jaxtyping import PRNGKeyArray
 
@@ -72,8 +59,6 @@ from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig, GpuConfig
 from experiments.simple_train_config import SimpleTrainConfig
-
-# Optional: Muon optimizer configs
 from levanter.optim import MuonConfig
 from experiments.llama import llama3_tokenizer_vocab_size
 
@@ -82,6 +67,17 @@ logger = logging.getLogger("ray")
 _IMPORT_PATH = getattr(__spec__, "name", __name__)
 
 silence_transformer_nag()
+
+# =========================
+# Submission metadata (filled by onboarding)
+# =========================
+# The onboarding workflow replaces these placeholders before committing the file.
+SUBMISSION_BRANCH = "__SUBMISSION_BRANCH__"
+SUBMISSION_DESCRIPTION = "__SUBMISSION_DESCRIPTION__"
+SUBMISSION_AUTHOR_NAME = "__SUBMISSION_AUTHOR_NAME__"
+SUBMISSION_AUTHOR_AFFILIATION = "__SUBMISSION_AUTHOR_AFFILIATION__"
+SUBMISSION_AUTHOR_URL = "__SUBMISSION_AUTHOR_URL__"
+
 
 # =========================
 # Hackable config & modules
@@ -350,14 +346,18 @@ class HackableLMHeadModel(
         return self.embeddings.token_embeddings.weight if self.lm_head is None else self.lm_head.weight
 
     def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "HackableLMHeadModel":
-        pass
+        raise NotImplementedError("resize_vocab is not implemented for HackableLMHeadModel")
 
 
 # =========================
 # Speedrun sweep definition
 # =========================
 
-AUTHOR = Author(name="Calvin Xu", affiliation="Stanford University", url="https://pinlinxu.com")  # TODO: update me
+AUTHOR = Author(
+    name=SUBMISSION_AUTHOR_NAME,
+    affiliation=SUBMISSION_AUTHOR_AFFILIATION,
+    url=(SUBMISSION_AUTHOR_URL or None),
+)
 
 
 def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: int = 20) -> int:
@@ -392,8 +392,8 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
 def _muon_presets() -> dict[str, MuonConfig]:
     return {
         "130m": MuonConfig(
-            learning_rate=0.016,
-            adam_lr=0.0032,
+            learning_rate=0.032,
+            adam_lr=0.0064,
             weight_decay=0.1,
             min_lr_ratio=0,
             warmup=0,
@@ -407,8 +407,8 @@ def _muon_presets() -> dict[str, MuonConfig]:
             decay=0.8,
         ),
         "300m": MuonConfig(
-            learning_rate=0.008,
-            adam_lr=0.0024,
+            learning_rate=0.016,
+            adam_lr=0.0038,
             weight_decay=0.1,
             min_lr_ratio=0,
             warmup=0,
@@ -422,8 +422,8 @@ def _muon_presets() -> dict[str, MuonConfig]:
             decay=0.8,
         ),
         "520m": MuonConfig(
-            learning_rate=0.008,
-            adam_lr=0.0024,
+            learning_rate=0.016,
+            adam_lr=0.0038,
             weight_decay=0.1,
             min_lr_ratio=0,
             warmup=0,
@@ -437,8 +437,8 @@ def _muon_presets() -> dict[str, MuonConfig]:
             decay=1,
         ),
         "1_2b": MuonConfig(
-            learning_rate=0.004,
-            adam_lr=0.0012,
+            learning_rate=0.008,
+            adam_lr=0.0024,
             weight_decay=0.1,
             min_lr_ratio=0,
             warmup=0,
@@ -474,52 +474,18 @@ def _batch_sizes() -> dict[str, int]:
     return {"130m": 128, "300m": 128, "520m": 128, "1_2b": 256}
 
 
-def _lr_multipliers(num: int = 5, start_exp: float = -2.0, stop_exp: float = 2.0) -> list[float]:
-    # Base-2 logspace, exclude 1x and 2x (already swept)
-    vals = np.logspace(start=start_exp, stop=stop_exp, num=num, base=2.0)
-    filtered = [float(v) for v in vals if not np.isclose(v, 1.0)]
-    # Deduplicate while preserving order (in case ranges overlap)
-    seen = set()
-    out: list[float] = []
-    for v in filtered:
-        key = f"{v:.8f}"
-        if key not in seen:
-            seen.add(key)
-            out.append(v)
-    return out
-
-
-def _format_multiplier_label(mult: float) -> str:
-    s = f"{mult:.6g}"
-    s = s.rstrip("0").rstrip(".") if "." in s else s
-    return s.replace(".", "_")
-
-
-def build_run(
-    size: str,
-    use_sink: bool,
-    *,
-    use_gpu: bool = False,
-    lr_multiplier: float | None = None,
-) -> tuple[str, SpeedrunConfig]:
+def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]:
     sizes = _size_presets()
     if size not in sizes:
         raise ValueError(f"Unknown size: {size}")
-    model_cfg = dataclasses.replace(sizes[size], use_attention_sink=use_sink)
+    model_cfg = sizes[size]
 
     batch = _batch_sizes()[size]
     seq_len = model_cfg.seq_len
     params = int(model_cfg.total_trainable_params(llama3_tokenizer_vocab_size))
-    print(params)
     steps = _get_num_train_steps(params, batch, seq_len, tpp=20)
 
     muon = _muon_presets()[size]
-    if lr_multiplier is not None:
-        muon = dataclasses.replace(
-            muon,
-            learning_rate=muon.learning_rate * lr_multiplier,
-            adam_lr=muon.adam_lr * lr_multiplier,
-        )
     resources = _resource_presets(use_gpu=use_gpu)[size]
 
     train = SimpleTrainConfig(
@@ -531,13 +497,8 @@ def build_run(
         steps_per_hf_export=-1,  # disable checkpointing
     )
 
-    lr_tag = f"_lr_x{_format_multiplier_label(lr_multiplier)}" if lr_multiplier is not None else ""
-    run_name = f"hacktx_{size}_{'attnsink' if use_sink else 'stdattn'}_{seq_len}_splash_lr_sweep{lr_tag}"
-    desc = (
-        f"Hackable Transformer ({size}); "
-        f"{'AttentionWithSink' if use_sink else 'Attention'} (Splash); "
-        f"LR sweep multiplier={lr_multiplier if lr_multiplier is not None else 1.0:g}"
-    )
+    run_name = f"{SUBMISSION_BRANCH}_{size}"
+    desc = f"{SUBMISSION_DESCRIPTION} ({size})"
     cfg = SpeedrunConfig(author=AUTHOR, description=desc, model_config=model_cfg, train_config=train)
     return run_name, cfg
 
@@ -560,11 +521,8 @@ if __name__ == "__main__":
 
     sizes = ["130m", "300m", "520m", "1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
-    sink = True
     steps = []
-    lr_mults = _lr_multipliers()
     for s in sizes:
-        for m in lr_mults:
-            name, cfg = build_run(s, sink, use_gpu=use_gpu, lr_multiplier=m)
-            steps.extend(default_speedrun(name, cfg))
-    executor_main(steps=steps, description="Hackable transformer attention-sink sweep")
+        name, cfg = build_run(s, use_gpu=use_gpu)
+        steps.extend(default_speedrun(name, cfg))
+    executor_main(steps=steps, description=SUBMISSION_DESCRIPTION)

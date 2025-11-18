@@ -26,7 +26,11 @@ fineweb = ExecutorStep(
 fineweb_edu = ExecutorStep(
     name="raw/fineweb-edu",
     fn=download_hf,
-    config=DownloadConfig(hf_dataset_id="HuggingFaceFW/fineweb-edu", revision="3c452cb"),
+    config=DownloadConfig(
+        hf_dataset_id="HuggingFaceFW/fineweb-edu",
+        revision="3c452cb",
+        hf_urls_glob=["data/**/*.parquet"],
+    ),
     override_output_path="raw/fineweb-edu",
 )
 
