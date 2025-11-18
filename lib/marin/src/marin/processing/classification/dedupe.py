@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import draccus
+import fsspec
 from marin.utils import fsspec_glob, rebase_file_path
 from rbloom import Bloom
 from zephyr import Dataset, flow_backend, load_parquet
@@ -209,6 +210,7 @@ def build_filter(
         yield bf.save_bytes()
 
     all_files = collect_input_files(input_path)
+    logger.info(f"Building bloom filter from {all_files} into {bloom_path}")
 
     # Build bloom filters for all shards in parallel
     shard_blooms_data = flow_backend().execute(
@@ -225,7 +227,8 @@ def build_filter(
     def _merge_bloom(bloom_files: Iterator[str]):
         merged_bloom = Bloom(config.estimated_doc_count, config.false_positive_rate)
         for bloom_file_path in bloom_files:
-            with open(bloom_file_path, "rb") as f:
+            fs, path = fsspec.url_to_fs(bloom_file_path)
+            with fs.open(path, "rb") as f:
                 bloom_bytes = f.read()
             shard_bloom = Bloom.load_bytes(bloom_bytes)
             merged_bloom.update(shard_bloom)
@@ -294,7 +297,7 @@ def mark_duplicates(record: dict, bloom_filter: Bloom, config: DedupeConfig) -> 
         offset += len(para) + 1  # +1 for newline
 
     return {
-        "id": record["id"],
+        "id": record.get("id", ""),
         "source": record.get("source", ""),
         "attributes": {config.attribute_name: duplicate_spans},
     }
@@ -328,8 +331,11 @@ def mark_duplicates_bloom(
         """Process a single input file and write to matching output path."""
         input_file_path = next(iter(file_path_shard))
         output_file_path = rebase_file_path(base_path, input_file_path, output_path)
+        fs, path = fsspec.url_to_fs(bloom_path)
+        with fs.open(path, "rb") as f:
+            bloom_bytes = f.read()
 
-        bf = Bloom.load(bloom_path)
+        bf = Bloom.load_bytes(bloom_bytes)
         records = (mark_duplicates(record, bf, config) for record in load_file(input_file_path))
         result = write_jsonl_file(records, output_file_path)
         yield result["path"]
