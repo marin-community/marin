@@ -41,13 +41,15 @@ class LocalCluster(Cluster):
     runtime environments.
     """
 
-    def __init__(self, working_dir: Path | None = None):
+    def __init__(self, working_dir: Path | None = None, queue_dir: Path | None = None):
         """Initialize local cluster.
 
         Args:
             working_dir: Directory to run jobs in (default: current directory)
+            queue_dir: Directory to store queue files (default: working_dir/queues)
         """
         self._working_dir = working_dir or Path.cwd()
+        self._queue_dir = queue_dir or (self._working_dir / "queues")
         self._jobs: dict[JobId, _LocalJob] = {}
 
     def launch(self, request: JobRequest) -> JobId:
@@ -146,7 +148,7 @@ class LocalCluster(Cluster):
         """
         from fray.cluster.local.file_queue import FileQueue
 
-        return FileQueue(name=name)
+        return FileQueue(name=name, queue_dir=str(self._queue_dir))
 
     def _get_job(self, job_id: JobId) -> "_LocalJob":
         if job_id not in self._jobs:

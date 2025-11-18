@@ -22,7 +22,7 @@ import ray
 from fray.cluster import set_current_cluster
 from fray.cluster.local import LocalCluster
 from fray.cluster.ray import RayCluster
-from fray.examples.fake_llm_worker import worker_loop
+from fray.examples.fake_llm_worker import process_task
 from fray.worker_pool import WorkerPool, WorkerPoolConfig
 
 # Enable debug logging
@@ -69,7 +69,7 @@ def test_worker_pool_inference(cluster):
     logger.info(f"Testing worker pool with cluster type: {type(cluster).__name__}")
 
     config = WorkerPoolConfig(
-        worker_func=worker_loop,
+        worker_func=process_task,
         min_workers=1,
         max_workers=3,
         scale_up_threshold=0.5,  # Scale up when queue has >0.5 tasks per worker
@@ -127,7 +127,7 @@ def test_worker_pool_inference(cluster):
 def test_worker_pool_autoscaling(cluster):
     """Test that worker pool scales up and down based on queue depth."""
     config = WorkerPoolConfig(
-        worker_func=worker_loop,
+        worker_func=process_task,
         min_workers=1,
         max_workers=4,
         scale_up_threshold=1.0,  # Scale up when >1 task per worker
@@ -179,7 +179,7 @@ def test_worker_pool_autoscaling(cluster):
 def test_worker_pool_shutdown(cluster):
     """Test graceful shutdown of worker pool."""
     config = WorkerPoolConfig(
-        worker_func=worker_loop,
+        worker_func=process_task,
         min_workers=2,
         max_workers=4,
     )

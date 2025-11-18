@@ -36,7 +36,7 @@ class WorkerPoolConfig:
     """Configuration for worker pool autoscaling.
 
     Attributes:
-        worker_func: Callable that workers will execute (should accept task and result queue names)
+        worker_func: Callable that processes individual tasks (task -> result)
         min_workers: Minimum number of workers to maintain
         max_workers: Maximum number of workers to scale up to
         scale_up_threshold: Tasks per worker to trigger scale up
@@ -44,7 +44,7 @@ class WorkerPoolConfig:
         scale_check_interval: How often to check scaling conditions (seconds)
     """
 
-    worker_func: Callable[[], None]
+    worker_func: Callable[[Any], Any]
     min_workers: int
     max_workers: int
     scale_up_threshold: float = 0.8
@@ -112,6 +112,7 @@ class WorkerPool:
         Returns:
             Job ID of the created worker
         """
+        from fray.cluster import current_cluster
         from fray.cluster.base import Entrypoint
 
         task_queue_name = f"{self._pool_id}_tasks"
@@ -120,7 +121,35 @@ class WorkerPool:
         worker_func = self._config.worker_func
 
         def worker_closure():
-            worker_func(task_queue_name, result_queue_name)
+            # Get queues from current cluster context
+            cluster = current_cluster()
+            task_queue = cluster.create_queue(task_queue_name)
+            result_queue = cluster.create_queue(result_queue_name)
+
+            # Process tasks until terminated
+            while True:
+                # Try to get a task
+                lease = task_queue.pop()
+
+                if lease is None:
+                    # No tasks available, sleep and retry
+                    time.sleep(0.1)
+                    continue
+
+                try:
+                    # Process the task using the user's worker function
+                    result = worker_func(lease.item)
+
+                    # Publish result
+                    result_queue.push(result)
+
+                    # Mark task as complete
+                    task_queue.done(lease)
+
+                except Exception as e:
+                    logger.error(f"Error processing task: {e}")
+                    # Release the lease so task can be retried
+                    task_queue.release(lease)
 
         request = JobRequest(
             name=f"worker-{self._pool_id[:8]}",
