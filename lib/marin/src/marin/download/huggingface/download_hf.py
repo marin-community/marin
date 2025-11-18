@@ -28,7 +28,6 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 from huggingface_hub import HfFileSystem
-
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Dataset, flow_backend
@@ -154,8 +153,14 @@ def download_hf(cfg: DownloadConfig) -> None:
     total_files = len(task_generator)
     logger.info(f"Total number of files to process: {total_files}")
 
-    backend = flow_backend()
-    pipeline = Dataset.from_list(task_generator).map(lambda task: stream_file_to_fsspec(*task))
+    backend = flow_backend(max_parallelism=512)
+    pipeline = (
+        Dataset.from_list(task_generator)
+        .map(lambda task: stream_file_to_fsspec(*task))
+        .write_jsonl(
+            f"{cfg.public_gcs_path}/.metrics/success-part-{{shard:05d}}-of-{{num_shards:05d}}.jsonl", skip_existing=True
+        )
+    )
     list(backend.execute(pipeline))
 
     # Write Provenance JSON
