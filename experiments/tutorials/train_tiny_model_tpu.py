@@ -13,12 +13,7 @@
 # limitations under the License.
 
 """
-This is a tutorial on how to train a tiny model on a small dataset using CPU.
-
-This script demonstrates how to:
-1. Train a tiny model on TinyStories using CPU
-2. Use TPU-specific training configuration
-3. Run a quick training experiment
+This is a tutorial on how to train a tiny model on a small dataset using TPU.
 
 For CPU training, see train_tiny_model_cpu.py
 For GPU training, see train_tiny_model_gpu.py

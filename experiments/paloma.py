@@ -61,6 +61,7 @@ paloma = (
             revision=versioned("65cd6fc"),
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
+            append_sha_to_path=True,
         ),
     )
     .with_output_path("raw/paloma-fc6827")

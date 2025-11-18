@@ -336,6 +336,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
     metadata_records: list[dict[str, Any]] = []
 
     backend = flow_backend(max_parallelism=cfg.max_concurrent_downloads, max_retries=3)
+    print(tasks)
     pipeline = (
         Dataset.from_list(tasks)
         .map(lambda task: _download_and_convert_single(*task))
