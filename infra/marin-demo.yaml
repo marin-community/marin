@@ -118,6 +118,19 @@ available_node_types:
       CPU: 120
       TPU: 4
 
+  tpu_slice_v4_8:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-8
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+
   tpu_slice_v4_16:
     max_workers: 1024
     min_workers: 0

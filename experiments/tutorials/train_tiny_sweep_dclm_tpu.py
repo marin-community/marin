@@ -18,8 +18,8 @@ while training a tiny model on the TinyStories dataset using TPU hardware.
 """
 import dataclasses
 
+from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.evals.task_configs import CORE_TASKS
-from experiments.exp72_baselines import fineweb_edu_tokenized
 from marin.execution.executor import executor_main, versioned
 from marin.resources import TpuPodConfig
 
@@ -59,12 +59,12 @@ for config in sweep_configs:
     run = default_train(
         # Marin will automatically create unique ids for runs b/c the model_config is versioned
         # however, we can give each run a unique name for easier identification
-        name=f"tutorial-fineweb-edu-30m-sweep-lr{lr}-wd{wd}",
-        tokenized=fineweb_edu_tokenized,
+        name=f"tutorial-dclm-30m-sweep-lr{lr}-wd{wd}",
+        tokenized=dclm_mixture_config_llama3,
         model_config=versioned(llama_30m),
         train_config=config,
         # wandb tags
-        tags=["llama", "30m", "fineweb_edu", "tutorial", "sweep", "test20251117"],
+        tags=["llama", "30m", "dclm", "tutorial", "sweep", "test20251117"],
         eval_harness_tasks=CORE_TASKS,
     )
     runs.append(run)

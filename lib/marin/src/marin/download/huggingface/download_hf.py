@@ -152,7 +152,7 @@ def download_hf(cfg: DownloadConfig) -> None:
         Dataset.from_list(task_generator)
         .map(lambda task: stream_file_to_fsspec(*task))
         .write_jsonl(
-            f"{cfg.public_gcs_path}/.metrics/success-part-{{shard:05d}}-of-{{num_shards:05d}}.jsonl", skip_existing=True
+            f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
     list(backend.execute(pipeline))
