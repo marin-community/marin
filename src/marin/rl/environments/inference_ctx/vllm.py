@@ -225,7 +225,7 @@ class vLLMInferenceContext(BaseInferenceContext):
                     mean diff: {jnp.mean(jnp.abs(weight - weight_other))}"
                 )
 
-    def tokenize_prompt(self, prompt: str, choice: Choice) -> np.ndarray:
+    def tokenize_prompt(self, prompt: str, choice: Choice, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.
 
         NOTE(chris): This is a hack to get the prompt token IDs the same since
@@ -323,6 +323,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         n: int,
         max_tokens: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Batch completions from the inference server."""
         sampling_params = SamplingParams(
@@ -334,12 +335,24 @@ class vLLMInferenceContext(BaseInferenceContext):
             logprobs=1,
         )
 
-        prompts_with_templates = [
-            self.tokenizer.apply_chat_template(
-                [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True
-            )
-            for prompt in prompts
-        ]
+        if system_prompt:
+            prompts_with_templates = [
+                self.tokenizer.apply_chat_template(
+                    [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                for prompt in prompts
+            ]
+        else:
+            prompts_with_templates = [
+                self.tokenizer.apply_chat_template(
+                    [{"role": "user", "content": prompt}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                for prompt in prompts
+            ]
 
         outputs = self.llm.generate(prompts_with_templates, sampling_params)
 

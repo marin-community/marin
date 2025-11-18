@@ -22,11 +22,13 @@ and writes the rollout data to files for training workers to consume.
 import dataclasses
 import logging
 import os
+import random
 import socket
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any
+import wandb
 
 import equinox as eqx
 import haliax as hax
@@ -91,6 +93,9 @@ class RolloutWorkerConfig:
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
 
+    system_prompt: str | None = None
+    """System prompt to use for inference."""
+
 
 def find_open_port() -> int:
     """Find an open port on localhost."""
@@ -107,6 +112,7 @@ class RolloutBatchStats:
     avg_reward: float
     pass_at_one: float | None = None
     pass_at_k: float | None = None
+    avg_at_k: float | None = None
 
 
 def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
@@ -116,9 +122,11 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
     reward_sum = 0.0
     pass_at_k = 0.0
     pass_at_one = 0.0
+    avg_at_k = 0.0
 
     for group in batch.groups:
         pass_at_k_for_current_group = 0.0
+        avg_at_k_for_current_group = 0.0
         for rollout in group.rollouts:
             rollout_stats_list.append(
                 RolloutStats(
@@ -130,6 +138,7 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
 
             if rollout.correctness_reward is not None:
                 pass_at_k_for_current_group = max(pass_at_k_for_current_group, rollout.correctness_reward)
+                avg_at_k_for_current_group += rollout.correctness_reward
 
             total_count += 1
             if rollout.episode_reward > 0:
@@ -140,6 +149,8 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
         if group.rollouts[0].correctness_reward is not None:
             pass_at_one += group.rollouts[0].correctness_reward
 
+        avg_at_k += avg_at_k_for_current_group / len(group.rollouts)
+
     return RolloutBatchStats(
         total_count=total_count,
         success_count=success_count,
@@ -147,6 +158,7 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
         avg_reward=(reward_sum / total_count) if total_count > 0 else 0.0,
         pass_at_one=(pass_at_one / len(batch.groups)) if len(batch.groups) > 0 else 0.0,
         pass_at_k=(pass_at_k / len(batch.groups)) if len(batch.groups) > 0 else 0.0,
+        avg_at_k=(avg_at_k / len(batch.groups)) if len(batch.groups) > 0 else 0.0,
     )
 
 
@@ -254,6 +266,7 @@ class RolloutWorker:
             mode=mode,
             max_tokens=max_tokens,
             stop=stop_tokens,
+            system_prompt=self.config.system_prompt,
         )
 
         if len(rollout_groups) == 0:
@@ -358,7 +371,7 @@ class RolloutWorker:
             return None
 
     def _log_prompt_example(self, lesson_id: str, batch: RolloutBatch, step: int, eval_type: str = "eval") -> None:
-        """Log a single representative sample from an evaluation batch.
+        """Log representative samples from an evaluation batch.
 
         Args:
             lesson_id: ID of the evaluated lesson
@@ -369,24 +382,34 @@ class RolloutWorker:
         if not batch or not batch.groups:
             return
 
-        # Take first rollout from first group as representative
-        sample = batch.groups[0].rollouts[0]
+        sample_groups = min(5, len(batch.groups))
+        selected_group_indices = random.sample(range(len(batch.groups)), k=sample_groups)
 
-        # Decode tokens to human-readable text
-        prompt_text = self._tokenizer.decode(sample.prompt_tokens, skip_special_tokens=True)
-        response_text = self._tokenizer.decode(sample.response_tokens, skip_special_tokens=True)
+        rows = []
+        for group_idx in selected_group_indices:
+            group = batch.groups[group_idx]
+            if not group.rollouts:
+                continue
+            rollout = random.choice(group.rollouts)
+            prompt_text = self._tokenizer.decode(rollout.prompt_tokens, skip_special_tokens=True)
+            response_text = self._tokenizer.decode(rollout.response_tokens, skip_special_tokens=True)
+            rows.append({"prompt": prompt_text, "response": response_text})
 
-        # Log with structured keys
+        if not rows:
+            return
+
+        table = wandb.Table(columns=["prompt", "response"])
+        for row in rows:
+            table.add_data(row["prompt"], row["response"])
+
         prefix = f"inference.{eval_type}/{lesson_id}"
-        metrics = {
-            f"{prefix}/sample_prompt": prompt_text,
-            f"{prefix}/sample_response": response_text,
-            f"{prefix}/sample_example_id": sample.env_example_id,
-        }
+        metrics = {f"{prefix}/sample_table": table}
         self.tracker.log(metrics, step=step)
-        logger.info(f"Eval sample for lesson {lesson_id} at step {step}: {metrics}")
+        logger.info(f"Logged {len(rows)} eval samples for lesson {lesson_id} at step {step}")
 
-    def _build_eval_metrics(self, prefix: str, lesson_id: str, batch: RolloutBatch) -> dict[str, Any]:
+    def _build_eval_metrics(
+        self, prefix: str, lesson_id: str, batch: RolloutBatch, n_generations: int
+    ) -> dict[str, Any]:
         metrics = {}
         stats = _compute_batch_stats(batch, lesson_id)
         if stats.total_count == 0:
@@ -396,21 +419,26 @@ class RolloutWorker:
         metrics[f"{prefix}/{lesson_id}/avg_reward"] = stats.avg_reward
         metrics[f"{prefix}/{lesson_id}/total_count"] = stats.total_count
         metrics[f"{prefix}/{lesson_id}/pass_at_one"] = stats.pass_at_one
-        metrics[f"{prefix}/{lesson_id}/pass_at_k"] = stats.pass_at_k
+        metrics[f"{prefix}/{lesson_id}/pass_at_{n_generations}"] = stats.pass_at_k
+        metrics[f"{prefix}/{lesson_id}/avg_at_{n_generations}"] = stats.avg_at_k
         return metrics
 
     def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> dict:
         """Evaluate a single lesson and log metrics."""
+        N_EVAL_GENERATIONS = 8
+
         batch, _ = self._sample_batch(
             lesson_id=lesson_id,
             n_examples=n_examples,
-            n_generations=1,
+            n_generations=N_EVAL_GENERATIONS,
             mode="eval",
             rng=rng,
         )
         stats = _compute_batch_stats(batch, lesson_id)
         self._log_prompt_example(lesson_id, batch, step, eval_type=eval_type)
-        metrics = self._build_eval_metrics(prefix=f"inference.{eval_type}", lesson_id=lesson_id, batch=batch)
+        metrics = self._build_eval_metrics(
+            prefix=f"inference.{eval_type}", lesson_id=lesson_id, batch=batch, n_generations=N_EVAL_GENERATIONS
+        )
         self.tracker.log(metrics, step=step)
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, step, metrics)
         # only update curriculum for full evals
@@ -501,7 +529,12 @@ class RolloutWorker:
             self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
                 stats.rollout_stats, mode="training", current_step=step
             )
-            eval_metrics = self._build_eval_metrics(prefix="rollout", lesson_id=lesson_id, batch=rollout_batch)
+            eval_metrics = self._build_eval_metrics(
+                prefix="rollout",
+                lesson_id=lesson_id,
+                batch=rollout_batch,
+                n_generations=lesson_config.sampling_params.n_generations_per_prompt,
+            )
 
             step += 1
 

@@ -133,6 +133,9 @@ class RLJobConfig:
     inference_config: InferenceServerConfig | vLLMInferenceContextConfig | None = None
     """Configuration for inference context."""
 
+    system_prompt: str | None = None
+    """System prompt to use for inference."""
+
     # Logging
     run_id: str = field(default_factory=lambda: f"rl-{uuid.uuid4().hex[:8]}")
     log_freq: int = 10
@@ -301,6 +304,7 @@ class RLJob:
             seed=self.config.seed + 1000,
             inference_type=self.config.inference_type,
             inference_config=inference_config,
+            system_prompt=self.config.system_prompt,
         )
 
         return train_worker_config, rollout_worker_config

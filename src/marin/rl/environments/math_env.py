@@ -198,6 +198,7 @@ class MathEnv(MarinEnv):
         mode: str = "train",
         max_tokens: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample prompts, evaluate responses, and create rollouts."""
 
@@ -216,7 +217,12 @@ class MathEnv(MarinEnv):
 
         prompts = [example.processed_prompt for example in sampled_examples]
         completions = inference_ctx.batch_completions(
-            prompts=prompts, temperature=temperature, n=n_generations, max_tokens=max_tokens, stop=stop
+            prompts=prompts,
+            temperature=temperature,
+            n=n_generations,
+            max_tokens=max_tokens,
+            stop=stop,
+            system_prompt=system_prompt,
         )
 
         rollout_groups: list[RolloutGroup] = []
@@ -250,6 +256,7 @@ class MathEnv(MarinEnv):
                     reward=token_reward,
                     correctness_reward=correct_score,
                     temperature=temperature,
+                    system_prompt=system_prompt,
                 )
 
                 group_rollouts.append(rollout)

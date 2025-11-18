@@ -294,7 +294,7 @@ def rloo_loss_with_importance_sampling(
         clip_epsilon=clip_epsilon,
         max_output_tokens=batch.max_output_tokens,
         trainer_inference_importance_sampling_ratio=trainer_inference_importance_sampling_ratio,
-        response_truncated_array=batch.truncated,
+        response_truncated_array=batch.truncated if do_overlong_filtering else None,
     )
 
     # RLOO loss with importance sampling

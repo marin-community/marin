@@ -47,9 +47,12 @@ class BaseInferenceContext:
         """Batch completions from the inference server."""
         raise NotImplementedError
 
-    def tokenize_prompt(self, prompt: str, choice: Choice) -> np.ndarray:
+    def tokenize_prompt(self, prompt: str, choice: Choice, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize with chat template matching server behavior."""
-        messages = [{"role": "user", "content": prompt}]
+        if system_prompt:
+            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
+        else:
+            messages = [{"role": "user", "content": prompt}]
         try:
             tokens = self.tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=True)
         except Exception as e:
@@ -109,11 +112,12 @@ class BaseInferenceContext:
         env_example_id: str,
         reward: float,
         temperature: float,
+        system_prompt: str | None = None,
         correctness_reward: float | None = None,
     ) -> Rollout:
         """Construct Rollout from a choice with validation."""
 
-        prompt_tokens = self.tokenize_prompt(prompt, choice)
+        prompt_tokens = self.tokenize_prompt(prompt, choice, system_prompt)
         # print(f"prompt_tokens: {prompt_tokens}")
         # print(f"prompt token ids: {choice.prompt_token_ids}")
 

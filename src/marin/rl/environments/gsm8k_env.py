@@ -190,6 +190,7 @@ class GSM8KEnv(MarinEnv):
         mode: str = "train",
         max_tokens: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample prompts, evaluate responses, and create rollouts."""
 
@@ -208,7 +209,12 @@ class GSM8KEnv(MarinEnv):
 
         prompts = [example.processed_prompt for example in sampled_examples]
         completions = inference_ctx.batch_completions(
-            prompts=prompts, temperature=temperature, n=n_generations, max_tokens=max_tokens, stop=stop
+            prompts=prompts,
+            temperature=temperature,
+            n=n_generations,
+            max_tokens=max_tokens,
+            stop=stop,
+            system_prompt=system_prompt,
         )
 
         rollout_groups: list[RolloutGroup] = []
@@ -235,6 +241,7 @@ class GSM8KEnv(MarinEnv):
                     reward=token_reward,
                     correctness_reward=correct_score,
                     temperature=temperature,
+                    system_prompt=system_prompt,
                 )
 
                 group_rollouts.append(rollout)
@@ -266,9 +273,7 @@ class GSM8KEnv(MarinEnv):
 
         return rollout_groups, metrics
 
-    def _score_choice(
-        self, example: GSM8KExample, response_text: str, tokenizer
-    ) -> tuple[float, float, float, float]:
+    def _score_choice(self, example: GSM8KExample, response_text: str, tokenizer) -> tuple[float, float, float, float]:
         """Score a single generated response text using MathEnv logic."""
 
         decoded_response = response_text.strip()
@@ -317,4 +322,3 @@ class GSM8KEnv(MarinEnv):
             }
             for idx in indices
         ]
-

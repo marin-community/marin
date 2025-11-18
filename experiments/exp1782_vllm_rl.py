@@ -191,16 +191,16 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
         #     sampling_params=default_sampling,
         # ),
-        "math_full": LessonConfig(
-            lesson_id="math_full",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.math_env.MathEnv",
-                env_args={"seed": 42},
-            ),
-            dependencies=[],
-            # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-            sampling_params=default_sampling,
-        ),
+        # "math_full": LessonConfig(
+        #     lesson_id="math_full",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.math_env.MathEnv",
+        #         env_args={"seed": 42},
+        #     ),
+        #     dependencies=[],
+        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+        #     sampling_params=default_sampling,
+        # ),
         # "story_generation": LessonConfig(
         #     lesson_id="story_generation",
         #     env_config=EnvConfig(
@@ -210,16 +210,16 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         #     dependencies=[],
         #     sampling_params=story_sampling,
         # ),
-        # "gsm8k" : LessonConfig(
-        #     lesson_id="gsm8k",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.gsm8k_env.GSM8KEnv",
-        #         env_args={"seed": 42},
-        #     ),
-        #     dependencies=[],
-        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
+        "gsm8k": LessonConfig(
+            lesson_id="gsm8k",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.gsm8k_env.GSM8KEnv",
+                env_args={"seed": 42},
+            ),
+            dependencies=[],
+            # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+            sampling_params=default_sampling,
+        ),
     }
 
     return CurriculumConfig(
@@ -284,7 +284,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
         # We are running on-policy, so wait for new weights from the trainer after each episode.
-        max_weight_transfer_wait_time=120,
+        max_weight_transfer_wait_time=600,
         coordinator_name=f"weight_transfer_coordinator_{name}",
     )
 
@@ -317,8 +317,8 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
                 temperature=1.0,
                 n=8,
                 max_tokens=MAX_OUTPUT_TOKENS,
-                # stop=["</answer>"],
-                # include_stop_str_in_output=True,
+                stop=["</answer>"],
+                include_stop_str_in_output=True,
                 logprobs=1,
             ),
         ),
@@ -333,6 +333,12 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             num_rollout_workers=1,
             inference_tpu_type="v5p-8",
         ),
+        system_prompt="""A conversation between User and Assistant. The User asks a
+            question, and the Assistant solves it. The Assistant first thinks about the reasoning process
+            in the mind and then provides the User with the answer. The reasoning process is enclosed
+            within <think> </think> and answer is enclosed within <answer> </answer> tags,
+            respectively, i.e., <think> reasoning process here </think> <answer> answer here
+            </answer>.""",
     )
 
     return ExecutorStep(
@@ -354,17 +360,42 @@ def main():
         ExperimentConfig(
             # model_config=llama_3_1_8b,
             # model_config=llama1b,
-            # model_config=qwen3_1_7b,
+            model_config=qwen3_1_7b,
+            # model_config=qwen3_8b,
+            rl_loss=RLOOLoss(
+                kl_coef=0.01,
+                clip_epsilon=0.2,
+                synchronous=True,
+                do_trainer_inference_mismatch_importance_sampling=True,
+                # do_overlong_filtering=True,
+            ),
+            experiment_name_suffix="math-tis-r1-prompt",
+        ),
+        ExperimentConfig(
             model_config=qwen3_8b,
             rl_loss=RLOOLoss(
                 kl_coef=0.01,
                 clip_epsilon=0.2,
                 synchronous=True,
                 do_trainer_inference_mismatch_importance_sampling=True,
-                do_overlong_filtering=True,
+                # do_overlong_filtering=True,
             ),
-            experiment_name_suffix="rloo-sync",
+            experiment_name_suffix="math-tis-r1-prompt",
         ),
+        # ExperimentConfig(
+        #     # model_config=llama_3_1_8b,
+        #     # model_config=llama1b,
+        #     model_config=qwen3_1_7b,
+        #     # model_config=qwen3_8b,
+        #     rl_loss=RLOOLoss(
+        #         kl_coef=0.01,
+        #         clip_epsilon=0.2,
+        #         synchronous=True,
+        #         do_trainer_inference_mismatch_importance_sampling=True,
+        #         do_overlong_filtering=True,
+        #     ),
+        #     experiment_name_suffix="overlong-tis",
+        # ),
         # ExperimentConfig(
         #     model_config=llama_3_1_8b, rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="grpo"
         # ),
@@ -390,7 +421,7 @@ def main():
         model_base_name = experiment_config.model_config.name.split("/")[-1].lower()
         experiments.append(
             rl_train(
-                name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-MATH-sync-{experiment_config.experiment_name_suffix}-{datestamp}",
+                name=f"{model_base_name}-{experiment_config.experiment_name_suffix}-{datestamp}",
                 experiment_config=experiment_config,
             ),
         )
