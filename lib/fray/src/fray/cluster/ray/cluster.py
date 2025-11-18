@@ -62,18 +62,18 @@ class RayCluster(Cluster):
             config_path: Path to cluster config YAML for SSH tunnel setup
                        (if None, no SSH tunnel will be created)
             namespace: Ray namespace for actor isolation
-                      (if None, detected from current context or uses Ray default)
+                      (if None, creates a unique namespace)
         """
         self._address = os.environ.get("RAY_ADDRESS", "auto") if address == "auto" else address
         self._config_path = config_path
-        self._namespace = namespace
 
-        # Detect namespace from current Ray context if not provided
-        if self._namespace is None:
-            try:
-                self._namespace = ray.get_runtime_context().namespace
-            except Exception:
-                pass
+        # Use provided namespace or create a unique one
+        if namespace is None:
+            self._namespace = f"fray_{uuid.uuid4().hex[:8]}"
+            logger.info(f"Created new namespace: {self._namespace}")
+        else:
+            self._namespace = namespace
+            logger.info(f"Using provided namespace: {self._namespace}")
 
         self._dashboard_address = dashboard_address or self._get_dashboard_address()
         self._tpu_jobs: dict[str, dict] = {}  # Track TPU jobs: job_id -> {ref, name, start_time}
@@ -323,7 +323,7 @@ class RayCluster(Cluster):
         Returns:
             RayQueue implementation
         """
-        return RayQueue(name)
+        return RayQueue(name, namespace=self._namespace)
 
     def get_ray_resources(self, request: JobRequest) -> dict[str, float]:
         """Convert ResourceConfig to Ray resource specification.
@@ -586,10 +586,18 @@ class RayQueue(Queue):
     to the actor via remote method calls.
     """
 
-    def __init__(self, name: str):
-        """Initialize queue with a Ray actor backend."""
+    def __init__(self, name: str, namespace: str | None = None):
+        """Initialize queue with a Ray actor backend.
+
+        Args:
+            name: Queue name
+            namespace: Ray namespace for the actor (if None, uses current namespace)
+        """
         self._name = name
-        self._actor = _RayQueueActor.options(name=name, get_if_exists=True).remote()
+        options = {"name": name, "get_if_exists": True}
+        if namespace is not None:
+            options["namespace"] = namespace
+        self._actor = _RayQueueActor.options(**options).remote()
 
     def push(self, item: Any) -> None:
         """Add an item to the queue."""

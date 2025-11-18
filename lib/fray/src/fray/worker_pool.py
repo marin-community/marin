@@ -123,8 +123,15 @@ class WorkerPool:
         def worker_closure():
             # Get queues from current cluster context
             cluster = current_cluster()
+            logger.info(f"Worker initialized with cluster: {cluster}, type: {type(cluster).__name__}")
+
+            # Log cluster details for debugging
+            if hasattr(cluster, "_namespace"):
+                logger.info(f"Worker cluster namespace: {cluster._namespace}")
+
             task_queue = cluster.create_queue(task_queue_name)
             result_queue = cluster.create_queue(result_queue_name)
+            logger.info(f"Worker queues created: task={task_queue_name}, result={result_queue_name}")
 
             # Process tasks until terminated
             while True:
@@ -138,7 +145,9 @@ class WorkerPool:
 
                 try:
                     # Process the task using the user's worker function
+                    logger.info(f"Worker processing task: {lease.item}")
                     result = worker_func(lease.item)
+                    logger.info(f"Worker produced result: {result}")
 
                     # Publish result
                     result_queue.push(result)
