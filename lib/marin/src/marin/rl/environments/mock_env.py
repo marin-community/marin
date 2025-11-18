@@ -15,9 +15,13 @@
 """Mock environment for testing RL training without external dependencies."""
 
 import logging
+import os
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol
+
+# Force JAX to use CPU only to avoid unnecessary TPU/GPU initialization during data operations
+os.environ["JAX_PLATFORMS"] = "cpu"
 
 import jax
 import numpy as np

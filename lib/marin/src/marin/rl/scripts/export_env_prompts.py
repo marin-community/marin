@@ -29,6 +29,10 @@ Usage:
 
 import json
 import logging
+import os
+
+# Force JAX to use CPU only to avoid unnecessary TPU/GPU initialization during data operations
+os.environ["JAX_PLATFORMS"] = "cpu"
 
 import click
 import jax
