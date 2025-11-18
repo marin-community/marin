@@ -113,13 +113,29 @@ export function navigateToUrl(urlParams, delta, location, navigate) {
 
 export function checkJsonResponse(response, setError) {
   // If axios can't parse the payload into an object (e.g., there are nan's inside), then it silently returns a string.
-  // This should fail (otherwise the payload would have been an object).
-  if (typeof response.data === "string") {
+  // Convert strings into parsed JSON and propagate backend errors to the UI.
+  let data = response.data;
+  if (typeof data === "string") {
     try {
-      JSON.parse(response.data);
+      data = JSON.parse(data);
     } catch (e) {
-      setError("Failed to parse response as JSON: " + e.message);
-      return;
+      const url = response?.config?.url ?? "the backend";
+      const status = response?.status ?? "unknown status";
+      const headers = response?.headers ?? {};
+      const contentType = headers["content-type"] || headers["Content-Type"] || "unknown content-type";
+      const snippet = data.trim().slice(0, 200).replace(/\s+/g, " ");
+      const message = `Expected JSON from ${url} but got ${status} (${contentType}). Body starts with: ${snippet || "<empty>"}`;
+      console.error("Non-JSON backend response", {url, status, contentType, bodySnippet: snippet, error: e});
+      setError(message);
+      return null;
     }
   }
+
+  if (data && typeof data === "object" && "error" in data) {
+    const error = typeof data.error === "string" ? data.error : JSON.stringify(data.error);
+    console.error("Backend returned error payload", {url: response?.config?.url, error});
+    setError(error);
+    return null;
+  }
+  return data;
 }

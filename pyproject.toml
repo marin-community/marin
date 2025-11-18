@@ -12,6 +12,8 @@ dependencies = [
     "marin",
     "levanter",
     "zephyr",
+    "haliax",
+    "fray",
 ]
 
 [tool.uv]
@@ -26,16 +28,16 @@ members = [
     "lib/marin",
     "lib/levanter",
     "lib/zephyr",
+    "lib/haliax",
+    "lib/fray"
 ]
 
-[tool.uv.sources.zephyr]
-workspace = true
-
-[tool.uv.sources.marin]
-workspace = true
-
-[tool.uv.sources.levanter]
-workspace = true
+[tool.uv.sources]
+fray.workspace = true
+haliax.workspace = true
+levanter.workspace = true
+marin.workspace = true
+zephyr.workspace = true
 
 [tool.black]
 line-length = 121

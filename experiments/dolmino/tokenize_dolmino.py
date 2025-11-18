@@ -20,7 +20,6 @@ This module defines a function that returns tokenization steps for each dataset 
 
 import os.path
 
-from levanter.store.cache import CacheOptions
 
 from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets import dolmino
@@ -109,7 +108,6 @@ dolmino_math_tokenized_llama3 = ExecutorStep(
         validation_paths=versioned([]),
         cache_path=this_output_path(),
         tokenizer=versioned(llama3_tokenizer),
-        cache_options=CacheOptions(num_shard_groups=32),
     ),
     pip_dependency_groups=["sentencepiece"],
 ).with_output_path("tokenized/dolmino/all_math-9d507c")
