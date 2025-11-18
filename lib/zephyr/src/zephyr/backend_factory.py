@@ -143,15 +143,21 @@ def flow_backend(
     # Build parameters, using current config as defaults
     params = {
         "backend_type": "auto",
-        "max_parallelism": (
-            max_parallelism if max_parallelism is not None else (current.config.max_parallelism if current else 100)
-        ),
         "memory": memory,
         "num_cpus": num_cpus,
         "num_gpus": num_gpus,
-        "chunk_size": chunk_size if chunk_size is not None else (current.config.chunk_size if current else 1000),
-        "dry_run": dry_run if dry_run is not None else (current.config.dry_run if current else False),
         **backend_options,
     }
+    if current is not None:
+        params["max_parallelism"] = current.config.max_parallelism
+        params["chunk_size"] = current.config.chunk_size
+        params["dry_run"] = current.config.dry_run
+
+    if max_parallelism is not None:
+        params["max_parallelism"] = max_parallelism
+    if chunk_size is not None:
+        params["chunk_size"] = chunk_size
+    if dry_run is not None:
+        params["dry_run"] = dry_run
 
     return create_backend(**params)
