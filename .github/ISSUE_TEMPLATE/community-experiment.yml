@@ -2,29 +2,28 @@ name: "Community Experiment Submission"
 description: "Propose an experiment; a branch and starter code will be created for you automatically."
 labels: ["community-experiment-submission"]
 body:
+  - type: markdown
+    attributes:
+      value: "Welcome to Marin! Please enter the title of your experiment. Tell us who you are, what your experiment is, and what you are trying to investigate. Your branch and starter code will be automatically set up."
   - type: input
     id: author_name
     attributes:
       label: Your name
+      placeholder: e.g., Calvin Xu
     validations:
       required: true
   - type: input
     id: affiliation
     attributes:
       label: Affiliation
+      placeholder: e.g., Stanford University
     validations:
       required: true
   - type: input
     id: url
     attributes:
       label: Link to your profile/site
-    validations:
-      required: true
-  - type: input
-    id: title
-    attributes:
-      label: Experiment Title
-      placeholder: e.g., The effects of QK Normalization
+      placeholder: example.com
     validations:
       required: true
   - type: textarea
@@ -40,15 +39,15 @@ body:
       description: What are you trying to learn or achieve? What do you expect to find before running the experiment?
     validations:
       required: true
+  - type: markdown
+    attributes:
+      value: "MarinBot will set up your branch and comment with the next steps."
   - type: input
     id: branch_name
     attributes:
       label: Name of your branch
       placeholder: my-experiment-branch
-      description: Lowercase letters, numbers, hyphens only.
+      description: Lowercase letters, numbers, hyphens only. Your full branch name will be {author_name}/{branch_name}-{issue_number}
     validations:
       required: true
-      pattern: '^[a-z0-9-]+$'
-  - type: markdown
-    attributes:
-      value: "<!-- community-experiment:onboarding v1 -->"
+      pattern: "^[a-z0-9-]+$"
