@@ -433,7 +433,8 @@ def tokenize(config: TokenizeConfigBase):
     if not train_paths and not validation_paths:
         raise ValueError("No input files specified. Nothing to do.")
 
-    backend = flow_backend()
+    # explicitly set JAX to use CPU only for tokenization, so we don't accidentally grab TPUs
+    backend = flow_backend(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}})
 
     def run_pipeline(paths: list[str], split_name: str) -> None:
         # Compute the file groups we should process per shard.
