@@ -20,12 +20,16 @@ trainer:
   batch_axis: "batch"
   fsdp_axis: "embed"
   mp: f32
-  num_train_steps: 100000
+  num_train_steps: 10000
   tensor_parallel_axes: ["mlp", "heads"]
-  train_batch_size: 32 # what's good?
+  train_batch_size: 32 # TODO determine
+
+optimizer:
+  learning_rate: 1e-6
+  weight_decay: 0.1
 
 eval_harness:
-  task_spec: ["hellaswag"]
+  task_spec: ["hellaswag", "xcopa"]
   max_examples: 2048
 eval_harness_steps: 1000
 
@@ -36,7 +40,8 @@ data:
     #  id: dlwh/wikitext_103_detokenized
     #  cache_dir: /tmp/marin_cache_pile
     ul2r:
-      id: dlwh/wikitext_103_detokenized
+      #id: dlwh/wikitext_103_detokenized
+      id: Salesforce/wikitext
       cache_dir: /tmp/marin_cache_ul2r
       format:
         type: ul2r
