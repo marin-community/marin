@@ -275,6 +275,14 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
+    # Verify JAX is configured for CPU-only mode
+    jax_platforms = os.environ.get("JAX_PLATFORMS", "not set")
+    jax_devices = jax.devices()
+
+    # Assert that JAX_PLATFORMS is set to cpu and that all devices are CPU devices
+    assert jax_platforms == "cpu", f"JAX_PLATFORMS should be 'cpu' but is '{jax_platforms}'"
+    assert all(d.platform == "cpu" for d in jax_devices), f"Expected all CPU devices, got: {jax_devices}"
+
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
@@ -346,7 +354,7 @@ def consolidate_shard_caches(
 
     logger.info("Copying shard data and metadata to final cache.")
     list(
-        flow_backend().execute(
+        cpu_only_backend().execute(
             Dataset.from_list(shard_info)
             .map(copy_shard)
             .write_jsonl(f"{output_path}/.copy/copy-shard-{{shard:05d}}.jsonl", skip_existing=True)
@@ -392,6 +400,11 @@ def consolidate_shard_caches(
     return final_ledger
 
 
+def cpu_only_backend():
+    """Return a Zephyr flow backend that uses only CPU devices."""
+    return flow_backend(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}})
+
+
 def tokenize(config: TokenizeConfigBase):
     """Tokenize datasets using zephyr pipeline.
 
@@ -433,12 +446,13 @@ def tokenize(config: TokenizeConfigBase):
     if not train_paths and not validation_paths:
         raise ValueError("No input files specified. Nothing to do.")
 
-    backend = flow_backend()
-
     def run_pipeline(paths: list[str], split_name: str) -> None:
         # Compute the file groups we should process per shard.
+        cluster_backend = cpu_only_backend()
+
+        thread_backend = create_backend("threadpool")
         file_stats = list(
-            create_backend("threadpool").execute(
+            thread_backend.execute(
                 Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
                 verbose=False,
             )
@@ -460,17 +474,15 @@ def tokenize(config: TokenizeConfigBase):
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
-        shard_paths = list(backend.execute(temp_shards))
+        shard_paths = list(cluster_backend.execute(temp_shards))
 
         logger.info("Computing exemplar for cache consolidation")
-        exemplar = next(
-            flow_backend().execute(
+        exemplar = cluster_backend.execute(
                 Dataset.from_list(paths[0:1])
                 .flat_map(load_file)
                 .take_per_shard(1)
                 .map_shard(lambda example: _tokenize_batches(config, [example]))
-            )
-        )
+            )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
         consolidate_shard_caches(
