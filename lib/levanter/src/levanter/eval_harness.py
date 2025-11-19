@@ -516,8 +516,17 @@ class LevanterHarnessLM(TemplateLM):
         # prompting/no mode.
         INPUT_PREFIX = "<|s|>"
         INPUT_SUFFIX = "<|mask_0|>"
+
+        # HACK
         modified_requests = []
         for request in requests:
+            prompt = request.args[0]
+            continuation = request.args[1]
+            modified_prompt = INPUT_PREFIX + prompt + INPUT_SUFFIX
+            modified_request = dataclasses.replace(request, args=(modified_prompt, continuation))
+            modified_requests.append(modified_request)
+
+        for request in modified_requests:
             bucket = self._prepare_bucket(current_task)
             if bucket is None:
                 break
@@ -525,13 +534,10 @@ class LevanterHarnessLM(TemplateLM):
             continuation = request.args[1]
             bucket.append(
                 {
-                    "prompt": INPUT_PREFIX + prompt + INPUT_SUFFIX,
+                    "prompt": prompt,
                     "generation": continuation,
                 }
             )
-            modified_prompt = INPUT_PREFIX + prompt + INPUT_SUFFIX
-            modified_request = dataclasses.replace(request, args=(modified_prompt, continuation))
-            modified_requests.append(modified_request)
 
         packed = _pack_requests(modified_requests, self.tokenizer, self.EvalPos, self.leader.max_packed_segments)
         packed_iterator = stack_batches(iter(packed), self.EvalPos, self.EvalBatch)

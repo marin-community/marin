@@ -29,7 +29,7 @@ optimizer:
   weight_decay: 0.1
 
 eval_harness:
-  task_spec: ["hellaswag", "xcopa"]
+  task_spec: ["hellaswag"] # did xcopa cause Missing points assertion?
   max_examples: 2048
 eval_harness_steps: 1000
 
