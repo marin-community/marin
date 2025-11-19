@@ -16,7 +16,6 @@
 
 import pytest
 import ray
-from fray import RayContext, SyncContext, ThreadContext
 from fray.cluster import LocalCluster, RayCluster
 
 
@@ -58,18 +57,3 @@ def context_type(request):
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
     return request.param
-
-
-@pytest.fixture
-def execution_context(context_type):
-    """Create execution context based on context_type parameter.
-
-    This fixture provides either a SyncContext, ThreadContext, or RayContext
-    instance depending on the context_type parameter.
-    """
-    if context_type == "sync":
-        return SyncContext()
-    elif context_type == "thread":
-        return ThreadContext(max_workers=2)
-    elif context_type == "ray":
-        return RayContext()

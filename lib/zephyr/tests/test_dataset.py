@@ -24,12 +24,6 @@ from zephyr.dataset import FilterOp, MapOp, WindowOp
 from zephyr._test_helpers import SampleDataclass
 
 
-@pytest.fixture(autouse=True)
-def ensure_ray(ray_cluster):
-    """Ensure Ray is initialized for all tests."""
-    pass
-
-
 @pytest.fixture(
     params=[
         pytest.param(create_backend("sync"), id="sync"),
@@ -813,6 +807,7 @@ def test_sorted_merge_join_shard_mismatch(backend):
     left = Dataset.from_list([{"id": 1, "text": "hello"}]).group_by(
         key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
     )
+
     right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
         key=lambda x: x["id"],
         reducer=lambda k, items: next(iter(items)),
