@@ -19,50 +19,16 @@ This provides object storage and task management functions for use within a job.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import inspect
+from collections.abc import Callable, Generator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass, field, is_dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
-
-import msgspec
-import zstandard as zstd
 
 try:
     import ray
 except ImportError:
     ray = None
-
-
-def msgpack_encode(obj: Any) -> bytes:
-    """Serialize with msgpack and compress with zstd."""
-    serialized = msgspec.msgpack.encode(obj)
-    cctx = zstd.ZstdCompressor(level=-10, threads=1)
-    return cctx.compress(serialized)
-
-
-def msgpack_decode(data: bytes) -> Any:
-    """Decompress zstd and deserialize msgpack."""
-    dctx = zstd.ZstdDecompressor()
-    decompressed = dctx.decompress(data)
-    return msgspec.msgpack.decode(decompressed)
-
-
-def _contains_dataclass(obj: Any) -> bool:
-    """Recursively check whether an object tree contains a dataclass instance.
-
-    Ray + msgpack turns dataclasses into plain dicts on decode, so we bypass
-    msgpack when a dataclass is present to preserve type information.
-    """
-    if is_dataclass(obj):
-        return True
-
-    if isinstance(obj, dict):
-        return any(_contains_dataclass(k) or _contains_dataclass(v) for k, v in obj.items())
-
-    if isinstance(obj, (list, tuple, set)):
-        return any(_contains_dataclass(item) for item in obj)
-
-    return False
 
 
 class ExecutionContext(Protocol):
@@ -124,9 +90,40 @@ class _ImmediateFuture:
 
     def __init__(self, result: Any):
         self._result = result
+        self._iterator = None
 
     def result(self) -> Any:
         return self._result
+
+    def __next__(self):
+        if self._iterator is None:
+            if not inspect.isgenerator(self._result):
+                raise StopIteration
+            self._iterator = iter(self._result)
+        return next(self._iterator)
+
+
+class GeneratorFuture:
+    """Wrapper for a Future that yields items, making it iterable.
+
+    This wraps a Future whose result is a list/iterable, allowing
+    iteration via __next__ while maintaining the Future interface
+    for unwrapping in get() and wait().
+    """
+
+    def __init__(self, future: Future):
+        self._future = future
+        self._iterator = None
+
+    def result(self) -> Any:
+        """Get the underlying result from the future."""
+        return self._future.result()
+
+    def __next__(self):
+        """Iterate through the future's result."""
+        if self._iterator is None:
+            self._iterator = iter(self.result())
+        return next(self._iterator)
 
 
 class SyncContext:
@@ -142,7 +139,7 @@ class SyncContext:
             return ref.result()
         return ref
 
-    def run(self, fn: Callable, *args) -> _ImmediateFuture:
+    def run(self, fn: Callable, *args) -> _ImmediateFuture | Generator[_ImmediateFuture, None, None]:
         """Execute function immediately and wrap result."""
         result = fn(*args)
         return _ImmediateFuture(result)
@@ -168,25 +165,42 @@ class ThreadContext:
         return obj
 
     def get(self, ref: Any) -> Any:
-        """Get result, handling both Future objects and plain values."""
+        """Get result, handling GeneratorFuture, Future objects and plain values."""
+        if isinstance(ref, GeneratorFuture):
+            return ref.result()
         if isinstance(ref, Future):
             return ref.result()
         return ref
 
-    def run(self, fn: Callable, *args) -> Future:
-        """Submit function to thread pool."""
-        return self.executor.submit(fn, *args)
+    def run(self, fn: Callable, *args) -> Future | GeneratorFuture:
+        """Submit function to thread pool, returning GeneratorFuture for generator functions."""
+        if inspect.isgeneratorfunction(fn):
+            future = self.executor.submit(lambda: list(fn(*args)))
+            return GeneratorFuture(future)
+        else:
+            return self.executor.submit(fn, *args)
 
-    def wait(self, futures: list[Future], num_returns: int = 1) -> tuple[list, list]:
-        """Wait for futures to complete."""
-        if num_returns >= len(futures):
+    def wait(self, futures: list[Future | GeneratorFuture], num_returns: int = 1) -> tuple[list, list]:
+        """Wait for futures to complete, unwrapping GeneratorFuture objects."""
+        # Create mapping from raw futures to original (possibly wrapped) futures
+        raw_to_wrapped = {}
+        raw_futures = []
+        for f in futures:
+            if isinstance(f, GeneratorFuture):
+                raw_to_wrapped[f._future] = f
+                raw_futures.append(f._future)
+            else:
+                raw_to_wrapped[f] = f
+                raw_futures.append(f)
+
+        if num_returns >= len(raw_futures):
             # Wait for all
-            done, pending = wait(futures, return_when="ALL_COMPLETED")
-            return list(done), list(pending)
+            done, pending = wait(raw_futures, return_when="ALL_COMPLETED")
+            return [raw_to_wrapped[f] for f in done], [raw_to_wrapped[f] for f in pending]
 
         # Wait until at least num_returns are complete
         done_set = set()
-        pending_set = set(futures)
+        pending_set = set(raw_futures)
 
         while len(done_set) < num_returns:
             done, pending = wait(pending_set, return_when="FIRST_COMPLETED")
@@ -197,7 +211,8 @@ class ThreadContext:
         done_list = list(done_set)[:num_returns]
         pending_list = list(done_set)[num_returns:] + list(pending_set)
 
-        return done_list, pending_list
+        # Map back to wrapped futures
+        return [raw_to_wrapped[f] for f in done_list], [raw_to_wrapped[f] for f in pending_list]
 
 
 class RayContext:
@@ -212,31 +227,23 @@ class RayContext:
         self.ray_options = ray_options or {}
 
     def put(self, obj: Any):
-        """Store object on a worker node."""
-        # Msgpack drops dataclass types on decode; fall back to Ray's native
-        # serialization when a dataclass is present anywhere in the payload.
-        if _contains_dataclass(obj):
-            return ray.put(obj)
-        return ray.put(msgpack_encode(obj))
+        """Store object in Ray's object store."""
+        return ray.put(obj)
 
     def get(self, ref):
         """Retrieve an object from Ray's object store."""
-        data = ray.get(ref)
-        # we may be retrieving results from a remote function return, these are not encoded
-        if isinstance(data, bytes):
-            return msgpack_decode(data)
-        return data
+        return ray.get(ref)
 
     def run(self, fn: Callable, *args):
         """Execute function remotely with configured Ray options.
 
-        Uses SPREAD scheduling strategy to avoid running on head node and
-        distribute work across worker nodes.
+        Uses SPREAD scheduling strategy to avoid running on head node.
         """
         if self.ray_options:
             remote_fn = ray.remote(**self.ray_options)(fn)
         else:
             remote_fn = ray.remote(fn)
+
         return remote_fn.options(scheduling_strategy="SPREAD").remote(*args)
 
     def wait(self, futures: list, num_returns: int = 1) -> tuple[list, list]:
