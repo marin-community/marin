@@ -18,6 +18,7 @@ Wrapper around vLLM generation.
 User -> Preset Prompt, Engine Kwargs, File -> Generate Text
 """
 
+import os
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
@@ -75,3 +76,71 @@ class vLLMProvider(BaseLLMProvider):
         for output in outputs:
             generated_text.append(" ".join([o.text for o in output.outputs]))
         return generated_text
+
+class OpenAIProvider(BaseLLMProvider):
+    """OpenAI-compatible provider using Together AI endpoint.
+    
+    This provider uses the Together AI OpenAI-compatible API to generate text.
+    It requires the TOGETHER_API_KEY environment variable to be set.
+    """
+    
+    DEFAULT_GENERATION_KWARGS: ClassVar[dict[str, Any]] = {
+        "temperature": 0.1,
+        "max_tokens": 1024,
+    }
+
+    def __init__(
+        self,
+        model_name: str,
+        generation_kwargs: dict[str, Any] | None = None,
+    ):
+        raise NotImplementedError("OpenAIProvider is not implemented")
+    
+    def generate(self, prompts: list[str]) -> list[str]:
+        """Generate text for a list of prompts.
+        
+        Args:
+            prompts: List of prompt strings
+            
+        Returns:
+            List of generated text strings
+        """
+        generated_text: list[str] = []
+        
+        for prompt in prompts:
+            # Convert prompt to chat format
+            messages = [{"role": "user", "content": prompt}]
+            
+            # Generate completion
+            completion = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                **self.generation_kwargs,
+            )
+            
+            # Extract generated text
+            generated_text.append(completion.choices[0].message.content)
+        
+        return generated_text
+
+class TogetherAIProvider(OpenAIProvider):
+    def __init__(
+        self,
+        model_name: str,
+        generation_kwargs: dict[str, Any] | None = None,
+    ):
+        self.model_name = model_name
+        self.generation_kwargs = {
+            **OpenAIProvider.DEFAULT_GENERATION_KWARGS,
+            **(generation_kwargs or {})
+        }
+        
+        try:
+            from together import Together
+        except ImportError:
+            raise ImportError(
+                "Together AI is not installed. Install it with: pip install together"
+            )
+
+        assert os.getenv("TOGETHER_API_KEY"), "TOGETHER_API_KEY environment variable is not set"
+        self.client = Together(api_key=os.getenv("TOGETHER_API_KEY"))
