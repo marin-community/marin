@@ -191,16 +191,16 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
         #     sampling_params=default_sampling,
         # ),
-        # "math_full": LessonConfig(
-        #     lesson_id="math_full",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.math_env.MathEnv",
-        #         env_args={"seed": 42},
-        #     ),
-        #     dependencies=[],
-        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
+        "math_full": LessonConfig(
+            lesson_id="math_full",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.math_env.MathEnv",
+                env_args={"seed": 42},
+            ),
+            dependencies=[],
+            # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+            sampling_params=default_sampling,
+        ),
         # "story_generation": LessonConfig(
         #     lesson_id="story_generation",
         #     env_config=EnvConfig(
@@ -210,16 +210,16 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         #     dependencies=[],
         #     sampling_params=story_sampling,
         # ),
-        "gsm8k": LessonConfig(
-            lesson_id="gsm8k",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.gsm8k_env.GSM8KEnv",
-                env_args={"seed": 42},
-            ),
-            dependencies=[],
-            # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-            sampling_params=default_sampling,
-        ),
+        # "gsm8k": LessonConfig(
+        #     lesson_id="gsm8k",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.gsm8k_env.GSM8KEnv",
+        #         env_args={"seed": 42},
+        #     ),
+        #     dependencies=[],
+        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+        #     sampling_params=default_sampling,
+        # ),
     }
 
     return CurriculumConfig(
@@ -358,9 +358,9 @@ def main():
     # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
     experiment_configs = [
         ExperimentConfig(
-            # model_config=llama_3_1_8b,
+            model_config=llama_3_1_8b,
             # model_config=llama1b,
-            model_config=qwen3_1_7b,
+            # model_config=qwen3_1_7b,
             # model_config=qwen3_8b,
             rl_loss=RLOOLoss(
                 kl_coef=0.01,
@@ -371,17 +371,17 @@ def main():
             ),
             experiment_name_suffix="math-tis-r1-prompt",
         ),
-        ExperimentConfig(
-            model_config=qwen3_8b,
-            rl_loss=RLOOLoss(
-                kl_coef=0.01,
-                clip_epsilon=0.2,
-                synchronous=True,
-                do_trainer_inference_mismatch_importance_sampling=True,
-                # do_overlong_filtering=True,
-            ),
-            experiment_name_suffix="math-tis-r1-prompt",
-        ),
+        # ExperimentConfig(
+        #     model_config=qwen3_8b,
+        #     rl_loss=RLOOLoss(
+        #         kl_coef=0.01,
+        #         clip_epsilon=0.2,
+        #         synchronous=True,
+        #         do_trainer_inference_mismatch_importance_sampling=True,
+        #         # do_overlong_filtering=True,
+        #     ),
+        #     experiment_name_suffix="math-tis-r1-prompt",
+        # ),
         # ExperimentConfig(
         #     # model_config=llama_3_1_8b,
         #     # model_config=llama1b,
