@@ -338,12 +338,6 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             num_rollout_workers=1,
             inference_tpu_type="v5p-8",
         ),
-        system_prompt="""A conversation between User and Assistant. The User asks a
-            question, and the Assistant solves it. The Assistant first thinks about the reasoning process
-            in the mind and then provides the User with the answer. The reasoning process is enclosed
-            within <think> </think> and answer is enclosed within <answer> </answer> tags,
-            respectively, i.e., <think> reasoning process here </think> <answer> answer here
-            </answer>.""",
     )
 
     return ExecutorStep(
