@@ -9,7 +9,6 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
     "typing-extensions>=4.0",
     "zstandard>=0.22.0",
-    "mergedeep",
     "cloudpickle>=3.1.2",
     "click>=8.0",
     "humanfriendly>=10.0",

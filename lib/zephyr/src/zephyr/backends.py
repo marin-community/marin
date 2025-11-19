@@ -562,7 +562,7 @@ def _merge_sorted_chunks(shard: Shard, key_fn: Callable) -> Iterator[tuple[objec
         yield key, group_iter
 
 
-def process_shard_group_by_reduce(ctx: ApplyShardCtx, key_fn: Callable, reducer_fn: Callable) -> list[Shard]:
+def process_shard_group_by_reduce(ctx: ApplyShardCtx, key_fn: Callable, reducer_fn: Callable) -> Generator:
     """Global reduction per shard, applying reducer to each key group.
     Uses streaming k-way merge to avoid materializing all items for each key.
     Chunks are assumed to be sorted by key.

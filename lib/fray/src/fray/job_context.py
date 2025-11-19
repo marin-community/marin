@@ -22,7 +22,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable, Generator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass, field, is_dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 try:
@@ -95,6 +95,16 @@ class _ImmediateFuture:
         return self._result
 
 
+class GeneratorFuture(Future):
+    def __init__(self, future: Future):
+        super().__init__()
+        self.set_result(future.result())
+        self.iterator = iter(self.result())
+
+    def __next__(self) -> Any:
+        return next(self.iterator)
+
+
 class SyncContext:
     """Execution context for synchronous (single-threaded) execution."""
 
@@ -111,25 +121,14 @@ class SyncContext:
     def run(self, fn: Callable, *args) -> _ImmediateFuture | Generator[_ImmediateFuture, None, None]:
         """Execute function immediately and wrap result."""
         result = fn(*args)
-        if hasattr(result, "__iter__") and hasattr(result, "__next__"):
-            for item in result:
-                yield _ImmediateFuture(item)
+        if inspect.isgeneratorfunction(fn):
+            return GeneratorFuture(_ImmediateFuture(result))
         else:
             return _ImmediateFuture(result)
 
     def wait(self, futures: list[_ImmediateFuture], num_returns: int = 1) -> tuple[list, list]:
         """All futures are immediately ready."""
         return futures[:num_returns], futures[num_returns:]
-
-
-class GeneratorFuture(Future):
-    def __init__(self, future: Future):
-        super().__init__()
-        self.set_result(future.result())
-        self.iterator = iter(self.result())
-
-    def __next__(self) -> Any:
-        return next(self.iterator)
 
 
 class ThreadContext:
@@ -155,8 +154,6 @@ class ThreadContext:
 
     def run(self, fn: Callable, *args) -> Future | Generator[Future, None, None]:
         """Submit function to thread pool, streaming results for generator functions."""
-        # is `fn` a generator function?
-        print(f"fn: {fn}, {hasattr(fn, '__iter__')}, {hasattr(fn, '__next__')}")
         if inspect.isgeneratorfunction(fn):
             return GeneratorFuture(self.executor.submit(lambda: list(fn(*args))))
         else:
@@ -197,20 +194,8 @@ class RayContext:
         self.ray_options = ray_options or {}
 
     def put(self, obj: Any):
-<<<<<<< HEAD
-        """Store object on a worker node."""
-        # Msgpack drops dataclass types on decode; fall back to Ray's native
-        # serialization when a dataclass is present anywhere in the payload.
-        if _contains_dataclass(obj):
-            return ray.put(obj)
-        return ray.put(msgpack_encode(obj))
-||||||| parent of 748611c76 (Switch to pure ray.put in zephyr/fray, remove manual serialization)
-        """Store object on a worker node."""
-        return ray.put(msgpack_encode(obj))
-=======
         """Store object in Ray's object store."""
         return ray.put(obj)
->>>>>>> 748611c76 (Switch to pure ray.put in zephyr/fray, remove manual serialization)
 
     def get(self, ref):
         """Retrieve an object from Ray's object store."""
