@@ -219,7 +219,15 @@ the config file configures each worker with only 120 visible CPUs.
 There is currently an error on the Ray autoscaler side with spot-TPU instances, where the Ray autoscaler is not able
 to detect when spot-TPU instances are dead and as a result, we may be left in a state with just the head node and
 no more spot-TPU worker instances starting up. When this state occurs, please message in the #marin-infra slack
-that you are going to restart the cluster (call `uv run scripts/ray/cluster.py --config <config> restart-cluster`)
+that you are going to restart the cluster, and then run `uv run scripts/ray/cluster.py --config <config> restart-cluster`.
+
+Notes:
+* Please check whether there are any running jobs from other users before restarting so that you do not kill all their
+jobs without getting permission first.
+* You can specify `--preserve-jobs=0` when restarting the cluster if you want to skip backing up running jobs and start
+with a completely clean slate (the default value is `--preserve-jobs=1`, which backs up jobs and resubmits them after the restart).
+Example: `uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml restart-cluster --preserve-jobs=0`
+* See the instructions below if there are any reserved workers on the cluster, though in many cases the command above is all you need.
 
 **Important step for reserved workers**
 
