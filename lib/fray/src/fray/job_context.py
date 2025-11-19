@@ -90,19 +90,40 @@ class _ImmediateFuture:
 
     def __init__(self, result: Any):
         self._result = result
+        self._iterator = None
 
     def result(self) -> Any:
         return self._result
 
+    def __next__(self):
+        if self._iterator is None:
+            if not inspect.isgenerator(self._result):
+                raise StopIteration
+            self._iterator = iter(self._result)
+        return next(self._iterator)
 
-class GeneratorFuture(Future):
+
+class GeneratorFuture:
+    """Wrapper for a Future that yields items, making it iterable.
+
+    This wraps a Future whose result is a list/iterable, allowing
+    iteration via __next__ while maintaining the Future interface
+    for unwrapping in get() and wait().
+    """
+
     def __init__(self, future: Future):
-        super().__init__()
-        self.set_result(future.result())
-        self.iterator = iter(self.result())
+        self._future = future
+        self._iterator = None
 
-    def __next__(self) -> Any:
-        return next(self.iterator)
+    def result(self) -> Any:
+        """Get the underlying result from the future."""
+        return self._future.result()
+
+    def __next__(self):
+        """Iterate through the future's result."""
+        if self._iterator is None:
+            self._iterator = iter(self.result())
+        return next(self._iterator)
 
 
 class SyncContext:
@@ -121,10 +142,7 @@ class SyncContext:
     def run(self, fn: Callable, *args) -> _ImmediateFuture | Generator[_ImmediateFuture, None, None]:
         """Execute function immediately and wrap result."""
         result = fn(*args)
-        if inspect.isgeneratorfunction(fn):
-            return GeneratorFuture(_ImmediateFuture(result))
-        else:
-            return _ImmediateFuture(result)
+        return _ImmediateFuture(result)
 
     def wait(self, futures: list[_ImmediateFuture], num_returns: int = 1) -> tuple[list, list]:
         """All futures are immediately ready."""
@@ -147,28 +165,42 @@ class ThreadContext:
         return obj
 
     def get(self, ref: Any) -> Any:
-        """Get result, handling both Future objects and plain values."""
+        """Get result, handling GeneratorFuture, Future objects and plain values."""
+        if isinstance(ref, GeneratorFuture):
+            return ref.result()
         if isinstance(ref, Future):
             return ref.result()
         return ref
 
-    def run(self, fn: Callable, *args) -> Future | Generator[Future, None, None]:
-        """Submit function to thread pool, streaming results for generator functions."""
+    def run(self, fn: Callable, *args) -> Future | GeneratorFuture:
+        """Submit function to thread pool, returning GeneratorFuture for generator functions."""
         if inspect.isgeneratorfunction(fn):
-            return GeneratorFuture(self.executor.submit(lambda: list(fn(*args))))
+            future = self.executor.submit(lambda: list(fn(*args)))
+            return GeneratorFuture(future)
         else:
             return self.executor.submit(fn, *args)
 
-    def wait(self, futures: list[Future], num_returns: int = 1) -> tuple[list, list]:
-        """Wait for futures to complete."""
-        if num_returns >= len(futures):
+    def wait(self, futures: list[Future | GeneratorFuture], num_returns: int = 1) -> tuple[list, list]:
+        """Wait for futures to complete, unwrapping GeneratorFuture objects."""
+        # Create mapping from raw futures to original (possibly wrapped) futures
+        raw_to_wrapped = {}
+        raw_futures = []
+        for f in futures:
+            if isinstance(f, GeneratorFuture):
+                raw_to_wrapped[f._future] = f
+                raw_futures.append(f._future)
+            else:
+                raw_to_wrapped[f] = f
+                raw_futures.append(f)
+
+        if num_returns >= len(raw_futures):
             # Wait for all
-            done, pending = wait(futures, return_when="ALL_COMPLETED")
-            return list(done), list(pending)
+            done, pending = wait(raw_futures, return_when="ALL_COMPLETED")
+            return [raw_to_wrapped[f] for f in done], [raw_to_wrapped[f] for f in pending]
 
         # Wait until at least num_returns are complete
         done_set = set()
-        pending_set = set(futures)
+        pending_set = set(raw_futures)
 
         while len(done_set) < num_returns:
             done, pending = wait(pending_set, return_when="FIRST_COMPLETED")
@@ -179,7 +211,8 @@ class ThreadContext:
         done_list = list(done_set)[:num_returns]
         pending_list = list(done_set)[num_returns:] + list(pending_set)
 
-        return done_list, pending_list
+        # Map back to wrapped futures
+        return [raw_to_wrapped[f] for f in done_list], [raw_to_wrapped[f] for f in pending_list]
 
 
 class RayContext:

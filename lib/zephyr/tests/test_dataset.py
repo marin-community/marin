@@ -24,12 +24,6 @@ from zephyr.dataset import FilterOp, MapOp, WindowOp
 from zephyr._test_helpers import SampleDataclass
 
 
-@pytest.fixture(autouse=True)
-def ensure_ray(ray_cluster):
-    """Ensure Ray is initialized for all tests."""
-    pass
-
-
 @pytest.fixture(
     params=[
         pytest.param(create_backend("sync"), id="sync"),

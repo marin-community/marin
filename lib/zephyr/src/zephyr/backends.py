@@ -292,6 +292,10 @@ def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
 
 
 # Helper to stream chunks from an iterator
+# N.B. All shard operations yield header & chunk separately.
+# This is so that we can resolve the header (which indicates which shard a chunk goes to)
+# separately from the chunk data. This allows the controller to coalesce chunks without
+# copying data directly.
 def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Generator[ChunkHeader | list[Any], None, None]:
     """Stream chunks from an iterator, yielding header/data pairs."""
     chunk = []
