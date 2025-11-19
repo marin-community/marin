@@ -125,10 +125,14 @@ MAX_OUTPUT_TOKENS = 2048
 RUN_ID = f"test-{MODEL.name.split('/')[-1]}-curriculum"
 
 
-def stop_tokens(tokenizer_name: str):
-    """Infer the stop tokens from the given tokenizer."""
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    return tokenizer.decode([tokenizer.eos_token_id])
+def get_stop_tokens(model_type: str) -> list[str]:
+    """Get model-specific stop tokens."""
+    if model_type == "llama":
+        return ["<|eot_id|>"]
+    elif model_type == "qwen":
+        return ["<|im_end|>"]
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
 
 
 def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> CurriculumConfig:
@@ -317,7 +321,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
                 temperature=1.0,
                 n=8,
                 max_tokens=MAX_OUTPUT_TOKENS,
-                stop=["</answer>"],
+                stop=get_stop_tokens(experiment_config.model_config.type),
                 include_stop_str_in_output=True,
                 logprobs=1,
             ),
