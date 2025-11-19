@@ -60,47 +60,31 @@ To run decomination for MMLU on the quickstart data we will also use a yaml
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --config_path marin/processing/classification/config/quickstart_decontaminate.yaml
 ```
 ### Consolidation Command
-After the attribute folders have been generated, to filter the dataset based on the quality rules following the example above you can run the following quickstart. We currently only support yaml
-and not command line args for this pipeline to allow support arbitrary classifiers for consolidation.
+After the attribute folders have been generated, you can filter the dataset based on quality classifiers.
+We currently only support yaml configs for this pipeline to allow support for arbitrary classifiers.
 
-You can deduplicate files as follows
-
-```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate_dedupe.yaml
-```
-We now run quality filtering on the subsequent files like so
+Example: run quality filtering using fasttext classifier
 
 ```bash
 ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate_fasttext.yaml
 ```
-We can also run both consolidation operations  (or many more) all in parallel. For the quickstart the combined command for deduping and quality filtering is
 
-```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate.yaml
-```
-
-If you would like to test the decontamination demo then after generate the attributes for MMLU then run
-```bash
-ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate_decontaminate.yaml
-```
-The yaml for the full consolidation is as follows:
+Example yaml configuration for quality filtering:
 ```yaml
 input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
-output_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_consolidate/"
-max_tasks_in_flight: 1000
+output_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_fasttext_only/"
 
 filters:
-  - type: "dedupe"
-    attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/"
-    name: "duplicate_text"
   - type: "classify"
     attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_olmo_fasttext/"
     name: "olmo-fasttext-quality"
     label: "__label__hq"
-    threshold: 0.1
+    lower_threshold: 0.1
 ```
 
-Currently we require the user specifiy the file format and the attribute to filter by
+Supported filter types:
+- `classify`: Filter documents based on classification scores with thresholds
+- `remove_spans`: Remove text spans from documents (e.g., duplicate paragraphs)
 
 ### Models supported:
 - FastText models: `DCLM`, `DOLMA`

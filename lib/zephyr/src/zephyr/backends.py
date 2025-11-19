@@ -23,7 +23,7 @@ import re
 import time
 import zlib
 from collections import defaultdict
-from collections.abc import Callable, Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from itertools import groupby, islice
 from typing import Any, TypeVar
@@ -52,7 +52,7 @@ from zephyr.dataset import (
     WriteDataOp,
 )
 
-from .writers import write_jsonl_file, write_levanter_cache, write_parquet_file
+from .writers import write_binary_file, write_jsonl_file, write_levanter_cache, write_parquet_file
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ class BackendConfig:
         dry_run: If True, show optimization plan without executing
     """
 
-    max_parallelism: int = 1000000
+    max_parallelism: int = 1024
     chunk_size: int = 1000
     dry_run: bool = False
 
@@ -396,7 +396,7 @@ def process_shard_fused(
         elif isinstance(op, WindowOp):
             yield from build_stream(make_windows(stream_input, op.folder_fn, op.initial_state), rest, op_index + 1)
         elif isinstance(op, WriteDataOp):
-            output_path = format_shard_path(op.output_pattern, ctx.shard_idx, ctx.total_shards)
+            output_path = op.output_pattern(ctx.shard_idx, ctx.total_shards)
 
             # Check if we should skip writing because file already exists
             if op.skip_existing:
@@ -420,6 +420,8 @@ def process_shard_fused(
                 result = write_parquet_file(stream_input, output_path, op.schema, op.batch_size)["path"]
             elif op.writer_type == "levanter_cache":
                 result = write_levanter_cache(stream_input, output_path, op.levanter_metadata)["path"]
+            elif op.writer_type == "binary":
+                result = write_binary_file(stream_input, output_path)["path"]
             else:
                 raise ValueError(f"Unknown writer_type: {op.writer_type}")
             yield from build_stream(iter([result]), rest, op_index + 1)
@@ -619,8 +621,8 @@ class Backend:
     def chunk_size(self) -> int:
         return self.config.chunk_size
 
-    def execute(self, dataset: Dataset, verbose: bool = False) -> Iterator:
-        """Execute a dataset and return an iterator over results.
+    def execute(self, dataset: Dataset, verbose: bool = False) -> Sequence:
+        """Execute a dataset, returning a sequence of results.
 
         Args:
             dataset: Dataset to execute
@@ -637,7 +639,7 @@ class Backend:
         if self.dry_run:
             return
 
-        yield from self._execute_optimized(dataset.source, optimized_ops)
+        return list(self._execute_optimized(dataset.source, optimized_ops))
 
     def _optimize_operations(self, operations: list) -> list:
         if not operations:
@@ -768,7 +770,7 @@ class Backend:
             for shard in shards:
                 yield from shard
 
-        yield from tqdm(materialize_all(), desc=desc, unit="items")
+        yield from tqdm(materialize_all(), desc=desc, unit="shards", total=len(shards))
 
     def _execute_on_shards(
         self, process_fn: Callable, fn_args: tuple, shards: list[Shard], aux_shards_per_shard: list[dict] | None = None

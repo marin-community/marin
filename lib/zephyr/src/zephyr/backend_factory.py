@@ -32,7 +32,7 @@ _backend_context: ContextVar[Backend | None] = ContextVar("zephyr_backend", defa
 
 def create_backend(
     backend_type: Literal["ray", "threadpool", "sync", "auto"] = "auto",
-    max_parallelism: int = 100,
+    max_parallelism: int = 1024,
     memory: str | None = None,
     num_cpus: float | None = None,
     num_gpus: float | None = None,
@@ -44,7 +44,7 @@ def create_backend(
 
     Args:
         backend_type: Type of backend (ray, threadpool, sync, or auto). Default: "auto"
-        max_parallelism: Maximum number of concurrent tasks (default: 100)
+        max_parallelism: Maximum number of concurrent tasks
         memory: Memory requirement per task (e.g., "2GB", "512MB")
         num_cpus: Number of CPUs per task for Ray backend
         num_gpus: Number of GPUs per task for Ray backend

@@ -218,3 +218,17 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
         f.write("")
 
     return {"path": output_path, "count": count}
+
+
+def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
+    """Write binary records to a file."""
+    ensure_parent_dir(output_path)
+
+    count = 0
+    with atomic_rename(output_path) as temp_path:
+        with fsspec.open(temp_path, "wb", block_size=64 * 1024 * 1024) as f:
+            for record in records:
+                f.write(record)
+                count += 1
+
+    return {"path": output_path, "count": count}

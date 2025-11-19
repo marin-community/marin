@@ -463,14 +463,12 @@ def tokenize(config: TokenizeConfigBase):
         shard_paths = list(backend.execute(temp_shards))
 
         logger.info("Computing exemplar for cache consolidation")
-        exemplar = next(
-            flow_backend().execute(
-                Dataset.from_list(paths[0:1])
-                .flat_map(load_file)
-                .take_per_shard(1)
-                .map_shard(lambda example: _tokenize_batches(config, [example]))
-            )
-        )
+        exemplar = flow_backend().execute(
+            Dataset.from_list(paths[0:1])
+            .flat_map(load_file)
+            .take_per_shard(1)
+            .map_shard(lambda example: _tokenize_batches(config, [example]))
+        )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
         consolidate_shard_caches(

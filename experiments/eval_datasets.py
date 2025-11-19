@@ -14,10 +14,11 @@
 
 import dataclasses
 
-from experiments.defaults import default_download
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
+
+from experiments.defaults import default_download
 
 """
 This script downloads HF datasets for various tasks and converts them to prompt/response JSONL format for log prob
@@ -476,7 +477,7 @@ gsm8k_raw = ExecutorStep(
     fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="openai/gsm8k",
-        revision=versioned("6e925c6"),
+        revision=versioned("e53f048"),
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
         hf_urls_glob=["**/*.parquet", "*.md"],

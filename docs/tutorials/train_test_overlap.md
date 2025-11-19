@@ -101,16 +101,13 @@ SUPPORTED_FORMATS = [
 Edit `experiments/train_test_overlap/train_test_total.py` and add your dataset:
 
 ```python
-# Import the DatasetConfig class
-from experiments.train_test_overlap.utils import DatasetConfig, ShardedDedupeConfig, run_all_shards
-
-# Add your dataset to DATASET_CONFIGS
+# Add your dataset to DATASET_CONFIGS in train_test_total.py
 DATASET_CONFIGS = [
     # ... existing datasets ...
     DatasetConfig(
         name="${DATASET_NAME}",
         path="gs://${BUCKET}/${DATASET_NAME}",
-        max_in_flight=64
+        text_field="text"  # Or "content" if using different field name
     ),
 ]
 ```
@@ -118,7 +115,7 @@ DATASET_CONFIGS = [
 **Parameters explained**:
 - **name**: Identifier for your dataset (used in output paths)
 - **path**: GCS/S3/local path to your dataset directory
-- **max_in_flight**: Number of parallel tasks (adjust based on your cluster size)
+- **text_field**: Name of the text field in your data files (default: "text")
 
 ### Step 3: Run Detection
 
@@ -135,58 +132,71 @@ The system will automatically:
 
 ### N-gram Settings
 
-Edit the `BASE_DEDUPE_CONFIG` in `experiments/train_test_overlap/utils.py`:
+The default `train_test_total.py` defines helpers for building dedupliation
+steps. You can define your own steps as well with custom N-gram or matching options:
 
 ```python
-BASE_DEDUPE_CONFIG = DedupeConfig(
-    # ... other settings ...
-    ngram=NGramConfig(
-        ngram_length=[15],        # List of n-gram sizes to check
-        overlap_threshold=1e-6,   # Minimum overlap to report
-        stride=0,                 # Stride between n-grams (0 = every position)
-    ),
-    processes=16,                 # Parallel processes per shard (see explanation below)
-    false_positive_rate=1e-12,    # Bloom filter false positive rate
+# experiments/my_dedupe.py
+
+from experiments.train_test_overlap.train_test_total import EVAL_DATASET_STEPS
+
+NGRAM_CONFIG = NGramConfig(
+    ngram_length=[5, 10, 15],
+    overlap_threshold=1e-6,
+    stride=5,
 )
+
+
+def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
+    dedupe_config = DedupeConfig(
+        input_path=dataset_config.path,
+        output_path=this_output_path(),
+        decontaminate_source=EVAL_DATASET_STEPS,
+        attribute_name="ngram_overlap",
+        false_positive_rate=1e-20,
+        ngram=NGRAM_CONFIG,
+        processes=1024,
+        mode=DedupMode.TRAIN_TEST_OVERLAP,
+        text_field=dataset_config.text_field,
+    )
+
+    return ExecutorStep(
+        name=f"tmp/power/train_test_overlap/dolma/total/{dataset_config.name}",
+        fn=run_train_test_overlap,
+        config=dedupe_config,
+        description=f"Run dedupe train-test overlap on {dataset_config.name}",
+        pip_dependency_groups=["quality_dedup_consolidate"],
+    )
 ```
 
 **Understanding the `processes` Parameter:**
 
-The `processes` parameter controls how many parallel processes dolma uses **per training shard**. Here's how it works:
+The `processes` parameter controls how many parallel processes Zephyr uses when processing your dataset:
 
-- **What it does**: Each training shard gets split into `processes` number of sub-shards for parallel processing
-- **Performance trade-off**: More processes = faster Bloom filter creation but higher CPU/memory usage
-- **Resource impact**: Each process loads a portion of the shard into memory simultaneously
-- **Typical values**: 8-32 processes depending on your cluster's CPU and memory capacity
-
-Example: If you have a 1GB training shard and set `processes=16`, the system will:
-1. Split the shard into 16 smaller chunks
-2. Process each chunk in parallel to build the Bloom filter
-3. Use 16x more CPU cores but complete ~16x faster
+- **What it does**: Controls the degree of parallelism for processing files in the dataset
+- **Performance trade-off**: More processes = faster processing but higher CPU/memory usage
+- **Typical values**: 8-4096 processes depending on your cluster's CPU and memory capacity
 
 **Common configurations**:
-- **Fast screening**: `ngram_length=[15]`, `false_positive_rate=1e-9`, `processes=8`
-- **Thorough analysis**: `ngram_length=[10, 15, 20]`, `false_positive_rate=1e-12`, `processes=16`
-- **Memory-constrained**: `false_positive_rate=1e-6`, `processes=4` (fewer processes = less memory)
+- **Fast screening**: `ngram_length=[15]`, `processes=1024`
+- **Balanced**: `ngram_length=[15]`, `processes=1024`
+- **Memory-constrained**: `processes=32`
 
 ### Parallel Processing
 
-The system has two levels of parallelism that you can adjust:
+Zephyr handles file discovery and parallelism automatically. You can control the degree of parallelism using the `processes` parameter:
 
-**1. Dataset-level parallelism (`max_in_flight`):**
 ```python
-# In DATASET_CONFIGS - how many shards to process simultaneously
-DatasetConfig(
-    name="dataset_name",
-    path="path",
-    max_in_flight=128  # Process 128 shards at once
-),
-```
-
-**2. Shard-level parallelism (`processes`):**
-```python
-# In BASE_DEDUPE_CONFIG - how many processes per shard. This will make generating the bloom filter for each training shard on a node run faster.
-processes=32,  # Split each shard into 32 parallel processes
+# In build_step function - adjust processes for parallelism
+def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
+    dedupe_config = DedupeConfig(
+        # ...
+        processes=128,  # Control parallelism level
+    )
+    return ExecutorStep(
+        # ...
+        config=dedupe_config,
+    )
 ```
 
 ### Custom Evaluation Datasets
@@ -220,60 +230,33 @@ my_eval_convert_dolma = ExecutorStep(
 )
 ```
 
-Then add it to the `EVAL_DATASET_STEPS` list in both `eval_datasets_overlap.py` and `utils.py`. The train-test overlap detection will automatically include your new evaluation dataset in all future runs.
+Then add it to the `EVAL_DATASET_STEPS` list in `eval_datasets_overlap.py`. The train-test overlap detection will automatically include your new evaluation dataset in all future runs.
 
 ## Advanced Usage
 
 ### Custom N-gram Analysis
 
-For specialized analysis, you can run single n-gram sizes:
+For specialized analysis, you can edit the constants in `train_test_total.py`:
 
 ```python
-# Create custom config
-custom_config = dataclasses.replace(
-    BASE_DEDUPE_CONFIG,
-    ngram=NGramConfig(ngram_length=[10]),  # Only 10-grams
-    false_positive_rate=1e-8,
+# Edit DEFAULT_NGRAM_CONFIG for different n-gram sizes
+DEFAULT_NGRAM_CONFIG = NGramConfig(
+    ngram_length=[10],        # Change from [15] to [10] for 10-grams
+    overlap_threshold=1e-6,
+    stride=0,
 )
 
-# Use in your ExecutorStep
-step = ExecutorStep(
-    name="custom_overlap_analysis",
-    fn=run_all_shards,
-    config=ShardedDedupeConfig(
-        dataset_dir="gs://${BUCKET}/${DATASET_NAME}",
-        output_path=this_output_path(),
-        max_in_flight=32,
-    ),
-)
+# Edit the processes parameter in build_step
+def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
+    dedupe_config = DedupeConfig(
+        # ...
+        processes=32,  # Increase for more parallelism
+    )
+    return ExecutorStep(
+        # ...
+        config=dedupe_config,
+    )
 ```
-
-### Memory Optimization
-
-For very large datasets or memory-constrained environments:
-
-```python
-# Reduce memory usage at the shard level
-BASE_DEDUPE_CONFIG = dataclasses.replace(
-    BASE_DEDUPE_CONFIG,
-    false_positive_rate=1e-6,     # Higher false positive rate = smaller Bloom filters
-    processes=8,                   # Fewer processes per shard = less concurrent memory usage
-)
-
-# Reduce memory usage at the dataset level
-DATASET_CONFIGS = [
-    DatasetConfig(
-        name="${DATASET_NAME}",
-        path="gs://${BUCKET}/${DATASET_NAME}",
-        max_in_flight=16  # Process fewer shards simultaneously
-    ),
-]
-```
-
-**Memory calculation**: Each process loads part of a shard into memory, so:
-- `max_in_flight=16` × `processes=8` = 128 total processes
-- Compare to default: `max_in_flight=64` × `processes=16` = 1,024 total processes
-- **Result**: ~8x less memory usage but proportionally slower processing
 
 ## Gotchas and Troubleshooting
 
@@ -301,27 +284,16 @@ DATASET_CONFIGS = [
 
 3. **Out of memory errors**
 
-   **Solution**: Reduce memory usage by lowering parallelism:
+   **Solution**: Reduce the `processes` parameter to lower memory usage:
    ```python
-   # Increase false positive rate (uses less memory for Bloom filters)
-   false_positive_rate=1e-6,  # Instead of 1e-12
-
-   # Reduce shard-level parallelism (fewer processes per shard)
-   processes=8,  # Instead of 16
-
-   # Reduce dataset-level parallelism (fewer concurrent shards)
-   max_in_flight=16,  # Instead of 64
+   processes=32,  # Reduce from default 128
    ```
 
 4. **Slow processing**
 
-   **Solution**: Increase parallelism (if you have resources). Be careful because this can crash the head node!
+   **Solution**: Increase the `processes` parameter (if you have resources):
    ```python
-   # More concurrent shards
-   max_in_flight=128,
-
-   # More processes per shard (splits each shard into more parallel chunks)
-   processes=32,
+   processes=256,  # Increase from default 128
    ```
 
 ### Performance Tips
@@ -343,7 +315,7 @@ DATASET_CONFIGS = [
     DatasetConfig(
         name="${DATASET_NAME}",
         path="gs://${BUCKET}/${DATASET_NAME}",
-        max_in_flight=64
+        text_field="text"  # Or "content" depending on your data
     ),
 ]
 ```

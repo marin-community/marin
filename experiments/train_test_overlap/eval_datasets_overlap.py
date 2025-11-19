@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
+
 from experiments.eval_datasets import (
     arc_raw as ai2_arc_raw,
 )
@@ -35,9 +39,6 @@ from experiments.eval_datasets import (
 from experiments.eval_datasets import (
     piqa_baber_raw as piqa_raw,
 )
-from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
 This script downloads HF datasets and converts them to dolma "text" format for decontamination.
@@ -401,6 +402,28 @@ winograd_wsc_convert_dolma = ExecutorStep(
 )
 
 ############################################################
+
+# List of evaluation dataset conversion steps for train-test overlap detection
+EVAL_DATASET_STEPS: list[ExecutorStep] = [
+    gsm8k_convert_dolma,
+    math_convert_dolma,
+    truthful_qa_convert_dolma,
+    bbh_convert_dolma,
+    mmlu_convert_dolma,
+    humaneval_convert_dolma,
+    instruction_following_convert_dolma,
+    gpqa_convert_dolma,
+    musr_convert_dolma,
+    mmlu_pro_convert_dolma,
+    hellaswag_convert_dolma,
+    ai2_arc_convert_dolma,
+    boolq_convert_dolma,
+    commonsense_qa_convert_dolma,
+    lambada_openai_convert_dolma,
+    openbookqa_convert_dolma,
+    piqa_convert_dolma,
+    winograd_wsc_convert_dolma,
+]
 
 if __name__ == "__main__":
     executor_main(
