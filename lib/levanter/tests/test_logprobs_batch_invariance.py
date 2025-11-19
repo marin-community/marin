@@ -6,10 +6,12 @@ import jax.numpy as jnp
 
 def logsumexp_reference(x, axis=-1):
     """Reference implementation using explicit Python loops (non-JIT)."""
+    assert axis == -1 or axis == len(x.shape) - 1, "This implementation of logsumexp only supports last axis"
+    x_2d = x.reshape(-1, x.shape[-1])
     logprobs_individual = []
-    for i in range(x.shape[0]):
-        logprobs_individual.append(jax.nn.logsumexp(x[i:i+1], axis=axis))
-    return jnp.array(logprobs_individual)
+    for i in range(x_2d.shape[0]):
+        logprobs_individual.append(jax.nn.logsumexp(x_2d[i]))
+    return jnp.array(logprobs_individual).reshape(x.shape[:-1])
 
 B = 16
 K = 256
