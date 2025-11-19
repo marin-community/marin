@@ -27,7 +27,6 @@ Example Usage:
 """
 
 import csv
-import json
 import logging
 import os
 from collections.abc import Iterator
@@ -37,7 +36,7 @@ import fsspec
 import ray
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob
-from zephyr import Dataset, flow_backend, load_file
+from zephyr import Dataset, create_backend, flow_backend, load_file, load_jsonl
 
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
@@ -73,10 +72,12 @@ def extract_shard_metadata(shard_path: str, training_root: str, ngram_size: int)
 def _compute_dataset_sizes(dataset_steps: list[ExecutorStep]) -> dict[str, int]:
     """Return mapping dataset_name -> total example count using Zephyr."""
 
+    thread_backend = create_backend("threadpool", max_parallelism=32)
+
     def count_dir(path: str) -> int:
         pattern = os.path.join(path.rstrip("/"), "**", "*.jsonl*")
         pipeline = Dataset.from_files(pattern, empty_glob_ok=True).flat_map(load_file).map(lambda _: 1).reduce(sum)
-        results = list(flow_backend().execute(pipeline))
+        results = list(thread_backend.execute(pipeline))
         return results[0]
 
     size_map: dict[str, int] = {}
@@ -181,7 +182,7 @@ def aggregate_single_dataset(
     training_name = os.path.basename(training_root)
 
     # 1. Discover ALL shards for this training dataset
-    pattern = os.path.join(training_root, "**", str(cfg.ngram_size), "**", "*.jsonl*")
+    pattern = os.path.join(training_root, "**", str(cfg.ngram_size), "**", "*.jsonl*.zst")
     shard_paths: list[str] = sorted(fsspec_glob(pattern))
     if not shard_paths:
         logger.warning("No attribute shards found for %s", training_name)
@@ -199,56 +200,52 @@ def aggregate_single_dataset(
         """Read attribute shard and extract overlap information."""
         test_dataset = path_to_test_ds.get(shard_path, "unknown")
 
-        with fsspec.open(shard_path, "rt", compression="infer") as f:
-            for line in f:
-                rec = json.loads(line)
-                doc_id = rec.get("id")
-                if doc_id is None:
-                    continue
+        logger.info(f"Loading from: {shard_path}")
+        for rec in load_file(shard_path):
+            doc_id = rec.get("id")
+            if doc_id is None:
+                continue
 
-                attrs = rec.get("attributes", {})
-                has_overlap = bool(attrs.get(attr_key))
+            attrs = rec.get("attributes", {})
+            has_overlap = bool(attrs.get(attr_key))
 
-                yield {
-                    "id": doc_id,
-                    "test_dataset": test_dataset,
-                    "training_dataset": training_name,
-                    "has_overlap": has_overlap,
-                }
+            yield {
+                "id": doc_id,
+                "test_dataset": test_dataset,
+                "training_dataset": training_name,
+                "has_overlap": has_overlap,
+            }
 
-    # 3. Run Zephyr pipeline to extract overlap data
+
     intermediate_dir = os.path.join(cfg.output_path, ".intermediate", training_name)
-    intermediate_paths = list(
-        flow_backend().execute(
-            Dataset.from_list(shard_paths)
-            .flat_map(extract_overlap_records)
-            .write_jsonl(f"{intermediate_dir}/overlap-{{shard:05d}}.jsonl.gz", skip_existing=True)
-        )
+    intermediate_paths = flow_backend().execute(
+        Dataset.from_list(shard_paths)
+        .flat_map(extract_overlap_records)
+        .write_jsonl(f"{intermediate_dir}/overlap-{{shard:05d}}.jsonl.gz", skip_existing=True)
     )
 
     logger.info(f"Wrote {len(intermediate_paths)} intermediate files to {intermediate_dir}")
 
     # 4. Read intermediate files and build aggregations
+    # we could do this with a zephyr aggregation, but these are small in practice
     overall_unique: set[str] = set()
     overall_overlap: set[str] = set()
     per_test: dict[str, dict[str, set[str]]] = {ds: {"unique": set(), "overlap": set()} for ds in dataset_sizes.keys()}
 
     for intermediate_path in intermediate_paths:
-        with fsspec.open(intermediate_path, "rt", compression="gzip") as f:
-            for line in f:
-                rec = json.loads(line)
-                doc_id = rec["id"]
-                test_ds = rec["test_dataset"]
-                has_overlap = rec["has_overlap"]
+        for rec in load_jsonl(intermediate_path):
+            doc_id = rec["id"]
+            test_ds = rec["test_dataset"]
+            has_overlap = rec["has_overlap"]
 
-                overall_unique.add(doc_id)
-                if test_ds not in per_test:
-                    per_test[test_ds] = {"unique": set(), "overlap": set()}
-                per_test[test_ds]["unique"].add(doc_id)
+            overall_unique.add(doc_id)
+            if test_ds not in per_test:
+                per_test[test_ds] = {"unique": set(), "overlap": set()}
+            per_test[test_ds]["unique"].add(doc_id)
 
-                if has_overlap:
-                    overall_overlap.add(doc_id)
-                    per_test[test_ds]["overlap"].add(doc_id)
+            if has_overlap:
+                overall_overlap.add(doc_id)
+                per_test[test_ds]["overlap"].add(doc_id)
 
     total = len(overall_unique)
     contaminated = len(overall_overlap)
@@ -417,7 +414,7 @@ def run_aggregate_total(config: AggregateConfig) -> str:
 
 
 def build_aggregate_total_step(
-    attributes_base_path: str = "gs://marin-us-central2/tmp/power/train_test_overlap/dolma/total",
+    attributes_base_path: str = "gs://marin-us-central2/tmp/train_test_overlap/",
     output_path: str | None = None,
     ngram_size: int = 15,
     eval_dataset_steps: list[ExecutorStep] | None = None,
