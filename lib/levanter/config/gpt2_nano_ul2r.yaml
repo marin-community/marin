@@ -1,0 +1,70 @@
+#data:
+#  id: dlwh/wikitext_103_detokenized
+
+#disable_jit: true
+#data_only: true
+
+model:
+  type: gpt2
+  # hidden_dim: 32
+  # num_heads: 4
+  # num_layers: 2
+
+initialize_from_hf: openai-community/gpt2
+use_hf_model_config: true
+
+trainer:
+  # checkpointer:
+  #   base_path: "checkpoints"
+  #   keep:
+  #     - every: 50
+  #   save_interval: 5m
+
+  # per_device_parallelism: -1
+  batch_axis: "batch"
+  fsdp_axis: "embed"
+  mp: f32
+  num_train_steps: 100000
+  tensor_parallel_axes: ["mlp", "heads"]
+  train_batch_size: 32 # what's good?
+
+data:
+  id: dlwh/wikitext_103_detokenized
+  # id: openai/gsm8k # This is super tiny. It's just for smoke tests.
+  # name: socratic
+  cache_dir: /tmp/marin_cache
+  tokenizer: ./gpt2_ul2r_DEV
+  format:
+    type: ul2r
+    #text_key: text # only for gsm8k
+    #text_key: question
+    task_configs:
+      r:
+        type: rx
+        mask_prob: 0.15
+        mean_span_length: 3.0
+        random_roll: true
+        task_token_id: 50257
+      x1:
+        type: rx
+        mask_prob: 0.15
+        mean_span_length: 32.0
+        random_roll: true
+        task_token_id: 50258
+      x2:
+        type: rx
+        mask_prob: 0.5
+        mean_span_length: 3.0
+        random_roll: true
+        task_token_id: 50258
+      s:
+        type: s
+        task_token_id: 50259
+    task_probs:
+      r: 0.5
+      x1: 0.125
+      x2: 0.125
+      s: 0.25
+    rng_seed: 42
+    sentinel_token_id_start: 50260
+    sentinel_token_id_count: 100

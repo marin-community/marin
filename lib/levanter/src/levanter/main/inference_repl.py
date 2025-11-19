@@ -79,6 +79,7 @@ def _load_model(
     model_config: LmConfig,
     hf_checkpoint: str | None,
     levanter_checkpoint: str | None,
+    tokenizer_path: str | None = None,
     *,
     key,
 ) -> tuple[LmHeadModel, HfTokenizer]:
@@ -90,7 +91,7 @@ def _load_model(
         raise ValueError("Specify only one of checkpoint_path or hf_checkpoint")
 
     mp = trainer_config.mp
-    tokenizer = load_tokenizer(hf_checkpoint)
+    tokenizer = load_tokenizer(tokenizer_path or hf_checkpoint)
     vocab_size = len(tokenizer)
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
@@ -236,6 +237,7 @@ class ReplContext:
                 model_config=self.config.model,
                 hf_checkpoint=path,
                 levanter_checkpoint=None,
+                tokenizer_path=tokenizer,
                 key=jrandom.PRNGKey(self.config.server.seed),
             )
         else:
@@ -247,6 +249,7 @@ class ReplContext:
                 model_config=self.config.model,
                 hf_checkpoint=None,
                 levanter_checkpoint=path,
+                tokenizer_path=tokenizer,
                 key=jrandom.PRNGKey(self.config.server.seed),
             )
 

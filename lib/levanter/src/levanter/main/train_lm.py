@@ -7,7 +7,10 @@ import gc
 import logging
 import os
 from dataclasses import dataclass, field
+import itertools
 from typing import Optional, Union
+import jax
+from tqdm_loggable.auto import tqdm
 
 import haliax as hax
 import jax.numpy as jnp
@@ -17,6 +20,7 @@ from haliax.partitioning import named_jit, round_axis_for_partitioning
 
 import levanter
 import levanter.callbacks
+from levanter.data.loader import DataLoader
 import levanter.eval
 import levanter.eval_harness
 from levanter import callbacks
@@ -67,6 +71,9 @@ class TrainLmConfig:
 
     # TODO: really need to add callback framework
     log_entropy: bool = False
+
+    data_only: bool = False
+    disable_jit: bool = False
 
 
 def main(config: TrainLmConfig):
@@ -130,9 +137,11 @@ def main(config: TrainLmConfig):
         # For most things, we just insist you specify the config right, but tokenizers often have strange numbers of
         # tokens: gpt-2 has 50257, for example. So we round up.
         vocab_size = len(tokenizer)
+        # print(f"vocab_size={vocab_size}")
         Vocab = round_axis_for_partitioning(Axis("vocab", vocab_size), parameter_axis_mapping)
         if vocab_size != Vocab.size:
             logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
+        # print(f"Vocab.size={Vocab.size}")
 
         # Get the training dataset
         train_dataset = config.data.train_set(
@@ -142,6 +151,50 @@ def main(config: TrainLmConfig):
             epochs=config.epoch,
         )
 
+        if config.data_only:
+            # batch_size = 512 # was hitting OOM
+            batch_size = 1
+            data_loader = DataLoader(train_dataset, batch_size=batch_size)
+            it = data_loader.iter_from_step(0)
+            for batch in it:
+                # DataLoaderIterator returns
+                # LmExample(
+                #   tokens=NamedArray(
+                #     array=i32[512,131072],
+                #     axes=(Axis(name='batch', size=512), Axis(name='position', size=131072))
+                #   ),
+                #   loss_mask=NamedArray(
+                #     array=i32[512,131072],
+                #     axes=(Axis(name='batch', size=512), Axis(name='position', size=131072))
+                #   ),
+                #   attn_mask=AttentionMask(
+                #     is_causal=True,
+                #     segment_ids=(
+                #       NamedArray(
+                #         array=i32[512,131072],
+                #         axes=(Axis(name='batch', size=512), Axis(name='position', size=131072))
+                #       ),
+                #       NamedArray(
+                #         array=i32[512,131072],
+                #         axes=(Axis(name='batch', size=512), Axis(name='position', size=131072))
+                #       )
+                #     )
+                #   )
+                # )
+                # TODO Why do we only have is_causal=True and segment_ids but not prefix_mask?
+                print(batch.attn_mask)
+                for i in range(batch_size):
+                    n = 512
+                    print(batch.tokens["batch", i].array[:n])
+                    print(tokenizer.decode(batch.tokens["batch", i].array[:n]))
+                    print(batch.loss_mask["batch", i].array[:n])
+                    print(batch.attn_mask.segment_ids[0]["batch", i, "position", :n].array)
+                    print(batch.attn_mask.materialize(Pos, Pos)["batch", i].array[:n, :n])
+                    # TODO print more from batch
+                    break
+            logger.info("Exiting early because data_only is True")
+            return
+
         # Get the tagged evaluation datasets
         tagged_eval_datasets = config.data.tagged_eval_sets(Pos)
 
@@ -150,7 +203,12 @@ def main(config: TrainLmConfig):
         if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
             state = load_checkpoint(state, config.initialize_from_checkpoint_path)
 
+        print(f"int(state.step)={int(state.step)}")
+
+        print(f"int(state.step)={int(state.step)}")
+
         if int(state.step) == 0:
+            print("true")
             # TODO: I don't love that we init the model twice, but it's not a big deal i think?
             if config.initialize_from_hf:
                 # initialize from an hf pretrained model
@@ -162,6 +220,7 @@ def main(config: TrainLmConfig):
                 # this is a bit gross, but we want to free up the memory from the model we just built
                 state = dataclasses.replace(state, model=None)
                 gc.collect()
+                print("load_pretrained")
                 model = converter.load_pretrained(
                     config.model.model_type,
                     config=config.model if not config.use_hf_model_config else None,
@@ -173,6 +232,7 @@ def main(config: TrainLmConfig):
             else:
                 logger.info("No checkpoint found. Starting from scratch.")
 
+        print("after check")
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.model)})
 
         max_eval_examples_per_ds = config.trainer.max_eval_batches
@@ -265,7 +325,10 @@ def main(config: TrainLmConfig):
             train_loader = train_loader.iter_from_step(0)
 
         ## OK, actually run training!
-        last_info = trainer.train(state, train_loader)
+        disable_jit = config.disable_jit
+        last_info = None
+        with jax.disable_jit(disable_jit):
+            last_info = trainer.train(state, train_loader)
 
         # If running EpochDataset save latest checkpoint by default
         if trainer.config.checkpointer is not None and config.epoch > 0:

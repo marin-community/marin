@@ -346,6 +346,7 @@ class LevanterHarnessLM(TemplateLM):
     def __init__(self, leader: _LmEvalHarnessWorker):
         super().__init__()
         self.leader = leader
+        self.axis_resources = leader.axis_resources
         # Storage for prompts and generations to include in outputs
         self.sample_outputs: dict[str, list[dict]] = {}
         self.sample_logging_config = leader.sample_logging_config
@@ -509,7 +510,23 @@ class LevanterHarnessLM(TemplateLM):
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
         current_task = getattr(self, "_current_task", "loglikelihood_task")
+
+        # HACK: Prepend UL2R task token to all requests
+        # Shouldn't be necessary? Ul2R paper mentions passing input w/ default
+        # prompting/no mode.
+        INPUT_PREFIX = "<|s|>"
+        INPUT_SUFFIX = "<|mask_0|>"
+
+        # HACK
+        modified_requests = []
         for request in requests:
+            prompt = request.args[0]
+            continuation = request.args[1]
+            modified_prompt = INPUT_PREFIX + prompt + INPUT_SUFFIX
+            modified_request = dataclasses.replace(request, args=(modified_prompt, continuation))
+            modified_requests.append(modified_request)
+
+        for request in modified_requests:
             bucket = self._prepare_bucket(current_task)
             if bucket is None:
                 break
@@ -522,7 +539,7 @@ class LevanterHarnessLM(TemplateLM):
                 }
             )
 
-        packed = _pack_requests(requests, self.tokenizer, self.EvalPos, self.leader.max_packed_segments)
+        packed = _pack_requests(modified_requests, self.tokenizer, self.EvalPos, self.leader.max_packed_segments)
         packed_iterator = stack_batches(iter(packed), self.EvalPos, self.EvalBatch)
         packed_iterator = BackgroundIterator(packed_iterator, max_capacity=1024)
 
@@ -538,6 +555,27 @@ class LevanterHarnessLM(TemplateLM):
         for q, batch in enumerate(packed_iterator):
             # Handle profiler start/stop based on step
             self._handle_profiler_step()
+
+            # TODO ask dlwh about this--was getting:
+            #   File "/.../lib/levanter/src/levanter/eval_harness.py", line 294, in dispatch_loglikelihood
+            #     return self.process_loglikelihood(packed_request)
+            #            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            #   File "/.../lib/levanter/src/levanter/eval_harness.py", line 288, in process_loglikelihood
+            #     out = self._jit_loglikelihood(self.model, packed_request)
+            #           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            #   File "/.../lib/haliax/src/haliax/partitioning.py", line 388, in __call__
+            #     return self._call(False, *args, **kwargs)
+            #            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            #   File "/.../.venv/lib/python3.12/site-packages/equinox/_module/_prebuilt.py", line 33, in __call__
+            #     return self.__func__(self.__self__, *args, **kwargs)
+            #            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            #   File "/.../lib/haliax/src/haliax/partitioning.py", line 464, in _call
+            #     out, out_static = cached_pjitted_fun(dynamic_donated, dynamic_reserved, static)
+            #                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            # ValueError: Received incompatible devices for jitted computation. Got argument dynamic_reserved[1][0][1].tokens[0] of
+            # _LmEvalHarnessWorker.__init__.<locals
+            # >._eval_loglikelihood with shape int32[32,1024] and device ids [0] on platform CPU and jit's context mesh with device ids [0] on platform GPU
+            batch = hax.shard(batch, self.axis_resources)
 
             segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size

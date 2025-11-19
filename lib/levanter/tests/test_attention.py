@@ -783,3 +783,108 @@ def test_attention_equivalence_jax_flash(
     o2 = sink_attention_ref_gpt_oss(q, k, v, sinks, sm_scale, sliding_window, start_q)
 
     torch.testing.assert_close(o1, o2)
+
+
+def test_attention_mask_with_prefix():
+    """Test that AttentionMask correctly handles is_prefix for UL2R-style attention."""
+    L = 8
+    Pos = Axis("Pos", L)
+    KPos = Pos.alias("KPos")
+
+    # Create a prefix mask pattern for UL2R
+    # input_masks: 1 1 0 0 1 0 0 0 (segments 0 and 1)
+    # segment_ids: 0 0 0 0 1 1 -1 -1
+    input_masks = jnp.array([1, 1, 0, 0, 1, 0, 0, 0], dtype=jnp.bool_)
+    segment_ids = jnp.array([0, 0, 0, 0, 1, 1, -1, -1])
+
+    # Create AttentionMask with causal, segment_ids, and is_prefix
+    input_masks_named = hax.named(input_masks, Pos)
+    segment_ids_named = hax.named(segment_ids, Pos)
+    mask = AttentionMask(
+        is_causal=True,
+        is_prefix=True,
+        input_mask=input_masks_named,
+        segment_ids=(segment_ids_named, segment_ids_named.rename({Pos.name: KPos.name}))
+    )
+
+    # Materialize the mask
+    materialized = mask.materialize(Pos, KPos)
+
+    print(materialized)
+
+    # Check the materialized mask
+    # The mask should allow:
+    # - Causal attention for all positions
+    # - Additional bidirectional attention for input positions within same segment
+
+    # For position 0 (input in segment 0):
+    # Should see position 0 (causal) + position 1 (prefix - same segment input)
+    assert materialized.array[0, 0] == True  # Can see self (causal)
+    assert materialized.array[0, 1] == True  # Can see position 1 (prefix)
+    assert materialized.array[0, 2] == False  # Cannot see position 2 (future + not input)
+
+    # For position 1 (input in segment 0):
+    # Should see positions 0-1 (causal + prefix)
+    assert materialized.array[1, 0] == True  # Can see position 0 (causal + prefix)
+    assert materialized.array[1, 1] == True  # Can see self (causal)
+    assert materialized.array[1, 2] == False  # Cannot see position 2 (future)
+
+    # For position 2 (output in segment 0):
+    # Should only follow causal pattern
+    assert materialized.array[2, 0] == True  # Can see position 0 (causal)
+    assert materialized.array[2, 1] == True  # Can see position 1 (causal)
+    assert materialized.array[2, 2] == True  # Can see self (causal)
+    assert materialized.array[2, 3] == False  # Cannot see position 3 (future)
+
+    # For position 4 (input in segment 1):
+    # Should only see itself (different segment, no cross-segment attention)
+    assert materialized.array[4, 0] == False  # Cannot see segment 0
+    assert materialized.array[4, 4] == True  # Can see self (causal + prefix)
+    assert materialized.array[4, 5] == False  # Cannot see position 5 (future)
+
+    # For positions 6-7 (padding):
+    # Should only follow causal pattern (is_prefix doesn't affect padding)
+    assert materialized.array[6, 6] == True  # Can see self (causal)
+    assert materialized.array[6, 7] == False  # Cannot see future
+
+
+def test_attention_mask_is_prefix_with_batch():
+    """Test that prefix attention masks work correctly with a batch axis."""
+    B, L = 2, 4
+    Batch = Axis("Batch", B)
+    Pos = Axis("Pos", L)
+    KPos = Pos.alias("KPos")
+
+    # Batch 0: [0, 0, 0, 0] with segment [0, 0, -1, -1]
+    # Batch 1: [1, 1, 0, 0] with segment [0, 0, 0, 0]
+    input_masks = jnp.array([[1, 0, 0, 0], [1, 1, 0, 0]], dtype=jnp.bool_)
+    segment_ids = jnp.array([[0, 0, -1, -1], [0, 0, 0, 0]])
+
+    input_masks_named = hax.named(input_masks, (Batch, Pos))
+    segment_ids_named = hax.named(segment_ids, (Batch, Pos))
+
+    mask = AttentionMask(
+        is_causal=True,
+        is_prefix=True,
+        input_mask=input_masks_named,
+        segment_ids=(segment_ids_named, segment_ids_named.rename({Pos.name: KPos.name}))
+    )
+
+    materialized = mask.materialize(Pos, KPos)
+
+    # Batch 0: only pos 0 is input, so only causal attention
+    # Batch 1: pos 0,1 are input, so they can attend bidirectionally to each other
+    expected = jnp.array([
+        [[True, False, False, False],   # Batch 0
+         [True, True, False, False],
+         [False, False, True, False],
+         [False, False, True, True]],
+        [[True, True, False, False],    # Batch 1: positions 0-1 see each other
+         [True, True, False, False],
+         [True, True, True, False],
+         [True, True, True, True]]
+    ])
+
+    # TODO Right now the batch axis isn't the outer axis. Is that right?
+    assert jnp.all(materialized[Batch, 0].array == expected[0])
+    assert jnp.all(materialized[Batch, 1].array == expected[1])
