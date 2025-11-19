@@ -116,7 +116,7 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
     )
 
     return ExecutorStep(
-        name=f"tmp/power/train_test_overlap/dolma/total/{dataset_config.name}",
+        name=f"train_test_overlap/dolma/total/{dataset_config.name}",
         fn=run_train_test_overlap,
         config=dedupe_config,
         description=f"Run dedupe train-test overlap on {dataset_config.name}",
