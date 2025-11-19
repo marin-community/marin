@@ -291,6 +291,73 @@ def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
     return normalized
 
 
+# Helper to stream chunks from an iterator
+def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Generator[ChunkHeader | list[Any], None, None]:
+    """Stream chunks from an iterator, yielding header/data pairs."""
+    chunk = []
+    chunk_idx = 0
+    for item in items:
+        chunk.append(item)
+        if len(chunk) >= chunk_size:
+            header = ChunkHeader(shard_idx=shard_idx, chunk_idx=chunk_idx, count=len(chunk))
+            yield header
+            yield chunk
+            chunk = []
+            chunk_idx += 1
+    # Yield final partial chunk
+    if chunk:
+        header = ChunkHeader(shard_idx=shard_idx, chunk_idx=chunk_idx, count=len(chunk))
+        yield header
+        yield chunk
+
+
+def deterministic_hash(obj: object) -> int:
+    s = msgspec.msgpack.encode(obj, order="deterministic")
+    return zlib.adler32(s)
+
+
+def _group_items_by_hash(
+    items: Iterable,
+    key_fn: Callable,
+    num_output_shards: int,
+    chunk_size: int,
+) -> dict[int, list[Chunk]]:
+    """Group items by hash of key into output shards with sorted chunks.
+
+    Args:
+        items: Items to group
+        key_fn: Function to extract grouping key from item
+        num_output_shards: Number of output shards to distribute across
+        chunk_size: Number of items per chunk
+
+    Returns:
+        Dict mapping shard index to list of chunks for that shard
+
+    Note:
+        Chunks contain raw data lists (not ObjectRefs). When used in worker
+        functions, the controller will store yielded data in the object store.
+    """
+    output_chunks = defaultdict(list)
+    output_tmp = defaultdict(list)
+
+    for item in items:
+        key = key_fn(item)
+        target_shard = deterministic_hash(key) % num_output_shards
+        output_tmp[target_shard].append(item)
+        if len(output_tmp[target_shard]) >= chunk_size:
+            sorted_items = sorted(output_tmp[target_shard], key=key_fn)
+            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=sorted_items))
+            output_tmp[target_shard] = []
+
+    # Add all remaining chunks
+    for target_shard, items in output_tmp.items():
+        if items:
+            sorted_items = sorted(items, key=key_fn)
+            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=sorted_items))
+
+    return output_chunks
+
+
 def process_shard_fused(
     ctx: ApplyShardCtx,
     operations: list,
@@ -390,25 +457,6 @@ def process_shard_fused(
             joined = _sorted_merge_join(stream_input, right_shard, op)
             yield from build_stream(joined, rest, op_index + 1)
 
-    # Helper to stream chunks from an iterator
-    def stream_chunks(items: Iterator, shard_idx: int):
-        """Stream chunks from an iterator, yielding header/data pairs."""
-        chunk = []
-        chunk_idx = 0
-        for item in items:
-            chunk.append(item)
-            if len(chunk) >= ctx.chunk_size:
-                header = ChunkHeader(shard_idx=shard_idx, chunk_idx=chunk_idx, count=len(chunk))
-                yield header
-                yield chunk
-                chunk = []
-                chunk_idx += 1
-        # Yield final partial chunk
-        if chunk:
-            header = ChunkHeader(shard_idx=shard_idx, chunk_idx=chunk_idx, count=len(chunk))
-            yield header
-            yield chunk
-
     if operations and isinstance(operations[-1], GroupByLocalOp):
         group_by_local_op = operations[-1]
         pre_ops = operations[:-1]
@@ -424,10 +472,16 @@ def process_shard_fused(
 
         # Stream chunks for each output shard
         for idx in range(num_output_shards):
-            for chunk in output_chunks[idx]:
-                header = ChunkHeader(shard_idx=idx, chunk_idx=0, count=chunk.count)
+            if output_chunks[idx]:
+                for chunk in output_chunks[idx]:
+                    header = ChunkHeader(shard_idx=idx, chunk_idx=0, count=chunk.count)
+                    yield header
+                    yield chunk.data
+            else:
+                # Yield empty chunk so controller knows this shard exists
+                header = ChunkHeader(shard_idx=idx, chunk_idx=0, count=0)
                 yield header
-                yield chunk.data
+                yield []
 
     elif operations and isinstance(operations[-1], ReduceLocalOp):
         reduce_local_op = operations[-1]
@@ -437,59 +491,12 @@ def process_shard_fused(
 
         result = reduce_local_op.local_reducer(stream)
         # Stream single-item chunk
-        yield from stream_chunks([result], ctx.shard_idx)
+        yield from _stream_chunks([result], ctx.shard_idx, ctx.chunk_size)
 
     else:
         # No grouping or reduction at the end, stream the results directly
         stream = build_stream(ctx.shard, operations)
-        yield from stream_chunks(stream, ctx.shard_idx)
-
-
-def deterministic_hash(obj: object) -> int:
-    s = msgspec.msgpack.encode(obj, order="deterministic")
-    return zlib.adler32(s)
-
-
-def _group_items_by_hash(
-    items: Iterable,
-    key_fn: Callable,
-    num_output_shards: int,
-    chunk_size: int,
-) -> dict[int, list[Chunk]]:
-    """Group items by hash of key into output shards with sorted chunks.
-
-    Args:
-        items: Items to group
-        key_fn: Function to extract grouping key from item
-        num_output_shards: Number of output shards to distribute across
-        chunk_size: Number of items per chunk
-
-    Returns:
-        Dict mapping shard index to list of chunks for that shard
-
-    Note:
-        Chunks contain raw data lists (not ObjectRefs). When used in worker
-        functions, the controller will store yielded data in the object store.
-    """
-    output_chunks = defaultdict(list)
-    output_tmp = defaultdict(list)
-
-    for item in items:
-        key = key_fn(item)
-        target_shard = deterministic_hash(key) % num_output_shards
-        output_tmp[target_shard].append(item)
-        if len(output_tmp[target_shard]) >= chunk_size:
-            sorted_items = sorted(output_tmp[target_shard], key=key_fn)
-            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=sorted_items))
-            output_tmp[target_shard] = []
-
-    # Add all remaining chunks
-    for target_shard, items in output_tmp.items():
-        if items:
-            sorted_items = sorted(items, key=key_fn)
-            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=sorted_items))
-
-    return output_chunks
+        yield from _stream_chunks(stream, ctx.shard_idx, ctx.chunk_size)
 
 
 def _sorted_merge_join(left_stream: Iterable, right_stream: Iterable, join_op) -> Iterator:
@@ -574,9 +581,16 @@ def process_shard_group_by_reduce(ctx: ApplyShardCtx, key_fn: Callable, reducer_
         for key, items_iter in _merge_sorted_chunks(ctx.shard, key_fn):
             yield reducer_fn(key, items_iter)
 
+    has_data = False
     for i, item in enumerate(result_generator()):
+        has_data = True
         yield ChunkHeader(shard_idx=ctx.shard_idx, chunk_idx=i, count=len(item))
         yield [item]
+
+    # Yield empty chunk if shard has no data, so controller knows this shard exists
+    if not has_data:
+        yield ChunkHeader(shard_idx=ctx.shard_idx, chunk_idx=0, count=0)
+        yield []
 
 
 def process_shard_reduce_global(
@@ -852,6 +866,7 @@ class Backend:
         # Reconstruct shards from collected chunks
         if len(chunks_by_shard_idx) == 0:
             return []
+
         max_shard_idx = max(chunks_by_shard_idx.keys())
         return [
             Shard(idx=idx, chunks=chunks_by_shard_idx.get(idx, []), context=self.context)
