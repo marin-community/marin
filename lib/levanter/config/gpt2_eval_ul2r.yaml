@@ -42,6 +42,7 @@ data:
     ul2r:
       #id: dlwh/wikitext_103_detokenized
       id: Salesforce/wikitext
+      name: wikitext-103-raw-v1
       cache_dir: /tmp/marin_cache_ul2r
       format:
         type: ul2r

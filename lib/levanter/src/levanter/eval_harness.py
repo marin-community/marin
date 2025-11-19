@@ -512,7 +512,10 @@ class LevanterHarnessLM(TemplateLM):
         current_task = getattr(self, "_current_task", "loglikelihood_task")
 
         # HACK: Prepend UL2R task token to all requests
-        TASK_PREFIX = "<|s|>"
+        # Shouldn't be necessary? Ul2R paper mentions passing input w/ default
+        # prompting/no mode.
+        INPUT_PREFIX = "<|s|>"
+        INPUT_SUFFIX = "<|mask_0|>"
         modified_requests = []
         for request in requests:
             bucket = self._prepare_bucket(current_task)
@@ -522,12 +525,12 @@ class LevanterHarnessLM(TemplateLM):
             continuation = request.args[1]
             bucket.append(
                 {
-                    "prompt": TASK_PREFIX + prompt,
+                    "prompt": INPUT_PREFIX + prompt + INPUT_SUFFIX,
                     "generation": continuation,
                 }
             )
-            # Create modified request with prefixed prompt
-            modified_request = dataclasses.replace(request, args=(TASK_PREFIX + prompt, continuation))
+            modified_prompt = INPUT_PREFIX + prompt + INPUT_SUFFIX
+            modified_request = dataclasses.replace(request, args=(modified_prompt, continuation))
             modified_requests.append(modified_request)
 
         packed = _pack_requests(modified_requests, self.tokenizer, self.EvalPos, self.leader.max_packed_segments)

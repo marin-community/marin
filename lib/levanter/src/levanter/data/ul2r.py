@@ -21,11 +21,8 @@ from levanter.store.cache import TreeCache
 
 # From https://huggingface.co/stanford-crfm/marin-tokenizer/blob/main/tokenizer.json
 R_TASK_TOKEN_ID = 128011
-R_TASK_TOKEN = "<|reserved_special_token_3|>"
 X_TASK_TOKEN_ID = 128012
-X_TASK_TOKEN = "<|reserved_special_token_4|>"
 S_TASK_TOKEN_ID = 128013
-S_TASK_TOKEN = "<|reserved_special_token_5|>"
 
 
 # Use the last 100 reserved token IDs as sentinel tokens (equivalent to T5's
@@ -492,12 +489,13 @@ def to_ul2r_s_tokens(
     #   [S] <prefix> <sentinel_0> <continuation>
     # or
     #   [S] <prefix> <continuation>
+    # We currently do the former.
     # The latter would be identical to what we had as CausalLmConfig.
     # The code in UL2 mentions noise_span_to_unique_sentinel for R/X-denoising
     # but not S-denoising (see Section 9.2) and a figure in UL2R says
     # "For PaLM and U-PaLM default, we pass the input as-is to the model.
     # For the rest, we prepend one of [S2S], [NLU], or [NLG] to the
-    # beginning of # the input, and in the case of [NLU] and [NLG], we add
+    # beginning of the input, and in the case of [NLU] and [NLG], we add
     # the infill token at the end of the input, as typical for these modes."
     # (implying there is no infill token for S-denoising) but I'm not sure.
     # https://github.com/google-research/text-to-text-transfer-transformer/blob/e081111ccd51df425aa7124e8e311ed6d403d767/t5/data/preprocessors.py#L2033
