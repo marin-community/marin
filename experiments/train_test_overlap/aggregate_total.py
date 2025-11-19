@@ -221,7 +221,6 @@ def aggregate_single_dataset(
     intermediate_paths = list(
         flow_backend().execute(
             Dataset.from_list(shard_paths)
-            .flat_map(load_file)
             .flat_map(extract_overlap_records)
             .write_jsonl(f"{intermediate_dir}/overlap-{{shard:05d}}.jsonl.gz", skip_existing=True)
         )
