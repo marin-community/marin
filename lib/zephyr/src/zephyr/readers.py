@@ -54,7 +54,7 @@ def open_file(file_path: str, mode: str = "rb"):
         file_path,
         mode,
         compression=compression,
-        block_size=1_000_000,
+        block_size=16_000_000,
         cache_type="background",
         maxblocks=2,
     ) as f:
