@@ -144,7 +144,7 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
 
     default_sampling = SamplingParams(
         temperature=1.0,
-        n_prompts=24,  # Overdo it since we know there are some with no signal?
+        n_prompts=16,
         n_generations_per_prompt=64,
         max_tokens=MAX_OUTPUT_TOKENS,
         # stop_tokens=stop_tokens(experiment_config.model_config.tokenizer),
@@ -275,8 +275,8 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
     )
 
     opt_config = AdamConfig(
-        learning_rate=1e-7,
-        weight_decay=1e-2,
+        learning_rate=2e-06,
+        weight_decay=0.0,
         warmup=0,
         lr_schedule="constant",
     )
@@ -362,7 +362,7 @@ def main():
             # model_config=qwen3_1_7b,
             # model_config=qwen3_8b,
             rl_loss=RLOOLoss(
-                kl_coef=0.01,
+                kl_coef=0.0,
                 clip_epsilon=0.2,
                 synchronous=True,
                 do_trainer_inference_mismatch_importance_sampling=True,
