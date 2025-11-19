@@ -36,7 +36,6 @@ import msgspec
 from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import Dataset, flow_backend, load_parquet
 from zephyr.readers import load_file
-from zephyr.writers import write_jsonl_file
 
 # handle optional rbloom dependency for dry runs.
 try:
@@ -296,39 +295,6 @@ def _record_id(record: dict) -> str:
         return str(_bloom_hash(s))
 
 
-def mark_duplicates(record: dict, bloom_filter: Bloom, config: DedupeConfig) -> dict:
-    """
-    Mark duplicate spans in a record using bloom filter.
-
-    Args:
-        record: Input record with text field
-        bloom_filter: Bloom filter to check against
-        config: Deduplication configuration
-
-    Returns:
-        Record with attributes field containing duplicate spans
-    """
-    text = record.get(config.text_field, "")
-    paragraphs = text.split("\n")
-    duplicate_spans = []
-
-    offset = 0
-    for para in paragraphs:
-        if not para:
-            offset += 1  # Just the newline
-            continue
-
-        overlap_score = calculate_paragraph_overlap(para, bloom_filter, config.ngram)
-        if overlap_score > 0:
-            duplicate_spans.append([offset, offset + len(para), overlap_score])
-        offset += len(para) + 1  # +1 for newline
-
-    return {
-        "id": _record_id(record),
-        "attributes": {config.attribute_name: duplicate_spans},
-    }
-
-
 def mark_duplicates_bloom(
     input_path: str | list[str],
     bloom_path: str,
@@ -352,23 +318,50 @@ def mark_duplicates_bloom(
     """
     # Determine base path for rebasing
     base_path = input_path[0] if isinstance(input_path, list) else input_path
+    all_files = collect_input_files(input_path)
 
-    def process_file_with_bloom(file_path_shard: Iterator[str]) -> Iterator[str]:
-        """Process a single input file and write to matching output path."""
-        input_file_path = next(iter(file_path_shard))
-        output_file_path = rebase_file_path(base_path, input_file_path, output_path)
+    def process_shard_with_bloom(records: Iterator[dict]) -> Iterator[dict]:
+        """Load bloom filter once per shard and mark duplicates."""
+        # Load bloom filter from storage
         fs, path = fsspec.url_to_fs(bloom_path)
         with fs.open(path, "rb") as f:
             bloom_bytes = f.read()
-
         bf = Bloom.load_bytes(bloom_bytes)
-        records = (mark_duplicates(record, bf, config) for record in load_file(input_file_path))
-        result = write_jsonl_file(records, output_file_path)
-        yield result["path"]
 
-    all_files = collect_input_files(input_path)
-    ds = Dataset.from_iterable(all_files).map_shard(process_file_with_bloom)
-    result = list(flow_backend(max_parallelism=config.processes).execute(ds))
+        # Process each record
+        for record in records:
+            text = record.get(config.text_field, "")
+            paragraphs = text.split("\n")
+            duplicate_spans = []
+
+            offset = 0
+            for para in paragraphs:
+                if not para:
+                    offset += 1  # Just the newline
+                    continue
+
+                overlap_score = calculate_paragraph_overlap(para, bf, config.ngram)
+                if overlap_score > 0:
+                    duplicate_spans.append([offset, offset + len(para), overlap_score])
+                offset += len(para) + 1  # +1 for newline
+
+            yield {
+                "id": _record_id(record),
+                "attributes": {config.attribute_name: duplicate_spans},
+            }
+
+    # Use write_jsonl with callable output pattern
+    result = list(
+        flow_backend(max_parallelism=config.processes).execute(
+            Dataset.from_iterable(all_files)
+            .flat_map(load_file)
+            .map_shard(process_shard_with_bloom)
+            .write_jsonl(
+                output_pattern=lambda shard_idx, total: rebase_file_path(base_path, all_files[shard_idx], output_path),
+                skip_existing=True,
+            )
+        )
+    )
     return result
 
 
@@ -419,45 +412,44 @@ def _run_deduplication(config: DedupeConfig):
     # Determine base path for rebasing
     base_path = config.input_path[0] if isinstance(config.input_path, list) else config.input_path
 
-    def _process_file_and_mark_dups(file_path_shard: Iterator[str]) -> Iterator[str]:
-        """Process a single input file and write to matching output path."""
-        input_file_path = next(iter(file_path_shard))
+    # Load duplicate map once (will be captured in closure)
+    logger.info("Loading duplicate map")
+    dup_map = {}
+    for record in load_parquet(duplicate_key_shards[0]):
+        dup_map[record["hash"]] = {
+            "canonical": record["canonical"],
+        }
 
-        # Compute output path that mirrors input structure
-        output_file_path = rebase_file_path(base_path, input_file_path, config.output_path)
+    def mark_exact_dups(record: dict) -> dict:
+        """Mark duplicate paragraphs in a single record using exact hash matching."""
+        record_id = _record_id(record)
+        spans = []
+        offset = 0
+        paras = record.get(config.text_field, "").split("\n")
+        for para in paras:
+            hash_val = _str_hash(para)
+            if hash_val in dup_map:
+                if record_id != dup_map[hash_val]["canonical"]:
+                    spans.append([offset, offset + len(para), 1.0])
+            offset = offset + len(para) + 1  # +1 for newline
 
-        # Load duplicate map
-        logger.info("Marking duplicates in file: %s", input_file_path)
-        dup_map = {}
-        for record in load_parquet(duplicate_key_shards[0]):
-            dup_map[record["hash"]] = {
-                "canonical": record["canonical"],
-            }
+        return {
+            "id": record_id,
+            "attributes": {config.attribute_name: spans},
+        }
 
-        # Process records
-        def mark_dups_in_file():
-            for record in load_file(input_file_path):
-                record_id = _record_id(record)
-                spans = []
-                offset = 0
-                paras = record.get(config.text_field, "").split("\n")
-                for para in paras:
-                    hash_val = _str_hash(para)
-                    if hash_val in dup_map:
-                        if record_id != dup_map[hash_val]["canonical"]:
-                            spans.append([offset, offset + len(para), 1.0])
-                    offset = offset + len(para) + 1  # +1 for newline
-
-                yield {
-                    "id": record_id,
-                    "attributes": {config.attribute_name: spans},
-                }
-
-        # Write to output file
-        result = write_jsonl_file(mark_dups_in_file(), output_file_path)
-        yield result["path"]
-
-    flow_backend().execute(Dataset.from_list(input_files).map_shard(_process_file_and_mark_dups))
+    # Use write_jsonl with callable output pattern
+    flow_backend().execute(
+        Dataset.from_list(input_files)
+        .flat_map(load_file)
+        .map(mark_exact_dups)
+        .write_jsonl(
+            output_pattern=lambda shard_idx, total: rebase_file_path(
+                base_path, input_files[shard_idx], config.output_path
+            ),
+            skip_existing=True,
+        )
+    )
 
     return {
         "success": True,

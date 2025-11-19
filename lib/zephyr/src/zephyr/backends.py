@@ -19,7 +19,6 @@ from __future__ import annotations
 import heapq
 import logging
 import os
-import re
 import struct
 import time
 from collections import defaultdict
@@ -397,7 +396,7 @@ def process_shard_fused(
         elif isinstance(op, WindowOp):
             yield from build_stream(make_windows(stream_input, op.folder_fn, op.initial_state), rest, op_index + 1)
         elif isinstance(op, WriteDataOp):
-            output_path = format_shard_path(op.output_pattern, ctx.shard_idx, ctx.total_shards)
+            output_path = op.output_pattern(ctx.shard_idx, ctx.total_shards)
 
             # Check if we should skip writing because file already exists
             if op.skip_existing:

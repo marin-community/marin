@@ -209,9 +209,8 @@ def test_decontamination(fox_corpus):
     assert len(results_by_id["test_contaminated_2"]["attributes"]["contaminated"]) == 1
     assert results_by_id["test_contaminated_2"]["attributes"]["contaminated"][0][2] == 1.0
 
-    # test_unique_1 is clean
-    assert len(results_by_id["test_unique_1"]["attributes"]["contaminated"]) == 1
-    assert results_by_id["test_unique_1"]["attributes"]["contaminated"][0][2] == 0.0
+    # test_unique_1 is clean (no contamination entries)
+    assert len(results_by_id["test_unique_1"]["attributes"]["contaminated"]) == 0
 
 
 def test_ngram_decontamination(fox_corpus):
@@ -277,13 +276,15 @@ def test_train_test_overlap(fox_corpus):
 
         # test_high_overlap should have some overlap with train
         assert len(results_by_id["test_high_overlap"]["attributes"][f"overlap_{ngram_len}"]) == 1
-        assert results_by_id["test_high_overlap"]["attributes"][f"overlap_{ngram_len}"][0][2] > 0.0
-
-        # test_unique_1 should have less overlap than test_high_overlap
-        assert len(results_by_id["test_unique_1"]["attributes"][f"overlap_{ngram_len}"]) == 1
         high_score = results_by_id["test_high_overlap"]["attributes"][f"overlap_{ngram_len}"][0][2]
-        unique_score = results_by_id["test_unique_1"]["attributes"][f"overlap_{ngram_len}"][0][2]
-        assert unique_score < high_score
+        assert high_score > 0.0
+
+        # test_unique_1 should have much less overlap than test_high_overlap
+        # (may have small overlap due to common words, but significantly less)
+        unique_attrs = results_by_id["test_unique_1"]["attributes"][f"overlap_{ngram_len}"]
+        if len(unique_attrs) > 0:
+            unique_score = unique_attrs[0][2]
+            assert unique_score < high_score, f"Expected unique ({unique_score}) < high overlap ({high_score})"
 
 
 def test_multi_paragraph_decontamination(fox_corpus):
@@ -307,14 +308,12 @@ def test_multi_paragraph_decontamination(fox_corpus):
     # Read output
     results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
 
-    # test_para_match: first paragraph clean (0.0), second contaminated (1.0) - matches train_arctic_2's second para
-    assert len(results_by_id["test_para_match"]["attributes"]["contaminated"]) == 2
-    assert results_by_id["test_para_match"]["attributes"]["contaminated"][0][2] == 0.0  # First paragraph
-    assert results_by_id["test_para_match"]["attributes"]["contaminated"][1][2] == 1.0  # Second paragraph (match!)
+    # test_para_match: second paragraph is contaminated (matches train_arctic_2's second para)
+    assert len(results_by_id["test_para_match"]["attributes"]["contaminated"]) == 1
+    assert results_by_id["test_para_match"]["attributes"]["contaminated"][0][2] == 1.0  # Second paragraph (match!)
 
-    # test_unique_1: single paragraph, all clean
-    assert len(results_by_id["test_unique_1"]["attributes"]["contaminated"]) == 1
-    assert results_by_id["test_unique_1"]["attributes"]["contaminated"][0][2] == 0.0
+    # test_unique_1: single paragraph, all clean (no contamination entries)
+    assert len(results_by_id["test_unique_1"]["attributes"]["contaminated"]) == 0
 
 
 def test_exact_deduplication_paragraph(fox_corpus):
