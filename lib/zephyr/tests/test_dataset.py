@@ -813,6 +813,7 @@ def test_sorted_merge_join_shard_mismatch(backend):
     left = Dataset.from_list([{"id": 1, "text": "hello"}]).group_by(
         key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
     )
+
     right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
         key=lambda x: x["id"],
         reducer=lambda k, items: next(iter(items)),
