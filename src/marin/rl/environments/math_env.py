@@ -296,18 +296,21 @@ class MathEnv(MarinEnv):
         """
 
         decoded_response = response_text.strip()
-        validation = validate_format(decoded_response + ">")
+        validation = validate_format(decoded_response)
 
         true_answer = example.processed_answer.strip()
-        weak_correct = 1.0 if true_answer and true_answer in decoded_response else 0.0
+        # weak_correct = 1.0 if true_answer and true_answer in decoded_response else 0.0
 
         if validation["is_valid"]:
+            if "<answer>" in validation["answer"]:
+                print(f"Validation answer: {validation['answer']}")
+
             grade = grade_answer(validation["answer"], true_answer)
         else:
             tokens = decoded_response.split()
             grade = grade_answer(tokens[-1], true_answer) if tokens else 0.0
 
-        reward = 0.3 * weak_correct + 0.1 * float(validation["is_valid"]) + 0.8 * float(grade)
+        reward = 0.1 * float(validation["is_valid"]) + 1.0 * float(grade)
 
         return reward, float(validation["is_valid"]), float(grade), reward
 

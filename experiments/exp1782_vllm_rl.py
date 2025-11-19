@@ -371,17 +371,17 @@ def main():
             ),
             experiment_name_suffix="math-tis-r1-prompt",
         ),
-        ExperimentConfig(
-            model_config=qwen3_8b,
-            rl_loss=RLOOLoss(
-                kl_coef=0.01,
-                clip_epsilon=0.2,
-                synchronous=True,
-                do_trainer_inference_mismatch_importance_sampling=True,
-                # do_overlong_filtering=True,
-            ),
-            experiment_name_suffix="math-tis-r1-prompt",
-        ),
+        # ExperimentConfig(
+        #     model_config=qwen3_8b,
+        #     rl_loss=RLOOLoss(
+        #         kl_coef=0.01,
+        #         clip_epsilon=0.2,
+        #         synchronous=True,
+        #         do_trainer_inference_mismatch_importance_sampling=True,
+        #         # do_overlong_filtering=True,
+        #     ),
+        #     experiment_name_suffix="math-tis-r1-prompt",
+        # ),
         # ExperimentConfig(
         #     # model_config=llama_3_1_8b,
         #     # model_config=llama1b,
