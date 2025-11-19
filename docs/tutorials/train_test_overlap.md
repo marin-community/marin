@@ -155,7 +155,7 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
         attribute_name="ngram_overlap",
         false_positive_rate=1e-20,
         ngram=NGRAM_CONFIG,
-        processes=128,
+        processes=1024,
         mode=DedupMode.TRAIN_TEST_OVERLAP,
         text_field=dataset_config.text_field,
     )
@@ -171,41 +171,31 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
 
 **Understanding the `processes` Parameter:**
 
-The `processes` parameter controls how many parallel processes dolma uses **per training shard**. Here's how it works:
+The `processes` parameter controls how many parallel processes Zephyr uses when processing your dataset:
 
-- **What it does**: Each training shard gets split into `processes` number of sub-shards for parallel processing
-- **Performance trade-off**: More processes = faster Bloom filter creation but higher CPU/memory usage
-- **Resource impact**: Each process loads a portion of the shard into memory simultaneously
-- **Typical values**: 8-32 processes depending on your cluster's CPU and memory capacity
-
-Example: If you have a 1GB training shard and set `processes=16`, the system will:
-1. Split the shard into 16 smaller chunks
-2. Process each chunk in parallel to build the Bloom filter
-3. Use 16x more CPU cores but complete ~16x faster
+- **What it does**: Controls the degree of parallelism for processing files in the dataset
+- **Performance trade-off**: More processes = faster processing but higher CPU/memory usage
+- **Typical values**: 8-4096 processes depending on your cluster's CPU and memory capacity
 
 **Common configurations**:
-- **Fast screening**: `ngram_length=[15]`, `false_positive_rate=1e-9`, `processes=8`
-- **Thorough analysis**: `ngram_length=[10, 15, 20]`, `false_positive_rate=1e-12`, `processes=16`
-- **Memory-constrained**: `false_positive_rate=1e-6`, `processes=4` (fewer processes = less memory)
+- **Fast screening**: `ngram_length=[15]`, `processes=1024`
+- **Balanced**: `ngram_length=[15]`, `processes=1024`
+- **Memory-constrained**: `processes=32`
 
 ### Parallel Processing
 
-The system uses **dataset-level parallelism** managed by Ray and Zephyr:
-
-**Dataset-level parallelism (automatic via Ray and Zephyr):**
-- Multiple datasets can run in parallel as separate Ray tasks
-- Zephyr handles file discovery and parallelism internally within each dataset
-- The `processes` parameter controls how many processes Zephyr uses for each dataset:
+Zephyr handles file discovery and parallelism automatically. You can control the degree of parallelism using the `processes` parameter:
 
 ```python
-# In build_step function - adjust processes for internal parallelism
+# In build_step function - adjust processes for parallelism
 def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
+    dedupe_config = DedupeConfig(
+        # ...
+        processes=128,  # Control parallelism level
+    )
     return ExecutorStep(
         # ...
-        config={
-            # ...
-            "processes": 15,  # Number of processes for Zephyr backend
-        },
+        config=dedupe_config,
     )
 ```
 
@@ -258,41 +248,15 @@ DEFAULT_NGRAM_CONFIG = NGramConfig(
 
 # Edit the processes parameter in build_step
 def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
+    dedupe_config = DedupeConfig(
+        # ...
+        processes=32,  # Increase for more parallelism
+    )
     return ExecutorStep(
         # ...
-        config={
-            # ...
-            "processes": 32,  # Increase for more parallelism
-        },
+        config=dedupe_config,
     )
 ```
-
-### Memory Optimization
-
-For very large datasets or memory-constrained environments:
-
-```python
-# Reduce memory usage by adjusting processes in build_step
-def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
-    return ExecutorStep(
-        name=f"train_test_overlap/dolma/total/{dataset_config.name}",
-        fn=run_train_test_overlap,
-        config={
-            "dataset_dir": dataset_config.path,
-            "output_path": this_output_path(),
-            "eval_dataset_steps": EVAL_DATASET_STEPS,
-            "text_field": dataset_config.text_field,
-            "processes": 8,  # Reduce from default 15 to lower memory usage
-        },
-        description=f"Run dedupe train-test overlap on {dataset_config.name}",
-        pip_dependency_groups=["quality_dedup_consolidate"],
-    )
-```
-
-**Memory considerations**:
-- Fewer `processes` = less memory usage per dataset
-- Zephyr handles parallelism automatically across files
-- The false positive rate is fixed at `1e-20` (very low, larger Bloom filters)
 
 ## Gotchas and Troubleshooting
 
@@ -320,27 +284,16 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
 
 3. **Out of memory errors**
 
-   **Solution**: Reduce memory usage by lowering parallelism:
+   **Solution**: Reduce the `processes` parameter to lower memory usage:
    ```python
-   # Increase false positive rate (uses less memory for Bloom filters)
-   false_positive_rate=1e-6,  # Instead of 1e-12
-
-   # Reduce shard-level parallelism (fewer processes per shard)
-   processes=8,  # Instead of 16
-
-   # Reduce dataset-level parallelism (fewer concurrent shards)
-   max_in_flight=16,  # Instead of 64
+   processes=32,  # Reduce from default 128
    ```
 
 4. **Slow processing**
 
-   **Solution**: Increase parallelism (if you have resources). Be careful because this can crash the head node!
+   **Solution**: Increase the `processes` parameter (if you have resources):
    ```python
-   # More concurrent shards
-   max_in_flight=128,
-
-   # More processes per shard (splits each shard into more parallel chunks)
-   processes=32,
+   processes=256,  # Increase from default 128
    ```
 
 ### Performance Tips

@@ -110,7 +110,7 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
         attribute_name="ngram_overlap",
         false_positive_rate=1e-20,
         ngram=DEFAULT_NGRAM_CONFIG,
-        processes=128,
+        processes=1024,
         mode=DedupMode.TRAIN_TEST_OVERLAP,
         text_field=dataset_config.text_field,
     )
