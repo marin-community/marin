@@ -20,51 +20,15 @@ This provides object storage and task management functions for use within a job.
 from __future__ import annotations
 
 import inspect
-import pickle
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field, is_dataclass
 from typing import Any, Literal, Protocol
-from collections.abc import Generator
-
-import zstandard as zstd
 
 try:
     import ray
 except ImportError:
     ray = None
-
-
-def msgpack_encode(obj: Any) -> bytes:
-    """Serialize with pickle and compress with zstd."""
-    serialized = pickle.dumps(obj)
-    cctx = zstd.ZstdCompressor(level=-10, threads=1)
-    return cctx.compress(serialized)
-
-
-def msgpack_decode(data: bytes) -> Any:
-    """Decompress zstd and deserialize pickle."""
-    dctx = zstd.ZstdDecompressor()
-    decompressed = dctx.decompress(data)
-    return pickle.loads(decompressed)
-
-
-def _contains_dataclass(obj: Any) -> bool:
-    """Recursively check whether an object tree contains a dataclass instance.
-
-    Ray + msgpack turns dataclasses into plain dicts on decode, so we bypass
-    msgpack when a dataclass is present to preserve type information.
-    """
-    if is_dataclass(obj):
-        return True
-
-    if isinstance(obj, dict):
-        return any(_contains_dataclass(k) or _contains_dataclass(v) for k, v in obj.items())
-
-    if isinstance(obj, (list, tuple, set)):
-        return any(_contains_dataclass(item) for item in obj)
-
-    return False
 
 
 class ExecutionContext(Protocol):
@@ -233,23 +197,24 @@ class RayContext:
         self.ray_options = ray_options or {}
 
     def put(self, obj: Any):
+<<<<<<< HEAD
         """Store object on a worker node."""
         # Msgpack drops dataclass types on decode; fall back to Ray's native
         # serialization when a dataclass is present anywhere in the payload.
         if _contains_dataclass(obj):
             return ray.put(obj)
         return ray.put(msgpack_encode(obj))
+||||||| parent of 748611c76 (Switch to pure ray.put in zephyr/fray, remove manual serialization)
+        """Store object on a worker node."""
+        return ray.put(msgpack_encode(obj))
+=======
+        """Store object in Ray's object store."""
+        return ray.put(obj)
+>>>>>>> 748611c76 (Switch to pure ray.put in zephyr/fray, remove manual serialization)
 
     def get(self, ref):
         """Retrieve an object from Ray's object store."""
-        data = ray.get(ref)
-        # ray sometimes double encodes data from generators, so check if it's still an ObjectRef
-        if isinstance(data, ray.ObjectRef):
-            data = ray.get(data)
-        # we may be retrieving results from a remote function return, these are not encoded
-        if isinstance(data, bytes):
-            return msgpack_decode(data)
-        return data
+        return ray.get(ref)
 
     def run(self, fn: Callable, *args):
         """Execute function remotely with configured Ray options.

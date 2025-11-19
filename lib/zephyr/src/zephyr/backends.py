@@ -31,7 +31,6 @@ from typing import Any, TypeVar
 import fsspec
 import msgspec
 import numpy as np
-import zstandard as zstd
 from fray import ExecutionContext
 from tqdm_loggable.auto import tqdm
 
@@ -113,20 +112,6 @@ class ShardMonitor:
         finally:
             # Stage complete - remove from active stages
             self.stage_counts.pop(stage_name, None)
-
-
-def msgpack_encode(obj: Any) -> bytes:
-    """Serialize with msgpack and compress with zstd."""
-    serialized = msgspec.msgpack.encode(obj)
-    cctx = zstd.ZstdCompressor(level=-10, threads=1)
-    return cctx.compress(serialized)
-
-
-def msgpack_decode(data: bytes) -> Any:
-    """Decompress zstd and deserialize msgpack."""
-    dctx = zstd.ZstdDecompressor()
-    decompressed = dctx.decompress(data)
-    return msgspec.msgpack.decode(decompressed)
 
 
 @dataclass
@@ -435,9 +420,7 @@ def process_shard_fused(
 
         stream = monitor.wrap(build_stream(ctx.shard, pre_ops), str(group_by_local_op))
 
-        output_chunks = _group_items_by_hash(
-            stream, group_by_local_op.key_fn, num_output_shards, ctx.chunk_size, ctx.shard.context
-        )
+        output_chunks = _group_items_by_hash(stream, group_by_local_op.key_fn, num_output_shards, ctx.chunk_size)
 
         # Stream chunks for each output shard
         for idx in range(num_output_shards):
@@ -472,7 +455,6 @@ def _group_items_by_hash(
     key_fn: Callable,
     num_output_shards: int,
     chunk_size: int,
-    context: ExecutionContext,
 ) -> dict[int, list[Chunk]]:
     """Group items by hash of key into output shards with sorted chunks.
 
@@ -481,10 +463,13 @@ def _group_items_by_hash(
         key_fn: Function to extract grouping key from item
         num_output_shards: Number of output shards to distribute across
         chunk_size: Number of items per chunk
-        context: Execution context for storing chunks
 
     Returns:
         Dict mapping shard index to list of chunks for that shard
+
+    Note:
+        Chunks contain raw data lists (not ObjectRefs). When used in worker
+        functions, the controller will store yielded data in the object store.
     """
     output_chunks = defaultdict(list)
     output_tmp = defaultdict(list)
@@ -495,14 +480,14 @@ def _group_items_by_hash(
         output_tmp[target_shard].append(item)
         if len(output_tmp[target_shard]) >= chunk_size:
             sorted_items = sorted(output_tmp[target_shard], key=key_fn)
-            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=context.put(sorted_items)))
+            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=sorted_items))
             output_tmp[target_shard] = []
 
-    # Put all remaining chunks
+    # Add all remaining chunks
     for target_shard, items in output_tmp.items():
         if items:
             sorted_items = sorted(items, key=key_fn)
-            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=context.put(sorted_items)))
+            output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=sorted_items))
 
     return output_chunks
 
