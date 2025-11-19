@@ -20,18 +20,32 @@ import importlib.util
 import logging
 import subprocess
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
-
 import humanfriendly
 
 from zephyr import set_flow_backend
-from zephyr.backend_factory import BackendConfig, create_backend
+from zephyr.backend_factory import create_backend
+
+
+@dataclass
+class CliConfig:
+    memory: str | None = None
+    num_cpus: float | None = None
+    num_gpus: float | None = None
+    backend: str = "threadpool"
+    max_parallelism: int = 100
+    cluster: str | None = None
+    entry_point: str = "main"
+    dry_run: bool = False
+
+    ray_options: dict = field(default_factory=dict)
 
 
 def run_local(
-    config: BackendConfig,
+    config: CliConfig,
     script_path: str,
     script_args: list[str],
     entry_point: str,
@@ -48,7 +62,7 @@ def run_local(
         SystemExit: If script execution fails
     """
     backend = create_backend(
-        backend_type=config.backend_type,
+        backend_type=config.backend,
         max_parallelism=config.max_parallelism,
         memory=config.memory,
         num_cpus=config.num_cpus,
@@ -69,8 +83,8 @@ def run_local(
         relative_path = script_path_obj.relative_to(Path.cwd())
         # Try to find the module name by looking for src/ in path
         parts = relative_path.parts
-        if "src" in parts:
-            src_idx = parts.index("src")
+        if "src" in parts or "experiments" in parts:
+            src_idx = parts.index("src") if "src" in parts else parts.index("experiments")
             module_parts = parts[src_idx + 1 :]
             if module_parts and module_parts[-1].endswith(".py"):
                 module_parts = [*list(module_parts[:-1]), module_parts[-1][:-3]]
@@ -111,7 +125,7 @@ def run_local(
 
 
 def run_cluster(
-    config: BackendConfig,
+    config: CliConfig,
     cluster: str,
     script_path: str,
     script_args: list[str],
@@ -146,7 +160,7 @@ def run_cluster(
         "-m",
         "zephyr.cli",
         "--backend",
-        config.backend_type,
+        config.backend,
         "--max-parallelism",
         str(config.max_parallelism),
     ]
@@ -223,13 +237,14 @@ def main(
     script_path = Path(script).resolve()
 
     # Build backend config
-    config = BackendConfig(
-        backend_type=backend,
+    config = CliConfig(
         max_parallelism=max_parallelism,
+        dry_run=dry_run,
         memory=memory,
         num_cpus=num_cpus,
         num_gpus=num_gpus,
-        dry_run=dry_run,
+        backend=backend,
+        cluster=cluster,
     )
 
     # Execute based on mode

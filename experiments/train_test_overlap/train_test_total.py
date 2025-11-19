@@ -82,7 +82,7 @@ class DatasetConfig:
     """Name of the text field in the parquet file."""
 
 
-@ray.remote
+@ray.remote(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "cpu"}})
 def run_train_test_overlap(config: DedupeConfig) -> str:
     logger.info(f"Starting train-test overlap dedupe with config: {config}")
     dedupe(config)
