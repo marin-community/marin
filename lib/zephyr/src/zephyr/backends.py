@@ -171,32 +171,6 @@ class Shard:
             yield from chunk_data
 
     @staticmethod
-    def from_items(items: Iterable, chunk_size: int, context: ExecutionContext, idx: int = 0) -> Shard:
-        """Create a Shard from items by chunking and storing via context.
-
-        Args:
-            items: Items to chunk and store
-            chunk_size: Number of items per chunk
-            context: Execution context for put/get operations
-            idx: Shard index (default 0)
-
-        Returns:
-            Shard containing chunked refs
-        """
-        chunks = []
-        chunk = []
-        for item in items:
-            chunk.append(item)
-            if len(chunk) >= chunk_size:
-                chunk_ref = context.put(chunk)
-                chunks.append(Chunk(count=len(chunk), data=chunk_ref))
-                chunk = []
-        if chunk:
-            chunk_ref = context.put(chunk)
-            chunks.append(Chunk(count=len(chunk), data=chunk_ref))
-        return Shard(idx=idx, chunks=chunks, context=context)
-
-    @staticmethod
     def from_single_ref(ref: Any, context: ExecutionContext, idx: int, count: int) -> Shard:
         """Wrap a single ref as a Shard.
 
