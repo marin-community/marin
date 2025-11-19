@@ -16,22 +16,27 @@ K = 256
 M = 128256
 NUM_TRIALS = 10
 
-# Generate 10 random inputs
+
+def _make_input(key: jax.random.PRNGKey) -> jnp.ndarray:
+    return jax.random.uniform(key, shape=(B, K, M), minval=0, maxval=1.0, dtype=jnp.float32)
+
+
+# Generate fixed keys for determinism
 key = jax.random.PRNGKey(0)
 keys = jax.random.split(key, NUM_TRIALS)
-inputs = [jax.random.uniform(k, shape=(B, K, M), minval=0, maxval=1.0, dtype=jnp.float32) for k in keys]
 
 # Correctness test: average max absolute difference over 10 inputs
 print("=" * 60)
 print("CORRECTNESS TEST")
 print("=" * 60)
 jax_diffs = []
-for i, a in enumerate(inputs):
+for i, k in enumerate(keys):
+    a = _make_input(k)
     res_ref = logsumexp_reference(a, axis=-1)
     res_jax = jax.nn.logsumexp(a, axis=-1)
-    
+
     jax_diff = jnp.max(jnp.abs(res_jax - res_ref))
-    
+
     jax_diffs.append(float(jax_diff))
     print(f"Input {i+1}: jax.nn={jax_diff:.2e}")
 
@@ -44,22 +49,27 @@ print("\n" + "=" * 60)
 print("PERFORMANCE TEST")
 print("=" * 60)
 
-# Warmup and compile
-for a in inputs[:2]:
+# Warmup and compile (input generation not timed)
+for k in keys[:2]:
+    a = _make_input(k)
     _ = logsumexp_reference(a, axis=-1).block_until_ready()
     _ = jax.nn.logsumexp(a, axis=-1).block_until_ready()
 
-# Benchmark reference
-start = time.time()
-for a in inputs:
+# Benchmark reference (exclude input generation time)
+ref_time = 0.0
+for k in keys:
+    a = _make_input(k)
+    start = time.time()
     _ = logsumexp_reference(a, axis=-1).block_until_ready()
-ref_time = time.time() - start
+    ref_time += time.time() - start
 
-# Benchmark jax.nn.logsumexp
-start = time.time()
-for a in inputs:
+# Benchmark jax.nn.logsumexp (exclude input generation time)
+jax_time = 0.0
+for k in keys:
+    a = _make_input(k)
+    start = time.time()
     _ = jax.nn.logsumexp(a, axis=-1).block_until_ready()
-jax_time = time.time() - start
+    jax_time += time.time() - start
 
 print(f"logsumexp_reference:       {ref_time*1000:.2f} ms ({ref_time*1000/NUM_TRIALS:.2f} ms/input)")
 print(f"jax.nn.logsumexp:          {jax_time*1000:.2f} ms ({jax_time*1000/NUM_TRIALS:.2f} ms/input)")
