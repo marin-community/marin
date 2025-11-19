@@ -18,14 +18,12 @@ from functools import partial
 from pathlib import Path
 
 import equinox as eqx
-import haliax as hax
 import jax
 import jax.numpy as jnp
 import optax
 import tyro
 from flax.training.train_state import TrainState
 from jax.sharding import PartitionSpec as PS
-from levanter.grad_accum import microbatched
 from optax import softmax_cross_entropy_with_integer_labels
 from scalax.sharding import MeshShardingHelper, TreePathShardingRule
 from tqdm.auto import tqdm
@@ -253,12 +251,6 @@ class Trainer:
             annotation_shardings=self.train_intermediate_sharding_rules,
         )
         def train_step(train_state, rng, batch):
-            # Define Batch axis for gradient accumulation
-            batch_size = batch["input_ids"].shape[0]
-            microbatch_size = batch_size // self.grad_accum_steps
-            Batch = hax.Axis("Batch", batch_size)
-            
-            # Define loss function that operates on a single batch (or microbatch)
             def loss_fn(params, input_ids, attention_mask, position_ids, target_ids,
                        policy_logprobs, reference_logprobs, loss_weights, loss_masks, key):
                 # Forward pass
@@ -301,36 +293,87 @@ class Trainer:
                     "entropy": entropy_sample,
                 }
             
-            # Create gradient function and wrap with microbatched accumulation
-            grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
-            
-            # Axis mappings for sharding (params should stay on model sharding, data on data sharding)
-            param_axis_mapping = {}  # Params stay on their current sharding
-            data_axis_mapping = {}   # Data is on the batch dimension
-            
             if self.grad_accum_steps > 1:
-                grad_fn = microbatched(
-                    grad_fn,
-                    Batch,
-                    microbatch_size,
-                    param_axis_mapping,
-                    data_axis_mapping,
-                    patch_in_rng_key="key",
+                # Use scan for gradient accumulation to save memory
+                batch_size = batch["input_ids"].shape[0]
+                microbatch_size = batch_size // self.grad_accum_steps
+                
+                # Split RNG for each microbatch
+                rng_keys = jax.random.split(rng, self.grad_accum_steps)
+                
+                # Reshape batch data from (B, ...) to (AccumSteps, MicroB, ...)
+                reshaped_batch = jax.tree_map(
+                    lambda x: x.reshape((self.grad_accum_steps, microbatch_size) + x.shape[1:]),
+                    batch
                 )
-            
-            # Execute gradient computation
-            (loss, aux), grads = grad_fn(
-                train_state.params,
-                batch["input_ids"],
-                batch["attention_mask"],
-                batch["position_ids"],
-                batch["target_ids"],
-                batch["policy_logprobs"],
-                batch["reference_logprobs"],
-                batch["loss_weights"],
-                batch["loss_masks"],
-                key=rng,
-            )
+                
+                def scan_step(carry, inputs):
+                    accumulated_grads, accumulated_loss, accumulated_aux = carry
+                    micro_batch_data, key = inputs
+                    
+                    # Compute gradients for this microbatch
+                    grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
+                    (micro_loss, micro_aux), micro_grads = grad_fn(
+                        train_state.params,
+                        micro_batch_data["input_ids"],
+                        micro_batch_data["attention_mask"],
+                        micro_batch_data["position_ids"],
+                        micro_batch_data["target_ids"],
+                        micro_batch_data["policy_logprobs"],
+                        micro_batch_data["reference_logprobs"],
+                        micro_batch_data["loss_weights"],
+                        micro_batch_data["loss_masks"],
+                        key=key,
+                    )
+                    
+                    # Accumulate gradients
+                    new_grads = jax.tree_map(lambda a, b: a + b, accumulated_grads, micro_grads)
+                    new_loss = accumulated_loss + micro_loss
+                    new_aux = jax.tree_map(lambda a, b: a + b, accumulated_aux, micro_aux)
+                    
+                    return (new_grads, new_loss, new_aux), None
+                
+                # Initialize accumulators
+                zero_grads = jax.tree_map(jnp.zeros_like, train_state.params)
+                zero_aux = jax.tree_map(lambda x: jnp.zeros_like(x), loss_fn(
+                    train_state.params,
+                    batch["input_ids"][:microbatch_size],
+                    batch["attention_mask"][:microbatch_size],
+                    batch["position_ids"][:microbatch_size],
+                    batch["target_ids"][:microbatch_size],
+                    batch["policy_logprobs"][:microbatch_size],
+                    batch["reference_logprobs"][:microbatch_size],
+                    batch["loss_weights"][:microbatch_size],
+                    batch["loss_masks"][:microbatch_size],
+                    key=rng,
+                )[1])
+                
+                # Run scan over microbatches
+                (grads, loss, aux), _ = jax.lax.scan(
+                    scan_step,
+                    (zero_grads, 0.0, zero_aux),
+                    (reshaped_batch, rng_keys)
+                )
+                
+                # Average gradients and loss
+                grads = jax.tree_map(lambda g: g / self.grad_accum_steps, grads)
+                loss = loss / self.grad_accum_steps
+                aux = jax.tree_map(lambda a: a / self.grad_accum_steps, aux)
+            else:
+                # No gradient accumulation - compute directly
+                grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
+                (loss, aux), grads = grad_fn(
+                    train_state.params,
+                    batch["input_ids"],
+                    batch["attention_mask"],
+                    batch["position_ids"],
+                    batch["target_ids"],
+                    batch["policy_logprobs"],
+                    batch["reference_logprobs"],
+                    batch["loss_weights"],
+                    batch["loss_masks"],
+                    key=rng,
+                )
             
             train_state = train_state.apply_gradients(grads=grads)
             metrics = dict(
