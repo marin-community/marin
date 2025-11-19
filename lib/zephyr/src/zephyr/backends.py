@@ -448,7 +448,6 @@ def process_shard_fused(
         elif isinstance(op, SortedMergeJoinOp):
             # Get right shard from aux_shards
             right_shards = ctx.aux_shards.get(op_index, [])
-            print(f"right_shards: {right_shards}")
 
             if len(right_shards) != 1:
                 raise ValueError(f"Expected 1 right shard for join at op {op_index}, got {len(right_shards)}")

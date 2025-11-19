@@ -31,6 +31,8 @@ def execution_context(context_type):
         return ThreadContext(max_workers=2)
     elif context_type == "ray":
         return RayContext()
+    else:
+        raise ValueError(f"Unknown context type: {context_type}")
 
 
 def test_context_put_get(execution_context):
