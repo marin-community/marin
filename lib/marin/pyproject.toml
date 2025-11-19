@@ -130,7 +130,6 @@ torch = [
     # CUDA12 index only when --extra cuda12
     { index = "pytorch-cu128", extra = "cuda12" },
 ]
-rbloom = { git = "https://github.com/marin-community/rbloom.git", rev = "v1.6.5" }
 
 
 [[tool.uv.index]]
@@ -141,11 +140,6 @@ explicit = true
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
-explicit = true
-
-[[tool.uv.index]]
-name = "rbloom-index"
-url = "https://marin.community/rbloom/"
 explicit = true
 
 
@@ -223,7 +217,7 @@ quality_dedup_consolidate = [
     "huggingface_hub",
     "hyperloglog",
     "nltk>=3.8.1",
-    "rbloom",
+    "rbloom_gcs",
     "transformers",
     "zstandard>=0.23.0",
 ]

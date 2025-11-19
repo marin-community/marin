@@ -641,6 +641,9 @@ class Dataset(Generic[T]):
     def write_binary(self, output_pattern: str | Callable[[int, int], str], skip_existing: bool = False) -> Dataset[str]:
         """Write records directly as uninterpreted binary files.
 
+        No delimitation or framing is applied - records are written back-to-back.
+        This is typically most useful for writing single large binary blobs.
+
         Args:
             output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}.bin")
                            or a callable that takes (shard_idx, total_shards) and returns the output path

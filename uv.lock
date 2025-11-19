@@ -3673,7 +3673,7 @@ quality-dedup-consolidate = [
     { name = "huggingface-hub" },
     { name = "hyperloglog" },
     { name = "nltk" },
-    { name = "rbloom" },
+    { name = "rbloom-gcs" },
     { name = "transformers" },
     { name = "zstandard" },
 ]
@@ -3864,7 +3864,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=22" },
     { name = "pylatexenc", marker = "extra == 'post-training'" },
     { name = "ray", specifier = "==2.45" },
-    { name = "rbloom", marker = "extra == 'quality-dedup-consolidate'", git = "https://github.com/marin-community/rbloom.git?rev=v1.6.5" },
+    { name = "rbloom-gcs", marker = "extra == 'quality-dedup-consolidate'" },
     { name = "readabilipy", marker = "extra == 'crawl'" },
     { name = "readabilipy", marker = "extra == 'download-transform'" },
     { name = "readability-lxml", marker = "extra == 'crawl'" },
@@ -6543,9 +6543,12 @@ default = [
 ]
 
 [[package]]
-name = "rbloom"
-version = "1.6.5"
-source = { git = "https://github.com/marin-community/rbloom.git?rev=v1.6.5#9f5da4c1a4f5156d043588cb9f45ef8d8d2b0881" }
+name = "rbloom-gcs"
+version = "1.5.6"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cc/a0/b07539f527c2dc15498f0a3ad87077785d942df47aefbec0468f270d3afd/rbloom_gcs-1.5.6-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b4d0d4d9193cb4ce7d6a95d500d1b1308c8eba7273fa0d68e1fadf1d00c3eeb7", size = 4558423, upload-time = "2025-02-05T02:40:42.774Z" },
+]
 
 [[package]]
 name = "readabilipy"

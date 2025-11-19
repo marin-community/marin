@@ -622,7 +622,7 @@ class Backend:
         return self.config.chunk_size
 
     def execute(self, dataset: Dataset, verbose: bool = False) -> Sequence:
-        """Execute a dataset and return an iterator over results.
+        """Execute a dataset, returning a sequence of results.
 
         Args:
             dataset: Dataset to execute
@@ -770,7 +770,7 @@ class Backend:
             for shard in shards:
                 yield from shard
 
-        yield from tqdm(materialize_all(), desc=desc, unit="items", total=len(shards))
+        yield from tqdm(materialize_all(), desc=desc, unit="shards", total=len(shards))
 
     def _execute_on_shards(
         self, process_fn: Callable, fn_args: tuple, shards: list[Shard], aux_shards_per_shard: list[dict] | None = None

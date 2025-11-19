@@ -132,27 +132,42 @@ The system will automatically:
 
 ### N-gram Settings
 
-Edit the `DEFAULT_NGRAM_CONFIG` and `processes` parameter in `experiments/train_test_overlap/train_test_total.py`:
+The default `train_test_total.py` defines helpers for building dedupliation
+steps. You can define your own steps as well with custom N-gram or matching options:
 
 ```python
-DEFAULT_NGRAM_CONFIG = NGramConfig(
-    ngram_length=[15],        # List of n-gram sizes to check
-    overlap_threshold=1e-6,   # Minimum overlap to report
-    stride=0,                 # Stride between n-grams (0 = every position)
+# experiments/my_dedupe.py
+
+from experiments.train_test_overlap.train_test_total import EVAL_DATASET_STEPS
+
+NGRAM_CONFIG = NGramConfig(
+    ngram_length=[5, 10, 15],
+    overlap_threshold=1e-6,
+    stride=5,
 )
 
-# In build_step function:
+
 def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
+    dedupe_config = DedupeConfig(
+        input_path=dataset_config.path,
+        output_path=this_output_path(),
+        decontaminate_source=EVAL_DATASET_STEPS,
+        attribute_name="ngram_overlap",
+        false_positive_rate=1e-20,
+        ngram=NGRAM_CONFIG,
+        processes=128,
+        mode=DedupMode.TRAIN_TEST_OVERLAP,
+        text_field=dataset_config.text_field,
+    )
+
     return ExecutorStep(
-        # ...
-        config={
-            # ...
-            "processes": 15,  # Parallel processes per shard (see explanation below)
-        },
+        name=f"tmp/power/train_test_overlap/dolma/total/{dataset_config.name}",
+        fn=run_train_test_overlap,
+        config=dedupe_config,
+        description=f"Run dedupe train-test overlap on {dataset_config.name}",
+        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 ```
-
-Note: The false positive rate is hardcoded to `1e-20` in the `run_train_test_overlap` function.
 
 **Understanding the `processes` Parameter:**
 
