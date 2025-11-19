@@ -19,6 +19,7 @@ import logging
 import os
 import time
 import uuid
+from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any, cast
@@ -504,7 +505,7 @@ class _RayQueueActor:
 
     def __init__(self):
         """Initialize empty queue state."""
-        self._available: list[Any] = []
+        self._available: deque[Any] = deque()
         self._leased: dict[str, tuple[Any, float]] = {}  # lease_id -> (item, deadline)
 
     def _cleanup_expired_leases(self):
@@ -513,7 +514,7 @@ class _RayQueueActor:
         expired = [lid for lid, (item, deadline) in self._leased.items() if now > deadline]
         for lease_id in expired:
             item, _ = self._leased.pop(lease_id)
-            self._available.insert(0, item)  # Re-queue at front
+            self._available.append(item)  # Re-queue at back to maintain FIFO
 
     def push(self, item: Any) -> None:
         """Add an item to the available queue."""
@@ -539,7 +540,7 @@ class _RayQueueActor:
         if not self._available:
             return None
 
-        item = self._available.pop(0)
+        item = self._available.popleft()
         lease_id = str(uuid.uuid4())
         timestamp = time.time()
         deadline = timestamp + lease_timeout
@@ -615,7 +616,7 @@ class RayQueue(Queue):
 
     def push(self, item: Any) -> None:
         """Add an item to the queue."""
-        logger.info(f"Pushing item {item} to {self}")
+        logger.debug(f"Pushing item {item} to {self}")
         ray.get(self._actor.push.remote(item))
 
     def peek(self) -> Any | None:
@@ -629,7 +630,7 @@ class RayQueue(Queue):
         Args:
             lease_timeout: Seconds before lease expires and item is requeued
         """
-        logger.info(f"Popping item from {self}")
+        logger.debug(f"Popping item from {self}")
         result = ray.get(self._actor.pop.remote(lease_timeout))
         if result is None:
             return None

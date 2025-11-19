@@ -16,6 +16,7 @@
 
 import logging
 import subprocess
+import tempfile
 import time
 import uuid
 from collections.abc import Iterator
@@ -48,7 +49,7 @@ class LocalCluster(Cluster):
             working_dir: Directory to run jobs in (default: current directory)
             queue_dir: Directory to store queue files (default: working_dir/queues)
         """
-        self._working_dir = working_dir or Path.cwd()
+        self._working_dir = working_dir or Path(tempfile.mkdtemp(prefix="fray-local-cluster-"))
         self._queue_dir = queue_dir or (self._working_dir / "queues")
         self._jobs: dict[JobId, _LocalJob] = {}
 

@@ -19,9 +19,7 @@ import time
 
 import pytest
 import ray
-from fray.cluster import set_current_cluster
-from fray.cluster.local import LocalCluster
-from fray.cluster.ray import RayCluster
+from fray.cluster import LocalCluster, RayCluster, set_current_cluster
 from fray.examples.fake_llm_worker import process_task
 from fray.worker_pool import WorkerPool, WorkerPoolConfig
 

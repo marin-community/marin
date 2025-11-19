@@ -30,6 +30,9 @@ from fray.cluster.queue import Queue
 
 logger = logging.getLogger(__name__)
 
+# Sentinel value for graceful worker shutdown (must be pickleable)
+_SHUTDOWN_SENTINEL = "__FRAY_WORKER_SHUTDOWN__"
+
 
 @dataclass
 class WorkerPoolConfig:
@@ -89,7 +92,7 @@ class WorkerPool:
         self._result_queue: Queue = cluster.create_queue(result_queue_name)
 
         # Worker tracking
-        self._workers: dict[JobId, JobInfo] = {}
+        self._workers: dict[JobId, JobInfo | None] = {}
         self._metadata_lock = Lock()
 
         # Control flags
@@ -125,10 +128,6 @@ class WorkerPool:
             cluster = current_cluster()
             logger.info(f"Worker initialized with cluster: {cluster}, type: {type(cluster).__name__}")
 
-            # Log cluster details for debugging
-            if hasattr(cluster, "_namespace"):
-                logger.info(f"Worker cluster namespace: {cluster._namespace}")
-
             task_queue = cluster.create_queue(task_queue_name)
             result_queue = cluster.create_queue(result_queue_name)
             logger.info(f"Worker queues created: task={task_queue_name}, result={result_queue_name}")
@@ -143,11 +142,17 @@ class WorkerPool:
                     time.sleep(0.1)
                     continue
 
+                # Check for shutdown sentinel
+                if lease.item == _SHUTDOWN_SENTINEL:
+                    task_queue.done(lease)
+                    logger.info("Worker received shutdown signal, exiting gracefully")
+                    break
+
                 try:
                     # Process the task using the user's worker function
-                    logger.info(f"Worker processing task: {lease.item}")
+                    logger.debug(f"Worker processing task: {lease.item}")
                     result = worker_func(lease.item)
-                    logger.info(f"Worker produced result: {result}")
+                    logger.debug(f"Worker produced result: {result}")
 
                     # Publish result
                     result_queue.push(result)
@@ -170,8 +175,7 @@ class WorkerPool:
         job_id = self._cluster.launch(request)
 
         with self._metadata_lock:
-            # We don't have JobInfo yet, will update via poll
-            self._workers[job_id] = None  # type: ignore
+            self._workers[job_id] = None
 
         logger.info(f"Created worker {job_id}, total workers: {len(self._workers)}")
         return job_id
@@ -293,19 +297,25 @@ class WorkerPool:
         """
         logger.info("Shutting down worker pool")
 
-        # Signal shutdown
+        # Signal shutdown to background threads
         self._shutdown_event.set()
 
-        # Wait for threads to finish (this releases the lock)
+        # Send shutdown sentinels to workers for graceful exit
+        with self._metadata_lock:
+            num_workers = len(self._workers)
+
+        for _ in range(num_workers):
+            self._task_queue.push(_SHUTDOWN_SENTINEL)
+
+        # Wait for threads to finish
         for thread in self._threads:
             thread.join(timeout=timeout)
 
-        # Now safe to acquire lock and terminate workers
+        # Terminate any remaining workers
         with self._metadata_lock:
             workers_to_kill = list(self._workers.keys())
             self._workers.clear()
 
-        # Terminate workers outside the lock
         for worker_id in workers_to_kill:
             try:
                 self._cluster.terminate(worker_id)

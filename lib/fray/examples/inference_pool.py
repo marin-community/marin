@@ -26,8 +26,8 @@ Example:
 import logging
 import time
 
-from fray.cluster.local_cluster import LocalCluster
-from fray.examples.fake_llm_worker import worker_loop
+from fray.cluster import LocalCluster
+from fray.examples.fake_llm_worker import process_task
 from fray.worker_pool import WorkerPool, WorkerPoolConfig
 
 logging.basicConfig(
@@ -61,7 +61,7 @@ def main():
 
     # Configure worker pool with autoscaling
     config = WorkerPoolConfig(
-        worker_func=worker_loop,
+        worker_func=process_task,
         min_workers=2,  # Start with 2 workers
         max_workers=5,  # Scale up to 5 workers
         scale_up_threshold=0.8,  # Scale up when >0.8 tasks per worker

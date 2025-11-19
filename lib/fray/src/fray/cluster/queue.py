@@ -80,12 +80,15 @@ class Queue(Protocol[T_co]):
         """
         ...
 
-    def pop(self) -> Lease[T_co] | None:
+    def pop(self, lease_timeout: float = 60.0) -> Lease[T_co] | None:
         """Acquire a lease on the next available item.
 
         This is a non-blocking operation that returns immediately. The returned
         lease represents exclusive ownership of the item until it is either
         completed via `done()` or released via `release()`.
+
+        Args:
+            lease_timeout: Seconds before lease expires and item is requeued
 
         Returns:
             A Lease containing the item and lease metadata, or None if the
