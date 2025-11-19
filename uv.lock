@@ -2651,20 +2651,6 @@ wheels = [
 ]
 
 [[package]]
-name = "hyperloglog"
-version = "0.1.5"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "msgpack" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
-    { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'group-5-marin-dev' or extra != 'extra-5-marin-crawl' or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/28/8d/42c8f276699f13290816fe785d2b675ea3928b93e33d32432160fe34359a/hyperloglog-0.1.5.tar.gz", hash = "sha256:fc985b6cc22f2fe37bee620aa4982faeb969e6ddb9fb4010345d650a4a6f70a4", size = 1333557, upload-time = "2025-08-15T16:00:31.388Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/96/b7/4f3d51ea8483443e022769bb6154fc8947279de82f299a43f65a7791c20b/hyperloglog-0.1.5-py3-none-any.whl", hash = "sha256:7fe9f2aa47e1aee745ab572c8ea4646471812ee6da98c1abba02c5eecc908ac4", size = 47498, upload-time = "2025-08-15T16:00:29.305Z" },
-]
-
-[[package]]
 name = "identify"
 version = "2.6.15"
 source = { registry = "https://pypi.org/simple" }
@@ -3671,7 +3657,6 @@ quality-dedup-consolidate = [
     { name = "ddsketch" },
     { name = "fasttext" },
     { name = "huggingface-hub" },
-    { name = "hyperloglog" },
     { name = "nltk" },
     { name = "rbloom-gcs" },
     { name = "transformers" },
@@ -3833,7 +3818,6 @@ requires-dist = [
     { name = "htmlmin", marker = "extra == 'download-transform'" },
     { name = "htmlmin", marker = "extra == 'download-transform'", specifier = "==0.1.12" },
     { name = "huggingface-hub", marker = "extra == 'quality-dedup-consolidate'" },
-    { name = "hyperloglog", marker = "extra == 'quality-dedup-consolidate'" },
     { name = "ipython", marker = "extra == 'post-training'" },
     { name = "jax", specifier = "==0.6.2" },
     { name = "jax", marker = "extra == 'cpu'", specifier = "==0.6.2" },
