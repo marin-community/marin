@@ -120,8 +120,9 @@ class ExperimentConfig:
 MODEL = llama1b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
 # MAX_TOKENS = 1024
-MAX_MODEL_LEN = 4096
-MAX_OUTPUT_TOKENS = 2048
+MAX_INPUT_LEN = 256
+MAX_OUTPUT_TOKENS = 512
+MAX_MODEL_LEN = MAX_INPUT_LEN + MAX_OUTPUT_TOKENS
 RUN_ID = f"test-{MODEL.name.split('/')[-1]}-curriculum"
 
 
