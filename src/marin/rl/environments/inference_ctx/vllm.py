@@ -333,6 +333,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             max_tokens=max_tokens or self.sampling_params.max_tokens,
             stop=stop or self.sampling_params.stop,
             logprobs=1,
+            include_stop_str_in_output=self.sampling_params.include_stop_str_in_output,
         )
 
         if system_prompt:

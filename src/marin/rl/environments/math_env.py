@@ -302,9 +302,6 @@ class MathEnv(MarinEnv):
         # weak_correct = 1.0 if true_answer and true_answer in decoded_response else 0.0
 
         if validation["is_valid"]:
-            if "<answer>" in validation["answer"]:
-                print(f"Validation answer: {validation['answer']}")
-
             grade = grade_answer(validation["answer"], true_answer)
         else:
             tokens = decoded_response.split()

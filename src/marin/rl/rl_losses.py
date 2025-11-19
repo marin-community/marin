@@ -57,7 +57,7 @@ def compute_metadata_metrics(
     batch_size, _ = policy_logprobs_array.shape
 
     mean_ratio_difference = jnp.sum(
-        (jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array)) * loss_masks_array, axis=1
+        (jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array))) * loss_masks_array, axis=1
     ) / jnp.sum(loss_masks_array, axis=1)
     mean_ratio_difference = jnp.mean(mean_ratio_difference)
 
@@ -70,7 +70,7 @@ def compute_metadata_metrics(
     mean_advantages = jnp.mean(mean_advantages)
 
     return {
-        "max_ratio_difference": jnp.max((jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array)) * loss_masks_array),
+        "max_ratio_difference": jnp.max((jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array))) * loss_masks_array),
         "mean_ratio_difference": mean_ratio_difference,
         "max_advantages": jnp.max(loss_weights_array),
         "mean_advantages": mean_advantages,

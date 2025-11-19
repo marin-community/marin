@@ -425,8 +425,8 @@ class RolloutWorker:
 
     def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> dict:
         """Evaluate a single lesson and log metrics."""
-        N_EVAL_GENERATIONS = 8
-
+        N_EVAL_GENERATIONS = 1
+        
         batch, _ = self._sample_batch(
             lesson_id=lesson_id,
             n_examples=n_examples,

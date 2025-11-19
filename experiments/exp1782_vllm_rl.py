@@ -191,16 +191,16 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
         #     sampling_params=default_sampling,
         # ),
-        # "math_full": LessonConfig(
-        #     lesson_id="math_full",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.math_env.MathEnv",
-        #         env_args={"seed": 42},
-        #     ),
-        #     dependencies=[],
-        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
+        "math_full": LessonConfig(
+            lesson_id="math_full",
+            env_config=EnvConfig(
+                env_class="marin.rl.environments.math_env.MathEnv",
+                env_args={"seed": 42},
+            ),
+            dependencies=[],
+            # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+            sampling_params=default_sampling,
+        ),
         # "story_generation": LessonConfig(
         #     lesson_id="story_generation",
         #     env_config=EnvConfig(
@@ -210,16 +210,16 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         #     dependencies=[],
         #     sampling_params=story_sampling,
         # ),
-        "gsm8k": LessonConfig(
-            lesson_id="gsm8k",
-            env_config=EnvConfig(
-                env_class="marin.rl.environments.gsm8k_env.GSM8KEnv",
-                env_args={"seed": 42},
-            ),
-            dependencies=[],
-            # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-            sampling_params=default_sampling,
-        ),
+        # "gsm8k": LessonConfig(
+        #     lesson_id="gsm8k",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.gsm8k_env.GSM8KEnv",
+        #         env_args={"seed": 42},
+        #     ),
+        #     dependencies=[],
+        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+        #     sampling_params=default_sampling,
+        # ),
     }
 
     return CurriculumConfig(
@@ -284,7 +284,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
         # We are running on-policy, so wait for new weights from the trainer after each episode.
-        max_weight_transfer_wait_time=600,
+        max_weight_transfer_wait_time=120,
         coordinator_name=f"weight_transfer_coordinator_{name}",
     )
 
