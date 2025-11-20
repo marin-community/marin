@@ -168,7 +168,7 @@ def default_rl_train(
         stop_tokens=[
             [end_of_message_token],
         ],
-        n_generations=64,
+        n_generations=4,
     )
 
     test_generation_config = GenerationConfig(
@@ -223,10 +223,10 @@ def default_rl_train(
             max_input_length=256,
             max_output_length=max_output_length,
             train_bsize=train_bsize,
-            decode_bsize=1024,
+            decode_bsize=16,
             prefill_bsize=16,
             reference_logprobs_bsize=256,
-            n_prompts_per_step=16,
+            n_prompts_per_step=4,
             optim_config=optim_config,
             pad_token_id=128002,
             kl_coef=kl_coef,
@@ -287,7 +287,7 @@ def main():
             name="math500",
             model_paths=model_paths,
             end_of_message_token=end_of_message_token,
-            tpu_type="v5p-16",
+            tpu_type="v5p-8",
             train_bsize=16,
             kl_coef=0.0,
             learning_rate=2e-06,
