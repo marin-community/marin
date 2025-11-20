@@ -17,7 +17,6 @@ from collections import deque
 from functools import partial
 from pathlib import Path
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
@@ -107,6 +106,8 @@ class Trainer:
         self.grad_accum_steps = optim_config.grad_accum_steps
         optimizer, self.optimizer_info = load_adamw_optimizer(config=optim_config, weight_decay_mask=weight_decay_mask)
 
+        if self.grad_accum_steps > 1:
+            optimizer = optax.MultiSteps(optimizer, self.grad_accum_steps)
 
         self.optimizer = optimizer
 
@@ -249,39 +250,38 @@ class Trainer:
             annotation_shardings=self.train_intermediate_sharding_rules,
         )
         def train_step(train_state, rng, batch):
-            def loss_fn(params, input_ids, attention_mask, position_ids, target_ids,
-                       policy_logprobs, reference_logprobs, loss_weights, loss_masks, key):
-                # Forward pass
+            def loss(params):
                 logits = self.train_model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
+                    input_ids=batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    position_ids=batch["position_ids"],
                     params=params,
-                    dropout_rng=key,
+                    dropout_rng=rng,
                     train=True,
                 ).logits
                 logits = logits.astype(jnp.float32)
-                token_loss = softmax_cross_entropy_with_integer_labels(logits, target_ids)
+                token_loss = softmax_cross_entropy_with_integer_labels(logits, batch["target_ids"])
                 
                 # Compute probability ratio: exp(target_logprobs - sampling_logprobs)
                 target_logprobs = -token_loss
-                prob_ratio = jnp.exp(target_logprobs - policy_logprobs)
+                sampling_logprobs = batch["policy_logprobs"]
+                prob_ratio = jnp.exp(target_logprobs - sampling_logprobs)
                 
                 # Compute importance-weighted REINFORCE loss
-                reinforce_loss = -jnp.mean(prob_ratio * loss_weights, where=loss_masks > 0.0)
-                ref_log_ratio = reference_logprobs + token_loss
+                reinforce_loss = -jnp.mean(prob_ratio * batch["loss_weights"], where=batch["loss_masks"] > 0.0)
+                ref_log_ratio = batch["reference_logprobs"] + token_loss
                 kl_loss = jnp.exp(ref_log_ratio) - 1 - ref_log_ratio
-                kl_loss = jnp.mean(kl_loss, where=loss_masks > 0.0)
+                kl_loss = jnp.mean(kl_loss, where=batch["loss_masks"] > 0.0)
                 loss = reinforce_loss + self.kl_coef * kl_loss
                 
                 # Compute KL divergence metrics between sampling and training logprobs
                 training_logprobs = target_logprobs
-                action_mask = loss_masks > 0.0
+                action_mask = batch["loss_masks"] > 0.0
                 
-                logprob_diff = policy_logprobs - training_logprobs
+                logprob_diff = sampling_logprobs - training_logprobs
                 kl_sample_train_v1 = jnp.mean(logprob_diff, where=action_mask)
                 kl_sample_train_v2 = 0.5 * jnp.mean(logprob_diff**2, where=action_mask)
-                entropy_sample = -jnp.mean(policy_logprobs, where=action_mask)
+                entropy_sample = -jnp.mean(sampling_logprobs, where=action_mask)
                 
                 return loss, {
                     "reinforce_loss": reinforce_loss,
@@ -290,89 +290,9 @@ class Trainer:
                     "kl_sample_train_v2": kl_sample_train_v2,
                     "entropy": entropy_sample,
                 }
-            
-            if self.grad_accum_steps > 1:
-                # Use scan for gradient accumulation to save memory
-                batch_size = batch["input_ids"].shape[0]
-                microbatch_size = batch_size // self.grad_accum_steps
-                
-                # Split RNG for each microbatch
-                rng_keys = jax.random.split(rng, self.grad_accum_steps)
-                
-                # Reshape batch data from (B, ...) to (AccumSteps, MicroB, ...)
-                reshaped_batch = jax.tree.map(
-                    lambda x: x.reshape((self.grad_accum_steps, microbatch_size) + x.shape[1:]),
-                    batch
-                )
-                
-                def scan_step(carry, inputs):
-                    accumulated_grads, accumulated_loss, accumulated_aux = carry
-                    micro_batch_data, key = inputs
-                    
-                    # Compute gradients for this microbatch
-                    grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
-                    (micro_loss, micro_aux), micro_grads = grad_fn(
-                        train_state.params,
-                        micro_batch_data["input_ids"],
-                        micro_batch_data["attention_mask"],
-                        micro_batch_data["position_ids"],
-                        micro_batch_data["target_ids"],
-                        micro_batch_data["policy_logprobs"],
-                        micro_batch_data["reference_logprobs"],
-                        micro_batch_data["loss_weights"],
-                        micro_batch_data["loss_masks"],
-                        key=key,
-                    )
-                    
-                    # Accumulate gradients
-                    new_grads = jax.tree.map(lambda a, b: a + b, accumulated_grads, micro_grads)
-                    new_loss = accumulated_loss + micro_loss
-                    new_aux = jax.tree.map(lambda a, b: a + b, accumulated_aux, micro_aux)
-                    
-                    return (new_grads, new_loss, new_aux), None
-                
-                # Initialize accumulators
-                zero_grads = jax.tree.map(jnp.zeros_like, train_state.params)
-                zero_aux = jax.tree.map(lambda x: jnp.zeros_like(x), loss_fn(
-                    train_state.params,
-                    batch["input_ids"][:microbatch_size],
-                    batch["attention_mask"][:microbatch_size],
-                    batch["position_ids"][:microbatch_size],
-                    batch["target_ids"][:microbatch_size],
-                    batch["policy_logprobs"][:microbatch_size],
-                    batch["reference_logprobs"][:microbatch_size],
-                    batch["loss_weights"][:microbatch_size],
-                    batch["loss_masks"][:microbatch_size],
-                    key=rng,
-                )[1])
-                
-                # Run scan over microbatches
-                (grads, loss, aux), _ = jax.lax.scan(
-                    scan_step,
-                    (zero_grads, 0.0, zero_aux),
-                    (reshaped_batch, rng_keys)
-                )
-                
-                # Average gradients and loss
-                grads = jax.tree.map(lambda g: g / self.grad_accum_steps, grads)
-                loss = loss / self.grad_accum_steps
-                aux = jax.tree.map(lambda a: a / self.grad_accum_steps, aux)
-            else:
-                # No gradient accumulation - compute directly
-                grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
-                (loss, aux), grads = grad_fn(
-                    train_state.params,
-                    batch["input_ids"],
-                    batch["attention_mask"],
-                    batch["position_ids"],
-                    batch["target_ids"],
-                    batch["policy_logprobs"],
-                    batch["reference_logprobs"],
-                    batch["loss_weights"],
-                    batch["loss_masks"],
-                    key=rng,
-                )
-            
+
+            grad_fn = jax.value_and_grad(loss, has_aux=True)
+            (loss, aux), grads = grad_fn(train_state.params)
             train_state = train_state.apply_gradients(grads=grads)
             metrics = dict(
                 loss=loss,
@@ -503,7 +423,7 @@ class Trainer:
                     checkpoint_path,
                     shard_fns=self.train_state_shard_fns.params,
                     remove_dict_prefix=self.config.model.model_paths.remove_dict_prefix,
-                    convert_to_dtypes=jax.tree.map(
+                    convert_to_dtypes=jax.tree_util.tree_map(
                         lambda x: self.config.model.training_param_dtype, train_state_shape.params
                     ),
                 )
@@ -514,7 +434,7 @@ class Trainer:
                     self.config.model.model_paths.params,
                     shard_fns=self.train_state_shard_fns.params,
                     remove_dict_prefix=self.config.model.model_paths.remove_dict_prefix,
-                    convert_to_dtypes=jax.tree.map(
+                    convert_to_dtypes=jax.tree_util.tree_map(
                         lambda x: self.config.model.training_param_dtype, train_state_shape.params
                     ),
                 )
@@ -524,7 +444,7 @@ class Trainer:
                 self.config.model.model_paths.params,
                 shard_fns=self.train_state_shard_fns,
                 remove_dict_prefix=self.config.model.model_paths.remove_dict_prefix,
-                convert_to_dtypes=jax.tree.map(
+                convert_to_dtypes=jax.tree_util.tree_map(
                     lambda x: self.config.model.training_param_dtype, train_state_shape
                 ),
             )
@@ -542,16 +462,16 @@ class Trainer:
         rng = jax.random.PRNGKey(0)
 
         # Evaluate before first training iteration if requested
-        # if self.config.logging.log_initial_step and latest_checkpoint_step < 0:
-        #     if self.config.logging.num_eval_examples > 0:
-        #         print("Evaluating before first training step...")
-        #         rng, subrng = jax.random.split(rng)
-        #         eval_metrics = self.evaluate_data_from_environment(train_state.params, subrng)
-        #         log_metrics = {"step": -1}
-        #         log_metrics.update(eval_metrics)
-        #         log_metrics = jax.device_get(log_metrics)
-        #         self.logger.log(log_metrics)
-        #         print(log_metrics)
+        if self.config.logging.log_initial_step and latest_checkpoint_step < 0:
+            if self.config.logging.num_eval_examples > 0:
+                print("Evaluating before first training step...")
+                rng, subrng = jax.random.split(rng)
+                eval_metrics = self.evaluate_data_from_environment(train_state.params, subrng)
+                log_metrics = {"step": -1}
+                log_metrics.update(eval_metrics)
+                log_metrics = jax.device_get(log_metrics)
+                self.logger.log(log_metrics)
+                print(log_metrics)
 
         for step in tqdm(
             range(max(0, latest_checkpoint_step), self.config.hyperparameters.num_train_steps),
@@ -599,12 +519,8 @@ class Trainer:
             )
             del inference_params
 
-            num_batches = 0
             for batch in tqdm(rl_dataset.iterate_batches(batch_size=self.train_bsize, shuffle=True, loop=False)):
                 train_state, metrics = self.train_step(train_state, subrng, batch)
-                num_batches += 1
-                if num_batches > 1:
-                    raise ValueError("Only one batch should be generated per environment")
 
             if self.config.logging.log_freq > 0 and (
                 (step + 1) % self.config.logging.log_freq == 0 or (self.config.logging.log_initial_step and step == 0)

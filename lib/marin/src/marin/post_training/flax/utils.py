@@ -113,7 +113,7 @@ def float_tensor_to_dtype(tensor, dtype):
 
 
 def float_to_dtype(tree, dtype):
-    return jax.tree.map(partial(float_tensor_to_dtype, dtype=dtype), tree)
+    return jax.tree_util.tree_map(partial(float_tensor_to_dtype, dtype=dtype), tree)
 
 
 def load_checkpoint(path, target=None, shard_fns=None, remove_dict_prefix=None, convert_to_dtypes=None):
@@ -189,7 +189,7 @@ def tree_path_to_string(path, sep=None):
 
 
 def named_tree_map(f, tree, *rest, is_leaf=None, sep=None):
-    """An extended version of jax.tree.map, where the mapped function
+    """An extended version of jax.tree_util.tree_map, where the mapped function
     f takes both the name (path) and the tree leaf as input.
     """
     return jax.tree_util.tree_map_with_path(
@@ -216,13 +216,13 @@ def get_weight_decay_mask(exclusions):
 
 def global_norm(tree):
     """Return the global L2 norm of a pytree."""
-    squared = jax.tree.map(lambda x: jnp.sum(jnp.square(x)), tree)
+    squared = jax.tree_util.tree_map(lambda x: jnp.sum(jnp.square(x)), tree)
     flattened, _ = jax.flatten_util.ravel_pytree(squared)
     return jnp.sqrt(jnp.sum(flattened))
 
 
 def average_metrics(metrics):
-    return jax.tree.map(lambda *args: jnp.mean(jnp.stack(args)), *metrics)
+    return jax.tree_map(lambda *args: jnp.mean(jnp.stack(args)), *metrics)
 
 
 def flatten_config_dict(config, prefix=None):

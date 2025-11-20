@@ -17,14 +17,10 @@
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 from collections.abc import Callable, Iterable
-
-# Force JAX to use CPU only to avoid unnecessary TPU/GPU initialization during data operations
-os.environ["JAX_PLATFORMS"] = "cpu"
 
 import datasets
 import jax
