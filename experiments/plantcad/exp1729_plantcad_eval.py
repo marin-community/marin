@@ -20,7 +20,6 @@ PlantCAD evaluation script: Performance on a single, zero-shot DNA sequence cons
 import json
 import logging
 import os
-import jax
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -39,8 +38,6 @@ from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
 
-if (backend := jax.default_backend()) != "gpu":
-    raise NotImplementedError(f"Only GPU backend supported, not {backend=}")
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -90,7 +87,7 @@ def get_nucleotide_token_ids(tokenizer: AutoTokenizer) -> dict[str, int]:
         token_id = tokenizer.convert_tokens_to_ids(nucleotide)
         if token_id is None:
             raise ValueError(f"Nucleotide '{nucleotide}' not found in tokenizer")
-        nucleotide_ids[nucleotide] = token_id
+        nucleotide_ids[nucleotide] = int(token_id)
 
     # Assert that all token IDs are unique
     token_id_values = list(nucleotide_ids.values())
@@ -464,7 +461,7 @@ def run_plantcad_evaluation(config: DnaEvalConfig) -> dict:
     def logit_function(tokens: TokenArray) -> LogitArray:
         Batch, Position = tokens.axes
         token_array = np.array(tokens.array, dtype=np.int64)
-        input_ids = torch.from_numpy(token_array).to(str(tokens.array.device))
+        input_ids = torch.from_numpy(token_array).to(config.device)
 
         with torch.inference_mode():
             outputs = model(input_ids)
@@ -514,7 +511,6 @@ def run_plantcad_evaluation(config: DnaEvalConfig) -> dict:
 # -----------------------------------------------------------------------------
 # Experiment setup
 # -----------------------------------------------------------------------------
-num_gpus = len(jax.devices("gpu"))
 checkpoint_path = "hf://plantcad/marin_exp1729__pcv1_600m_c512__checkpoints/local_store/checkpoints/plantcad-train-600m-r16-a1bc43/hf/step-26782"
 evaluation_step = ExecutorStep(
     name="plantcad-eval",

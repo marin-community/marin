@@ -28,14 +28,14 @@ from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger("ray")
 
-if (backend := jax.default_backend()) != "gpu":
-    raise NotImplementedError(f"Only GPU backend supported, not {backend=}")
+if (backend := jax.default_backend()) not in {"gpu", "cpu"}:
+    raise NotImplementedError(f"Only GPU and CPU backends supported, not {backend=}")
 
 # -----------------------------------------------------------------------------
 # Experiment configuration
 # -----------------------------------------------------------------------------
 run_number = 1
-num_gpus = len(jax.devices("gpu"))
+num_gpus = len(jax.devices("gpu")) if backend == "gpu" else 1
 tokenizer_path = "kuleshov-group/PlantCaduceus_l20"
 dataset_path = "kuleshov-group/Angiosperm_16_genomes"
 dataset_examples = 5_485_282
