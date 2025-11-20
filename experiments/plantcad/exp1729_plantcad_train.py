@@ -18,7 +18,6 @@ PlantCAD training experiment: A single 600M model pretrained on 16 Angiosperm ge
 
 import jax
 import logging
-from huggingface_hub import snapshot_download
 from marin.execution.executor import executor_main
 from marin.resources import GpuConfig
 from levanter.data.text import TextLmDatasetFormat
@@ -40,7 +39,6 @@ tokenizer_path = "kuleshov-group/PlantCaduceus_l20"
 dataset_path = "kuleshov-group/Angiosperm_16_genomes"
 dataset_examples = 5_485_282
 target_examples = dataset_examples * 10  # 10 epochs
-use_pretokenized_dataset = True
 learning_rate = 3e-4
 per_device_eval_parallelism = 256
 train_batch_size = per_device_eval_parallelism * num_gpus
@@ -75,16 +73,6 @@ data_tokenized = default_tokenize(
     # DNA sequences are in `seq`, not `text`
     format=TextLmDatasetFormat(text_key="seq"),
 )
-# Tokenization is very slow, so default to pre-tokenized cache
-# TODO: Figure out why tokenization takes 15+ minutes
-if use_pretokenized_dataset:
-    data_local_path = snapshot_download(
-        repo_id="plantcad/marin_exp1729__angiosperm_16_genomes__tokenized",
-        repo_type="dataset",
-        revision="main",
-    )
-    data_tokenized = data_tokenized.with_output_path(data_local_path)
-
 
 # -----------------------------------------------------------------------------
 # Training configuration
