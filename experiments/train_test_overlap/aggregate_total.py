@@ -216,7 +216,6 @@ def aggregate_single_dataset(
                 "has_overlap": has_overlap,
             }
 
-
     intermediate_dir = os.path.join(cfg.output_path, ".intermediate", training_name)
     intermediate_paths = flow_backend().execute(
         Dataset.from_list(shard_paths)
@@ -414,7 +413,7 @@ def run_aggregate_total(config: AggregateConfig) -> str:
 
 
 def build_aggregate_total_step(
-    attributes_base_path: str = "gs://marin-us-central2/tmp/train_test_overlap/",
+    attributes_base_path: str = "gs://marin-us-central2/train_test_overlap/",
     output_path: str | None = None,
     ngram_size: int = 15,
     eval_dataset_steps: list[ExecutorStep] | None = None,
@@ -438,7 +437,7 @@ def build_aggregate_total_step(
     )
 
     return ExecutorStep(
-        name="tmp/train_test_overlap/aggregate_total",
+        name="train_test_overlap/aggregate_total",
         fn=run_aggregate_total,
         config=cfg,
         description="Aggregate overlap across all training datasets with individual and union views",
