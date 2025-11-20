@@ -44,27 +44,8 @@ from marin.utilities.executor_utils import ckpt_path_to_step_name
 import os
 import shutil
 
+logger = logging.getLogger(__name__)
 HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
-
-
-@dataclass
-class VizLmConfig:
-    """
-    Configuration for visualizing log probabilities of a language model.
-    """
-
-    checkpoint_path: str
-    model: LmConfig
-    datasets: LMMixtureDatasetConfig
-    checkpoint_is_hf: bool = False
-    num_docs_per_dataset: int = 32
-    per_device_batch_size: int = 4
-    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
-
-    comparison_model_path: str | None = None
-    comparison_is_hf: bool = False
-
-    resource_config: ResourceConfig = dataclasses.field(default_factory=lambda: SINGLE_TPU_V5p_8_FULL)
 
 
 def execute_in_subprocess(underlying_function, args, kwargs):
@@ -96,6 +77,25 @@ def execute_in_subprocess(underlying_function, args, kwargs):
     if not success:
         value.reraise()
     return value
+
+@dataclass
+class VizLmConfig:
+    """
+    Configuration for visualizing log probabilities of a language model.
+    """
+
+    checkpoint_path: str
+    model: LmConfig
+    datasets: LMMixtureDatasetConfig
+    checkpoint_is_hf: bool = False
+    num_docs_per_dataset: int = 32
+    per_device_batch_size: int = 4
+    output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore
+
+    comparison_model_path: str | None = None
+    comparison_is_hf: bool = False
+
+    resource_config: ResourceConfig = dataclasses.field(default_factory=lambda: SINGLE_TPU_V5p_8_FULL) # pretty arbitrary
 
 
 @ray.remote(
