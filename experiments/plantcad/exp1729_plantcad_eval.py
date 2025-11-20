@@ -33,7 +33,7 @@ from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
@@ -516,7 +516,7 @@ evaluation_step = ExecutorStep(
     name="plantcad-eval",
     fn=run_plantcad_evaluation,
     config=DnaEvalConfig(
-        checkpoint_path=checkpoint_path,
+        checkpoint_path=versioned(checkpoint_path),
         output_path=this_output_path(),
     ),
 )

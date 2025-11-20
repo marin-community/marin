@@ -18,7 +18,7 @@ PlantCAD training experiment: A single 600M model pretrained on 16 Angiosperm ge
 
 import jax
 import logging
-from marin.execution.executor import executor_main
+from marin.execution.executor import versioned, executor_main
 from marin.resources import GpuConfig
 from levanter.data.text import TextLmDatasetFormat
 from levanter.models.llama import LlamaConfig
@@ -68,7 +68,7 @@ model_config = LlamaConfig(
 # https://huggingface.co/datasets/kuleshov-group/Angiosperm_16_genomes
 data_tokenized = default_tokenize(
     name="angiosperm_16_genomes",
-    dataset=dataset_path,
+    dataset=versioned(dataset_path),
     tokenizer=tokenizer_path,
     # DNA sequences are in `seq`, not `text`
     format=TextLmDatasetFormat(text_key="seq"),
