@@ -35,7 +35,7 @@ from ray.runtime_env import RuntimeEnv
 from transformers import AutoTokenizer
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.inference.engine import InferenceEngineConfig
-from levanter.infra.ray_tpu import run_on_pod_ray
+from fray.cluster.ray.tpu import run_on_pod_ray
 
 from marin.resources import TpuPodConfig
 from marin.training.training import _add_run_env_variables
