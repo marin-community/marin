@@ -65,10 +65,9 @@ def execute_in_subprocess(underlying_function, args, kwargs):
         process.terminate()
         raise TimeoutError("Process timed out") from None
 
-    if success:
-        return value
-    else:
+    if not success:
         value.reraise()
+    return value
 
 
 @dataclass

@@ -93,8 +93,8 @@ def submit(ctx, extra, cpus, memory, disk, tpu, gpu, gpu_count, env, auto_stop, 
 
     try:
         env_dict["GIT_COMMIT"] = subprocess.getoutput("git rev-parse HEAD")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to get git commit hash: {e}")
 
     # Build device config
     device = CpuConfig()

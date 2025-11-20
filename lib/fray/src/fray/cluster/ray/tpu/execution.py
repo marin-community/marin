@@ -256,13 +256,15 @@ def _hacky_remove_tpu_lockfile():
         try:
             os.unlink("/tmp/libtpu_lockfile")
         except FileNotFoundError:
+            # The lockfile may not exist; this is expected and can be safely ignored.
             pass
         except PermissionError:
             logger.warning("Failed to remove lockfile")
             try:
                 os.system("sudo rm /tmp/libtpu_lockfile")
-            except Exception:
-                pass
+            except Exception as ex:
+                # Unexpected error removing lockfile; log and continue.
+                logger.warning(f"Unexpected error removing lockfile with sudo: {ex}")
 
 
 def _validate_num_slices(num_slices: int | Sequence[int]):
@@ -458,7 +460,6 @@ class ResourcePoolManager(ABC):
 
     def _scale_actor_pool(self, desired_num_actors: int) -> None:
         # NOTE: There is no retry loop in this function.
-        # You should wrap this in an external retry loop.
         if self._actor_pool:
             self._remove_unhealthy_members_from_actor_pool()
         if len(self._actor_pool) < desired_num_actors:
