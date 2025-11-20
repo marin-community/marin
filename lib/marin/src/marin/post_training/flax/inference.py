@@ -166,7 +166,7 @@ class GenerationManager:
                     jnp.where(mask[..., None, None, None], source, target[indices, : source.shape[1]])
                 )
 
-            local_scattered = jax.tree_util.tree_map(
+            local_scattered = jax.tree.map(
                 lambda x, y: insert_source_into_target(x, y) if len(x.shape) == 4 else y,
                 source_kv_cache,
                 target_kv_cache,
@@ -190,7 +190,7 @@ class GenerationManager:
             def swap(x):
                 return x.at[to_index].set(x[from_index])
 
-            local_selected = jax.tree_util.tree_map(lambda x: swap(x) if len(x.shape) == 4 else x, kv_cache)
+            local_selected = jax.tree.map(lambda x: swap(x) if len(x.shape) == 4 else x, kv_cache)
             return local_selected
 
         return swap_kv_indices
@@ -357,7 +357,7 @@ class FlaxSampler:
             lambda: self.prefill_model.init_cache(self.prefill_bsize, self.max_input_length)
         )
 
-        self.kv_cache_sharding_rules = jax.tree_util.tree_map(
+        self.kv_cache_sharding_rules = jax.tree.map(
             lambda x: PS(self.replica_axis_name, None, tp_axis_name, None) if len(x.shape) == 4 else PS(),
             self.kv_cache_shape,
         )
@@ -391,7 +391,7 @@ class FlaxSampler:
             out_shardings=self.generation_state_sharding_rules,
         )
         def init_generation_state():
-            kv_cache = jax.tree_util.tree_map(
+            kv_cache = jax.tree.map(
                 lambda x, y: MeshShardingHelper.with_sharding_constraint(jnp.zeros(x.shape, dtype=x.dtype), y),
                 self.kv_cache_shape,
                 self.kv_cache_sharding_rules,
@@ -457,7 +457,7 @@ class FlaxSampler:
             freeze: jnp.ndarray,
             generation_state: GenerationState,
         ) -> GenerationState:
-            prefill_kv_cache = jax.tree_util.tree_map(
+            prefill_kv_cache = jax.tree.map(
                 lambda x, y: MeshShardingHelper.with_sharding_constraint(jnp.zeros(x.shape, dtype=x.dtype), y),
                 self.prefill_kv_cache_shape,
                 self.kv_cache_sharding_rules,

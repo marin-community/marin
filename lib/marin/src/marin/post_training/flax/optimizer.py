@@ -145,7 +145,7 @@ def optax_add_scheduled_weight_decay(schedule_fn, mask=None):
             raise ValueError("Params cannot be None for weight decay!")
 
         weight_decay = schedule_fn(state.count)
-        updates = jax.tree_util.tree_map(lambda g, p: g + weight_decay * p, updates, params)
+        updates = jax.tree.map(lambda g, p: g + weight_decay * p, updates, params)
         return updates, OptaxScheduledWeightDecayState(count=optax.safe_int32_increment(state.count))
 
     if mask is not None:

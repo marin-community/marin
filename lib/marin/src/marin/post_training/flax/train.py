@@ -302,7 +302,7 @@ class Trainer:
                 rng_keys = jax.random.split(rng, self.grad_accum_steps)
                 
                 # Reshape batch data from (B, ...) to (AccumSteps, MicroB, ...)
-                reshaped_batch = jax.tree_map(
+                reshaped_batch = jax.tree.map(
                     lambda x: x.reshape((self.grad_accum_steps, microbatch_size) + x.shape[1:]),
                     batch
                 )
@@ -327,15 +327,15 @@ class Trainer:
                     )
                     
                     # Accumulate gradients
-                    new_grads = jax.tree_map(lambda a, b: a + b, accumulated_grads, micro_grads)
+                    new_grads = jax.tree.map(lambda a, b: a + b, accumulated_grads, micro_grads)
                     new_loss = accumulated_loss + micro_loss
-                    new_aux = jax.tree_map(lambda a, b: a + b, accumulated_aux, micro_aux)
+                    new_aux = jax.tree.map(lambda a, b: a + b, accumulated_aux, micro_aux)
                     
                     return (new_grads, new_loss, new_aux), None
                 
                 # Initialize accumulators
-                zero_grads = jax.tree_map(jnp.zeros_like, train_state.params)
-                zero_aux = jax.tree_map(lambda x: jnp.zeros_like(x), loss_fn(
+                zero_grads = jax.tree.map(jnp.zeros_like, train_state.params)
+                zero_aux = jax.tree.map(lambda x: jnp.zeros_like(x), loss_fn(
                     train_state.params,
                     batch["input_ids"][:microbatch_size],
                     batch["attention_mask"][:microbatch_size],
@@ -356,9 +356,9 @@ class Trainer:
                 )
                 
                 # Average gradients and loss
-                grads = jax.tree_map(lambda g: g / self.grad_accum_steps, grads)
+                grads = jax.tree.map(lambda g: g / self.grad_accum_steps, grads)
                 loss = loss / self.grad_accum_steps
-                aux = jax.tree_map(lambda a: a / self.grad_accum_steps, aux)
+                aux = jax.tree.map(lambda a: a / self.grad_accum_steps, aux)
             else:
                 # No gradient accumulation - compute directly
                 grad_fn = eqx.filter_value_and_grad(loss_fn, has_aux=True)
@@ -505,7 +505,7 @@ class Trainer:
                     checkpoint_path,
                     shard_fns=self.train_state_shard_fns.params,
                     remove_dict_prefix=self.config.model.model_paths.remove_dict_prefix,
-                    convert_to_dtypes=jax.tree_util.tree_map(
+                    convert_to_dtypes=jax.tree.map(
                         lambda x: self.config.model.training_param_dtype, train_state_shape.params
                     ),
                 )
@@ -516,7 +516,7 @@ class Trainer:
                     self.config.model.model_paths.params,
                     shard_fns=self.train_state_shard_fns.params,
                     remove_dict_prefix=self.config.model.model_paths.remove_dict_prefix,
-                    convert_to_dtypes=jax.tree_util.tree_map(
+                    convert_to_dtypes=jax.tree.map(
                         lambda x: self.config.model.training_param_dtype, train_state_shape.params
                     ),
                 )
@@ -526,7 +526,7 @@ class Trainer:
                 self.config.model.model_paths.params,
                 shard_fns=self.train_state_shard_fns,
                 remove_dict_prefix=self.config.model.model_paths.remove_dict_prefix,
-                convert_to_dtypes=jax.tree_util.tree_map(
+                convert_to_dtypes=jax.tree.map(
                     lambda x: self.config.model.training_param_dtype, train_state_shape
                 ),
             )
@@ -544,16 +544,16 @@ class Trainer:
         rng = jax.random.PRNGKey(0)
 
         # Evaluate before first training iteration if requested
-        if self.config.logging.log_initial_step and latest_checkpoint_step < 0:
-            if self.config.logging.num_eval_examples > 0:
-                print("Evaluating before first training step...")
-                rng, subrng = jax.random.split(rng)
-                eval_metrics = self.evaluate_data_from_environment(train_state.params, subrng)
-                log_metrics = {"step": -1}
-                log_metrics.update(eval_metrics)
-                log_metrics = jax.device_get(log_metrics)
-                self.logger.log(log_metrics)
-                print(log_metrics)
+        # if self.config.logging.log_initial_step and latest_checkpoint_step < 0:
+        #     if self.config.logging.num_eval_examples > 0:
+        #         print("Evaluating before first training step...")
+        #         rng, subrng = jax.random.split(rng)
+        #         eval_metrics = self.evaluate_data_from_environment(train_state.params, subrng)
+        #         log_metrics = {"step": -1}
+        #         log_metrics.update(eval_metrics)
+        #         log_metrics = jax.device_get(log_metrics)
+        #         self.logger.log(log_metrics)
+        #         print(log_metrics)
 
         for step in tqdm(
             range(max(0, latest_checkpoint_step), self.config.hyperparameters.num_train_steps),
