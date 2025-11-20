@@ -50,6 +50,11 @@ from fray.cluster.base import (
 )
 from fray.cluster.local import LocalCluster
 
+try:
+    from fray.cluster.ray.cluster import RayCluster
+except ImportError:
+    RayCluster = None
+
 
 def create_cluster(cluster_spec: str) -> Cluster:
     """Create a cluster from a specification string.
@@ -101,17 +106,10 @@ __all__ = [
     "JobRequest",
     "JobStatus",
     "LocalCluster",
+    "RayCluster",
     "ResourceConfig",
     "TpuConfig",
     "TpuType",
     "create_cluster",
     "create_environment",
 ]
-
-# Ray cluster is optional
-try:
-    from fray.cluster.ray.cluster import RayCluster
-
-    __all__.append("RayCluster")
-except ImportError:
-    pass

@@ -24,8 +24,10 @@ from fray.cluster import LocalCluster, RayCluster
 def ray_cluster():
     if not ray.is_initialized():
         ray.init(
+            address="local",
+            num_cpus=8,
             ignore_reinit_error=True,
-            logging_level="debug",
+            logging_level="info",
             log_to_driver=True,
         )
     yield RayCluster()

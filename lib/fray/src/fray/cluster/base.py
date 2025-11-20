@@ -219,8 +219,8 @@ class ResourceConfig:
     """
 
     cpu: int = 1
-    ram: str = "4g"
-    disk: str = "10g"
+    ram: str = "128m"
+    disk: str = "1g"
     device: DeviceConfig = field(default_factory=CpuConfig)
     count: int = 1
     regions: Sequence[str] | None = None
