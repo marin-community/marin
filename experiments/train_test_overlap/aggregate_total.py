@@ -339,7 +339,6 @@ def aggregate_total(cfg: AggregateConfig):
         writer = csv.writer(f)
         writer.writerow(["training_dataset", "ngram", "total_examples", "contaminated", "fraction"])
 
-        # Write each training dataset
         for training_name in sorted(all_results.keys()):
             result = all_results[training_name]
             writer.writerow(
@@ -352,16 +351,7 @@ def aggregate_total(cfg: AggregateConfig):
                 ]
             )
 
-        # Write union row
-        writer.writerow(
-            [
-                "union",
-                cfg.ngram_size,
-                union_total,
-                union_contaminated,
-                f"{union_frac:.6f}",
-            ]
-        )
+        writer.writerow(["union", cfg.ngram_size, union_total, union_contaminated, f"{union_frac:.6f}"])
 
     logger.info("Wrote consolidated summary: %s", summary_path)
 
