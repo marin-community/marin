@@ -28,10 +28,14 @@ from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger("ray")
 
+if (backend := jax.default_backend()) != "gpu":
+    raise NotImplementedError(f"Only GPU backend supported, not {backend=}")
+
 # -----------------------------------------------------------------------------
 # Experiment configuration
 # -----------------------------------------------------------------------------
 run_number = 1
+num_gpus = len(jax.devices("gpu"))
 tokenizer_path = "kuleshov-group/PlantCaduceus_l20"
 dataset_path = "kuleshov-group/Angiosperm_16_genomes"
 dataset_examples = 5_485_282
@@ -39,12 +43,6 @@ target_examples = dataset_examples * 10  # 10 epochs
 use_pretokenized_dataset = True
 learning_rate = 3e-4
 per_device_eval_parallelism = 256
-accelerator_type = "H100"
-# TODO: Eliminate the need for this; note that some default must be provided
-#       for unit test dry runs when GPUs are not actually present
-num_gpus = len(jax.devices("gpu")) if jax.default_backend() == "gpu" else 1
-# TODO: Determine why global batch size must scale with gpus to avoid OOM;
-#       gradient accumulation does not appear to be working as expected
 train_batch_size = per_device_eval_parallelism * num_gpus
 num_train_steps = target_examples // train_batch_size
 steps_per_export = num_train_steps // 10
@@ -81,8 +79,7 @@ data_tokenized = default_tokenize(
 # TODO: Figure out why tokenization takes 15+ minutes
 if use_pretokenized_dataset:
     data_local_path = snapshot_download(
-        # TODO: Rename this repo
-        repo_id="plantcad/_dev_marin_plantcad1_v1_tokenized",
+        repo_id="plantcad/marin_exp1729__angiosperm_16_genomes__tokenized",
         repo_type="dataset",
         revision="main",
     )
@@ -93,8 +90,10 @@ if use_pretokenized_dataset:
 # Training configuration
 # -----------------------------------------------------------------------------
 train_config = SimpleTrainConfig(
-    # TODO: Find what happens when accelerator_type is not specified as in prior runs
-    resources=GpuConfig(gpu_count=num_gpus, accelerator_type=accelerator_type),
+    # Omit accelerator_type intentionally so that FLOPs for MFU metrics
+    # are inferred based on jax.Device; see:
+    # https://github.com/marin-community/levanter/blob/982cef7f1d8d1a642b825fcd30ab1b44a912f478/src/levanter/utils/flop_utils.py#L188
+    resources=GpuConfig(gpu_count=num_gpus),
     train_batch_size=train_batch_size,
     per_device_eval_parallelism=per_device_eval_parallelism,
     learning_rate=learning_rate,

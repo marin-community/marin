@@ -39,6 +39,8 @@ from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
 
+if (backend := jax.default_backend()) != "gpu":
+    raise NotImplementedError(f"Only GPU backend supported, not {backend=}")
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -512,12 +514,13 @@ def run_plantcad_evaluation(config: DnaEvalConfig) -> dict:
 # -----------------------------------------------------------------------------
 # Experiment setup
 # -----------------------------------------------------------------------------
-num_gpus = len(jax.devices("gpu")) if jax.default_backend() == "gpu" else 1
+num_gpus = len(jax.devices("gpu"))
+checkpoint_path = "hf://plantcad/marin_exp1729__pcv1_600m_c512__checkpoints/local_store/checkpoints/plantcad-train-600m-r16-a1bc43/hf/step-26782"
 evaluation_step = ExecutorStep(
     name="plantcad-eval",
     fn=run_plantcad_evaluation,
     config=DnaEvalConfig(
-        checkpoint_path="hf://plantcad/_dev_marin_plantcad1_v3_train/local_store/checkpoints/plantcad-train-600m-r16-a1bc43/hf/step-26782",
+        checkpoint_path=checkpoint_path,
         output_path=this_output_path(),
     ),
 )
