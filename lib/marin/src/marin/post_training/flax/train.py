@@ -107,8 +107,6 @@ class Trainer:
         self.grad_accum_steps = optim_config.grad_accum_steps
         optimizer, self.optimizer_info = load_adamw_optimizer(config=optim_config, weight_decay_mask=weight_decay_mask)
 
-        if self.grad_accum_steps > 1:
-            optimizer = optax.MultiSteps(optimizer, self.grad_accum_steps)
 
         self.optimizer = optimizer
 
