@@ -42,7 +42,6 @@ Notes
 import logging
 from dataclasses import dataclass
 
-import ray
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 
@@ -82,7 +81,6 @@ class DatasetConfig:
     """Name of the text field in the parquet file."""
 
 
-@ray.remote(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "cpu"}})
 def run_train_test_overlap(config: DedupeConfig) -> str:
     logger.info(f"Starting train-test overlap dedupe with config: {config}")
     dedupe(config)
