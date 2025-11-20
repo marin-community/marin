@@ -77,6 +77,19 @@ exclude = ["marin/", "scripts/"]
 [tool.pyrefly]
 project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"]
 
+# Explicitly tell Pyrefly where our editable packages live so it resolves imports
+# against the library sources instead of the top-level `src` directory, which only
+# contains a handful of legacy modules.
+search-path = [
+    "lib/marin/src",
+    "lib/levanter/src",
+    "lib/haliax/src",
+    "lib/zephyr/src",
+    "lib/fray/src",
+    "src",
+]
+disable-search-path-heuristics = true
+
 # Prevent pyrefly from querying the Python interpreter for site-packages
 # which would auto-detect workspace members as site packages and exclude them
 skip-interpreter-query = true
