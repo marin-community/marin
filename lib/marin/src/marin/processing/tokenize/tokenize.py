@@ -478,11 +478,11 @@ def tokenize(config: TokenizeConfigBase):
 
         logger.info("Computing exemplar for cache consolidation")
         exemplar = cluster_backend.execute(
-                Dataset.from_list(paths[0:1])
-                .flat_map(load_file)
-                .take_per_shard(1)
-                .map_shard(lambda example: _tokenize_batches(config, [example]))
-            )[0]
+            Dataset.from_list(paths[0:1])
+            .flat_map(load_file)
+            .take_per_shard(1)
+            .map_shard(lambda example: _tokenize_batches(config, [example]))
+        )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
         consolidate_shard_caches(
