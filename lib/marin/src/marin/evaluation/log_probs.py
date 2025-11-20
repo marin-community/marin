@@ -117,6 +117,7 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
         config (EvalLmConfig): The configuration for visualizing log probabilities.
     """
     try:
+        local_path = None
         if config.hf_checkpoint:
             # Use GCSFuse directly so that we don't have to download the checkpoint to the local filesystem
             local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.hf_checkpoint))

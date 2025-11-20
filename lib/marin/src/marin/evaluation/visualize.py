@@ -78,6 +78,7 @@ def execute_in_subprocess(underlying_function, args, kwargs):
         value.reraise()
     return value
 
+
 @dataclass
 class VizLmConfig:
     """
@@ -95,7 +96,9 @@ class VizLmConfig:
     comparison_model_path: str | None = None
     comparison_is_hf: bool = False
 
-    resource_config: ResourceConfig = dataclasses.field(default_factory=lambda: SINGLE_TPU_V5p_8_FULL) # pretty arbitrary
+    resource_config: ResourceConfig = dataclasses.field(
+        default_factory=lambda: SINGLE_TPU_V5p_8_FULL
+    )  # pretty arbitrary
 
 
 @ray.remote(
@@ -113,6 +116,7 @@ def do_viz_lm(config: LevanterVizLmConfig) -> None:
     """
     # remove_tpu_lockfile_on_exit() isn't sufficient now?
     try:
+        local_path = None
         if config.checkpoint_is_hf:
             # Use GCSFuse directly so that we don't have to download the checkpoint to the local filesystem
             local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.checkpoint_path))
@@ -161,6 +165,6 @@ def visualize_lm_log_probs(config: VizLmConfig) -> None:
     )
     ray.get(
         do_viz_lm.options(
-            resources={"TPU": config.resource_config.num_tpu,
-            f"{config.resource_config.tpu_type}-head": 1}).remote(levanter_config)
-        )
+            resources={"TPU": config.resource_config.num_tpu, f"{config.resource_config.tpu_type}-head": 1}
+        ).remote(levanter_config)
+    )
