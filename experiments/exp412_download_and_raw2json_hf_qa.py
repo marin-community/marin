@@ -14,7 +14,7 @@
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
+from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
 
 """
 Downloads the following datasets
@@ -46,7 +46,7 @@ Converts raw to JSON for:
 # This creates a JSON file representing the auxiliary training data subset of MMLU
 mmlu_convert_eval_aux = ExecutorStep(
     name="evaluation/mmlu-eval-aux",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["all"],
@@ -65,7 +65,7 @@ mmlu_convert_eval_aux = ExecutorStep(
 # This creates one file per subject from MMLU, excluding the all and auxiliary training subsets
 mmlu_convert_eval_subject = ExecutorStep(
     name="evaluation/mmlu-eval-subject",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["*"],
@@ -86,7 +86,7 @@ mmlu_convert_eval_subject = ExecutorStep(
 # This is used as input to the decontamination pipeline so documents with MMLU content are removed
 mmlu_convert_dolma = ExecutorStep(
     name="decontamination/mmlu-dolma",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["all"],

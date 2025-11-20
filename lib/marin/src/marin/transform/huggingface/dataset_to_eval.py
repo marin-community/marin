@@ -12,7 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
+"""
+Convert HuggingFace datasets to evaluation and decontamination formats.
+
+Processes HuggingFace datasets (QA, multiple choice, etc.) and converts them to:
+- Evaluation format: prompt/response pairs for perplexity evaluation
+- Decontamination format: text field for Dolma decontamination pipeline
+
+Example Usage:
+uv run zephyr --backend=sync \
+    lib/marin/src/marin/transform/huggingface/dataset_to_eval.py \
+    --dataset_name cais/mmlu \
+    --subsets all \
+    --splits train \
+    --input_path gs://bucket/raw/cais/mmlu \
+    --hf_path cais/mmlu \
+    --output_path gs://bucket/evaluation/mmlu \
+    --output_format evaluation \
+    --prompt_key question \
+    --options_key choices \
+    --answer_idx_key answer \
+    --answer_labels A B C D
+"""
+
 import logging
 import os
 from dataclasses import dataclass, field
@@ -21,9 +43,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 import draccus
-import fsspec
-from datasets import Dataset, get_dataset_config_names, load_dataset
+from datasets import get_dataset_config_names, load_dataset
 from google.cloud import storage
+from zephyr import Dataset, flow_backend
 
 from marin.core.data import QAExample, QAExampleMetadata
 from marin.utilities.dataclass_utils import asdict_without_nones
@@ -66,7 +88,7 @@ class OutputFormatOptions(str, Enum):
 @dataclass
 class DatasetConversionConfig:
     """
-    Configuration class for converting Hugging Face datasets to dolma format.
+    Configuration class for converting Hugging Face datasets to evaluation/decontamination formats.
 
     Attributes:
         dataset_name (str): Name of the Hugging Face dataset to convert
@@ -74,7 +96,7 @@ class DatasetConversionConfig:
         splits (list[str]): List of splits of dataset to convert
         input_path (str): HF Hub, local, or GCP path where Hugging Face repo is stored
         hf_path (str): HF Hub path (e.g. cais/mmlu) for provenance
-        output_path (str): where to store output of dolma processing
+        output_path (str): where to store output of processing
         output_format (str): format of output JSON from {decontaminaton, evaluation}
         prompt_key (str): key in HF data object for the prompt
         answer_text_key (str): key in HF data object for the answer text (e.g. "Paris")
@@ -122,13 +144,13 @@ class DatasetWithMetaData:
     the dataset and its associated metadata for downstream processing.
 
     Attributes:
-        dataset (Dataset): The Hugging Face dataset object.
+        dataset: The Hugging Face dataset object (iterable).
         subset (str): The name of the subset of the dataset (e.g., 'all', 'philosophy', etc.).
         split (str): The split of the dataset (e.g., 'train', 'dev', 'test').
         revision (str): The revision of the dataset (e.g. "main")
     """
 
-    dataset: Dataset
+    dataset: Any  # HuggingFace Dataset
     subset: str
     split: str
     revision: str
@@ -368,15 +390,147 @@ def format_prompt_response(
     return prompt, response
 
 
-def raw2json(cfg: DatasetConversionConfig) -> None:
+def transform_example_to_qa(example: dict, idx: int, dataset_meta: DatasetWithMetaData, cfg: DatasetConversionConfig):
     """
-    Converts datasets based on the provided configuration and saves them as JSONL files.
+    Transform a single HuggingFace dataset example to QA format.
+
+    Args:
+        example: Raw example from HuggingFace dataset
+        idx: Index of the example in the dataset
+        dataset_meta: Metadata about the dataset (subset, split, revision)
+        cfg: Configuration for the conversion
+
+    Returns:
+        Dictionary with transformed QA example
+
+    Raises:
+        Exception: If transformation fails
+    """
+    # create base document
+    document = QAExample(
+        id=f"{cfg.dataset_name}-{dataset_meta.subset}-{dataset_meta.split}-{cfg.output_format.value}-{idx}",
+        source=cfg.dataset_name,
+        metadata=QAExampleMetadata(
+            subset=dataset_meta.subset,
+            split=dataset_meta.split,
+            revision=dataset_meta.revision,
+            provenance=f"https://huggingface.co/datasets/{cfg.hf_path}",
+        ),
+    )
+
+    # get the question text
+    question_text = get_nested_item(example, cfg.prompt_key)
+    # get answer labels
+    answer_labels = get_nested_item(example, cfg.answer_labels_key, cfg.answer_labels)
+    # get the list of options in standardized form (list of options)
+    options = standardize_options(
+        get_nested_item(example, cfg.options_key, [get_nested_item(example, key, {}) for key in cfg.options_keys])
+    )
+
+    # first pass attempt to populate answer_text, answer_idx, answer_label
+    # if there is a direct key to answer text, use this
+    answer_text = get_nested_item(example, cfg.answer_text_key) if cfg.answer_text_key else ""
+    # if there is a direct key for the idx into choices of correct answer, use this
+    answer_idx = get_nested_item(example, cfg.answer_idx_key) if cfg.answer_idx_key else None
+    # if there is a direct key for the label of the correct answer, use this
+    answer_label = get_nested_item(example, cfg.answer_label_key) if cfg.answer_label_key else ""
+
+    # try to populate answer_text, answer_idx, answer_label based on initial retrieved values
+    if answer_idx is None:
+        if answer_label is not None and answer_labels:
+            # try to infer answer_idx from answer_label (label or numeric index)
+            try:
+                answer_idx = answer_labels.index(answer_label)
+            except ValueError:
+                try:
+                    # fallback if answer_label is a numeric string (1-based indexing)
+                    numeric = int(answer_label)
+                    answer_idx = numeric - 1
+                except Exception:
+                    answer_idx = None
+        elif answer_text and options:
+            # infer answer_idx (e.g. 0) from answer_text and options list
+            answer_idx = options.index(answer_text)
+    else:
+        # if answer_idx is provided, make sure it is an int
+        answer_idx = int(answer_idx)
+
+    if not answer_label:
+        if answer_idx is not None and isinstance(answer_idx, int) and cfg.answer_labels:
+            # infer answer_label (e.g. A) from answer_label and list of potential labels
+            answer_label = answer_labels[answer_idx]
+
+    if not answer_text:
+        if answer_idx is not None and isinstance(answer_idx, int) and options:
+            answer_text = options[answer_idx]
+        elif cfg.answer_text_ignore:
+            answer_text = ""
+            options = ["" for _ in range(len(cfg.answer_labels))]
+        elif cfg.output_format.value == "evaluation":
+            # Evaluations Need Answers
+            raise ValueError("No answer text was found. Please review config.")
+
+    # set various metadata
+    if options:
+        # list of potential answers
+        document.metadata.options = options
+    if answer_idx:
+        # index into list of potential answers of correct answer
+        document.metadata.answer_idx = answer_idx
+    if answer_label:
+        # label of correct answer (e.g. "A")
+        document.metadata.answer_label = answer_label
+    if answer_text:
+        # answer text of correct answer
+        document.metadata.answer = answer_text
+    if answer_labels:
+        # list of potential labels (e.g. ["A", "B", "C", 'D'])
+        document.metadata.answer_labels = answer_labels
+
+    if cfg.output_format.value == "decontamination":
+        # decontamination output format is dolma with text as the key
+        document.text = question_text
+    elif cfg.output_format.value == "evaluation":
+        # evaluation format wants prompt, response
+        if answer_labels and options:
+            prompt, response = format_prompt_response(question_text, options, answer_labels, answer_idx, answer_text)
+        else:
+            prompt = question_text + "\n\n"
+            response = answer_text
+        document.prompt = prompt
+        document.response = response
+
+    return asdict_without_nones(document)
+
+
+def wrap_transform(item: dict, dataset_meta: DatasetWithMetaData, cfg: DatasetConversionConfig):
+    """
+    Wrapper that transforms a HuggingFace dataset example to QA format with error handling.
+
+    Args:
+        item: Dict with "idx" and "example" keys
+        dataset_meta: Metadata about the dataset (subset, split, revision)
+        cfg: Configuration for the conversion
+
+    Returns:
+        Dictionary with transformed QA example, or None if transformation fails
+    """
+    try:
+        return transform_example_to_qa(item["example"], item["idx"], dataset_meta, cfg)
+    except Exception as e:
+        logger.warning(f"Failed to transform example {item['idx']}: {e}")
+        return None
+
+
+def hf_dataset_to_jsonl(cfg: DatasetConversionConfig) -> None:
+    """
+    Converts HuggingFace datasets to JSONL files for evaluation or decontamination.
 
     This function processes datasets according to the configuration specified in the
     `DatasetConversionConfig`. It loads the datasets for each subset and split, formats
-    the data into a structured format, and writes the results to a compressed `.jsonl.gz`
-    output file. The format of the output depends on the selected `output_format` (either
-    'decontamination' or 'evaluation').
+    the data into a structured format, and writes the results to compressed `.jsonl.gz`
+    output files. The format of the output depends on the selected `output_format`
+    (either 'decontamination' or 'evaluation').
 
     Args:
         cfg (DatasetConversionConfig): The configuration object specifying dataset
@@ -385,15 +539,15 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
 
     Process Overview:
     - Loads datasets specified in the configuration for each subset and split.
-    - Iterates over the dataset examples to construct a `QAExample` object.
+    - Transforms examples into QAExample objects with appropriate formatting.
     - Populates question, options, answer text, and other relevant metadata based on
       configuration keys.
     - Supports two output formats:
         - **Decontamination**: Writes the question text as the main field.
         - **Evaluation**: Writes the formatted prompt and response based on the question
           and multiple-choice options.
-    - Saves the output as a compressed `.jsonl.gz` file in the specified output path,
-      with each example written as a JSON object.
+    - Saves the output as compressed `.jsonl.gz` files in the specified output path,
+      with one or more files per (subset, split) pair.
 
     Raises:
         ValueError: If no valid answer text is found for a particular example, indicating
@@ -425,111 +579,34 @@ def raw2json(cfg: DatasetConversionConfig) -> None:
     """
     # Load config parameters
     datasets = load_datasets(cfg)
+    backend = flow_backend()
 
-    # go through (subset,split) pairs and upload file for that (subset,split) producing output JSON specified in config
-    for dataset in datasets:
-        output_path = os.path.join(
-            cfg.output_path, f"{cfg.dataset_name}-{dataset.subset}-{dataset.split}-{cfg.output_format.value}.jsonl.gz"
+    # Process each (subset, split) pair
+    for dataset_meta in datasets:
+        # Create output path pattern with shard placeholder for potential multi-file output
+        output_pattern = os.path.join(
+            cfg.output_path,
+            f"{cfg.dataset_name}-{dataset_meta.subset}-{dataset_meta.split}-{cfg.output_format.value}-{{shard:05d}}.jsonl.gz",
         )
-        with fsspec.open(output_path, "wt", compression="gzip") as dolma_file:
-            for idx, example in enumerate(dataset.dataset):
-                # create base document
-                document = QAExample(
-                    id=f"{cfg.dataset_name}-{dataset.subset}-{dataset.split}-{cfg.output_format.value}-{idx}",
-                    source=cfg.dataset_name,
-                    metadata=QAExampleMetadata(
-                        subset=dataset.subset,
-                        split=dataset.split,
-                        revision=dataset.revision,
-                        provenance=f"https://huggingface.co/datasets/{cfg.hf_path}",
-                    ),
-                )
-                # get the question text
-                question_text = get_nested_item(example, cfg.prompt_key)
-                # get answer labels
-                answer_labels = get_nested_item(example, cfg.answer_labels_key, cfg.answer_labels)
-                # get the list of options in standardized form (list of options)
-                options = standardize_options(
-                    get_nested_item(
-                        example, cfg.options_key, [get_nested_item(example, key, {}) for key in cfg.options_keys]
-                    )
-                )
-                # first pass attempt to populate answer_text, answer_idx, answer_label
-                # if there is a direct key to answer text, use this
-                answer_text = get_nested_item(example, cfg.answer_text_key) if cfg.answer_text_key else ""
-                # if there is a direct key for the idx into choices of correct answer, use this
-                answer_idx = get_nested_item(example, cfg.answer_idx_key) if cfg.answer_idx_key else None
-                # if there is a direct key for the label of the correct answer, use this
-                answer_label = get_nested_item(example, cfg.answer_label_key) if cfg.answer_label_key else ""
-                # try to populate answer_text, answer_idx, answer_label based on initial retrieved values
-                if answer_idx is None:
-                    if answer_label is not None and answer_labels:
-                        # try to infer answer_idx from answer_label (label or numeric index)
-                        try:
-                            answer_idx = answer_labels.index(answer_label)
-                        except ValueError:
-                            try:
-                                # fallback if answer_label is a numeric string (1-based indexing)
-                                numeric = int(answer_label)
-                                answer_idx = numeric - 1
-                            except Exception:
-                                answer_idx = None
-                    elif answer_text and options:
-                        # infer answer_idx (e.g. 0) from answer_text and options list
-                        answer_idx = options.index(answer_text)
-                else:
-                    # if answer_idx is provided, make sure it is an int
-                    answer_idx = int(answer_idx)
-                if not answer_label:
-                    if answer_idx is not None and isinstance(answer_idx, int) and cfg.answer_labels:
-                        # infer answer_label (e.g. A) from answer_label and list of potential labels
-                        answer_label = answer_labels[answer_idx]
-                if not answer_text:
-                    if answer_idx is not None and isinstance(answer_idx, int) and options:
-                        answer_text = options[answer_idx]
-                    elif cfg.answer_text_ignore:
-                        answer_text = ""
-                        options = ["" for _ in range(len(cfg.answer_labels))]
-                    elif cfg.output_format.value == "evaluation":
-                        # Evaluations Need Answers
-                        raise ValueError("No answer text was found. Please review config.")
-                # set various metadata
-                if options:
-                    # list of potential answers
-                    document.metadata.options = options
-                if answer_idx:
-                    # index into list of potential answers of correct answer
-                    document.metadata.answer_idx = answer_idx
-                if answer_label:
-                    # label of correct answer (e.g. "A")
-                    document.metadata.answer_label = answer_label
-                if answer_text:
-                    # answer text of correct answer
-                    document.metadata.answer = answer_text
-                if answer_labels:
-                    # list of potential labels (e.g. ["A", "B", "C", 'D'])
-                    document.metadata.answer_labels = answer_labels
-                if cfg.output_format.value == "decontamination":
-                    # decontamination output format is dolma with text as the key
-                    document.text = question_text
-                elif cfg.output_format.value == "evaluation":
-                    # evaluation format wants prompt, response
-                    if answer_labels and options:
-                        prompt, response = format_prompt_response(
-                            question_text, options, answer_labels, answer_idx, answer_text
-                        )
-                    else:
-                        prompt = question_text + "\n\n"
-                        response = answer_text
-                    document.prompt = prompt
-                    document.response = response
-                # write json to output file
-                print(json.dumps(asdict_without_nones(document)), file=dolma_file)
+
+        # Convert to list of dicts with idx and example for processing
+        enumerated_examples = [{"idx": idx, "example": example} for idx, example in enumerate(dataset_meta.dataset)]
+
+        pipeline = (
+            Dataset.from_list(enumerated_examples)
+            .map(lambda item, dm=dataset_meta, c=cfg: wrap_transform(item, dm, c))
+            .filter(lambda record: record is not None)
+            .write_jsonl(output_pattern)  # Compression auto-detected from .gz extension
+        )
+
+        list(backend.execute(pipeline))
+        logger.info(f"Wrote to {output_pattern}")
 
 
 @draccus.wrap()
 def main(cfg: DatasetConversionConfig) -> None:
-    raw2json(cfg)
+    """CLI entrypoint."""
+    hf_dataset_to_jsonl(cfg)
 
 
 if __name__ == "__main__":
