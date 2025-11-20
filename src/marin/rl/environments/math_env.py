@@ -295,6 +295,9 @@ class MathEnv(MarinEnv):
         Returns (reward, format_score, correct_score, token_reward_value).
         """
 
+        L_MAX = 4096
+        L_CACHE = 3072
+
         decoded_response = response_text.strip()
         validation = validate_format(decoded_response)
 
@@ -307,7 +310,17 @@ class MathEnv(MarinEnv):
             tokens = decoded_response.split()
             grade = grade_answer(tokens[-1], true_answer) if tokens else 0.0
 
-        reward = 0.1 * float(validation["is_valid"]) + 1.0 * float(grade)
+        response_text_tokens = tokenizer.encode(response_text, add_special_tokens=False)
+
+        if len(response_text_tokens) <= (L_MAX - L_CACHE):
+            length_penalty = 0.0
+        elif len(response_text_tokens) <= L_MAX:
+            length_difference = (L_MAX - L_CACHE) - len(response_text_tokens)
+            length_penalty = length_difference / L_CACHE
+        else:
+            length_penalty = -1.0
+
+        reward = 0.1 * float(validation["is_valid"]) + 1.0 * float(grade) + length_penalty
 
         return reward, float(validation["is_valid"]), float(grade), reward
 

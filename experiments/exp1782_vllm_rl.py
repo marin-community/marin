@@ -116,6 +116,14 @@ class ExperimentConfig:
     rl_loss: RLLossModule
     experiment_name_suffix: str
 
+    # trainer params
+    train_batch_size: int = 1024
+
+    # some sampling params
+    max_output_tokens: int = 2048
+    n_prompts: int = 24
+    n_generations_per_prompt: int = 64
+
 
 MODEL = llama1b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
@@ -139,9 +147,9 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
 
     default_sampling = SamplingParams(
         temperature=1.0,
-        n_prompts=24,  # Overdo it since we know there are some with no signal?
-        n_generations_per_prompt=64,
-        max_tokens=MAX_OUTPUT_TOKENS,
+        n_prompts=experiment_config.n_prompts,  # Overdo it since we know there are some with no signal?
+        n_generations_per_prompt=experiment_config.n_generations_per_prompt,
+        max_tokens=experiment_config.max_output_tokens,
         # stop_tokens=stop_tokens(experiment_config.model_config.tokenizer),
         stop_tokens=None,
     )
@@ -235,7 +243,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
     config = experiment_config.model_config.config_class.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_MODEL_LEN, tokenizer=experiment_config.model_config.tokenizer)
+    model_config = dataclasses.replace(config, seq_len=experiment_config.max_output_tokens, tokenizer=experiment_config.model_config.tokenizer)
 
     _ = WandbConfig
 
@@ -254,7 +262,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         # Set the train batch size to num_rollout_workers * n_generations * n_prompts
         # to ensure we accept an entire training batch from the rollout workers.
-        train_batch_size=1024,
+        train_batch_size=experiment_config.train_batch_size,
         # microbatch to avoid OOM
         per_device_parallelism=16,
         num_train_steps=500,
@@ -310,13 +318,13 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         # inference_type="levanter",
         inference_config=vLLMInferenceContextConfig(
             model_name=experiment_config.model_config.name,
-            max_model_len=4096,
+            max_model_len=experiment_config.max_output_tokens,
             tensor_parallel_size=8,
             gpu_memory_utilization=0.90,
             sampling_params=SamplingParams(
                 temperature=1.0,
                 n=8,
-                max_tokens=MAX_OUTPUT_TOKENS,
+                max_tokens=experiment_config.max_output_tokens,
                 stop=["</answer>"],
                 include_stop_str_in_output=True,
                 logprobs=1,
@@ -356,21 +364,89 @@ def main():
         return
 
     # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
-    experiment_configs = [
-        ExperimentConfig(
-            # model_config=llama_3_1_8b,
-            # model_config=llama1b,
-            model_config=qwen3_1_7b,
-            # model_config=qwen3_8b,
-            rl_loss=RLOOLoss(
-                kl_coef=0.01,
-                clip_epsilon=0.2,
-                synchronous=True,
-                do_trainer_inference_mismatch_importance_sampling=True,
-                # do_overlong_filtering=True,
-            ),
-            experiment_name_suffix="math-tis-r1-prompt",
+    length_penalty = ExperimentConfig(
+        model_config=qwen3_1_7b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.01,
+            clip_epsilon=0.2,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+            # do_overlong_filtering=True,
         ),
+        experiment_name_suffix="math-tis-r1-bsz128-t4096-n8-g16-lp",
+        train_batch_size=128,
+        max_output_tokens=4096,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+    )
+    experiment_configs = [
+        length_penalty,
+        # ExperimentConfig(
+        #     # model_config=llama_3_1_8b,
+        #     # model_config=llama1b,
+        #     model_config=qwen3_1_7b,
+        #     # model_config=qwen3_8b,
+        #     rl_loss=RLOOLoss(
+        #         kl_coef=0.01,
+        #         clip_epsilon=0.2,
+        #         synchronous=True,
+        #         do_trainer_inference_mismatch_importance_sampling=True,
+        #         # do_overlong_filtering=True,
+        #     ),
+        #     experiment_name_suffix="math-tis-r1-prompt",
+        # ),
+        # ExperimentConfig(
+        #     # model_config=llama_3_1_8b,
+        #     # model_config=llama1b,
+        #     model_config=qwen3_1_7b,
+        #     # model_config=qwen3_8b,
+        #     rl_loss=RLOOLoss(
+        #         kl_coef=0.01,
+        #         clip_epsilon=0.2,
+        #         synchronous=True,
+        #         do_trainer_inference_mismatch_importance_sampling=True,
+        #         # do_overlong_filtering=True,
+        #     ),
+        #     experiment_name_suffix="math-tis-r1-prompt-bsz128-t512-n8-g16",
+        #     train_batch_size=128,
+        #     max_output_tokens=1024,
+        #     n_prompts=8,
+        #     n_generations_per_prompt=16,
+        # ),
+        # ExperimentConfig(
+        #     # model_config=llama_3_1_8b,
+        #     # model_config=llama1b,
+        #     # model_config=qwen3_1_7b,
+        #     model_config=qwen3_8b,
+        #     rl_loss=RLOOLoss(
+        #         kl_coef=0.01,
+        #         clip_epsilon=0.2,
+        #         synchronous=True,
+        #         do_trainer_inference_mismatch_importance_sampling=True,
+        #         # do_overlong_filtering=True,
+        #     ),
+        #     experiment_name_suffix="math-tis-r1-prompt-bsz128-t512-n8-g16",
+        #     train_batch_size=128,
+        #     max_output_tokens=512,
+        #     n_prompts=8,
+        #     n_generations_per_prompt=16,
+        # ),
+        # ExperimentConfig(
+        #     model_config=qwen3_1_7b,
+        #     rl_loss=RLOOLoss(
+        #         kl_coef=0.01,
+        #         clip_epsilon=0.2,
+        #         synchronous=True,
+        #         do_trainer_inference_mismatch_importance_sampling=True,
+        #         # do_overlong_filtering=True,
+        #     ),
+        #     experiment_name_suffix="math-tis-r1-prompt-bsz128-t4096-n8-g16",
+        #     train_batch_size=128,
+        #     max_output_tokens=4096,
+        #     n_prompts=8,
+        #     n_generations_per_prompt=16,
+        # ),
+
         # ExperimentConfig(
         #     model_config=qwen3_8b,
         #     rl_loss=RLOOLoss(
@@ -395,24 +471,6 @@ def main():
         #         do_overlong_filtering=True,
         #     ),
         #     experiment_name_suffix="overlong-tis",
-        # ),
-        # ExperimentConfig(
-        #     model_config=llama_3_1_8b, rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="grpo"
-        # ),
-        # ExperimentConfig(
-        #     model_config=llama_3_1_8b,
-        #     rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2, divide_by_entire_length=True),
-        #     experiment_name_suffix="grpo-div-len",
-        # ),
-        # ExperimentConfig(
-        #     model_config=llama_3_1_8b,
-        #     rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2, divide_by_std=False),
-        #     experiment_name_suffix="grpo-div-std",
-        # ),
-        # ExperimentConfig(
-        #     model_config=llama_3_1_8b,
-        #     rl_loss=CISPOLoss(epsilon_low=0.2, epsilon_high=0.2),
-        #     experiment_name_suffix="cispo",
         # ),
     ]
     experiments = []

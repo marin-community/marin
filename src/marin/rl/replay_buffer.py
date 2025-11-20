@@ -57,6 +57,9 @@ class ReplayBufferConfig:
     max_rollout_timestamp_delay: float = 3600.0
     """Maximum age of rollouts in seconds."""
 
+    filter_out_groups_with_no_variance: bool = False
+    """Filter out groups with no variance in rewards."""
+
 
 @dataclass
 class RolloutWithCount(RolloutWithAdvantage):
@@ -82,6 +85,7 @@ class ReplayBuffer:
     max_samples: int
     max_rollout_step_delay: int
     max_rollout_timestamp_delay: float
+    filter_out_groups_with_no_variance: bool
     loss_module: RLLossModule
     seed: int
 
@@ -124,6 +128,7 @@ class ReplayBuffer:
             max_samples=config.max_samples,
             max_rollout_step_delay=config.max_rollout_step_delay,
             max_rollout_timestamp_delay=config.max_rollout_timestamp_delay,
+            filter_out_groups_with_no_variance=config.filter_out_groups_with_no_variance,
             loss_module=loss_module,
             seed=seed,
         )
@@ -226,8 +231,11 @@ class ReplayBuffer:
 
                 if np.std(batch_rewards[group_idx]) > 0.0:
                     env_examples[rollout.env_name].extend(maybe_used_rollouts)
-                else:
-                    logger.info(f"Group {group_idx} has no variance in rewards, skipping")
+                else: # group has no variance in rewards
+                    if not self.filter_out_groups_with_no_variance:
+                        env_examples[rollout.env_name].extend(maybe_used_rollouts)
+
+                    logger.info(f"Group {group_idx} has no variance in rewards")
 
             logger.info(f"Reward mean across all groups: {batch_rewards.mean()}")
             logger.info(f"Reward std across all groups: {batch_rewards.std(axis=1).mean()}")

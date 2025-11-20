@@ -274,8 +274,29 @@ upload_qwen32b_annotated_open_thoughts_4 = replace(
     upload_qwen32b_annotated_open_thoughts_4, pip_dependency_groups=["vllm"]
 )
 
+upload_qwen32b_annotated_open_thoughts_4_science = upload_dir_to_hf(
+    input_path=qwen_32B_annotated_open_thoughts_4_science,
+    repo_id="marin-community/open-thoughts-4-science-qwen3-32b-annotated",
+    repo_type="dataset",
+)
+
+upload_qwen32b_annotated_open_thoughts_4_science = replace(
+    upload_qwen32b_annotated_open_thoughts_4_science, pip_dependency_groups=["vllm"]
+)
+
+upload_qwen32b_annotated_open_thoughts_4_code = upload_dir_to_hf(
+    input_path=open_thoughts_4_annotated_qwen3_32b_code,
+    repo_id="marin-community/open-thoughts-4-code-qwen3-32b-annotated",
+    repo_type="dataset",
+)
+
+upload_qwen32b_annotated_open_thoughts_4_code = replace(
+    upload_qwen32b_annotated_open_thoughts_4_code, pip_dependency_groups=["vllm"]
+)
+
 if __name__ == "__main__":
     executor_main([qwen3_32b])
     # executor_main([upload_qwen32b_annotated_open_thoughts_4])
     # executor_main([qwen_32B_annotated_open_thoughts_4_science])
-    executor_main([open_thoughts_4_annotated_qwen3_32b_code])
+    executor_main([upload_qwen32b_annotated_open_thoughts_4_science])
+    # executor_main([upload_qwen32b_annotated_open_thoughts_4_code])
