@@ -135,14 +135,10 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
             config.checkpoint_path = discover_levanter_checkpoints(local_path)[-1]
         eval_lm_main(config)
     finally:
-        if config.hf_checkpoint:
-            if os.path.exists(config.hf_checkpoint):
-                shutil.rmtree(config.hf_checkpoint, ignore_errors=True)
-                print(f"Deleted local checkpoint at {config.checkpoint_path}.")
-            else:
-                shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
-                print(f"Deleted local checkpoint at {HUGGINGFACE_CACHE_PATH}.")
-        if "gcsfuse" not in local_path:
+        if config.hf_checkpoint and not os.path.exists(config.hf_checkpoint):
+            shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
+            print(f"Deleted HuggingFace cache at {HUGGINGFACE_CACHE_PATH}.")
+        if local_path and "gcsfuse" not in local_path:
             shutil.rmtree(local_path, ignore_errors=True)
             print(f"Deleted local checkpoint at {local_path}.")
 
