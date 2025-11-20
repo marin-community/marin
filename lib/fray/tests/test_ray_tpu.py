@@ -46,7 +46,7 @@ def setup_ray_tpu_tests():
     os.environ["RAY_USAGE_STATS_ENABLED"] = "0"
     os.environ["RAY_SCHEDULER_EVENTS"] = "0"
 
-    tpu_resource_name = "TPU-v5e-4-head"
+    tpu_resource_name = "TPU-v5litepod-4-head"
     chip_count = 4
 
     print(f"Starting TPU Ray cluster with resources TPU:{chip_count}, {tpu_resource_name}:1")
@@ -149,18 +149,18 @@ class CounterActor:
 def test_single_slice_simple_run():
     """1. Run a simple function on a single slice and verify it runs correctly."""
     num_slices = 1
-    results = run_on_pod(simple_jax_workload, "v5e-4", num_slices=num_slices)
+    results = run_on_pod(simple_jax_workload, "v5litepod-4", num_slices=num_slices)
 
     assert results is not None
     assert len(results) == num_slices
 
-    # For `num_slices=1` with "v5e-4" (1 host per slice):
-    assert len(results) == 1  # One result because one host in total for one v5e-4 slice.
+    # For `num_slices=1` with "v5litepod-4" (1 host per slice):
+    assert len(results) == 1  # One result because one host in total for one v5litepod-4 slice.
     assert isinstance(results[0], np.ndarray)
     assert results[0].shape == (4,)  # Based on simple_jax_fn's output dim_out
 
     # Verify a second run works
-    results_2 = run_on_pod(simple_jax_workload, "v5e-4", num_slices=num_slices)
+    results_2 = run_on_pod(simple_jax_workload, "v5litepod-4", num_slices=num_slices)
     assert len(results_2) == 1
     assert isinstance(results_2[0], np.ndarray)
     assert np.array_equal(results[0], results_2[0])  # Deterministic function
@@ -171,13 +171,13 @@ def test_single_slice_run_twice():
     """2. Run a second function after the first one and verify it runs correctly."""
     num_slices = 1
     # First run
-    results1 = run_on_pod(simple_jax_workload, "v5e-4", num_slices=num_slices)
+    results1 = run_on_pod(simple_jax_workload, "v5litepod-4", num_slices=num_slices)
     assert len(results1) == 1
     assert isinstance(results1[0], np.ndarray)
     assert results1[0].shape == (4,)
 
     # Second run
-    results2 = run_on_pod(simple_jax_workload, "v5e-4", num_slices=num_slices)
+    results2 = run_on_pod(simple_jax_workload, "v5litepod-4", num_slices=num_slices)
     assert len(results2) == 1
     assert isinstance(results2[0], np.ndarray)
     assert results2[0].shape == (4,)
@@ -205,18 +205,18 @@ def test_single_slice_fail_once():
         return result
 
     num_slices = 1
-    results = run_on_pod(fail_once_jax_fn, "v5e-4", num_slices=num_slices, max_retries_failure=1)
+    results = run_on_pod(fail_once_jax_fn, "v5litepod-4", num_slices=num_slices, max_retries_failure=1)
 
     assert results is not None
     assert len(results) == num_slices
 
-    # For `num_slices=1` with "v5e-4" (1 host per slice):
-    assert len(results) == 1  # One result because one host in total for one v5e-4 slice.
+    # For `num_slices=1` with "v5litepod-4" (1 host per slice):
+    assert len(results) == 1  # One result because one host in total for one v5litepod-4 slice.
     assert isinstance(results[0], np.ndarray)
     assert results[0].shape == (4,)  # Based on simple_jax_fn's output dim_out
 
     # Verify a second run works
-    results_2 = run_on_pod(simple_jax_workload, "v5e-4", num_slices=num_slices)
+    results_2 = run_on_pod(simple_jax_workload, "v5litepod-4", num_slices=num_slices)
     assert len(results_2) == 1
     assert isinstance(results_2[0], np.ndarray)
     assert np.array_equal(results[0], results_2[0])  # Deterministic function
@@ -230,15 +230,15 @@ def test_single_slice_fail_once():
 def test_multislice_simple_run():
     """1. Run a simple function on a multislice and verify it runs correctly."""
     num_slices = 2
-    tpu_type = "v5e-4"  # Each slice is a v5e-4
+    tpu_type = "v5litepod-4"  # Each slice is a v5litepod-4
 
     results = run_on_pod(simple_jax_workload, tpu_type, num_slices=num_slices)
 
     # run_on_pod_new returns a flat list of results from all hosts across all slices.
-    # If each v5e-4 slice has 1 host (as per TPU-v5e-4-head resource meaning),
+    # If each v5litepod-4 slice has 1 host (as per TPU-v5litepod-4-head resource meaning),
     # then for num_slices=2, we expect 2 results in the list.
     assert results is not None
-    assert len(results) == num_slices  # num_slices * hosts_per_slice (assuming 1 host per v5e-4 slice)
+    assert len(results) == num_slices  # num_slices * hosts_per_slice (assuming 1 host per v5litepod-4 slice)
 
     for i in range(num_slices):
         assert isinstance(results[i], np.ndarray)
@@ -254,12 +254,12 @@ def test_multislice_simple_run():
 def test_variable_multislice_run():
     """1. Run a simple function on a multislice and verify it runs correctly."""
     num_slices = [1, 2]
-    tpu_type = "v5e-4"  # Each slice is a v5e-4
+    tpu_type = "v5litepod-4"  # Each slice is a v5litepod-4
 
     results = run_on_pod(simple_jax_fn, tpu_type, num_slices=num_slices)
 
     assert results is not None
-    assert len(results) in num_slices  # num_slices * hosts_per_slice (assuming 1 host per v5e-4 slice)
+    assert len(results) in num_slices  # num_slices * hosts_per_slice (assuming 1 host per v5litepod-4 slice)
 
     for i in range(len(results)):
         assert isinstance(results[i], np.ndarray)
@@ -273,7 +273,7 @@ def test_variable_multislice_run():
 def test_multislice_run_twice():
     """2. Run a second function after the first one and verify it runs correctly."""
     num_slices = 2
-    tpu_type = "v5e-4"
+    tpu_type = "v5litepod-4"
 
     # First run
     results1 = run_on_pod(simple_jax_workload, tpu_type, num_slices=num_slices)
@@ -320,13 +320,13 @@ def test_multislice_fail_once():
         time.sleep(5)
         return result
 
-    results = run_on_pod(fail_once_on_first_slice_jax_fn, "v5e-4", num_slices=num_slices, max_retries_failure=1)
+    results = run_on_pod(fail_once_on_first_slice_jax_fn, "v5litepod-4", num_slices=num_slices, max_retries_failure=1)
 
     # run_on_pod_new returns a flat list of results from all hosts across all slices.
-    # If each v5e-4 slice has 1 host (as per TPU-v5e-4-head resource meaning),
+    # If each v5litepod-4 slice has 1 host (as per TPU-v5litepod-4-head resource meaning),
     # then for num_slices=2, we expect 2 results in the list.
     assert results is not None
-    assert len(results) == num_slices  # num_slices * hosts_per_slice (assuming 1 host per v5e-4 slice)
+    assert len(results) == num_slices  # num_slices * hosts_per_slice (assuming 1 host per v5litepod-4 slice)
 
     for i in range(num_slices):
         assert isinstance(results[i], np.ndarray)
@@ -353,7 +353,7 @@ deliberately_raised_exception = DeliberatelyRaisedException("This function is de
 def test_single_slice_catches_failure():
     """Test that run_on_pod_new correctly handles a failing function after retries."""
     with pytest.raises(RayTaskError) as excinfo:
-        run_on_pod(failing_fn, "v5e-4", num_slices=1, max_retries_failure=0, max_retries_preemption=0)
+        run_on_pod(failing_fn, "v5litepod-4", num_slices=1, max_retries_failure=0, max_retries_preemption=0)
 
     assert "DeliberatelyRaisedException" in str(
         excinfo.value
@@ -393,7 +393,7 @@ def test_single_slice_handles_preemption():
         run_on_pod(
             # We need to curry arguments into preemptible_fn or wrap it
             preempted_until_n,
-            "v5e-4",
+            "v5litepod-4",
             num_slices=1,
             max_retries_failure=1,
             max_retries_preemption=2,  # Should retry preemption twice
@@ -413,7 +413,7 @@ def test_single_slice_handles_preemption():
     # This should succeed after 2 retries
     results = run_on_pod(
         preempted_always,
-        "v5e-4",
+        "v5litepod-4",
         num_slices=1,
         max_retries_failure=0,  # No failure retries
         max_retries_preemption=2,  # Should retry preemption twice
@@ -447,7 +447,7 @@ def fail_on_slice_0_fn():
 def test_multislice_one_slice_fails():
     """3. Run a function where one slice fails, verify retries and eventual failure."""
     num_slices = 2
-    tpu_type = "v5e-4"
+    tpu_type = "v5litepod-4"
 
     with pytest.raises(RayTaskError) as excinfo:
         run_on_pod(
