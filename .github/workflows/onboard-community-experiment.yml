@@ -42,12 +42,10 @@ jobs:
           author_name="$(parse_field "Your name")"
           affiliation="$(parse_field "Affiliation")"
           url="$(parse_field "Link to your profile/site")"
-          branch_name="$(parse_field "Name of your branch")"
           description="$(parse_field "One-sentence description of your experiment")"
 
           # Fallbacks
           : "${author_name:=anonymous}"
-          : "${branch_name:=community-experiment}"
           : "${description:=Community experiment submission}"
 
           # Slugify helpers
@@ -55,10 +53,12 @@ jobs:
             tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g; s/-+/-/g'
           }
           author_slug="$(printf '%s' "$author_name" | to_slug)"
-          branch_slug="$(printf '%s' "$branch_name" | to_slug)"
+          issue_number="${{ github.event.issue.number }}"
+          branch_slug="submission_${issue_number}"
+          branch_display="${author_name}: Submission #${issue_number}"
 
           # Compose branch and directory names
-          branch_ref="${author_slug}/${branch_slug}-${{ github.event.issue.number }}"
+          branch_ref="${author_slug}/${branch_slug}"
           dir_name="${branch_slug}"
           import_path="experiments.speedrun.${dir_name}.main"
 
@@ -67,7 +67,7 @@ jobs:
             echo "author_name=$author_name"
             echo "affiliation=$affiliation"
             echo "url=$url"
-            echo "branch_name=$branch_name"
+            echo "branch_name=$branch_display"
             echo "description=$description"
             echo "author_slug=$author_slug"
             echo "branch_slug=$branch_slug"
@@ -171,7 +171,7 @@ jobs:
 
           ```bash
           python marin/run/ray_run.py -- \
-            python -m ${{ steps.parse.outputs.import_path }}
+            python -m ${{ steps.parse.outputs.import_path }} --force_run_failed true
           ```
           EOF
           fi
@@ -224,11 +224,11 @@ jobs:
               "⚓ Welcome to Marin! Your branch is ready.",
               "",
               `- Branch & Starter File: https://github.com/${owner}/${repo}/tree/${branch}/${dest}`,
-              `- PR: ${prUrl}`,
+              `- Draft PR: ${prUrl}` (eventually to be merged into main!),
               "",
               "## Next Steps",
               "",
-              `1. **[Click here to fork Marin](${`https://github.com/${owner}/${repo}/fork`})**`,
+              `1. **[Click here to fork Marin](${`https://github.com/${owner}/${repo}/fork`})** (if you haven't already done so)`,
               "",
               "2. **Copy, paste & run the following to find your branch and starter code**",
               "",
@@ -236,9 +236,9 @@ jobs:
               `git clone https://github.com/${author}/${repo}.git`,
               `cd ${repo}`,
               `git remote add upstream https://github.com/${owner}/${repo}.git`,
-              `git fetch upstream ${branch}`,
-              `git checkout -b ${branch} --track upstream/${branch}`,
-              `git push -u origin ${branch}`,
+              `git fetch upstream "${branch}"`,
+              `git checkout -b "${branch}" --track "upstream/${branch}"`,
+              `git push -u origin "${branch}"`,
               "",
               "uv venv --python 3.11",
               ". .venv/bin/activate",
@@ -250,10 +250,11 @@ jobs:
               "",
               "3. Start hacking!",
               "",
-              "Run your starter code locally:",
+              `To sync changes in your branch & on your fork with us, **[create a PR](https://github.com/marin-community/marin/compare/${branch}...${owner}:${repo}:${branch})**.`,
+              "Please include the output of `print_run_info()` in the PR description, which you can obtain by dry-running the starter code",
               "```bash",
               "python marin/run/ray_run.py -- \\",
-              `  python -m ${importPath}`,
+              `  python -m ${importPath} --force_run_failed true --dry_run true`,
               "```",
             ].join("\n");
             const params = {
