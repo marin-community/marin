@@ -99,7 +99,7 @@ class VizLmConfig:
 
 
 @ray.remote(
-    memory=64 * 1024 * 1024 * 1024, 
+    memory=64 * 1024 * 1024 * 1024,
     max_calls=1,
     runtime_env={"env_vars": {"HF_HOME": HUGGINGFACE_CACHE_PATH}},
 )
@@ -160,5 +160,7 @@ def visualize_lm_log_probs(config: VizLmConfig) -> None:
         comparison_is_hf=config.comparison_is_hf,
     )
     ray.get(
-        do_viz_lm.options(resources={"TPU": config.resource_config.num_tpu, f"{config.resource_config.tpu_type}-head": 1}).remote(levanter_config)
+        do_viz_lm.options(
+            resources={"TPU": config.resource_config.num_tpu,
+            f"{config.resource_config.tpu_type}-head": 1}).remote(levanter_config)
         )
