@@ -19,12 +19,12 @@ import subprocess
 import time
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 
-from fray.cluster.base import Cluster
-from fray.cluster.types import CpuConfig, EnvironmentConfig, JobId, JobInfo, JobRequest, JobStatus
+from fray.cluster.base import Cluster, CpuConfig, EnvironmentConfig, JobId, JobInfo, JobRequest, JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -130,21 +130,31 @@ class LocalCluster(Cluster):
     def list_jobs(self) -> list[JobInfo]:
         return [job.get_info() for job in self._jobs.values()]
 
+    @contextmanager
+    def connect(self) -> Iterator[None]:
+        """No-op connection for local cluster."""
+        yield
+
     def _get_job(self, job_id: JobId) -> "_LocalJob":
         if job_id not in self._jobs:
             raise KeyError(f"Job {job_id} not found")
         return self._jobs[job_id]
 
     def _build_command(self, request: JobRequest) -> list[str]:
+        entrypoint = request.entrypoint
+
+        if entrypoint.callable is not None:
+            # Callable entrypoint: use thunk helper to convert to binary entrypoint
+            from fray.fn_thunk import create_thunk_entrypoint
+
+            # Convert callable to binary-based entrypoint
+            entrypoint = create_thunk_entrypoint(entrypoint.callable, prefix=f"/tmp/{request.name}")
+
+        # Binary entrypoint
+        assert entrypoint.binary is not None, "Command-line entrypoint requires binary"
+
         if request.environment and request.environment.workspace:
-            return [
-                "uv",
-                "run",
-                "python",
-                "-m",
-                request.entrypoint,
-                *request.entrypoint_args,
-            ]
+            return ["uv", "run", entrypoint.binary, *entrypoint.args]
         else:
             raise NotImplementedError("Docker execution not yet supported in LocalCluster")
 

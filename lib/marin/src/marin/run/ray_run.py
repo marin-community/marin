@@ -28,7 +28,7 @@ import yaml
 from ray.job_submission import JobSubmissionClient
 
 from marin.cluster.config import find_config_by_region
-from marin.cluster.ray import DashboardConfig, ray_dashboard
+from fray.cluster.ray import DashboardConfig, ray_dashboard
 from marin.run.ray_deps import build_runtime_env_for_packages
 
 logger = logging.getLogger(__name__)

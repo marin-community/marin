@@ -1,0 +1,87 @@
+name: Fray - Tests
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    paths:
+      - lib/fray/**
+      - .github/workflows/fray-unit-tests.yaml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Test fray
+        env:
+          CI: true
+        run: |
+          cd lib/fray && uv run --group=fray-test --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/
+
+  tpu-test:
+    runs-on: [tpu-ci]
+    timeout-minutes: 10
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
+
+      - name: Run TPU tests in Docker
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+        run: |
+          bash infra/tpu-ci/clean-tpu.sh
+
+          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
+          echo "Using Docker image: $DOCKER_IMAGE"
+
+          # Create UV cache directory
+          mkdir -p /tmp/uv-cache
+          chmod 777 /tmp/uv-cache
+
+          docker run --rm \
+            --device /dev/vfio:/dev/vfio \
+            --shm-size=100g \
+            --stop-timeout=5 \
+            --cap-add=SYS_RESOURCE \
+            --ulimit memlock=68719476736:68719476736 \
+            -e HF_TOKEN \
+            -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
+            -e JAX_PLATFORMS=tpu,cpu \
+            -e PJRT_DEVICE=TPU \
+            -e TPU_MIN_LOG_LEVEL=3 \
+            -e TPU_STDERR_LOG_LEVEL=3 \
+            -e UV_CACHE_DIR=/tmp/uv-cache \
+            -e WANDB_API_KEY \
+            -e WANDB_MODE=offline \
+            -v ${{ github.workspace }}:/workspace-src:ro \
+            -v /tmp/uv-cache:/tmp/uv-cache:rw \
+            -w /workspace \
+            $DOCKER_IMAGE \
+            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace/lib/fray && timeout --kill-after=5 --signal=TERM 590 uv run --group=fray-tpu-test pytest tests/ -v --tb=short -s --log-cli-level=INFO -m tpu_ci"

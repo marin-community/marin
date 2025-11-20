@@ -127,11 +127,12 @@ def build_python_path(submodules_dir: str = "submodules") -> list[str]:
     """
     # Workspace member src directories + experiments directory
     paths = [
-        "lib/marin/src",
-        "lib/levanter/src",
-        "lib/zephyr/src",
-        "lib/haliax/src",
         "experiments",
+        "lib/fray/src",
+        "lib/haliax/src",
+        "lib/levanter/src",
+        "lib/marin/src",
+        "lib/zephyr/src",
     ]
 
     if not os.path.exists(submodules_dir):

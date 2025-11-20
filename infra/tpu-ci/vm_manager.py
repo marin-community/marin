@@ -789,7 +789,6 @@ sudo docker run --rm \\
   -e TPU_CI=true \\
   -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \\
   -e START_RAY_TPU_CLUSTER=true \\
-  -e PYTHONPATH=/workspace \\
   -e UV_PROJECT_ENVIRONMENT=/opt/marin/.venv \\
 {env_var_flags}  -v {remote_dir}:/workspace:rw \\
   --tmpfs /workspace/logs:rw \\

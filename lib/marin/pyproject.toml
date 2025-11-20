@@ -26,6 +26,7 @@ dependencies = [
     "levanter[serve]",
     "lz4",
     "zephyr",
+    "fray",
     "multiprocess==0.70.16",
     "numpy",
     "openai",
@@ -122,6 +123,7 @@ conflicts = [
 [tool.uv.sources]
 zephyr = { workspace = true }
 levanter = { workspace = true }
+fray = { workspace = true }
 
 torch = [
     # Default to the CPU index for TPU/CPU builds

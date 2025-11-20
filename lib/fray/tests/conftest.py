@@ -14,6 +14,7 @@
 
 """Pytest fixtures for fray tests."""
 
+
 import pytest
 import ray
 from fray.cluster import LocalCluster, RayCluster
@@ -22,7 +23,13 @@ from fray.cluster import LocalCluster, RayCluster
 @pytest.fixture(scope="module")
 def ray_cluster():
     if not ray.is_initialized():
-        ray.init(ignore_reinit_error=True)
+        ray.init(
+            address="local",
+            num_cpus=8,
+            ignore_reinit_error=True,
+            logging_level="info",
+            log_to_driver=True,
+        )
     yield RayCluster()
     # Don't shutdown - let pytest handle cleanup
 

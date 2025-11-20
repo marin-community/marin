@@ -15,3 +15,15 @@
 """Ray-based cluster implementation."""
 
 from fray.cluster.ray.cluster import RayCluster
+from fray.cluster.ray.dashboard import (
+    DashboardConfig,
+    DashboardConnection,
+    ray_dashboard,
+)
+
+__all__ = [
+    "DashboardConfig",
+    "DashboardConnection",
+    "RayCluster",
+    "ray_dashboard",
+]

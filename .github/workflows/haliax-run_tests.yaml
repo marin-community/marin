@@ -1,4 +1,4 @@
-name: Run Tests
+name: Haliax - Tests
 
 on:
   push:
@@ -15,7 +15,7 @@ on:
       - .github/workflows/haliax-*.yaml
 
 jobs:
-  build:
+  cpu-test:
 
     runs-on: ubuntu-latest
 

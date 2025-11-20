@@ -73,7 +73,6 @@ def run_local(
     set_flow_backend(backend)
     sys.argv = [script_path, *script_args]
 
-    # Import script dynamically
     script_path_obj = Path(script_path).resolve()
 
     # Derive module name from path for Ray compatibility
@@ -154,7 +153,6 @@ def run_cluster(
     if config.num_gpus:
         ray_cmd += ["--entrypoint-num-gpus", str(config.num_gpus)]
 
-    # Construct the entrypoint command (direct python call - deps already installed by ray_run)
     entrypoint = [
         "python",
         "-m",
@@ -176,7 +174,6 @@ def run_cluster(
 
     entrypoint += [script_path, *script_args]
 
-    # Pass entrypoint command to ray_run (must be prefixed with --)
     ray_cmd += ["--", *entrypoint]
 
     # Run ray_run.py, forward exit code
@@ -230,7 +227,6 @@ def main(
     dry_run: bool,
 ) -> None:
     """Execute data processing pipeline script with configurable backend."""
-    # Get script arguments from extra args
     script_args = ctx.args
 
     # Resolve script path
@@ -243,22 +239,16 @@ def main(
         memory=memory,
         num_cpus=num_cpus,
         num_gpus=num_gpus,
-        backend=backend,
         cluster=cluster,
+        entry_point=entry_point,
     )
 
-    # Execute based on mode
+    # in cluster mode: submit via ray_run.py
+    script_path = Path(script).resolve()
     if cluster:
-        # Cluster mode: submit via ray_run.py
-        # Convert to relative path for cluster execution
-        try:
-            relative_script_path = script_path.relative_to(Path.cwd())
-            run_cluster(config, cluster, str(relative_script_path), script_args, entry_point)
-        except ValueError:
-            # Script is outside cwd, use absolute path
-            run_cluster(config, cluster, str(script_path), script_args, entry_point)
+        relative_script_path = script_path.relative_to(Path.cwd())
+        run_cluster(config, cluster, str(relative_script_path), script_args, entry_point)
     else:
-        # Local mode: run directly
         run_local(config, str(script_path), script_args, entry_point)
 
 

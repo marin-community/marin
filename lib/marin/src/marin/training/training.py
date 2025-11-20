@@ -23,7 +23,7 @@ import draccus
 import levanter.infra.cli_helpers
 import ray
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
-from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
+from fray.cluster.ray.tpu import run_on_pod
 from levanter.main import train_lm
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
@@ -210,15 +210,12 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     # TODO: abstract this?
     if isinstance(hw_config, TpuPodConfig):
-        if hw_config.slice_count == 1:
-            return run_on_pod_resumable(train_lm_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
-        else:
-            return run_on_pod_multislice_resumable(
-                train_lm_task,
-                config.resources.accelerator_descriptor(),
-                hw_config.slice_count,
-                max_retries_failure=10,
-            )
+        return run_on_pod(
+            train_lm_task,
+            config.resources.accelerator_descriptor(),
+            num_slices=hw_config.slice_count,
+            max_retries_failure=10,
+        )
     else:
         return ray.get(train_lm_task.remote())
 

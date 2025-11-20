@@ -30,7 +30,7 @@ import fsspec
 import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
-from levanter.infra.ray_tpu import TPU_CONFIGS
+from fray.cluster.ray.tpu import TPU_CONFIGS
 
 from experiments.defaults import _get_tokenizer_for_train, default_train
 from experiments.llama import llama3_tokenizer_vocab_size
