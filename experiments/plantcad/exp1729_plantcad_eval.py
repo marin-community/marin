@@ -445,7 +445,12 @@ def run_plantcad_evaluation(config: DnaEvalConfig) -> dict:
     tokenizer = AutoTokenizer.from_pretrained(resolved_checkpoint)
     logger.info(f"Tokenizer vocab size: {len(tokenizer.vocab)}")
 
-    # Load model
+    # Load HF model
+    # Note: HF checkpoints are used in this case instead of Levanter checkpoints
+    # for no good reason other than for consistency with code in other projects
+    # intended to evaluate the same checkpoints in Torch, e.g.:
+    # https://github.com/plantcad/plantcad-dev/pull/26
+    # TODO: Switch to Levanter checkpoints/models
     logger.info("Loading model...")
     torch_dtype = getattr(torch, config.dtype) if config.dtype else None
     model = AutoModelForCausalLM.from_pretrained(
