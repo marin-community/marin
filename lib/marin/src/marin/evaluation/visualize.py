@@ -67,6 +67,37 @@ class VizLmConfig:
     resource_config: ResourceConfig = dataclasses.field(default_factory=lambda: SINGLE_TPU_V5p_8_FULL)
 
 
+def execute_in_subprocess(underlying_function, args, kwargs):
+    def target_fn(queue, args, kwargs):
+        try:
+            # Call the original function
+            result = underlying_function(*args, **kwargs)
+            queue.put((True, result))  # Success, put the result
+        except Exception as e:
+            # Capture and return the full traceback in case of an exception
+            exc_info = sys.exc_info()
+            exception_info = ExceptionInfo(ex=e, tb=tblib.Traceback(exc_info[2]))
+            queue.put((False, exception_info))
+
+    queue = multiprocessing.Queue()
+    process = multiprocessing.Process(target=target_fn, args=(queue, args, kwargs))
+    process.start()
+    process.join()
+
+    # Retrieve the result or error from the queue
+    logger.info("Process finished")
+    try:
+        success, value = queue.get(timeout=1)
+    except Empty:
+        logger.error("Process timed out")
+        process.terminate()
+        raise TimeoutError("Process timed out") from None
+
+    if not success:
+        value.reraise()
+    return value
+
+
 @ray.remote(
     memory=64 * 1024 * 1024 * 1024, 
     max_calls=1,
