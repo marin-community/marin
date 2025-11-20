@@ -224,7 +224,7 @@ jobs:
               "⚓ Welcome to Marin! Your branch is ready.",
               "",
               `- Branch & Starter File: https://github.com/${owner}/${repo}/tree/${branch}/${dest}`,
-              `- Draft PR: ${prUrl}` (eventually to be merged into main!),
+              `- Draft PR: ${prUrl} (eventually to be merged into main!)`,
               "",
               "## Next Steps",
               "",
