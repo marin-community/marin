@@ -36,6 +36,7 @@ from marin.utilities.executor_utils import ckpt_path_to_step_name
 from marin.resources import ResourceConfig
 
 HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
+GCSFUSE_MOUNT_POINT = "/opt/gcsfuse_mount"
 
 
 @dataclass
@@ -120,7 +121,7 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
         local_path = None
         if config.hf_checkpoint:
             # Use GCSFuse directly so that we don't have to download the checkpoint to the local filesystem
-            local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.hf_checkpoint))
+            local_path = os.path.join(config.local_model_dir, ckpt_path_to_step_name(config.hf_checkpoint))
             download_from_gcs(
                 gcs_path=config.hf_checkpoint,
                 destination_path=local_path,
@@ -128,7 +129,7 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
             config.hf_checkpoint = local_path
             print(f"Downloaded model checkpoint to {local_path}: {os.listdir(local_path)}")
         elif config.checkpoint_path and is_remote_path(config.checkpoint_path):
-            local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.checkpoint_path))
+            local_path = os.path.join(config.local_model_dir, ckpt_path_to_step_name(config.checkpoint_path))
             download_from_gcs(
                 gcs_path=config.checkpoint_path,
                 destination_path=local_path,
@@ -139,7 +140,7 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
         if config.hf_checkpoint and not os.path.exists(config.hf_checkpoint):
             shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
             print(f"Deleted HuggingFace cache at {HUGGINGFACE_CACHE_PATH}.")
-        if local_path and "gcsfuse" not in local_path:
+        if local_path and not local_path.startswith(GCSFUSE_MOUNT_POINT):
             shutil.rmtree(local_path, ignore_errors=True)
             print(f"Deleted local checkpoint at {local_path}.")
 
