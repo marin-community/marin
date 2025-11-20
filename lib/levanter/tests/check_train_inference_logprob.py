@@ -14,6 +14,22 @@ import optax
 
 from levanter.layers.attention import AttentionMask, AttentionBackend
 
+def logsumexp_batch_invariant(x: jax.Array, axis: int = -1) -> jax.Array:
+    assert axis == -1 or axis == len(x.shape) - 1, "This implementation of logsumexp only supports last axis"
+    x_2d = x.reshape(-1, x.shape[-1])
+    logprobs_individual = []
+    for i in range(x_2d.shape[0]):
+        logprobs_individual.append(jax.jit(jax.nn.logsumexp)(x_2d[i]))
+    return jnp.array(logprobs_individual).reshape(x.shape[:-1])
+
+def softmax_cross_entropy_with_integer_labels_batch_invariant(logits: jax.Array, labels: jax.Array, axis: int = -1) -> jax.Array:
+    label_logits = jnp.take_along_axis(
+        logits, jnp.expand_dims(labels, axis), axis=axis
+    ).take(0, axis=axis)
+    print(f'{logits.shape=}')
+    log_normalizers = logsumexp_batch_invariant(logits, axis=axis)
+    out = log_normalizers - label_logits
+    return out
 
 def simple_autoregressive_inference(model, prompt_tokens, max_new_tokens, key):
     """
@@ -52,7 +68,7 @@ def simple_autoregressive_inference(model, prompt_tokens, max_new_tokens, key):
         # Compute logprob using the same method as line 142
         next_token_squeezed = next_token.squeeze(-1)  # [batch]
         print(f"[decode {i}] {next_token_squeezed=}")
-        logprob = optax.softmax_cross_entropy_with_integer_labels(
+        logprob = softmax_cross_entropy_with_integer_labels_batch_invariant(
             next_token_logits.array.astype(jnp.float32), next_token_squeezed
         )
         logprob = -1 * logprob  # Negate to get log probability
@@ -184,7 +200,7 @@ if __name__ == "__main__":
         logits = logits.array.astype(jnp.float32)
         labels = generated.array[:, 1:].reshape(batch_size, -1)
         print(f"[forward] {labels=}")
-        logprobs = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
+        logprobs = softmax_cross_entropy_with_integer_labels_batch_invariant(logits, labels)
         logprobs = -1 * logprobs
         response_logprobs_levanter = logprobs[0, len(prompt_tokens)-1:]
         # print("Response logprobs levanter: ", logprobs[0, len(prompt_tokens)-1:])
