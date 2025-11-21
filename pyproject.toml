@@ -86,7 +86,6 @@ search-path = [
     "lib/haliax/src",
     "lib/zephyr/src",
     "lib/fray/src",
-    "src",
 ]
 disable-search-path-heuristics = true
 
