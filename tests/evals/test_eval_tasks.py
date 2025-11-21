@@ -86,5 +86,5 @@ def test_mock_task_integration(mesh_context, backend):
     results = task.run()
     print(f"Mock task results: {results}")
     assert len(results) == 1
-    assert "mock_0" in results
-    assert len(results["mock_0"].text) > 0
+    assert results[0].request_id == "mock_0"
+    assert len(results[0].text) > 0

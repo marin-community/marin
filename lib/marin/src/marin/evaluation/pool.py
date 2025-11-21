@@ -62,7 +62,10 @@ class InferencePool:
 
         def _worker_closure():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-            worker_impl(self.config.model_config)
+
+            # Create and run worker (close over the queues)
+            worker = worker_impl(self.config.model_config)
+            worker.run(self.task_queue, self.result_queue)
 
         job_request = JobRequest(
             name="marin-inference-worker",
@@ -70,18 +73,36 @@ class InferencePool:
             entrypoint=Entrypoint(callable=_worker_closure),
             environment=EnvironmentConfig(workspace="."),
         )
-        self.workers.append(self.cluster.launch(job_request))
+        job_id = self.cluster.launch(job_request)
+        self.workers.append(job_id)
         return self
 
     def map(self, tasks: list[InferenceRequest]) -> list[InferenceResult]:
+        import time
+
         for task in tasks:
             logger.info(f"Pushing: {task}")
             self.task_queue.push(task)
 
         results = []
         for _ in range(len(tasks)):
-            results.append(self.result_queue.pop())
-            logger.info(f"Popped: {results[-1]}")
+            # Poll for result with timeout
+            max_wait = 60.0  # 60 second timeout
+            start_time = time.time()
+            result = None
+            while result is None and (time.time() - start_time) < max_wait:
+                lease = self.result_queue.pop()
+                if lease is not None:
+                    result = lease.item
+                    self.result_queue.done(lease)
+                    break
+                time.sleep(0.1)
+
+            if result is None:
+                raise TimeoutError(f"Timed out waiting for result after {max_wait}s")
+
+            logger.info(f"Popped: {result}")
+            results.append(result)
         return results
 
     def __exit__(self, exc_type, exc_val, exc_tb):

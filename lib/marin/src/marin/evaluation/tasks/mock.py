@@ -30,8 +30,14 @@ class MockTask(EvaluationTask):
 
     def run(self) -> list[InferenceResult]:
         logger.info(f"Running mock task with {len(self.prompts)} prompts")
+
+        # Convert prompts to InferenceRequests
+        from marin.evaluation.types import InferenceRequest
+
+        requests = [InferenceRequest(prompt=prompt, request_id=f"mock_{i}") for i, prompt in enumerate(self.prompts)]
+
         with InferencePool(self.config) as pool:
-            results = pool.map(self.prompts)
+            results = pool.map(requests)
 
         logger.info(f"Mock task completed with {len(results)} results")
         return results

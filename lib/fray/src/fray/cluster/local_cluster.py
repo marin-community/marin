@@ -63,9 +63,14 @@ class LocalCluster(Cluster):
 
     def shutdown(self):
         """Terminate any remaining jobs forcefully."""
-        for job in self._jobs.values():
-            job.process.kill()
-            job.process.wait(timeout=5)
+        logger.info(f"[SHUTDOWN] Shutting down cluster with {len(self._jobs)} jobs")
+        for job_id, job in self._jobs.items():
+            if job.process.poll() is None:
+                logger.info(f"[SHUTDOWN] Killing job {job_id}")
+                job.process.kill()
+                job.process.wait(timeout=5)
+            else:
+                logger.info(f"[SHUTDOWN] Job {job_id} already exited with code {job.process.returncode}")
 
     def launch(self, request: JobRequest) -> JobId:
         """Launch a job as a local subprocess."""
@@ -95,6 +100,7 @@ class LocalCluster(Cluster):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                bufsize=1,  # Line buffered
             )
             logger.info(f"[LAUNCH] Process started with PID: {process.pid}")
         except Exception as e:
@@ -116,6 +122,7 @@ class LocalCluster(Cluster):
         return job_id
 
     def monitor(self, job_id: JobId) -> Iterator[str]:
+        """Monitor job output."""
         job = self._get_job(job_id)
         while True:
             try:
@@ -123,6 +130,7 @@ class LocalCluster(Cluster):
                 yield line
             except Empty:
                 if job.process.poll() is not None:
+                    # Process finished, drain remaining logs
                     while not job.log_queue.empty():
                         yield job.log_queue.get_nowait()
                     break
@@ -133,6 +141,7 @@ class LocalCluster(Cluster):
     def terminate(self, job_id: JobId) -> None:
         job = self._get_job(job_id)
         if job.process.poll() is None:
+            logger.info(f"[TERMINATE] Terminating job {job_id}")
             job.process.terminate()
             try:
                 job.process.wait(timeout=5)
@@ -176,6 +185,9 @@ class LocalCluster(Cluster):
         if "FRAY_CLUSTER_SPEC" not in env:
             env["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
 
+        # Disable Python output buffering so we can see logs in real-time
+        env["PYTHONUNBUFFERED"] = "1"
+
         return env
 
 
@@ -198,17 +210,22 @@ class _LocalJob:
 
     def start_log_thread(self):
         """Start background thread to collect logs."""
-
         thread_logger = logging.getLogger(__name__ + ".log_thread")
 
         def collect_logs():
-            thread_logger.info(f"Starting log collection for job {self.job_id}")
-            while self.process.poll() is not None:
-                for line in self.process.stdout:
-                    thread_logger.info(f"Job {self.job_id} output: {line.rstrip()}")
-                    self.log_queue.put(line.rstrip())
-            thread_logger.info(f"Log collection ended for job {self.job_id}")
-            thread_logger.info("Process ended with returncode: %s", self.process.wait())
+            thread_logger.info(f"[LOG_THREAD] Starting log collection for job {self.job_id}")
+            try:
+                # Read lines until EOF (process exits and pipe closes)
+                for line in iter(self.process.stdout.readline, ""):
+                    line = line.rstrip()
+                    if line:  # Only log non-empty lines
+                        thread_logger.info(f"[WORKER {self.job_id}] {line}")
+                        self.log_queue.put(line)
+            except Exception as e:
+                thread_logger.error(f"[LOG_THREAD] Error reading logs for job {self.job_id}: {e}")
+            finally:
+                thread_logger.info(f"[LOG_THREAD] Log collection ended for job {self.job_id}")
+                thread_logger.info(f"[LOG_THREAD] Process ended with returncode: {self.process.returncode}")
 
         self._log_thread = Thread(target=collect_logs, daemon=True)
         self._log_thread.start()
