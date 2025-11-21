@@ -523,7 +523,7 @@ class LevanterHarnessLM(TemplateLM):
             prompt = request.args[0]
             continuation = request.args[1]
             modified_prompt = INPUT_PREFIX + prompt + INPUT_SUFFIX
-            modified_request = dataclasses.replace(request, args=(modified_prompt, continuation))
+            modified_request = dataclasses.replace(request, arguments=(modified_prompt, continuation))
             modified_requests.append(modified_request)
 
         for request in modified_requests:

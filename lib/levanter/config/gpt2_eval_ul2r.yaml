@@ -20,7 +20,7 @@ trainer:
   batch_axis: "batch"
   fsdp_axis: "embed"
   mp: f32
-  num_train_steps: 10000
+  num_train_steps: 100000
   tensor_parallel_axes: ["mlp", "heads"]
   train_batch_size: 32 # TODO determine
 

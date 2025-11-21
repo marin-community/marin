@@ -1,0 +1,87 @@
+# This is the same as gpt2_eval_ul2r.yaml except without any UL2R data.
+# Trying to get a baseline.
+# uv run --extra lm_eval --extra gpu python -m levanter.main.train_lm --config config/gpt2_eval_ul2r_baseline.yaml
+
+model:
+  type: gpt2
+  # hidden_dim: 32
+  # num_heads: 4
+  # num_layers: 2
+
+initialize_from_hf: openai-community/gpt2
+use_hf_model_config: true
+
+trainer:
+  # checkpointer:
+  #   base_path: "checkpoints"
+  #   keep:
+  #     - every: 50
+  #   save_interval: 5m
+
+  # per_device_parallelism: -1
+  batch_axis: "batch"
+  fsdp_axis: "embed"
+  mp: f32
+  num_train_steps: 100000
+  tensor_parallel_axes: ["mlp", "heads"]
+  train_batch_size: 32 # TODO determine
+
+optimizer:
+  learning_rate: 1e-6
+  weight_decay: 0.1
+
+eval_harness:
+  task_spec: ["hellaswag"] # did xcopa cause Missing points assertion?
+  max_examples: 2048
+eval_harness_steps: 1000
+
+data:
+  tokenizer: ./gpt2_ul2r_DEV
+  configs:
+    wikitext:
+     id: dlwh/wikitext_103_detokenized
+     cache_dir: /tmp/marin_cache_pile
+    # ul2r:
+    #   #id: dlwh/wikitext_103_detokenized
+    #   id: Salesforce/wikitext
+    #   name: wikitext-103-raw-v1
+    #   cache_dir: /tmp/marin_cache_ul2r
+    #   format:
+    #     type: ul2r
+    #     #text_key: text # only for gsm8k
+    #     #text_key: question
+    #     task_configs:
+    #       r:
+    #         type: rx
+    #         mask_prob: 0.15
+    #         mean_span_length: 3.0
+    #         random_roll: true
+    #         task_token_id: 50257
+    #       x1:
+    #         type: rx
+    #         mask_prob: 0.15
+    #         mean_span_length: 32.0
+    #         random_roll: true
+    #         task_token_id: 50258
+    #       x2:
+    #         type: rx
+    #         mask_prob: 0.5
+    #         mean_span_length: 3.0
+    #         random_roll: true
+    #         task_token_id: 50258
+    #       s:
+    #         type: s
+    #         task_token_id: 50259
+    #     task_probs:
+    #       r: 0.5
+    #       x1: 0.125
+    #       x2: 0.125
+    #       s: 0.25
+    #     rng_seed: 42
+    #     sentinel_token_id_start: 50260
+    #     sentinel_token_id_count: 100
+  train_weights:
+    # Can't do this because is_prefix/input_mask don't match.
+    # TODO fix?
+    wikitext: 0.0 # eval only
+    ul2r: 1.0
