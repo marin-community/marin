@@ -62,14 +62,16 @@ class RayQueueActor:
         return lease
 
     def done(self, lease_id: str) -> None:
-        if lease_id in self.leases:
-            del self.leases[lease_id]
+        if lease_id not in self.leases:
+            raise ValueError(f"Invalid lease: {lease_id} not found")
+        del self.leases[lease_id]
 
     def release(self, lease_id: str) -> None:
-        if lease_id in self.leases:
-            lease, _ = self.leases.pop(lease_id)
-            # Requeue at the front for immediate retry
-            self.queue.appendleft(lease.item)
+        if lease_id not in self.leases:
+            raise ValueError(f"Invalid lease: {lease_id} not found")
+        lease, _ = self.leases.pop(lease_id)
+        # Requeue at the front for immediate retry
+        self.queue.appendleft(lease.item)
 
     def size(self) -> int:
         return len(self.queue) + len(self.leases)
@@ -80,10 +82,16 @@ class RayQueueActor:
     def _monitor_leases(self) -> None:
         """Background thread to check for expired leases."""
         while not self._stop_event.is_set():
-            time.sleep(1.0)
-            for lease_id, (lease, timeout) in self.leases.items():
+            time.sleep(0.1)  # Check frequently to catch short timeouts
+            # Make a copy to avoid "dictionary changed size during iteration"
+            leases_snapshot = list(self.leases.items())
+            for lease_id, (lease, timeout) in leases_snapshot:
                 if time.time() - lease.timestamp > timeout:
-                    self.release(lease_id)
+                    try:
+                        self.release(lease_id)
+                    except ValueError:
+                        # Already released/done by another thread
+                        pass
 
     def shutdown(self) -> None:
         self._stop_event.set()

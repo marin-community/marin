@@ -17,11 +17,13 @@
 
 import pytest
 import ray
-from fray.cluster import LocalCluster, RayCluster
+from fray.cluster import LocalCluster
 
 
 @pytest.fixture(scope="module")
 def ray_cluster():
+    from fray.cluster.ray import RayCluster
+
     if not ray.is_initialized():
         ray.init(
             address="local",

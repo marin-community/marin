@@ -19,9 +19,7 @@ import time
 
 import pytest
 import ray
-
-from fray.cluster.local.file_queue import FileQueue
-from fray.cluster.ray import RayQueue
+from fray import FileQueue, RayQueue
 
 
 @pytest.fixture(scope="module")
@@ -37,9 +35,13 @@ def queue(request, ray_context):
     """Parameterized fixture providing FileQueue and RayQueue implementations."""
     if request.param == "file":
         with tempfile.TemporaryDirectory() as tmpdir:
-            yield FileQueue(name="test-queue", queue_dir=tmpdir)
+            yield FileQueue(path=tmpdir)
     else:  # ray
-        yield RayQueue(name="test-queue")
+        # Use unique name per test to avoid state pollution
+        import uuid
+
+        unique_name = f"test-queue-{uuid.uuid4()}"
+        yield RayQueue(name=unique_name)
 
 
 def test_push_and_pop(queue):
@@ -116,10 +118,10 @@ def test_release_requeues_item(queue):
     queue.release(lease)
     assert queue.pending() == 2  # both items pending again
 
-    # task1 should be available again (at the end)
+    # Released items go to front for immediate retry
     next_lease = queue.pop()
     assert next_lease is not None
-    assert next_lease.item == "task2"  # task2 was next in line
+    assert next_lease.item == "task1"  # task1 was released, goes to front
 
 
 def test_release_with_invalid_lease(queue):
@@ -198,17 +200,17 @@ def test_complete_workflow(queue):
     assert lease2.item == "task1"
     queue.release(lease2)  # Requeue the failed task
 
-    # Worker 3 processes successfully
+    # Worker 3 gets the requeued task (goes to front)
     lease3 = queue.pop()
     assert lease3 is not None
-    assert lease3.item == "task2"
+    assert lease3.item == "task1"  # Requeued task at front
     queue.done(lease3)
 
-    # The requeued task should be available
-    assert queue.pending() == 3  # task1 (requeued), task3, task4
+    # Continue with remaining tasks
+    assert queue.pending() == 3  # task2, task3, task4
     assert queue.size() == 3
 
-    # Process the requeued task
+    # Process next task
     lease4 = queue.pop()
     assert lease4 is not None
     assert queue.size() == 3

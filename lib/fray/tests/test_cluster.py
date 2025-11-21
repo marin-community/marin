@@ -116,7 +116,7 @@ def test_cluster_monitor_logs(cluster):
 
 def test_ray_cluster_get_runtime_env():
     # Use remote address to test runtime_env building (local clusters return None)
-    from fray.cluster import RayCluster
+    from fray.cluster.ray import RayCluster
 
     remote_cluster = RayCluster(address="ray://remote:8265")
     request = JobRequest(
@@ -177,7 +177,7 @@ def test_ray_cluster_get_ray_resources_tpu(ray_cluster):
 
 def test_ray_cluster_environment_variable_injection():
     # Use remote address to test runtime_env building (local clusters return None)
-    from fray.cluster import RayCluster
+    from fray.cluster.ray import RayCluster
 
     remote_cluster = RayCluster(address="ray://remote:8265")
     request = JobRequest(
@@ -201,7 +201,7 @@ def test_ray_cluster_environment_variable_injection():
 
 def test_ray_cluster_extra_dependency_groups():
     # Use remote address to test runtime_env building (local clusters return None)
-    from fray.cluster import RayCluster
+    from fray.cluster.ray import RayCluster
 
     remote_cluster = RayCluster(address="ray://remote:8265")
     request = JobRequest(

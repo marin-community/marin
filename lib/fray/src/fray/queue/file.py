@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import logging
 import pickle
-import threading
 import time
 import uuid
 from typing import Any, TypeVar
@@ -38,17 +37,15 @@ class FileQueue(Queue[T]):
     Uses atomic moves (if supported by backend) or copy-delete for state transitions.
     """
 
-    def __init__(self, path: str, fs_args: dict[str, Any] | None = None, monitor: bool = True):
+    def __init__(self, path: str, fs_args: dict[str, Any] | None = None):
         """Initialize FileQueue.
 
         Args:
             path: Base path for the queue (e.g., "gs://my-bucket/queue-1" or "/tmp/queue-1")
             fs_args: Additional arguments for fsspec.filesystem
-            monitor: Whether to start the background lease monitor thread
         """
         self.path = path.rstrip("/")
         self.fs_args = fs_args or {}
-        self._monitor = monitor
 
         # Initialize filesystem
         self.fs, self.fs_path = fsspec.core.url_to_fs(path, **self.fs_args)
@@ -59,27 +56,6 @@ class FileQueue(Queue[T]):
         # Create directories
         self.fs.makedirs(self.pending_dir, exist_ok=True)
         self.fs.makedirs(self.processing_dir, exist_ok=True)
-
-        # Start background monitor if requested
-        self._stop_event = threading.Event()
-        self._monitor_thread = None
-        if self._monitor:
-            self._monitor_thread = threading.Thread(target=self._monitor_leases, daemon=True)
-            self._monitor_thread.start()
-
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        # Don't pickle thread or event
-        state.pop("_monitor_thread", None)
-        state.pop("_stop_event", None)
-        # Don't restart monitor on unpickle
-        state["_monitor"] = False
-        return state
-
-    def __setstate__(self, state):
-        self.__dict__.update(state)
-        self._stop_event = threading.Event()
-        self._monitor_thread = None
 
     def push(self, item: T) -> None:
         # Create unique filename with timestamp for ordering
@@ -109,6 +85,9 @@ class FileQueue(Queue[T]):
             return None
 
     def pop(self, lease_timeout: float = 60.0) -> Lease[T] | None:
+        # First, check for expired leases in processing directory
+        self._recover_expired_leases()
+
         # List pending files
         try:
             files = sorted(self.fs.ls(self.pending_dir, detail=False))
@@ -143,24 +122,64 @@ class FileQueue(Queue[T]):
 
         return None
 
+    def _recover_expired_leases(self) -> None:
+        """Check processing directory for expired leases and move them back to pending."""
+        try:
+            files = self.fs.ls(self.processing_dir, detail=False)
+        except Exception:
+            return
+
+        now = time.time()
+        for file_path in files:
+            filename = file_path.split("/")[-1]
+            try:
+                # Parse expiry from filename
+                parts = filename.split("__expiry_")
+                if len(parts) != 2:
+                    continue
+
+                expiry = float(parts[1])
+
+                if now > expiry:
+                    logger.warning(f"Lease expired for {filename}, requeuing")
+                    # Use timestamp 0.0 to put at front of queue
+                    timestamp = 0.0
+                    unique_id = uuid.uuid4()
+                    new_filename = f"{timestamp:.6f}_{unique_id}.pkl"
+                    pending_path = f"{self.pending_dir}/{new_filename}"
+
+                    # Move back to pending
+                    try:
+                        self.fs.mv(file_path, pending_path)
+                    except FileNotFoundError:
+                        pass  # Race condition - already moved
+
+            except ValueError:
+                continue
+            except Exception as e:
+                logger.error(f"Error processing lease {filename}: {e}")
+
     def done(self, lease: Lease[T]) -> None:
         processing_path = f"{self.processing_dir}/{lease.lease_id}"
         try:
             self.fs.rm(processing_path)
         except FileNotFoundError:
-            logger.warning(f"Lease {lease.lease_id} not found (already done or expired?)")
+            raise ValueError(f"Invalid lease: {lease.lease_id} not found (already done or expired)") from None
 
     def release(self, lease: Lease[T]) -> None:
         processing_path = f"{self.processing_dir}/{lease.lease_id}"
 
-        # Extract original name (remove timeout suffix)
-        original_name = lease.lease_id.split("__expiry_")[0]
-        pending_path = f"{self.pending_dir}/{original_name}"
+        # Use timestamp 0.0 to put released items at the front of the queue
+        # This ensures immediate retry while maintaining FIFO order among released items
+        timestamp = 0.0
+        unique_id = uuid.uuid4()
+        filename = f"{timestamp:.6f}_{unique_id}.pkl"
+        pending_path = f"{self.pending_dir}/{filename}"
 
         try:
             self.fs.mv(processing_path, pending_path)
         except FileNotFoundError:
-            logger.warning(f"Lease {lease.lease_id} not found during release")
+            raise ValueError(f"Invalid lease: {lease.lease_id} not found during release") from None
 
     def size(self) -> int:
         try:
@@ -175,46 +194,3 @@ class FileQueue(Queue[T]):
             return len(self.fs.ls(self.pending_dir, detail=False))
         except Exception:
             return 0
-
-    def _monitor_leases(self) -> None:
-        while not self._stop_event.is_set():
-            time.sleep(5.0)  # Check less frequently for remote FS
-            try:
-                now = time.time()
-                try:
-                    files = self.fs.ls(self.processing_dir, detail=False)
-                except Exception:
-                    continue
-
-                for file_path in files:
-                    filename = file_path.split("/")[-1]
-                    try:
-                        # Parse expiry from filename
-                        parts = filename.split("__expiry_")
-                        if len(parts) != 2:
-                            continue
-
-                        expiry = float(parts[1])
-
-                        if now > expiry:
-                            logger.warning(f"Lease expired for {filename}, requeuing")
-                            original_name = parts[0]
-                            pending_path = f"{self.pending_dir}/{original_name}"
-
-                            # Move back to pending
-                            try:
-                                self.fs.mv(file_path, pending_path)
-                            except FileNotFoundError:
-                                pass  # Race condition
-
-                    except ValueError:
-                        continue
-                    except Exception as e:
-                        logger.error(f"Error processing lease {filename}: {e}")
-
-            except Exception as e:
-                logger.error(f"Error in lease monitor: {e}")
-
-    def shutdown(self) -> None:
-        self._stop_event.set()
-        self._monitor_thread.join(timeout=1.0)

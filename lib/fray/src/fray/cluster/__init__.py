@@ -52,12 +52,7 @@ from fray.cluster.base import (
     TpuType,
     create_environment,
 )
-from fray.cluster.local import LocalCluster
-
-try:
-    from fray.cluster.ray.cluster import RayCluster
-except ImportError:
-    RayCluster = None
+from fray.cluster.local_cluster import LocalCluster
 
 logger = logging.getLogger(__name__)
 
