@@ -194,7 +194,7 @@ def default_rl_train(
     checkpointer_config = CheckpointerConfigData(
         save_optimizer_state=False,
         save_float_dtype="bf16",
-        save_model_freq=10,
+        save_model_freq=999999,
     )
 
     resources = TpuPodConfig(tpu_type=tpu_type)
