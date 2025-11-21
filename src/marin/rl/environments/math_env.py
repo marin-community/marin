@@ -55,6 +55,17 @@ class MathEnvExample:
     example_id: str
     metadata: dict[str, Any] = field(default_factory=dict)
 
+@dataclass
+class LengthPenaltyConfig:
+    max_response_tokens: int
+    cache_response_tokens: int
+
+@dataclass
+class RewardConfig:
+    length_penalty_coef: float = 0.0
+    length_penalty_config: LengthPenaltyConfig | None = None
+    correctness_reward_coef: float = 1.0
+    format_reward_coef: float = 0.1
 
 LoadDatasetFn = Callable[..., Any]
 
@@ -79,6 +90,7 @@ class MathEnv(MarinEnv):
         datasets_loader: LoadDatasetFn | None = None,
         train_dataset: Iterable[dict[str, Any]] | None = None,
         eval_dataset: Iterable[dict[str, Any]] | None = None,
+        reward_config: RewardConfig | None = None,
     ) -> None:
         """Initialize the math environment.
 
@@ -101,6 +113,7 @@ class MathEnv(MarinEnv):
         self._trust_remote_code = trust_remote_code
         self._datasets_loader = datasets_loader or datasets.load_dataset
         self._rng = np.random.default_rng(seed)
+        self.reward_config = reward_config or RewardConfig()
 
         self.train_examples = self._prepare_split(
             split_name="train",
@@ -232,12 +245,14 @@ class MathEnv(MarinEnv):
         correct_sum = 0.0
         response_token_count = 0
         truncated_count = 0
+        mean_max_response_token_length = 0.0
 
         print(f"Length of sampled examples: {len(sampled_examples)}")
         print(f"Length of completions: {len(completions)}")
         for example, completion in zip(sampled_examples, completions, strict=True):
             group_rollouts: list[Rollout] = []
 
+            max_response_token_length = 0
             for choice in completion.choices:
                 (
                     reward,
@@ -267,8 +282,12 @@ class MathEnv(MarinEnv):
                 correct_sum += correct_score
                 response_token_count += rollout.response_tokens.size
 
+                max_response_token_length = max(max_response_token_length, rollout.response_tokens.size)
+
                 if choice.finish_reason == "length":
                     truncated_count += 1
+            
+            mean_max_response_token_length += max_response_token_length
 
             if group_rollouts:
                 rollout_groups.append(RolloutGroup(rollouts=group_rollouts))
@@ -285,6 +304,7 @@ class MathEnv(MarinEnv):
             f"{prefix}_total_responses": float(total_choices),
             f"{prefix}_sampled_examples": float(len(sampled_examples)),
             f"{prefix}_truncated_percentage": float(truncated_count) / total_choices,
+            f"{prefix}_mean_max_response_tokens": mean_max_response_token_length / len(completions),
         }
 
         return rollout_groups, metrics
@@ -294,9 +314,6 @@ class MathEnv(MarinEnv):
 
         Returns (reward, format_score, correct_score, token_reward_value).
         """
-
-        L_MAX = 4096
-        L_CACHE = 3072
 
         decoded_response = response_text.strip()
         validation = validate_format(decoded_response)
@@ -312,15 +329,18 @@ class MathEnv(MarinEnv):
 
         response_text_tokens = tokenizer.encode(response_text, add_special_tokens=False)
 
-        if len(response_text_tokens) <= (L_MAX - L_CACHE):
+        if self.reward_config.length_penalty_config is None:
             length_penalty = 0.0
-        elif len(response_text_tokens) <= L_MAX:
-            length_difference = (L_MAX - L_CACHE) - len(response_text_tokens)
-            length_penalty = length_difference / L_CACHE
         else:
-            length_penalty = -1.0
+            if len(response_text_tokens) <= self.reward_config.length_penalty_config.cache_response_tokens:
+                length_penalty = 0.0
+            elif len(response_text_tokens) <= self.reward_config.length_penalty_config.max_response_tokens:
+                length_difference = len(response_text_tokens) - self.reward_config.length_penalty_config.cache_response_tokens
+                length_penalty = length_difference / (self.reward_config.length_penalty_config.max_response_tokens - self.reward_config.length_penalty_config.cache_response_tokens)
+            else:
+                length_penalty = -1.0
 
-        reward = 0.1 * float(validation["is_valid"]) + 1.0 * float(grade) + length_penalty
+        reward = self.reward_config.format_reward_coef * float(validation["is_valid"]) + self.reward_config.correctness_reward_coef * float(grade) + self.reward_config.length_penalty_coef * length_penalty
 
         return reward, float(validation["is_valid"]), float(grade), reward
 

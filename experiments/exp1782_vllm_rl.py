@@ -42,6 +42,7 @@ from marin.rl.rl_losses import RLOOLoss, RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
+from marin.rl.environments.math_env import RewardConfig, LengthPenaltyConfig
 
 try:
     from vllm import SamplingParams
@@ -118,12 +119,15 @@ class ExperimentConfig:
 
     # trainer params
     train_batch_size: int = 1024
+    per_device_parallelism: int = 16
 
     # some sampling params
     max_output_tokens: int = 2048
     n_prompts: int = 24
     n_generations_per_prompt: int = 64
 
+    # length penalty params
+    reward_config: RewardConfig | None = None
 
 MODEL = llama1b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
@@ -203,7 +207,7 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
             lesson_id="math_full",
             env_config=EnvConfig(
                 env_class="marin.rl.environments.math_env.MathEnv",
-                env_args={"seed": 42},
+                env_args={"seed": 42, "reward_config": experiment_config.reward_config},
             ),
             dependencies=[],
             # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
@@ -264,7 +268,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         # to ensure we accept an entire training batch from the rollout workers.
         train_batch_size=experiment_config.train_batch_size,
         # microbatch to avoid OOM
-        per_device_parallelism=16,
+        per_device_parallelism=experiment_config.per_device_parallelism,
         num_train_steps=500,
         steps_per_eval=100,
         checkpointer=CheckpointerConfig(
@@ -292,7 +296,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
         # We are running on-policy, so wait for new weights from the trainer after each episode.
-        max_weight_transfer_wait_time=120,
+        max_weight_transfer_wait_time=300,
         coordinator_name=f"weight_transfer_coordinator_{name}",
     )
 
@@ -378,9 +382,29 @@ def main():
         max_output_tokens=4096,
         n_prompts=8,
         n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=3072), length_penalty_coef=1.0),
     )
+
+    max_length_8192_exp = ExperimentConfig(
+        model_config=qwen3_1_7b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.01,
+            clip_epsilon=0.2,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+            # do_overlong_filtering=True,
+        ),
+        experiment_name_suffix="math-tis-r1-bsz128-t8192-n8-g16-lp",
+        train_batch_size=128,
+        per_device_parallelism=8,
+        max_output_tokens=8192,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+    )
+
     experiment_configs = [
-        length_penalty,
+        # length_penalty,
+        max_length_8192_exp,
         # ExperimentConfig(
         #     # model_config=llama_3_1_8b,
         #     # model_config=llama1b,
