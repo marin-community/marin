@@ -12,22 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Simple test that just checks whether scheduling a task on
-a TPU works.
-"""
+"""Helpers shared by tests to avoid pickling import issues on Ray workers."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
 
 
-import pytest
-import ray
+@dataclass
+class SampleDataclass:
+    """Tiny dataclass used in serialization round-trip tests."""
+
+    name: str
+    value: int
 
 
-@ray.remote(resources={"TPU": 1})
-def increment(x):
-    return x + 1
-
-
-@pytest.mark.tpu_ci
-@pytest.mark.timeout(10)
-def test_scheduling_on_tpu(ray_tpu_cluster):
-    result = ray.get(increment.remote(1))
-    assert result == 2
+__all__ = ["SampleDataclass"]

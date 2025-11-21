@@ -32,10 +32,9 @@ _backend_context: ContextVar[Backend | None] = ContextVar("zephyr_backend", defa
 
 def create_backend(
     backend_type: Literal["ray", "threadpool", "sync", "auto"] = "auto",
-    max_parallelism: int = 100,
+    max_parallelism: int = 1024,
     memory: str | None = None,
     num_cpus: float | None = None,
-    num_gpus: float | None = None,
     chunk_size: int = 1000,
     dry_run: bool = False,
     **ray_options,
@@ -44,10 +43,9 @@ def create_backend(
 
     Args:
         backend_type: Type of backend (ray, threadpool, sync, or auto). Default: "auto"
-        max_parallelism: Maximum number of concurrent tasks (default: 100)
+        max_parallelism: Maximum number of concurrent tasks
         memory: Memory requirement per task (e.g., "2GB", "512MB")
         num_cpus: Number of CPUs per task for Ray backend
-        num_gpus: Number of GPUs per task for Ray backend
         chunk_size: Items per chunk within a shard (default: 1000)
         dry_run: If True, show optimization plan without executing
         **ray_options: Additional Ray remote options (e.g., max_retries=3)
@@ -67,7 +65,6 @@ def create_backend(
         max_workers=max_parallelism,
         memory=memory_bytes,
         num_cpus=num_cpus,
-        num_gpus=num_gpus,
         **ray_options,
     )
 
@@ -143,15 +140,21 @@ def flow_backend(
     # Build parameters, using current config as defaults
     params = {
         "backend_type": "auto",
-        "max_parallelism": (
-            max_parallelism if max_parallelism is not None else (current.config.max_parallelism if current else 100)
-        ),
         "memory": memory,
         "num_cpus": num_cpus,
         "num_gpus": num_gpus,
-        "chunk_size": chunk_size if chunk_size is not None else (current.config.chunk_size if current else 1000),
-        "dry_run": dry_run if dry_run is not None else (current.config.dry_run if current else False),
         **backend_options,
     }
+    if current is not None:
+        params["max_parallelism"] = current.config.max_parallelism
+        params["chunk_size"] = current.config.chunk_size
+        params["dry_run"] = current.config.dry_run
+
+    if max_parallelism is not None:
+        params["max_parallelism"] = max_parallelism
+    if chunk_size is not None:
+        params["chunk_size"] = chunk_size
+    if dry_run is not None:
+        params["dry_run"] = dry_run
 
     return create_backend(**params)
