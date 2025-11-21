@@ -569,6 +569,15 @@ def main(config: TrainingConfig):
         mesh_axis_splitting=config.distributed.physical_axis_splitting,
     )
 
+    # Print sharding information
+    print("=" * 80)
+    print("SHARDING CONFIGURATION:")
+    print(f"  Configured sharding: {config.distributed.train_sharding}")
+    print(f"  Actual mesh shape: {mesh.mesh.shape}")
+    print(f"  Mesh axis names: {mesh.mesh.axis_names}")
+    print(f"  Physical devices: {mesh.mesh.devices.shape}")
+    print("=" * 80)
+
     with mesh.get_context():
         model_paths = config.model.model_paths
         llama_config = llama_config_from_model_config(model_paths, config.model.model_config_override)
