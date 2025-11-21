@@ -3,24 +3,71 @@
 
 import os
 import re
-from typing import TypeAlias
-
-from transformers import PreTrainedTokenizer, PreTrainedTokenizerFast
+from typing import Any, Protocol
 
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import logical_cpu_core_count
-
 
 silence_transformer_nag()
 
 _HF_TOKENIZER_OFF_VALUES = {"off", "false", "f", "no", "n", "0"}
 
-HfTokenizer: TypeAlias = PreTrainedTokenizerFast | PreTrainedTokenizer
-"""
-Type alias for a Hugging Face tokenizer. This is a union of the two tokenizer types.
-While there is PreTrainedTokenizerBase, it doesn't have all methods that are implemented in both
-PreTrainedTokenizer and PreTrainedTokenizerFast. grumble grumble.
-"""
+
+class HfTokenizer(Protocol):
+    """
+    Protocol defining the interface for Hugging Face tokenizers.
+
+    This protocol captures the common interface used across Levanter and Marin for both
+    PreTrainedTokenizer and PreTrainedTokenizerFast, without requiring a direct type union.
+
+    Note: Most attributes are effectively read-only in practice, but the Protocol doesn't
+    enforce this to allow compatibility with various tokenizer implementations.
+    """
+
+    # Token ID attributes
+    pad_token_id: int | None
+    eos_token_id: int | None
+    bos_token_id: int | None
+    all_special_ids: list[int]
+
+    # Token string attributes
+    pad_token: str | None
+    eos_token: str | None
+    bos_token: str | None
+    unk_token: str | None
+
+    # Configuration attributes
+    vocab_size: int
+    model_max_length: int
+    chat_template: str | None
+    name_or_path: str
+    is_fast: bool
+    backend_tokenizer: Any
+
+    # Core tokenization methods
+    def encode(self, text: Any, text_pair: Any = None, add_special_tokens: Any = True, **kwargs: Any) -> Any: ...
+    def decode(self, token_ids: Any, skip_special_tokens: Any = False, **kwargs: Any) -> str: ...
+    def __call__(self, text: Any, text_pair: Any = None, add_special_tokens: Any = True, **kwargs: Any) -> Any: ...
+    def apply_chat_template(
+        self, conversation: Any, tokenize: bool = True, add_generation_prompt: bool = False, **kwargs: Any
+    ) -> Any: ...
+
+    # Token conversion methods
+    def convert_tokens_to_ids(self, tokens: Any) -> Any: ...
+    def convert_ids_to_tokens(self, ids: Any) -> Any: ...
+
+    # Batch processing methods
+    def pad(self, encoded_inputs: Any, padding: Any = True, max_length: Any = None, **kwargs: Any) -> Any: ...
+    def batch_decode(self, sequences: Any, skip_special_tokens: Any = False, **kwargs: Any) -> Any: ...
+
+    # Special token management
+    def add_special_tokens(self, special_tokens_dict: Any, **kwargs: Any) -> int: ...
+
+    # Checkpoint methods
+    def save_pretrained(self, save_directory: str, **kwargs: Any) -> Any: ...
+
+    # Special methods
+    def __len__(self) -> int: ...
 
 
 def num_cpus_used_by_tokenizer(tokenizer: HfTokenizer) -> int:
