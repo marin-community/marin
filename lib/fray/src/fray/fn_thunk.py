@@ -86,6 +86,7 @@ def main(path: str):
     Args:
         path: fsspec-compatible path to the cloudpickled callable
     """
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
         logger.info("Loading callable from %s", path)
         with fsspec.open(path, "rb") as f:

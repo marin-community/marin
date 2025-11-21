@@ -1,0 +1,181 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Ray-based distributed queue implementation."""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+import uuid
+from collections import deque
+from typing import Any, TypeVar
+
+import ray
+from fray.queues.base import Lease, Queue
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+@ray.remote
+class RayQueueActor:
+    """Actor managing queue state and lease monitoring."""
+
+    def __init__(self):
+        self.queue = deque()
+        # Map lease_id -> (Lease, timeout)
+        self.leases: dict[str, tuple[Lease, float]] = {}
+        self._stop_event = threading.Event()
+        self._monitor_thread = threading.Thread(target=self._monitor_leases, daemon=True)
+        self._monitor_thread.start()
+
+    def push(self, item: Any) -> None:
+        self.queue.append(item)
+
+    def peek(self) -> Any | None:
+        if not self.queue:
+            return None
+        return self.queue[0]
+
+    def pop(self, lease_timeout: float) -> Lease | None:
+        if not self.queue:
+            return None
+
+        item = self.queue.popleft()
+        lease_id = str(uuid.uuid4())
+        lease = Lease(item=item, lease_id=lease_id, timestamp=time.time())
+        self.leases[lease_id] = (lease, lease_timeout)
+        return lease
+
+    def done(self, lease_id: str) -> None:
+        if lease_id in self.leases:
+            del self.leases[lease_id]
+
+    def release(self, lease_id: str) -> None:
+        if lease_id in self.leases:
+            lease, _ = self.leases.pop(lease_id)
+            # Requeue at the front for immediate retry
+            self.queue.appendleft(lease.item)
+
+    def size(self) -> int:
+        return len(self.queue) + len(self.leases)
+
+    def pending(self) -> int:
+        return len(self.queue)
+
+    def _monitor_leases(self) -> None:
+        """Background thread to check for expired leases."""
+        while not self._stop_event.is_set():
+            time.sleep(1.0)
+            for lease_id, (lease, timeout) in self.leases.items():
+                if time.time() - lease.timestamp > timeout:
+                    self.release(lease_id)
+
+    def shutdown(self) -> None:
+        self._stop_event.set()
+        self._monitor_thread.join(timeout=1.0)
+
+
+@ray.remote
+class ThreadSafeRayQueueActor(RayQueueActor):
+    """Thread-safe version of RayQueueActor using a lock."""
+
+    def __init__(self):
+        super().__init__()
+        self._lock = threading.Lock()
+
+    def push(self, item: Any) -> None:
+        with self._lock:
+            super().push(item)
+
+    def peek(self) -> Any | None:
+        with self._lock:
+            return super().peek()
+
+    def pop(self, lease_timeout: float) -> Lease | None:
+        with self._lock:
+            return super().pop(lease_timeout)
+
+    def done(self, lease_id: str) -> None:
+        with self._lock:
+            super().done(lease_id)
+
+    def release(self, lease_id: str) -> None:
+        with self._lock:
+            super().release(lease_id)
+
+    def size(self) -> int:
+        with self._lock:
+            return super().size()
+
+    def pending(self) -> int:
+        with self._lock:
+            return super().pending()
+
+    def _monitor_leases(self) -> None:
+        while not self._stop_event.is_set():
+            time.sleep(1.0)
+            try:
+                now = time.time()
+                with self._lock:
+                    expired_ids = []
+                    for lease_id, (lease, timeout) in self.leases.items():
+                        if now - lease.timestamp > timeout:
+                            expired_ids.append(lease_id)
+
+                    for lease_id in expired_ids:
+                        logger.warning(f"Lease {lease_id} expired, requeuing item")
+                        lease, _ = self.leases.pop(lease_id)
+                        self.queue.appendleft(lease.item)
+            except Exception as e:
+                logger.error(f"Error in lease monitor: {e}")
+
+
+class RayQueue(Queue[T]):
+    """Client for Ray-based queue."""
+
+    def __init__(self, name: str, actor: ray.actor.ActorHandle | None = None):
+        self.name = name
+        if actor:
+            self._actor = actor
+        else:
+            # Try to get existing actor or create new one
+            try:
+                self._actor = ray.get_actor(name)
+            except ValueError:
+                self._actor = ThreadSafeRayQueueActor.options(name=name, lifetime="detached").remote()
+
+    def push(self, item: T) -> None:
+        ray.get(self._actor.push.remote(item))
+
+    def peek(self) -> T | None:
+        return ray.get(self._actor.peek.remote())
+
+    def pop(self, lease_timeout: float = 60.0) -> Lease[T] | None:
+        return ray.get(self._actor.pop.remote(lease_timeout))
+
+    def done(self, lease: Lease[T]) -> None:
+        ray.get(self._actor.done.remote(lease.lease_id))
+
+    def release(self, lease: Lease[T]) -> None:
+        ray.get(self._actor.release.remote(lease.lease_id))
+
+    def size(self) -> int:
+        return ray.get(self._actor.size.remote())
+
+    def pending(self) -> int:
+        return ray.get(self._actor.pending.remote())

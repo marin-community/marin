@@ -19,10 +19,9 @@ import logging
 import os
 import time
 import uuid
-from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, cast
+from typing import cast
 
 import ray
 from ray.job_submission import JobStatus as RayJobStatus
@@ -38,7 +37,6 @@ from fray.cluster.base import (
     TpuConfig,
     create_environment,
 )
-from fray.cluster.queue import Lease, Queue
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
 from fray.fn_thunk import create_thunk_entrypoint
@@ -315,17 +313,6 @@ class RayCluster(Cluster):
             )
         return result
 
-    def create_queue(self, name: str) -> Queue:
-        """Create a Ray-based distributed queue.
-
-        Args:
-            name: Unique name for this queue
-
-        Returns:
-            RayQueue implementation
-        """
-        return RayQueue(name, namespace=self._namespace)
-
     def get_ray_resources(self, request: JobRequest) -> dict[str, float]:
         """Convert ResourceConfig to Ray resource specification.
 
@@ -492,169 +479,3 @@ class RayCluster(Cluster):
         else:
             # Local cluster or no config path specified
             yield
-
-
-@ray.remote
-class _RayQueueActor:
-    """Ray actor for distributed queue state management.
-
-    Maintains queue state in the actor's memory, accessible across
-    the Ray cluster. Uses lease semantics for reliable distributed
-    task processing.
-    """
-
-    def __init__(self):
-        """Initialize empty queue state."""
-        self._available: deque[Any] = deque()
-        self._leased: dict[str, tuple[Any, float]] = {}  # lease_id -> (item, deadline)
-
-    def _cleanup_expired_leases(self):
-        """Move expired leases back to available queue."""
-        now = time.time()
-        expired = [lid for lid, (item, deadline) in self._leased.items() if now > deadline]
-        for lease_id in expired:
-            item, _ = self._leased.pop(lease_id)
-            self._available.append(item)  # Re-queue at back to maintain FIFO
-
-    def push(self, item: Any) -> None:
-        """Add an item to the available queue."""
-        self._available.append(item)
-
-    def peek(self) -> Any | None:
-        """Return the next available item without leasing it."""
-        if not self._available:
-            return None
-        return self._available[0]
-
-    def pop(self, lease_timeout: float = 60.0) -> dict[str, Any] | None:
-        """Lease the next available item, returning lease data or None.
-
-        Args:
-            lease_timeout: Seconds before lease expires and item is requeued
-
-        Returns:
-            Dict with keys 'item', 'lease_id', 'timestamp', or None if empty.
-        """
-        self._cleanup_expired_leases()
-
-        if not self._available:
-            return None
-
-        item = self._available.popleft()
-        lease_id = str(uuid.uuid4())
-        timestamp = time.time()
-        deadline = timestamp + lease_timeout
-        self._leased[lease_id] = (item, deadline)
-
-        return {
-            "item": item,
-            "lease_id": lease_id,
-            "timestamp": timestamp,
-        }
-
-    def done(self, lease_id: str) -> None:
-        """Remove a completed lease from tracking.
-
-        Args:
-            lease_id: The lease identifier to complete.
-
-        Raises:
-            ValueError: If the lease_id is not found in leased items.
-        """
-        if lease_id not in self._leased:
-            raise ValueError(f"Invalid lease: {lease_id}")
-        del self._leased[lease_id]
-
-    def release(self, lease_id: str) -> None:
-        """Release a lease and requeue the item.
-
-        Args:
-            lease_id: The lease identifier to release.
-
-        Raises:
-            ValueError: If the lease_id is not found in leased items.
-        """
-        if lease_id not in self._leased:
-            raise ValueError(f"Invalid lease: {lease_id}")
-
-        item, _ = self._leased[lease_id]
-        del self._leased[lease_id]
-        self._available.append(item)
-
-    def size(self) -> int:
-        """Return total number of items (available + leased)."""
-        return len(self._available) + len(self._leased)
-
-    def pending(self) -> int:
-        """Return number of available (unleased) items."""
-        return len(self._available)
-
-
-class RayQueue(Queue):
-    """Distributed queue implementation using Ray actors.
-
-    Provides a Queue interface backed by a Ray actor for distributed
-    state management. All operations are synchronous from the caller's
-    perspective, using ray.get() to wait for actor responses.
-
-    The actor handle is stored and all queue operations are delegated
-    to the actor via remote method calls.
-    """
-
-    def __init__(self, name: str, namespace: str | None = None):
-        """Initialize queue with a Ray actor backend.
-
-        Args:
-            name: Queue name
-            namespace: Ray namespace for the actor (if None, uses current namespace)
-        """
-        self._name = name
-        options = {"name": name, "get_if_exists": True}
-        if namespace is not None:
-            options["namespace"] = namespace
-        self._actor = _RayQueueActor.options(**options).remote()
-
-    def push(self, item: Any) -> None:
-        """Add an item to the queue."""
-        logger.debug(f"Pushing item {item} to {self}")
-        ray.get(self._actor.push.remote(item))
-
-    def peek(self) -> Any | None:
-        """View the next available item without acquiring a lease."""
-        logger.info(f"Peeking item from {self}")
-        return ray.get(self._actor.peek.remote())
-
-    def pop(self, lease_timeout: float = 60.0):
-        """Acquire a lease on the next available item.
-
-        Args:
-            lease_timeout: Seconds before lease expires and item is requeued
-        """
-        logger.debug(f"Popping item from {self}")
-        result = ray.get(self._actor.pop.remote(lease_timeout))
-        if result is None:
-            return None
-
-        return Lease(
-            item=result["item"],
-            lease_id=result["lease_id"],
-            timestamp=result["timestamp"],
-        )
-
-    def done(self, lease) -> None:
-        """Mark a leased task as completed and remove it from the queue."""
-        logger.info(f"Marking lease done: {lease.lease_id} on {self}")
-        ray.get(self._actor.done.remote(lease.lease_id))
-
-    def release(self, lease) -> None:
-        """Release a lease and requeue the item for reprocessing."""
-        logger.info(f"Releasing lease: {lease.lease_id} on {self}")
-        ray.get(self._actor.release.remote(lease.lease_id))
-
-    def size(self) -> int:
-        """Return the total number of items in the queue."""
-        return ray.get(self._actor.size.remote())
-
-    def pending(self) -> int:
-        """Return the number of items available for leasing."""
-        return ray.get(self._actor.pending.remote())

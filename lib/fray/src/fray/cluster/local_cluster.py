@@ -146,19 +146,6 @@ class LocalCluster(Cluster):
         """No-op connection for local cluster."""
         yield
 
-    def create_queue(self, name: str):
-        """Create a local queue using file-based storage for cross-subprocess support.
-
-        Args:
-            name: Unique name for this queue
-
-        Returns:
-            FileQueue implementation
-        """
-        from fray.cluster.local.file_queue import FileQueue
-
-        return FileQueue(name=name, queue_dir=str(self._queue_dir))
-
     def _get_job(self, job_id: JobId) -> "_LocalJob":
         if job_id not in self._jobs:
             raise KeyError(f"Job {job_id} not found")
@@ -219,9 +206,10 @@ class _LocalJob:
             logger.info(f"[LOG_THREAD] Starting log collection for job {self.job_id}")
             if self.process.stdout:
                 for line in self.process.stdout:
-                    logger.debug(f"[LOG_THREAD] Job {self.job_id} output: {line.rstrip()}")
+                    logger.info(f"[LOG_THREAD] Job {self.job_id} output: {line.rstrip()}")
                     self.log_queue.put(line.rstrip())
             logger.info(f"[LOG_THREAD] Log collection ended for job {self.job_id}")
+            logger.info("Process ended with returncode: %s", self.process.returncode)
 
         self._log_thread = Thread(target=collect_logs, daemon=True)
         self._log_thread.start()

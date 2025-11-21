@@ -12,11 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Queue abstraction with lease semantics for distributed task management.
+"""Alpaca evaluation task implementation."""
 
-This module is deprecated. Use fray.queues.base instead.
-"""
+from marin.evaluation.tasks.base import EvaluationTask
 
-from fray.queues.base import Lease, Queue
 
-__all__ = ["Lease", "Queue"]
+class AlpacaTask(EvaluationTask):
+    """Alpaca evaluation task."""
+
+    def run(self) -> None:
+        """Run Alpaca evaluation.
+
+        This should:
+        1. Load Alpaca dataset and format prompts
+        2. Create Controller and submit requests
+        3. Compute Alpaca-specific metrics
+        4. Write results to config.evaluation_path
+        """
+        # TODO: Implement Alpaca evaluation
+        raise NotImplementedError("Alpaca task not yet implemented")

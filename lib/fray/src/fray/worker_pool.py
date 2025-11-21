@@ -17,16 +17,14 @@
 from __future__ import annotations
 
 import logging
-import threading
 import time
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any
 
 from fray.cluster.base import Cluster, CpuConfig, JobId, JobInfo, JobRequest, ResourceConfig, create_environment
-from fray.cluster.queue import Queue
+from fray.queues.base import Queue
 
 logger = logging.getLogger(__name__)
 
@@ -36,74 +34,59 @@ _SHUTDOWN_SENTINEL = "__FRAY_WORKER_SHUTDOWN__"
 
 @dataclass
 class WorkerPoolConfig:
-    """Configuration for worker pool autoscaling.
+    """Configuration for worker pool.
 
     Attributes:
-        worker_func: Callable that processes individual tasks (task -> result)
-        min_workers: Minimum number of workers to maintain
-        max_workers: Maximum number of workers to scale up to
-        scale_up_threshold: Tasks per worker to trigger scale up
-        scale_down_threshold: Tasks per worker to trigger scale down
-        scale_check_interval: How often to check scaling conditions (seconds)
+        worker_impl: Class to run on workers. Must be callable after instantiation.
+        num_workers: Number of workers to maintain
+        resources: Resource configuration for workers (default: CPU)
+        worker_args: Positional arguments for worker initialization
+        worker_kwargs: Keyword arguments for worker initialization
     """
 
-    worker_func: Callable[[Any], Any]
-    min_workers: int
-    max_workers: int
-    scale_up_threshold: float = 0.8
-    scale_down_threshold: float = 0.2
-    scale_check_interval: float = 5.0
+    worker_impl: type
+    num_workers: int
+    resources: ResourceConfig | None = None
+    worker_args: tuple = field(default_factory=tuple)
+    worker_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 class WorkerPool:
-    """Autoscaling pool of worker jobs for distributed task processing.
+    """Fixed-size pool of worker jobs for distributed task processing.
 
-    The pool manages a dynamic set of worker jobs, automatically scaling up when
-    the task queue grows and scaling down when idle. Tasks are distributed via
-    queues with a background autoscaler thread.
-
-    Unlike the Zephyr WorkerPool which uses Ray actors, this implementation uses
-    the Cluster API to launch separate worker jobs. Workers consume tasks from a
-    shared queue and publish results to a result queue.
+    The pool manages a fixed set of worker jobs. Tasks are distributed via
+    provided queues.
     """
 
     def __init__(
         self,
         cluster: Cluster,
         config: WorkerPoolConfig,
+        task_queue: Queue,
+        result_queue: Queue,
     ):
         """Initialize worker pool.
 
         Args:
             cluster: Cluster backend to use for worker jobs
-            config: Pool configuration including worker function and scaling parameters
+            config: Pool configuration including worker function
+            task_queue: Queue for submitting tasks
+            result_queue: Queue for collecting results
         """
         self._cluster = cluster
         self._config = config
+        self._task_queue = task_queue
+        self._result_queue = result_queue
 
-        # Generate unique pool ID for queue names
+        # Generate unique pool ID for worker naming
         self._pool_id = str(uuid.uuid4())
-
-        # Create queues for task distribution and result collection
-        task_queue_name = f"{self._pool_id}_tasks"
-        result_queue_name = f"{self._pool_id}_results"
-        logger.info(f"Creating queue from cluster {cluster}")
-        self._task_queue: Queue = cluster.create_queue(task_queue_name)
-        self._result_queue: Queue = cluster.create_queue(result_queue_name)
 
         # Worker tracking
         self._workers: dict[JobId, JobInfo | None] = {}
         self._metadata_lock = Lock()
 
-        # Control flags
-        self._shutdown_event = threading.Event()
-        self._threads: list[threading.Thread] = []
-
-        # Start background threads
-        self._start_background_threads()
-
         # Create initial workers
-        for _ in range(self._config.min_workers):
+        for _ in range(self._config.num_workers):
             self._create_worker()
 
     def _create_worker(self) -> JobId:
@@ -115,60 +98,74 @@ class WorkerPool:
         Returns:
             Job ID of the created worker
         """
-        from fray.cluster import current_cluster
         from fray.cluster.base import Entrypoint
 
-        task_queue_name = f"{self._pool_id}_tasks"
-        result_queue_name = f"{self._pool_id}_results"
-
-        worker_func = self._config.worker_func
+        worker_impl = self._config.worker_impl
+        worker_args = self._config.worker_args
+        worker_kwargs = self._config.worker_kwargs
+        task_queue = self._task_queue
+        result_queue = self._result_queue
 
         def worker_closure():
-            # Get queues from current cluster context
-            cluster = current_cluster()
-            logger.info(f"Worker initialized with cluster: {cluster}, type: {type(cluster).__name__}")
+            logging.basicConfig(level=logging.INFO)
+            logger.info(f"Worker initialized. Queue types: {type(task_queue)}, {type(result_queue)}")
 
-            task_queue = cluster.create_queue(task_queue_name)
-            result_queue = cluster.create_queue(result_queue_name)
-            logger.info(f"Worker queues created: task={task_queue_name}, result={result_queue_name}")
+            # Initialize worker
+            try:
+                processor = worker_impl(*worker_args, **worker_kwargs)
+                logger.info(f"Initialized worker: {worker_impl.__name__}")
+            except Exception as e:
+                logger.error(f"Failed to initialize worker {worker_impl.__name__}: {e}")
+                raise
 
-            # Process tasks until terminated
-            while True:
-                # Try to get a task with short lease timeout for faster recovery
-                lease = task_queue.pop(lease_timeout=5.0)
-
-                if lease is None:
-                    # No tasks available, sleep and retry
-                    time.sleep(0.1)
-                    continue
-
-                # Check for shutdown sentinel
-                if lease.item == _SHUTDOWN_SENTINEL:
-                    task_queue.done(lease)
-                    logger.info("Worker received shutdown signal, exiting gracefully")
-                    break
-
+            # Check if worker handles its own loop
+            if hasattr(processor, "run") and callable(processor.run):
+                logger.info(f"Worker {worker_impl.__name__} has 'run' method, delegating queue handling.")
                 try:
-                    # Process the task using the user's worker function
-                    logger.debug(f"Worker processing task: {lease.item}")
-                    result = worker_func(lease.item)
-                    logger.debug(f"Worker produced result: {result}")
-
-                    # Publish result
-                    result_queue.push(result)
-
-                    # Mark task as complete
-                    task_queue.done(lease)
-
+                    processor.run(task_queue, result_queue)
                 except Exception as e:
-                    logger.error(f"Error processing task: {e}")
-                    # Release the lease so task can be retried
-                    task_queue.release(lease)
+                    logger.error(f"Worker run loop failed: {e}")
+                    raise
+            else:
+                # Process tasks until terminated (Legacy/Simple mode)
+                while True:
+                    # Try to get a task with short lease timeout for faster recovery
+                    lease = task_queue.pop(lease_timeout=5.0)
+
+                    if lease is None:
+                        # No tasks available, sleep and retry
+                        time.sleep(0.1)
+                        continue
+
+                    # Check for shutdown sentinel
+                    if lease.item == _SHUTDOWN_SENTINEL:
+                        task_queue.done(lease)
+                        logger.info("Worker received shutdown signal, exiting gracefully")
+                        break
+
+                    try:
+                        # Process the task using the user's worker function
+                        logger.debug(f"Worker processing task: {lease.item}")
+                        result = processor(lease.item)
+                        logger.debug(f"Worker produced result: {result}")
+
+                        # Publish result
+                        result_queue.push(result)
+
+                        # Mark task as complete
+                        task_queue.done(lease)
+
+                    except Exception as e:
+                        logger.error(f"Error processing task: {e}")
+                        # Release the lease so task can be retried
+                        task_queue.release(lease)
+
+        resources = self._config.resources or ResourceConfig(device=CpuConfig())
 
         request = JobRequest(
             name=f"worker-{self._pool_id[:8]}",
             entrypoint=Entrypoint(callable=worker_closure),
-            resources=ResourceConfig(device=CpuConfig()),
+            resources=resources,
             environment=create_environment(),
         )
 
@@ -177,73 +174,8 @@ class WorkerPool:
         with self._metadata_lock:
             self._workers[job_id] = None
 
-        logger.info(f"Created worker {job_id}, total workers: {len(self._workers)}")
+        logger.info(f"Created worker {job_id}, running {worker_closure} total workers: {len(self._workers)}")
         return job_id
-
-    def _terminate_worker(self, job_id: JobId) -> None:
-        """Terminate a worker job.
-
-        Args:
-            job_id: Job ID to terminate
-        """
-        with self._metadata_lock:
-            if job_id in self._workers:
-                del self._workers[job_id]
-
-        try:
-            self._cluster.terminate(job_id)
-        except Exception as e:
-            logger.warning(f"Failed to terminate worker {job_id}: {e}")
-
-        logger.info(f"Terminated worker {job_id}, total workers: {len(self._workers)}")
-
-    def _autoscale_loop(self) -> None:
-        """Background thread: monitor load and scale workers up/down."""
-        while not self._shutdown_event.is_set():
-            time.sleep(self._config.scale_check_interval)
-
-            if self._shutdown_event.is_set():
-                break
-
-            try:
-                # Get worker count
-                with self._metadata_lock:
-                    num_workers = len(self._workers)
-
-                if num_workers == 0:
-                    continue
-
-                # Calculate queue depth (pending tasks)
-                queue_depth = self._task_queue.pending()
-                load_ratio = queue_depth / num_workers
-
-                # Scale up if queue is growing
-                if load_ratio > self._config.scale_up_threshold and num_workers < self._config.max_workers:
-                    logger.info(f"Scaling up: load_ratio={load_ratio:.2f}, workers={num_workers}")
-                    self._create_worker()
-
-                # Scale down if idle
-                elif load_ratio < self._config.scale_down_threshold and num_workers > self._config.min_workers:
-                    logger.info(f"Scaling down: load_ratio={load_ratio:.2f}, workers={num_workers}")
-                    # Get worker to terminate
-                    with self._metadata_lock:
-                        if self._workers:
-                            worker_to_kill = next(iter(self._workers.keys()))
-                        else:
-                            worker_to_kill = None
-
-                    # Terminate outside the lock to avoid deadlock
-                    if worker_to_kill is not None:
-                        self._terminate_worker(worker_to_kill)
-
-            except Exception as e:
-                if not self._shutdown_event.is_set():
-                    logger.error(f"Error in autoscaler loop: {e}")
-
-    def _start_background_threads(self) -> None:
-        autoscaler_thread = threading.Thread(target=self._autoscale_loop, daemon=True, name="autoscaler")
-        autoscaler_thread.start()
-        self._threads.append(autoscaler_thread)
 
     def submit(self, task: Any) -> None:
         """Submit a task to the worker pool.
@@ -297,9 +229,6 @@ class WorkerPool:
         """
         logger.info("Shutting down worker pool")
 
-        # Signal shutdown to background threads
-        self._shutdown_event.set()
-
         # Send shutdown sentinels to workers for graceful exit
         with self._metadata_lock:
             num_workers = len(self._workers)
@@ -307,9 +236,10 @@ class WorkerPool:
         for _ in range(num_workers):
             self._task_queue.push(_SHUTDOWN_SENTINEL)
 
-        # Wait for threads to finish
-        for thread in self._threads:
-            thread.join(timeout=timeout)
+        # Wait for workers to finish (optional, or just kill them)
+        # Since we don't have a way to wait for specific tasks easily without tracking,
+        # we'll give them some time then kill.
+        time.sleep(min(timeout, 5.0))
 
         # Terminate any remaining workers
         with self._metadata_lock:

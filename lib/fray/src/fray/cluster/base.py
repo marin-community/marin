@@ -24,8 +24,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal, NewType
 
-from fray.cluster.queue import Queue
-
 logger = logging.getLogger(__name__)
 
 # Job types
@@ -464,21 +462,6 @@ class Cluster(ABC):
 
         Yields:
             None - connection is active within context
-        """
-        ...
-
-    @abstractmethod
-    def create_queue(self, name: str) -> Queue:
-        """Create a distributed queue for task distribution.
-
-        Args:
-            name: Unique name for this queue
-
-        Returns:
-            Backend-specific Queue implementation
-
-        Raises:
-            ValueError: If queue name is invalid or already exists
         """
         ...
 

@@ -13,8 +13,34 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Any
 
-from experiments.evals.resource_configs import ResourceConfig
+
+@dataclass
+class ModelConfig:
+    name: str
+    """The name of the model e.g., allenai/olmo-7b"""
+
+    path: str | None
+    """
+    The path to the model checkpoint. Can be a local path or GCS path.
+    Both vLLM and Levanter can load directly from GCS.
+    """
+
+    engine_kwargs: dict[str, Any]
+    """
+    Additional keyword arguments to pass to the vLLM engine.
+    """
+
+    generation_params: dict | None = None
+    """
+    Additional keyword arguments passed to the SamplingParams for the vLLM engine
+    """
+
+    apply_chat_template: bool = False
+    """
+    Whether or not this model was trained with a Chat Template in the tokenizer
+    """
 
 
 @dataclass(frozen=True)
@@ -81,11 +107,6 @@ class EvaluationConfig:
     engine_kwargs: dict | None = None
     """
     Additional keyword arguments to pass to the vLLM engine.
-    """
-
-    resource_config: ResourceConfig | None = None
-    """
-    Additional keyword arguments to pass to the Ray resources.
     """
 
     generation_params: dict | None = None

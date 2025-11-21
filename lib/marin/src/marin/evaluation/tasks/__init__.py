@@ -12,11 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Queue abstraction with lease semantics for distributed task management.
-
-This module is deprecated. Use fray.queues.base instead.
-"""
-
-from fray.queues.base import Lease, Queue
-
-__all__ = ["Lease", "Queue"]
+"""Evaluation task implementations."""

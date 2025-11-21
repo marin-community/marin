@@ -12,11 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Queue abstraction with lease semantics for distributed task management.
+"""Common types for inference requests and responses."""
 
-This module is deprecated. Use fray.queues.base instead.
-"""
+from __future__ import annotations
 
-from fray.queues.base import Lease, Queue
+from dataclasses import dataclass
+from typing import Any
 
-__all__ = ["Lease", "Queue"]
+
+@dataclass
+class InferenceRequest:
+    """Request for inference."""
+
+    prompt: str
+    sampling_params: dict[str, Any] | None = None
+    request_id: str | None = None
+
+
+@dataclass
+class InferenceResult:
+    """Result of inference."""
+
+    text: list[str]
+    request_id: str | None = None
+    error: str | None = None
