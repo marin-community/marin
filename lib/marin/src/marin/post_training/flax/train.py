@@ -282,7 +282,7 @@ class Trainer:
                 kl_sample_train_v1 = jnp.mean(logprob_diff, where=action_mask)
                 kl_sample_train_v2 = 0.5 * jnp.mean(logprob_diff**2, where=action_mask)
                 mean_ratio_difference = jnp.mean(jnp.abs(jnp.exp(sampling_logprobs) - jnp.exp(training_logprobs)), where=action_mask)
-                max_ratio_difference = jnp.max(jnp.abs(jnp.exp(sampling_logprobs) - jnp.exp(training_logprobs)), where=action_mask)
+                max_ratio_difference = jnp.max(jnp.abs(jnp.exp(sampling_logprobs) - jnp.exp(training_logprobs)), where=action_mask, initial=-jnp.inf)
                 entropy_sample = -jnp.mean(sampling_logprobs, where=action_mask)
                 
                 return loss, {
