@@ -179,4 +179,4 @@ markers = [
 testpaths = ["tests", "experiments"]
 
 # Make sure we timeout before CI kills us, and don't run TPU tests by default
-addopts = "--session-timeout=500 --dist=worksteal -m 'not tpu_ci'"
+addopts = "--session-timeout=500 -m 'not tpu_ci'"

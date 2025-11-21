@@ -290,7 +290,7 @@ class _LmEvalHarnessWorker:
 
     def dispatch_loglikelihood(self, packed_request):
         self._send_message(_Message.LOGLIKELIHOOD)
-        self._send_payload(packed_request)
+        packed_request = self._send_payload(packed_request)
         return self.process_loglikelihood(packed_request)
 
     def stop(self):
@@ -346,6 +346,7 @@ class LevanterHarnessLM(TemplateLM):
     def __init__(self, leader: _LmEvalHarnessWorker):
         super().__init__()
         self.leader = leader
+        self.axis_resources = leader.axis_resources
         # Storage for prompts and generations to include in outputs
         self.sample_outputs: dict[str, list[dict]] = {}
         self.sample_logging_config = leader.sample_logging_config
@@ -539,11 +540,14 @@ class LevanterHarnessLM(TemplateLM):
             # Handle profiler start/stop based on step
             self._handle_profiler_step()
 
+            batch = hax.shard(batch, self.axis_resources)
+
             segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
 
             padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
+            batch = jax.device_put(batch)
 
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
 
@@ -761,6 +765,7 @@ class LevanterHarnessLM(TemplateLM):
             max_seqs=256,
             page_size=8,
             compute_dtype=jnp.bfloat16,
+            hbm_utilization=0.5,
         )
         engine = InferenceEngine.from_model_with_config(
             model=self.leader.model, tokenizer=self.tokenizer, config=engine_cfg

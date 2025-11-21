@@ -90,8 +90,11 @@ function ViewPage() {
       const promises = paths.map(async (path) => {
         try {
           const response = await axios.get(apiViewUrl({path, offset, count}));
-          checkJsonResponse(response, setError);
-          setPayloads((prevPayloads) => ({...prevPayloads, [path]: response.data}));
+          const payload = checkJsonResponse(response, setError);
+          if (!payload) {
+            return;
+          }
+          setPayloads((prevPayloads) => ({...prevPayloads, [path]: payload}));
         } catch (error) {
           console.error(error);
           setError(error.message);
