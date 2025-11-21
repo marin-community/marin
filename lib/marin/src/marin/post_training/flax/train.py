@@ -300,6 +300,7 @@ class Trainer:
             train_state = train_state.apply_gradients(grads=grads)
             
             # Compute mean advantages
+            action_mask = batch["loss_masks"] > 0.0
             mean_advantages_token_level = jnp.mean(batch["loss_weights"], where=action_mask)
             mean_advantages_sequence_level = jnp.mean(jnp.mean(batch["loss_weights"], axis=1, where=action_mask))
             
