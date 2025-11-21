@@ -461,7 +461,7 @@ def run_cleanup_loop(gcp_project: str, zone: str, interval: int = 600, disk_thre
 
 def running_cleanup_jobs() -> Sequence[dict[str, Any]]:
     """Return a list of job dicts for any currently running or pending cleanup jobs."""
-    from fray.cluster.ray.dashboard import list_jobs
+    from marin.cluster.ray import list_jobs
 
     running_jobs = list_jobs(filters=["status=RUNNING"])
     pending_jobs = list_jobs(filters=["status=PENDING"])

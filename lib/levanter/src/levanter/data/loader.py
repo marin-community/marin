@@ -142,6 +142,8 @@ class DataLoader(Iterable[Ex]):
             self._check_batch_size_divisibility()
 
     def _check_batch_size_divisibility(self):
+        if self._data_axis_size is None:
+            return
         for size in self.scheduler.unique_batch_sizes():
             if size % self._data_axis_size != 0:
                 raise ValueError(
@@ -539,7 +541,7 @@ def _batchified_shape(Batch, leaf: hax.NamedArray | Array) -> ShapeSpec | NamedS
     if is_named_array(leaf):
         return NamedShapeSpec((Batch,) + leaf.axes, leaf.dtype)
     else:
-        return ShapeSpec((Batch.size,) + leaf.shape, leaf.dtype)
+        return ShapeSpec((Batch.size,) + tuple(leaf.shape), leaf.dtype)
 
 
 class _JaxCpuBackgroundIterator(BackgroundIterator[Ex]):

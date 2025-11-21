@@ -9,7 +9,7 @@ import warnings
 from dataclasses import dataclass
 from enum import Enum
 from numbers import Integral
-from typing import Optional, Union, overload
+from typing import Optional, Union, cast, overload
 
 import equinox as eqx
 import jax
@@ -818,7 +818,7 @@ def _materialize_segment_mask(
         kv_segment_ids = segment_ids.rename({QPos.name: KPos.name})[KPos.name, k_slice]
         q_segment_ids = segment_ids[QPos.name, q_slice]
 
-    return q_segment_ids.broadcast_axis(kv_segment_ids.axes) == kv_segment_ids
+    return cast(NamedArray, q_segment_ids.broadcast_axis(kv_segment_ids.axes) == kv_segment_ids)
 
 
 def _materialize_sliding_window_mask(
