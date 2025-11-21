@@ -219,67 +219,16 @@ the config file configures each worker with only 120 visible CPUs.
 There is currently an error on the Ray autoscaler side with spot-TPU instances, where the Ray autoscaler is not able
 to detect when spot-TPU instances are dead and as a result, we may be left in a state with just the head node and
 no more spot-TPU worker instances starting up. When this state occurs, please message in the #marin-infra slack
-that you are going to restart the cluster (call `uv run scripts/ray/cluster.py --config <config> restart-cluster`)
+that you are going to restart the cluster, and then run `uv run scripts/ray/cluster.py --config <config> restart-cluster`.
 
-**Important step for reserved workers**
+Notes:
+* Please check whether there are any running jobs from other users before restarting so that you do not kill all their
+jobs without getting permission first.
+* You can specify `--preserve-jobs=0` when restarting the cluster if you want to skip backing up running jobs and start
+with a completely clean slate (the default value is `--preserve-jobs=1`, which backs up jobs and resubmits them after the restart).
+Example: `uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml restart-cluster --preserve-jobs=0`
+* See the instructions below if there are any reserved workers on the cluster, though in many cases the command above is all you need.
 
-If there are reserved workers, you all also need to take care to delete the reserved workers, then take down the cluster,
-bring up the cluster and finally spin the reserved workers back up
-
-To add manual workers from our reserved quota to cluster:
-1. If rebooting, first go to **[Queued Resources](https://console.cloud.google.com/compute/tpus?authuser=1&project=hai-gcp-models&tab=queuedResources&invt=AbuT6A)** and delete any existing queued resources for the zone you want to add workers for.
-2. Use the cluster manager to add workers:
-```bash
-# Add a reserved worker
-uv run scripts/ray/cluster.py --config infra/marin-us-central2.yaml add-worker v4-128 --capacity reserved
-
-# Or add a preemptible worker if needed
-uv run scripts/ray/cluster.py --config infra/marin-us-central2.yaml add-worker v4-128 --capacity preemptible
-```
-3. Repeat step 2 as needed to launch additional manual workers.
-
-Please note that after restarting the cluster and queueing the first job, it will likely stall because it takes a while
-for the head node to actually spin up the worker sometimes (~10min).
-
-To recap the full process for restarting the cluster is as follows:
-
-```bash
-# 1. First, delete any existing queued resources for the zone
-# Go to Queued Resources in GCP Console and delete existing resources
-
-# 2. Delete any queued workers
-# Go to VM instances in GCP Console and delete queued workers
-
-# 3. Delete any reserved workers
-gcloud alpha compute tpus tpu-vm list --project=hai-gcp-models --zone $CLUSTER
-
-# Example output format:
-# NAME                                    ZONE        ACCELERATOR_TYPE  TYPE  TOPOLOGY  NETWORK  RANGE          STATUS
-# ray-marin-{cluster}-worker-{id}-tpu     {zone}      v6e-4            V6E   2x2       default  10.202.0.0/20  READY
-# ray-marin-{cluster}-worker-{id}-tpu     {zone}      v6e-8            V6E   2x4       default  10.202.0.0/20  READY
-# ray-marin-{cluster}-worker-{id}-tpu     {zone}      v6e-64           V6E   8x8       default  10.202.0.0/20  DELETING
-# WORKER_NAME below is which one of the workers above you want to delete
-
-gcloud alpha compute tpus tpu-vm delete $WORKER_NAME --zone $CLUSTER --project hai-gcp-models
-
-# 4. Take down the cluster
-ray down -y infra/marin-$CLUSTER.yaml
-
-# 5. Bring up the cluster
-ray up -y infra/marin-$CLUSTER.yaml
-
-# 6. Get the head node's internal IP
-# Go to VM instances in GCP Console and find the head node's internal IP
-
-# 7. Add reserved workers back (repeat for each worker needed)
-uv run scripts/ray/cluster.py --config infra/marin-$CLUSTER.yaml add-worker $TPU_TYPE --capacity reserved
-
-# 8. Monitor the cluster startup
-ray exec infra/marin-$CLUSTER.yaml "tail -n 100 -f /tmp/ray/session_latest/logs/monitor*"
-
-# Note: After restarting and queueing the first job, it may stall for ~10 minutes
-# while the head node spins up workers
-```
 
 If you want the command below will delete all reserved workers **BE VERY CAREFUL**
 not to delete workers others are running jobs on. It will only be necessary for full resets

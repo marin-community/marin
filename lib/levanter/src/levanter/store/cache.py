@@ -44,7 +44,6 @@ from ..utils.ray_utils import ExceptionInfo, SnitchRecipient, current_actor_hand
 from .jagged_array import JaggedArrayStore, PreparedBatch
 from .tree_store import TreeStore
 
-
 T = TypeVar("T")
 U = TypeVar("U")
 T_co = TypeVar("T_co", covariant=True)
@@ -504,7 +503,7 @@ class CacheLedger:
     def load(cache_dir: str, metadata: Optional["CacheMetadata"] = None) -> "CacheLedger":
         ledger_path = os.path.join(cache_dir, LEDGER_FILE_NAME)
         try:
-            logger.debug(f"Attempting to load cache ledger from {ledger_path}")
+            logger.info(f"Attempting to load cache ledger from {ledger_path}")
             with fsspec.open(ledger_path) as file:
                 cache_ledger = CacheLedger.from_json(file.read())  # type: ignore
             if metadata:
@@ -561,10 +560,12 @@ class SerialCacheWriter(AbstractContextManager):
         cache_dir: str,
         exemplar: T,
         metadata: Optional["CacheMetadata"] = None,
+        shard_name: str = "",
     ):
         self.cache_dir = cache_dir
         self.metadata = metadata
         self._exemplar = exemplar
+        self._shard_name = shard_name
         self._tree_store = TreeStore.open(exemplar, self.cache_dir, mode="w", cache_metadata=True)
         self._is_closed = False
 
@@ -577,8 +578,8 @@ class SerialCacheWriter(AbstractContextManager):
         ledger = CacheLedger(
             total_num_rows=len(self._tree_store),
             is_finished=True,
-            shard_rows={"": len(self._tree_store)},
-            finished_shards=[""],
+            shard_rows={self._shard_name: len(self._tree_store)},
+            finished_shards=[self._shard_name],
             field_counts={},
             metadata=self.metadata or CacheMetadata.empty(),
         )
@@ -612,7 +613,6 @@ def _serialize_json_and_commit(path: str, obj):
         fs.copy(path, f"{path}.bak")
 
     for i in range(10):
-
         try:
             with fsspec.open(path, "w") as file:
                 file.write(obj.to_json())
@@ -1022,11 +1022,19 @@ def _assign_shards_to_groups(source: ShardedDataSource, num_groups: int | None) 
     return out_groups  # type: ignore
 
 
-def _merge_ledgers(dest: CacheLedger, source: CacheLedger):
+def expose_cache_rows(cache_path: str, exemplar: T, num_rows: int) -> None:
+    """Update offsets[0] to expose the specified number of rows."""
+    cache = TreeStore.open(exemplar, cache_path, mode="a", cache_metadata=False)
+    _expose_available_rows(cache, num_rows)
+
+
+def merge_ledgers(dest: CacheLedger, source: CacheLedger) -> CacheLedger:
+    """Merge source ledger into dest (mutates dest)."""
     assert not dest.is_finished
     dest.total_num_rows += source.total_num_rows
     for shard, rows in source.shard_rows.items():
         current_value = dest.shard_rows.get(shard, 0)
+        logger.info("Merging shard %s: current rows=%d, new rows=%d", shard, current_value, rows)
         assert current_value == 0, f"Shard {shard} already has {current_value} rows"
         dest.shard_rows[shard] = rows
 
@@ -1180,7 +1188,7 @@ def _copy_temp_caches_to_final_cache(
 
         _expose_available_rows(permanent_cache, num_available_rows)
 
-        _merge_ledgers(overall_ledger, group_ledger)
+        merge_ledgers(overall_ledger, group_ledger)
         overall_ledger._serialize_and_commit(cache_dir)
         ray.get(parent._notify_updated_ledger.remote(overall_ledger))
         parent._report_copy_progress.remote(
@@ -1221,7 +1229,11 @@ def _copy_cache_data(dest_path, source_path, processor, data_offset_tree, rows_s
         rows_so_far: The total number of rows in the destination cache before this copy.
     """
     with log_failures_to(parent):
-        asyncio.run(_extend_cache_with_other_cache(dest_path, source_path, processor, data_offset_tree, rows_so_far))
+        asyncio.run(
+            extend_cache_with_other_cache(
+                dest_path, source_path, processor.output_exemplar, data_offset_tree, rows_so_far
+            )
+        )
 
 
 @ray.remote(
@@ -1253,12 +1265,14 @@ class _MetadataCopier:
         """
         with log_failures_to(self.parent):
             asyncio.run(
-                _extend_cache_metadata_with_other(dest_path, source_path, processor, data_offset_tree, rows_so_far)
+                extend_cache_metadata_with_other(
+                    dest_path, source_path, processor.output_exemplar, data_offset_tree, rows_so_far
+                )
             )
 
 
-async def _extend_cache_with_other_cache(
-    dest_path: str, source_path: str, processor: BatchProcessor, data_offset_tree: PyTree[int], row_offset
+async def extend_cache_with_other_cache(
+    dest_path: str, source_path: str, exemplar: dict, data_offset_tree: PyTree[int], row_offset
 ) -> int:
     """
     Copies the data from one cache to another, appending it to the end of the destination cache.
@@ -1270,8 +1284,8 @@ async def _extend_cache_with_other_cache(
     try:
 
         logger.info(f"Copying data from {source_path} to {dest_path}.")
-        dest = TreeStore.open(processor.output_exemplar, dest_path, mode="a", cache_metadata=False)
-        source = TreeStore.open(processor.output_exemplar, source_path, mode="r", cache_metadata=True)
+        dest = TreeStore.open(exemplar, dest_path, mode="a", cache_metadata=False)
+        source = TreeStore.open(exemplar, source_path, mode="r", cache_metadata=True)
 
         source_num_rows = await source.async_len()
 
@@ -1319,14 +1333,14 @@ async def _copy_in_batches(dest_array, dest_offset, src_array, src_len, elems_pe
         await last_future
 
 
-async def _extend_cache_metadata_with_other(
-    dest_path: str, source_path: str, processor: BatchProcessor, data_offset_tree: PyTree[int], row_offset
+async def extend_cache_metadata_with_other(
+    dest_path: str, source_path: str, exemplar: dict, data_offset_tree: PyTree[int], row_offset
 ) -> int:
     """Copies just the offsets and shapes (if present)"""
     try:
         logger.info(f"Copying metadata from {source_path} to {dest_path}.")
-        dest = TreeStore.open(processor.output_exemplar, dest_path, mode="a")
-        source = TreeStore.open(processor.output_exemplar, source_path, mode="r", cache_metadata=True)
+        dest = TreeStore.open(exemplar, dest_path, mode="a")
+        source = TreeStore.open(exemplar, source_path, mode="r", cache_metadata=True)
 
         source_num_rows = await source.async_len()
 

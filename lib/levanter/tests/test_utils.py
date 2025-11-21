@@ -186,17 +186,6 @@ def skip_if_hf_model_not_accessible(model_id: str):
     return pytest.mark.skipif(not try_load_hf(model_id), reason="HuggingFace model not accessible")
 
 
-def skip_in_ci(fn_or_msg):
-    if isinstance(fn_or_msg, str):
-
-        def decorator(fn):
-            return pytest.mark.skipif("CI" in os.environ, reason=fn_or_msg)(fn)
-
-        return decorator
-
-    return pytest.mark.skipif("CI" in os.environ, reason="skipped in CI")(fn_or_msg)
-
-
 class IdentityProcessor(BatchProcessor[BatchEncoding, BatchEncoding]):
     def __call__(self, batch: Sequence[BatchEncoding]) -> BatchEncoding:
         stacked = reduce(_stack_batch_encodings, batch)

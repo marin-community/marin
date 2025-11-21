@@ -98,20 +98,15 @@ Map the given function over the dataset, transforming the elements.
 
 Return a new dataset containing only elements where `fn(item)` returns True-ish.
 
-`take(n)`
+`take_per_shard(n)`
 
-Take the first n items from each shard. This operates per-shard independently,
-preserving parallelism while limiting data volume. Useful for testing and
-debugging pipelines with large datasets.
-
-Note: With k shards, you may get up to k*n total items.
+Take the first n items from each shard.
 
 ```python
-# Test pipeline with first 1000 items per shard
 ds = (Dataset
   .from_files("gs://data/*.jsonl")
   .flat_map(load_jsonl)
-  .take(1000)  # Limit each shard to 1000 items
+  .take(1000)
   .map(process)
 )
 ```
@@ -318,3 +313,24 @@ in parallel.
 
 The implementation is best-effort and redistributes chunks across shards in
 round-robin fashion without splitting individual chunks.
+
+### Resuming from Failures
+
+For a pure map pipeline, you can leverage Zephyr's `skip_existing` functionality
+to skip working on shards that have already been processed. As an optimization,
+any operations _before_ the output file are also skipped.
+
+```python
+ds = (Dataset
+    .from_files("gs://input/*.jsonl")
+    .flat_map(load_jsonl)
+    .map(expensive_transform)
+    .write_jsonl("gs://output/processed-{shard:05d}-of-{total:05d}.jsonl", skip_existing=True)
+)
+```
+
+For example, if you have 5 input files and outputs for shards 1 and 3 already
+exist, the pipeline will:
+- Process shards 0, 2, and 4 (creating new outputs)
+- Skip processing shards 1 and 3 (preserving empty shards internally)
+- Skip writing to existing output files for shards 1 and 3

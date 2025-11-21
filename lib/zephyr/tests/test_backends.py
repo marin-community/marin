@@ -20,7 +20,7 @@ import json
 
 import ray
 from zephyr.backend_factory import flow_backend
-from zephyr.backends import RayBackend, format_shard_path
+from zephyr.backends import format_shard_path
 from zephyr.writers import write_jsonl_file
 
 
@@ -112,14 +112,16 @@ def test_write_jsonl_no_compression_without_gz_extension(tmp_path):
 
 
 def test_flow_backend_defaults_to_ray_when_initialized():
-    """Test that flow_backend returns RayBackend when Ray is initialized."""
+    """Test that flow_backend returns ray backend when Ray is initialized."""
+    from fray import RayContext
+
     if ray.is_initialized():
         ray.shutdown()
 
     try:
         ray.init(ignore_reinit_error=True)
         backend = flow_backend()
-        assert isinstance(backend, RayBackend)
+        assert isinstance(backend.context, RayContext)
     finally:
         ray.shutdown()
 

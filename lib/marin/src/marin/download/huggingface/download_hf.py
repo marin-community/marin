@@ -28,7 +28,6 @@ from dataclasses import dataclass
 import draccus
 import fsspec
 from huggingface_hub import HfFileSystem
-
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Dataset, flow_backend
@@ -39,7 +38,6 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class DownloadConfig:
     # fmt: off
-
 
     # HuggingFace Dataset Parameters
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
@@ -54,15 +52,11 @@ class DownloadConfig:
     This works with any fsspec-compatible path, but for backwards compatibility, we call it gcs_output_path.
     """
 
-    # Additional GCS Parameters
-    public_gcs_path: str = (                                # Path to Publicly Readable Bucket (for Storage Transfer)
-        "gs://hf_dataset_transfer_bucket"
-    )
+    append_sha_to_path: bool = False
+    """If true, write outputs under ``gcs_output_path/<revision>`` instead of directly under ``gcs_output_path``."""
 
     # Job Control Parameters, used only for non-gated dataset transfers done via STS
     wait_for_completion: bool = True                        # if True, will block until job completes
-    timeout: int = 1800                                     # Maximum time to wait for job completion (in seconds)
-    poll_interval: int = 10                                 # Time to wait between polling job status (in seconds)
 
     # fmt: on
     hf_repo_type_prefix: str = (
@@ -89,7 +83,7 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
     target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
     # Use larger chunk size for large files, such as 32B models
-    chunk_size = 16 * 1024 * 1024
+    chunk_size = 256 * 1024 * 1024 * 1024
     max_retries = 10
 
     # Retry when there is an error, such as hf rate limit
@@ -101,7 +95,7 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
                     while chunk := src_file.read(chunk_size):
                         dest_file.write(chunk)
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path}")
-            return
+            return {"file_path": file_path, "status": "success"}
         except Exception as e:
             wait_time = (2**attempt) + random.uniform(0, 5)
             logger.warning(f"Attempt {attempt + 1} failed for {file_path}: {e}, retrying in {wait_time:.1f}s")
@@ -112,19 +106,19 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
 def download_hf(cfg: DownloadConfig) -> None:
     logging.basicConfig(level=logging.INFO)
 
-    # TODO: Our earlier version of download_hf used this piece of code for calculating the versioned_output_path
-    # versioned_output_path = os.path.join(cfg.gcs_output_path, cfg.revision)
-    # This versioned_output_path was used instead of gcs_output_path. So some of the earlier datasets are stored in
-    # gcs_output_path/<revision> instead of gcs_output_path. We should do this migration.
+    # Set cfg.append_sha_to_path=True to mimic the older behavior of writing to gcs_output_path/<revision>.
+    # Some historical datasets were written that way, so this flag keeps backwards compatibility when needed.
 
     # Ensure the output path is writable
     try:
-        ensure_fsspec_path_writable(cfg.gcs_output_path)
+        output_path = os.path.join(cfg.gcs_output_path, cfg.revision) if cfg.append_sha_to_path else cfg.gcs_output_path
+        ensure_fsspec_path_writable(output_path)
     except ValueError as e:
         logger.exception(f"Output path validation failed: {e}")
         raise e
 
     # Initialize Hugging Face filesystem
+    logger.info("Identifying files to download from HuggingFace...")
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
     hf_repo_name_with_prefix = os.path.join(cfg.hf_repo_type_prefix, cfg.hf_dataset_id)
 
@@ -141,30 +135,36 @@ def download_hf(cfg: DownloadConfig) -> None:
     if not files:
         raise ValueError(f"No files found for dataset `{cfg.hf_dataset_id}. Used glob patterns: {cfg.hf_urls_glob}")
 
-    task_generator = []
+    download_tasks = []
 
     for file in files:
         try:
-            fsspec_file_path = os.path.join(cfg.gcs_output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
+            fsspec_file_path = os.path.join(output_path, file.split("/", 3)[-1])  # Strip the dataset prefix
             # Hf file paths are always of format : hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>
-            task_generator.append((cfg.gcs_output_path, file, fsspec_file_path))
+            download_tasks.append((output_path, file, fsspec_file_path))
         except Exception as e:
             logging.exception(f"Error preparing task for {file}: {e}")
 
-    total_files = len(task_generator)
+    total_files = len(download_tasks)
     logger.info(f"Total number of files to process: {total_files}")
 
-    backend = flow_backend()
-    pipeline = Dataset.from_list(task_generator).map(lambda task: stream_file_to_fsspec(*task))
+    backend = flow_backend(max_parallelism=16)
+    pipeline = (
+        Dataset.from_list(download_tasks)
+        .map(lambda task: stream_file_to_fsspec(*task))
+        .write_jsonl(
+            f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
+        )
+    )
     list(backend.execute(pipeline))
 
     # Write Provenance JSON
     write_provenance_json(
-        cfg.gcs_output_path,
+        output_path,
         metadata={"dataset": cfg.hf_dataset_id, "version": cfg.revision, "links": files},
     )
 
-    logger.info(f"Streamed all files and wrote provenance JSON; check {cfg.gcs_output_path}.")
+    logger.info(f"Streamed all files and wrote provenance JSON; check {output_path}.")
 
 
 @draccus.wrap()
