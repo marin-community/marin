@@ -12,6 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""MuonH + Feistel Ferry incorporating shuffle-failure fixes and Kaiyue When's
+(@whenwhen) experiments/speedrun/muonh_qwen3_scaling/muonh_sweep.py learnings."""
+
 import dataclasses
 
 from levanter.optim import MuonHConfig
@@ -92,6 +95,7 @@ ferry_model_1b = default_train(
     model_config=qwen3_1_7b,
     train_config=train_config_1b,
     eval_harness_tasks=[],
+    override_output_path="checkpoints/ferry_muonh_qwen3_1_7b_feistel-b5c378",
 )
 
 ferry_model_8b = default_train(
@@ -100,6 +104,7 @@ ferry_model_8b = default_train(
     model_config=qwen3_8b,
     train_config=train_config_8b,
     eval_harness_tasks=[],
+    override_output_path="checkpoints/ferry_muonh_qwen3_8b_feistel-515e16",
 )
 
 

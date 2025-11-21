@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Idealized Ferry baseline mirroring docs/reports/marin-32b-retro.md."""
+
 import math
 
 from experiments.defaults import SimpleTrainConfig, default_train
@@ -190,6 +192,7 @@ ferry_model_1b = default_train(
     model_config=qwen3_1_7b,
     train_config=train_config_1b,
     eval_harness_tasks=[],
+    override_output_path="checkpoints/ferry_qwen3_1_7b_pt_to_cooldown-027563",
 )
 
 ferry_model_8b = default_train(
@@ -198,6 +201,7 @@ ferry_model_8b = default_train(
     model_config=qwen3_8b,
     train_config=train_config_8b,
     eval_harness_tasks=[],
+    override_output_path="checkpoints/ferry_qwen3_8b_pt_to_cooldown-1fc2cb",
 )
 
 # Main execution block
