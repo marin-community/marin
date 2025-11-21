@@ -14,6 +14,7 @@
 
 """File-based queue implementation for cross-subprocess communication."""
 
+import logging
 import pickle
 import time
 import uuid
@@ -22,6 +23,8 @@ from typing import Any
 import fsspec
 
 from fray.cluster.queue import Lease
+
+logger = logging.getLogger(__name__)
 
 
 class FileQueue:
@@ -92,6 +95,7 @@ class FileQueue:
 
     def push(self, item: Any) -> None:
         """Add an item to the queue."""
+        logger.info("Pushing {item} onto {self._name}")
         item_id = str(uuid.uuid4())
         timestamp = time.time()
         filename = self._make_available_filename(item_id, timestamp)
@@ -116,15 +120,20 @@ class FileQueue:
         with self._fs.open(files_sorted[0], "rb") as f:
             return pickle.load(f)
 
-    def pop(self, lease_timeout: float = 60.0) -> Lease[Any] | None:
+    def pop(self, lease_timeout: float = 60.0, max_wait_time: float = 60.0) -> Lease[Any] | None:
         """Acquire a lease on the next available item. Lease deadline is encoded in the filename."""
-        self._cleanup_expired_leases()
+        start_time = time.time()
 
-        # Keep trying until we successfully lease a file or run out
-        while files := self._fs.glob(f"{self._available_dir}/*.ts-*.pkl"):
+        while time.time() - start_time < max_wait_time:
+            files = self._fs.glob(f"{self._available_dir}/*.ts-*.pkl")
+            if not files:
+                time.sleep(1.0)
+                continue
+
+            logger.info("Found %d available files", len(files))
+
+            self._cleanup_expired_leases()
             files_sorted = sorted(files, key=lambda f: self._parse_available_filename(f)[1])
-            if not files_sorted:
-                break
 
             file_path = files_sorted[0]
             item_id, _ = self._parse_available_filename(file_path)
@@ -142,7 +151,7 @@ class FileQueue:
                 # File might be gone (race) or corrupt, re-glob and try next
                 continue
 
-        return None
+        raise ValueError("Timeout waiting for available item")
 
     def done(self, lease: Lease[Any]) -> None:
         """Mark a leased task as successfully completed."""

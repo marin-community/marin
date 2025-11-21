@@ -16,11 +16,10 @@ import logging
 import time
 
 import torch
-from fray.queues.base import Queue
-from fray.types import InferenceRequest, InferenceResult
+from fray import Queue
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from marin.evaluation.evaluation_config import ModelConfig
+from marin.evaluation.types import InferenceRequest, InferenceResult, ModelConfig
 
 logger = logging.getLogger(__name__)
 
@@ -66,29 +65,17 @@ class TransformersWorker:
                 time.sleep(0.1)
                 continue
 
-            # Check for shutdown
-            if lease.item == "__FRAY_WORKER_SHUTDOWN__":
-                task_queue.done(lease)
-                logger.info("TransformersWorker received shutdown signal")
-                break
-
             request = lease.item
             logger.info(f"Processing request: {request.request_id}")
 
             try:
-                # Process request
                 result = self._process_request(request)
-
-                # Push result
                 result_queue.push(result)
                 task_queue.done(lease)
 
             except Exception as e:
                 logger.error(f"Error processing request {request.request_id}: {e}")
-                # Release lease
                 task_queue.release(lease)
-
-                # Push error result
                 error_result = InferenceResult(text=[], request_id=request.request_id, error=str(e))
                 result_queue.push(error_result)
 

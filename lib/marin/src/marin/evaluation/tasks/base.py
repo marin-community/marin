@@ -16,7 +16,7 @@
 
 from abc import ABC, abstractmethod
 
-from marin.evaluation.evaluation_config import EvaluationConfig, ModelConfig
+from marin.evaluation.types import EvaluationConfig
 
 
 class EvaluationTask(ABC):
@@ -27,9 +27,8 @@ class EvaluationTask(ABC):
     to GCS or local storage.
     """
 
-    def __init__(self, config: EvaluationConfig, model_config: ModelConfig):
+    def __init__(self, config: EvaluationConfig):
         self.config = config
-        self.model_config = model_config
 
     @abstractmethod
     def run(self) -> None:

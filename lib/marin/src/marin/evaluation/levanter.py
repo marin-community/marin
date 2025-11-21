@@ -13,30 +13,22 @@
 # limitations under the License.
 
 import logging
-import os
-import shutil
 import time
 
 import haliax as hax
-from fray.queues.base import Queue
-from fray.types import InferenceRequest, InferenceResult
+from fray import Queue
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.inference.engine import InferenceEngine, InferenceEngineConfig, Request, SeqDecodingParams
 from levanter.models.llama import LlamaConfig
 from levanter.trainer import TrainerConfig
 from transformers import AutoConfig, AutoTokenizer
 
-from marin.evaluation.evaluation_config import ModelConfig
+from marin.evaluation.types import InferenceRequest, InferenceResult, ModelConfig
 
 logger = logging.getLogger(__name__)
 
 
 class LevanterWorker:
-    """
-    Worker that runs inference with Levanter on TPUs (or CPUs for testing).
-    """
-
-    CACHE_PATH: str = "/tmp/levanter_cache"
 
     def __init__(self, model_config: ModelConfig):
         self.model_config = model_config
@@ -115,12 +107,6 @@ class LevanterWorker:
                 time.sleep(0.1)
                 continue
 
-            # Check for shutdown
-            if lease.item == "__FRAY_WORKER_SHUTDOWN__":  # Hardcoded sentinel for now to match pool
-                task_queue.done(lease)
-                logger.info("LevanterWorker received shutdown signal")
-                break
-
             request = lease.item
             logger.info(f"Processing request: {request.request_id}")
 
@@ -144,10 +130,7 @@ class LevanterWorker:
     def _process_request(self, request: InferenceRequest) -> InferenceResult:
         """Process a single inference request."""
         try:
-            # Tokenize
             prompt_ids = self.tokenizer.encode(request.prompt)
-
-            # Create Levanter Request
             levanter_request = Request(
                 prompt_tokens=prompt_ids,
                 request_id=(
@@ -158,14 +141,9 @@ class LevanterWorker:
                 decode_params=SeqDecodingParams.default(),  # Use defaults for now
                 n_generations=1,
             )
-
-            # Generate - engine.generate expects a sequence of requests
             result = self.engine.generate([levanter_request])
-
-            # Decode the generated tokens
-            # result.tokens is a list of token lists (one per generation)
             if result.tokens and len(result.tokens) > 0:
-                generated_tokens = result.tokens[0]  # Get first generation
+                generated_tokens = result.tokens[0]
                 generated_text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
             else:
                 generated_text = ""
@@ -175,11 +153,3 @@ class LevanterWorker:
         except Exception as e:
             logger.error(f"Error during Levanter inference: {e}")
             raise
-
-    @staticmethod
-    def cleanup(model_config: ModelConfig):
-        """Clean up resources associated with the model."""
-        # TODO: Implement cleanup logic (e.g. close engine, free memory)
-        pass
-        if os.path.exists(LevanterWorker.CACHE_PATH) and "gcsfuse" not in LevanterWorker.CACHE_PATH:
-            shutil.rmtree(LevanterWorker.CACHE_PATH)

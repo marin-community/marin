@@ -13,15 +13,13 @@
 # limitations under the License.
 
 import logging
-import os
 import subprocess
 import time
 
 import requests
 from fray.inference_server import InferenceServer
 
-from marin.evaluation.evaluation_config import ModelConfig
-from marin.utils import remove_tpu_lockfile_on_exit
+from marin.evaluation.types import ModelConfig
 
 logger = logging.getLogger(__name__)
 

@@ -61,6 +61,12 @@ class LocalCluster(Cluster):
         """
         return f"local?queue_dir={self._queue_dir}"
 
+    def shutdown(self):
+        """Terminate any remaining jobs forcefully."""
+        for job in self._jobs.values():
+            job.process.kill()
+            job.process.wait(timeout=5)
+
     def launch(self, request: JobRequest) -> JobId:
         """Launch a job as a local subprocess."""
 
@@ -110,18 +116,13 @@ class LocalCluster(Cluster):
         return job_id
 
     def monitor(self, job_id: JobId) -> Iterator[str]:
-        """Stream logs from job's stdout/stderr."""
         job = self._get_job(job_id)
-
-        # Yield buffered logs
         while True:
             try:
                 line = job.log_queue.get(timeout=0.1)
                 yield line
             except Empty:
-                # Check if process is done
                 if job.process.poll() is not None:
-                    # Drain remaining logs
                     while not job.log_queue.empty():
                         yield job.log_queue.get_nowait()
                     break
@@ -155,13 +156,10 @@ class LocalCluster(Cluster):
         entrypoint = request.entrypoint
 
         if entrypoint.callable is not None:
-            # Callable entrypoint: use thunk helper to convert to binary entrypoint
             from fray.fn_thunk import create_thunk_entrypoint
 
-            # Convert callable to binary-based entrypoint
             entrypoint = create_thunk_entrypoint(entrypoint.callable, prefix=f"/tmp/{request.name}")
 
-        # Binary entrypoint
         assert entrypoint.binary is not None, "Command-line entrypoint requires binary"
 
         if request.environment and request.environment.workspace:
@@ -175,7 +173,6 @@ class LocalCluster(Cluster):
         env = os.environ.copy()
         env.update(env_config.env_vars)
 
-        # Inject cluster spec for automatic cluster recreation in subprocess
         if "FRAY_CLUSTER_SPEC" not in env:
             env["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
 
@@ -202,14 +199,16 @@ class _LocalJob:
     def start_log_thread(self):
         """Start background thread to collect logs."""
 
+        thread_logger = logging.getLogger(__name__ + ".log_thread")
+
         def collect_logs():
-            logger.info(f"[LOG_THREAD] Starting log collection for job {self.job_id}")
-            if self.process.stdout:
+            thread_logger.info(f"Starting log collection for job {self.job_id}")
+            while self.process.poll() is not None:
                 for line in self.process.stdout:
-                    logger.info(f"[LOG_THREAD] Job {self.job_id} output: {line.rstrip()}")
+                    thread_logger.info(f"Job {self.job_id} output: {line.rstrip()}")
                     self.log_queue.put(line.rstrip())
-            logger.info(f"[LOG_THREAD] Log collection ended for job {self.job_id}")
-            logger.info("Process ended with returncode: %s", self.process.returncode)
+            thread_logger.info(f"Log collection ended for job {self.job_id}")
+            thread_logger.info("Process ended with returncode: %s", self.process.wait())
 
         self._log_thread = Thread(target=collect_logs, daemon=True)
         self._log_thread.start()
@@ -221,7 +220,7 @@ class _LocalJob:
             Job information with current status
         """
         returncode = self.process.poll()
-        logger.info(f"[GET_INFO] Job {self.job_id} returncode: {returncode}, pid: {self.process.pid}")
+        logger.info(f"Job {self.job_id} returncode: {returncode}, pid: {self.process.pid}")
 
         if returncode is None:
             status: JobStatus = "running"

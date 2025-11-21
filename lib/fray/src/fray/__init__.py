@@ -14,6 +14,18 @@
 
 """Fray: Execution contexts for distributed and parallel computing."""
 
+from fray.cluster import (
+    Cluster,
+    CpuConfig,
+    Entrypoint,
+    EnvironmentConfig,
+    GpuConfig,
+    JobId,
+    JobRequest,
+    LocalCluster,
+    ResourceConfig,
+    TpuConfig,
+)
 from fray.job_context import (
     ContextConfig,
     ExecutionContext,
@@ -22,15 +34,28 @@ from fray.job_context import (
     ThreadContext,
     create_context,
 )
-from fray.worker_pool import WorkerPool, WorkerPoolConfig
+from fray.queue.base import Lease, Queue
+from fray.queue.file import FileQueue
+from fray.queue.ray import RayQueue
 
 __all__ = [
+    "Cluster",
     "ContextConfig",
+    "CpuConfig",
+    "Entrypoint",
+    "EnvironmentConfig",
     "ExecutionContext",
+    "FileQueue",
+    "GpuConfig",
+    "JobId",
+    "JobRequest",
+    "Lease",
+    "LocalCluster",
+    "Queue",
     "RayContext",
+    "ResourceConfig",
     "SyncContext",
     "ThreadContext",
-    "WorkerPool",
-    "WorkerPoolConfig",
+    "TpuConfig",
     "create_context",
 ]

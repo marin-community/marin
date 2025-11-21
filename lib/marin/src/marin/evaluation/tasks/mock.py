@@ -16,37 +16,22 @@
 
 import logging
 
-from marin.evaluation.controller import Controller
+from marin.evaluation.pool import InferencePool
 from marin.evaluation.tasks.base import EvaluationTask
+from marin.evaluation.types import EvaluationConfig, InferenceResult
 
 logger = logging.getLogger(__name__)
 
 
 class MockTask(EvaluationTask):
-    """Simple mock task that generates one word completions.
-
-    This is primarily for integration testing the controller and worker infrastructure.
-    """
-
-    def __init__(self, prompts: list[str], *args, **kwargs):
-        """Initialize mock task with prompts.
-
-        Args:
-            prompts: List of prompts to complete
-        """
-        super().__init__(*args, **kwargs)
+    def __init__(self, config: EvaluationConfig, prompts: list[str]):
+        super().__init__(config)
         self.prompts = prompts
 
-    def run(self) -> dict:
-        """Run mock evaluation.
-
-        Returns:
-            Dictionary mapping request IDs to results.
-        """
+    def run(self) -> list[InferenceResult]:
         logger.info(f"Running mock task with {len(self.prompts)} prompts")
-
-        controller = Controller(config=self.config, model_config=self.model_config)
-        results = controller.run()
+        with InferencePool(self.config) as pool:
+            results = pool.map(self.prompts)
 
         logger.info(f"Mock task completed with {len(results)} results")
         return results

@@ -53,7 +53,6 @@ from fray.cluster.base import (
     create_environment,
 )
 from fray.cluster.local import LocalCluster
-from fray.cluster.queue import Lease, Queue
 
 try:
     from fray.cluster.ray.cluster import RayCluster
@@ -138,6 +137,7 @@ def create_cluster(cluster_spec: str) -> Cluster:
 
     raise ValueError(f"Unknown cluster spec: {cluster_spec}")
 
+
 __all__ = [
     "Cluster",
     "CpuConfig",
@@ -150,9 +150,7 @@ __all__ = [
     "JobInfo",
     "JobRequest",
     "JobStatus",
-    "Lease",
     "LocalCluster",
-    "Queue",
     "ResourceConfig",
     "TpuConfig",
     "TpuType",
