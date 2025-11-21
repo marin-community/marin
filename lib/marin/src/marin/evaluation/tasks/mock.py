@@ -45,15 +45,7 @@ class MockTask(EvaluationTask):
         """
         logger.info(f"Running mock task with {len(self.prompts)} prompts")
 
-        # Create controller
         controller = Controller(config=self.config, model_config=self.model_config)
-
-        # Prepare requests
-        # We'll modify the controller to accept prompts, but for now we need to
-        # work with the existing controller.run() which pulls from config.evals
-
-        # Actually, looking at controller.py, it expects config.evals to have prompts
-        # Let's just call controller.run() and it will use the config.evals
         results = controller.run()
 
         logger.info(f"Mock task completed with {len(results)} results")
