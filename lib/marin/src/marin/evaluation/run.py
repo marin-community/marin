@@ -26,7 +26,9 @@ import time
 
 import draccus
 
-from marin.evaluation.evaluation_config import EvaluationConfig, ModelConfig
+from marin.evaluation.evaluation_config import EvaluationConfig
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluators.evaluator_factory import get_evaluator
 from marin.evaluation.utils import discover_hf_checkpoints
 
 logger = logging.getLogger(__name__)
@@ -34,16 +36,27 @@ logger = logging.getLogger(__name__)
 
 def evaluate(config: EvaluationConfig) -> None:
     logger.info(f"Running evals with args: {config}")
+    evaluator: Evaluator = get_evaluator(config)
 
     model: ModelConfig = _impute_model_config(config)
     logger.info(f"Evaluating {model.name} with {config.evals}")
 
     start_time: float = time.time()
-
-    from marin.evaluation.controller import Controller
-
-    controller = Controller(config, model)
-    controller.run()
+    if config.launch_with_ray:
+        evaluator.launch_evaluate_with_ray(
+            model,
+            evals=config.evals,
+            output_path=config.evaluation_path,
+            max_eval_instances=config.max_eval_instances,
+            resource_config=config.resource_config,
+        )
+    else:
+        evaluator.evaluate(
+            model,
+            evals=config.evals,
+            output_path=config.evaluation_path,
+            max_eval_instances=config.max_eval_instances,
+        )
 
     logger.info(f"Done (total time: {time.time() - start_time} seconds)")
 

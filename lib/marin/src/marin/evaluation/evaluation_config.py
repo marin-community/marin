@@ -12,59 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Common types for inference requests and responses."""
-
-from __future__ import annotations
-
 from dataclasses import dataclass, field
-from typing import Any
 
-from fray import ResourceConfig
-
-
-@dataclass
-class InferenceRequest:
-    """Request for inference."""
-
-    prompt: str
-    sampling_params: dict[str, Any] | None = None
-    request_id: str | None = None
-
-
-@dataclass
-class InferenceResult:
-    """Result of inference."""
-
-    text: list[str]
-    request_id: str | None = None
-    error: str | None = None
-
-
-@dataclass
-class ModelConfig:
-    name: str
-    """The name of the model e.g., allenai/olmo-7b"""
-
-    path: str | None
-    """
-    The path to the model checkpoint. Can be a local path or GCS path.
-    Both vLLM and Levanter can load directly from GCS.
-    """
-
-    engine_kwargs: dict[str, Any]
-    """
-    Additional keyword arguments to pass to the vLLM engine.
-    """
-
-    generation_params: dict | None = None
-    """
-    Additional keyword arguments passed to the SamplingParams for the vLLM engine
-    """
-
-    apply_chat_template: bool = False
-    """
-    Whether or not this model was trained with a Chat Template in the tokenizer
-    """
+from experiments.evals.resource_configs import ResourceConfig
 
 
 @dataclass(frozen=True)
@@ -84,8 +34,14 @@ class EvaluationConfig:
     evaluator: str
     """Name of the evaluator to run."""
 
-    model_config: ModelConfig
-    worker_resources: ResourceConfig
+    model_name: str | None
+    """
+    Can be a name of the model in Hugging Face (e.g, google/gemma-2b) or
+    a name given to the model checkpoint (e.g., $RUN/$CHECKPOINT).
+
+    If None, the model_path should be provided and the name will be imputed from the path,
+     using Levanter's path conventions. (i.e. $RUN/hf/step-$STEP --> $RUN-$STEP)
+    """
 
     evaluation_path: str = "tmp/output"
     """
@@ -100,6 +56,11 @@ class EvaluationConfig:
     See https://github.com/stanford-crfm/helm/tree/main/src/helm/benchmark/presentation, or
     https://github.com/EleutherAI/lm-evaluation-harness/tree/main/lm_eval/tasks
     for the full list.
+    """
+
+    model_path: str | None = None
+    """
+    Optional: Path to the model. Can be a path on GCS.
     """
 
     discover_latest_checkpoint: bool = False
@@ -120,6 +81,11 @@ class EvaluationConfig:
     engine_kwargs: dict | None = None
     """
     Additional keyword arguments to pass to the vLLM engine.
+    """
+
+    resource_config: ResourceConfig | None = None
+    """
+    Additional keyword arguments to pass to the Ray resources.
     """
 
     generation_params: dict | None = None

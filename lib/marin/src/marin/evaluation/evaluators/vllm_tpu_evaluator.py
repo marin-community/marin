@@ -12,31 +12,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
+import os
 import subprocess
 import time
+from abc import ABC
 
+import ray
 import requests
-from fray.inference_server import InferenceServer
 
-from marin.evaluation.types import ModelConfig
+from experiments.evals.resource_configs import ResourceConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.utils import kill_process_on_port
+from marin.run.ray_deps import build_runtime_env_for_packages
+from marin.utils import remove_tpu_lockfile_on_exit
 
-logger = logging.getLogger(__name__)
 
+class VllmTpuEvaluator(Evaluator, ABC):
+    """For `Evaluator`s that runs inference with VLLM on TPUs."""
 
-class VllmWorker(InferenceServer):
-    """
-    Worker that runs inference with VLLM.
-    vLLM can load directly from GCS paths.
-    """
+    # Where to store checkpoints, cache inference results, etc.
+    CACHE_PATH: str = "/tmp"
 
-    def _initialize_model(self) -> None:
+    @staticmethod
+    def download_model(model: ModelConfig) -> str:
         """
-        Initialize the model.
-        vLLM can load directly from GCS, so no download needed.
+        Download the model if it's not already downloaded
         """
-        # Call parent to initialize vLLM
-        super()._initialize_model()
+        downloaded_path: str | None = model.ensure_downloaded(
+            local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
+        )
+        # Use the model name if a path is not specified (e.g., for Hugging Face models)
+        model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
+        return model_name_or_path
 
     @staticmethod
     def start_vllm_server_in_background(
@@ -46,9 +54,8 @@ class VllmWorker(InferenceServer):
         Serve the model with a local vLLM server in the background.
         Returns the port the server is running on.
         """
-        # Use path if provided, otherwise use name (for HF models)
-        # vLLM can load directly from GCS
-        model_name_or_path: str = model.path or model.name
+        # Use the model name if a path is not specified (e.g., for Hugging Face models)
+        model_name_or_path: str = VllmTpuEvaluator.download_model(model)
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
         command: str = (
@@ -94,3 +101,56 @@ class VllmWorker(InferenceServer):
 
         print(f"vLLM server is ready at {server_url} ({elapsed_time}s).")
         return server_url
+
+    @staticmethod
+    def cleanup(model: ModelConfig, vllm_port: int | None = None) -> None:
+        """
+        Clean up the vLLM server and any other resources.
+        """
+        print("Cleaning up resources.")
+        # Kill the vLLM server
+        try:
+            if vllm_port is not None:
+                kill_process_on_port(vllm_port)
+        except Exception as e:
+            print(f"Failed to kill vLLM server on port {vllm_port}: {e}")
+
+        # Delete the checkpoint
+        model.destroy()
+
+    def get_runtime_env(self) -> dict:
+        """
+        Returns the runtime environment to run the evaluator on the Ray cluster.
+        """
+        return build_runtime_env_for_packages(extra=["eval", "tpu"])
+
+    def launch_evaluate_with_ray(
+        self,
+        model: ModelConfig,
+        evals: list[EvalTaskConfig],
+        output_path: str,
+        max_eval_instances: int | None = None,
+        resource_config: ResourceConfig | None = None,
+    ) -> None:
+        """
+        Launches the evaluation run with Ray.
+        """
+
+        @ray.remote(
+            scheduling_strategy=self._get_scheduling_strategy(resource_config),
+            runtime_env=self.get_runtime_env(),
+            max_calls=1,
+        )
+        @remove_tpu_lockfile_on_exit
+        def launch(
+            model: ModelConfig,
+            evals: list[EvalTaskConfig],
+            output_path: str,
+            max_eval_instances: int | None = None,
+        ) -> None:
+            import logging
+
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+            self.evaluate(model, evals, output_path, max_eval_instances)
+
+        ray.get(launch.remote(model, evals, output_path, max_eval_instances))

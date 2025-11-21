@@ -11,23 +11,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-"""HELM evaluation task implementation."""
-
-from marin.evaluation.tasks.base import EvaluationTask
-
-
-class HelmTask(EvaluationTask):
-    """HELM evaluation task."""
-
-    def run(self) -> None:
-        """Run HELM evaluation.
-
-        This should:
-        1. Load HELM scenarios and format prompts
-        2. Create Controller and submit requests
-        3. Compute HELM-specific metrics
-        4. Write results to config.evaluation_path
-        """
-        # TODO: Implement HELM evaluation
-        raise NotImplementedError("HELM task not yet implemented")
