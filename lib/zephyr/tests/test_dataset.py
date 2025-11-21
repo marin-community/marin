@@ -20,13 +20,8 @@ from pathlib import Path
 
 import pytest
 from zephyr import Dataset, create_backend, load_file, load_parquet
-from zephyr.dataset import FilterOp, MapOp, TakeOp, WindowOp
-
-
-@pytest.fixture(autouse=True)
-def ensure_ray(ray_cluster):
-    """Ensure Ray is initialized for all tests."""
-    pass
+from zephyr.dataset import FilterOp, MapOp, WindowOp
+from zephyr._test_helpers import SampleDataclass
 
 
 @pytest.fixture(
@@ -47,6 +42,20 @@ def test_from_list(sample_data, backend):
     assert list(backend.execute(ds)) == sample_data
 
 
+def test_dataclass_round_trip_preserves_type(backend):
+    """Ensure dataclass items are not downcast to dicts during execution."""
+    items = [SampleDataclass("alpha", 1), SampleDataclass("beta", 2)]
+
+    ds = Dataset.from_list(items)
+    result = list(backend.execute(ds))
+
+    assert [item.name for item in result] == ["alpha", "beta"]
+    assert all(isinstance(item, SampleDataclass) for item in result)
+
+    doubled = Dataset.from_list(items).map(lambda x: x.value * 2)
+    assert list(backend.execute(doubled)) == [2, 4]
+
+
 def test_from_iterable(backend):
     """Test creating dataset from iterable."""
     ds = Dataset.from_iterable(range(5))
@@ -59,25 +68,26 @@ def test_filter(sample_data, backend):
     assert list(backend.execute(ds)) == [2, 4, 6, 8, 10]
 
 
-def test_take_basic(backend):
-    """Test basic take operation."""
-    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take(5)
+def test_take_per_shard(backend):
+    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take_per_shard(5)
     result = list(backend.execute(ds))
     assert result == [0, 1, 2, 3, 4]
 
-
-def test_take_more_than_available(backend):
-    """Test take when n > dataset size."""
-    ds = Dataset.from_list([list(range(5))]).flat_map(lambda x: x).take(10)
-    result = list(backend.execute(ds))
-    assert result == [0, 1, 2, 3, 4]
-
-
-def test_take_zero(backend):
-    """Test take with n=0."""
-    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take(0)
+    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take_per_shard(0)
     result = list(backend.execute(ds))
     assert result == []
+
+    # Create 3 shards with 5 items each
+    ds = (
+        Dataset.from_list([[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14]])
+        .flat_map(lambda x: x)
+        .take_per_shard(2)
+    )
+
+    result = sorted(list(backend.execute(ds)))
+    # Each of 3 shards contributes 2 items = 6 total
+    # Shard 0: [0, 1], Shard 1: [5, 6], Shard 2: [10, 11]
+    assert result == [0, 1, 5, 6, 10, 11]
 
 
 def test_take_with_filter_and_map(backend):
@@ -86,30 +96,11 @@ def test_take_with_filter_and_map(backend):
         Dataset.from_list([list(range(20))])
         .flat_map(lambda x: x)
         .filter(lambda x: x % 2 == 0)  # [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
-        .take(5)  # [0, 2, 4, 6, 8]
+        .take_per_shard(5)  # [0, 2, 4, 6, 8]
         .map(lambda x: x * 2)  # [0, 4, 8, 12, 16]
     )
     result = list(backend.execute(ds))
     assert result == [0, 4, 8, 12, 16]
-
-
-def test_take_per_shard(backend):
-    """Test that take operates independently per shard."""
-    # Create 3 shards with 5 items each
-    ds = Dataset.from_list([[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14]]).flat_map(lambda x: x).take(2)
-
-    result = sorted(list(backend.execute(ds)))
-    # Each of 3 shards contributes 2 items = 6 total
-    # Shard 0: [0, 1], Shard 1: [5, 6], Shard 2: [10, 11]
-    assert result == [0, 1, 5, 6, 10, 11]
-
-
-def test_take_operation_is_dataclass():
-    """Test that take operation is stored as inspectable dataclass."""
-    ds = Dataset.from_list([1, 2, 3]).take(5)
-    assert len(ds.operations) == 1
-    assert isinstance(ds.operations[0], TakeOp)
-    assert ds.operations[0].n == 5
 
 
 def test_batch(backend):
@@ -816,6 +807,7 @@ def test_sorted_merge_join_shard_mismatch(backend):
     left = Dataset.from_list([{"id": 1, "text": "hello"}]).group_by(
         key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
     )
+
     right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
         key=lambda x: x["id"],
         reducer=lambda k, items: next(iter(items)),
@@ -918,3 +910,165 @@ def test_map_shard_error_propagation(backend):
 
     with pytest.raises(ValueError, match="Test error"):
         list(backend.execute(ds))
+
+
+class CallCounter:
+    """Helper to track function calls across test scenarios."""
+
+    def __init__(self):
+        self.flat_map_count = 0
+        self.map_count = 0
+        self.processed_ids = []
+
+    def reset(self):
+        self.flat_map_count = 0
+        self.map_count = 0
+        self.processed_ids = []
+
+    def counting_flat_map(self, path):
+        self.flat_map_count += 1
+        return load_file(path)
+
+    def counting_map(self, x):
+        self.map_count += 1
+        self.processed_ids.append(x["id"])
+        return {**x, "processed": True}
+
+
+def test_skip_existing_clean_run(tmp_path):
+    """Test skip_existing with no existing files - all shards process."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # Create input files
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    for i in range(3):
+        with open(input_dir / f"input-{i}.jsonl", "w") as f:
+            f.write(f'{{"id": {i}}}\n')
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_files(f"{input_dir}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert all(Path(p).exists() for p in result)
+    assert counter.flat_map_count == 3  # All files loaded
+    assert counter.map_count == 3  # All items mapped
+    assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
+
+
+def test_skip_existing_one_file_exists(tmp_path):
+    """Test skip_existing with one output file existing - only that shard skips."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # Create input files
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    for i in range(3):
+        with open(input_dir / f"input-{i}.jsonl", "w") as f:
+            f.write(f'{{"id": {i}}}\n')
+
+    # Manually create one output file (shard 1)
+    with open(output_dir / "output-00001.jsonl", "w") as f:
+        f.write('{"id": 1, "processed": true}\n')
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_files(f"{input_dir}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert all(Path(p).exists() for p in result)
+    assert counter.flat_map_count == 2  # Only 2 files loaded (shard 1 skipped)
+    assert counter.map_count == 2  # Only 2 items mapped
+    assert sorted(counter.processed_ids) == [0, 2]  # Only shards 0 and 2 ran
+
+
+def test_skip_existing_all_files_exist(tmp_path):
+    """Test skip_existing with all output files existing - all shards skip."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # Create input files
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    for i in range(3):
+        with open(input_dir / f"input-{i}.jsonl", "w") as f:
+            f.write(f'{{"id": {i}}}\n')
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_files(f"{input_dir}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    # First run: create all output files
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.flat_map_count == 3
+    assert counter.map_count == 3
+    assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
+
+    # Second run: all files exist, nothing should process
+    counter.reset()
+    ds = (
+        Dataset.from_files(f"{input_dir}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.flat_map_count == 0  # Nothing loaded
+    assert counter.map_count == 0  # Nothing mapped
+    assert counter.processed_ids == []  # No shards ran
+
+
+def test_skip_existing_parquet(tmp_path):
+    """Test skip_existing works with parquet files."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_list([{"id": 1}, {"id": 2}, {"id": 3}])
+        .map(counter.counting_map)
+        .write_parquet(str(output_dir / "output-{shard:05d}.parquet"), skip_existing=True)
+    )
+
+    # First run
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.map_count == 3
+    assert sorted(counter.processed_ids) == [1, 2, 3]  # All shards ran
+
+    # Second run: should skip
+    counter.reset()
+    ds = (
+        Dataset.from_list([{"id": 1}, {"id": 2}, {"id": 3}])
+        .map(counter.counting_map)
+        .write_parquet(str(output_dir / "output-{shard:05d}.parquet"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.map_count == 0
+    assert counter.processed_ids == []  # No shards ran
