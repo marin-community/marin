@@ -298,6 +298,11 @@ class Trainer:
             grad_fn = jax.value_and_grad(loss, has_aux=True)
             (loss, aux), grads = grad_fn(train_state.params)
             train_state = train_state.apply_gradients(grads=grads)
+            
+            # Compute mean advantages
+            mean_advantages_token_level = jnp.mean(batch["loss_weights"], where=action_mask)
+            mean_advantages_sequence_level = jnp.mean(jnp.mean(batch["loss_weights"], axis=1, where=action_mask))
+            
             metrics = dict(
                 loss=loss,
                 reinforce_loss=aux["reinforce_loss"],
@@ -305,6 +310,8 @@ class Trainer:
                 learning_rate=self.optimizer_info["learning_rate_schedule"](train_state.step),
                 gradient_norm=global_norm(grads),
                 param_norm=global_norm(train_state.params),
+                mean_advantages_token_level=mean_advantages_token_level,
+                mean_advantages_sequence_level=mean_advantages_sequence_level,
             )
             metrics["optim/kl_sample_train_v1"] = aux["kl_sample_train_v1"]
             metrics["optim/kl_sample_train_v2"] = aux["kl_sample_train_v2"]
