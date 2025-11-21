@@ -268,7 +268,7 @@ class Trainer:
                 prob_ratio = jnp.exp(target_logprobs - sampling_logprobs)
                 
                 # Compute importance-weighted REINFORCE loss
-                reinforce_loss = -jnp.mean(prob_ratio * batch["loss_weights"], where=batch["loss_masks"] > 0.0)
+                reinforce_loss = -jnp.sum(prob_ratio * batch["loss_weights"], where=batch["loss_masks"] > 0.0)
                 ref_log_ratio = batch["reference_logprobs"] + token_loss
                 kl_loss = jnp.exp(ref_log_ratio) - 1 - ref_log_ratio
                 kl_loss = jnp.mean(kl_loss, where=batch["loss_masks"] > 0.0)
