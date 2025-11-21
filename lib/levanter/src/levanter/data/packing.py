@@ -58,7 +58,7 @@ class SequencePacker:
         self.Pos = Pos
         self._ids: list[int] = []
         self._segment_ids: list[int] = []
-        self._loss_mask: list[int] = []
+        self._loss_weight: list[float] = []
         self.num_segments = 0
         self.pad_token = pad_token
         self.max_pack_size = max_pack_size
@@ -67,9 +67,9 @@ class SequencePacker:
     def can_pack(self, ids: list[int]) -> bool:
         return len(ids) + len(self._ids) <= self.Pos.size and self.num_segments < self.max_pack_size
 
-    def add_example(self, ids: list[int], loss_mask: list[int] | np.ndarray, segment_id: int | None = None):
-        if len(ids) != len(loss_mask):
-            raise ValueError("ids and loss_mask must have the same length")
+    def add_example(self, ids: list[int], loss_weight: list[float] | np.ndarray, segment_id: int | None = None):
+        if len(ids) != len(loss_weight):
+            raise ValueError("ids and loss_weight must have the same length")
 
         if len(ids) == 0:
             return
@@ -88,23 +88,23 @@ class SequencePacker:
 
         self._segment_ids.extend([segment_id] * len(ids))
 
-        self._loss_mask.extend(loss_mask)
+        self._loss_weight.extend(loss_weight)
 
     def pack(self) -> LmExample:
         ids = self._ids + [self.pad_token] * (self.Pos.size - len(self._ids))
 
         segment_ids = self._segment_ids + [-1] * (self.Pos.size - len(self._segment_ids))
 
-        loss_mask = self._loss_mask + [0] * (self.Pos.size - len(self._loss_mask))
+        loss_weight = self._loss_weight + [0.0] * (self.Pos.size - len(self._loss_weight))
 
         with local_cpu_mesh():
             tokens = hax.named(ids, self.Pos).astype(jnp.int32)
             segment_ids = hax.named(segment_ids, self.Pos).astype(jnp.int32)
-            loss_mask = hax.named(loss_mask, self.Pos).astype(jnp.int32)
+            loss_weight = hax.named(loss_weight, self.Pos).astype(jnp.float32)
 
             attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
 
-            return LmExample(tokens=tokens, loss_mask=loss_mask, attn_mask=attn_mask)
+            return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
 
 @dataclass(frozen=True)
@@ -139,13 +139,13 @@ def pack_prompt_completions(
     packers = [SequencePacker(Pos, max_segments_per_example, pad_token)]
 
     for sequence in sequences:
-        loss_mask = np.arange(len(sequence.ids)) >= sequence.prompt_length - 1
-        loss_mask[-1] = 0
-        assert np.any(loss_mask)
+        loss_weight = np.arange(len(sequence.ids)) >= sequence.prompt_length - 1
+        loss_weight[-1] = 0
+        assert np.any(loss_weight)
 
         for packer in packers:
             if packer.can_pack(sequence.ids):
-                packer.add_example(sequence.ids, loss_mask, sequence.segment_id)
+                packer.add_example(sequence.ids, loss_weight, sequence.segment_id)
 
                 if packer.num_segments == max_segments_per_example:
                     yield packer.pack()
@@ -154,7 +154,7 @@ def pack_prompt_completions(
         else:
             # no packer could fit the example, create a new one
             packer = SequencePacker(Pos, max_segments_per_example, pad_token)
-            packer.add_example(sequence.ids, loss_mask, sequence.segment_id)
+            packer.add_example(sequence.ids, loss_weight, sequence.segment_id)
             packers.append(packer)
 
         while len(packers) >= max_buffered_examples:
@@ -188,7 +188,7 @@ def per_segment_loss(
     Pos = packed_example.tokens.axes[0]
 
     # mask out padding etc
-    masked_losses = losses * packed_example.loss_mask
+    masked_losses = losses * packed_example.loss_weight
 
     # sum the losses for each segment
     unique_segment_ids = _unique_segment_ids(max_Segments, segment_ids)
@@ -238,7 +238,8 @@ def per_segment_correct(
     Pos = packed_example.tokens.axes[0]
 
     # mask out padding etc
-    masked_correct = hax.logical_or(correct, hax.logical_not(packed_example.loss_mask))
+    valid_positions = packed_example.loss_weight > 0
+    masked_correct = hax.logical_or(correct, hax.logical_not(valid_positions))
 
     # sum the losses for each segment
     # Extract unique segment IDs with padding
@@ -264,10 +265,10 @@ def greedy_pack_prompt_completions(
     Greedy packing of prompt completions into LmExamples using [pack_documents][]
     """
 
-    def make_loss_mask(id, prompt_length):
-        loss_mask = np.arange(len(id)) >= prompt_length - 1
-        loss_mask[-1] = 0
-        return loss_mask
+    def make_loss_weight(id, prompt_length):
+        loss_weight = np.arange(len(id)) >= prompt_length - 1
+        loss_weight[-1] = 0
+        return loss_weight
 
     # Convert sequences to lists for easier access
     sequences = list(sequences)
@@ -289,14 +290,14 @@ def greedy_pack_prompt_completions(
         pack_sequences = [sequences[i] for i in docs_in_pack]
         pack_prompt_lengths = [sequence.prompt_length for sequence in pack_sequences]
 
-        # Concatenate the IDs and create loss masks
+        # Concatenate the IDs and create loss weights
         concat_ids = []
-        concat_loss_mask = []
+        concat_loss_weight = []
         segment_ids = []
 
         for doc_id, seq, prompt_len in zip(docs_in_pack, pack_sequences, pack_prompt_lengths):
             concat_ids.extend(seq.ids)
-            concat_loss_mask.extend(make_loss_mask(seq.ids, prompt_len))
+            concat_loss_weight.extend(make_loss_weight(seq.ids, prompt_len))
             segment_ids.extend([doc_id] * len(seq.ids))
 
         # Pad to max length
@@ -304,23 +305,23 @@ def greedy_pack_prompt_completions(
 
         if pad_length > 0:
             concat_ids.extend([pad_token] * pad_length)
-            concat_loss_mask.extend([0] * pad_length)
+            concat_loss_weight.extend([0] * pad_length)
             segment_ids.extend([-1] * pad_length)
         elif pad_length < 0:
             # too long, this should only happen if there's 1 document in the pack
             if len(pack_sequences) != 1:
                 raise ValueError("Too many tokens in a pack with more than one document")
             concat_ids = concat_ids[-Pos.size :]
-            concat_loss_mask = concat_loss_mask[-Pos.size :]
+            concat_loss_weight = concat_loss_weight[-Pos.size :]
             segment_ids = segment_ids[-Pos.size :]
 
         # Create the LmExample
         tokens = hax.named(np.array(concat_ids), Pos)
-        loss_mask = hax.named(np.array(concat_loss_mask), Pos)
+        loss_weight = hax.named(np.array(concat_loss_weight), Pos)
         segment_ids = hax.named(np.array(segment_ids), Pos)
         attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
 
-        out.append(LmExample(tokens=tokens, loss_mask=loss_mask, attn_mask=attn_mask))
+        out.append(LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask))
 
     return out
 

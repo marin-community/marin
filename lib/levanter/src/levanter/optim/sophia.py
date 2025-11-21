@@ -80,7 +80,7 @@ class ScaleBySophiaState(NamedTuple):
 #
 #     def num_data_points(self, example: Ex) -> int:
 #         """
-#         Returns the number of data points in the example. This should take into account the loss mask
+#         Returns the number of data points in the example. This should take into account the loss weight
 #         or any other masking that might be applied to the example.
 #
 #         By default, we just return 1, and you can just pull the term into the hyperparams of Sophia if you want.
