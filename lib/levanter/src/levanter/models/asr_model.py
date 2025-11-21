@@ -115,7 +115,7 @@ class ASRMixin(abc.ABC):
         targets = hax.roll(example.tokens, -1, axis=self.Pos.name)
         target_y = hax.nn.one_hot(targets, self.Vocab, dtype=logits.dtype)
         loss = cross_entropy_loss(
-            logits, self.Vocab, target_y, reduction, reduction_axis=reduction_axis, where=example.loss_weight
+            logits, self.Vocab, target_y, reduction, reduction_axis=reduction_axis, weight=example.loss_weight
         )
 
         return loss

@@ -139,7 +139,7 @@ def pack_prompt_completions(
     packers = [SequencePacker(Pos, max_segments_per_example, pad_token)]
 
     for sequence in sequences:
-        loss_weight = np.arange(len(sequence.ids)) >= sequence.prompt_length - 1
+        loss_weight = (np.arange(len(sequence.ids)) >= sequence.prompt_length - 1).astype(np.float32)
         loss_weight[-1] = 0
         assert np.any(loss_weight)
 

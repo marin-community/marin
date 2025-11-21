@@ -158,7 +158,7 @@ def cross_entropy_and_logsumexp_penalty(
     if logsumexp_weight is not None and logsumexp_weight != 0.0:
         loss = loss + logsumexp_weight * (log_normalizers**2)
 
-    return hax.nn.loss.maybe_reduce_loss(loss, reduction, reduction_axis, weight=weight)
+    return hax.nn.loss.reduce_loss(loss, reduction, reduction_axis, weight=weight)
 
 
 def fused_cross_entropy_loss_and_logsumexp_penalty(
