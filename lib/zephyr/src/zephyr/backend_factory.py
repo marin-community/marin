@@ -35,7 +35,6 @@ def create_backend(
     max_parallelism: int = 1024,
     memory: str | None = None,
     num_cpus: float | None = None,
-    num_gpus: float | None = None,
     chunk_size: int = 1000,
     dry_run: bool = False,
     **ray_options,
@@ -47,7 +46,6 @@ def create_backend(
         max_parallelism: Maximum number of concurrent tasks
         memory: Memory requirement per task (e.g., "2GB", "512MB")
         num_cpus: Number of CPUs per task for Ray backend
-        num_gpus: Number of GPUs per task for Ray backend
         chunk_size: Items per chunk within a shard (default: 1000)
         dry_run: If True, show optimization plan without executing
         **ray_options: Additional Ray remote options (e.g., max_retries=3)
@@ -67,7 +65,6 @@ def create_backend(
         max_workers=max_parallelism,
         memory=memory_bytes,
         num_cpus=num_cpus,
-        num_gpus=num_gpus,
         **ray_options,
     )
 
