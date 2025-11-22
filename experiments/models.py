@@ -185,6 +185,13 @@ marin_8b_base = download_model_step(
     )
 )
 
+marin_32b_base = download_model_step(
+    ModelConfig(
+        hf_repo_id="marin-community/marin-32b-base",
+        hf_revision="f19b346",
+    )
+)
+
 llama_3_2_1b = download_model_step(
     ModelConfig(
         hf_repo_id="meta-llama/Llama-3.2-1B",
@@ -259,5 +266,12 @@ qwen3_32b = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-32B",
         hf_revision="9216db5781bf21249d130ec9da846c4624c16137",
+    )
+)
+
+olmo3_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/Olmo-3-1125-32B",
+        hf_revision="0556619",
     )
 )

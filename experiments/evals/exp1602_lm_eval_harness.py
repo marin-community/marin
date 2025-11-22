@@ -30,16 +30,17 @@ from experiments.evals.task_configs import (
     ACTION_TASKS,
     TRUTHFULNESS_TASKS,
     SPECIALIZED_TASKS,
+    CORE_TASKS,
 )
-from experiments.models import qwen3_32b
+from experiments.models import marin_32b_base, qwen3_32b, olmo3_32b
 from marin.execution.executor import executor_main
-
-from experiments.tootsie.exp1529_32b_mantis_cooldown import tootsie_32b_cooldown_mantis as marin_32b
 
 # List of models to evaluate
 MODELS_TO_EVALUATE = [
-    marin_32b,
+    marin_32b_base,
     qwen3_32b,
+    olmo3_32b,
+
 ]
 
 # Task configurations to run
