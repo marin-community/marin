@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Sequence
@@ -214,7 +215,7 @@ class ResourceConfig:
         ram: RAM requirement (e.g., "8g", "16g")
         disk: Disk space requirement (e.g., "10g", "100g")
         device: Device configuration (CPU, GPU, or TPU)
-        count: Number of workers with these resources
+        replicas: Number of replicas (individual pods with these resources)
         regions: Preferred cloud regions for job placement
     """
 
@@ -222,7 +223,7 @@ class ResourceConfig:
     ram: str = "128m"
     disk: str = "1g"
     device: DeviceConfig = field(default_factory=CpuConfig)
-    count: int = 1
+    replicas: int = 1
     regions: Sequence[str] | None = None
 
 
@@ -258,30 +259,22 @@ class EnvironmentConfig:
 class Entrypoint:
     """Job entrypoint specification.
 
-    Supports two execution modes:
-    - Command line: Execute any binary with arguments (e.g., "python", "uv", "bash")
-    - Function call: Execute a zero-argument callable directly (for TPU/Ray remote execution)
-
-    Exactly one of (binary, callable) must be specified.
-
     Args:
         binary: Binary to execute (e.g., "python", "uv", "bash")
         args: Command-line arguments for the binary
-        callable: Zero-argument callable for direct execution (use closures for arguments)
+        callable: Callable for direct execution
+        function_args: Keyword arguments to pass to callable
 
     Examples:
-        # Command-line execution
         Entrypoint(binary="python", args=["train.py", "--config", "config.yaml"])
-        Entrypoint(binary="uv", args=["run", "python", "script.py"])
-
-        # Function execution (with closure for arguments)
-        config = Config(...)
+        Entrypoint(callable=train_fn, function_args={"config": config, "epochs": 100})
         Entrypoint(callable=lambda: train_fn(config))
     """
 
     binary: str | None = None
     args: Sequence[str] = field(default_factory=list)
-    callable: Callable[[], Any] | None = None
+    callable: Callable[..., Any] | None = None
+    function_args: dict[str, Any] | None = None
 
     def __post_init__(self):
         if self.binary is None and self.callable is None:
@@ -290,6 +283,8 @@ class Entrypoint:
             raise ValueError("Cannot specify both binary and callable")
         if self.args and self.callable is not None:
             raise ValueError("args only valid with binary, not callable")
+        if self.function_args is not None and self.callable is None:
+            raise ValueError("function_args only valid with callable, not binary")
 
 
 @dataclass
@@ -326,11 +321,13 @@ def create_environment(
     env_vars: dict[str, str] | None = None,
     extra_dependency_groups: Sequence[str] | None = None,
 ) -> EnvironmentConfig:
-    """Create an EnvironmentConfig with sensible defaults.
+    """Create an EnvironmentConfig
 
-    Sets default environment variables commonly needed for ML workloads:
+    By default, sets the following environment variables:
     - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
+    - HF_TOKEN
+    - WANDB_API_KEY
 
     Args:
         workspace: Path to workspace root (default: current directory)
@@ -342,19 +339,17 @@ def create_environment(
     Returns:
         EnvironmentConfig with defaults applied
     """
-    import os
 
-    # Use current directory as workspace if neither workspace nor docker_image specified
     if workspace is None and docker_image is None:
         workspace = os.getcwd()
 
-    # Default environment variables for ML workloads
     default_env_vars = {
         "HF_DATASETS_TRUST_REMOTE_CODE": "1",
         "TOKENIZERS_PARALLELISM": "false",
+        "HF_TOKEN": os.getenv("HF_TOKEN"),
+        "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
     }
 
-    # Merge user env vars with defaults (user values take precedence)
     merged_env_vars = {**default_env_vars, **(env_vars or {})}
 
     return EnvironmentConfig(

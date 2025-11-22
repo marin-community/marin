@@ -48,32 +48,22 @@ from fray.cluster.base import Entrypoint
 logger = logging.getLogger(__name__)
 
 
-def create_thunk_entrypoint(callable_fn: Callable[[], Any], prefix: str | None = None) -> Entrypoint:
-    """Serialize a callable to a temporary file and return an Entrypoint.
+def create_thunk_entrypoint(
+    callable_fn: Callable[..., Any], prefix: str, function_args: dict[str, Any] | None = None
+) -> Entrypoint:
+    """Serialize a callable and its arguments to a temporary file and return an Entrypoint.
 
     Args:
-        callable_fn: Zero-argument callable to serialize
-        prefix: Optional file prefix for the pickled callable (default: uses tempfile)
+        callable_fn: Callable to serialize
+        prefix: File prefix for the pickled callable
+        function_args: Keyword arguments to pass to callable
 
     Returns:
         Entrypoint configured to execute the callable via fray.fn_thunk
-
-    Example:
-        >>> def my_job():
-        ...     print("Running job")
-        >>> entrypoint = create_thunk_entrypoint(my_job, prefix="/tmp/myjob")
-        >>> # Returns: Entrypoint(binary="python", args=["-m", "fray.fn_thunk", "/tmp/myjob_abc123.pkl"])
     """
-    if prefix:
-        # Use prefix with tempfile naming for uniqueness
-        with tempfile.NamedTemporaryFile(mode="wb", suffix=".pkl", prefix=prefix + "_", delete=False) as f:
-            cloudpickle.dump(callable_fn, f)
-            pickle_path = f.name
-    else:
-        # Use default tempfile location
-        with tempfile.NamedTemporaryFile(mode="wb", suffix=".pkl", delete=False) as f:
-            cloudpickle.dump(callable_fn, f)
-            pickle_path = f.name
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".pkl", prefix=prefix + "_", delete=False) as f:
+        cloudpickle.dump((callable_fn, function_args), f, protocol=cloudpickle.DEFAULT_PROTOCOL)
+        pickle_path = f.name
 
     return Entrypoint(binary="python", args=["-m", "fray.fn_thunk", pickle_path])
 
@@ -86,25 +76,36 @@ def main(path: str):
     Args:
         path: fsspec-compatible path to the cloudpickled callable
     """
+    logging.basicConfig(
+        level=logging.INFO, format="%(filename)s:%(lineno)d %(asctime)s %(levelname)s %(message)s", stream=sys.stderr
+    )
     try:
         logger.info("Loading callable from %s", path)
         with fsspec.open(path, "rb") as f:
-            callable_fn = cloudpickle.load(f)
-
-        logger.info("Executing callable...")
-        result = callable_fn()
-
-        logger.info("Callable executed successfully. Result: %s", result)
-
-    except FileNotFoundError:
-        click.echo(f"Error: File not found: {path}", err=True)
-        sys.exit(1)
+            payload = cloudpickle.load(f)
+            if isinstance(payload, tuple):
+                callable_fn, function_args = payload
+            else:
+                callable_fn = payload
+                function_args = None
     except Exception as e:
-        click.echo(f"Error executing function: {e}", err=True)
-        import traceback
+        logger.error("Failed to load callable from %s: %s", path, e)
+        raise
 
-        traceback.print_exc()
-        sys.exit(1)
+    try:
+        logger.info("Calling user entrypoint %s", callable_fn)
+        logger.info("About to execute callable_fn()")
+        sys.stdout.flush()
+        sys.stderr.flush()
+        if function_args:
+            result = callable_fn(**function_args)
+        else:
+            result = callable_fn()
+        logger.info("Callable executed successfully. Result: %s", result)
+        return 0
+    except Exception as e:
+        logger.error("Failed to run callable: %s", e, exc_info=True)
+        return 1
 
 
 if __name__ == "__main__":

@@ -13,8 +13,62 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Any
 
-from experiments.evals.resource_configs import ResourceConfig
+from fray.cluster.base import ResourceConfig
+
+
+@dataclass
+class ModelConfig:
+    name: str
+    """The name of the model e.g., allenai/olmo-7b"""
+
+    path: str | None
+    """
+    The path to the model checkpoint. Can be a local path or a path on GCS.
+    """
+
+    engine_kwargs: dict[str, Any]
+    """
+    Additional keyword arguments to pass to the vLLM engine.
+    """
+
+    device: str = "auto"
+    """
+    Device to run VLLM on: "auto", "cpu", "cuda", or "tpu".
+    Auto will try to detect available accelerators.
+    """
+
+    generation_params: dict | None = None
+    """
+    Additional keyword arguments passed to the SamplingParams for the vLLM engine
+    """
+
+    apply_chat_template: bool = False
+    """
+    Whether or not this model was trained with a Chat Template in the tokenizer
+    """
+
+
+@dataclass
+class InferencePoolConfig:
+    """Configuration for the inference pool.
+
+    Args:
+        num_servers: Number of VLLM server workers in the pool
+        resource_config: Fray ResourceConfig for each worker (TPU/GPU resources)
+        model_config: Model to load in the servers
+        proxy_host: Host for the OpenAI proxy server
+        proxy_port: Port for the OpenAI proxy server
+        vllm_port_range: Port range for VLLM servers (start, end)
+    """
+
+    num_servers: int
+    resource_config: ResourceConfig
+    model_config: ModelConfig
+    proxy_host: str = "127.0.0.1"
+    proxy_port: int = 9000
+    vllm_port_range: tuple[int, int] = (0, 0)
 
 
 @dataclass(frozen=True)
@@ -33,6 +87,12 @@ class EvalTaskConfig:
 class EvaluationConfig:
     evaluator: str
     """Name of the evaluator to run."""
+
+    pool_config: InferencePoolConfig
+    """
+    Configuration for the inference pool. All evaluations use the
+    Fray-based inference pool with load-balanced VLLM servers.
+    """
 
     model_name: str | None
     """
@@ -78,19 +138,10 @@ class EvaluationConfig:
     Maximum number of evaluation instances to run.
     """
 
-    engine_kwargs: dict | None = None
-    """
-    Additional keyword arguments to pass to the vLLM engine.
-    """
-
-    resource_config: ResourceConfig | None = None
-    """
-    Additional keyword arguments to pass to the Ray resources.
-    """
-
     generation_params: dict | None = None
     """
-    Additional keyword arguments passed to the vLLM sampling params engine
+    Additional keyword arguments passed to the vLLM sampling params engine.
+    Per-task generation parameters (temperature, max_tokens, etc.).
     """
 
     apply_chat_template: bool = False

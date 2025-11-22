@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Script to run an evaluator on a model checkpoint.
+Script to run an evaluator on a model checkpoint using the Fray-based inference pool.
 
 Usage:
 
@@ -22,46 +22,95 @@ python3 run.py <Name of evaluator> --model <Path to model or Hugging Face model 
 """
 
 import logging
+import os
 import time
 
 import draccus
+from fray.cluster.local_cluster import LocalCluster
+from fray.queue.file import FileQueue
 
-from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
+from marin.evaluation.evaluation_config import EvaluationConfig, ModelConfig
+from marin.evaluation.evaluators.evaluator import Evaluator
 from marin.evaluation.evaluators.evaluator_factory import get_evaluator
+from marin.evaluation.inference_pool import InferencePool
 from marin.evaluation.utils import discover_hf_checkpoints
+from marin.evaluation.vllm import InferenceRequest, InferenceResponse
 
 logger = logging.getLogger(__name__)
 
 
 def evaluate(config: EvaluationConfig) -> None:
-    logger.info(f"Running evals with args: {config}")
-    evaluator: Evaluator = get_evaluator(config)
+    """Run evaluation using the Fray-based inference pool.
 
+    This function:
+    1. Creates a Fray cluster and queues
+    2. Starts the inference pool with VLLM servers
+    3. Runs the evaluator with the pool's OpenAI-compatible API
+    4. Shuts down the pool and cluster
+    """
+    logger.info(f"Running evals with args: {config}")
+
+    # Create model config
     model: ModelConfig = _impute_model_config(config)
     logger.info(f"Evaluating {model.name} with {config.evals}")
 
-    start_time: float = time.time()
-    if config.launch_with_ray:
-        evaluator.launch_evaluate_with_ray(
-            model,
-            evals=config.evals,
-            output_path=config.evaluation_path,
-            max_eval_instances=config.max_eval_instances,
-            resource_config=config.resource_config,
-        )
-    else:
+    # Create Fray cluster
+    logger.info("Creating Fray cluster")
+    cluster = LocalCluster()
+
+    # Create queues for request/response
+    queue_dir = os.path.join("/tmp", f"inference-pool-{int(time.time())}")
+    logger.info(f"Creating queues in {queue_dir}")
+    request_queue = FileQueue[InferenceRequest](path=os.path.join(queue_dir, "requests"))
+    response_queue = FileQueue[InferenceResponse](path=os.path.join(queue_dir, "responses"))
+
+    # Create and start inference pool
+    logger.info("Creating inference pool")
+    pool = InferencePool(
+        config=config.pool_config,
+        cluster=cluster,
+        request_queue=request_queue,
+        response_queue=response_queue,
+    )
+
+    try:
+        start_time = time.time()
+
+        logger.info("Starting inference pool")
+        pool.start()
+
+        logger.info("Waiting for pool to be healthy")
+        pool.wait_for_healthy()
+
+        # Get OpenAI base URL from pool
+        openai_base_url = pool.base_url()
+        logger.info(f"Pool ready at {openai_base_url}")
+
+        # Create and run evaluator
+        evaluator: Evaluator = get_evaluator(config)
         evaluator.evaluate(
-            model,
+            model=model,
             evals=config.evals,
+            openai_base_url=openai_base_url,
             output_path=config.evaluation_path,
             max_eval_instances=config.max_eval_instances,
+            wandb_tags=config.wandb_tags,
         )
 
-    logger.info(f"Done (total time: {time.time() - start_time} seconds)")
+        logger.info(f"Evaluation complete (total time: {time.time() - start_time:.1f}s)")
+
+    finally:
+        logger.info("Shutting down inference pool")
+        pool.shutdown()
+        cluster.shutdown()
 
 
 def _impute_model_config(config):
+    """Create ModelConfig from EvaluationConfig.
+
+    Imputes model name from path if not provided and extracts engine_kwargs
+    from pool_config.model_config.
+    """
     model_path = config.model_path
 
     if config.model_path is None:
@@ -93,24 +142,9 @@ def _impute_model_config(config):
         model_name = f"{model_name}-{step_part}"
     else:
         model_name = config.model_name
-    generation_params = {}
-    engine_kwargs = {}
-    if config.generation_params is None:
-        logger.warning(f"No generation params provided for {model_name}, using default params")
-    else:
-        generation_params = config.generation_params
-    if config.engine_kwargs is None:
-        logger.warning(f"No engine kwargs provided for {model_name}, using default params")
-    else:
-        engine_kwargs = config.engine_kwargs
 
-    return ModelConfig(
-        name=model_name,
-        path=model_path,
-        engine_kwargs=engine_kwargs,
-        generation_params=generation_params,
-        apply_chat_template=config.apply_chat_template,
-    )
+    # Use model config from pool_config
+    return config.pool_config.model_config
 
 
 @draccus.wrap()
