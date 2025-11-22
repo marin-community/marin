@@ -63,16 +63,17 @@ class LocalCluster(Cluster):
         """Terminate any remaining jobs forcefully."""
         logger.info(f"Shutting down cluster with {len(self._jobs)} jobs")
         for job_id, job in self._jobs.items():
-            if job.process.poll() is None:
-                logger.info(f"Killing job {job_id} and its process group")
-                try:
-                    os.killpg(job.process.pid, signal.SIGTERM)
-                    job.process.wait(timeout=5)
-                except (ProcessLookupError, OSError):
-                    # Process group already dead
-                    pass
-            else:
-                logger.info(f"Job {job_id} already exited with code {job.process.returncode}")
+            for replica_id, process in enumerate(job.processes):
+                if process.poll() is None:
+                    logger.info(f"Killing job {job_id} replica {replica_id} (PID {process.pid})")
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                        process.wait(timeout=5)
+                    except (ProcessLookupError, OSError):
+                        # Process group already dead
+                        pass
+                else:
+                    logger.info(f"Job {job_id} replica {replica_id} already exited with code {process.returncode}")
 
         self._jobs.clear()
 
@@ -117,50 +118,68 @@ class LocalCluster(Cluster):
                 logger.warning(f"Failed to query git files, falling back to simple copy: {e}")
                 shutil.copytree(request.environment.workspace, job_dir, dirs_exist_ok=True)
 
-        logger.info(f"Launching job {job_id} with command: {' '.join(cmd)} in {job_dir}")
+        replica_count = request.resources.replicas
+        logger.info(f"Launching job {job_id} with {replica_count} replica(s) in {job_dir}")
+        logger.info(f"Command: {' '.join(cmd)}")
 
+        processes = []
         try:
-            process = subprocess.Popen(
-                cmd,
-                cwd=job_dir,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,  # Line buffered
-                start_new_session=True,  # Create new process group
-            )
-            logger.info(f"Process started with PID: {process.pid}")
+            for replica_id in range(replica_count):
+                # Add replica-specific environment variables
+                replica_env = env.copy()
+                replica_env["FRAY_REPLICA_ID"] = str(replica_id)
+                replica_env["FRAY_REPLICA_COUNT"] = str(replica_count)
+
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=job_dir,
+                    env=replica_env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,  # Line buffered
+                    start_new_session=True,  # Create new process group
+                )
+                processes.append(process)
+                logger.info(f"Replica {replica_id}/{replica_count} started with PID: {process.pid}")
         except Exception as e:
+            # Clean up any started processes
+            for p in processes:
+                if p.poll() is None:
+                    try:
+                        os.killpg(p.pid, signal.SIGKILL)
+                    except (ProcessLookupError, OSError):
+                        pass
             raise RuntimeError(f"Failed to launch job: {e}") from e
 
         # Track job
         local_job = _LocalJob(
             job_id=job_id,
             request=request,
-            process=process,
+            processes=processes,
             start_time=time.time(),
             job_dir=job_dir,
         )
         self._jobs[job_id] = local_job
 
-        # Start log collection thread
+        # Start log collection threads
         local_job.start_log_thread()
-        logger.info(f"Log thread started for job {job_id}")
+        logger.info(f"Log threads started for job {job_id}")
 
         return job_id
 
     def monitor(self, job_id: JobId) -> Iterator[str]:
-        """Monitor job output."""
+        """Monitor job output from all replicas."""
         job = self._get_job(job_id)
         while True:
             try:
                 line = job.log_queue.get(timeout=0.1)
                 yield line
             except Empty:
-                if job.process.poll() is not None:
-                    # Process finished, drain remaining logs
+                # Check if all processes have finished
+                if all(process.poll() is not None for process in job.processes):
+                    # All processes finished, drain remaining logs
                     while not job.log_queue.empty():
                         yield job.log_queue.get_nowait()
                     break
@@ -169,17 +188,23 @@ class LocalCluster(Cluster):
         return self._get_job(job_id).get_info()
 
     def terminate(self, job_id: JobId) -> None:
+        """Terminate all replicas of a job."""
         job = self._get_job(job_id)
-        if job.process.poll() is None:
-            logger.info(f"Terminating job {job_id} and its process group")
-            try:
-                os.killpg(job.process.pid, signal.SIGTERM)
-                job.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(job.process.pid, signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                # Process group already dead
-                pass
+        for replica_id, process in enumerate(job.processes):
+            if process.poll() is None:
+                logger.info(f"Terminating job {job_id} replica {replica_id} (PID {process.pid})")
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"Replica {replica_id} did not respond to SIGTERM, sending SIGKILL")
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    # Process group already dead
+                    logger.info(f"Replica {replica_id} process group already dead")
+                    pass
+            else:
+                logger.info(f"Replica {replica_id} already exited with code {process.returncode}")
 
     def list_jobs(self) -> list[JobInfo]:
         return [job.get_info() for job in self._jobs.values()]
@@ -247,67 +272,78 @@ class _LocalJob:
         self,
         job_id: JobId,
         request: JobRequest,
-        process: subprocess.Popen,
+        processes: list[subprocess.Popen],
         start_time: float,
         job_dir: str,
     ):
         self.job_id = job_id
         self.request = request
-        self.process = process
+        self.processes = processes
+        self.replica_count = len(processes)
         self.start_time = start_time
         self.job_dir = job_dir
         self.log_queue: Queue[str] = Queue()
-        self._log_thread: Thread | None = None
+        self._log_threads: list[Thread] = []
 
     def start_log_thread(self):
-        """Start background thread to collect logs."""
+        """Start background threads to collect logs from all replicas."""
         thread_logger = logging.getLogger(__name__ + ".log_thread")
 
-        def collect_logs():
-            thread_logger.info(f"Starting log collection for job {self.job_id}")
-            while True:
-                try:
-                    # Read lines until EOF (process exits and pipe closes)
-                    for line in iter(self.process.stdout.readline, ""):
-                        line = line.rstrip()
-                        if line:  # Only log non-empty lines
-                            thread_logger.info(f"{self.job_id}: {line}")
-                            self.log_queue.put(line)
-                except Exception as e:
-                    thread_logger.error(f"Error reading logs for job {self.job_id}: {e}")
-                finally:
-                    thread_logger.info(f"Log collection ended for job {self.job_id}")
+        def collect_logs_for_replica(replica_id: int, process: subprocess.Popen):
+            thread_logger.info(f"Starting log collection for job {self.job_id} replica {replica_id}")
+            try:
+                # Read lines until EOF (process exits and pipe closes)
+                for line in iter(process.stdout.readline, ""):
+                    line = line.rstrip()
+                    if line:  # Only log non-empty lines
+                        prefixed_line = f"[replica-{replica_id}] {line}"
+                        thread_logger.info(f"{self.job_id}: {prefixed_line}")
+                        self.log_queue.put(prefixed_line)
+            except Exception as e:
+                thread_logger.error(f"Error reading logs for job {self.job_id} replica {replica_id}: {e}")
+            finally:
+                thread_logger.info(f"Log collection ended for job {self.job_id} replica {replica_id}")
+                if process.poll() is not None:
+                    thread_logger.info(f"Replica {replica_id} ended with returncode: {process.returncode}")
 
-                if self.process.poll() is not None:
-                    thread_logger.info(f"Process ended with returncode: {self.process.returncode}")
-                    break
-                else:
-                    time.sleep(0.1)
-
-        self._log_thread = Thread(target=collect_logs, daemon=True)
-        self._log_thread.start()
+        # Start one thread per replica
+        for replica_id, process in enumerate(self.processes):
+            thread = Thread(target=collect_logs_for_replica, args=(replica_id, process), daemon=True)
+            thread.start()
+            self._log_threads.append(thread)
 
     def get_info(self) -> JobInfo:
-        """Get current job info.
+        """Get current job info with conservative status aggregation.
+
+        Conservative aggregation means:
+        - Status is "running" if ANY replica is still running
+        - Status is "failed" if ANY replica has failed
+        - Status is "succeeded" only if ALL replicas succeeded
 
         Returns:
             Job information with current status
         """
-        returncode = self.process.poll()
-        logger.info(f"{self.job_id} returncode: {returncode}, pid: {self.process.pid}")
+        returncodes = [process.poll() for process in self.processes]
+        logger.info(f"{self.job_id} returncodes: {returncodes}, PIDs: {[p.pid for p in self.processes]}")
 
-        if returncode is None:
+        # Conservative aggregation
+        if any(rc is None for rc in returncodes):
+            # At least one replica still running
             status: JobStatus = "running"
             end_time = None
             error_message = None
-        elif returncode == 0:
+        elif any(rc != 0 for rc in returncodes):
+            # At least one replica failed
+            status = "failed"
+            end_time = time.time()
+            failed_replicas = [i for i, rc in enumerate(returncodes) if rc != 0]
+            failed_codes = [returncodes[i] for i in failed_replicas]
+            error_message = f"Replica(s) {failed_replicas} failed with exit code(s) {failed_codes}"
+        else:
+            # All replicas succeeded (all returncodes are 0)
             status = "succeeded"
             end_time = time.time()
             error_message = None
-        else:
-            status = "failed"
-            end_time = time.time()
-            error_message = f"Process exited with code {returncode}"
 
         logger.info(f"{self.job_id} determined status: {status}")
         return JobInfo(

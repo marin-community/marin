@@ -188,3 +188,68 @@ def test_environment_integration(cluster, cluster_type, tmp_path):
     if cluster_type == "ray":
         # These are usually injected by Ray
         assert "RAY_ADDRESS" in env_vars or "RAY_JOB_ID" in env_vars
+
+
+def test_local_cluster_replica_integration(local_cluster, tmp_path):
+    """Integration test for replica functionality: env vars, logs, status aggregation."""
+
+    def replica_worker(output_path: str):
+        import json
+        import os
+        import sys
+
+        replica_id = int(os.environ.get("FRAY_REPLICA_ID", "0"))
+        replica_count = os.environ.get("FRAY_REPLICA_COUNT", "MISSING")
+
+        # Log from each replica
+        print(f"Hello from replica {replica_id}")
+
+        # Write env vars to file
+        output_file = f"{output_path}_{replica_id}.json"
+        with open(output_file, "w") as f:
+            json.dump({"replica_id": str(replica_id), "replica_count": replica_count}, f)
+
+        # Replica 1 fails to test status aggregation
+        if replica_id == 1:
+            print("Replica 1 intentionally failing")
+            sys.exit(1)
+
+    output_path = str(tmp_path / "replica_output")
+
+    request = JobRequest(
+        name="replica-integration-test",
+        entrypoint=Entrypoint(callable=replica_worker, function_args={"output_path": output_path}),
+        resources=ResourceConfig(replicas=3),
+        environment=create_environment(),
+    )
+
+    job_id = local_cluster.launch(request)
+
+    # Collect logs
+    logs = list(local_cluster.monitor(job_id))
+
+    # Check log prefixes - each replica should log with [replica-N] prefix
+    replica_0_logs = [log for log in logs if "[replica-0]" in log and "Hello from replica 0" in log]
+    replica_1_logs = [log for log in logs if "[replica-1]" in log and "Replica 1 intentionally failing" in log]
+    replica_2_logs = [log for log in logs if "[replica-2]" in log and "Hello from replica 2" in log]
+
+    assert len(replica_0_logs) > 0, "No logs from replica-0"
+    assert len(replica_1_logs) > 0, "No logs from replica-1"
+    assert len(replica_2_logs) > 0, "No logs from replica-2"
+
+    # Check status - should be failed because replica 1 failed (conservative aggregation)
+    info = local_cluster.poll(job_id)
+    assert info.status == "failed"
+    assert info.error_message is not None
+    assert "1" in info.error_message  # Should mention replica 1
+
+    # Check environment variables were set correctly
+    for replica_id in [0, 2]:  # Replica 1 failed, may not have written file
+        output_file = f"{output_path}_{replica_id}.json"
+        assert os.path.exists(output_file), f"Replica {replica_id} did not write output file"
+
+        with open(output_file) as f:
+            data = json.load(f)
+
+        assert data["replica_id"] == str(replica_id)
+        assert data["replica_count"] == "3"
