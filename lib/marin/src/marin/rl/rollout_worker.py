@@ -43,6 +43,13 @@ from transformers import PreTrainedTokenizer
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
+from marin.rl.hooks import (
+    HookContext,
+    HookManager,
+    create_default_evaluation_hooks,
+    compute_batch_stats,
+    build_eval_metrics,
+)
 from marin.rl.inference_ctx import InferenceContext
 from marin.rl.model_utils import load_model_from_checkpoint
 
@@ -51,7 +58,6 @@ from .types import (
     RolloutBatch,
     RolloutGroup,
     RolloutMetadata,
-    RolloutStats,
 )
 from .weight_transfer import WeightTransferClient, WeightTransferConfig, create_weight_transfer_client
 
@@ -90,41 +96,7 @@ def find_open_port() -> int:
         return s.getsockname()[1]
 
 
-@dataclass
-class RolloutBatchStats:
-    total_count: int
-    success_count: int
-    rollout_stats: list[RolloutStats]
-    avg_reward: float
-
-
-def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
-    rollout_stats_list = []
-    total_count = 0
-    success_count = 0
-    reward_sum = 0.0
-
-    for group in batch.groups:
-        for rollout in group.rollouts:
-            rollout_stats_list.append(
-                RolloutStats(
-                    lesson_id=lesson_id,
-                    episode_reward=rollout.episode_reward,
-                    env_example_id=rollout.env_example_id,
-                )
-            )
-
-            total_count += 1
-            if rollout.episode_reward > 0:
-                success_count += 1
-            reward_sum += rollout.episode_reward
-
-    return RolloutBatchStats(
-        total_count=total_count,
-        success_count=success_count,
-        rollout_stats=rollout_stats_list,
-        avg_reward=(reward_sum / total_count) if total_count > 0 else 0.0,
-    )
+# RolloutBatchStats and compute_batch_stats moved to hooks.py
 
 
 class RolloutWorker:
@@ -142,6 +114,7 @@ class RolloutWorker:
     _rollout_writer: RolloutWriter
     _tokenizer: PreTrainedTokenizer
     _environments: dict[str, MarinEnv]
+    _hook_manager: HookManager
 
     def __init__(self, config: RolloutWorkerConfig):
         config.trainer.id = f"{config.run_id}-rollout"
@@ -188,6 +161,13 @@ class RolloutWorker:
         time.sleep(1.0)
 
         self._environments = {}
+
+        # Initialize hook manager and register default evaluation hooks
+        self._hook_manager = HookManager()
+        default_hooks = create_default_evaluation_hooks(self.config.curriculum_config)
+        for hook in default_hooks:
+            self._hook_manager.register_hook(hook)
+        logger.info(f"Initialized hook manager with {len(default_hooks)} default hooks")
 
         # Create curriculum actor (no checkpoint path for rollout workers)
         self._curriculum_actor = get_or_create_curriculum_actor(self.config.curriculum_config)
@@ -366,15 +346,7 @@ class RolloutWorker:
         logger.info(f"Eval sample for lesson {lesson_id} at step {step}: {metrics}")
 
     def _build_eval_metrics(self, prefix: str, lesson_id: str, batch: RolloutBatch) -> dict[str, Any]:
-        metrics = {}
-        stats = _compute_batch_stats(batch, lesson_id)
-        if stats.total_count == 0:
-            return metrics
-        success_rate = stats.success_count / stats.total_count
-        metrics[f"{prefix}/{lesson_id}/success_rate"] = success_rate
-        metrics[f"{prefix}/{lesson_id}/avg_reward"] = stats.avg_reward
-        metrics[f"{prefix}/{lesson_id}/total_count"] = stats.total_count
-        return metrics
+        return build_eval_metrics(prefix, lesson_id, batch)
 
     def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> dict:
         """Evaluate a single lesson and log metrics."""
@@ -385,7 +357,11 @@ class RolloutWorker:
             mode="eval",
             rng=rng,
         )
-        stats = _compute_batch_stats(batch, lesson_id)
+
+        if batch is None:
+            return {}
+
+        stats = compute_batch_stats(batch, lesson_id)
         self._log_prompt_example(lesson_id, batch, step, eval_type=eval_type)
         metrics = self._build_eval_metrics(prefix=f"inference.{eval_type}", lesson_id=lesson_id, batch=batch)
         self.tracker.log(metrics, step=step)
@@ -395,7 +371,7 @@ class RolloutWorker:
             self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
                 stats.rollout_stats, mode="eval", current_step=step
             )
-        return stats
+        return metrics
 
     def _evaluate_curriculum(self, rng, step: int) -> dict:
         """Evaluate all lessons and update the curriculum actor."""
@@ -412,6 +388,7 @@ class RolloutWorker:
             )
 
         barrier_sync()
+        return {}
 
     def run(self):
         """Main inference worker loop."""
@@ -440,22 +417,15 @@ class RolloutWorker:
                 logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
                 time.sleep(10.0)
                 continue
+            # Run registered hooks
+            rng, hook_rng = jrandom.split(rng)
+            hook_context = HookContext(
+                worker=self, step=step, rng=hook_rng, curriculum_actor=self._curriculum_actor, lesson_id=lesson_id
+            )
 
-            # Micro-eval: feedback on current lesson
-            if step > 0 and step % self.config.curriculum_config.micro_eval_frequency == 0:
-                rng, micro_eval_rng = jrandom.split(rng)
-                self._evaluate_lesson(
-                    lesson_id,
-                    self.config.curriculum_config.micro_eval_n_examples,
-                    eval_type="micro_eval",
-                    rng=micro_eval_rng,
-                    step=step,
-                )
-
-            # Full eval: comprehensive check on all lessons
-            if step > 0 and step % self.config.curriculum_config.eval_frequency == 0:
-                rng, eval_rng = jrandom.split(rng)
-                self._evaluate_curriculum(eval_rng, step)
+            hook_results = self._hook_manager.run_hooks(hook_context)
+            if hook_results:
+                logger.debug(f"Hook results at step {step}: {hook_results}")
 
             logger.info(f"Sampled lesson '{lesson_id}' from curriculum")
 
@@ -473,7 +443,7 @@ class RolloutWorker:
 
             self._rollout_writer.write_batch(rollout_batch)
 
-            stats = _compute_batch_stats(rollout_batch, lesson_id)
+            stats = compute_batch_stats(rollout_batch, lesson_id)
             self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
                 stats.rollout_stats, mode="training", current_step=step
             )
@@ -492,3 +462,7 @@ class RolloutWorker:
         logger.info(f"Inference worker completed after generating {step} rollouts")
         barrier_sync()
         self._shutdown_complete.set()
+
+    @property
+    def hook_manager(self) -> HookManager:
+        return self._hook_manager
