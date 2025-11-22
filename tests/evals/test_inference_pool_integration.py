@@ -62,14 +62,10 @@ def inference_pool(test_model_config, cluster):
 
     pool_config = InferencePoolConfig(
         num_servers=1,
-        resource_config=ResourceConfig(
-            cpu=2,
-            ram="8g",
-        ),
+        resource_config=ResourceConfig(cpu=2, ram="8g", replicas=2),
         model_config=test_model_config,
         proxy_host="127.0.0.1",
         proxy_port=8080,
-        vllm_port_range=(8000, 8001),
     )
 
     with InferencePool(

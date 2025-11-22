@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Sequence
@@ -214,7 +215,7 @@ class ResourceConfig:
         ram: RAM requirement (e.g., "8g", "16g")
         disk: Disk space requirement (e.g., "10g", "100g")
         device: Device configuration (CPU, GPU, or TPU)
-        count: Number of workers with these resources
+        replicas: Number of replicas (individual pods with these resources)
         regions: Preferred cloud regions for job placement
     """
 
@@ -222,7 +223,7 @@ class ResourceConfig:
     ram: str = "128m"
     disk: str = "1g"
     device: DeviceConfig = field(default_factory=CpuConfig)
-    count: int = 1
+    replicas: int = 1
     regions: Sequence[str] | None = None
 
 
@@ -320,11 +321,13 @@ def create_environment(
     env_vars: dict[str, str] | None = None,
     extra_dependency_groups: Sequence[str] | None = None,
 ) -> EnvironmentConfig:
-    """Create an EnvironmentConfig with sensible defaults.
+    """Create an EnvironmentConfig
 
-    Sets default environment variables commonly needed for ML workloads:
+    By default, sets the following environment variables:
     - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
+    - HF_TOKEN
+    - WANDB_API_KEY
 
     Args:
         workspace: Path to workspace root (default: current directory)
@@ -336,19 +339,17 @@ def create_environment(
     Returns:
         EnvironmentConfig with defaults applied
     """
-    import os
 
-    # Use current directory as workspace if neither workspace nor docker_image specified
     if workspace is None and docker_image is None:
         workspace = os.getcwd()
 
-    # Default environment variables for ML workloads
     default_env_vars = {
         "HF_DATASETS_TRUST_REMOTE_CODE": "1",
         "TOKENIZERS_PARALLELISM": "false",
+        "HF_TOKEN": os.getenv("HF_TOKEN"),
+        "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
     }
 
-    # Merge user env vars with defaults (user values take precedence)
     merged_env_vars = {**default_env_vars, **(env_vars or {})}
 
     return EnvironmentConfig(

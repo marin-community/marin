@@ -68,6 +68,17 @@ class InferenceResponse:
     error: str | None = None
 
 
+def find_free_port() -> int:
+    """Find a free port on localhost."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+    return port
+
+
 def download_model(model: ModelConfig, cache_path: str = "/tmp") -> str:
     """Download the model if it's not already downloaded."""
     downloaded_path: str | None = model.ensure_downloaded(local_path=os.path.join(cache_path, model.name))
@@ -183,6 +194,11 @@ def vllm_server_worker(
 
     print("ENTERING vllm_server_worker", file=sys.stderr, flush=True)
     logger.info(f"Starting VLLM worker on port {port}")
+
+    # Auto-assign port if 0
+    if port == 0:
+        port = find_free_port()
+        logger.info(f"Auto-assigned port {port}")
 
     server_url = start_vllm_server(
         model_name_or_path=model.path,

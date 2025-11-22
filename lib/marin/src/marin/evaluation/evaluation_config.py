@@ -68,7 +68,7 @@ class InferencePoolConfig:
     model_config: ModelConfig
     proxy_host: str = "127.0.0.1"
     proxy_port: int = 9000
-    vllm_port_range: tuple[int, int] = (8000, 9000)
+    vllm_port_range: tuple[int, int] = (0, 0)
 
 
 @dataclass(frozen=True)
