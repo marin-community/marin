@@ -316,6 +316,8 @@ class Trainer:
             )
             metrics["optim/kl_sample_train_v1"] = aux["kl_sample_train_v1"]
             metrics["optim/kl_sample_train_v2"] = aux["kl_sample_train_v2"]
+            metrics["optim/mean_ratio_difference"] = aux["mean_ratio_difference"]
+            metrics["optim/max_ratio_difference"] = aux["max_ratio_difference"]
             metrics["optim/entropy"] = aux["entropy"]
             return train_state, metrics
 
