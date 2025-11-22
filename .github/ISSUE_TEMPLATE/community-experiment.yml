@@ -42,12 +42,3 @@ body:
   - type: markdown
     attributes:
       value: "MarinBot will set up your branch and comment with the next steps."
-  - type: input
-    id: branch_name
-    attributes:
-      label: Name of your branch
-      placeholder: my-experiment-branch
-      description: Lowercase letters, numbers, hyphens only. Your full branch name will be {author_name}/{branch_name}-{issue_number}
-    validations:
-      required: true
-      pattern: "^[a-z0-9-]+$"
