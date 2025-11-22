@@ -84,5 +84,5 @@ def test_supervised_eval(local_gpt2_tokenizer: PreTrainedTokenizerBase):
 
     lm_ex = _prepare_supervised_examples([ex], tokenizer, Axis("position", 128))[0]
 
-    assert lm_ex.loss_mask["position", 44]
-    assert haliax.sum(lm_ex.loss_mask) == 1
+    assert lm_ex.loss_weight["position", 44]
+    assert haliax.sum(lm_ex.loss_weight) == 1

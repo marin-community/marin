@@ -19,7 +19,7 @@ from levanter.models.lm_model import LmConfig
 class AudioTextExample(eqx.Module):
     audio: hax.NamedArray
     tokens: hax.NamedArray
-    loss_mask: hax.NamedArray
+    loss_weight: hax.NamedArray
     attn_mask: AttentionMask | hax.NamedArray = AttentionMask.causal()
 
     @staticmethod
@@ -28,7 +28,7 @@ class AudioTextExample(eqx.Module):
         tokens: hax.NamedArray,
         *,
         attn_mask: Optional[hax.NamedArray | AttentionMask] = None,
-        loss_mask: Optional[hax.NamedArray] = None,
+        loss_weight: Optional[hax.NamedArray] = None,
         ignore_id: Optional[int] = None,
     ) -> "AudioTextExample":
         if tokens.ndim != 1:
@@ -40,15 +40,17 @@ class AudioTextExample(eqx.Module):
         Pos = tokens.axes[0]
 
         # don't predict the last token.
-        if loss_mask is None:
-            loss_mask = 1 - hax.nn.one_hot(-1, Pos, dtype=jnp.float32)
+        if loss_weight is None:
+            loss_weight = 1 - hax.nn.one_hot(-1, Pos, dtype=jnp.float32)
+        else:
+            loss_weight = loss_weight.astype(jnp.result_type(loss_weight.dtype, jnp.float32))
 
         if ignore_id is not None:
             # we don't compute loss for any tokens matching the ignore index
             ignore_mask = hax.roll(tokens, -1, Pos) != ignore_id
-            loss_mask = loss_mask * ignore_mask
+            loss_weight = loss_weight * ignore_mask.astype(loss_weight.dtype)
 
-        return AudioTextExample(audio=audio, tokens=tokens, loss_mask=loss_mask, attn_mask=attn_mask)
+        return AudioTextExample(audio=audio, tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
 
 class ASRConfig(LmConfig):
@@ -113,7 +115,7 @@ class ASRMixin(abc.ABC):
         targets = hax.roll(example.tokens, -1, axis=self.Pos.name)
         target_y = hax.nn.one_hot(targets, self.Vocab, dtype=logits.dtype)
         loss = cross_entropy_loss(
-            logits, self.Vocab, target_y, reduction, reduction_axis=reduction_axis, where=example.loss_mask
+            logits, self.Vocab, target_y, reduction, reduction_axis=reduction_axis, weight=example.loss_weight
         )
 
         return loss

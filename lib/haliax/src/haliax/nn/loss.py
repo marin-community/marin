@@ -22,6 +22,7 @@ def cross_entropy_loss(
     targets: NamedArray,
     reduction: ReductionFunction | None | Unspecified = UNSPECIFIED,
     where: NamedArray | None = None,
+    weight: NamedArray | None = None,
     reduction_axis: None = None,
 ) -> jnp.ndarray | NamedArray: ...
 
@@ -33,6 +34,7 @@ def cross_entropy_loss(
     targets: NamedArray,
     reduction: ReductionFunction | None | Unspecified = UNSPECIFIED,
     where: NamedArray | None = None,
+    weight: NamedArray | None = None,
     reduction_axis: AxisSelection = ...,
 ) -> NamedArray: ...
 
@@ -43,6 +45,7 @@ def cross_entropy_loss(
     targets: NamedArray,
     reduction: ReductionFunction | None | Unspecified = UNSPECIFIED,
     where: NamedArray | None = None,
+    weight: NamedArray | None = None,
     reduction_axis: AxisSelection | None = None,
 ) -> jnp.ndarray | NamedArray:
     loss, _ = cross_entropy_loss_and_log_normalizers(logits, Label, targets)
@@ -53,7 +56,7 @@ def cross_entropy_loss(
             f"target_y has dtype {targets.dtype}, which is not a floating point type. This is probably a mistake."
         )
 
-    loss = maybe_reduce_loss(loss, reduction, reduction_axis, where)
+    loss = maybe_reduce_loss(loss, reduction, reduction_axis, where, weight)
 
     return loss
 
@@ -64,6 +67,7 @@ def binary_cross_entropy_loss(
     targets: NamedArray,
     reduction: ReductionFunction | None | Unspecified = UNSPECIFIED,
     where: NamedArray | None = None,
+    weight: NamedArray | None = None,
     reduction_axis: None = None,
 ) -> jnp.ndarray | NamedArray: ...
 
@@ -74,6 +78,7 @@ def binary_cross_entropy_loss(
     targets: NamedArray,
     reduction: ReductionFunction | None | Unspecified = UNSPECIFIED,
     where: NamedArray | None = None,
+    weight: NamedArray | None = None,
     reduction_axis: AxisSelection = ...,
 ) -> NamedArray: ...
 
@@ -83,6 +88,7 @@ def binary_cross_entropy_loss(
     targets: NamedArray,
     reduction: ReductionFunction | None | Unspecified = UNSPECIFIED,
     where: NamedArray | None = None,
+    weight: NamedArray | None = None,
     reduction_axis: AxisSelection | None = None,
 ) -> jnp.ndarray | NamedArray:
     log_p = hax.nn.log_sigmoid(logits)
@@ -90,23 +96,25 @@ def binary_cross_entropy_loss(
     targets = targets.astype(logits.dtype)
     loss = -targets * log_p - (1.0 - targets) * log_not_p
 
-    loss = maybe_reduce_loss(loss, reduction, reduction_axis, where)
+    loss = maybe_reduce_loss(loss, reduction, reduction_axis, where, weight)
     return loss
 
 
 def reduce_loss(
-    arr,
+    arr: NamedArray,
     reduction: ReductionFunction | None | Unspecified = UNSPECIFIED,
     reduction_axis: AxisSelection | None = None,
+    *,
     where: NamedArray | None = None,
-):
+    weight: NamedArray | None = None,
+) -> NamedArray:
     """
     Reduce a loss array according to the given reduction and reduction axis.
     If reduction is None, the loss is not reduced.
     If reduction is UNSPECIFIED, the default reduction is used (mean).
     If reduction_axis is None (default), the loss is reduced over all axes.
     """
-    return maybe_reduce_loss(arr, reduction, reduction_axis, where)
+    return maybe_reduce_loss(arr, reduction, reduction_axis, where, weight)
 
 
 def maybe_reduce_loss(
@@ -114,14 +122,58 @@ def maybe_reduce_loss(
     reduction: ReductionFunction | None | Unspecified,
     reduction_axis: AxisSelection | None,
     where: NamedArray | None,
+    weight: NamedArray | None,
 ):
+    effective_weight = _resolve_effective_weight(arr, weight, where)
+
     if reduction is not None and reduction_axis != ():
         if reduction is UNSPECIFIED:
             reduction = hax.mean
-        arr = reduction(arr, where=where, axis=reduction_axis)
+
+        if effective_weight is not None:
+            weighted_arr = arr * effective_weight
+            if _is_mean_reduction(reduction):
+                numerator = hax.sum(weighted_arr, axis=reduction_axis)
+                denom = hax.sum(effective_weight, axis=reduction_axis)
+                zeros = hax.zeros_like(numerator)
+                arr = hax.where(denom != 0, numerator / denom, zeros)
+            else:
+                arr = reduction(weighted_arr, axis=reduction_axis)
+        else:
+            arr = reduction(arr, where=where, axis=reduction_axis)
+    elif effective_weight is not None:
+        arr = arr * effective_weight
     elif where is not None:
         arr = hax.where(where, arr, 0)
+
     return arr
+
+
+def _resolve_effective_weight(arr, weight, where):
+    """
+    Combines the weight and where masks into a single effective weight, broadcasting and and'ing as necessary.
+    """
+    effective_weight = weight
+
+    if where is not None:
+        mask_dtype = weight.dtype if weight is not None else arr.dtype
+        mask = where.astype(mask_dtype)
+        effective_weight = mask if effective_weight is None else effective_weight * mask
+
+    if effective_weight is None:
+        return None
+
+    if not isinstance(arr, NamedArray):
+        raise TypeError("weighted reductions require the loss to be a NamedArray")
+
+    effective_weight = hax.broadcast_to(effective_weight, arr.axes)
+    effective_weight = effective_weight.astype(arr.dtype)
+    return effective_weight
+
+
+def _is_mean_reduction(reduction):
+    # Mean reductions need special handling for weighted reductions
+    return reduction is hax.mean or reduction is jnp.mean
 
 
 def cross_entropy_loss_and_log_normalizers(
