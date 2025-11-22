@@ -203,12 +203,13 @@ class InferencePool:
         job_request = JobRequest(
             name="vllm-inference-pool",
             entrypoint=Entrypoint(
-                callable=lambda: vllm_server_worker(
-                    model=self.config.model_config,
-                    request_queue=self.request_queue,
-                    response_queue=self.response_queue,
-                    port=self.config.vllm_port_range[0],
-                ),
+                callable=vllm_server_worker,
+                function_args={
+                    "model": self.config.model_config,
+                    "request_queue": self.request_queue,
+                    "response_queue": self.response_queue,
+                    "port": self.config.vllm_port_range[0],
+                },
             ),
             resources=self.config.resource_config,
             environment=create_environment(pip_packages=["vllm==0.11.0"]),

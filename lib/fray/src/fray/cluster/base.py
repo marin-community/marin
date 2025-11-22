@@ -258,30 +258,22 @@ class EnvironmentConfig:
 class Entrypoint:
     """Job entrypoint specification.
 
-    Supports two execution modes:
-    - Command line: Execute any binary with arguments (e.g., "python", "uv", "bash")
-    - Function call: Execute a zero-argument callable directly (for TPU/Ray remote execution)
-
-    Exactly one of (binary, callable) must be specified.
-
     Args:
         binary: Binary to execute (e.g., "python", "uv", "bash")
         args: Command-line arguments for the binary
-        callable: Zero-argument callable for direct execution (use closures for arguments)
+        callable: Callable for direct execution
+        function_args: Keyword arguments to pass to callable
 
     Examples:
-        # Command-line execution
         Entrypoint(binary="python", args=["train.py", "--config", "config.yaml"])
-        Entrypoint(binary="uv", args=["run", "python", "script.py"])
-
-        # Function execution (with closure for arguments)
-        config = Config(...)
+        Entrypoint(callable=train_fn, function_args={"config": config, "epochs": 100})
         Entrypoint(callable=lambda: train_fn(config))
     """
 
     binary: str | None = None
     args: Sequence[str] = field(default_factory=list)
-    callable: Callable[[], Any] | None = None
+    callable: Callable[..., Any] | None = None
+    function_args: dict[str, Any] | None = None
 
     def __post_init__(self):
         if self.binary is None and self.callable is None:
@@ -290,6 +282,8 @@ class Entrypoint:
             raise ValueError("Cannot specify both binary and callable")
         if self.args and self.callable is not None:
             raise ValueError("args only valid with binary, not callable")
+        if self.function_args is not None and self.callable is None:
+            raise ValueError("function_args only valid with callable, not binary")
 
 
 @dataclass

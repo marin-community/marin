@@ -52,7 +52,7 @@ def cluster():
     cluster.shutdown()
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def inference_pool(test_model_config, cluster):
     """Create an inference pool with 1 worker for testing."""
     queue_dir = tempfile.mkdtemp(prefix="test-pool-")

@@ -50,17 +50,6 @@ class LocalCluster(Cluster):
         self._working_dir = working_dir or Path(tempfile.mkdtemp(prefix="fray-local-cluster-"))
         self._jobs: dict[JobId, _LocalJob] = {}
 
-    def __getstate__(self):
-        """Exclude unpicklable _jobs dict when serializing."""
-        return {
-            "_working_dir": self._working_dir,
-        }
-
-    def __setstate__(self, state):
-        """Restore cluster state, initializing empty jobs dict."""
-        self._working_dir = state["_working_dir"]
-        self._jobs = {}
-
     def _get_cluster_spec(self) -> str:
         return "local"
 
@@ -211,7 +200,9 @@ class LocalCluster(Cluster):
         if entrypoint.callable is not None:
             from fray.fn_thunk import create_thunk_entrypoint
 
-            entrypoint = create_thunk_entrypoint(entrypoint.callable, prefix=f"/tmp/{request.name}")
+            entrypoint = create_thunk_entrypoint(
+                entrypoint.callable, prefix=f"/tmp/{request.name}", function_args=entrypoint.function_args
+            )
 
         assert entrypoint.binary is not None, "Command-line entrypoint requires binary"
 

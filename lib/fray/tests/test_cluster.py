@@ -155,11 +155,12 @@ def test_environment_integration(cluster, cluster_type, tmp_path):
 
     output_path = str(tmp_path / "env.json")
 
-    # Create job request with closure
+    # Create job request with function_args
     request = JobRequest(
         name="env-integration-test",
         entrypoint=Entrypoint(
-            callable=lambda: _check_env_closure(output_path),
+            callable=_check_env_closure,
+            function_args={"output_path": output_path},
         ),
         environment=create_environment(
             env_vars={"TEST_INTEGRATION_VAR": "test_value_123"},

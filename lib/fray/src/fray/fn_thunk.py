@@ -48,24 +48,21 @@ from fray.cluster.base import Entrypoint
 logger = logging.getLogger(__name__)
 
 
-def create_thunk_entrypoint(callable_fn: Callable[[], Any], prefix: str) -> Entrypoint:
-    """Serialize a callable to a temporary file and return an Entrypoint.
+def create_thunk_entrypoint(
+    callable_fn: Callable[..., Any], prefix: str, function_args: dict[str, Any] | None = None
+) -> Entrypoint:
+    """Serialize a callable and its arguments to a temporary file and return an Entrypoint.
 
     Args:
-        callable_fn: Zero-argument callable to serialize
+        callable_fn: Callable to serialize
         prefix: File prefix for the pickled callable
+        function_args: Keyword arguments to pass to callable
 
     Returns:
         Entrypoint configured to execute the callable via fray.fn_thunk
-
-    Example:
-        >>> def my_job():
-        ...     print("Running job")
-        >>> entrypoint = create_thunk_entrypoint(my_job, prefix="/tmp/myjob")
-        >>> # Returns: Entrypoint(binary="python", args=["-m", "fray.fn_thunk", "/tmp/myjob_abc123.pkl"])
     """
     with tempfile.NamedTemporaryFile(mode="wb", suffix=".pkl", prefix=prefix + "_", delete=False) as f:
-        cloudpickle.dump(callable_fn, f, protocol=cloudpickle.DEFAULT_PROTOCOL)
+        cloudpickle.dump((callable_fn, function_args), f, protocol=cloudpickle.DEFAULT_PROTOCOL)
         pickle_path = f.name
 
     return Entrypoint(binary="python", args=["-m", "fray.fn_thunk", pickle_path])
@@ -85,7 +82,12 @@ def main(path: str):
     try:
         logger.info("Loading callable from %s", path)
         with fsspec.open(path, "rb") as f:
-            callable_fn = cloudpickle.load(f)
+            payload = cloudpickle.load(f)
+            if isinstance(payload, tuple):
+                callable_fn, function_args = payload
+            else:
+                callable_fn = payload
+                function_args = None
     except Exception as e:
         logger.error("Failed to load callable from %s: %s", path, e)
         raise
@@ -95,7 +97,10 @@ def main(path: str):
         logger.info("About to execute callable_fn()")
         sys.stdout.flush()
         sys.stderr.flush()
-        result = callable_fn()
+        if function_args:
+            result = callable_fn(**function_args)
+        else:
+            result = callable_fn()
         logger.info("Callable executed successfully. Result: %s", result)
         return 0
     except Exception as e:

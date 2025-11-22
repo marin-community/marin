@@ -340,7 +340,9 @@ class RayCluster(Cluster):
 
     def _launch_callable_job(self, request: JobRequest) -> JobId:
         entrypoint = request.entrypoint
-        thunk_entrypoint = create_thunk_entrypoint(entrypoint.callable, prefix=f"/tmp/{request.name}")
+        thunk_entrypoint = create_thunk_entrypoint(
+            entrypoint.callable, prefix=f"/tmp/{request.name}", function_args=entrypoint.function_args
+        )
         runtime_env = self._get_runtime_env(request)
         entrypoint_cmd = f"{thunk_entrypoint.binary} {' '.join(thunk_entrypoint.args)}"
         entrypoint_params = self._get_entrypoint_params(request)
@@ -362,7 +364,10 @@ class RayCluster(Cluster):
 
         runtime_env = self._get_runtime_env(request)
 
-        remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(entrypoint.callable)
+        if entrypoint.function_args:
+            remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(entrypoint.callable)(**entrypoint.function_args)
+        else:
+            remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(entrypoint.callable)
 
         object_ref = run_on_pod_ray.remote(
             remote_fn,
