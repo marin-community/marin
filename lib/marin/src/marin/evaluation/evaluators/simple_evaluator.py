@@ -17,6 +17,7 @@ import traceback
 from dataclasses import dataclass
 from typing import ClassVar
 
+from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 
@@ -134,9 +135,10 @@ class SimpleEvaluator(VllmTpuEvaluator):
     def evaluate(
         self,
         model: ModelConfig,
-        evals: list[str],
+        evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         try:
             from vllm import LLM, SamplingParams
@@ -147,7 +149,8 @@ class SimpleEvaluator(VllmTpuEvaluator):
             llm = LLM(model=model_name_or_path, enforce_eager=False, trust_remote_code=True)
 
             inference_times: dict[str, float] = {}
-            for eval_name in evals:
+            for eval_config in evals:
+                eval_name = eval_config.name
                 assert eval_name in SimpleEvaluator.NAME_TO_TEST_PLAN, f"Unknown eval: {eval_name}"
                 test_plan: TestPlan = SimpleEvaluator.NAME_TO_TEST_PLAN[eval_name]
 

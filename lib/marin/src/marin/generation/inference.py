@@ -152,7 +152,7 @@ def get_ray_data_write_kwargs(config: TextGenerationInferenceConfig):
 
 @ray.remote
 def _find_finished_ids_for_file(checkpoint_filepath: str, id_column: str | dict[str, str]):
-    from marin.processing.classification.inference import read_dataset
+    from marin.processing.classification.dataset_utils import read_dataset
 
     if isinstance(id_column, dict):
         dataset_column = next(iter(id_column.keys()))

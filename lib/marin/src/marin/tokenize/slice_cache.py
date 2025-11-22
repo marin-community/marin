@@ -208,7 +208,8 @@ def _patch_source_config(
 
     TODO: would be better to make this more explicit somehow...
     """
-    return dataclasses.replace(input_config, cache_dir=output_path, tags=input_config.tags + extra_tags)
+    base_tags = input_config.tags or []
+    return dataclasses.replace(input_config, cache_dir=output_path, tags=base_tags + extra_tags)
 
 
 def _slice_cache_in_ray(cfg: SliceCacheConfig):

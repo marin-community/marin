@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Union
+from typing import Union, cast
 
 import equinox as eqx
 import haliax as hax
@@ -106,9 +106,18 @@ class GemmaConfig(HFCompatConfig):
     scan_layers: bool = True
 
     # Axis
-    Pos = property(lambda self: Axis(name="position", size=self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
-    Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
+    @property
+    def Pos(self) -> Axis:
+        return Axis(name="position", size=self.seq_len)
+
+    @property
+    def KeyPos(self) -> Axis:
+        return self.Pos.alias("key_position")
+
+    @property
+    def Embed(self) -> Axis:
+        return Axis(name="embed", size=self.hidden_dim)
+
     Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
     KVHeads = property(lambda self: Axis(name="kv_heads", size=self.num_kv_heads))
     Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
@@ -287,6 +296,7 @@ class GemmaRMSNorm(LayerNormBase):
         out = x * inv
         # NB: this differs from most RMS Norms by adding 1.
         # This is probably so we can weight decay to 1?
+        assert self.weight is not None
         out = out * (1.0 + self.weight)
         return out.astype(dtype)
 
@@ -361,7 +371,7 @@ class GemmaTransformer(ModuleWithStateDictSerialization):
         self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
+        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
 
         return x
@@ -698,7 +708,7 @@ class Gemma2Transformer(ModuleWithStateDictSerialization):
         self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
+        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
 

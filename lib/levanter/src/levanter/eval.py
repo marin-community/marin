@@ -109,12 +109,12 @@ class DomainTaggedDataset(AsyncDataset[tuple[T, hax.NamedArray]]):
     async def async_len(self) -> int:
         return int((await self._get_offsets())[-1])
 
-    async def getitem_async(self, item: int) -> tuple[T, hax.NamedArray]:
+    async def getitem_async(self, index: int) -> tuple[T, hax.NamedArray]:
         offsets = await self._get_offsets()
-        dataset_index = np.searchsorted(offsets, item, side="right") - 1
+        dataset_index = np.searchsorted(offsets, index, side="right") - 1
         offset = offsets[dataset_index]
         dataset, tags = self.datasets[dataset_index]
-        return await dataset.getitem_async(int(item - offset)), self._tag_arrays[dataset_index]
+        return await dataset.getitem_async(int(index - offset)), self._tag_arrays[dataset_index]
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[tuple[T, hax.NamedArray]]:
         # Chatgpt wrote this. pretty sure it's correct
@@ -167,7 +167,7 @@ def cb_tagged_lm_evaluate(
     tagged_eval_sets: Sequence[tuple[AsyncDataset[LmExample], Sequence[str]]],
     tokenizer: Optional[HfTokenizer] = None,
     device_mesh: Optional[Mesh] = None,
-    axis_mapping: ResourceMapping = None,
+    axis_mapping: ResourceMapping | None = None,
     max_examples_per_dataset: Optional[int] = None,
     eval_current: bool = True,
     eval_ema: bool = True,
