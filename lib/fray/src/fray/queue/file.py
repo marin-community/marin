@@ -47,33 +47,36 @@ class FileQueue(Queue[T]):
         self.path = path.rstrip("/")
         self.fs_args = fs_args or {}
 
-        # Initialize filesystem
         self.fs, self.fs_path = fsspec.core.url_to_fs(path, **self.fs_args)
 
         self.pending_dir = f"{self.path}/pending"
         self.processing_dir = f"{self.path}/processing"
 
-        # Create directories
         self.fs.makedirs(self.pending_dir, exist_ok=True)
         self.fs.makedirs(self.processing_dir, exist_ok=True)
 
+    def __getstate__(self):
+        return {
+            "path": self.path,
+            "fs_args": self.fs_args,
+        }
+
+    def __setstate__(self, state):
+        self.__init__(**state)
+
     def push(self, item: T) -> None:
-        # Create unique filename with timestamp for ordering
         timestamp = time.time()
         unique_id = uuid.uuid4()
         filename = f"{timestamp:.6f}_{unique_id}.pkl"
 
         final_path = f"{self.pending_dir}/{filename}"
 
-        # Write directly to final path (atomic on GCS/S3, usually atomic on local)
         with self.fs.open(final_path, "wb") as f:
             pickle.dump(item, f)
 
     def peek(self) -> T | None:
-        # List pending files
         try:
             files = sorted(self.fs.ls(self.pending_dir, detail=False))
-            # Filter out directory itself if returned
             files = [f for f in files if f.rstrip("/") != self.pending_dir.rstrip("/")]
 
             if not files:
@@ -85,10 +88,8 @@ class FileQueue(Queue[T]):
             return None
 
     def pop(self, lease_timeout: float = 60.0) -> Lease[T] | None:
-        # First, check for expired leases in processing directory
         self._recover_expired_leases()
 
-        # List pending files
         try:
             files = sorted(self.fs.ls(self.pending_dir, detail=False))
             files = [f for f in files if f.rstrip("/") != self.pending_dir.rstrip("/")]
@@ -96,19 +97,15 @@ class FileQueue(Queue[T]):
             return None
 
         for file_path in files:
-            # Extract filename from path
             filename = file_path.split("/")[-1]
 
-            # Try to acquire lease by moving to processing
             lease_expiry = time.time() + lease_timeout
             new_name = f"{filename}__expiry_{lease_expiry:.6f}"
             processing_path = f"{self.processing_dir}/{new_name}"
 
             try:
-                # Atomic move if possible
                 self.fs.mv(file_path, processing_path)
 
-                # Successfully acquired
                 with self.fs.open(processing_path, "rb") as f:
                     item = pickle.load(f)
 
@@ -133,7 +130,6 @@ class FileQueue(Queue[T]):
         for file_path in files:
             filename = file_path.split("/")[-1]
             try:
-                # Parse expiry from filename
                 parts = filename.split("__expiry_")
                 if len(parts) != 2:
                     continue
@@ -148,11 +144,10 @@ class FileQueue(Queue[T]):
                     new_filename = f"{timestamp:.6f}_{unique_id}.pkl"
                     pending_path = f"{self.pending_dir}/{new_filename}"
 
-                    # Move back to pending
                     try:
                         self.fs.mv(file_path, pending_path)
                     except FileNotFoundError:
-                        pass  # Race condition - already moved
+                        pass
 
             except ValueError:
                 continue
@@ -169,8 +164,6 @@ class FileQueue(Queue[T]):
     def release(self, lease: Lease[T]) -> None:
         processing_path = f"{self.processing_dir}/{lease.lease_id}"
 
-        # Use timestamp 0.0 to put released items at the front of the queue
-        # This ensures immediate retry while maintaining FIFO order among released items
         timestamp = 0.0
         unique_id = uuid.uuid4()
         filename = f"{timestamp:.6f}_{unique_id}.pkl"

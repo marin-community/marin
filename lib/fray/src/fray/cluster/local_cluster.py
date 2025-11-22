@@ -15,6 +15,9 @@
 """Local subprocess-based cluster implementation for development and testing."""
 
 import logging
+import os
+import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -35,47 +38,58 @@ class LocalCluster(Cluster):
 
     Runs jobs as local subprocesses. Useful for development, testing,
     and single-machine workloads. Does not support distributed execution
-    or GPU/TPU resources.
-
-    Jobs are executed using `uv run` for workspace-based execution,
-    which provides isolated dependency management similar to Ray's
-    runtime environments.
+    or GPU/TPU resources. Jobs are run in isolated temporary directories using `uv run`.
     """
 
-    def __init__(self, working_dir: Path | None = None, queue_dir: Path | None = None):
+    def __init__(self, working_dir: Path | None = None):
         """Initialize local cluster.
 
         Args:
             working_dir: Directory to run jobs in (default: current directory)
-            queue_dir: Directory to store queue files (default: working_dir/queues)
         """
         self._working_dir = working_dir or Path(tempfile.mkdtemp(prefix="fray-local-cluster-"))
-        self._queue_dir = queue_dir or (self._working_dir / "queues")
         self._jobs: dict[JobId, _LocalJob] = {}
 
-    def _get_cluster_spec(self) -> str:
-        """Get cluster spec string that can recreate this cluster.
+    def __getstate__(self):
+        """Exclude unpicklable _jobs dict when serializing."""
+        return {
+            "_working_dir": self._working_dir,
+        }
 
-        Returns:
-            Cluster spec with queue_dir encoded
-        """
-        return f"local?queue_dir={self._queue_dir}"
+    def __setstate__(self, state):
+        """Restore cluster state, initializing empty jobs dict."""
+        self._working_dir = state["_working_dir"]
+        self._jobs = {}
+
+    def _get_cluster_spec(self) -> str:
+        return "local"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.shutdown()
 
     def shutdown(self):
         """Terminate any remaining jobs forcefully."""
-        logger.info(f"[SHUTDOWN] Shutting down cluster with {len(self._jobs)} jobs")
+        logger.info(f"Shutting down cluster with {len(self._jobs)} jobs")
         for job_id, job in self._jobs.items():
             if job.process.poll() is None:
-                logger.info(f"[SHUTDOWN] Killing job {job_id}")
-                job.process.kill()
-                job.process.wait(timeout=5)
+                logger.info(f"Killing job {job_id} and its process group")
+                try:
+                    os.killpg(job.process.pid, signal.SIGTERM)
+                    job.process.wait(timeout=5)
+                except (ProcessLookupError, OSError):
+                    # Process group already dead
+                    pass
             else:
-                logger.info(f"[SHUTDOWN] Job {job_id} already exited with code {job.process.returncode}")
+                logger.info(f"Job {job_id} already exited with code {job.process.returncode}")
+
+        self._jobs.clear()
 
     def launch(self, request: JobRequest) -> JobId:
         """Launch a job as a local subprocess."""
 
-        # Validate request
         if not isinstance(request.resources.device, CpuConfig):
             raise ValueError("LocalCluster only supports CPU resources")
 
@@ -84,25 +98,51 @@ class LocalCluster(Cluster):
 
         job_id = JobId(str(uuid.uuid4()))
 
-        # Build command
         cmd = self._build_command(request)
-        env = self._build_environment(request.environment)
+        env = self._environment_dict(request.environment)
+        job_dir = tempfile.mkdtemp(dir=self._working_dir, suffix=f"fray-job-{job_id}")
 
-        logger.info(f"[LAUNCH] Launching job {job_id} with command: {' '.join(cmd)}")
+        if request.environment.workspace:
+            logger.info(f"Copying workspace {request.environment.workspace} to {job_dir}")
 
-        # Start process
+            # Get list of files from git (tracked + untracked, respecting gitignore)
+            try:
+                # --cached: tracked files
+                # --others: untracked files
+                # --exclude-standard: respect .gitignore
+                git_files = subprocess.check_output(
+                    ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+                    cwd=request.environment.workspace,
+                    text=True,
+                ).splitlines()
+
+                for rel_path in git_files:
+                    src_path = Path(request.environment.workspace) / rel_path
+                    dst_path = Path(job_dir) / rel_path
+
+                    if src_path.is_file():
+                        dst_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(src_path, dst_path)
+
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"Failed to query git files, falling back to simple copy: {e}")
+                shutil.copytree(request.environment.workspace, job_dir, dirs_exist_ok=True)
+
+        logger.info(f"Launching job {job_id} with command: {' '.join(cmd)} in {job_dir}")
+
         try:
             process = subprocess.Popen(
                 cmd,
-                cwd=self._working_dir,
+                cwd=job_dir,
                 env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,  # Line buffered
+                start_new_session=True,  # Create new process group
             )
-            logger.info(f"[LAUNCH] Process started with PID: {process.pid}")
+            logger.info(f"Process started with PID: {process.pid}")
         except Exception as e:
             raise RuntimeError(f"Failed to launch job: {e}") from e
 
@@ -112,12 +152,13 @@ class LocalCluster(Cluster):
             request=request,
             process=process,
             start_time=time.time(),
+            job_dir=job_dir,
         )
         self._jobs[job_id] = local_job
 
         # Start log collection thread
         local_job.start_log_thread()
-        logger.info(f"[LAUNCH] Log thread started for job {job_id}")
+        logger.info(f"Log thread started for job {job_id}")
 
         return job_id
 
@@ -141,12 +182,15 @@ class LocalCluster(Cluster):
     def terminate(self, job_id: JobId) -> None:
         job = self._get_job(job_id)
         if job.process.poll() is None:
-            logger.info(f"[TERMINATE] Terminating job {job_id}")
-            job.process.terminate()
+            logger.info(f"Terminating job {job_id} and its process group")
             try:
+                os.killpg(job.process.pid, signal.SIGTERM)
                 job.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                job.process.kill()
+                os.killpg(job.process.pid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                # Process group already dead
+                pass
 
     def list_jobs(self) -> list[JobInfo]:
         return [job.get_info() for job in self._jobs.values()]
@@ -172,22 +216,36 @@ class LocalCluster(Cluster):
         assert entrypoint.binary is not None, "Command-line entrypoint requires binary"
 
         if request.environment and request.environment.workspace:
-            return ["uv", "run", entrypoint.binary, *entrypoint.args]
+            cmd = ["uv", "run"]
+
+            # set python version to current Python
+            import sys
+
+            py_version = sys.version_info
+            cmd.append(f"--python={py_version.major}.{py_version.minor}")
+            cmd.append("--with=setuptools")
+
+            for pkg in request.environment.pip_packages:
+                cmd.append(f"--with={pkg}")
+
+            for group in request.environment.extra_dependency_groups:
+                cmd.append(f"--with={group}")
+
+            cmd.append(entrypoint.binary)
+            cmd.extend(entrypoint.args)
+            return cmd
         else:
             raise NotImplementedError("Docker execution not yet supported in LocalCluster")
 
-    def _build_environment(self, env_config: EnvironmentConfig) -> dict[str, str]:
-        import os
-
-        env = os.environ.copy()
+    def _environment_dict(self, env_config: EnvironmentConfig) -> dict[str, str]:
+        env = {
+            "PATH": os.environ["PATH"],
+            "HOME": os.environ["HOME"],
+            "USER": os.environ["USER"],
+            "FRAY_CLUSTER_SPEC": self._get_cluster_spec(),
+            "PYTHONUNBUFFERED": "1",
+        }
         env.update(env_config.env_vars)
-
-        if "FRAY_CLUSTER_SPEC" not in env:
-            env["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
-
-        # Disable Python output buffering so we can see logs in real-time
-        env["PYTHONUNBUFFERED"] = "1"
-
         return env
 
 
@@ -200,11 +258,13 @@ class _LocalJob:
         request: JobRequest,
         process: subprocess.Popen,
         start_time: float,
+        job_dir: str,
     ):
         self.job_id = job_id
         self.request = request
         self.process = process
         self.start_time = start_time
+        self.job_dir = job_dir
         self.log_queue: Queue[str] = Queue()
         self._log_thread: Thread | None = None
 
@@ -213,19 +273,25 @@ class _LocalJob:
         thread_logger = logging.getLogger(__name__ + ".log_thread")
 
         def collect_logs():
-            thread_logger.info(f"[LOG_THREAD] Starting log collection for job {self.job_id}")
-            try:
-                # Read lines until EOF (process exits and pipe closes)
-                for line in iter(self.process.stdout.readline, ""):
-                    line = line.rstrip()
-                    if line:  # Only log non-empty lines
-                        thread_logger.info(f"[WORKER {self.job_id}] {line}")
-                        self.log_queue.put(line)
-            except Exception as e:
-                thread_logger.error(f"[LOG_THREAD] Error reading logs for job {self.job_id}: {e}")
-            finally:
-                thread_logger.info(f"[LOG_THREAD] Log collection ended for job {self.job_id}")
-                thread_logger.info(f"[LOG_THREAD] Process ended with returncode: {self.process.returncode}")
+            thread_logger.info(f"Starting log collection for job {self.job_id}")
+            while True:
+                try:
+                    # Read lines until EOF (process exits and pipe closes)
+                    for line in iter(self.process.stdout.readline, ""):
+                        line = line.rstrip()
+                        if line:  # Only log non-empty lines
+                            thread_logger.info(f"{self.job_id}: {line}")
+                            self.log_queue.put(line)
+                except Exception as e:
+                    thread_logger.error(f"Error reading logs for job {self.job_id}: {e}")
+                finally:
+                    thread_logger.info(f"Log collection ended for job {self.job_id}")
+
+                if self.process.poll() is not None:
+                    thread_logger.info(f"Process ended with returncode: {self.process.returncode}")
+                    break
+                else:
+                    time.sleep(0.1)
 
         self._log_thread = Thread(target=collect_logs, daemon=True)
         self._log_thread.start()
@@ -237,7 +303,7 @@ class _LocalJob:
             Job information with current status
         """
         returncode = self.process.poll()
-        logger.info(f"Job {self.job_id} returncode: {returncode}, pid: {self.process.pid}")
+        logger.info(f"{self.job_id} returncode: {returncode}, pid: {self.process.pid}")
 
         if returncode is None:
             status: JobStatus = "running"
@@ -252,7 +318,7 @@ class _LocalJob:
             end_time = time.time()
             error_message = f"Process exited with code {returncode}"
 
-        logger.info(f"[GET_INFO] Job {self.job_id} determined status: {status}")
+        logger.info(f"{self.job_id} determined status: {status}")
         return JobInfo(
             job_id=self.job_id,
             status=status,

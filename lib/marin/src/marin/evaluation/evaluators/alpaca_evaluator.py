@@ -16,7 +16,7 @@ import os
 import shutil
 import traceback
 
-from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.evaluation.evaluation_config import ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 from marin.evaluation.utils import is_remote_path, upload_to_gcs, write_yaml
 from marin.run.ray_deps import build_runtime_env_for_packages

@@ -131,19 +131,15 @@ class RayCluster(Cluster):
         # bouncing prevents us from using a traditional job submission for TPU workloads.
         if request.entrypoint.callable is not None:
             if isinstance(request.resources.device, TpuConfig):
-                # TPU jobs execute callable directly via run_on_pod
                 return self._launch_tpu_job(request)
             else:
-                # Non-TPU callable: use thunk helper
                 return self._launch_callable_job(request)
 
-        # Command-line entrypoint
         runtime_env = self._get_runtime_env(request)
         entrypoint = f"{request.entrypoint.binary} {' '.join(request.entrypoint.args)}"
         logger.info("Submitting job with entrypoint: %s", entrypoint)
         logger.debug("Runtime env: %s", runtime_env)
 
-        # Map ResourceConfig to Ray entrypoint parameters
         entrypoint_params = self._get_entrypoint_params(request)
         logger.debug("Entrypoint params: %s", entrypoint_params)
 
@@ -164,10 +160,8 @@ class RayCluster(Cluster):
         """
         environment = request.environment if request.environment else create_environment()
 
-        # Start with env_vars from environment config
         env_vars = dict(environment.env_vars)
 
-        # Inject cluster spec for automatic recreation
         if "FRAY_CLUSTER_SPEC" not in env_vars:
             env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
 
@@ -196,20 +190,16 @@ class RayCluster(Cluster):
 
         params = {}
 
-        # Map CPU count
         if request.resources.cpu > 0:
             params["entrypoint_num_cpus"] = float(request.resources.cpu)
 
-        # Map memory
         if request.resources.ram:
             params["entrypoint_memory"] = humanfriendly.parse_size(request.resources.ram, binary=True)
 
-        # Map device-specific resources
         device = request.resources.device
         if isinstance(device, GpuConfig):
             params["entrypoint_num_gpus"] = float(device.count)
         elif isinstance(device, TpuConfig):
-            # Build TPU resources dict
             params["entrypoint_resources"] = {
                 f"TPU-{device.type}-head": 1.0,
                 "TPU": float(device.count),
@@ -233,7 +223,6 @@ class RayCluster(Cluster):
                 yield line
             logger.info("Finished tailing logs for job %s, got %d lines", job_id, line_count)
 
-        # Consume async generator and yield results
         async def _consume():
             results = []
             async for line in _tail_logs():
@@ -350,7 +339,6 @@ class RayCluster(Cluster):
         return cast(JobStatus, mapping.get(ray_status, "failed"))
 
     def _launch_callable_job(self, request: JobRequest) -> JobId:
-        """Launch non-TPU callable job using thunk helper."""
         entrypoint = request.entrypoint
         thunk_entrypoint = create_thunk_entrypoint(entrypoint.callable, prefix=f"/tmp/{request.name}")
         runtime_env = self._get_runtime_env(request)
@@ -366,7 +354,6 @@ class RayCluster(Cluster):
         return JobId(submission_id)
 
     def _launch_tpu_job(self, request: JobRequest) -> JobId:
-        """Launch TPU job using run_on_pod."""
         entrypoint = request.entrypoint
         assert entrypoint.callable is not None, "TPU jobs require callable entrypoint"
 
@@ -375,10 +362,8 @@ class RayCluster(Cluster):
 
         runtime_env = self._get_runtime_env(request)
 
-        # Wrap callable with ray.remote
         remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(entrypoint.callable)
 
-        # Submit to TPU execution
         object_ref = run_on_pod_ray.remote(
             remote_fn,
             tpu_type=device.type,
@@ -477,5 +462,4 @@ class RayCluster(Cluster):
             with ray_dashboard(dashboard_cfg):
                 yield
         else:
-            # Local cluster or no config path specified
             yield
