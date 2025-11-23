@@ -124,7 +124,8 @@ def maybe_reduce_loss(
     where: NamedArray | None,
     weight: NamedArray | None,
 ):
-    effective_weight = _resolve_effective_weight(arr, weight, where)
+    effective_weight: NamedArray | None = _resolve_effective_weight(arr, weight, where)
+    del where, weight
 
     if reduction is not None and reduction_axis != ():
         if reduction is UNSPECIFIED:
@@ -143,8 +144,6 @@ def maybe_reduce_loss(
             arr = reduction(arr, where=where, axis=reduction_axis)
     elif effective_weight is not None:
         arr = arr * effective_weight
-    elif where is not None:
-        arr = hax.where(where, arr, 0)
 
     return arr
 
@@ -166,7 +165,7 @@ def _resolve_effective_weight(arr, weight, where):
     if not isinstance(arr, NamedArray):
         raise TypeError("weighted reductions require the loss to be a NamedArray")
 
-    effective_weight = hax.broadcast_to(effective_weight, arr.axes)
+    effective_weight = hax.broadcast_axis(effective_weight, arr.axes)
     effective_weight = effective_weight.astype(arr.dtype)
     return effective_weight
 
