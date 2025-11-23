@@ -118,6 +118,7 @@ class HELMEvaluator(VllmTpuEvaluator):
         evals: list[EvalTaskConfig],
         output_path: str,
         max_eval_instances: int | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         """
         Runs HELM on the specified model and set of evaluations.
@@ -131,6 +132,7 @@ class HELMEvaluator(VllmTpuEvaluator):
             output_path (str): The path to save the evaluation results.
 
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
+            wandb_tags (list[str] | None): Optional tags to add to the wandb run (unused).
         """
         try:
             from helm.common.general import ensure_file_downloaded

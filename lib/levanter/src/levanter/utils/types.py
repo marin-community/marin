@@ -1,7 +1,7 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Callable, Optional, Protocol, Tuple, TypeVar, Union
+from typing import Any, Callable, Optional, Protocol, Tuple, TypeVar, Union, cast
 
 from jaxtyping import PyTree
 
@@ -51,7 +51,7 @@ class ComputeLossFunction(Protocol[M_con, X]):
         self,
         model: M_con,
         *inputs: X,
-        reduction: Optional[hax.ReductionFunction] = hax.mean,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
         reduction_axis: Optional[hax.AxisSelection] = None,
         **kwargs,
     ) -> Scalar | hax.NamedArray: ...

@@ -144,7 +144,7 @@ class MEDUPipeline:
         return self.tokenizer.apply_chat_template(chat_prompt, tokenize=False, add_generation_prompt=True)
 
     # Stage 1: Get benchmark description prompt
-    def get_benchmark_description_prompt(self) -> str:
+    def get_benchmark_description_prompt(self) -> list[str]:
         """Given the corpus content, generate a description of the corpus content and the type of data and skills
         that the data should have.
         """

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
-from typing import Optional
+from typing import Optional, cast
 
 import equinox
 import jax
@@ -11,6 +11,8 @@ import jax.numpy as jnp
 import haliax as hax
 from haliax import NamedArray
 from haliax.nn import cross_entropy_loss_and_log_normalizers
+
+DEFAULT_REDUCTION = cast(hax.ReductionFunction, hax.mean)
 
 
 def maybe_fused_next_token_loss(
@@ -21,7 +23,7 @@ def maybe_fused_next_token_loss(
     pred_lm_head: NamedArray,
     true_ids: NamedArray,
     loss_mask: Optional[NamedArray] = None,
-    reduction: Optional[hax.ReductionFunction] = hax.mean,
+    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
     logsumexp_weight: Optional[float] = None,
     block_size: Optional[int] = None,
@@ -96,7 +98,7 @@ def next_token_loss(
     logits: NamedArray,
     true_ids: NamedArray,
     loss_mask: Optional[NamedArray] = None,
-    reduction: Optional[hax.ReductionFunction] = hax.mean,
+    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
     logsumexp_weight: Optional[float] = None,
 ):
@@ -144,7 +146,7 @@ def cross_entropy_and_logsumexp_penalty(
     pred_y: NamedArray,
     target_y: NamedArray,
     *,
-    reduction: Optional[hax.ReductionFunction] = hax.mean,
+    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
     where: Optional[NamedArray] = None,
     logsumexp_weight=0.0,
@@ -166,7 +168,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     Label: hax.AxisSelector,
     target_y: NamedArray,
     *,
-    reduction: Optional[hax.ReductionFunction] = hax.mean,
+    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
     where: Optional[NamedArray] = None,
     logsumexp_weight: float | None = 0.0,

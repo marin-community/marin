@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import dataclasses
-from typing import Optional, Tuple
+from typing import Optional, Tuple, cast
 
 import equinox as eqx
 import jax
@@ -240,7 +240,7 @@ def _diag_mask(Ci: Axis, Cj: Axis) -> NamedArray:
     jj = hax.arange(Cj)
     I = ii.broadcast_axis(Cj)
     J = jj.broadcast_axis(Ci)
-    return I == J
+    return cast(NamedArray, I == J)
 
 
 # ---------- Kernels ----------

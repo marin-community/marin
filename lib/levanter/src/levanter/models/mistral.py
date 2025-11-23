@@ -69,9 +69,18 @@ class MistralConfig(LlamaConfig):
     rope: RotaryEmbeddingsConfig = dataclasses.field(default_factory=DefaultRotaryEmbeddingsConfig)
 
     # Axis
-    Pos = property(lambda self: Axis(name="position", size=self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
-    Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
+    @property
+    def Pos(self) -> Axis:
+        return Axis(name="position", size=self.seq_len)
+
+    @property
+    def KeyPos(self) -> Axis:
+        return self.Pos.alias("key_position")
+
+    @property
+    def Embed(self) -> Axis:
+        return Axis(name="embed", size=self.hidden_dim)
+
     Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
     KVHeads = property(lambda self: Axis(name="kv_heads", size=self.num_kv_heads))
     Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
@@ -146,7 +155,7 @@ class MistralConfig(LlamaConfig):
     def model_type(cls) -> Type["MistralLMHeadModel"]:
         return MistralLMHeadModel
 
-    def flops_per_token(self, vocab_size: int) -> Optional[float]:
+    def flops_per_token(self, vocab_size: int) -> float:
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,

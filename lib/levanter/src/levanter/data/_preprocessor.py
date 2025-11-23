@@ -40,7 +40,7 @@ class BatchProcessor(Generic[T_contra, U_co], ABC):
 
     @property
     @abstractmethod
-    def output_exemplar(self):
+    def output_exemplar(self) -> Any:
         """
         An exemplar of what this processor returns. This is used to determine the output schema of a dataset.
         """

@@ -49,9 +49,18 @@ class Gpt2HyenaConfig(LmConfig):
     hyena: HyenaConfig = HyenaConfig()
 
     # Axes
-    Pos = property(lambda self: self.hyena.Pos)
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
-    Embed = property(lambda self: self.hyena.Embed)
+    @property
+    def Pos(self) -> Axis:
+        return self.hyena.Pos
+
+    @property
+    def KeyPos(self) -> Axis:
+        return self.Pos.alias("key_position")
+
+    @property
+    def Embed(self) -> Axis:
+        return self.hyena.Embed
+
     Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
     Mlp = property(lambda self: Axis(name="mlp", size=self.Embed.size * self.mlp_scale))
 

@@ -359,7 +359,7 @@ def num_bytes(model: PyTree):
 class JAXTransferServer(WeightTransferServer):
     """JAX transfer server-based weight transfer server."""
 
-    coordinator: WeightTransferCoordinator
+    coordinator: RobustActor
 
     def __init__(self, config: WeightTransferConfig, mesh, params_sharding_rules=None):
         self.config = config

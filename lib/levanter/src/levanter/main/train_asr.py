@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import Optional, Union, cast
 
 import jax
 import jax.random as jrandom
@@ -91,7 +91,7 @@ def main(config: TrainASRConfig):
         example: AudioTextExample,
         *,
         key=None,
-        reduction: Optional[hax.ReductionFunction] = hax.mean,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
         reduction_axis: Optional[hax.AxisSelection] = None,
     ) -> jax.numpy.ndarray | hax.NamedArray:
         return m.compute_loss(example, key=key, reduction=reduction, reduction_axis=reduction_axis)

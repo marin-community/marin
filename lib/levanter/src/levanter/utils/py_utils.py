@@ -16,14 +16,14 @@ import enum
 from dataclasses import is_dataclass, asdict
 
 
-def logical_cpu_core_count():
+def logical_cpu_core_count() -> int:
     """Returns the number of logical CPU cores available to the process."""
     num_cpus = os.getenv("SLURM_CPUS_ON_NODE", None)
     if num_cpus is not None:
         return int(num_cpus)
 
     try:
-        return os.cpu_count()
+        return os.cpu_count() or 1
     except NotImplementedError:
         return 1
 

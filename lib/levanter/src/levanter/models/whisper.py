@@ -75,11 +75,22 @@ class WhisperConfig(HFCompatConfig, ASRConfig):
 
     # Axis
     MelPos = property(lambda self: Axis(name="position", size=self.max_source_positions * 2))
-    Pos = property(lambda self: Axis(name="position", size=self.max_length))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
+
+    @property
+    def Pos(self) -> Axis:
+        return Axis(name="position", size=self.max_length)
+
+    @property
+    def KeyPos(self) -> Axis:
+        return self.Pos.alias("key_position")
+
     SourcePos = property(lambda self: Axis(name="position", size=self.max_source_positions))
     Vocab = property(lambda self: Axis(name="vocab_size", size=self.vocab_size))
-    Embed = property(lambda self: Axis(name="embed_dim", size=self.d_model))
+
+    @property
+    def Embed(self) -> Axis:
+        return Axis(name="embed_dim", size=self.d_model)
+
     EncoderMlp = property(lambda self: Axis(name="mlp_dim", size=self.encoder_ffn_dim))
     EncoderHeads = property(lambda self: Axis(name="heads", size=self.encoder_attention_heads))
     EncoderHeadSize = property(lambda self: Axis(name="head_size", size=self.d_model // self.encoder_attention_heads))
