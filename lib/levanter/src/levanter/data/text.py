@@ -793,12 +793,14 @@ def _prepare_supervised_examples(ex: list[dict], tokenizer: PreTrainedTokenizerB
 @functools.partial(jax.jit, static_argnums=(0, 3, 4))
 def _mk_sup_example_jit(Pos, input_ids: hax.NamedArray, sources_len, pad_token_id, eos_id):
     # mask out padding and anything before the start of the target
-    loss_mask = hax.arange(Pos) >= sources_len - 1
+    loss_weight = (hax.arange(Pos) >= sources_len - 1).astype(jax.numpy.float32)
     # don't predict the padding
     targets = hax.roll(input_ids, -1, Pos)
-    loss_mask = loss_mask & (targets != pad_token_id)
-    loss_mask = loss_mask & (1 - hax.nn.one_hot(-1, Pos, dtype=jax.numpy.bool_))
-    return LmExample.causal(input_ids, loss_mask=loss_mask, eos_id=eos_id)
+    loss_weight = loss_weight * (targets != pad_token_id).astype(loss_weight.dtype)
+    loss_weight = loss_weight * hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jax.numpy.bool_)).astype(
+        loss_weight.dtype
+    )
+    return LmExample.causal(input_ids, loss_weight=loss_weight, eos_id=eos_id)
 
 
 def mk_supervised_dataset(
@@ -1681,15 +1683,15 @@ class MultiturnChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, Processed
             if mask_user_turns:
                 # mask is 1 on the position of the assistant tokens
                 mask = example["assistant_masks"]
-                # loss_mask by convention is 1 on the positions where we compute loss, i.e. shifted back 1
+                # loss_weight by convention is 1 on the positions where we compute loss, i.e. shifted back 1
                 mask = jnp.roll(mask, -1, axis=-1)
-                loss_mask = hax.named(mask, self.Pos)
+                loss_weight = hax.named(mask, self.Pos)
             else:
-                loss_mask = None
+                loss_weight = None
 
             seg_ids = hax.named(seg_ids["input_ids"], self.Pos)
 
-            out = LmExample.causal(tokens=tokens, loss_mask=loss_mask, segment_ids=seg_ids)
+            out = LmExample.causal(tokens=tokens, loss_weight=loss_weight, segment_ids=seg_ids)
             out = jax.lax.with_sharding_constraint(out, sharding)
             return out
 
@@ -1795,12 +1797,12 @@ class SupervisedDataset(MappedAsyncDataset[tuple[ProcessedSupervisedDict, Proces
 
             if self.mask_inputs:
                 sequence_mask = self._make_sequence_mask(segment_ids, ex["sources_len"])
-                loss_mask = hax.named(sequence_mask, Pos)
+                loss_weight = hax.named(sequence_mask, Pos)
             else:
-                # Use default loss mask
-                loss_mask = None
+                # Use default loss weight
+                loss_weight = None
 
-            return LmExample.causal(tokens, loss_mask=loss_mask, segment_ids=hax.named(segment_ids, Pos))
+            return LmExample.causal(tokens, loss_weight=loss_weight, segment_ids=hax.named(segment_ids, Pos))
 
         super().__init__(self.packed, _create_lm_example)
 
