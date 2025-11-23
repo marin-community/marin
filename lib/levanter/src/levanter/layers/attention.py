@@ -1851,7 +1851,7 @@ def _do_tpu_ragged_paged_attention(
 
     o = shard_map(
         Partial(tpu_ragged_paged_attention, sm_scale=sm_scale, soft_cap=soft_cap),
-        haliax.partitioning._get_mesh(),
+        jax.sharding.get_abstract_mesh(),
         in_specs=(
             haliax.partitioning.pspec_for_axis(q_flat.axes),
             haliax.partitioning.pspec_for_axis(kv_pages_padded.axes),
