@@ -10,11 +10,14 @@ import threading
 import typing
 import warnings
 from math import prod
-from typing import Callable, ContextManager, Mapping, Optional, ParamSpec, Sequence, TypeAlias, TypeVar, cast
+from typing import Any, Callable, ContextManager, Mapping, Optional, ParamSpec, Sequence, TypeAlias, TypeVar, cast
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
+import jax.tree_util as jtu
 from equinox import is_array, module_update_wrapper
+from jax.experimental.shard_map import shard_map as jax_shard_map
 from jax.lax import with_sharding_constraint
 from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, SingleDeviceSharding, get_abstract_mesh
 
@@ -24,8 +27,8 @@ from jaxtyping import PyTree
 import haliax.tree_util as htu
 from haliax._src.compile_utils import compile_cache
 
-from .axis import Axis, AxisSelection, AxisSelector, axis_spec_to_shape_dict
-from .core import NamedArray
+from .axis import Axis, AxisSelection, AxisSelector, axis_spec_to_shape_dict, to_jax_shape
+from .core import NamedArray, enable_shape_checks
 from .jax_utils import Static, is_in_jit, is_jax_array_like, is_on_mac_metal
 from .tree_util import hashable_combine, hashable_partition
 from .util import StringHolderEnum
@@ -734,16 +737,210 @@ def round_axis_for_partitioning(axis: Axis, mapping: ResourceMapping | None = No
 
 
 def _get_mesh() -> Mesh | None:
-    """Deprecated helper that simply proxies to :func:`get_abstract_mesh`."""
+    from jax.interpreters.pxla import thread_resources
 
-    warnings.warn(
-        "`_get_mesh` is deprecated; use `jax's get_abstract_mesh or get_concrete_mesh` instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
+    return thread_resources.env.physical_mesh
 
-    mesh = _resolve_mesh()
-    return mesh
+
+@typing.overload
+def shard_map(
+    f: Callable[Args, R],
+    *,
+    in_specs: Any = None,
+    out_specs: Any = None,
+    mesh: Mesh | None = None,
+    axis_mapping: ResourceMapping | None = None,
+    check_rep: bool = False,
+    **kwargs,
+) -> Callable[Args, R]: ...
+
+
+@typing.overload
+def shard_map(
+    *,
+    in_specs: Any = None,
+    out_specs: Any = None,
+    mesh: Mesh | None = None,
+    axis_mapping: ResourceMapping | None = None,
+    check_rep: bool = False,
+    **kwargs,
+) -> typing.Callable[[Callable[Args, R]], Callable[Args, R]]: ...
+
+
+def shard_map(
+    f: Optional[Callable] = None,
+    *,
+    in_specs=None,
+    out_specs=None,
+    mesh: Optional[Mesh] = None,
+    axis_mapping: Optional[ResourceMapping] = None,
+    check_rep: bool = False,
+    **kwargs,
+):
+    """A NamedArray-friendly wrapper around :func:`jax.experimental.shard_map.shard_map`.
+
+    This function can be used either as ``haliax.shard_map(fn, ...)`` or as a
+    decorator::
+
+        @haliax.shard_map()
+        def fn(x):
+            ...
+
+    Note that, unlike the JAX version, you don't need to provide in_specs, out_specs, if all arguments and return value
+    are ``NamedArray`` objects. Mesh can be inferred from the context mesh (which JAX could do, but doesn't).
+    Axis mapping can be inferred from the context axis mapping.
+
+
+    Args:
+        f: The function to apply with ``shard_map``.
+        in_specs: Optional PyTree describing the input sharding. Each leaf can be a
+            :class:`NamedArray`, :class:`Axis`, or a sequence of ``Axis`` objects,
+            or a :class:`PartitionSpec`. ``NamedArray`` and ``Axis`` leaves will be
+            converted to ``PartitionSpec`` using :func:`pspec_for_axis` and the
+            provided ``axis_mapping``. If ``None`` the specifications are
+            inferred from the arguments on first invocation.
+        out_specs: Like ``in_specs`` but for the output. If ``None`` the output
+            specifications are inferred by evaluating ``f`` on placeholder inputs
+            and using the returned axis names.
+        mesh: The mesh to run the computation on. Defaults to the current mesh
+            returned by :func:`_get_mesh`.
+        axis_mapping: Optional mapping from logical axis names to mesh axis names
+            used when converting ``Axis`` objects to ``PartitionSpec``.
+        check_rep: Passed through to ``jax.shard_map``.
+        **kwargs: Additional arguments forwarded to ``jax.shard_map``.
+
+        Returns:
+            A wrapped function that accepts and returns ``NamedArray`` objects
+            according to the provided specifications.
+    """
+
+    if f is None:
+        return lambda fn: shard_map(
+            fn,
+            in_specs=in_specs,
+            out_specs=out_specs,
+            mesh=mesh,
+            axis_mapping=axis_mapping,
+            check_rep=check_rep,
+            **kwargs,
+        )
+
+    mesh = _resolve_mesh(mesh) or _get_mesh()
+
+    def _axes(spec):
+        if isinstance(spec, NamedArray):
+            return spec.axes
+        elif isinstance(spec, Axis):
+            return spec
+        elif isinstance(spec, Sequence) and all(isinstance(ax, Axis) for ax in spec):
+            return tuple(spec)
+        else:
+            return None
+
+    def _pspec(spec):
+        if is_jax_array_like(spec) and not isinstance(spec, NamedArray):
+            return None
+        if isinstance(spec, (PartitionSpec, NamedSharding)) or spec is None:
+            return spec
+        axes = _axes(spec)
+        if axes is None:
+            return spec
+        return pspec_for_axis(axes, axis_mapping)
+
+    def _leaf(x):
+        return isinstance(x, NamedArray) or (isinstance(x, Sequence) and all(isinstance(ax, Axis) for ax in x))
+
+    def _prepare(spec_tree):
+        axes = jtu.tree_map(_axes, spec_tree, is_leaf=_leaf)
+        pspec = jtu.tree_map(_pspec, spec_tree, is_leaf=_leaf)
+        return axes, pspec
+
+    def _dummy(arg, ax):
+        if ax is None:
+            if is_jax_array_like(arg):
+                return jax.ShapeDtypeStruct(arg.shape, arg.dtype)
+            return arg
+        shape = to_jax_shape(ax)
+        dtype = arg.dtype if is_jax_array_like(arg) else jnp.float32
+        return NamedArray(jax.ShapeDtypeStruct(shape, dtype), ax if isinstance(ax, tuple) else (ax,))
+
+    def _wrap_out(a, ax):
+        if ax is None:
+            return a
+        axes = ax if isinstance(ax, tuple) else (ax,)
+        with enable_shape_checks(False):
+            return NamedArray(a, axes)
+
+    def build_fn(arg_axes, part_in_specs, out_axes, part_out_specs):
+
+        def inner(*arrays):
+            arr_flat, arr_tree = jtu.tree_flatten(arrays)
+            ax_flat, _ = jtu.tree_flatten(arg_axes, is_leaf=_leaf)
+
+            def wrap_arg(a, ax):
+                if ax is None:
+                    return a
+                axes = ax if isinstance(ax, tuple) else (ax,)
+                local_axes = [Axis(ax_i.name, a.shape[i]) for i, ax_i in enumerate(axes)]
+                with enable_shape_checks(False):
+                    return NamedArray(a, local_axes if len(local_axes) > 1 else local_axes[0])
+
+            named_args_flat = [wrap_arg(a, ax) for a, ax in zip(arr_flat, ax_flat)]
+            named_args = jtu.tree_unflatten(arr_tree, named_args_flat)
+            result = f(*named_args)
+            return jtu.tree_map(
+                lambda r: r.array if isinstance(r, NamedArray) else r,
+                result,
+                is_leaf=lambda x: isinstance(x, NamedArray),
+            )
+
+        return jax_shard_map(
+            inner,
+            mesh=mesh,
+            in_specs=part_in_specs,
+            out_specs=part_out_specs,
+            check_rep=check_rep,
+            **kwargs,
+        )
+
+    @compile_cache
+    def _cache(fun_names, *, arg_axes, part_in_specs, out_axes, part_out_specs):
+        return build_fn(arg_axes, part_in_specs, out_axes, part_out_specs)
+
+    def wrapper(*args):
+        arrays = jtu.tree_map(
+            lambda a: a.array if isinstance(a, NamedArray) else a,
+            args,
+            is_leaf=lambda x: isinstance(x, NamedArray),
+        )
+
+        spec_source = in_specs if in_specs is not None else args
+        arg_axes, part_in_specs = _prepare(spec_source)
+
+        if out_specs is None:
+            dummy_args = jtu.tree_map(_dummy, arrays, arg_axes, is_leaf=_leaf)
+            if isinstance(dummy_args, tuple):
+                out_shape = _cached_filter_eval_shape(f, *dummy_args)
+            else:
+                out_shape = _cached_filter_eval_shape(f, dummy_args)
+            out_axes = jtu.tree_map(_axes, out_shape, is_leaf=_leaf)
+            part_out_specs = jtu.tree_map(_pspec, out_shape, is_leaf=_leaf)
+        else:
+            out_axes = jtu.tree_map(_axes, out_specs, is_leaf=_leaf)
+            part_out_specs = jtu.tree_map(_pspec, out_specs, is_leaf=_leaf)
+
+        sm_fn = _cache(
+            f, arg_axes=arg_axes, part_in_specs=part_in_specs, out_axes=out_axes, part_out_specs=part_out_specs
+        )
+
+        out = sm_fn(*arrays)
+        out_flat, out_tree = jtu.tree_flatten(out)
+        ax_out_flat, _ = jtu.tree_flatten(out_axes, is_leaf=_leaf)
+
+        wrapped_out = [_wrap_out(a, ax) for a, ax in zip(out_flat, ax_out_flat)]
+        return jtu.tree_unflatten(out_tree, wrapped_out)
+
+    return functools.update_wrapper(wrapper, f)
 
 
 def _is_jit_tracer(x) -> bool:
@@ -760,6 +957,7 @@ __all__ = [
     "auto_sharded",
     "shard",
     "shard_with_axis_mapping",
+    "shard_map",
     "pspec_for",
     "infer_resource_partitions",
     "named_jit",
