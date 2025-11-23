@@ -26,14 +26,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import fsspec
-import ray
 import requests
+from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, ensure_versioned, this_output_path
+from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
-
-from marin.core.runtime import cached_or_construct_output, simple_backpressure
-from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, ensure_versioned, this_output_path
-from marin.utils import fsspec_exists, fsspec_mkdirs
+from zephyr import Dataset, flow_backend
+from zephyr.writers import atomic_rename
 
 logger = logging.getLogger("ray")
 
@@ -251,8 +250,6 @@ def _normalize_record(raw: Any, dataset: UncheatableEvalDataset, index: int) -> 
     return {"id": record_id, "text": text, "source": dataset.source_label}
 
 
-@ray.remote(max_retries=3)
-@cached_or_construct_output(success_suffix="SUCCESS")
 def _download_and_convert_single(
     input_url: str,
     output_file_path: str,
@@ -280,12 +277,13 @@ def _download_and_convert_single(
     fsspec_mkdirs(os.path.dirname(output_file_path), exist_ok=True)
 
     record_count = 0
-    with fsspec.open(output_file_path, "wt", encoding="utf-8", compression="gzip") as outfile:
-        for index, raw in enumerate(payload):
-            normalized = _normalize_record(raw, dataset, index)
-            json.dump(normalized, outfile, ensure_ascii=False)
-            outfile.write("\n")
-            record_count += 1
+    with atomic_rename(output_file_path) as temp_path:
+        with fsspec.open(temp_path, "wt", encoding="utf-8", compression="gzip") as outfile:
+            for index, raw in enumerate(payload):
+                normalized = _normalize_record(raw, dataset, index)
+                json.dump(normalized, outfile, ensure_ascii=False)
+                outfile.write("\n")
+                record_count += 1
 
     logger.info("Wrote %s records to %s", record_count, output_file_path)
     return {"records": record_count, "output_file": output_file_path}
@@ -295,16 +293,11 @@ def _generate_tasks(
     datasets: Iterable[UncheatableEvalDataset],
     output_path: str,
     request_options: _RequestOptions,
-    skip_existing: bool,
 ) -> tuple[list[tuple[str, str, UncheatableEvalDataset, _RequestOptions]], list[UncheatableEvalDataset]]:
     tasks: list[tuple[str, str, UncheatableEvalDataset, _RequestOptions]] = []
     filtered: list[UncheatableEvalDataset] = []
     for dataset in datasets:
         output_file = posixpath.join(output_path, dataset.output_filename())
-        success_file = f"{output_file}.SUCCESS"
-        if skip_existing and fsspec_exists(success_file):
-            logger.info("Skipping %s because output already exists", dataset.name)
-            continue
         tasks.append((dataset.download_url, output_file, dataset, request_options))
         filtered.append(dataset)
     return tasks, filtered
@@ -334,7 +327,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
     output_path = str(cfg.output_path)
     fsspec_mkdirs(output_path, exist_ok=True)
 
-    tasks, filtered_datasets = _generate_tasks(latest_datasets, output_path, request_options, cfg.skip_existing)
+    tasks, filtered_datasets = _generate_tasks(latest_datasets, output_path, request_options)
 
     if not tasks:
         logger.info("No new datasets to process")
@@ -342,32 +335,35 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
 
     metadata_records: list[dict[str, Any]] = []
 
-    refs = simple_backpressure(
-        _download_and_convert_single,
-        iter(tasks),
-        max_in_flight=cfg.max_concurrent_downloads,
-        fetch_local=True,
-    )
+    backend = flow_backend(max_parallelism=cfg.max_concurrent_downloads, max_retries=3)
 
-    for dataset, ref in zip(filtered_datasets, refs, strict=False):
+    pipeline = (
+        Dataset.from_list(tasks)
+        .map(lambda task: _download_and_convert_single(*task))
+        .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
+    )
+    output_paths = list(backend.execute(pipeline))
+
+    for dataset, metadata_file in zip(filtered_datasets, output_paths, strict=True):
+        with fsspec.open(metadata_file, "r", encoding="utf-8") as meta_file:
+            result = json.load(meta_file)
+
         try:
-            result = ray.get(ref)
+            metadata_records.append(
+                {
+                    "benchmark": dataset.benchmark,
+                    "start_date": dataset.start_date,
+                    "end_date": dataset.end_date,
+                    "source": dataset.source_label,
+                    "output_file": posixpath.join(output_path, dataset.output_filename()),
+                    "records": result.get("records"),
+                    "sha": dataset.sha,
+                    "size": dataset.size,
+                }
+            )
         except Exception:
             logger.exception("Failed to process dataset %s", dataset.name)
             raise
-
-        metadata_records.append(
-            {
-                "benchmark": dataset.benchmark,
-                "start_date": dataset.start_date,
-                "end_date": dataset.end_date,
-                "source": dataset.source_label,
-                "output_file": posixpath.join(output_path, dataset.output_filename()),
-                "records": result.get("records"),
-                "sha": dataset.sha,
-                "size": dataset.size,
-            }
-        )
 
     _write_metadata(cfg, metadata_records)
     return {"success": True, "processed": metadata_records}

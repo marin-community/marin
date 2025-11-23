@@ -236,7 +236,7 @@ class CompletionReplayer:
     async def run_async(self) -> dict[str, Any]:
         """Main async entry point for replaying completions."""
         requests = load_requests(self.config.requests_file)
-        server, client, _ = create_inference_server(self.config)
+        _server, client, _ = create_inference_server(self.config)
 
         return await replay_all_with_warmup(client, requests, self.config)
 

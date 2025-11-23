@@ -9,10 +9,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
+import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
-
-import haliax as hax
 from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
 
@@ -30,7 +29,6 @@ from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, compute_n
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
-
 
 logger = logging.getLogger(__name__)
 

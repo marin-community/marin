@@ -346,6 +346,7 @@ class LevanterHarnessLM(TemplateLM):
     def __init__(self, leader: _LmEvalHarnessWorker):
         super().__init__()
         self.leader = leader
+        self.axis_resources = leader.axis_resources
         # Storage for prompts and generations to include in outputs
         self.sample_outputs: dict[str, list[dict]] = {}
         self.sample_logging_config = leader.sample_logging_config
@@ -539,11 +540,14 @@ class LevanterHarnessLM(TemplateLM):
             # Handle profiler start/stop based on step
             self._handle_profiler_step()
 
+            batch = hax.shard(batch, self.axis_resources)
+
             segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
 
             padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
+            batch = jax.device_put(batch)
 
             batch = jax.device_put(batch)
 

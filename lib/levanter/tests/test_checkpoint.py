@@ -3,21 +3,24 @@
 
 import dataclasses
 import datetime
+import json
 import pathlib
 import tempfile
 from datetime import timedelta
 
+import equinox
 import equinox as eqx
+import fsspec
+import haliax as hax
 import jax
 import jax.tree_util as jtu
 import numpy as np
 import optax
 from chex import assert_trees_all_close, assert_trees_all_equal
+from haliax import Axis
 from jax import ShapeDtypeStruct
 from jax import numpy as jnp
-
-import haliax as hax
-from haliax import Axis
+from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import (
@@ -30,7 +33,6 @@ from levanter.checkpoint import (
     save_checkpoint,
 )
 from levanter.trainer_state import TrainerState
-from test_utils import MLP, arrays_only, assert_trees_not_close, use_test_mesh
 
 
 def _dummy_step_info(step):
@@ -166,8 +168,8 @@ def test_checkpointer_mixed_policy():
         assert _get_checkpoint_steps(tmpdir) == [2, 4, 6, 8, 10, 15, 20, 30, 40, 49]  # 49 is last temporary checkpoint
 
 
-def _make_state(step, key):
-    model = MLP(in_size=2, out_size=1, width_size=2, depth=3, key=key)
+def _make_state(step, key, depth=3):
+    model = MLP(in_size=2, out_size=1, width_size=2, depth=depth, key=key)
     optim = optax.adam(1e-4)
     opt_state = optim.init(arrays_only(model))
 
@@ -432,3 +434,87 @@ def test_load_from_checkpoint_allows_partial_checkpoints():
         assert hax.all(hax.equal(loaded.a, model0.a))
         assert loaded.b is not None
         assert hax.all(hax.equal(loaded.b, model1.b))
+
+
+def test_ocdbt_merges_files():
+    """Test that OCDBT checkpoints create manifest.ocdbt file."""
+
+    for depth in [1, 5, 20]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            key0 = jax.random.PRNGKey(0)
+            initial_state = _make_state(10, key0, depth=depth)
+            save_checkpoint(
+                initial_state,
+                step=initial_state.step,
+                checkpoint_path=tmpdir,
+            )
+
+            # Check that manifest.ocdbt exists
+            # The manifest should be in one of the checkpoint subdirectories
+            checkpoint_dir = pathlib.Path(tmpdir)
+            checkpoint_files = list(checkpoint_dir.rglob("*"))
+            assert (
+                len(checkpoint_files) <= 25
+            ), f"There should be fewer than 25 files in the checkpoint directory: {checkpoint_files}"
+            print(depth, len(checkpoint_files), checkpoint_files)
+
+            manifest_files = list(checkpoint_dir.rglob("manifest.ocdbt"))
+            assert len(manifest_files) > 0, "OCDBT manifest.ocdbt file should exist in checkpoint"
+
+
+def test_backward_compatibility_with_ocdbt():
+    """Test that we can load old non-OCDBT checkpoints with new OCDBT-enabled code."""
+    import jax.experimental.array_serialization.serialization as array_ser
+
+    key0 = jax.random.PRNGKey(0)
+    key1 = jax.random.PRNGKey(1)
+
+    initial_state = _make_state(10, key0)
+    rep_state = _make_state(2, key1)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Save with old format by directly using serialize_with_paths (non-OCDBT)
+        manager = array_ser.GlobalAsyncCheckpointManager()
+        from levanter.utils import jax_utils
+
+        checkpoint_path = tmpdir
+
+        leaf_key_paths = jax_utils.leaf_key_paths(initial_state, is_leaf=lambda x: x is None)
+        paths = []
+        for key_path in jax.tree.leaves(leaf_key_paths):
+            paths.append(f"{checkpoint_path}/{key_path.replace('.', '/')}")
+
+        arrays = [
+            leaf.array if hasattr(leaf, "array") else leaf
+            for leaf in jax.tree.leaves(initial_state)
+            if hasattr(leaf, "array") or jax.Array in type(leaf).__mro__
+        ]
+
+        filtered = [(a, p) for a, p in zip(arrays, paths) if equinox.is_array_like(a)]
+        arrays_to_save = [a for a, _ in filtered]
+        paths_to_save = [p for _, p in filtered]
+
+        # Save using old non-OCDBT method
+        manager.serialize_with_paths(arrays_to_save, paths_to_save)
+        manager.wait_until_finished()
+
+        # Save metadata (normally done by save_checkpoint)
+        fs, _ = fsspec.core.url_to_fs(checkpoint_path)
+        metadata = {"step": 10, "timestamp": datetime.datetime.now().isoformat(), "is_temporary": False}
+        with fs.open(f"{checkpoint_path}/metadata.json", "w") as f:
+            json.dump(metadata, f)
+
+        # Now try to load it with the new OCDBT-enabled code
+        restored_state = load_checkpoint(
+            rep_state,
+            checkpoint_path=tmpdir,
+            discover_latest=False,
+        )
+
+        # Verify the data was loaded correctly
+        assert_trees_all_equal(
+            jax.tree_util.tree_leaves(arrays_only(restored_state.model)),
+            jax.tree_util.tree_leaves(arrays_only(initial_state.model)),
+        )
+        assert all(np.isclose(restored_state.training_key, initial_state.training_key))
+        assert restored_state.step == initial_state.step

@@ -474,7 +474,6 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
      2. Then, inside jit, we select the source'th element of the array, then reshard with the out_axis_specs
 
     """
-
     current_mesh: jax.sharding.Mesh = hax.partitioning._get_mesh()
 
     axis_names = current_mesh.axis_names

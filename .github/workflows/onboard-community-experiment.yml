@@ -1,0 +1,274 @@
+name: Onboard Community Experiment
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: community-experiment-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  onboard:
+    if: contains(join(fromJson(toJson(github.event.issue.labels)).*.name, ','), 'community-experiment-submission') || contains(github.event.issue.body, '<!-- community-experiment:onboarding')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse Issue Form fields
+        id: parse
+        shell: bash
+        run: |
+          set -euo pipefail
+          BODY=$(printf "%s" "${{ github.event.issue.body }}")
+
+          parse_field() {
+            local heading="$1"
+            awk -v h="### ${heading}" '
+              $0 ~ h {flag=1; next}
+              /^### / {if(flag){exit}; next}
+              flag && NF {print; exit}
+            ' <<<"$BODY" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+          }
+
+          author_name="$(parse_field "Your name")"
+          affiliation="$(parse_field "Affiliation")"
+          url="$(parse_field "Link to your profile/site")"
+          branch_name="$(parse_field "Name of your branch")"
+          description="$(parse_field "One-sentence description of your experiment")"
+
+          # Fallbacks
+          : "${author_name:=anonymous}"
+          : "${branch_name:=community-experiment}"
+          : "${description:=Community experiment submission}"
+
+          # Slugify helpers
+          to_slug() {
+            tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g; s/-+/-/g'
+          }
+          author_slug="$(printf '%s' "$author_name" | to_slug)"
+          branch_slug="$(printf '%s' "$branch_name" | to_slug)"
+
+          # Compose branch and directory names
+          branch_ref="${author_slug}/${branch_slug}-${{ github.event.issue.number }}"
+          dir_name="${branch_slug}"
+          import_path="experiments.speedrun.${dir_name}.main"
+
+          # Expose outputs
+          {
+            echo "author_name=$author_name"
+            echo "affiliation=$affiliation"
+            echo "url=$url"
+            echo "branch_name=$branch_name"
+            echo "description=$description"
+            echo "author_slug=$author_slug"
+            echo "branch_slug=$branch_slug"
+            echo "branch_ref=$branch_ref"
+            echo "dir_name=$dir_name"
+            echo "import_path=$import_path"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post placeholder comment
+        id: placeholder
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.payload.issue.number;
+            const body = [
+              "⚓ Thanks for your submission!",
+              "",
+              "We are provisioning your starter branch and PR now... ⏳",
+              "",
+              "_This comment will update automatically once everything is ready._",
+            ].join("\n");
+            const comment = await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body,
+            });
+            core.setOutput("comment_id", String(comment.data.id));
+
+      - name: Create branch and files
+        id: create
+        shell: bash
+        run: |
+          set -euo pipefail
+          BRANCH="${{ steps.parse.outputs.branch_ref }}"
+          DIR="${{ steps.parse.outputs.dir_name }}"
+          IMPORT_PATH="${{ steps.parse.outputs.import_path }}"
+
+          # Create or switch to branch safely
+          if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+            git checkout "$BRANCH"
+          else
+            git checkout -b "$BRANCH"
+          fi
+
+          # Configure committer identity for this repo
+          git config user.name "github-actions[bot]"
+          # https://github.com/orgs/community/discussions/26560
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          DEST="experiments/speedrun/${DIR}"
+          mkdir -p "$DEST"
+          # Only create starter if it doesn't already exist
+          if [ ! -f "$DEST/main.py" ]; then
+            cp "experiments/hackable_transformer_starter_template.py" "$DEST/main.py"
+
+          # Patch placeholders using environment variables (safe for quotes/newlines)
+          export SUBMISSION_IMPORT_PATH="${{ steps.parse.outputs.import_path }}"
+          export SUBMISSION_BRANCH="${{ steps.parse.outputs.branch_ref }}"
+          export SUBMISSION_DESCRIPTION="${{ steps.parse.outputs.description }}"
+          export SUBMISSION_AUTHOR_NAME="${{ steps.parse.outputs.author_name }}"
+          export SUBMISSION_AUTHOR_AFFILIATION="${{ steps.parse.outputs.affiliation }}"
+          export SUBMISSION_AUTHOR_URL="${{ steps.parse.outputs.url }}"
+
+          TMP_PY="$(mktemp)"
+          # Strip 12 leading spaces from the embedded Python, write to temp file (keeps YAML tidy)
+          sed -e 's/^ \{10\}//' > "$TMP_PY" <<'PY'
+          import io, os, sys
+          p = sys.argv[1]
+          with io.open(p, 'r', encoding='utf-8') as f:
+              s = f.read()
+          replacements = {
+              "__SUBMISSION_IMPORT_PATH__": os.environ.get("SUBMISSION_IMPORT_PATH", ""),
+              "__SUBMISSION_BRANCH__": os.environ.get("SUBMISSION_BRANCH", ""),
+              "__SUBMISSION_DESCRIPTION__": os.environ.get("SUBMISSION_DESCRIPTION", ""),
+              "__SUBMISSION_AUTHOR_NAME__": os.environ.get("SUBMISSION_AUTHOR_NAME", ""),
+              "__SUBMISSION_AUTHOR_AFFILIATION__": os.environ.get("SUBMISSION_AUTHOR_AFFILIATION", ""),
+              "__SUBMISSION_AUTHOR_URL__": os.environ.get("SUBMISSION_AUTHOR_URL", ""),
+          }
+          for needle, value in replacements.items():
+              s = s.replace(needle, value)
+          with io.open(p, 'w', encoding='utf-8') as f:
+              f.write(s)
+          PY
+            python "$TMP_PY" "$DEST/main.py"
+            rm -f "$TMP_PY"
+          else
+            echo "Starter already exists at $DEST/main.py; leaving as-is."
+          fi
+
+          # Minimal README with how-to-run
+          if [ ! -f "$DEST/README.md" ]; then
+            cat > "$DEST/README.md" <<'EOF'
+          # ${{ steps.parse.outputs.branch_name }}
+
+          ${{ steps.parse.outputs.description }}
+
+          How to run:
+
+          ```bash
+          python marin/run/ray_run.py -- \
+            python -m ${{ steps.parse.outputs.import_path }}
+          ```
+          EOF
+          fi
+
+          git add "$DEST"
+          if git diff --staged --quiet; then
+            echo "No changes to commit in $DEST"
+          else
+            git commit -m "community: initialize starter for ${{ steps.parse.outputs.author_slug }}/${{ steps.parse.outputs.branch_slug }}"
+          fi
+          git push origin "$BRANCH"
+
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "dest=$DEST" >> "$GITHUB_OUTPUT"
+
+      - name: Open draft PR
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const head = '${{ steps.create.outputs.branch }}';
+            const title = `Community experiment: ${'${{ steps.parse.outputs.branch_name }}'}`;
+            const body = `Closes #${issue.number} (auto-generated)\n\nHow to run:\n\`\`\`bash\npython marin/run/ray_run.py -- \\\n  python -m ${'${{ steps.parse.outputs.import_path }}'}\n\`\`\``;
+            const base = context.payload.repository?.default_branch || 'main';
+            const pr = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              head,
+              base,
+              draft: true,
+              body,
+            });
+            core.setOutput('url', pr.data.html_url);
+
+      - name: Update onboarding comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commentId = '${{ steps.placeholder.outputs.comment_id }}';
+            const prUrl = '${{ steps.pr.outputs.url }}';
+            const branch = '${{ steps.create.outputs.branch }}';
+            const dest = '${{ steps.create.outputs.dest }}';
+            const importPath = '${{ steps.parse.outputs.import_path }}';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const author = context.payload.issue?.user?.login || 'your-github-username';
+            const body = [
+              "⚓ Welcome to Marin! Your branch is ready.",
+              "",
+              `- Branch & Starter File: https://github.com/${owner}/${repo}/tree/${branch}/${dest}`,
+              `- PR: ${prUrl}`,
+              "",
+              "## Next Steps",
+              "",
+              `1. **[Click here to fork Marin](${`https://github.com/${owner}/${repo}/fork`})**`,
+              "",
+              "2. **Copy, paste & run the following to find your branch and starter code**",
+              "",
+              "```bash",
+              `git clone https://github.com/${author}/${repo}.git`,
+              `cd ${repo}`,
+              `git remote add upstream https://github.com/${owner}/${repo}.git`,
+              `git fetch upstream ${branch}`,
+              `git checkout -b ${branch} --track upstream/${branch}`,
+              `git push -u origin ${branch}`,
+              "",
+              "uv venv --python 3.11",
+              ". .venv/bin/activate",
+              "uv sync --all-packages",
+              "",
+              `cd ${dest}`,
+              `echo "\nWelcome to Marin! You are now in your starter directory: $(pwd)"`,
+              "```",
+              "",
+              "3. Start hacking!",
+              "",
+              "Run your starter code locally:",
+              "```bash",
+              "python marin/run/ray_run.py -- \\",
+              `  python -m ${importPath}`,
+              "```",
+            ].join("\n");
+            const params = {
+              owner,
+              repo,
+              body,
+            };
+            if (commentId) {
+              await github.rest.issues.updateComment({
+                ...params,
+                comment_id: Number(commentId),
+              });
+            } else {
+              await github.rest.issues.createComment({
+                ...params,
+                issue_number: context.payload.issue.number,
+              });
+            }

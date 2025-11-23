@@ -37,8 +37,10 @@ import yaml
 
 ROOT_DIR = pathlib.Path(__file__).parent.parent
 LEVANTER_LICENSE = ROOT_DIR / "lib/levanter/etc/license_header.txt"
+HALIAX_LICENSE = ROOT_DIR / "lib/haliax/etc/license_header.txt"
 MARIN_LICENSE = ROOT_DIR / "etc/license_header.txt"
 LEVANTER_BLACK_CONFIG = ROOT_DIR / "lib/levanter/pyproject.toml"
+HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
 
 EXCLUDE_PATTERNS = [
     ".git/**",
@@ -150,16 +152,27 @@ def check_black(files: list[pathlib.Path], fix: bool, config: pathlib.Path | Non
         return 0
 
     click.echo("\nBlack formatter:")
-    args = ["uv", "run", "--all-packages", "black"]
-    if not fix:
-        args.append("--check")
+    args = ["uv", "run", "--all-packages", "black", "--check"]
+    if fix:
+        # When fixing, use --diff to show changes but still exit non-zero if files would be formatted
+        args.append("--diff")
     if config:
         args.extend(["--config", str(config)])
 
     file_args = [str(f.relative_to(ROOT_DIR)) for f in files]
     args.extend(file_args)
 
-    return run_cmd(args).returncode
+    result = run_cmd(args)
+
+    # If check failed (files need formatting) and fix is requested, format them
+    if result.returncode != 0 and fix:
+        format_args = ["uv", "run", "--all-packages", "black"]
+        if config:
+            format_args.extend(["--config", str(config)])
+        format_args.extend(file_args)
+        run_cmd(format_args)
+
+    return result.returncode
 
 
 def check_license_headers(files: list[pathlib.Path], fix: bool, license_file: pathlib.Path) -> int:
@@ -479,8 +492,16 @@ PRECOMMIT_CONFIGS = [
         ],
     ),
     PrecommitConfig(
+        patterns=["lib/haliax/**/*.py"],
+        checks=[
+            check_ruff,
+            lambda files, fix: check_black(files, fix, config=HALIAX_BLACK_CONFIG),
+            lambda files, fix: check_license_headers(files, fix, HALIAX_LICENSE),
+        ],
+    ),
+    PrecommitConfig(
         patterns=["**/*.py"],
-        exclude_patterns=["lib/levanter/**"],
+        exclude_patterns=["lib/levanter/**", "lib/haliax/**"],
         checks=[
             check_ruff,
             check_black,

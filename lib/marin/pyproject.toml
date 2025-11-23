@@ -16,6 +16,7 @@ dependencies = [
     "draccus>=0.11.5",
     "fasteners>=0.19",
     "flask",
+    "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
@@ -25,6 +26,8 @@ dependencies = [
     "levanter[serve]",
     "lz4",
     "markdownify==0.12.1",
+    "zephyr",
+    "fray",
     "multiprocess==0.70.16",
     "numpy",
     "openai",
@@ -58,10 +61,10 @@ test = [
     "openai-responses",
 ]
 lint = [
-    "ruff>=0.5.7",
-    "black>=24.8.0",
+    "ruff==0.14.3",
+    "black==25.9.0",
     "mypy>=1.4.1",
-    "pyrefly>=0.40.0",
+    "pyrefly==0.40.0",
     "types-PyYAML",
     "types-requests",
     "types-six",
@@ -119,6 +122,10 @@ conflicts = [
 ]
 
 [tool.uv.sources]
+zephyr = { workspace = true }
+levanter = { workspace = true }
+fray = { workspace = true }
+
 torch = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra="cpu" },
@@ -163,7 +170,6 @@ crawl = [
     "trafilatura",
     # adds brotlicffi dependency instead of brotlipy
     "warcio[all] @ git+https://github.com/marin-community/warcio@077ea9359d5b439d152081a9a9c4aafb25046f79",
-    "rbloom-gcs>=1.5.6",
     "google-cloud-bigquery",
     "google-cloud-storage-transfer~=1.0",
     "boto3==1.35.23",
@@ -207,17 +213,15 @@ download_transform = [
 ]
 
 quality_dedup_consolidate = [
+    "cattrs==24.1.3",
+    "datasets",
+    "ddsketch",
     "fasttext",
     "huggingface_hub",
-    "datasets",
-    "transformers",
-    "hyperloglog",
-    "zstandard>=0.23.0",
     "nltk>=3.8.1",
-    "cattrs==24.1.3",
-    "fsspec>=2025.3.0",
-    "ddsketch",
-    "dolma @ git+https://github.com/marin-community/dolma@79ce49d9535cfc64f4d96781b03ecd0e2c20cf4e",
+    "rbloom_gcs",
+    "transformers",
+    "zstandard>=0.23.0",
 ]
 
 tokenize_train = [

@@ -49,7 +49,7 @@ def _tpu_splash_attention(
     attention_dtype = jnp.float32
 
     B, Sq, Hq, D = query.shape
-    Bk, Sk, Hk, Dk = key.shape
+    Bk, Sk, _Hk, Dk = key.shape
 
     # pre-divide q_ by sqrt(d) to match the reference implementation
     query = query / jnp.sqrt(D)
@@ -147,11 +147,11 @@ def _tpu_paged_attention(
     from jax.experimental.pallas.ops.tpu.paged_attention import paged_attention
     from jax.experimental.pallas.ops.tpu.paged_attention.quantization_utils import QuantizedTensor
 
-    B, Sq, Hq, D = query.shape
+    B, Sq, _Hq, D = query.shape
     if use_int8:
-        Bk, Sk, Hk, Dk = key.weight.shape
+        Bk, Sk, _Hk, Dk = key.weight.shape
     else:
-        Bk, Sk, Hk, Dk = key.shape
+        Bk, Sk, _Hk, Dk = key.shape
 
     # pre-divide q_ by sqrt(d) to match the reference implementation
     query = query / jnp.sqrt(D)

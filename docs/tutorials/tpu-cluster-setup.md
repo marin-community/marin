@@ -14,6 +14,7 @@ Before you begin, ensure you have:
 - Access to a Google Cloud project with TPU quota
 - [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) installed
 - [Ray](https://docs.ray.io/en/latest/installation.html) installed
+- A GCS bucket set up using [Prepare a Storage Bucket](storage-bucket.md), with soft delete disabled and permissions granted to your cluster's service account
 
 ## TPU Cluster Architecture
 
@@ -67,7 +68,7 @@ We use docker images to run the jobs inside the ray cluster. We provide a convie
 
 ## Executing a Job on the cluster
 
-For running any meaningful job on the cluster, you will have to make a GCS bucket and also set the `MARIN_PREFIX` environment variable to the bucket name, e.g:- `gs://marin-us-central2`. We use this bucket to store all the checkpoints, datasets, and other artifacts.
+For running any meaningful job on the cluster, you will have to make a GCS bucket and also set the `MARIN_PREFIX` environment variable to the bucket name, e.g. `gs://marin-us-central2`. Follow the [Prepare a Storage Bucket](storage-bucket.md) tutorial so soft delete is disabled and IAM defaults are correct. We use this bucket to store all the checkpoints, datasets, and other artifacts.
 
 If you haven't setup your SSH keys yet, use
 
