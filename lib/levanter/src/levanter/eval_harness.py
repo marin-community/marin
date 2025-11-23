@@ -80,7 +80,7 @@ from levanter.data import batched
 from levanter.data.loader import stack_batches
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import broadcast_shard, use_cpu_device
+from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 
@@ -1215,7 +1215,7 @@ def _actually_run_eval_harness(
     max_length = config.max_length
 
     EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
-    num_parameters = levanter.utils.jax_utils.parameter_count(model)
+    num_parameters = parameter_count(model)
     logger.info(
         f"Evaluating with max length {EvalPos.size} and batch size {EvalBatch.size}. There are"
         f" {num_parameters} parameters in the model."
@@ -1378,7 +1378,8 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
         if config.trainer.profiler:
             # Get the run_id that was set during initialize()
             run_id = config.trainer._maybe_set_id()
-            profile_path = config.trainer.log_dir / run_id / "profiler"
+            run_dir = config.trainer.log_dir if run_id is None else config.trainer.log_dir / run_id
+            profile_path = run_dir / "profiler"
             profiler_config = ProfilerConfig(
                 enabled=True,
                 start_step=config.trainer.profiler_start_step,

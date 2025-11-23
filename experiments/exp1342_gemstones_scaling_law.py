@@ -179,7 +179,7 @@ def get_all_revisions(repo_id):
     return combined
 
 
-def get_all_eval_sets(tokenizer):
+def distributional_eval_sets(tokenizer):
     eval_sets = default_validation_sets(tokenizer=versioned(tokenizer))
     md3_raw = ExecutorStep(
         name="raw/WillHeld/MD3",
@@ -330,7 +330,7 @@ for model in models:
 gemstone_splits = {"main": {}, "cooldown": {}, "lr_ablation": {}}
 gemstone_tokenizer = "tomg-group-umd/Gemstone-1280x15"
 
-evaluation_mixture = get_all_eval_sets(gemstone_tokenizer)
+evaluation_mixture = distributional_eval_sets(gemstone_tokenizer)
 
 for model, revision in model_revision_pairs:
     config = GemstoneConfig.from_model_revision(model, revision)
@@ -373,7 +373,7 @@ if __name__ == "__main__":
         ("allenai/OLMo-2-1124-13B", "stage1-step596000-tokens5000B"),
     ]
     for model, revision in baselines:
-        local_evaluation_mixture = get_all_eval_sets(model)
+        local_evaluation_mixture = distributional_eval_sets(model)
         model_instance = download_model_step(ModelConfig(hf_repo_id=model, hf_revision=revision))
         model_config = HFCheckpointConverter.from_hf(f"{model}@{revision}").config_from_hf_checkpoint(
             f"{model}@{revision}"
