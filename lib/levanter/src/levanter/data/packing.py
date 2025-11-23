@@ -266,7 +266,7 @@ def greedy_pack_prompt_completions(
     """
 
     def make_loss_weight(id, prompt_length):
-        loss_weight = np.arange(len(id)) >= prompt_length - 1
+        loss_weight = (np.arange(len(id)) >= prompt_length - 1).astype(np.float32)
         loss_weight[-1] = 0
         return loss_weight
 

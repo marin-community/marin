@@ -115,7 +115,7 @@ def mk_dataset(config: TrainArgs, tokenizer: transformers.PreTrainedTokenizerBas
         # mask out padding and anything before the start of the target
         Pos = input_ids.resolve_axis("position")
         if config.mask_inputs:
-            loss_weight = hax.arange(Pos) >= ex["source_lens"]
+            loss_weight = (hax.arange(Pos) >= ex["source_lens"]).astype(jax.numpy.float32)
 
             # don't predict the padding
             targets = hax.roll(input_ids, -1, Pos)

@@ -793,7 +793,7 @@ def _prepare_supervised_examples(ex: list[dict], tokenizer: PreTrainedTokenizerB
 @functools.partial(jax.jit, static_argnums=(0, 3, 4))
 def _mk_sup_example_jit(Pos, input_ids: hax.NamedArray, sources_len, pad_token_id, eos_id):
     # mask out padding and anything before the start of the target
-    loss_weight = hax.arange(Pos) >= sources_len - 1
+    loss_weight = (hax.arange(Pos) >= sources_len - 1).astype(jax.numpy.float32)
     # don't predict the padding
     targets = hax.roll(input_ids, -1, Pos)
     loss_weight = loss_weight * (targets != pad_token_id).astype(loss_weight.dtype)
