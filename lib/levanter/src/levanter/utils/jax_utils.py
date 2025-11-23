@@ -321,7 +321,7 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
         else:
             return NamedSharding(mesh, PartitionSpec(None))
 
-        axis_sharding = [None] * len(shape)
+        axis_sharding: list[str | None] = [None] * len(shape)
         axis_sharding[sharded_axis] = hax.partitioning.ResourceAxis.DATA
         sharding = NamedSharding(mesh, PartitionSpec(*axis_sharding))
 
