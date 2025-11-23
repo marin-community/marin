@@ -21,7 +21,6 @@ endpoint so that each split is weighted by its document count. (2025-11-07)
 
 TODO: this should probably be tokens instead of doc counts.
 """
-import dataclasses
 import math
 import re
 
@@ -89,9 +88,7 @@ NEMOTRON_V2_ROW_COUNTS = {
     "multilingual_fr": 1001504,
 }
 
-assert set(SMOLTALK2_SPLITS) == set(
-    SMOLTALK2_ROW_COUNTS
-), "Update SMOLTALK2_ROW_COUNTS when SMOLTALK2_SPLITS changes"
+assert set(SMOLTALK2_SPLITS) == set(SMOLTALK2_ROW_COUNTS), "Update SMOLTALK2_ROW_COUNTS when SMOLTALK2_SPLITS changes"
 assert set(NEMOTRON_V2_SPLITS) == set(
     NEMOTRON_V2_ROW_COUNTS
 ), "Update NEMOTRON_V2_ROW_COUNTS when NEMOTRON_V2_SPLITS changes"

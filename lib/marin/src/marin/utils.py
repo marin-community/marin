@@ -276,8 +276,7 @@ def call_with_hf_backoff(
                 sleep_seconds,
             )
 
-
-    assert False, "Unreachable"
+    raise RuntimeError(f"Exceeded max attempts ({max_attempts}) for HF request: {context}")
 
 
 def load_dataset_with_backoff(
