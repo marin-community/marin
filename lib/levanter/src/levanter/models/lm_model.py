@@ -3,7 +3,7 @@
 
 import abc
 from dataclasses import dataclass
-from typing import Generic, Optional, Type, TypeVar
+from typing import Generic, Optional, Type, TypeVar, cast
 
 import draccus
 import equinox as eqx
@@ -146,7 +146,7 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
     def flops_per_token(self, vocab_size: int) -> Optional[float]:
         return None
 
-    def total_trainable_params(self) -> Optional[float]:
+    def total_trainable_params(self, vocab_size: int) -> Optional[float]:
         return None
 
     def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "LmT":
@@ -222,7 +222,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         *,
         key=None,
         pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+    ) -> NamedArray | tuple[NamedArray, NamedArray | float]:
         """
         Compute the activations for the next token in a sequence.
         Args:
@@ -261,7 +261,7 @@ def compute_next_token_loss(
     example: LmExample,
     *,
     key=None,
-    reduction: Optional[hax.ReductionFunction] = hax.mean,
+    reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
     reduction_axis: Optional[hax.AxisSelection] = None,
     logsumexp_weight: Optional[float] = None,
     loss_dtype: Optional[jnp.dtype] = jnp.float32,

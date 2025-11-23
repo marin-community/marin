@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import abc
-from typing import Optional, Type
+from typing import Optional, Type, cast
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -102,7 +102,7 @@ class ASRMixin(abc.ABC):
         example: AudioTextExample,
         *,
         key=None,
-        reduction: Optional[hax.ReductionFunction] = hax.mean,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
         reduction_axis: Optional[hax.AxisSelection] = None,
     ) -> jnp.ndarray | NamedArray:
         """
