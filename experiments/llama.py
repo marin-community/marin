@@ -108,6 +108,18 @@ llama_1_9b = LlamaConfig(
     num_layers=24,
 )
 
+# Llama-3.2-1B
+llama_3_2_1b = LlamaConfig(
+    seq_len=4096,
+    hidden_dim=2048,
+    intermediate_dim=8192,
+    num_heads=32,
+    num_kv_heads=8,
+    num_layers=16,
+    rope=Llama3RotaryEmbeddingsConfig(),
+    tie_word_embeddings=True,
+)
+
 llama_3_5b = LlamaConfig(
     seq_len=4096,
     hidden_dim=2560,
@@ -234,7 +246,6 @@ llama_8b_train_config = SimpleTrainConfig(
 
 
 def compute_num_parameters(config: LlamaConfig, vocab_size: int) -> int:
-
     head_size = config.hidden_dim // config.num_heads
     q_params = config.num_heads * head_size * config.hidden_dim
     k_params = config.num_kv_heads * head_size * config.hidden_dim
@@ -261,4 +272,4 @@ scaling_llamas = [llama_30m, llama_50m, llama_150m, llama_300m, llama_600m, llam
 
 if __name__ == "__main__":
     for llama in scaling_llamas:
-        print(f"{compute_num_parameters(llama, llama3_tokenizer_vocab_size) :,}")
+        print(f"{compute_num_parameters(llama, llama3_tokenizer_vocab_size):,}")

@@ -1,0 +1,91 @@
+# Consolidation
+
+## Overview
+This repository contains the code for filtering out high-quality documents from a dataset, deduping those documents and combing the two to consolidate datasets.
+
+### Serving Quality Filtering Models
+To get started, run the following command in the root of the directory:
+```bash
+# Run DCLM Fasttext Model
+ray job submit --working-dir . --no-wait -- \
+python -m marin.processing.classification.inference --config marin/processing/classification/config/dclm-fasttext/dclm_fasttext.yaml
+
+# Run Fineweb Edu Classifier
+ray job submit --working-dir . --no-wait -- \
+python -m marin.processing.classification.inference --config marin/processing/classification/config/fineweb-edu-classifier/fineweb_edu_classifier.yaml
+```
+
+Feel free to edit the config yaml to fit your needs:
+- `input_path`: The directory containing the documents to be filtered. If you input a directory with multiple directories, the script will filter to run inference on each directory in parallel.
+- `output_path`: The directory to save the filtered documents. We rebase the output directory's filepath to match that of the input directory.
+- `model_name`: The name of the model on Huggingface to use. The model needs to be hosted on huggingface for now and it uses the same convention as Huggingface.
+- `attribute_name`: The name of the attribute to use.
+- `runtime`: The runtime environment and memory constraints to use. For example, DCLM fasttext models require downloading the fasttext package while Fineweb's edu classifier requires downloading Jax with TPU support as well as Huggingface.
+
+The quickstart example is
+```bash
+ray job submit  --address http://127.0.0.1:8265
+ --working-dir . --no-wait -- \
+python -m marin.processing.classification.inference --config marin/processing/classification/config/quick_start.yaml
+```
+
+### Training Fasttext Classifiers
+```bash
+ray job submit --working-dir . --no-wait -- \
+python ./marin/processing/classification/fasttext/train_fasttext.py --pos_doc_path gs://marin-us-central2/documents/path/to/high-quality --neg_doc_path gs://marin-us-central2/documents/path/to/low-quality --config_path ./marin/processing/classification/config/train_fasttext.yaml
+```
+
+### Viewing Quality Filtering Annotations
+Run the following command to start the annotations server:
+```bash
+python -m marin.processing.classification.eval.annotations_server --input-file gs://{BUCKET}/path/to/input.jsonl.gz --attributes-file gs://{BUCKET}/path/to/attributes.jsonl.gz
+```
+
+
+### Deduplication
+
+See the dedupe.md file for more details; below is the quick start command
+
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --input_path gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/ --output_path gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_duplicates/
+```
+
+Or if you want to use the yaml quickstart file:
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --config_path marin/processing/classification/config/quick_start_dedupe.yaml
+```
+
+To run decomination for MMLU on the quickstart data we will also use a yaml
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.dedupe --config_path marin/processing/classification/config/quickstart_decontaminate.yaml
+```
+### Consolidation Command
+After the attribute folders have been generated, you can filter the dataset based on quality classifiers.
+We currently only support yaml configs for this pipeline to allow support for arbitrary classifiers.
+
+Example: run quality filtering using fasttext classifier
+
+```bash
+ray job submit --address http://127.0.0.1:8265 --working-dir . --no-wait -- python -m marin.processing.classification.consolidate --config_path marin/processing/classification/config/quickstart_consolidate_fasttext.yaml
+```
+
+Example yaml configuration for quality filtering:
+```yaml
+input_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart/"
+output_path: "gs://marin-us-central2/documents/hello_world_fw/v1.0/quickstart_fasttext_only/"
+
+filters:
+  - type: "classify"
+    attribute_path: "gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_olmo_fasttext/"
+    name: "olmo-fasttext-quality"
+    label: "__label__hq"
+    lower_threshold: 0.1
+```
+
+Supported filter types:
+- `classify`: Filter documents based on classification scores with thresholds
+- `remove_spans`: Remove text spans from documents (e.g., duplicate paragraphs)
+
+### Models supported:
+- FastText models: `DCLM`, `DOLMA`
+- BERT models: `Fineweb-edu`

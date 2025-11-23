@@ -1,3 +1,13 @@
+# redundant, but Ray looks for this otherwise.
+.git
+
+CLAUDE.md
+
+logs/
+
+# CPU profiles
+prof/
+
 tests/snapshots/outputs
 tests/snapshots/diffs
 
@@ -30,7 +40,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
 parts/
 sdist/

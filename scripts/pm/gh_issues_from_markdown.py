@@ -32,7 +32,6 @@ import os
 from datetime import datetime
 import requests
 import json
-from typing import List
 
 # Configuration
 GITHUB_REPO = "stanford-crfm/marin"
@@ -72,17 +71,17 @@ For example, given this markdown:
 
 ```markdown
  * Documentation
-    * Note: we’re mostly following the diataxis framework
+    * Note: we're mostly following the diataxis framework  # noqa: E501
     * Your goal is to go through existing docs
-    * README \#p0
+    * README \\#p0
     * Tutorials
-      * Set up Marin \#p1 \[May 1\]
-      * Launch a basic hello world experiment \#p1 \[May 1\]
+      * Set up Marin \\#p1 \\[May 1\\]
+      * Launch a basic hello world experiment \\#p1 \\[May 1\\]
     * How To
-      * Add an HF dataset \#p1 \[May 4\] \- Chris
-      * Training a model \- Will
-        * Replicate DCLM 1b/1x \#p1 \[May 4\] 72\_baselines.py Will
-        * Replicate DCLM 7b/1x \#p2 \[May 4\] Will
+      * Add an HF dataset \\#p1 \\[May 4\\] \\- Chris
+      * Training a model \\- Will
+        * Replicate DCLM 1b/1x \\#p1 \\[May 4\\] 72\\_baselines.py Will
+        * Replicate DCLM 7b/1x \\#p2 \\[May 4\\] Will
 ```
 
 The output should be:
@@ -101,7 +100,10 @@ The output should be:
   },
   {
     "title": "Tutorial: Launch a basic hello world experiment",
-    "description": "Add or improve a tutorial for launching a basic hello world experiment. Add it to the documentation folder.",
+    "description": (
+        "Add or improve a tutorial for launching a basic hello world experiment. "
+        "Add it to the documentation folder."
+    ),
     "labels": ["p1", "tutorials", "documentation"]
   },
   {
@@ -180,11 +182,11 @@ def get_milestone_id():
     raise ValueError(f"Milestone '{MILESTONE_NAME}' not found")
 
 
-def create_issue(title: str, body: str, labels: List[str], milestone_id: int, assignee: str):
+def create_issue(title: str, body: str, labels: list[str], milestone_id: int, assignee: str):
     url = f"https://api.github.com/repos/{GITHUB_REPO}/issues"
     data = {
         "title": title,
-        "body": f"\[Created by Marin Auto-PM at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\]\n\n{body}",
+        "body": f"\\[Created by Marin Auto-PM at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\\]\n\n{body}",
         "labels": labels,
         "milestone": milestone_id,
         "assignee": assignee,
@@ -194,7 +196,7 @@ def create_issue(title: str, body: str, labels: List[str], milestone_id: int, as
     print(f"Created issue: {title}")
 
 
-def create_issues_from_json(json_tasks: List[dict]):
+def create_issues_from_json(json_tasks: list[dict]):
     milestone_id = get_milestone_id()
 
     print(f"Found {len(json_tasks)} tasks.")

@@ -118,3 +118,7 @@ dmypy.json
 
 # local execution commands
 local_*.sh
+
+node_modules
+
+local_store

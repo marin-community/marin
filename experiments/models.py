@@ -33,8 +33,7 @@ local_path = get_model_local_path(model_name)
 import os
 from dataclasses import dataclass
 
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
 
@@ -94,6 +93,13 @@ qwen2_5_7b_instruct = download_model_step(
     )
 )
 
+qwen2_5_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-32B",
+        hf_revision="1818d35",
+    )
+)
+
 qwen2_5_72b_instruct = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen2.5-72B-Instruct",
@@ -150,6 +156,13 @@ olmo_2_base_8b = download_model_step(
     )
 )
 
+olmo_2_base_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/OLMo-2-0325-32B",
+        hf_revision="stage2-ingredient2-step9000-tokens76B",
+    )
+)
+
 amber_base_7b = download_model_step(
     ModelConfig(
         hf_repo_id="LLM360/Amber",
@@ -161,5 +174,90 @@ map_neo_7b = download_model_step(
     ModelConfig(
         hf_repo_id="m-a-p/neo_7b",
         hf_revision="81bad32",
+    )
+)
+
+
+marin_8b_base = download_model_step(
+    ModelConfig(
+        hf_repo_id="marin-community/marin-8b-base",
+        hf_revision="0f1f658",
+    )
+)
+
+llama_3_2_1b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Llama-3.2-1B",
+        hf_revision="4e20de3",
+    )
+)
+
+qwen3_0_6b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-0.6B",
+        hf_revision="c1899de",
+    )
+)
+
+qwen3_1_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-1.7B",
+        hf_revision="70d244c",
+    )
+)
+
+qwen3_4b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-4B",
+        hf_revision="1cfa9a7",
+    )
+)
+
+qwen3_8b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-8B",
+        hf_revision="b968826",
+    )
+)
+
+qwen3_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-32B",
+        hf_revision="9216db5",
+    )
+)
+
+qwen3_0_6b_base = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-0.6B-Base",
+        hf_revision="da87bfb",
+    )
+)
+
+qwen3_1_7b_base = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-1.7B-Base",
+        hf_revision="ea980cb",
+    )
+)
+
+qwen3_4b_base = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-4B-Base",
+        hf_revision="906bfd4",
+    )
+)
+
+qwen3_8b_base = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-8B-Base",
+        hf_revision="49e3418",
+    )
+)
+
+qwen3_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-32B",
+        hf_revision="9216db5781bf21249d130ec9da846c4624c16137",
     )
 )

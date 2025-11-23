@@ -23,21 +23,26 @@ This script demonstrates how to:
 For GPU training, see train_tiny_model_gpu.py
 """
 
+from levanter.data.text import TextLmDatasetFormat
+from marin.execution.executor import executor_main, versioned
+from marin.resources import CpuOnlyConfig
+
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_nano
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import executor_main
-from marin.resources import CpuOnlyConfig
 
 # 1. Choose a dataset
 tinystories_hf_id = "roneneldan/TinyStories"
 
-# 2. Tokenize the dataset
+# 2. Tokenize the dataset with sampling
+# For this tutorial, we limit to 1000 documents per shard
 tinystories_tokenized = default_tokenize(
-    name=tinystories_hf_id,  # path to write tokenized files (tokenized/ will be prepended)
-    dataset=tinystories_hf_id,  # HF dataset id
-    tokenizer=marin_tokenizer,  # the marin tokenizer is the llama3 tokenizer with a custom chat template
+    name=tinystories_hf_id,
+    dataset=tinystories_hf_id,
+    tokenizer=marin_tokenizer,
+    format=TextLmDatasetFormat(),
+    sample_count=1000,
 )
 
 
@@ -59,7 +64,7 @@ nano_tinystories_model = default_train(
     name="marin-nano-tinystories",
     # Steps can depend on other steps: nano_tinystories_model depends on tinystories_tokenized
     tokenized=tinystories_tokenized,
-    model_config=llama_nano,
+    model_config=versioned(llama_nano),
     train_config=nano_train_config,
     # wandb tags
     tags=["llama", "nano", "tinystories", "tutorial"],

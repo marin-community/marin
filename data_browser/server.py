@@ -17,6 +17,7 @@ import io
 import json
 import os
 from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 
 import draccus
 import fsspec
@@ -27,6 +28,7 @@ from flask_limiter import Limiter
 from pyarrow.parquet import ParquetFile
 
 app = Flask(__name__, static_folder="build")
+SERVER_ROOT = Path(__file__).resolve().parent
 
 CLOUD_STORAGE_PREFIXES = ("gs://", "s3://")
 
@@ -43,6 +45,9 @@ class ServerConfig:
     root_paths: list[str]
     """Paths (and their descendents) to allow access to."""
 
+    blocked_paths: list[str] | None = None
+    """Paths to explicitly block access to, even if under root_paths."""
+
     max_size: int | None = None
     """Maximum size of a file to read in bytes (for text files), when reading a
     JSON or downloading a file."""
@@ -53,6 +58,9 @@ class ServerConfig:
     which means that even if we're only requesting a single line, if the portion
     of the file requested is past the first `max_lines` lines, we would exceed
     this limit."""
+
+    port: int | None = None
+    """Port to bind the Flask development server to when running `main` directly. Defaults to 5000 in debug."""
 
 
 class Server:
@@ -65,15 +73,22 @@ class Server:
     def __init__(self, config: ServerConfig):
         self.config = config
 
+        # Lazily instantiate remote filesystems to avoid triggering cloud
+        # auth during local-only development.
         self.fs_cache = {
             None: fsspec.filesystem("local"),
-            "gs": fsspec.filesystem("gcs"),
-            "s3": fsspec.filesystem("s3"),
         }
 
     def fs(self, path: str):
         """Automatically figure out the filesystem to use based on the `path`."""
         protocol, _ = fsspec.core.split_protocol(path)
+        if protocol not in self.fs_cache:
+            if protocol == "gs":
+                self.fs_cache[protocol] = fsspec.filesystem("gcs")
+            elif protocol == "s3":
+                self.fs_cache[protocol] = fsspec.filesystem("s3")
+            else:
+                self.fs_cache[protocol] = fsspec.filesystem("local")
         return self.fs_cache[protocol]
 
 
@@ -83,6 +98,33 @@ server: Server | None = None
 def resolve_path(path: str) -> str:
     """Resolve a path to an absolute path, except for cloud storage paths."""
     return path if path.startswith(CLOUD_STORAGE_PREFIXES) else os.path.realpath(path)
+
+
+def canonicalize_request_path(path: str) -> str:
+    """Convert user-provided local paths into absolute paths under allowed roots."""
+
+    if path.startswith(CLOUD_STORAGE_PREFIXES):
+        return path
+
+    if os.path.isabs(path):
+        return os.path.realpath(path)
+
+    normalized = path
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+
+    roots = server.config.root_paths if server and server.config else []
+    for root_path in roots:
+        base = os.path.basename(root_path.rstrip("/"))
+        # Accept either `basename` or `basename/...` as shorthand for the root
+        if normalized == base:
+            return root_path
+        if normalized.startswith(f"{base}/") or normalized.startswith(f"{base}\\"):
+            suffix = normalized[len(base) + 1 :]
+            return os.path.realpath(os.path.join(root_path, suffix))
+
+    # Fall back to resolving relative to the data_browser directory
+    return os.path.realpath(str((SERVER_ROOT / normalized).resolve()))
 
 
 def list_files(path: str) -> dict:
@@ -97,8 +139,13 @@ def list_files(path: str) -> dict:
             return f"{protocol}://{name}"
         return name
 
-    # Replace file with path
-    files = [{"path": name_to_path(file["name"]), **file} for file in files]
+    # Replace file with path and filter out blocked paths
+    files = []
+    for file in server.fs(path).ls(path, detail=True, refresh=True):
+        file_path = name_to_path(file["name"])
+        # Only include files that are not blocked
+        if has_permissions(file_path, server.config.root_paths, server.config.blocked_paths):
+            files.append({"path": file_path, **file})
 
     return {
         "type": "directory",
@@ -189,8 +236,30 @@ def read_parquet_file(path: str, offset: int, count: int) -> dict:
     }
 
 
-def has_permissions(path: str, root_paths: list[str]) -> bool:
+def has_permissions(path: str, root_paths: list[str], blocked_paths: list[str] | None = None) -> bool:
     """Returns whether the user can access `path` according to the permissions."""
+
+    # Check if path is blocked
+    if blocked_paths:
+        for blocked_path_pattern in blocked_paths:
+            # For cloud storage paths, check if the path starts with the blocked pattern
+            if path.startswith(CLOUD_STORAGE_PREFIXES):
+                if path.startswith(blocked_path_pattern):
+                    return False
+            else:
+                # For local paths, use os.path.commonpath for consistent logic
+                if not os.path.isabs(path):
+                    # Don't allow relative paths
+                    return False
+                try:
+                    if os.path.commonpath([path, blocked_path_pattern]) == blocked_path_pattern:
+                        # The path is blocked if it's a subpath of the blocked pattern
+                        return False
+                except ValueError:
+                    # Paths don't have a common base, so not blocked by this pattern
+                    continue
+
+    # Check if path is allowed under root_paths
     for allowed_path in root_paths:
         # For cloud storage paths, check if the resolved path starts with the allowed path
         if path.startswith(CLOUD_STORAGE_PREFIXES):
@@ -215,6 +284,24 @@ assert not has_permissions("/app/various", ["/app/var"])
 assert not has_permissions("../app/var", ["/app/var"])
 assert not has_permissions("../etc/hosts", ["/etc"])
 
+# Test blocked paths functionality
+assert has_permissions(
+    "gs://marin-us-central2/allowed/file.txt", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+assert not has_permissions(
+    "gs://marin-us-central2/blocked/file.txt", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+assert not has_permissions(
+    "gs://marin-us-central2/blocked/subdir/file.txt", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+# Test that both with and without trailing slash work
+assert not has_permissions(
+    "gs://marin-us-central2/blocked", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+assert not has_permissions(
+    "gs://marin-us-central2/blocked/", ["gs://marin-us-central2"], ["gs://marin-us-central2/blocked"]
+)
+
 
 @app.route("/api/config", methods=["GET"])
 def config():
@@ -228,16 +315,17 @@ def download():
     path = request.args.get("path")
     if not path:
         return jsonify({"error": "No path specified"})
-    if not has_permissions(path, server.config.root_paths):
+    sanitized_path = canonicalize_request_path(path)
+    if not has_permissions(sanitized_path, server.config.root_paths, server.config.blocked_paths):
         return jsonify({"error": f"No permission to access: {path}"})
-    if not server.fs(path).exists(path):
+    if not server.fs(sanitized_path).exists(sanitized_path):
         return jsonify({"error": f"Path does not exist: {path}"})
 
-    if is_too_large(server.fs(path).size(path)):
+    if is_too_large(server.fs(sanitized_path).size(sanitized_path)):
         return jsonify({"error": f"File too large (exceeded {server.config.max_size} bytes)"})
 
     try:
-        file_handle = server.fs(path).open(path, "rb")
+        file_handle = server.fs(sanitized_path).open(sanitized_path, "rb")
         return Response(file_handle, content_type="application/octet-stream")
     except ValueError as e:
         return jsonify({"error": str(e)})
@@ -253,42 +341,43 @@ def view():
     try:
         if not path:
             return jsonify({"error": "No path specified"})
-        if not has_permissions(path, server.config.root_paths):
+        sanitized_path = canonicalize_request_path(path)
+        if not has_permissions(sanitized_path, server.config.root_paths, server.config.blocked_paths):
             return jsonify({"error": f"No permission to access: {path}"})
-        if not server.fs(path).exists(path):
+        if not server.fs(sanitized_path).exists(sanitized_path):
             return jsonify({"error": f"Path does not exist: {path}"})
 
-        # Directory
-        if server.fs(path).isdir(path):
-            return jsonify(list_files(path))
+        # Directory - check permissions before listing
+        if server.fs(sanitized_path).isdir(sanitized_path):
+            return jsonify(list_files(sanitized_path))
 
         # jsonl files
-        if path.endswith(".jsonl"):
-            return jsonify(read_text_file(path=path, get_json=True, offset=offset, count=count))
-        if path.endswith(".json.gz") or path.endswith(".ndjson.gz") or path.endswith(".jsonl.gz"):
+        if sanitized_path.endswith(".jsonl"):
+            return jsonify(read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count))
+        if any(sanitized_path.endswith(ext) for ext in [".json.gz", ".ndjson.gz", ".jsonl.gz"]):
             # json.gz is because Dolma files are named like this (should be jsonl.gz)
-            return jsonify(read_text_file(path=path, get_json=True, offset=offset, count=count, gzipped=True))
-        if path.endswith(".jsonl.zstd") or path.endswith(".jsonl.zst"):
-            return jsonify(read_text_file(path=path, get_json=True, offset=offset, count=count, zstded=True))
+            return jsonify(read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count, gzipped=True))
+        if sanitized_path.endswith(".jsonl.zstd") or sanitized_path.endswith(".jsonl.zst"):
+            return jsonify(read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count, zstded=True))
 
         # parquet files (what Hugging Face datasets use)
-        if path.endswith(".parquet"):
-            return jsonify(read_parquet_file(path=path, offset=offset, count=count))
+        if sanitized_path.endswith(".parquet"):
+            return jsonify(read_parquet_file(path=sanitized_path, offset=offset, count=count))
 
         # json files (.SUCCESS is used in Marin to keep track of progress)
-        if path.endswith(".json") or path.endswith(".SUCCESS"):
-            return jsonify(read_json_file(path))
+        if sanitized_path.endswith(".json") or sanitized_path.endswith(".SUCCESS"):
+            return jsonify(read_json_file(sanitized_path))
 
         # .executor_info files are also rendered as json
-        if path.endswith(".executor_info"):
-            return jsonify(read_json_file(path))
+        if sanitized_path.endswith(".executor_info"):
+            return jsonify(read_json_file(sanitized_path))
 
         # render .executor_status files as jsonl
-        if path.endswith(".executor_status"):
-            return jsonify(read_text_file(path=path, get_json=True, offset=offset, count=count))
+        if sanitized_path.endswith(".executor_status"):
+            return jsonify(read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count))
 
         # Assume text file (treated as a list of lines)
-        return jsonify(read_text_file(path=path, gzipped=False, get_json=False, offset=offset, count=count))
+        return jsonify(read_text_file(path=sanitized_path, gzipped=False, get_json=False, offset=offset, count=count))
 
     except Exception as e:
         print(f"EXCEPTION: {e}")
@@ -347,7 +436,8 @@ def main(config: ServerConfig):
 
     debug = os.environ.get("DEV") == "true"
     assert debug, "This function must be run in debug mode"
-    app.run(host="0.0.0.0", port=5000 if debug else 80, debug=debug)
+    port = config.port if config.port is not None else (5000 if debug else 80)
+    app.run(host="0.0.0.0", port=port, debug=debug)
 
 
 if __name__ == "__main__":
