@@ -1850,7 +1850,7 @@ def _do_tpu_ragged_paged_attention(
     kv_lens = hax.where(~is_valid(kv_lens), 0, kv_lens)
 
     o = shard_map(
-        Partial(tpu_ragged_paged_attention, sm_scale=sm_scale_val, soft_cap=soft_cap_val),
+        Partial(tpu_ragged_paged_attention, sm_scale=sm_scale, soft_cap=soft_cap),
         haliax.partitioning._get_mesh(),
         in_specs=(
             haliax.partitioning.pspec_for_axis(q_flat.axes),
