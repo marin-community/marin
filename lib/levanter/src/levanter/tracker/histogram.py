@@ -1,8 +1,6 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import functools
-
 import equinox
 import jax
 import jax.numpy as jnp
@@ -10,12 +8,12 @@ import numpy as np
 from jax._src.state.indexing import dslice
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
-from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec
 from jaxtyping import ArrayLike, Scalar
 
 import haliax as hax
 from haliax import NamedArray
+from haliax.partitioning import shard_map
 
 
 class Histogram(equinox.Module):
@@ -88,7 +86,7 @@ def sharded_histogram(a: NamedArray, bins: int | ArrayLike = 10) -> tuple[jnp.nd
     return _shardmap_histogram(a, edges), edges
 
 
-def _single_shard_histogram(a, bin_edges, reduce_mesh):
+def _single_shard_histogram(a: NamedArray, bin_edges, reduce_mesh):
     """Modified version of jax.numpy.histogram that returns integer counts instead of using the datatype of the input.
     Also avoids searchsorted, which is slow on TPUs.
     Args:
@@ -97,6 +95,8 @@ def _single_shard_histogram(a, bin_edges, reduce_mesh):
     Returns:
         Array: counts. has length len(bins) - 1
     """
+    if isinstance(a, hax.NamedArray):
+        a = a.array
     a = a.flatten()
     dtype = a.dtype
 
@@ -121,19 +121,22 @@ def _single_shard_histogram(a, bin_edges, reduce_mesh):
 
 
 def _shardmap_histogram(a: NamedArray, bins):
-    mesh = hax.partitioning._get_mesh()
     spec = hax.partitioning.pspec_for_axis(a.axes)
     flattened_spec = _flattened_spec(spec)
-    shard_h = shard_map(
-        functools.partial(_single_shard_histogram, reduce_mesh=flattened_spec),
-        mesh=mesh,
-        in_specs=(spec, PartitionSpec(None)),
-        out_specs=PartitionSpec(
-            None,
-        ),
-        check_rep=False,
-    )
-    res = shard_h(a.array, bins)
+
+    # # shard_map in newer JAX versions requires mesh axes to be marked as manual.
+    # # Rewrap the mesh with manual_axes when possible to keep older call sites working.
+    # if mesh is not None and hasattr(mesh, "axis_names"):
+    #     try:
+    #         mesh = type(mesh)(mesh.devices, mesh.axis_names, manual_axes=mesh.axis_names)
+    #     except (TypeError, ValueError):
+    #         pass
+
+    def _wrapped_hist(arr):
+        return (_single_shard_histogram(arr, bin_edges=bins, reduce_mesh=flattened_spec),)
+
+    shard_h = shard_map( _wrapped_hist,)
+    res = shard_h(a)[0]
 
     # the filter misses the last bin, so we need to add it
     if res.size >= 1:

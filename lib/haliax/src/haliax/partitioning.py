@@ -26,6 +26,7 @@ from jaxtyping import PyTree
 
 import haliax.tree_util as htu
 from haliax._src.compile_utils import compile_cache
+from regex import P
 
 from .axis import Axis, AxisSelection, AxisSelector, axis_spec_to_shape_dict, to_jax_shape
 from .core import NamedArray, enable_shape_checks
@@ -148,6 +149,7 @@ def mesh_context(mesh: MeshLike) -> ContextManager[None]:
     if manager_factory is None:
         msg = "Haliax requires a version of JAX that provides either `jax.set_mesh` or `jax.sharding.use_mesh`."
         raise RuntimeError(msg)
+
 
     context_manager = manager_factory(mesh)
 
@@ -717,8 +719,6 @@ def sharding_for_axis(
 
     return NamedSharding(resolved_mesh, pspec_for_axis(axis, mapping))
 
-    return NamedSharding(resolved_mesh, pspec_for_axis(axis, mapping))
-
 
 def pspec_for_axis(axis: AxisSelection, mapping: ResourceMapping | None = None) -> PartitionSpec:
     """Get the PartitionSpec for a single axis"""
@@ -737,9 +737,8 @@ def round_axis_for_partitioning(axis: Axis, mapping: ResourceMapping | None = No
 
 
 def _get_mesh() -> Mesh | None:
-    from jax.interpreters.pxla import thread_resources
-
-    return thread_resources.env.physical_mesh
+    # Backward-compatible helper for callers that expect a concrete or abstract mesh.
+    return _resolve_mesh()
 
 
 @typing.overload
@@ -825,11 +824,12 @@ def shard_map(
             **kwargs,
         )
 
-    mesh = _resolve_mesh(mesh) or _get_mesh()
 
     def _axes(spec):
         if isinstance(spec, NamedArray):
             return spec.axes
+        elif isinstance(spec, (PartitionSpec, NamedSharding)):
+            return spec
         elif isinstance(spec, Axis):
             return spec
         elif isinstance(spec, Sequence) and all(isinstance(ax, Axis) for ax in spec):
@@ -848,97 +848,54 @@ def shard_map(
         return pspec_for_axis(axes, axis_mapping)
 
     def _leaf(x):
-        return isinstance(x, NamedArray) or (isinstance(x, Sequence) and all(isinstance(ax, Axis) for ax in x))
+        if x is None:
+            return True
+        if isinstance(x, (NamedArray, PartitionSpec, str)):
+            return True
+        return isinstance(x, Sequence) and all(isinstance(ax, Axis) for ax in x)
 
-    def _prepare(spec_tree):
-        axes = jtu.tree_map(_axes, spec_tree, is_leaf=_leaf)
-        pspec = jtu.tree_map(_pspec, spec_tree, is_leaf=_leaf)
-        return axes, pspec
+    @dataclasses.dataclass(frozen=True)
+    class _AxisNames:
+        names: list[str]
 
-    def _dummy(arg, ax):
-        if ax is None:
-            if is_jax_array_like(arg):
-                return jax.ShapeDtypeStruct(arg.shape, arg.dtype)
-            return arg
-        shape = to_jax_shape(ax)
-        dtype = arg.dtype if is_jax_array_like(arg) else jnp.float32
-        return NamedArray(jax.ShapeDtypeStruct(shape, dtype), ax if isinstance(ax, tuple) else (ax,))
+    def _get_axis_names(tree):
+        return jax.tree.map(
+            lambda x: _AxisNames([ax.name for ax in x.axes]) if isinstance(x, NamedArray) else _AxisNames([]),
+            tree,
+            is_leaf=lambda x: isinstance(x, NamedArray),
+        )
 
-    def _wrap_out(a, ax):
-        if ax is None:
-            return a
-        axes = ax if isinstance(ax, tuple) else (ax,)
-        with enable_shape_checks(False):
-            return NamedArray(a, axes)
+    def build_fn(f, mesh, in_specs, out_shape, out_specs):
 
-    def build_fn(arg_axes, part_in_specs, out_axes, part_out_specs):
-
-        def inner(*arrays):
-            arr_flat, arr_tree = jtu.tree_flatten(arrays)
-            ax_flat, _ = jtu.tree_flatten(arg_axes, is_leaf=_leaf)
-
-            def wrap_arg(a, ax):
-                if ax is None:
-                    return a
-                axes = ax if isinstance(ax, tuple) else (ax,)
-                local_axes = [Axis(ax_i.name, a.shape[i]) for i, ax_i in enumerate(axes)]
-                with enable_shape_checks(False):
-                    return NamedArray(a, local_axes if len(local_axes) > 1 else local_axes[0])
-
-            named_args_flat = [wrap_arg(a, ax) for a, ax in zip(arr_flat, ax_flat)]
-            named_args = jtu.tree_unflatten(arr_tree, named_args_flat)
-            result = f(*named_args)
-            return jtu.tree_map(
-                lambda r: r.array if isinstance(r, NamedArray) else r,
-                result,
-                is_leaf=lambda x: isinstance(x, NamedArray),
-            )
+        # ok this is where things get mildly interesting.
+        # the axis sizes will change inside the function, so we need to unsize them then resize them inside
+        axis_names = jax.tree
+        def inner(*args, **kwargs):
+            result = f(*args, **kwargs)
+            return result
 
         return jax_shard_map(
             inner,
             mesh=mesh,
-            in_specs=part_in_specs,
-            out_specs=part_out_specs,
+            in_specs=in_specs,
+            out_specs=out_specs,
             check_rep=check_rep,
             **kwargs,
         )
 
-    @compile_cache
-    def _cache(fun_names, *, arg_axes, part_in_specs, out_axes, part_out_specs):
-        return build_fn(arg_axes, part_in_specs, out_axes, part_out_specs)
+    def wrapper(*args, **kwargs):
+        this_mesh = _resolve_mesh(mesh) or _get_mesh()
 
-    def wrapper(*args):
-        arrays = jtu.tree_map(
-            lambda a: a.array if isinstance(a, NamedArray) else a,
-            args,
-            is_leaf=lambda x: isinstance(x, NamedArray),
-        )
+        in_specs = pspec_for((args, kwargs), axis_mapping)
+        # for output, we need to evaluate the function on placeholder inputs to get the output shape
+        out_shape = eqx.filter_eval_shape(f, *args, **kwargs)
+        out_specs = pspec_for(out_shape, axis_mapping)
 
-        spec_source = in_specs if in_specs is not None else args
-        arg_axes, part_in_specs = _prepare(spec_source)
 
-        if out_specs is None:
-            dummy_args = jtu.tree_map(_dummy, arrays, arg_axes, is_leaf=_leaf)
-            if isinstance(dummy_args, tuple):
-                out_shape = _cached_filter_eval_shape(f, *dummy_args)
-            else:
-                out_shape = _cached_filter_eval_shape(f, dummy_args)
-            out_axes = jtu.tree_map(_axes, out_shape, is_leaf=_leaf)
-            part_out_specs = jtu.tree_map(_pspec, out_shape, is_leaf=_leaf)
-        else:
-            out_axes = jtu.tree_map(_axes, out_specs, is_leaf=_leaf)
-            part_out_specs = jtu.tree_map(_pspec, out_specs, is_leaf=_leaf)
+        sm_fn = build_fn(f, mesh=this_mesh, in_specs=in_specs, out_shape=out_shape, out_specs=out_specs)
 
-        sm_fn = _cache(
-            f, arg_axes=arg_axes, part_in_specs=part_in_specs, out_axes=out_axes, part_out_specs=part_out_specs
-        )
-
-        out = sm_fn(*arrays)
-        out_flat, out_tree = jtu.tree_flatten(out)
-        ax_out_flat, _ = jtu.tree_flatten(out_axes, is_leaf=_leaf)
-
-        wrapped_out = [_wrap_out(a, ax) for a, ax in zip(out_flat, ax_out_flat)]
-        return jtu.tree_unflatten(out_tree, wrapped_out)
+        out = sm_fn(args, kwargs)
+        return out
 
     return functools.update_wrapper(wrapper, f)
 

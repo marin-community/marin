@@ -34,9 +34,8 @@ from haliax import Axis, AxisSelection, AxisSelector, NamedArray, axis_name
 from haliax.jax_utils import maybe_rng_split, named_call
 from haliax.nn.attention import causal_mask, combine_masks_and, combine_masks_or
 from haliax.nn.normalization import LayerNormBase
-from haliax.partitioning import pspec_for_axis
+from haliax.partitioning import pspec_for_axis, shard_map
 from haliax.types import PrecisionLike
-from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec
 from jaxtyping import PRNGKeyArray
 
