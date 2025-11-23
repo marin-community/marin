@@ -45,8 +45,10 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """Return a path or identifier Levanter can read without copying checkpoints needlessly."""
 
         if model.path:
-            if is_remote_path(model.path) or os.path.isdir(model.path) or LevanterTpuEvaluator._looks_like_url(
-                model.path
+            if (
+                is_remote_path(model.path)
+                or os.path.isdir(model.path)
+                or LevanterTpuEvaluator._looks_like_url(model.path)
             ):
                 return model.path
 
