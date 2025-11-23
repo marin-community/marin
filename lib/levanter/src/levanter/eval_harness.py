@@ -199,7 +199,7 @@ class _LmEvalHarnessWorker:
                 Vocab=model.Vocab,
                 logits=logits,
                 true_ids=packed_example.tokens,
-                loss_mask=packed_example.loss_mask,
+                loss_weight=packed_example.loss_weight,
                 reduction=None,
             )
 
@@ -1586,7 +1586,7 @@ def _pack_requests(
 def _make_dummy_batch(EvalBatch, EvalPos):
     dummy_batch = hax.vmap(LmExample.causal, EvalBatch)(
         hax.zeros(EvalPos, dtype=jnp.int32),
-        loss_mask=hax.zeros(EvalPos, dtype=jnp.int32),
+        loss_weight=hax.zeros(EvalPos, dtype=jnp.float32),
         segment_ids=hax.zeros(EvalPos, dtype=jnp.int32),
     )
     out = hax.shard(dummy_batch, {})
