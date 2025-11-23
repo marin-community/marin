@@ -36,9 +36,9 @@ eval_harness_steps: 1000
 data:
   tokenizer: ./gpt2_ul2r_DEV
   configs:
-    #wikitext:
-    #  id: dlwh/wikitext_103_detokenized
-    #  cache_dir: /tmp/marin_cache_pile
+    wikitext:
+      id: dlwh/wikitext_103_detokenized
+      cache_dir: /tmp/marin_cache_pile
     ul2r:
       #id: dlwh/wikitext_103_detokenized
       id: Salesforce/wikitext
@@ -79,7 +79,5 @@ data:
         sentinel_token_id_start: 50260
         sentinel_token_id_count: 100
   train_weights:
-    # Can't do this because is_prefix/input_mask don't match.
-    # TODO fix?
-    #wikitext: 0.0 # eval only
-    ul2r: 1.0
+    wikitext: 0.5
+    ul2r: 0.5

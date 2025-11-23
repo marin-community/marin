@@ -1053,8 +1053,8 @@ def test_ul2r_dataset_build(dummy_text_data, hf_tokenizer):
         assert len(unexpected_tokens) == 0, f"Found unexpected tokens not in input: {unexpected_tokens}"
 
         # Attention mask checks
-        input_mask = typing.cast(NamedArray, ex.attn_mask.input_mask)
-        assert input_mask.array.shape == (QPos.size,)
+        prefix_lm_mask = typing.cast(NamedArray, ex.attn_mask.prefix_lm_mask)
+        assert prefix_lm_mask.array.shape == (QPos.size,)
         # Materialize full attention mask (causal + prefix)
         materialized = ex.attn_mask.materialize(QPos, KPos)
         assert materialized is not None

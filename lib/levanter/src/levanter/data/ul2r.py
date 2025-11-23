@@ -776,8 +776,7 @@ def create_ul2r_example(
     out_seg_ids = hax.named(out_seg_ids, [QPos])
     attn_mask = AttentionMask(
         is_causal=True,
-        is_prefix=True,
-        input_mask=hax.named(input_mask, [QPos]),
+        prefix_lm_mask=hax.named(input_mask, [QPos]),
         segment_ids=(out_seg_ids, out_seg_ids),
     )
 

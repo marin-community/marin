@@ -71,6 +71,10 @@ class LmExample(eqx.Module):
         elif segment_ids is not None:
             attn_mask = attn_mask.with_segment_ids(segment_ids)
 
+        # HACK: Set prefix_lm_mask to zeros so that AttentionMasks can be stacked
+        # with UL2R/eval examples that have a real prefix_lm_mask.
+        attn_mask = attn_mask.with_prefix_lm_mask(hax.zeros(Pos, dtype=jnp.bool_))
+
         return LmExample(tokens=tokens, loss_mask=loss_mask, attn_mask=attn_mask)
 
     @staticmethod

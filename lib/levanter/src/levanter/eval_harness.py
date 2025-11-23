@@ -1612,6 +1612,7 @@ def _pack_requests(
         packed_iterator,
         max_segments_per_example=max_pack_size,
         pad_token=tokenizer.pad_token_id,
+        use_prefix_lm=True,
     )
 
 

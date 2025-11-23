@@ -259,6 +259,8 @@ def greedy_pack_prompt_completions(
     sequences: Iterable[PromptCompletion],
     pad_token: int,
     max_segments_per_example: int = 64,
+    # HACK Probably want to indicate in PromptCompletion instead and make configurable
+    use_prefix_lm: bool = False,
 ) -> list[LmExample]:
     """
     Greedy packing of prompt completions into LmExamples using [pack_documents][]
@@ -293,11 +295,16 @@ def greedy_pack_prompt_completions(
         concat_ids = []
         concat_loss_mask = []
         segment_ids = []
+        prefix_lm_mask = [] if use_prefix_lm else None
 
         for doc_id, seq, prompt_len in zip(docs_in_pack, pack_sequences, pack_prompt_lengths):
             concat_ids.extend(seq.ids)
             concat_loss_mask.extend(make_loss_mask(seq.ids, prompt_len))
             segment_ids.extend([doc_id] * len(seq.ids))
+
+            if use_prefix_lm:
+                # True for prompt tokens, False for completion tokens
+                prefix_lm_mask.extend([True] * prompt_len + [False] * (len(seq.ids) - prompt_len))
 
         # Pad to max length
         pad_length = Pos.size - len(concat_ids)
@@ -306,6 +313,8 @@ def greedy_pack_prompt_completions(
             concat_ids.extend([pad_token] * pad_length)
             concat_loss_mask.extend([0] * pad_length)
             segment_ids.extend([-1] * pad_length)
+            if use_prefix_lm:
+                prefix_lm_mask.extend([False] * pad_length)
         elif pad_length < 0:
             # too long, this should only happen if there's 1 document in the pack
             if len(pack_sequences) != 1:
@@ -313,12 +322,18 @@ def greedy_pack_prompt_completions(
             concat_ids = concat_ids[-Pos.size :]
             concat_loss_mask = concat_loss_mask[-Pos.size :]
             segment_ids = segment_ids[-Pos.size :]
+            if use_prefix_lm:
+                prefix_lm_mask = prefix_lm_mask[-Pos.size :]
 
         # Create the LmExample
         tokens = hax.named(np.array(concat_ids), Pos)
         loss_mask = hax.named(np.array(concat_loss_mask), Pos)
-        segment_ids = hax.named(np.array(segment_ids), Pos)
-        attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
+        segment_ids_array = hax.named(np.array(segment_ids), Pos)
+        attn_mask = AttentionMask.causal().with_segment_ids(segment_ids_array)
+
+        if use_prefix_lm:
+            prefix_lm_mask_array = hax.named(np.array(prefix_lm_mask), Pos)
+            attn_mask = attn_mask.with_prefix_lm_mask(prefix_lm_mask_array)
 
         out.append(LmExample(tokens=tokens, loss_mask=loss_mask, attn_mask=attn_mask))
 
