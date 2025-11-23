@@ -786,24 +786,23 @@ def test_attention_equivalence_jax_flash(
 
 
 def test_attention_mask_with_prefix():
-    """Test that AttentionMask correctly handles is_prefix for UL2R-style attention."""
+    """Test that AttentionMask correctly handles prefix_lm_mask for UL2R-style attention."""
     L = 8
     Pos = Axis("Pos", L)
     KPos = Pos.alias("KPos")
 
     # Create a prefix mask pattern for UL2R
-    # input_masks: 1 1 0 0 1 0 0 0 (segments 0 and 1)
+    # prefix_lm_mask: 1 1 0 0 1 0 0 0 (segments 0 and 1)
     # segment_ids: 0 0 0 0 1 1 -1 -1
-    input_masks = jnp.array([1, 1, 0, 0, 1, 0, 0, 0], dtype=jnp.bool_)
+    prefix_lm_mask = jnp.array([1, 1, 0, 0, 1, 0, 0, 0], dtype=jnp.bool_)
     segment_ids = jnp.array([0, 0, 0, 0, 1, 1, -1, -1])
 
-    # Create AttentionMask with causal, segment_ids, and is_prefix
-    input_masks_named = hax.named(input_masks, Pos)
+    # Create AttentionMask with causal, segment_ids, and prefix_lm_mask
+    prefix_lm_mask_named = hax.named(prefix_lm_mask, Pos)
     segment_ids_named = hax.named(segment_ids, Pos)
     mask = AttentionMask(
         is_causal=True,
-        is_prefix=True,
-        input_mask=input_masks_named,
+        prefix_lm_mask=prefix_lm_mask_named,
         segment_ids=(segment_ids_named, segment_ids_named.rename({Pos.name: KPos.name}))
     )
 
@@ -843,7 +842,7 @@ def test_attention_mask_with_prefix():
     assert materialized.array[4, 5] == False  # Cannot see position 5 (future)
 
     # For positions 6-7 (padding):
-    # Should only follow causal pattern (is_prefix doesn't affect padding)
+    # Should only follow causal pattern (prefix_lm_mask doesn't affect padding)
     assert materialized.array[6, 6] == True  # Can see self (causal)
     assert materialized.array[6, 7] == False  # Cannot see future
 
@@ -857,16 +856,15 @@ def test_attention_mask_is_prefix_with_batch():
 
     # Batch 0: [0, 0, 0, 0] with segment [0, 0, -1, -1]
     # Batch 1: [1, 1, 0, 0] with segment [0, 0, 0, 0]
-    input_masks = jnp.array([[1, 0, 0, 0], [1, 1, 0, 0]], dtype=jnp.bool_)
+    prefix_lm_mask = jnp.array([[1, 0, 0, 0], [1, 1, 0, 0]], dtype=jnp.bool_)
     segment_ids = jnp.array([[0, 0, -1, -1], [0, 0, 0, 0]])
 
-    input_masks_named = hax.named(input_masks, (Batch, Pos))
+    prefix_lm_mask_named = hax.named(prefix_lm_mask, (Batch, Pos))
     segment_ids_named = hax.named(segment_ids, (Batch, Pos))
 
     mask = AttentionMask(
         is_causal=True,
-        is_prefix=True,
-        input_mask=input_masks_named,
+        prefix_lm_mask=prefix_lm_mask_named,
         segment_ids=(segment_ids_named, segment_ids_named.rename({Pos.name: KPos.name}))
     )
 

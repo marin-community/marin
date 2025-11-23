@@ -490,7 +490,7 @@ class Trainer:
                 # print(f"batch={batch}")
                 # jax.debug.print("{result}", result=result)
                 # jax.debug.print(f"attn_mask={batch[0].attn_mask}")
-                # jax.debug.print("input_mask={x}", x=batch[0].attn_mask.input_mask.array)
+                # jax.debug.print("prefix_lm_mask={x}", x=batch[0].attn_mask.prefix_lm_mask.array)
                 # jax.debug.print("segment_ids={x}", x=batch[0].attn_mask.segment_ids[0].array)
                 # materialized = batch[0].attn_mask.materialize(hax.Axis(name='position', size=1024), hax.Axis(name='key_position', size=1024))
                 # jax.debug.print(f"attn_mask={materialized.array}")
