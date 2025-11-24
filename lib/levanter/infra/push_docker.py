@@ -10,6 +10,7 @@ It is not necessary to run this yourself unless you are deploying a new base ima
 script will automatically build and deploy an image based on your current code.
 """
 import argparse
+from pathlib import Path
 
 from levanter.infra import cli_helpers as cli
 from levanter.infra.docker import build_docker, push_to_gcp, push_to_github
@@ -25,14 +26,21 @@ if __name__ == "__main__":
     cli.add_arg(parser, config, ["--tag"], default="latest", help="Docker image tag.")
     cli.add_arg(parser, config, ["--github_user"], default=None, help="Github user name.")
     cli.add_arg(parser, config, ["--github_token"], default=None, help="Github token.")
-    cli.add_arg(parser, config, ["--docker_file"], default="docker/tpu/Dockerfile.base", help="Dockerfile to use.")
+    cli.add_arg(
+        parser, config, ["--docker_file"], default="lib/levanter/docker/tpu/Dockerfile.base", help="Dockerfile to use."
+    )
 
     # push to either github or GCP
     cli.add_arg(parser, config, ["--docker_target"], choices=["github", "gcp", "ghcr"], required=True)
 
     args = parser.parse_args()
 
-    local_id = build_docker(docker_file=args.docker_file, image_name=args.image, tag=args.tag)
+    repo_root = next((p for p in [Path.cwd()] + list(Path.cwd().parents) if (p / ".git").exists()), Path.cwd())
+    docker_file = Path(args.docker_file)
+    if not docker_file.is_absolute():
+        docker_file = repo_root / docker_file
+
+    local_id = build_docker(docker_file=str(docker_file), image_name=args.image, tag=args.tag, context=str(repo_root))
 
     if args.docker_target in ["github", "ghcr"]:
         assert args.github_user, "Must specify --github_user when pushing to Github"

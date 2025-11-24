@@ -163,7 +163,7 @@ def configure_gcp_docker(project_id, region, repository):
     _run(["gcloud", "auth", "configure-docker", "--quiet", f"{region}-docker.pkg.dev"])
 
 
-def build_docker(docker_file, image_name, tag, build_args=None) -> str:
+def build_docker(docker_file, image_name, tag, build_args=None, context=".") -> str:
     """Builds a Docker image, enables artifact access, and pushes to Artifact Registry."""
     args = [
         "docker",
@@ -183,7 +183,7 @@ def build_docker(docker_file, image_name, tag, build_args=None) -> str:
         [
             "-f",
             docker_file,
-            ".",
+            context,
         ]
     )
     _run(args)

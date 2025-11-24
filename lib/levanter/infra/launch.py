@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import levanter.infra.cli_helpers as cli
 import levanter.infra.docker as docker
@@ -21,6 +22,14 @@ TPU_TYPE_TO_VM_IMAGE = {
     "v5p": "v2-alpha-tpuv5",
     "v6e": "v2-alpha-tpuv6e",
 }
+
+
+def find_repo_root() -> Path:
+    here = Path(__file__).resolve()
+    for p in [here] + list(here.parents):
+        if (p / ".git").exists():
+            return p
+    return Path.cwd()
 
 
 def main():
@@ -103,11 +112,18 @@ def main():
     # make an image tag based on the unix timestamp to ensure we always pull the latest image
     tag = int(time.time())
 
+    repo_root = find_repo_root()
+    docker_file = repo_root / "lib/levanter/docker/tpu/Dockerfile.incremental"
+
     base_image, base_tag = docker.split_image_and_tag(args.docker_base_image)
     build_args = {"IMAGE": base_image, "TAG": base_tag}
 
     local_id = docker.build_docker(
-        docker_file="docker/tpu/Dockerfile.incremental", image_name=image_id, tag=tag, build_args=build_args
+        docker_file=str(docker_file),
+        image_name=image_id,
+        tag=tag,
+        build_args=build_args,
+        context=str(repo_root),
     )
 
     if registry == "ghcr":

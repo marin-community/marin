@@ -31,6 +31,8 @@ dependencies = [
     "haliax>=1.4.dev450",
     "equinox>=0.11.7,!=0.12.0",
     "jax>=0.6.2,!=0.7.0,!=0.7.1",
+    "fray",
+    "zephyr",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
     "transformers>=4.57.1,<5.0",
@@ -60,7 +62,6 @@ dependencies = [
     "lenses",
     "jinja2",  # needed for apply_chat_template
     "protobuf>=6,<7",  # ensure TB/XProf compatibility; avoid 7+ due to ray
-    "fray @ https://github.com/marin-community/marin/archive/refs/heads/main.zip#subdirectory=fray",
   # "lm-eval==0.4.2",
   # "lm-eval @ git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch"
 ]
@@ -132,6 +133,9 @@ dev = [
   "prompt_toolkit>=3.0.0",
 ]
 
+
+
+
 [tool.uv]
 default-groups = ["test", "docs", "dev"]
 conflicts = [
@@ -140,6 +144,11 @@ conflicts = [
     { extra = "tpu" },
   ],
 ]  # Never solve for both GPU and TPU at once
+
+[tool.uv.sources]
+zephyr = { workspace = true }
+fray = { workspace = true }
+haliax = { workspace = true }
 
 [tool.ruff]
 line-length = 119
