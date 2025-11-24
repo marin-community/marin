@@ -62,7 +62,8 @@ def extra_flags(extra: list[str] | None = None) -> list[str]:
         extra = []
 
     accel_type = accelerator_type_from_extra(extra)
-    if accel_type == AcceleratorType.NONE:
+    # Don't add cpu if vllm is present, as they conflict
+    if accel_type == AcceleratorType.NONE and "vllm" not in extra:
         extra.append("cpu")
 
     extra = set(extra)

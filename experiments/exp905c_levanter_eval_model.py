@@ -1,12 +1,11 @@
+import logging
+
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
 # from experiments.models import llama_3_1_8b_instruct, tulu_3_1_8b_instruct
 # from experiments.tootsie.exp1237_starling_sft import mixture_sft_deeper_starling
 from marin.execution.executor import executor_main, ExecutorStep
-from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.run import evaluate
-from marin.execution.executor import this_output_path
 from experiments.evals.resource_configs import ResourceConfig
 
 resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v4-8", strategy="STRICT_PACK")
@@ -195,6 +194,9 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
 if __name__ == "__main__":
     # Quiet ray logs for this experiment
     # logging.getLogger("ray").setLevel(logging.WARNING)
+    
+    # Suppress logs from haliax/core.py
+    logging.getLogger("haliax.core").setLevel(logging.WARNING)
 
     # NOTE(chiheem 2025-10-01): We may want to run the lm-eval tasks as separate steps so that we can avoid
     # `out of pages` error.
@@ -210,7 +212,14 @@ if __name__ == "__main__":
                 resource_config=resource_config,
                 apply_chat_template=model_config["apply_chat_template"] if "apply_chat_template" in model_config else False,
                 max_length=model_config["max_length"] if "max_length" in model_config else None,  # Total length of the prompt + generation
-                generation_kwargs={"max_gen_toks": 4096, "temperature": 0.0},  # Override lm-eval generation parameters
+                generation_kwargs={
+                    "max_gen_toks": 8192,
+                    "temperature": 0.7,
+                    "top_p": 1.0,
+                    "do_sample": True,
+                    "n": 1,  # Generate 5 samples for avg@5 evaluation
+                    "seed": 42,
+                },  # Override lm-eval generation parameters
             )
             all_steps.append(lm_eval_task_step)
 

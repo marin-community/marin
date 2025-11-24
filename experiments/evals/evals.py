@@ -107,6 +107,7 @@ def evaluate_lm_evaluation_harness(
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
+    generation_params: dict | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -115,6 +116,7 @@ def evaluate_lm_evaluation_harness(
         model_name (str): Name of the model.
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
+        generation_params (dict | None): Generation parameters for vLLM (temperature, max_tokens, etc.)
     """
     return ExecutorStep(
         name=f"evaluation/lm_evaluation_harness/{model_name}",
@@ -132,6 +134,7 @@ def evaluate_lm_evaluation_harness(
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
             wandb_tags=wandb_tags,
+            generation_params=generation_params,
         ),
     )
 

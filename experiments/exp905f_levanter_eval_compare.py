@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime
 
 # Disable HuggingFace logging
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
@@ -11,9 +12,6 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 # from experiments.models import llama_3_1_8b_instruct, tulu_3_1_8b_instruct
 # from experiments.tootsie.exp1237_starling_sft import mixture_sft_deeper_starling
 from marin.execution.executor import executor_main, ExecutorStep
-from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.run import evaluate
-from marin.execution.executor import this_output_path
 from experiments.evals.resource_configs import ResourceConfig
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_mtime
 
@@ -231,7 +229,7 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
     output_path = OutputName("compiled_results")
     
     return ExecutorStep(
-        name="scratch/chiheem/compile_results",
+        name=f"scratch/chiheem/compile_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
         fn=_compile_results_fn,
         config={"input_paths": input_paths, "output_path": output_path},
         description="Compile results from multiple lm-eval steps into a single DataFrame"
@@ -250,7 +248,7 @@ if __name__ == "__main__":
 
     MODELS = get_model_checkpoints(MODEL_CONFIGS)
 
-    for model in MODELS[0:1]:
+    for model in MODELS[:1]:
         for eval_task in EVAL_TASKS:
             lm_eval_task_step = evaluate_levanter_lm_evaluation_harness(
                 model["name"],
@@ -260,7 +258,14 @@ if __name__ == "__main__":
                 resource_config=resource_config,
                 apply_chat_template=model["apply_chat_template"] if "apply_chat_template" in model else False,
                 max_length=model["max_length"] if "max_length" in model else 2**14,  # Total length of the prompt + max_gen_toks
-                generation_kwargs={"max_gen_toks": max(1, model["max_length"]-2048), "temperature": 0.0},  # Override lm-eval generation parameters
+                generation_kwargs={
+                    "max_gen_toks": max(1, model["max_length"]-2048),
+                    "temperature": 0.7,
+                    "top_p": 1.0,
+                    "do_sample": True,
+                    "n": 5,  # Generate 5 samples for avg@5 evaluation
+                    "seed": 42,
+                },
             )
             all_steps.append(lm_eval_task_step)
 
@@ -276,4 +281,3 @@ if __name__ == "__main__":
 
     executor_main(steps=all_steps)
 
-    print(f"Output to: {compile_step.output_path}")

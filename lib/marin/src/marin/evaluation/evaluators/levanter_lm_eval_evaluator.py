@@ -65,7 +65,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                 "statsmodels==0.14.4",
                 "sentencepiece",  # Required for SentencePiece-based tokenizers
                 "tiktoken",  # Required for Qwen2 and other tiktoken-based tokenizers
-                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+                "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@03fa048e86c83855d4d5e270cbaac21196454ea8",
                 "math-verify",  # Required by lm-eval[math]
                 "sympy>=1.12",  # Required by lm-eval[math]
             ],
