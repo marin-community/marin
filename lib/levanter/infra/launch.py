@@ -8,7 +8,6 @@ import os
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 import levanter.infra.cli_helpers as cli
 import levanter.infra.docker as docker
@@ -47,7 +46,6 @@ def main():
     cli.add_arg(parser, config, ["--docker_registry"], default="gcp", choices=["gcp", "ghcr"])
     cli.add_arg(parser, config, ["--github_user"], type=str)
     cli.add_arg(parser, config, ["--github_token"], type=str)
-    cli.add_arg(parser, config, ["--extra_context"], type=Path, required=False, default=None)
 
     parser.add_argument("-e", "--env", action="append", nargs=2, metavar=("KEY", "VALUE"))
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -80,8 +78,6 @@ def main():
     registry = args.docker_registry
     github_user = args.github_user
     github_token = args.github_token or os.getenv("GITHUB_DOCKER_TOKEN")
-    extra_context = args.extra_context
-
     if zone is None:
         zone = cli.gcloud_config()["zone"]
 
@@ -107,15 +103,12 @@ def main():
     # make an image tag based on the unix timestamp to ensure we always pull the latest image
     tag = int(time.time())
 
-    with docker.copy_extra_ctx(extra_context) as extra_context:
-        build_args = {"EXTRA_CTX": extra_context} if extra_context else {}
-        base_image, base_tag = docker.split_image_and_tag(args.docker_base_image)
-        build_args["IMAGE"] = base_image
-        build_args["TAG"] = base_tag
+    base_image, base_tag = docker.split_image_and_tag(args.docker_base_image)
+    build_args = {"IMAGE": base_image, "TAG": base_tag}
 
-        local_id = docker.build_docker(
-            docker_file="docker/tpu/Dockerfile.incremental", image_name=image_id, tag=tag, build_args=build_args
-        )
+    local_id = docker.build_docker(
+        docker_file="docker/tpu/Dockerfile.incremental", image_name=image_id, tag=tag, build_args=build_args
+    )
 
     if registry == "ghcr":
         full_image_id = docker.push_to_github(

@@ -1211,7 +1211,7 @@ def _expose_available_rows(permanent_cache, num_available_rows):
 
 @ray.remote(
     num_cpus=4,
-    memory=6 * 1024 * 1024 * 1024,
+    memory=2 * 1024 * 1024 * 1024,
     runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}),
     scheduling_strategy="SPREAD",
 )
@@ -1238,7 +1238,7 @@ def _copy_cache_data(dest_path, source_path, processor, data_offset_tree, rows_s
 
 @ray.remote(
     num_cpus=0.5,
-    memory=1 * 1024 * 1024 * 1024,
+    memory=128 * 1024 * 1024,
     runtime_env=RuntimeEnv(env_vars={"JAX_PLATFORMS": "cpu"}),
 )
 class _MetadataCopier:

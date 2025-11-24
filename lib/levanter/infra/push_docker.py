@@ -12,7 +12,6 @@ script will automatically build and deploy an image based on your current code.
 import argparse
 
 from levanter.infra import cli_helpers as cli
-from levanter.infra import docker
 from levanter.infra.docker import build_docker, push_to_gcp, push_to_github
 
 
@@ -27,16 +26,13 @@ if __name__ == "__main__":
     cli.add_arg(parser, config, ["--github_user"], default=None, help="Github user name.")
     cli.add_arg(parser, config, ["--github_token"], default=None, help="Github token.")
     cli.add_arg(parser, config, ["--docker_file"], default="docker/tpu/Dockerfile.base", help="Dockerfile to use.")
-    cli.add_arg(parser, config, ["--extra_context"], required=False, default=None)
 
     # push to either github or GCP
     cli.add_arg(parser, config, ["--docker_target"], choices=["github", "gcp", "ghcr"], required=True)
 
     args = parser.parse_args()
 
-    with docker.copy_extra_ctx(args.extra_context) as extra_ctx:
-        build_args = {"EXTRA_CTX": extra_ctx} if extra_ctx else None
-        local_id = build_docker(docker_file=args.docker_file, image_name=args.image, tag=args.tag)
+    local_id = build_docker(docker_file=args.docker_file, image_name=args.image, tag=args.tag)
 
     if args.docker_target in ["github", "ghcr"]:
         assert args.github_user, "Must specify --github_user when pushing to Github"

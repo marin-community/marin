@@ -8,7 +8,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -32,6 +31,7 @@ GCP_CLEANUP_POLICY = [
 
 
 def _rm(path):
+    path = Path(path)
     if path.is_dir():
         shutil.rmtree(path, ignore_errors=True)
     elif path.is_file():
@@ -41,6 +41,8 @@ def _rm(path):
 
 
 def _cp(src, dst):
+    src = Path(src)
+    dst = Path(dst)
     # delete dst if exists
     _rm(dst)
 
@@ -159,20 +161,6 @@ def configure_gcp_docker(project_id, region, repository):
     )
 
     _run(["gcloud", "auth", "configure-docker", "--quiet", f"{region}-docker.pkg.dev"])
-
-
-@contextmanager
-def copy_extra_ctx(extra_ctx):
-    """Context manager to handle copying and cleanup of extra context directory."""
-    if extra_ctx is not None:
-        mount_dst = Path(".mnt")
-        _cp(extra_ctx, mount_dst)
-        try:
-            yield extra_ctx
-        finally:
-            _rm(mount_dst)
-    else:
-        yield None
 
 
 def build_docker(docker_file, image_name, tag, build_args=None) -> str:
