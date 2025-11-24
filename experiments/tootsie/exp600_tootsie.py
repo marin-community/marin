@@ -34,14 +34,14 @@ from levanter.schedule import ScheduleStep
 from experiments.cooldown_anneal import dolmino_dclm
 from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3_old
 from experiments.defaults import default_train
-from experiments.pretraining_datasets import tokenize_dolma_steps
-from experiments.pretraining_datasets import dolmino_math_tokenized_llama3, get_dolmino_step
+from experiments.pretraining_datasets import tokenize_dolma
+from experiments.pretraining_datasets.dolmino import tokenized as dolmino_tokenized, tokenize_dolmino_subset
 from experiments.evals.evals import default_base_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
-from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
+from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
@@ -202,7 +202,7 @@ dolma_splits = [
     "dolma/stackexchange",
     "dolma/wiki",
 ]
-all_dolma_steps = tokenize_dolma_steps(tokenizer=llama3_tokenizer)
+all_dolma_steps = tokenize_dolma(tokenizer=llama3_tokenizer)
 phase_3_tokenized.update({dataset: step for dataset, step in all_dolma_steps.items() if dataset in dolma_splits})
 phase_3_tokenized["finemath_3_plus"] = finemath_3_plus_tokenized
 phase_3_tokenized["dolmino_dclm"] = dolmino_dclm
@@ -288,7 +288,7 @@ llama_8b_tootsie_phase3 = dataclasses.replace(
 ## TinyGSM-Mind
 
 dessert_dolmino_sets = {
-    s: get_dolmino_step(s)
+    s: tokenize_dolmino_subset(s)
     for s in [
         "flan",
         "math/dolmino_math_synth",
@@ -397,7 +397,7 @@ dessert_weights_v2 = {
     ),
 }
 
-all_math = dolmino_math_tokenized_llama3
+all_math = dolmino_tokenized["dolmino_math"]
 
 dessert_tokenized_v2 = {
     **phase_3_tokenized,
@@ -510,7 +510,7 @@ PHASE_4_REWARMUP_DURATION = 2000
 REALLY_FAR_AWAY_STEP = 2_000_000
 
 
-nemotron_cc_steps = tokenize_nemotron_steps()
+nemotron_cc_steps = tokenize_nemotron()
 
 # Nemotron weights are in compressed TiB. We'll use the rule of thumb that compressed bytes ≈ tokens
 

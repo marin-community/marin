@@ -17,12 +17,12 @@ from experiments.llama import llama3_tokenizer
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
 from experiments.pretraining_datasets import (
     slimpajama_6b_tokenized_llama3,
-    tokenize_dolma_steps,
+    tokenize_dolma,
 )
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path
 
-dolma_components = tokenize_dolma_steps()
+dolma_components = tokenize_dolma()
 
 c4_tokenized = dolma_components["dolma/c4"]
 starcoder_tokenized = dolma_components["dolma/starcoder"]

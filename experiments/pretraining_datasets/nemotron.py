@@ -23,22 +23,25 @@ import os.path
 
 from levanter.store.cache import CacheOptions
 
+from experiments.llama import llama3_tokenizer
 from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
 # Raw dataset download step
-nemotron_cc = ExecutorStep(
-    name="raw/nemotro-cc",
-    fn=download_nemotron_cc,
-    config=NemotronIngressConfig(
-        output_path=this_output_path(),
-    ),
-    pip_dependency_groups=["download_transform"],
-)
+downloads = {
+    "nemotron_cc": ExecutorStep(
+        name="raw/nemotro-cc",
+        fn=download_nemotron_cc,
+        config=NemotronIngressConfig(
+            output_path=this_output_path(),
+        ),
+        pip_dependency_groups=["download_transform"],
+    )
+}
 
-_nemotron_cc_path = output_path_of(nemotron_cc, "contrib/Nemotron/Nemotron-CC/data-jsonl/")
+_nemotron_cc_path = output_path_of(downloads["nemotron_cc"], "contrib/Nemotron/Nemotron-CC/data-jsonl/")
 
 # The following dataset splits define file patterns for each split.
 NEMOTRON_DATASETS = {
@@ -81,16 +84,12 @@ def _get_nemotron_split_paths(split: str):
     return [_nemotron_cc_path / pattern for pattern in patterns]
 
 
-def tokenize_nemotron_steps(*, base_path="tokenized/", tokenizer: str | None = None) -> dict[str, TokenizerStep]:
+def tokenize_nemotron(*, tokenizer: str = llama3_tokenizer) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Nemotron CC dataset splits."""
-    if tokenizer is None:
-        from experiments.llama import llama3_tokenizer
-
-        tokenizer = llama3_tokenizer
 
     nemotron_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for split in NEMOTRON_DATASETS:
-        nemotron_split_output_path = os.path.join(base_path, "nemotron_cc", split)
+        nemotron_split_output_path = os.path.join("tokenized", "nemotron_cc", split)
         nemotron_split_paths = _get_nemotron_split_paths(split)
         step = ExecutorStep(
             name=nemotron_split_output_path,
@@ -106,8 +105,6 @@ def tokenize_nemotron_steps(*, base_path="tokenized/", tokenizer: str | None = N
         )
 
         # Check if we need to use override path for llama3
-        from experiments.llama import llama3_tokenizer
-
         if tokenizer == llama3_tokenizer and split in NEMOTRON_LLAMA3_OVERRIDES:
             step = step.with_output_path(NEMOTRON_LLAMA3_OVERRIDES[split])
 
@@ -117,7 +114,7 @@ def tokenize_nemotron_steps(*, base_path="tokenized/", tokenizer: str | None = N
     return nemotron_steps
 
 
-def get_nemotron_step(split: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
+def tokenize_nemotron_subset(name: str, tokenizer: str = llama3_tokenizer) -> ExecutorStep[TokenizeConfig]:
     """Get a specific nemotron split tokenization step."""
-    assert split in NEMOTRON_DATASETS, f"Split {split} not found in NEMOTRON_DATASETS"
-    return tokenize_nemotron_steps(tokenizer=tokenizer)[f"nemotron_cc/{split}"]
+    assert name in NEMOTRON_DATASETS, f"Split {name} not found in NEMOTRON_DATASETS"
+    return tokenize_nemotron(tokenizer=tokenizer)[f"nemotron_cc/{name}"]

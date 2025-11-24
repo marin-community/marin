@@ -27,7 +27,7 @@ import os
 from dataclasses import dataclass, field
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.pretraining_datasets import get_dolmino_step
+from experiments.pretraining_datasets import tokenize_dolmino_subset
 from experiments.exp274_mmlu_quality_classifier import (
     dclm_negative_examples_in_dolma_format,
     mmlu_eval_aux_in_dolma_format,
@@ -59,7 +59,7 @@ from marin.processing.classification.fasttext.train_fasttext import (
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
 
-dolmino_dclm = get_dolmino_step("dclm")
+dolmino_dclm = tokenize_dolmino_subset("dclm")
 
 BERT_DEPENDENCIES = [
     "--find-links https://storage.googleapis.com/libtpu-releases/index.html",

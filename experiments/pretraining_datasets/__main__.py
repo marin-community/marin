@@ -12,146 +12,159 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Command-line interface for tokenizing pretraining datasets."""
+"""Command-line interface for pretraining datasets."""
 
 import sys
-from collections.abc import Sequence
+
+import click
 
 from marin.execution.executor import ExecutorStep, executor_main
 
-from experiments.pretraining_datasets import (
-    MULTI_SPLIT_DATASETS,
-    SIMPLE_TOKENIZED_DATASETS,
-)
+from experiments.pretraining_datasets import DATASETS
 
 
-def get_tokenization_steps(dataset_names: Sequence[str]) -> list[ExecutorStep]:
+def get_steps(dataset_names: list[str], *, download: bool = False, tokenize: bool = True) -> list[ExecutorStep]:
     """
-    Get tokenization steps for the specified dataset names.
+    Get steps for the specified dataset names.
 
     Args:
         dataset_names: List of dataset names. Can be:
-            - Simple dataset names: "dclm_baseline", "slimpajama_6b", etc.
-            - Multi-split with split name: "dolmino:dclm", "nemotron_cc:hq_actual"
-            - Multi-split all: "dolmino:all", "nemotron_cc:all", "dolma:all"
+            - Simple dataset names: "dclm_baseline", "slimpajama_6b" (implicit :all)
+            - Multi-subset with subset name: "dolmino:dclm", "nemotron_cc:hq_actual"
+            - Multi-subset all: "dolmino:all", "nemotron_cc:all"
+        download: Whether to get download steps
+        tokenize: Whether to get tokenization steps
 
     Returns:
-        List of ExecutorSteps for tokenization
+        List of ExecutorSteps
     """
     steps = []
 
     for name in dataset_names:
-        # Check if it's a multi-split dataset
+        # Parse dataset name and subset
         if ":" in name:
-            dataset_family, split = name.split(":", 1)
-
-            if dataset_family not in MULTI_SPLIT_DATASETS:
-                print(f"Error: Unknown dataset family '{dataset_family}'", file=sys.stderr)
-                print(f"Available families: {', '.join(MULTI_SPLIT_DATASETS.keys())}", file=sys.stderr)
-                sys.exit(1)
-
-            dataset_info = MULTI_SPLIT_DATASETS[dataset_family]
-            available_splits = dataset_info["splits"]
-            tokenize_fn = dataset_info["tokenize_fn"]
-
-            if split == "all":
-                steps.extend(tokenize_fn().values())
-            elif split in available_splits:
-                steps.append(tokenize_fn()[f"{dataset_family}/{split}"])
-            else:
-                print(f"Error: Unknown {dataset_family} split '{split}'", file=sys.stderr)
-                print(f"Available splits: {', '.join(available_splits.keys())}", file=sys.stderr)
-                sys.exit(1)
-
-        # Check if it's a simple dataset
-        elif name in SIMPLE_TOKENIZED_DATASETS:
-            steps.append(SIMPLE_TOKENIZED_DATASETS[name])
-
+            dataset_family, subset = name.split(":", 1)
         else:
-            print(f"Error: Unknown dataset '{name}'", file=sys.stderr)
-            print(f"Available simple datasets: {', '.join(SIMPLE_TOKENIZED_DATASETS.keys())}", file=sys.stderr)
-            print("For multi-split datasets, use: FAMILY:SPLIT or FAMILY:all", file=sys.stderr)
-            print(f"Available families: {', '.join(MULTI_SPLIT_DATASETS.keys())}", file=sys.stderr)
-            print("Use --list to see all available datasets and splits", file=sys.stderr)
+            # Implicit :all for simple datasets
+            dataset_family = name
+            subset = "all"
+
+        # Look up in registry
+        if dataset_family not in DATASETS:
+            click.echo(f"Error: Unknown dataset '{dataset_family}'", err=True)
+            click.echo(f"Available datasets: {', '.join(sorted(DATASETS.keys()))}", err=True)
+            click.echo("Use 'list' command to see all available datasets and subsets", err=True)
             sys.exit(1)
+
+        dataset_info = DATASETS[dataset_family]
+        available_subsets = dataset_info["subsets"]
+
+        # Determine which subsets to process
+        if subset == "all":
+            # Process all available subsets
+            subsets_to_process = available_subsets
+        elif subset in available_subsets:
+            # Process specific subset
+            subsets_to_process = [subset]
+        else:
+            click.echo(f"Error: Unknown {dataset_family} subset '{subset}'", err=True)
+            click.echo(f"Available subsets: {', '.join(available_subsets)}", err=True)
+            sys.exit(1)
+
+        # Add download step (only once per dataset)
+        if download:
+            steps.append(dataset_info["download"])
+
+        # Add tokenization steps
+        if tokenize:
+            tokenize_result = dataset_info["tokenize_fn"]()
+            for sub in subsets_to_process:
+                key = f"{dataset_family}/{sub}"
+                if key in tokenize_result:
+                    steps.append(tokenize_result[key])
+                else:
+                    click.echo(f"Error: Tokenization step not found for {key}", err=True)
+                    sys.exit(1)
 
     return steps
 
 
-def list_datasets():
-    """Print all available datasets and their splits."""
-    print("=" * 60)
-    print("SIMPLE TOKENIZED DATASETS")
-    print("=" * 60)
-    for name in sorted(SIMPLE_TOKENIZED_DATASETS.keys()):
-        print(f"  {name}")
-
-    for family, info in sorted(MULTI_SPLIT_DATASETS.items()):
-        print(f"\n{'=' * 60}")
-        print(f"{family.upper()} SPLITS")
-        print("=" * 60)
-        print(f"  Use: {family}:SPLIT or {family}:all")
-        print()
-        for split in sorted(info["splits"].keys()):
-            print(f"    {split}")
+@click.group()
+def cli():
+    """Manage pretraining datasets: download, tokenize, and list available datasets."""
+    pass
 
 
-def main():
-    """Command-line interface for tokenizing datasets."""
-    import argparse
+@cli.command()
+def list():
+    """List all available datasets and their subsets."""
+    click.echo("=" * 70)
+    click.echo("SIMPLE DATASETS (single subset)")
+    click.echo("=" * 70)
 
-    parser = argparse.ArgumentParser(
-        prog="python -m experiments.pretraining_datasets",
-        description="Tokenize pretraining datasets",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # List all available datasets
-  python -m experiments.pretraining_datasets --list
+    simple_datasets = {k: v for k, v in DATASETS.items() if v["subsets"] == ["all"]}
+    for name in sorted(simple_datasets.keys()):
+        click.echo(f"  {name}")
+        click.echo(f"    Usage: {name} or {name}:all")
 
-  # Tokenize simple datasets
-  python -m experiments.pretraining_datasets --datasets slimpajama_6b dclm_baseline
+    multi_datasets = {k: v for k, v in DATASETS.items() if v["subsets"] != ["all"]}
+    for family in sorted(multi_datasets.keys()):
+        info = multi_datasets[family]
+        click.echo(f"\n{'=' * 70}")
+        click.echo(f"{family.upper()} SUBSETS")
+        click.echo("=" * 70)
+        click.echo(f"  Usage: {family}:SUBSET or {family}:all")
+        click.echo()
+        for subset in sorted(info["subsets"]):
+            click.echo(f"    {subset}")
 
-  # Tokenize all splits of dolmino
-  python -m experiments.pretraining_datasets --datasets dolmino:all
 
-  # Tokenize specific splits
-  python -m experiments.pretraining_datasets --datasets dolmino:dclm nemotron_cc:hq_actual dolma:c4
-        """,
-    )
+@cli.command()
+@click.argument("datasets", nargs=-1, required=True)
+@click.option("--download", is_flag=True, help="Download raw datasets")
+@click.option("--tokenize/--no-tokenize", default=True, help="Tokenize datasets (default: enabled)")
+def run(datasets, download, tokenize):
+    """
+    Process datasets: download and/or tokenize.
 
-    parser.add_argument(
-        "--datasets",
-        nargs="+",
-        help="Dataset names to tokenize. Use --list to see available datasets.",
-    )
+    DATASETS: One or more dataset names to process.
 
-    parser.add_argument(
-        "--list",
-        action="store_true",
-        help="List all available datasets and splits",
-    )
+    \b
+    Examples:
+      # Tokenize simple datasets (implicit :all)
+      python -m experiments.pretraining_datasets run proofpile_2 slimpajama_6b
 
-    args = parser.parse_args()
+      # Download raw datasets
+      python -m experiments.pretraining_datasets run --download dolmino nemotron_cc
 
-    if args.list:
-        list_datasets()
-        return
+      # Tokenize specific subsets
+      python -m experiments.pretraining_datasets run dolmino:dclm nemotron_cc:hq_actual
 
-    if not args.datasets:
-        parser.print_help()
-        print("\nError: --datasets is required (or use --list to see available datasets)", file=sys.stderr)
+      # Tokenize all subsets of a multi-subset dataset
+      python -m experiments.pretraining_datasets run dolmino:all
+
+      # Download and tokenize
+      python -m experiments.pretraining_datasets run --download dolmino:dclm
+    """
+    if not download and not tokenize:
+        click.echo("Error: Must specify at least one of --download or --tokenize", err=True)
         sys.exit(1)
 
-    steps = get_tokenization_steps(args.datasets)
+    steps = get_steps(list(datasets), download=download, tokenize=tokenize)
 
     if not steps:
-        print("Error: No tokenization steps found", file=sys.stderr)
+        click.echo("Error: No steps found", err=True)
         sys.exit(1)
 
-    print(f"Running tokenization for {len(steps)} dataset(s)...")
-    executor_main(steps=steps, description=f"Tokenize: {', '.join(args.datasets)}")
+    action_str = []
+    if download:
+        action_str.append("download")
+    if tokenize:
+        action_str.append("tokenize")
+
+    click.echo(f"Running {len(steps)} step(s) to {' and '.join(action_str)}: {', '.join(datasets)}")
+    executor_main(steps=steps, description=f"{'/'.join(action_str).title()}: {', '.join(datasets)}")
 
 
 if __name__ == "__main__":
-    main()
+    cli()

@@ -20,14 +20,14 @@ Link to issue: https://github.com/marin-community/marin/issues/820
 
 from experiments.anneal_config import AnnealConfig
 from experiments.defaults import default_anneal
-from experiments.pretraining_datasets import tokenize_dolma_steps
-from experiments.pretraining_datasets import get_dolmino_step
+from experiments.pretraining_datasets import tokenize_dolma
+from experiments.pretraining_datasets import tokenize_dolmino_subset
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 
-dolmino_dclm = get_dolmino_step("dclm")
+dolmino_dclm = tokenize_dolmino_subset("dclm")
 
-starcoder_tokenized = tokenize_dolma_steps()["dolma/starcoder"]
+starcoder_tokenized = tokenize_dolma()["dolma/starcoder"]
 
 dataset_config = lm_mixture_data_config(
     components={

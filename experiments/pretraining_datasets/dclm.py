@@ -18,14 +18,7 @@ from levanter.data.text import TextLmDatasetFormat
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from experiments.pretraining_datasets import (
-    dclm_baseline_tokenized_llama3,
-    dclm_baseline_wrong,
-    proofpile_2,
-    proofpile_2_tokenized_llama3,
-    starcoderdata,
-    starcoderdata_tokenized_llama3,
-)
+from experiments.pretraining_datasets.simple import downloads, tokenized
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 
@@ -45,9 +38,9 @@ DCLM_BASELINE_ONLY_MIXTURE = {
 
 
 dclm_components_llama3 = {
-    "dclm_baseline": dclm_baseline_tokenized_llama3,
-    "starcoderdata": starcoderdata_tokenized_llama3,
-    "proofpile_2": proofpile_2_tokenized_llama3,
+    "dclm_baseline": tokenized["dclm_baseline"],
+    "starcoderdata": tokenized["starcoderdata"],
+    "proofpile_2": tokenized["proofpile_2"],
 }
 dclm_mixture_config_llama3_old = lm_mixture_data_config(
     components=dclm_components_llama3,
@@ -67,20 +60,20 @@ dclm_components_llama3_wrong = {
     "dclm_baseline": dataclasses.replace(
         default_tokenize(
             name="dclm_baseline",
-            dataset=dclm_baseline_wrong,
+            dataset=downloads["dclm_baseline_wrong"],
             tokenizer=llama3_tokenizer,
         ),
         override_output_path="gs://marin-us-central2/tokenized/dclm_baseline-0206f1_WRONG_20250211/",
     ),
     "starcoderdata": default_tokenize(
         name="starcoderdata",
-        dataset=starcoderdata,
+        dataset=downloads["starcoderdata"],
         tokenizer=llama3_tokenizer,
         format=TextLmDatasetFormat(text_key="content"),
     ),
     "proofpile_2": default_tokenize(
         name="proofpile_2",
-        dataset=proofpile_2,
+        dataset=downloads["proofpile_2"],
         tokenizer=llama3_tokenizer,
     ),
 }

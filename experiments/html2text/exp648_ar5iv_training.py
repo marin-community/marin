@@ -27,7 +27,7 @@ Reference Issue: https://github.com/marin-community/marin/issues/648
 
 import logging
 
-from experiments.pretraining_datasets import tokenize_dolma_steps
+from experiments.pretraining_datasets import tokenize_dolma
 from experiments.exp579_ar5iv_markdownify import (
     ar5iv_no_problem_resiliparse_no_references_no_links,
     ar5iv_no_problem_resiliparse_no_references_with_links,
@@ -42,7 +42,7 @@ logger = logging.getLogger("ray")
 EXPERIMENT_TAG = ["arxiv_no_problem_subbed_dolma"]
 
 # Tokenize the Dolma dataset
-tokenized_dolma_steps = tokenize_dolma_steps()
+tokenized_dolma_steps = tokenize_dolma()
 
 # Conduct the experiment with no references and no links
 (

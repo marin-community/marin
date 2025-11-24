@@ -21,23 +21,26 @@ logic for all 15 splits.
 
 import os.path
 
+from experiments.llama import llama3_tokenizer
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
 # Raw dataset download step
-dolma = ExecutorStep(
-    name="raw/dolma",
-    fn=download_hf,
-    config=DownloadConfig(
-        hf_dataset_id="allenai/dolma",
-        revision="7f48140",
-        gcs_output_path=this_output_path(),
-        wait_for_completion=True,
-    ),
-    override_output_path="raw/dolma",
-)
+downloads = {
+    "dolma": ExecutorStep(
+        name="raw/dolma",
+        fn=download_hf,
+        config=DownloadConfig(
+            hf_dataset_id="allenai/dolma",
+            revision="7f48140",
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+        ),
+        override_output_path="raw/dolma",
+    )
+}
 
 
 # For dolma 1.7, we hardcode the path since it was added before versioning
@@ -107,17 +110,13 @@ DOLMA_LLAMA3_OVERRIDES = {
 }
 
 
-def tokenize_dolma_steps(*, base_path="tokenized/", tokenizer: str | None = None) -> dict[str, TokenizerStep]:
+def tokenize_dolma(*, tokenizer: str = llama3_tokenizer) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Dolma 1.7 dataset splits."""
-    if tokenizer is None:
-        from experiments.llama import llama3_tokenizer
-
-        tokenizer = llama3_tokenizer
 
     dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, files in DOLMA_DATASETS.items():
         step = ExecutorStep(
-            name=os.path.join(base_path, "dolma", dataset),
+            name=os.path.join("tokenized", "dolma", dataset),
             fn=tokenize,
             config=TokenizeConfig(
                 train_paths=[os.path.join(_DOLMA_V1_7_PATH, file) for file in files],
@@ -129,8 +128,6 @@ def tokenize_dolma_steps(*, base_path="tokenized/", tokenizer: str | None = None
         )
 
         # Check if we need to use override path for llama3
-        from experiments.llama import llama3_tokenizer
-
         if tokenizer == llama3_tokenizer and dataset in DOLMA_LLAMA3_OVERRIDES:
             step = step.with_output_path(DOLMA_LLAMA3_OVERRIDES[dataset])
         dolma_steps[os.path.join("dolma", dataset)] = step

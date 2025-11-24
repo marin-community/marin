@@ -15,9 +15,8 @@
 """
 Canonical raw and tokenized pretraining datasets.
 
-This module provides a registry of raw dataset downloads and their canonical
-tokenizations. For multi-split datasets (dolmino, nemotron_cc, dolma), helper
-functions generate tokenized versions of individual splits.
+This module provides a unified registry of raw dataset downloads and their canonical
+tokenizations. All datasets support a consistent FAMILY:SPLIT syntax in the CLI.
 
 Dataset families are organized in separate modules:
 - dolma: DOLMA 1.7 (15 splits)
@@ -25,116 +24,106 @@ Dataset families are organized in separate modules:
 - nemotron: NEMOTRON CC (7 quality-based splits)
 - simple: Single-corpus datasets
 
-Use `python -m experiments.pretraining_datasets --list` to see all available datasets.
+Use `python -m experiments.pretraining_datasets list` to see all available datasets.
 """
 
-# Import dataset families
+# Import downloads and tokenized dicts from each module
 from experiments.pretraining_datasets.dolma import (
     DOLMA_DATASETS,
     DOLMA_LLAMA3_OVERRIDES,
     DOLMA_OLMO_MIXTURE_WEIGHTS,
-    dolma,
-    tokenize_dolma_steps,
+    downloads as dolma_downloads,
+    tokenize_dolma,
 )
 from experiments.pretraining_datasets.dolmino import (
     DOLMINO_DATASETS,
     DOLMINO_LLAMA3_OVERRIDES,
-    dolmino,
-    dolmino_math_tokenized_llama3,
-    get_dolmino_step,
-    tokenize_dolmino_steps,
+    downloads as dolmino_downloads,
+    tokenize_dolmino,
+    tokenize_dolmino_math,
+    tokenize_dolmino_subset,
 )
 from experiments.pretraining_datasets.nemotron import (
     NEMOTRON_DATASETS,
     NEMOTRON_LLAMA3_OVERRIDES,
     NEMOTRON_WEIGHTS,
-    get_nemotron_step,
-    nemotron_cc,
-    tokenize_nemotron_steps,
+    downloads as nemotron_downloads,
+    tokenize_nemotron,
+    tokenize_nemotron_subset,
 )
-from experiments.pretraining_datasets.simple import (
-    dclm_baseline,
-    dclm_baseline_tokenized_llama3,
-    dclm_baseline_wrong,
-    fineweb,
-    fineweb_edu,
-    fineweb_edu_tokenized_llama3,
-    proofpile_2,
-    proofpile_2_tokenized_llama3,
-    slimpajama,
-    slimpajama_6b,
-    slimpajama_6b_tokenized_llama3,
-    starcoderdata,
-    starcoderdata_tokenized_llama3,
-    the_pile_openwebtext2,
-    the_stack_dedup,
-)
+from experiments.pretraining_datasets.simple import downloads as simple_downloads, tokenized as simple_tokenized
 
-# Re-export all commonly used items for backward compatibility
+# Re-export constants
 __all__ = [
+    "DATASETS",
     "DOLMA_DATASETS",
     "DOLMA_LLAMA3_OVERRIDES",
     "DOLMA_OLMO_MIXTURE_WEIGHTS",
     "DOLMINO_DATASETS",
     "DOLMINO_LLAMA3_OVERRIDES",
-    "MULTI_SPLIT_DATASETS",
     "NEMOTRON_DATASETS",
     "NEMOTRON_LLAMA3_OVERRIDES",
     "NEMOTRON_WEIGHTS",
-    "SIMPLE_TOKENIZED_DATASETS",
-    "dclm_baseline",
-    "dclm_baseline_tokenized_llama3",
-    "dclm_baseline_wrong",
-    "dolma",
-    "dolmino",
-    "dolmino_math_tokenized_llama3",
-    "fineweb",
-    "fineweb_edu",
-    "fineweb_edu_tokenized_llama3",
-    "get_dolmino_step",
-    "get_nemotron_step",
-    "nemotron_cc",
-    "proofpile_2",
-    "proofpile_2_tokenized_llama3",
-    "slimpajama",
-    "slimpajama_6b",
-    "slimpajama_6b_tokenized_llama3",
-    "starcoderdata",
-    "starcoderdata_tokenized_llama3",
-    "the_pile_openwebtext2",
-    "the_stack_dedup",
-    "tokenize_dolma_steps",
-    "tokenize_dolmino_steps",
-    "tokenize_nemotron_steps",
+    "tokenize_dolma",
+    "tokenize_dolmino",
+    "tokenize_dolmino_math",
+    "tokenize_dolmino_subset",
+    "tokenize_nemotron",
+    "tokenize_nemotron_subset",
 ]
 
 
 # ============================================================================
-# DATASET REGISTRY
+# UNIFIED DATASET REGISTRY
 # ============================================================================
-# Organize all datasets for easy lookup and CLI access
 
-# Simple tokenized datasets (single corpus, already tokenized)
-SIMPLE_TOKENIZED_DATASETS = {
-    "dclm_baseline": dclm_baseline_tokenized_llama3,
-    "starcoderdata": starcoderdata_tokenized_llama3,
-    "proofpile_2": proofpile_2_tokenized_llama3,
-    "slimpajama_6b": slimpajama_6b_tokenized_llama3,
-    "fineweb_edu": fineweb_edu_tokenized_llama3,
-}
-
-# Multi-split dataset metadata
-MULTI_SPLIT_DATASETS = {
+DATASETS = {
+    # Simple datasets (single "all" subset)
+    "dclm_baseline": {
+        "subsets": ["all"],
+        "download": simple_downloads["dclm_baseline"],
+        "tokenize_fn": lambda: {"dclm_baseline/all": simple_tokenized["dclm_baseline"]},
+    },
+    "starcoderdata": {
+        "subsets": ["all"],
+        "download": simple_downloads["starcoderdata"],
+        "tokenize_fn": lambda: {"starcoderdata/all": simple_tokenized["starcoderdata"]},
+    },
+    "proofpile_2": {
+        "subsets": ["all"],
+        "download": simple_downloads["proofpile_2"],
+        "tokenize_fn": lambda: {"proofpile_2/all": simple_tokenized["proofpile_2"]},
+    },
+    "slimpajama_6b": {
+        "subsets": ["all"],
+        "download": simple_downloads["slimpajama_6b"],
+        "tokenize_fn": lambda: {"slimpajama_6b/all": simple_tokenized["slimpajama_6b"]},
+    },
+    "fineweb_edu": {
+        "subsets": ["all"],
+        "download": simple_downloads["fineweb_edu"],
+        "tokenize_fn": lambda: {"fineweb_edu/all": simple_tokenized["fineweb_edu"]},
+    },
+    # Special combined dataset
+    "dolmino_math": {
+        "subsets": ["all"],
+        "download": dolmino_downloads["dolmino"],
+        "tokenize_fn": lambda: {"dolmino_math/all": tokenize_dolmino_math()},
+    },
+    # Multi-subset datasets
     "dolmino": {
-        "splits": DOLMINO_DATASETS,
-        "tokenize_fn": tokenize_dolmino_steps,
+        "subsets": list(DOLMINO_DATASETS.keys()),
+        "download": dolmino_downloads["dolmino"],
+        "tokenize_fn": tokenize_dolmino,
     },
     "nemotron_cc": {
-        "splits": NEMOTRON_DATASETS,
-        "tokenize_fn": tokenize_nemotron_steps,
+        "subsets": list(NEMOTRON_DATASETS.keys()),
+        "download": nemotron_downloads["nemotron_cc"],
+        "tokenize_fn": tokenize_nemotron,
     },
     "dolma": {
-        "splits": DOLMA_DATASETS,
-        "tokenize_fn": tokenize_dolma_steps,
+        "subsets": list(DOLMA_DATASETS.keys()),
+        "download": dolma_downloads["dolma"],
+        "tokenize_fn": tokenize_dolma,
     },
 }
