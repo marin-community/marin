@@ -8,7 +8,6 @@ import numpy as np
 from jax._src.state.indexing import dslice
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
-from jax.sharding import PartitionSpec
 from jaxtyping import ArrayLike, Scalar
 
 import haliax as hax
@@ -95,8 +94,7 @@ def _single_shard_histogram(a: NamedArray, bin_edges, reduce_mesh):
     Returns:
         Array: counts. has length len(bins) - 1
     """
-    if isinstance(a, hax.NamedArray):
-        a = a.array
+    a = a.array
     a = a.flatten()
     dtype = a.dtype
 
@@ -124,19 +122,13 @@ def _shardmap_histogram(a: NamedArray, bins):
     spec = hax.partitioning.pspec_for_axis(a.axes)
     flattened_spec = _flattened_spec(spec)
 
-    # # shard_map in newer JAX versions requires mesh axes to be marked as manual.
-    # # Rewrap the mesh with manual_axes when possible to keep older call sites working.
-    # if mesh is not None and hasattr(mesh, "axis_names"):
-    #     try:
-    #         mesh = type(mesh)(mesh.devices, mesh.axis_names, manual_axes=mesh.axis_names)
-    #     except (TypeError, ValueError):
-    #         pass
-
     def _wrapped_hist(arr):
-        return (_single_shard_histogram(arr, bin_edges=bins, reduce_mesh=flattened_spec),)
+        return _single_shard_histogram(arr, bin_edges=bins, reduce_mesh=flattened_spec)
 
-    shard_h = shard_map( _wrapped_hist,)
-    res = shard_h(a)[0]
+    shard_h = shard_map(
+        _wrapped_hist,
+    )
+    res = shard_h(a)
 
     # the filter misses the last bin, so we need to add it
     if res.size >= 1:
