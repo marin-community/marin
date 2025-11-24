@@ -7,7 +7,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec
 from jaxtyping import Array
 
 import haliax as hax
@@ -43,7 +43,7 @@ def test_pspec_for_named_axes():
     with axis_mapping(resource_map), mesh:
         mod = MyModule(named=hax.ones((Dim1, Dim2, Dim3)), unnamed1=jnp.ones(Dim2.size), static_field=1)
 
-        specs: MyModule = pspec_for(mod, preserve_existing_shardings=False)
+        specs: MyModule = pspec_for(mod)
 
         spec = PartitionSpec(None, ResourceAxis.DATA, ResourceAxis.MODEL)
 
@@ -60,9 +60,20 @@ def test_pspec_for_plain_array_axis_names():
     with axis_mapping(resource_map), mesh:
         mod = ArrayModule(jnp.ones((Dim2.size, Dim3.size)))
 
-        specs: ArrayModule = pspec_for(mod, preserve_existing_shardings=False)
+        specs: ArrayModule = pspec_for(mod)
 
         assert specs.arr == PartitionSpec(ResourceAxis.DATA, ResourceAxis.MODEL)
+
+
+def test_pspec_for_plain_array_uses_typeof_sharding():
+    # In explicit sharding mode, jax.typeof carries sharding info for plain arrays.
+    devices = jax.devices()
+    mesh = Mesh(np.array(devices), (ResourceAxis.DATA,), axis_types=(AxisType.Explicit,))
+    sharding = NamedSharding(mesh, PartitionSpec(ResourceAxis.DATA, None))
+    array = jax.device_put(jnp.ones((len(devices), 2)), sharding)
+
+    spec = pspec_for(array, resource_mapping={})
+    assert spec == PartitionSpec(ResourceAxis.DATA, None)
 
 
 class NestedArrayModule(eqx.Module):
@@ -74,7 +85,7 @@ def test_pspec_for_plain_array_axis_names_nested_module():
     with axis_mapping(resource_map), mesh:
         mod = NestedArrayModule(ArrayModule(jnp.ones((Dim2.size, Dim3.size))))
 
-        specs: NestedArrayModule = pspec_for(mod, preserve_existing_shardings=False)
+        specs: NestedArrayModule = pspec_for(mod)
 
         assert specs.inner.arr == PartitionSpec(ResourceAxis.DATA, ResourceAxis.MODEL)
 

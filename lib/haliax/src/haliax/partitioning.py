@@ -16,7 +16,7 @@ import equinox as eqx
 import jax
 from equinox import is_array, module_update_wrapper
 from jax.lax import with_sharding_constraint
-from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, SingleDeviceSharding, get_abstract_mesh
+from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, get_abstract_mesh
 
 
 from jaxtyping import PyTree
@@ -214,7 +214,7 @@ def shard(x: T, mapping: ResourceMapping | None = None, mesh: Mesh | None = None
             # could use eqx.partition to avoid this, but eh
             return named
 
-        pspec = pspec_for(named, mapping, preserve_existing_shardings=False)
+        pspec = pspec_for(named, mapping)
         assert isinstance(pspec, PartitionSpec)
         sharding = NamedSharding(resolved_mesh, pspec)
         if is_in_jit():
@@ -235,7 +235,6 @@ def shard_with_axis_mapping(x: T, mapping: ResourceMapping, mesh: Mesh | None = 
 def pspec_for(
     tree: PyTree,
     resource_mapping: ResourceMapping | None = None,
-    preserve_existing_shardings: bool = True,
 ) -> PyTree:
     """Infer the :class:`PartitionSpec` for a module.
 
@@ -243,9 +242,6 @@ def pspec_for(
     objects instead of :class:`~jax.sharding.NamedSharding`. It is primarily a helper
     for :func:`infer_resource_partitions` but may be useful when only the partition
     specification is required.
-
-    If ``preserve_existing_shardings`` is ``True``, then arrays that already have a
-    sharding are left untouched and ``None`` is returned for those leaves.
     """
     if resource_mapping is None:
         resource_mapping = current_thread_local_mapping()
@@ -253,17 +249,28 @@ def pspec_for(
     if resource_mapping is None:
         raise ValueError("No resource mapping found")
 
+    def _pspec_from_typeof(x: typing.Any) -> PartitionSpec | None:
+        """
+        Try to recover a PartitionSpec from the JAX-level type (jax.typeof) of ``x``.
+
+        Newer versions of JAX include sharding information in the abstract values for
+        explicitly-sharded arrays. When available, prefer that over concrete sharding
+        info so we respect sharding-in-types even for plain arrays.
+        """
+        try:
+            typeof = jax.typeof(x)
+        except Exception:
+            return None
+
+        sharding = getattr(typeof, "sharding", None)
+        spec = getattr(sharding, "spec", None)
+        if isinstance(spec, PartitionSpec):
+            return spec
+        return None
+
     def partition_spec(node: typing.Any):
         if isinstance(node, NamedArray):
-            # If our NamedArray doesn't have an array (or a shapedtypestruct), we can't shard it
-            if not is_jax_array_like(node.array):
-                return None
-
-            current_sharding = getattr(node.array, "sharding", None) if preserve_existing_shardings else None
-            if current_sharding is not None:
-                return None
-            else:
-                return pspec_for_axis(node.axes, resource_mapping)
+            return pspec_for_axis(node.axes, resource_mapping)
         elif isinstance(node, eqx.Module):
             # handle eqx.Module explicitly so that we can look at axis_names metadata
             updates: dict[str, typing.Any] = {}
@@ -274,11 +281,7 @@ def pspec_for(
                 value = getattr(node, field.name)
                 axis_names = field.metadata.get("axis_names") if field.metadata is not None else None
                 if axis_names is not None and is_jax_array_like(value):
-                    current_sharding = getattr(value, "sharding", None) if preserve_existing_shardings else None
-                    if current_sharding is not None:
-                        updates[field.name] = None
-                    else:
-                        updates[field.name] = pspec_for_axis(axis_names, resource_mapping)
+                    updates[field.name] = pspec_for_axis(axis_names, resource_mapping)
                 else:
                     updates[field.name] = htu.tree_map(
                         partition_spec, value, is_leaf=lambda x: isinstance(x, eqx.Module)
@@ -294,21 +297,13 @@ def pspec_for(
 
             return new_node
         elif is_jax_array_like(node):
-            sharding = getattr(node, "sharding", None)
+            type_pspec = _pspec_from_typeof(node)
             # TODO: these are usually replicated. Is there a better way to tell?
             if node.shape == ():
                 return PartitionSpec()
-            elif isinstance(sharding, SingleDeviceSharding):
-                return PartitionSpec(None)
-            elif sharding is not None and preserve_existing_shardings:
-                return None
-            # elif use_auto_sharding:
-            # TODO: auto doesn't seem to really work reliably yet
-            #     compat between 0.4.10 and 0.4.11
-            # if isinstance(AUTO, typing.Callable):  # type: ignore
-            #     return AUTO(mesh)
-            # else:
-            #     return AUTO
+            elif type_pspec is not None:
+                return type_pspec
+
             return PartitionSpec(None)
         elif isinstance(node, (bool, float, complex, int)):
             return PartitionSpec()
@@ -321,22 +316,14 @@ def pspec_for(
 def infer_resource_partitions(
     tree: PyTree,
     resource_mapping: ResourceMapping | None = None,
-    preserve_existing_shardings: bool = True,
     mesh: Mesh | None = None,
 ) -> PyTree:
     """
     Infer the sharding for a module, to be used with ``named_jit``.
 
     This first calls :func:`pspec_for` to compute ``PartitionSpec`` objects and then
-    wraps them in :class:`~jax.sharding.NamedSharding` using the provided mesh. If
-    ``preserve_existing_shardings`` is ``True``, then arrays that are already sharded
-    retain their current sharding.
-    """
-    pspecs = pspec_for(
-        tree,
-        resource_mapping=resource_mapping,
-        preserve_existing_shardings=preserve_existing_shardings,
-    )
+    wraps them in :class:`~jax.sharding.NamedSharding` using the provided mesh."""
+    pspecs = pspec_for(tree, resource_mapping=resource_mapping)
 
     resolved_mesh = _resolve_mesh(mesh)
     if resolved_mesh is None:
@@ -446,15 +433,11 @@ class _NamedJitWrapper(eqx.Module):
                 in_resources = infer_resource_partitions(
                     (dynamic_donated, dynamic_reserved),
                     in_axis_resources,
-                    preserve_existing_shardings=in_axis_resources is None,
                 )
                 my_pjit_args["in_shardings"] = in_resources
 
             if out_axis_resources is not None:
-                # TODO: when AUTO is fixed (or eval_shape can give shardings), use it here
-                out_resources = infer_resource_partitions(
-                    output_shape, out_axis_resources, preserve_existing_shardings=False
-                )
+                out_resources = infer_resource_partitions(output_shape, out_axis_resources)
                 my_pjit_args["out_shardings"] = out_resources
 
             cached_pjitted_fun = _named_pjit_cache(self._fn, **my_pjit_args)
@@ -711,8 +694,6 @@ def sharding_for_axis(
     resolved_mesh = _resolve_mesh(mesh)
     if resolved_mesh is None:
         raise ValueError("No mesh found")
-
-    return NamedSharding(resolved_mesh, pspec_for_axis(axis, mapping))
 
     return NamedSharding(resolved_mesh, pspec_for_axis(axis, mapping))
 
