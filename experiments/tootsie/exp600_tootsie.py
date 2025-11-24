@@ -32,10 +32,14 @@ import dataclasses
 from levanter.schedule import ScheduleStep
 
 from experiments.cooldown_anneal import dolmino_dclm
-from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3_old
+from experiments.pretraining_datasets.dclm import (
+    DCLM_MIXTURE_WEIGHTS,
+    dclm_components_llama3,
+    dclm_mixture_config_llama3_old,
+)
 from experiments.defaults import default_train
 from experiments.pretraining_datasets import tokenize_dolma
-from experiments.pretraining_datasets.dolmino import tokenized as dolmino_tokenized, tokenize_dolmino_subset
+from experiments.pretraining_datasets import tokenize_dolmino_math, tokenize_dolmino_subset
 from experiments.evals.evals import default_base_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
@@ -397,7 +401,7 @@ dessert_weights_v2 = {
     ),
 }
 
-all_math = dolmino_tokenized["dolmino_math"]
+all_math = tokenize_dolmino_math()
 
 dessert_tokenized_v2 = {
     **phase_3_tokenized,

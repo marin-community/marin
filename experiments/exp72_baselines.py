@@ -19,18 +19,14 @@ https://github.com/marin-community/marin/issues/72
 
 import os
 
-from experiments.defaults import default_tokenize, default_train
+from experiments.defaults import default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config, llama_300m, llama_300m_train_config
-from experiments.pretraining_datasets import (
-    fineweb_edu_tokenized_llama3,
-    nemotron_cc,
-    slimpajama,
-    slimpajama_6b_tokenized_llama3,
-)
+from experiments.pretraining_datasets.simple import downloads, tokenized
+from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, lm_data_config, tokenize
+from marin.processing.tokenize import TokenizeConfig, lm_data_config, lm_mixture_data_config, tokenize
 
-slimpajama_6b_tokenized = slimpajama_6b_tokenized_llama3
+slimpajama_6b_tokenized = tokenized["slimpajama_6b"]
 slimpajama_6b_config = lm_data_config(slimpajama_6b_tokenized, permutation_type="linear")
 slimpajama_6b_model = default_train(
     name="SlimPajama-6B-300m",
@@ -43,8 +39,8 @@ slimpajama_tokenized = ExecutorStep(
     name=os.path.join("tokenized", "SlimPajama-627B"),
     fn=tokenize,
     config=TokenizeConfig(
-        train_paths=[slimpajama.cd("train")],
-        validation_paths=[slimpajama.cd("validation")],
+        train_paths=[downloads["slimpajama"].cd("train")],
+        validation_paths=[downloads["slimpajama"].cd("validation")],
         cache_path=this_output_path(),
         tokenizer=versioned(llama3_tokenizer),
     ),
@@ -57,7 +53,7 @@ slimpajama_model = default_train(
     train_config=llama_1_4b_train_config,
 )
 
-fineweb_edu_tokenized = fineweb_edu_tokenized_llama3
+fineweb_edu_tokenized = tokenized["fineweb_edu"]
 fineweb_edu_config = lm_data_config(fineweb_edu_tokenized, permutation_type="linear")
 fineweb_edu_model = default_train(
     name="fineweb-edu-1.4b",
@@ -66,8 +62,12 @@ fineweb_edu_model = default_train(
     train_config=llama_1_4b_train_config,
 )
 
-nemotron_cc_tokenized = default_tokenize(name="nemotron_cc", dataset=nemotron_cc, tokenizer=llama3_tokenizer)
-nemotron_cc_config = lm_data_config(nemotron_cc_tokenized, permutation_type="linear")
+nemotron_cc_steps = tokenize_nemotron(tokenizer=llama3_tokenizer)
+nemotron_cc_config = lm_mixture_data_config(
+    components=nemotron_cc_steps,
+    weights=NEMOTRON_WEIGHTS,
+    permutation_type="linear",
+)
 nemotron_cc_model = default_train(
     name="nemotron_cc-1.4b",
     tokenized=nemotron_cc_config,
@@ -83,7 +83,6 @@ if __name__ == "__main__":
             slimpajama_6b_model,
             slimpajama_model,
             fineweb_edu_model,
-            nemotron_cc_tokenized,
             nemotron_cc_model,
         ],
         description="Train 1.4B models on standard datasets (SlimPajama 6B, SlimPajama, FineWebEdu, Nemotron-CC).",

@@ -36,7 +36,7 @@ from experiments.pretraining_datasets import (
     NEMOTRON_WEIGHTS,
     tokenize_nemotron,
 )
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_components
 from marin.execution import executor_main, output_path_of

@@ -26,7 +26,7 @@ import dataclasses
 
 from levanter.callbacks.watch import WatchConfig
 
-from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_sft, default_train
 from experiments.pretraining_datasets import tokenize_dolmino_subset
 from experiments.exp606_sft import tulu3_llama_data_old, tulu_sft_config

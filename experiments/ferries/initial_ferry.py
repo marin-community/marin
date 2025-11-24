@@ -18,8 +18,8 @@ import math
 
 from experiments.defaults import SimpleTrainConfig, default_train
 from experiments.qwen3 import qwen3_1_7b, qwen3_8b
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
-from experiments.nemotron_cc.tokenize_nemotron import (
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
+from experiments.pretraining_datasets import (
     NEMOTRON_WEIGHTS,
     tokenize_nemotron,
 )

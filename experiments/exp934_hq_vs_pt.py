@@ -31,9 +31,9 @@ Metrics: Paloma Loss, Tulu3 Validation Loss, MMLU Accuracy
 # HQ = High Quality
 
 from experiments.anneal_config import AnnealConfig
-from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
 from experiments.defaults import default_anneal, default_tokenize
-from experiments.pretraining_datasets.dolmino import tokenized as dolmino_tokenized, tokenize_dolmino
+from experiments.pretraining_datasets.dolmino import tokenize_dolmino, tokenize_dolmino_math
 from experiments.exp575_wikipedia_markdownify import wikipedia_resiliparse_custom_fork
 from experiments.exp579_ar5iv_markdownify import ar5iv_no_problem_resiliparse_custom_fork
 from experiments.exp822_stackexchange_markdownify import stackexchange_text_resiliparse_custom_fork
@@ -65,7 +65,7 @@ nemotron_code_dolmino_components = {
     **tokenize_nemotron(),
     "starcoderdata": dclm_components_llama3["starcoderdata"],
     "proofpile_2": dclm_components_llama3["proofpile_2"],
-    "all_math": dolmino_tokenized["dolmino_math"],
+    "all_math": tokenize_dolmino_math(),
     **tokenize_dolmino(),
 }
 
@@ -120,7 +120,7 @@ pt_vs_hq_components = {
     **tokenize_nemotron(),
     "starcoderdata": dclm_components_llama3["starcoderdata"],
     "proofpile_2": dclm_components_llama3["proofpile_2"],
-    "all_math": dolmino_tokenized["dolmino_math"],
+    "all_math": tokenize_dolmino_math(),
     "arxiv_markdownified": md_arxiv_tokenized,
     "wikipedia_markdown": md_wiki_tokenized,
     "stackexchange_custom": md_stackexchange_tokenized,

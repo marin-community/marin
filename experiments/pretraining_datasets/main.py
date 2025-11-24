@@ -81,9 +81,13 @@ def get_steps(dataset_names: list[str], *, download: bool = False, tokenize: boo
 
 
 @click.group(invoke_without_command=True)
+@click.option("--dry_run", type=str, hidden=True, help="Passed by test framework; ignored by this CLI.")
+@click.option("--executor_info_base_path", type=str, hidden=True, help="Passed by test framework; ignored by this CLI.")
+@click.option("--prefix", type=str, hidden=True, help="Passed by test framework; ignored by this CLI.")
 @click.pass_context
-def cli(ctx):
+def cli(ctx, dry_run, executor_info_base_path, prefix):
     """Manage pretraining datasets: download, tokenize, and list available datasets."""
+    # These arguments are passed by the test framework but used by executor_main, not this CLI
     if ctx.invoked_subcommand is None:
         ctx.invoke(_list)
 

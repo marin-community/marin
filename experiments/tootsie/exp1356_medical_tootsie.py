@@ -24,7 +24,7 @@ Report: https://api.wandb.ai/links/marin-community/qfnxfxc3
 from dataclasses import replace
 
 from experiments.anneal_config import AnnealConfig
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.defaults import default_anneal
 from experiments.midtraining_datasets import (
     lavita_medmcqa_tokenized,

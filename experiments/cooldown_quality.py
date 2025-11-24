@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 
 from experiments.anneal_config import AnnealConfig
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.defaults import default_anneal
 from experiments.pretraining_datasets import tokenize_dolma
 from marin.execution.executor import ExecutorStep

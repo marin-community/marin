@@ -15,10 +15,8 @@
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
-from experiments.pretraining_datasets import (
-    slimpajama_6b_tokenized_llama3,
-    tokenize_dolma,
-)
+from experiments.pretraining_datasets import tokenize_dolma
+from experiments.pretraining_datasets.simple import tokenized
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path
 
@@ -29,7 +27,7 @@ starcoder_tokenized = dolma_components["dolma/starcoder"]
 wiki_tokenized = dolma_components["dolma/wiki"]
 flan_tokenized = dolma_components["dolma/flan"]
 
-slimpajama_tokenized = slimpajama_6b_tokenized_llama3
+slimpajama_tokenized = tokenized["slimpajama_6b"]
 
 latxa_corpus = ExecutorStep(
     name="raw/latxa_corpus",
