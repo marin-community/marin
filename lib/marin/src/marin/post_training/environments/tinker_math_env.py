@@ -113,6 +113,7 @@ class TinkerMathEnv(MarinEnv):
         mode: str = "train",
         n_generations: int = 1,
         temperature: float = 1.0,
+        step: int = 0,
         **kwargs,
     ) -> EnvStep:
         """
@@ -125,18 +126,20 @@ class TinkerMathEnv(MarinEnv):
             mode: "train" or "eval"
             n_generations: Number of generations per example
             temperature: Generation temperature
+            step: Current training step index
         """
         # Sample examples from dataset using JAX random (synchronized across workers)
         if mode == "train":
             available_examples = self.train_examples
         else:
             available_examples = self.eval_examples
-
-        # Use JAX random for consistent sampling across all TPU workers
-        with jax.default_device(jax.devices("cpu")[0]):
-            n_to_sample = min(n_examples, len(available_examples))
-            indices = jax.random.choice(prng_key, len(available_examples), shape=(n_to_sample,), replace=False)
-            examples = [available_examples[int(idx)] for idx in indices]
+        
+        # Use deterministic sampling based on step index
+        # This ensures we iterate through the dataset sequentially and wrap around
+        total_n = len(available_examples)
+        start_idx = (step * n_examples) % total_n
+        indices = [(start_idx + i) % total_n for i in range(n_examples)]
+        examples = [available_examples[idx] for idx in indices]
 
         # Generate responses using the model
         prompts = [example["prompt"] for example in examples]
@@ -259,7 +262,7 @@ class TinkerMathEnv(MarinEnv):
         )
 
     def training_data(self) -> Iterator[DataExample]:
-        train_dataset = _get_hendrycks_math_train()
+        train_dataset = _get_hendrycks_math_train().shuffle(seed=0)
 
         for item in train_dataset:
             raw_prompt = item["problem"]

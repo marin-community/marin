@@ -130,6 +130,7 @@ class LoggingConfig:
     save_initial_checkpoint: bool = False
     log_initial_step: bool = True
     max_checkpoints: int | None = None
+    num_groups_to_log: int = 4
 
     online: bool = True
     prefix: str | None = None

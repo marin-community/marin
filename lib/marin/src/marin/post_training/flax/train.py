@@ -21,6 +21,7 @@ import jax
 import jax.numpy as jnp
 import optax
 import tyro
+import wandb
 from flax.training.train_state import TrainState
 from jax.sharding import PartitionSpec as PS
 from optax import softmax_cross_entropy_with_integer_labels
@@ -475,17 +476,17 @@ class Trainer:
         # Training loop
         rng = jax.random.PRNGKey(0)
 
-        # Evaluate before first training iteration if requested
-        if self.config.logging.log_initial_step and latest_checkpoint_step < 0:
-            if self.config.logging.num_eval_examples > 0:
-                print("Evaluating before first training step...")
-                rng, subrng = jax.random.split(rng)
-                eval_metrics = self.evaluate_data_from_environment(train_state.params, subrng)
-                log_metrics = {"step": -1}
-                log_metrics.update(eval_metrics)
-                log_metrics = jax.device_get(log_metrics)
-                self.logger.log(log_metrics)
-                print(log_metrics)
+        # # Evaluate before first training iteration if requested
+        # if self.config.logging.log_initial_step and latest_checkpoint_step < 0:
+        #     if self.config.logging.num_eval_examples > 0:
+        #         print("Evaluating before first training step...")
+        #         rng, subrng = jax.random.split(rng)
+        #         eval_metrics = self.evaluate_data_from_environment(train_state.params, subrng)
+        #         log_metrics = {"step": -1}
+        #         log_metrics.update(eval_metrics)
+        #         log_metrics = jax.device_get(log_metrics)
+        #         self.logger.log(log_metrics)
+        #         print(log_metrics)
 
         for step in tqdm(
             range(max(0, latest_checkpoint_step), self.config.hyperparameters.num_train_steps),
@@ -518,7 +519,7 @@ class Trainer:
                 reference_logprobs_bsize=self.reference_logprobs_bsize,
             )
 
-            rl_dataset, dataset_metrics = create_dataset_from_environment(
+            rl_dataset, dataset_metrics, env_step = create_dataset_from_environment(
                 environment=environment,
                 policy_ctx=policy_ctx,
                 reference_ctx=reference_ctx,
@@ -530,6 +531,7 @@ class Trainer:
                 pad_token_id=self.pad_token_id,
                 mode="train",
                 temperature=self.config.generation_config.temperature,
+                step=step,
             )
             del inference_params
 
@@ -542,6 +544,19 @@ class Trainer:
                 if self.config.logging.num_eval_examples > 0:
                     rng, subrng = jax.random.split(rng)
                     metrics.update(self.evaluate_data_from_environment(train_state.params, subrng))
+
+                if self.config.logging.num_groups_to_log > 0:
+                    num_groups = min(self.config.logging.num_groups_to_log, len(env_step.examples))
+                    columns = ["prompt", "response"]
+                    data = []
+                    for i in range(num_groups):
+                        prompt = env_step.examples[i]["prompt"]
+                        for response in env_step.responses[i]:
+                            decoded_response = self.tokenizer.decode(response["tokens"], skip_special_tokens=True)
+                            data.append([prompt, decoded_response])
+                    
+                    if data:
+                        metrics["train/samples"] = wandb.Table(columns=columns, data=data)
 
                 log_metrics = {"step": step + 1}
                 log_metrics.update(metrics)

@@ -435,7 +435,8 @@ def create_dataset_from_environment(
     pad_token_id: int,
     mode: str = "train",
     temperature: float = 1.0,
-) -> tuple["RLDataset", dict[str, float]]:
+    step: int = 0,
+) -> tuple["RLDataset", dict[str, float], EnvStep]:
     """Create RLDataset by stepping through the environment.
 
     Args:
@@ -450,9 +451,10 @@ def create_dataset_from_environment(
         pad_token_id: Padding token ID
         mode: "train" or "eval"
         temperature: Generation temperature
+        step: Current training step index
 
     Returns:
-        RLDataset and metrics dictionary
+        RLDataset, metrics dictionary, and the raw EnvStep
     """
     # Step environment with policy context
     env_step = environment.step(
@@ -462,6 +464,7 @@ def create_dataset_from_environment(
         mode=mode,
         n_generations=n_generations,
         temperature=temperature,
+        step=step,
     )
 
     # Create dataset from environment step
@@ -473,4 +476,4 @@ def create_dataset_from_environment(
         pad_token_id=pad_token_id,
     )
 
-    return dataset, env_step.metrics
+    return dataset, env_step.metrics, env_step

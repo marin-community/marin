@@ -51,9 +51,9 @@ def open_with_bucket(
     if gcloud_token is None:
         gcloud_token = GCLOUD_TOKEN_PATH
     # load from google cloud storage if starts with "gs://"
-    if path.startswith("gs://"):
+    if str(path).startswith("gs://"):
         f = gcsfs.GCSFileSystem(project=gcloud_project, token=gcloud_token).open(
-            path[len("gs://") :], mode=mode, **kwargs
+            str(path)[len("gs://") :], mode=mode, **kwargs
         )
     else:
         f = open(path, mode=mode, **kwargs)
@@ -164,8 +164,24 @@ def save_checkpoint(train_state, path, gather_fns=None, float_dtype=None):
 
     with open_with_bucket(path, "wb") as fout:
         for key, value in flattend_train_state.items():
+            # Debugging: log tensor info before gather
+            print(f"[DEBUG] Processing tensor key: {key}")
+            if hasattr(value, 'shape'):
+                print(f"[DEBUG]   Shape: {value.shape}, dtype: {value.dtype}")
+            if hasattr(value, 'sharding'):
+                print(f"[DEBUG]   Sharding: {value.sharding}")
+            
             if gather_fns is not None:
-                value = gather_fns[key](value)
+                try:
+                    print(f"[DEBUG]   Attempting gather for key: {key}")
+                    value = gather_fns[key](value)
+                    print(f"[DEBUG]   Gather succeeded for key: {key}")
+                except Exception as e:
+                    print(f"[ERROR] Failed to gather tensor key: {key}")
+                    print(f"[ERROR]   Exception type: {type(e).__name__}")
+                    print(f"[ERROR]   Exception message: {str(e)}")
+                    raise
+            
             value = float_tensor_to_dtype(value, float_dtype)
             fout.write(packer.pack((key, to_bytes(value))))
 
