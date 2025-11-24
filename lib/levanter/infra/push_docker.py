@@ -35,7 +35,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    repo_root = next((p for p in [Path.cwd()] + list(Path.cwd().parents) if (p / ".git").exists()), Path.cwd())
+    repo_root = cli.find_repo_root()
     docker_file = Path(args.docker_file)
     if not docker_file.is_absolute():
         docker_file = repo_root / docker_file
