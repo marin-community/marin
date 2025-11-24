@@ -14,8 +14,6 @@ from typing import Any, Callable, ContextManager, Mapping, Optional, ParamSpec, 
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
-import jax.tree_util as jtu
 from equinox import is_array, module_update_wrapper
 from jax.experimental.shard_map import shard_map as jax_shard_map
 from jax.lax import with_sharding_constraint
@@ -26,10 +24,9 @@ from jaxtyping import PyTree
 
 import haliax.tree_util as htu
 from haliax._src.compile_utils import compile_cache
-from regex import P
 
-from .axis import Axis, AxisSelection, AxisSelector, axis_spec_to_shape_dict, to_jax_shape
-from .core import NamedArray, enable_shape_checks
+from .axis import Axis, AxisSelection, AxisSelector, axis_spec_to_shape_dict
+from .core import NamedArray
 from .jax_utils import Static, is_in_jit, is_jax_array_like, is_on_mac_metal
 from .tree_util import hashable_combine, hashable_partition
 from .util import StringHolderEnum
@@ -150,7 +147,6 @@ def mesh_context(mesh: MeshLike) -> ContextManager[None]:
         msg = "Haliax requires a version of JAX that provides either `jax.set_mesh` or `jax.sharding.use_mesh`."
         raise RuntimeError(msg)
 
-
     context_manager = manager_factory(mesh)
 
     return context_manager
@@ -240,7 +236,7 @@ def shard_with_axis_mapping(x: T, mapping: ResourceMapping, mesh: Mesh | None = 
 def pspec_for(
     tree: PyTree,
     resource_mapping: ResourceMapping | None = None,
-    preserve_existing_shardings: bool = True,
+    preserve_existing_shardings: bool = False,
 ) -> PyTree:
     """Infer the :class:`PartitionSpec` for a module.
 
@@ -769,48 +765,50 @@ def shard_map(
 def shard_map(
     f: Optional[Callable] = None,
     *,
-    in_specs=None,
-    out_specs=None,
+    in_specs: PyTree = None,
+    out_specs: PyTree = None,
     mesh: Optional[Mesh] = None,
     axis_mapping: Optional[ResourceMapping] = None,
     check_rep: bool = False,
-    **kwargs,
-):
+    **shmap_kwargs: dict,
+) -> Callable:
     """A NamedArray-friendly wrapper around :func:`jax.experimental.shard_map.shard_map`.
 
     This function can be used either as ``haliax.shard_map(fn, ...)`` or as a
     decorator::
 
-        @haliax.shard_map()
+        @haliax.shard_map
         def fn(x):
             ...
 
     Note that, unlike the JAX version, you don't need to provide in_specs, out_specs, if all arguments and return value
     are ``NamedArray`` objects. Mesh can be inferred from the context mesh (which JAX could do, but doesn't).
-    Axis mapping can be inferred from the context axis mapping.
+    Axis mapping can be inferred from the context axis mapping or provided explicitly.
 
+    Also note that this function will call ``f`` twice unless out_specs is provided: once to infer the output
+    pspec, and once to actually run the computation.
 
     Args:
         f: The function to apply with ``shard_map``.
         in_specs: Optional PyTree describing the input sharding. Each leaf can be a
-            :class:`NamedArray`, :class:`Axis`, or a sequence of ``Axis`` objects,
-            or a :class:`PartitionSpec`. ``NamedArray`` and ``Axis`` leaves will be
-            converted to ``PartitionSpec`` using :func:`pspec_for_axis` and the
-            provided ``axis_mapping``. If ``None`` the specifications are
+            [haliax.NamedArray][], [haliax.Axis][], or a sequence of `Axis` objects,
+            or a [jax.sharding.PartitionSpec][]. `NamedArray` and `Axis` leaves will be
+            converted to `PartitionSpec` using :func:`pspec_for_axis` and the
+            provided `axis_mapping`. If `None` the specifications are
             inferred from the arguments on first invocation.
-        out_specs: Like ``in_specs`` but for the output. If ``None`` the output
-            specifications are inferred by evaluating ``f`` on placeholder inputs
+        out_specs: Like `in_specs` but for the output. If `None` the output
+            specifications are inferred by evaluating `f` on placeholder inputs
             and using the returned axis names.
         mesh: The mesh to run the computation on. Defaults to the current mesh
-            returned by :func:`_get_mesh`.
+            returned by [jax.sharding.get_abstract_mesh][].
         axis_mapping: Optional mapping from logical axis names to mesh axis names
-            used when converting ``Axis`` objects to ``PartitionSpec``.
-        check_rep: Passed through to ``jax.shard_map``.
-        **kwargs: Additional arguments forwarded to ``jax.shard_map``.
+            used when converting `Axis` objects to `PartitionSpec`.
+        check_rep: Passed through to `jax.shard_map`.
+        **shmap_kwargs: Additional arguments forwarded to `jax.shard_map`.
 
-        Returns:
-            A wrapped function that accepts and returns ``NamedArray`` objects
-            according to the provided specifications.
+    Returns:
+        A wrapped function that accepts and returns `NamedArray` objects
+        according to the provided specifications.
     """
 
     if f is None:
@@ -821,80 +819,41 @@ def shard_map(
             mesh=mesh,
             axis_mapping=axis_mapping,
             check_rep=check_rep,
-            **kwargs,
-        )
-
-
-    def _axes(spec):
-        if isinstance(spec, NamedArray):
-            return spec.axes
-        elif isinstance(spec, (PartitionSpec, NamedSharding)):
-            return spec
-        elif isinstance(spec, Axis):
-            return spec
-        elif isinstance(spec, Sequence) and all(isinstance(ax, Axis) for ax in spec):
-            return tuple(spec)
-        else:
-            return None
-
-    def _pspec(spec):
-        if is_jax_array_like(spec) and not isinstance(spec, NamedArray):
-            return None
-        if isinstance(spec, (PartitionSpec, NamedSharding)) or spec is None:
-            return spec
-        axes = _axes(spec)
-        if axes is None:
-            return spec
-        return pspec_for_axis(axes, axis_mapping)
-
-    def _leaf(x):
-        if x is None:
-            return True
-        if isinstance(x, (NamedArray, PartitionSpec, str)):
-            return True
-        return isinstance(x, Sequence) and all(isinstance(ax, Axis) for ax in x)
-
-    @dataclasses.dataclass(frozen=True)
-    class _AxisNames:
-        names: list[str]
-
-    def _get_axis_names(tree):
-        return jax.tree.map(
-            lambda x: _AxisNames([ax.name for ax in x.axes]) if isinstance(x, NamedArray) else _AxisNames([]),
-            tree,
-            is_leaf=lambda x: isinstance(x, NamedArray),
-        )
-
-    def build_fn(f, mesh, in_specs, out_shape, out_specs):
-
-        # ok this is where things get mildly interesting.
-        # the axis sizes will change inside the function, so we need to unsize them then resize them inside
-        axis_names = jax.tree
-        def inner(*args, **kwargs):
-            result = f(*args, **kwargs)
-            return result
-
-        return jax_shard_map(
-            inner,
-            mesh=mesh,
-            in_specs=in_specs,
-            out_specs=out_specs,
-            check_rep=check_rep,
-            **kwargs,
+            **shmap_kwargs,
         )
 
     def wrapper(*args, **kwargs):
-        this_mesh = _resolve_mesh(mesh) or _get_mesh()
+        if mesh is not None:
+            this_mesh = mesh
+        else:
+            this_mesh = get_abstract_mesh()
 
-        in_specs = pspec_for((args, kwargs), axis_mapping)
+        def inner(args, kwargs):
+            return f(*args, **kwargs)
+
+        if in_specs is None:
+            this_in_specs = pspec_for((args, kwargs), axis_mapping)
+        else:
+            this_in_specs = in_specs
+
         # for output, we need to evaluate the function on placeholder inputs to get the output shape
-        out_shape = eqx.filter_eval_shape(f, *args, **kwargs)
-        out_specs = pspec_for(out_shape, axis_mapping)
+        # we have to do this under shard_map so that psum etc. work
+        almost_shmap = functools.partial(
+            jax_shard_map,
+            inner,
+            mesh=this_mesh,
+            in_specs=this_in_specs,
+            check_rep=check_rep,
+            **shmap_kwargs,
+        )
 
+        if out_specs is not None:
+            this_out_specs = out_specs
+        else:
+            out_shape = eqx.filter_eval_shape(almost_shmap(out_specs=PartitionSpec()), args, kwargs)
+            this_out_specs = pspec_for(out_shape, axis_mapping)
 
-        sm_fn = build_fn(f, mesh=this_mesh, in_specs=in_specs, out_shape=out_shape, out_specs=out_specs)
-
-        out = sm_fn(args, kwargs)
+        out = almost_shmap(out_specs=this_out_specs)(args, kwargs)
         return out
 
     return functools.update_wrapper(wrapper, f)
