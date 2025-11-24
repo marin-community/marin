@@ -254,6 +254,25 @@ def pspec_for(
     if resource_mapping is None:
         raise ValueError("No resource mapping found")
 
+    def _pspec_from_typeof(x: typing.Any) -> PartitionSpec | None:
+        """
+        Try to recover a PartitionSpec from the JAX-level type (jax.typeof) of ``x``.
+
+        Newer versions of JAX include sharding information in the abstract values for
+        explicitly-sharded arrays. When available, prefer that over concrete sharding
+        info so we respect sharding-in-types even for plain arrays.
+        """
+        try:
+            typeof = jax.typeof(x)
+        except Exception:
+            return None
+
+        sharding = getattr(typeof, "sharding", None)
+        spec = getattr(sharding, "spec", None)
+        if isinstance(spec, PartitionSpec):
+            return spec
+        return None
+
     def partition_spec(node: typing.Any):
         if isinstance(node, NamedArray):
             # If our NamedArray doesn't have an array (or a shapedtypestruct), we can't shard it
@@ -295,14 +314,19 @@ def pspec_for(
 
             return new_node
         elif is_jax_array_like(node):
+            type_pspec = _pspec_from_typeof(node)
             sharding = getattr(node, "sharding", None)
+
+            if preserve_existing_shardings and (sharding is not None or type_pspec is not None):
+                return None
+
             # TODO: these are usually replicated. Is there a better way to tell?
             if node.shape == ():
                 return PartitionSpec()
             elif isinstance(sharding, SingleDeviceSharding):
                 return PartitionSpec(None)
-            elif sharding is not None and preserve_existing_shardings:
-                return None
+            elif type_pspec is not None:
+                return type_pspec
             # elif use_auto_sharding:
             # TODO: auto doesn't seem to really work reliably yet
             #     compat between 0.4.10 and 0.4.11
@@ -790,12 +814,9 @@ def shard_map(
 
     Args:
         f: The function to apply with ``shard_map``.
-        in_specs: Optional PyTree describing the input sharding. Each leaf can be a
-            [haliax.NamedArray][], [haliax.Axis][], or a sequence of `Axis` objects,
-            or a [jax.sharding.PartitionSpec][]. `NamedArray` and `Axis` leaves will be
-            converted to `PartitionSpec` using :func:`pspec_for_axis` and the
-            provided `axis_mapping`. If `None` the specifications are
-            inferred from the arguments on first invocation.
+        in_specs: Optional PyTree prefix describing the input sharding. Each is a PartitionSpec or
+            AxisSelection. If `None` the input specifications are inferred from the
+            provided arguments using `pspec_for`.
         out_specs: Like `in_specs` but for the output. If `None` the output
             specifications are inferred by evaluating `f` on placeholder inputs
             and using the returned axis names.
