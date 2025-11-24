@@ -9,10 +9,8 @@ ENV TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS=60\
     PATH=/opt/levanter/.venv/bin:$PATH\
     HOME=/home/levanter
 
-# Use monorepo root as context; keep legacy /opt/levanter path via symlink.
 WORKDIR /opt/marin
 ADD . /opt/marin
 RUN uv sync --package levanter --extra serve --extra tpu
-
 
 WORKDIR /opt/marin/lib/levanter
