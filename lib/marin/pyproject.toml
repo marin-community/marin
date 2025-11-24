@@ -20,7 +20,7 @@ dependencies = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "jax==0.6.2",
+    "jax==0.7.2",
     "haliax>=1.4.dev443",
     "levanter[serve]",
     "lz4",
@@ -28,7 +28,7 @@ dependencies = [
     "numpy",
     "openai",
     "pandas", # Only needed by Fileprovider in inference.py
-    "pyarrow>=22",
+    "pyarrow", # Only needed by Fileprovider in inference.py
     "ray==2.45",
     "regex",
     "requests",
@@ -115,6 +115,14 @@ conflicts = [
         { extra = "cuda12" },
         { extra = "cpu" },
     ],
+    [
+        { extra = "vllm" },
+        { extra = "tpu" },
+    ],
+    [
+        { extra = "vllm" },
+        { extra = "cpu" },
+    ],
 ]
 
 [tool.uv.sources]
@@ -124,6 +132,7 @@ torch = [
     { index = "pytorch-cpu", extra="tpu" },
     # CUDA12 index only when --extra cuda12
     { index = "pytorch-cu128", extra = "cuda12" },
+    { index = "pytorch-cu128", extra = "vllm" },
 ]
 
 
@@ -148,11 +157,11 @@ gcp = [
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
+cuda12 = ["jax[cuda12]==0.7.2", "torch>=2.7.0"]
 
-tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
+tpu = ["jax[tpu]==0.7.2", "torch>=2.7.0"]
 
-cpu = ["jax==0.6.2", "torch>=2.7.0"]
+cpu = ["jax==0.7.2", "torch>=2.7.0"]
 
 crawl = [
     "w3lib",
@@ -222,7 +231,7 @@ quality_dedup_consolidate = [
 tokenize_train = [
     "multiprocess==0.70.16",
     "haliax>=1.4.dev443",
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@03fa048e86c83855d4d5e270cbaac21196454ea8",
     "tblib",
     "sentencepiece",
     "tiktoken",
@@ -237,7 +246,7 @@ rl = [
 post_training = [
     "gcsfs",
     "transformers",
-    "flax==0.10.0",
+    "flax==0.11.1",
     "jaxtyping",
     "tyro==0.8.11",
     "tqdm",
@@ -248,12 +257,17 @@ post_training = [
     "pylatexenc",
     "ipython",
     "datasets",
-    "scalax@git+https://github.com/Sea-Snell/scalax@8cf9ceabe30d4c4274df3c09aae2f66b59fbce3c",
+    "scalax@git+https://github.com/Sea-Snell/scalax.git",
     "swebench ; sys_platform != 'darwin'",
 ]
 
 eval = [
-    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@03fa048e86c83855d4d5e270cbaac21196454ea8",
+]
+
+vllm = [
+    "vllm-tpu==0.11.1",
+    "torch==2.8.0",
 ]
 
 
