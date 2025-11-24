@@ -563,7 +563,7 @@ def process_shard_group_by_reduce(ctx: ApplyShardCtx, key_fn: Callable, reducer_
     has_data = False
     for i, item in enumerate(result_generator()):
         has_data = True
-        yield ChunkHeader(shard_idx=ctx.shard_idx, chunk_idx=i, count=len(item))
+        yield ChunkHeader(shard_idx=ctx.shard_idx, chunk_idx=i, count=1)
         yield [item]
 
     # Yield empty chunk if shard has no data, so controller knows this shard exists
