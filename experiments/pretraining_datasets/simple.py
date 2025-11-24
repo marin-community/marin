@@ -23,11 +23,11 @@ import os.path
 
 from levanter.data.text import TextLmDatasetFormat
 from levanter.store.cache import CacheOptions
-
-
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
+
+from experiments.llama import llama3_tokenizer
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -51,16 +51,6 @@ def _tokenize_simple(
         tokenizer=versioned(tokenizer),
         format=text_format,
     )
-
-    if cache_options is not None:
-        config = TokenizeConfig(
-            train_paths=config.train_paths,
-            validation_paths=config.validation_paths,
-            cache_path=config.cache_path,
-            tokenizer=config.tokenizer,
-            format=config.format,
-            cache_options=cache_options,
-        )
 
     step = ExecutorStep(
         name=os.path.join("tokenized", name),
@@ -217,25 +207,30 @@ tokenized = {
     "dclm_baseline": _tokenize_simple(
         "dclm_baseline",
         downloads["dclm_baseline"],
+        tokenizer=llama3_tokenizer,
         override_path="tokenized/dclm_baseline-0206f1/",
     ),
     "starcoderdata": _tokenize_simple(
         "starcoderdata",
         downloads["starcoderdata"],
+        tokenizer=llama3_tokenizer,
         text_format=TextLmDatasetFormat(text_key="content"),
         override_path="tokenized/starcoderdata-12f018/",
     ),
     "proofpile_2": _tokenize_simple(
         "proofpile_2",
         downloads["proofpile_2"],
+        tokenizer=llama3_tokenizer,
         override_path="tokenized/proofpile_2-4a35c7/",
     ),
     "slimpajama_6b": _tokenize_simple(
         "SlimPajama-6B",
         downloads["slimpajama_6b"],
+        tokenizer=llama3_tokenizer,
     ),
     "fineweb_edu": _tokenize_simple(
         "fineweb-edu",
         downloads["fineweb_edu"],
+        tokenizer=llama3_tokenizer,
     ),
 }

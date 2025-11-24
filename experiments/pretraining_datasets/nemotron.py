@@ -16,7 +16,6 @@
 
 import os.path
 
-from levanter.store.cache import CacheOptions
 from marin.download.nemotron_cc.download_nemotron_cc import NemotronIngressConfig, download_nemotron_cc
 from marin.execution.executor import ExecutorStep, output_path_of, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -94,7 +93,6 @@ def tokenize_nemotron(*, tokenizer: str | None = None) -> dict[str, TokenizerSte
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
-                cache_options=CacheOptions(num_shard_groups=256),
             ),
             pip_dependency_groups=["sentencepiece"],
         )

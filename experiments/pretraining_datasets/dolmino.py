@@ -16,7 +16,6 @@
 
 import os.path
 
-from levanter.store.cache import CacheOptions
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -143,7 +142,6 @@ def tokenize_dolmino_math(tokenizer: str | None = None):
             validation_paths=versioned([]),
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),
-            cache_options=CacheOptions(num_shard_groups=32),
         ),
         pip_dependency_groups=["sentencepiece"],
     ).with_output_path("tokenized/dolmino/all_math-9d507c")
