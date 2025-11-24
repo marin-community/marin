@@ -15,7 +15,7 @@
 """Scaling law comparison between Stack v2 datasets and StarCoderData."""
 
 from experiments.common_pile.tokenize_common_pile import stackv2, stackv2_edu_filtered
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 

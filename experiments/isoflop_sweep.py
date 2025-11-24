@@ -35,7 +35,7 @@ from experiments.llama import compute_num_parameters
 from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
-from experiments.pretraining_datasets import dclm_baseline
+from experiments.pretraining_datasets.simple import downloads
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 from marin.processing.tokenize import lm_mixture_data_config
@@ -345,7 +345,7 @@ def generate_isoflop_sweep(
 dclm_tokenized = dataclasses.replace(
     default_tokenize(
         name="dclm_baseline",
-        dataset=dclm_baseline,
+        dataset=downloads["dclm_baseline"],
         tokenizer=llama3_tokenizer,
     ).with_output_path("tokenized/dclm_baseline-0206f1/"),
 )

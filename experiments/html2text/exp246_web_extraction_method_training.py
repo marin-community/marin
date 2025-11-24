@@ -21,7 +21,7 @@ import logging
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
-from experiments.pretraining_datasets import fineweb
+from experiments.pretraining_datasets.simple import downloads
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -42,7 +42,7 @@ transform_trafilatura_default = ExecutorStep(
     name="documents/fineweb-small-trafilatura",
     fn=process_fw_dump,
     config=ParquetFWConfig(
-        input_path=output_path_of(fineweb),
+        input_path=output_path_of(downloads["fineweb"]),
         cc_dumps=versioned(["CC-MAIN-2024-18"]),
         md_output_path=this_output_path("md"),
         text_output_path=this_output_path("text"),
@@ -74,7 +74,7 @@ transform_trafilatura_favor_precision = ExecutorStep(
     name="documents/fineweb-small-trafilatura-favor-precision",
     fn=process_fw_dump,
     config=ParquetFWConfig(
-        input_path=output_path_of(fineweb),
+        input_path=output_path_of(downloads["fineweb"]),
         cc_dumps=versioned(["CC-MAIN-2024-18"]),
         md_output_path=this_output_path("md"),
         text_output_path=this_output_path("text"),
@@ -111,7 +111,7 @@ transform_resiliparse_default = ExecutorStep(
     name="documents/fineweb-small-resiliparse-default",
     fn=process_fw_dump,
     config=ParquetFWConfig(
-        input_path=output_path_of(fineweb),
+        input_path=output_path_of(downloads["fineweb"]),
         cc_dumps=versioned(["CC-MAIN-2024-18"]),
         md_output_path=this_output_path("md"),
         text_output_path=this_output_path("text"),
@@ -144,7 +144,7 @@ transform_resiliparse_preserve_formatting = ExecutorStep(
     name="documents/fineweb-small-resiliparse-preserve-formatting",
     fn=process_fw_dump,
     config=ParquetFWConfig(
-        input_path=output_path_of(fineweb),
+        input_path=output_path_of(downloads["fineweb"]),
         cc_dumps=versioned(["CC-MAIN-2024-18"]),
         md_output_path=this_output_path("md"),
         text_output_path=this_output_path("text"),
@@ -181,7 +181,7 @@ transform_readability = ExecutorStep(
     name="documents/fineweb-small-readability",
     fn=process_fw_dump,
     config=ParquetFWConfig(
-        input_path=output_path_of(fineweb),
+        input_path=output_path_of(downloads["fineweb"]),
         cc_dumps=versioned(["CC-MAIN-2024-18"]),
         md_output_path=this_output_path("md"),
         text_output_path=this_output_path("text"),
@@ -210,7 +210,7 @@ fineweb_readability_1_4b_model = default_train(
 
 if __name__ == "__main__":
     steps = [
-        fineweb,
+        downloads["fineweb"],
         transform_trafilatura_default,
         fineweb_trafilatura_tokenized,
         fineweb_trafilatura_1_4b_model,

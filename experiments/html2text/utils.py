@@ -23,7 +23,7 @@ dataset is added with custom processed data. The main workflow includes:
 """
 
 from experiments.defaults import default_tokenize, default_train
-from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
+from experiments.pretraining_datasets import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma
 from experiments.evals.evals import default_eval
 from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.execution.executor import ExecutorStep
@@ -54,7 +54,7 @@ def dolma_pipeline_with_modified_dataset(
     Returns:
         A list of ExecutorSteps for the default experiment.
     """
-    tokenized_dolma_steps = tokenize_dolma_steps()
+    tokenized_dolma_steps = tokenize_dolma()
 
     tokenized_dataset = default_tokenize(
         name=path_prefix,

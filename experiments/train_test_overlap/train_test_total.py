@@ -46,13 +46,9 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 
 from experiments.midtraining_datasets import finemath_3_plus
-from experiments.pretraining_datasets import (
-    dclm_baseline,
-    dolmino,
-    nemotron_cc,
-    proofpile_2,
-    starcoderdata,
-)
+from experiments.pretraining_datasets.simple import downloads
+from experiments.pretraining_datasets.dolmino import downloads as dolmino_downloads
+from experiments.pretraining_datasets.nemotron import downloads as nemotron_downloads
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -92,11 +88,11 @@ def run_train_test_overlap(config: DedupeConfig) -> str:
 # finemath is parquet with 'text' as text key
 DATASET_CONFIGS = [
     DatasetConfig(name="finemath", path=finemath_3_plus, text_field="text"),
-    DatasetConfig(name="dclm", path=dclm_baseline),
-    DatasetConfig(name="starcoder", path=starcoderdata, text_field="content"),
-    DatasetConfig(name="proofpile", path=proofpile_2),
-    DatasetConfig(name="dolmino", path=dolmino),
-    DatasetConfig(name="nemotron_cc", path=nemotron_cc),
+    DatasetConfig(name="dclm", path=downloads["dclm_baseline"]),
+    DatasetConfig(name="starcoder", path=downloads["starcoderdata"], text_field="content"),
+    DatasetConfig(name="proofpile", path=downloads["proofpile_2"]),
+    DatasetConfig(name="dolmino", path=dolmino_downloads["dolmino"]),
+    DatasetConfig(name="nemotron_cc", path=nemotron_downloads["nemotron_cc"]),
 ]
 
 
