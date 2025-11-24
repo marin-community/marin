@@ -814,9 +814,9 @@ def shard_map(
 
     Args:
         f: The function to apply with ``shard_map``.
-        in_specs: Optional PyTree prefix describing the input sharding. Each is a PartitionSpec or
-            AxisSelection. If `None` the input specifications are inferred from the
-            provided arguments using `pspec_for`.
+        in_specs: Optional PyTree prefix describing the input sharding. If None, the input
+            specifications are inferred from the input NamedArray arguments and the
+            provided `axis_mapping`.
         out_specs: Like `in_specs` but for the output. If `None` the output
             specifications are inferred by evaluating `f` on placeholder inputs
             and using the returned axis names.
