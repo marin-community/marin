@@ -74,7 +74,7 @@ available_node_types:
   head_default:
     min_workers: 0
     max_workers: 0
-    resources: {"CPU": 0, "head_node": 1}
+    resources: {"CPU": 1, "head_node": 1}
 
     # GCP-Specific Configuration; by default, Ray will configure unspecified fields (e.g., subnets, ssh-keys)
     #   => Ref: https://cloud.google.com/compute/docs/reference/rest/v1/instances/insert
@@ -93,69 +93,9 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 4
-    node_config:
-      acceleratorType: v4-8
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_16:
-    max_workers: 1024
-    min_workers: 0
+    min_workers: 1
     node_config:
       acceleratorType: v4-16
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_32:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-32
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_64:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-64
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_128:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-128
-      runtimeVersion: tpu-ubuntu2204-base
-      schedulingConfig:
-        preemptible: true
-    resources:
-      CPU: 120
-      TPU: 4
-
-  tpu_slice_v4_256:
-    max_workers: 1024
-    min_workers: 0
-    node_config:
-      acceleratorType: v4-256
       runtimeVersion: tpu-ubuntu2204-base
       schedulingConfig:
         preemptible: true
