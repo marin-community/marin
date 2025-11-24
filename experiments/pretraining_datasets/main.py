@@ -17,7 +17,6 @@
 import sys
 
 import click
-
 from marin.execution.executor import ExecutorStep, executor_main
 
 from experiments.pretraining_datasets import DATASETS
@@ -41,15 +40,12 @@ def get_steps(dataset_names: list[str], *, download: bool = False, tokenize: boo
     steps = []
 
     for name in dataset_names:
-        # Parse dataset name and subset
         if ":" in name:
             dataset_family, subset = name.split(":", 1)
         else:
-            # Implicit :all for simple datasets
             dataset_family = name
             subset = "all"
 
-        # Look up in registry
         if dataset_family not in DATASETS:
             click.echo(f"Error: Unknown dataset '{dataset_family}'", err=True)
             click.echo(f"Available datasets: {', '.join(sorted(DATASETS.keys()))}", err=True)
@@ -59,23 +55,18 @@ def get_steps(dataset_names: list[str], *, download: bool = False, tokenize: boo
         dataset_info = DATASETS[dataset_family]
         available_subsets = dataset_info["subsets"]
 
-        # Determine which subsets to process
         if subset == "all":
-            # Process all available subsets
             subsets_to_process = available_subsets
         elif subset in available_subsets:
-            # Process specific subset
             subsets_to_process = [subset]
         else:
             click.echo(f"Error: Unknown {dataset_family} subset '{subset}'", err=True)
             click.echo(f"Available subsets: {', '.join(available_subsets)}", err=True)
             sys.exit(1)
 
-        # Add download step (only once per dataset)
         if download:
             steps.append(dataset_info["download"])
 
-        # Add tokenization steps
         if tokenize:
             tokenize_result = dataset_info["tokenize_fn"]()
             for sub in subsets_to_process:
@@ -89,14 +80,16 @@ def get_steps(dataset_names: list[str], *, download: bool = False, tokenize: boo
     return steps
 
 
-@click.group()
-def cli():
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx):
     """Manage pretraining datasets: download, tokenize, and list available datasets."""
-    pass
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(_list)
 
 
-@cli.command()
-def list():
+@cli.command(name="list")
+def _list():
     """List all available datasets and their subsets."""
     click.echo("=" * 70)
     click.echo("SIMPLE DATASETS (single subset)")
@@ -121,49 +114,55 @@ def list():
 
 @cli.command()
 @click.argument("datasets", nargs=-1, required=True)
-@click.option("--download", is_flag=True, help="Download raw datasets")
-@click.option("--tokenize/--no-tokenize", default=True, help="Tokenize datasets (default: enabled)")
-def run(datasets, download, tokenize):
+def download(datasets):
     """
-    Process datasets: download and/or tokenize.
+    Download raw datasets.
 
-    DATASETS: One or more dataset names to process.
+    DATASETS: One or more dataset names to download.
 
-    \b
     Examples:
-      # Tokenize simple datasets (implicit :all)
-      python -m experiments.pretraining_datasets run proofpile_2 slimpajama_6b
-
       # Download raw datasets
-      python -m experiments.pretraining_datasets run --download dolmino nemotron_cc
+      uv run experiments/pretraining_datasets/main.py download dolmino nemotron_cc
 
-      # Tokenize specific subsets
-      python -m experiments.pretraining_datasets run dolmino:dclm nemotron_cc:hq_actual
-
-      # Tokenize all subsets of a multi-subset dataset
-      python -m experiments.pretraining_datasets run dolmino:all
-
-      # Download and tokenize
-      python -m experiments.pretraining_datasets run --download dolmino:dclm
+      # Download a specific subset
+      uv run experiments/pretraining_datasets/main.py download dolmino:dclm
     """
-    if not download and not tokenize:
-        click.echo("Error: Must specify at least one of --download or --tokenize", err=True)
-        sys.exit(1)
-
-    steps = get_steps(list(datasets), download=download, tokenize=tokenize)
+    steps = get_steps(list(datasets), download=True, tokenize=False)
 
     if not steps:
         click.echo("Error: No steps found", err=True)
         sys.exit(1)
 
-    action_str = []
-    if download:
-        action_str.append("download")
-    if tokenize:
-        action_str.append("tokenize")
+    click.echo(f"Running {len(steps)} step(s) to download: {', '.join(datasets)}")
+    executor_main(steps=steps, description=f"Download: {', '.join(datasets)}")
 
-    click.echo(f"Running {len(steps)} step(s) to {' and '.join(action_str)}: {', '.join(datasets)}")
-    executor_main(steps=steps, description=f"{'/'.join(action_str).title()}: {', '.join(datasets)}")
+
+@cli.command()
+@click.argument("datasets", nargs=-1, required=True)
+def tokenize(datasets):
+    """
+    Tokenize datasets.
+
+    DATASETS: One or more dataset names to tokenize.
+
+    Examples:
+      # Tokenize simple datasets (implicit :all)
+      uv run experiments/pretraining_datasets/main.py tokenize proofpile_2 slimpajama_6b
+
+      # Tokenize specific subsets
+      uv run experiments/pretraining_datasets/main.py tokenize dolmino:dclm nemotron_cc:hq_actual
+
+      # Tokenize all subsets of a multi-subset dataset
+      uv run experiments/pretraining_datasets/main.py tokenize dolmino:all
+    """
+    steps = get_steps(list(datasets), download=False, tokenize=True)
+
+    if not steps:
+        click.echo("Error: No steps found", err=True)
+        sys.exit(1)
+
+    click.echo(f"Running {len(steps)} step(s) to tokenize: {', '.join(datasets)}")
+    executor_main(steps=steps, description=f"Tokenize: {', '.join(datasets)}")
 
 
 if __name__ == "__main__":

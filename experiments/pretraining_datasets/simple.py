@@ -24,7 +24,7 @@ import os.path
 from levanter.data.text import TextLmDatasetFormat
 from levanter.store.cache import CacheOptions
 
-from experiments.llama import llama3_tokenizer
+
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -37,7 +37,7 @@ from marin.processing.tokenize import TokenizeConfig, tokenize
 def _tokenize_simple(
     name: str,
     raw_dataset: ExecutorStep,
-    tokenizer: str = llama3_tokenizer,
+    tokenizer: str | None = None,
     override_path: str | None = None,
     text_format: TextLmDatasetFormat = TextLmDatasetFormat(),
     cache_options: CacheOptions | None = None,
@@ -138,7 +138,6 @@ downloads = {
             revision="a3b142c",
             gcs_output_path=this_output_path(),
             wait_for_completion=True,
-            timeout=24 * 60 * 60,
         ),
         override_output_path="raw/dclm_WRONG_20250211/",
     ),
@@ -151,7 +150,6 @@ downloads = {
                 revision="a3b142c",
                 gcs_output_path=this_output_path(),
                 wait_for_completion=True,
-                timeout=24 * 60 * 60,
             ),
             override_output_path="raw/dclm",
         ).cd("a3b142c")

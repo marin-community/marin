@@ -12,18 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-DOLMINO dataset definitions and tokenization.
-
-This module defines the raw DOLMINO dataset download and tokenization
-logic for all 12 splits, plus a combined math split.
-"""
+"""DOLMINO dataset definitions and tokenization."""
 
 import os.path
 
 from levanter.store.cache import CacheOptions
-
-from experiments.llama import llama3_tokenizer
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -90,8 +83,12 @@ def _get_dolmino_split_paths(split: str):
     return [dolmino_split_input_base_path / pattern for pattern in patterns]
 
 
-def tokenize_dolmino(*, tokenizer: str = llama3_tokenizer) -> dict[str, TokenizerStep]:
+def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Dolmino dataset splits."""
+    if tokenizer is None:
+        from experiments.llama import llama3_tokenizer
+
+        tokenizer = llama3_tokenizer
 
     dolmino_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for split in DOLMINO_DATASETS:
@@ -110,14 +107,16 @@ def tokenize_dolmino(*, tokenizer: str = llama3_tokenizer) -> dict[str, Tokenize
         )
 
         # Check if we need to use override path for llama3
-        if tokenizer == llama3_tokenizer and split in DOLMINO_LLAMA3_OVERRIDES:
+        from experiments.llama import llama3_tokenizer as _llama3_tokenizer
+
+        if tokenizer == _llama3_tokenizer and split in DOLMINO_LLAMA3_OVERRIDES:
             step = step.with_output_path(DOLMINO_LLAMA3_OVERRIDES[split])
         dolmino_steps[os.path.join("dolmino", split)] = step
 
     return dolmino_steps
 
 
-def tokenize_dolmino_subset(name: str, tokenizer: str = llama3_tokenizer) -> ExecutorStep[TokenizeConfig]:
+def tokenize_dolmino_subset(name: str, tokenizer: str | None = None) -> ExecutorStep[TokenizeConfig]:
     """Get a specific dolmino split tokenization step."""
     assert name in DOLMINO_DATASETS, f"Split {name} not found in DOLMINO_DATASETS"
     return tokenize_dolmino(tokenizer=tokenizer)[f"dolmino/{name}"]
@@ -129,8 +128,13 @@ _all_dolmino_math_files = [
 ]
 
 
-def tokenize_dolmino_math(tokenizer: str = llama3_tokenizer):
+def tokenize_dolmino_math(tokenizer: str | None = None):
     """Create the combined math dataset tokenization step."""
+    if tokenizer is None:
+        from experiments.llama import llama3_tokenizer
+
+        tokenizer = llama3_tokenizer
+
     return ExecutorStep(
         name="tokenized/dolmino/all_math",
         fn=tokenize,

@@ -19,7 +19,7 @@ from experiments.defaults import SimpleTrainConfig, default_tokenize, default_tr
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import LlamaConfig
-from experiments.pretraining_datasets import dclm_baseline, proofpile_2, starcoderdata
+from experiments.pretraining_datasets.simple import downloads
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
 from marin.resources import TpuPodConfig
@@ -30,27 +30,27 @@ gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
 
 dclm_baseline_tokenized_neox_wrong = default_tokenize(
     name="dclm_baseline",
-    dataset=dclm_baseline,
+    dataset=downloads["dclm_baseline"],
     tokenizer=gpt_neox_tokenizer,
 )
 
 
 dclm_baseline_neox_tokenized = default_tokenize(
     name="dclm_baseline",
-    dataset=dclm_baseline,
+    dataset=downloads["dclm_baseline"],
     tokenizer=gpt_neox_tokenizer,
 )
 
 starcoderdata_neox_tokenized = default_tokenize(
     name="starcoderdata",
-    dataset=starcoderdata,
+    dataset=downloads["starcoderdata"],
     tokenizer=gpt_neox_tokenizer,
     format=TextLmDatasetFormat(text_key="content"),
 )
 
 proofpile_2_neox_tokenized = default_tokenize(
     name="proofpile_2",
-    dataset=proofpile_2,
+    dataset=downloads["proofpile_2"],
     tokenizer=gpt_neox_tokenizer,
 )
 

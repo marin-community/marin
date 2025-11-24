@@ -21,7 +21,7 @@ logic for all 15 splits.
 
 import os.path
 
-from experiments.llama import llama3_tokenizer
+
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -110,8 +110,12 @@ DOLMA_LLAMA3_OVERRIDES = {
 }
 
 
-def tokenize_dolma(*, tokenizer: str = llama3_tokenizer) -> dict[str, TokenizerStep]:
+def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
     """Generate tokenization steps for all Dolma 1.7 dataset splits."""
+    if tokenizer is None:
+        from experiments.llama import llama3_tokenizer
+
+        tokenizer = llama3_tokenizer
 
     dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, files in DOLMA_DATASETS.items():
@@ -128,7 +132,9 @@ def tokenize_dolma(*, tokenizer: str = llama3_tokenizer) -> dict[str, TokenizerS
         )
 
         # Check if we need to use override path for llama3
-        if tokenizer == llama3_tokenizer and dataset in DOLMA_LLAMA3_OVERRIDES:
+        from experiments.llama import llama3_tokenizer as _llama3_tokenizer
+
+        if tokenizer == _llama3_tokenizer and dataset in DOLMA_LLAMA3_OVERRIDES:
             step = step.with_output_path(DOLMA_LLAMA3_OVERRIDES[dataset])
         dolma_steps[os.path.join("dolma", dataset)] = step
 
