@@ -29,7 +29,7 @@ import ray
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 
-from experiments.pretraining_datasets import proofpile_2
+from experiments.pretraining_datasets.simple import tokenized
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -54,7 +54,7 @@ def run_train_test_overlap(config: DedupeConfig) -> str:
 
 def build_proofpile_step() -> ExecutorStep:
     dedupe_config = DedupeConfig(
-        input_path=proofpile_2,
+        input_path=tokenized["proofpile_2"],
         output_path=this_output_path(),
         decontaminate_source=EVAL_DATASET_STEPS,
         attribute_name="ngram_overlap",
