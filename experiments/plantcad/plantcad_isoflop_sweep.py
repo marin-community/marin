@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Generate ISOFlop sweep steps for varying model and batch sizes on a target plant DNA dataset."""
+"""Generate ISOFlop sweep steps for varying model sizes and architectures on a target plant DNA dataset."""
 
 import dataclasses
 import math
@@ -25,6 +25,7 @@ from dataclasses import dataclass, replace
 
 from levanter.data.text import TextLmDatasetFormat
 from levanter.data.sharded_datasource import WrappedHFDataSource
+from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
@@ -40,12 +41,13 @@ from zephyr import Dataset, create_backend
 
 logger = logging.getLogger("ray")
 
-
 # TPU v5p hardware constants for memory estimation
 # Constants for TPU v5p
 HBM_PER_CHIP_GIB = 95
 CORES_PER_CHIP = 2
 V5P_CORE_OPTIONS = [8, 16, 32, 128, 256, 512]  # TPU slices
+
+ModelConfig = LlamaConfig | Qwen3Config
 
 
 def format_num(n: int | float) -> str:
@@ -95,19 +97,21 @@ class IsoFlopSweepConfig:
     total_token_count: int
     output_seq_len: int
     input_seq_len: int
-    experiment_name: str = "plantcad_isoflop_xbs_01"
-    budgets: list[float] = dataclasses.field(default_factory=lambda: [1e17, 3.3e17, 6.6e17, 1e18])
-    batch_sizes: list[int] = dataclasses.field(default_factory=lambda: [8, 32, 128, 512])
-    num_eval_tokens: int = 268_435_456
+    experiment_name: str = "plantcad_isoflop_01"
+    budgets: list[float] = dataclasses.field(default_factory=lambda: [3.3e16, 6.6e16, 1e17, 3.3e17])
+    architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen", "llama"])
+    steps_per_run: int = 8_192
+    per_device_eval_parallelism: int = 512
+    max_eval_batches: int = 64
     num_evals: int = 3
-    min_steps: int = 10
-    max_learning_rate: float = 0.01
     flop_tolerance: float = 0.01
+    max_train_token_multiplier: float = 1.2
     base_hidden_layer_ratio: int = 64
     hidden_head_ratio: int = 128
     lr_constant: float = 0.33
-    min_hidden_pow: int = 9
-    max_hidden_pow: int = 11
+    lr_max: float | None = 0.02
+    min_hidden_pow: int = 8
+    max_hidden_pow: int = 10
     mlp_ratio: int = 4
     base_optimizer_config: OptimizerConfig = dataclasses.field(
         default_factory=lambda: CautiousConfig(
@@ -159,7 +163,7 @@ def estimate_bytes(
 
 
 def pick_v5p_type(
-    config: Qwen3Config,
+    config: ModelConfig,
     hidden: int,
     layers: int,
     batch: int,
@@ -215,6 +219,7 @@ def compute_total_flops(
 
 @dataclass
 class IsoFlopRunConfig:
+    architecture: str
     hidden_size: int
     intermediate_dim: int
     num_layers: int
@@ -226,19 +231,19 @@ class IsoFlopRunConfig:
     beta2: float
     budget: float
     steps_per_eval: int
-    max_eval_batches: int
-    eval_tokens: int
     train_tokens: int
+    num_params: int
+    model_config: ModelConfig
 
 
 def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[IsoFlopRunConfig]:
     """Generate ISOFlop run configurations within the FLOP budget."""
 
     # Hidden size step for grid
-    step_size: int = 256
+    step_size: int = 128
 
-    # Loop over batch size as the primary dimension of the search space
-    for batch_size in cfg.batch_sizes:
+    # Loop over architecture as the primary dimension of the search space
+    for architecture in cfg.architectures:
         # Loop through hidden size on a grid, which will determine the model
         # size and therefore token count for each run config
         for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, step_size):
@@ -248,8 +253,40 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
             n_heads = max(1, hidden_size // cfg.hidden_head_ratio)
             n_kv_heads = n_heads
 
-            # Calculate training steps to meet budget
-            flops_per_step = compute_total_flops(
+            # Calculate batch size to meet budget with fixed steps
+            batch_exact = budget / compute_total_flops(
+                batch=1,
+                num_layers=num_layers,
+                hidden=hidden_size,
+                intermediate=intermediate_dim,
+                num_kv_heads=n_kv_heads,
+                num_heads=n_heads,
+                steps=cfg.steps_per_run,
+                seq_len=cfg.seq_len,
+                vocab_size=cfg.vocab_size,
+            )
+
+            batch_size = round_to_power_of_two(batch_exact)
+
+            # Scale LR with sqrt(batch) and hidden size (uTransfer style)
+            # Reference: https://arxiv.org/pdf/2203.03466 (Section 10 Related Works)
+            lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
+
+            # Halve batch size until LR is stable
+            if cfg.lr_max is not None:
+                while lr > cfg.lr_max:
+                    batch_size //= 2
+                    lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
+
+            # Set beta2 based on https://arxiv.org/pdf/2507.07101
+            b2 = 0.98 ** (batch_size / 128)
+
+            if batch_size < 8:
+                logger.warning(f"Skipping config with batch size {batch_size} (less than 8)")
+                continue
+
+            # Recompute exact steps based on adjusted batch size
+            steps_exact = budget / compute_total_flops(
                 batch=batch_size,
                 num_layers=num_layers,
                 hidden=hidden_size,
@@ -260,43 +297,56 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
                 seq_len=cfg.seq_len,
                 vocab_size=cfg.vocab_size,
             )
-            train_steps = round(budget / flops_per_step)
-            if train_steps < cfg.min_steps:
-                continue
+            train_steps = round(steps_exact)
 
             # Ensure actual flops still within range
-            achieved_flops = flops_per_step * train_steps
+            achieved_flops = compute_total_flops(
+                batch=batch_size,
+                num_layers=num_layers,
+                hidden=hidden_size,
+                intermediate=intermediate_dim,
+                num_kv_heads=n_kv_heads,
+                num_heads=n_heads,
+                steps=train_steps,
+                seq_len=cfg.seq_len,
+                vocab_size=cfg.vocab_size,
+            )
             if abs(achieved_flops - budget) / budget > cfg.flop_tolerance:
+                logger.warning(
+                    f"Skipping config with achieved flops {achieved_flops} (not within {cfg.flop_tolerance} of budget {budget})"  # noqa: E501
+                )
                 continue
 
-            # - Scale LR with sqrt(batch) and hidden size
-            #   - A particularly useful reference for this is (uTransfer):
-            #     https://arxiv.org/pdf/2203.03466 (Section 10 Related Works)
-            # - Note that setting LR based on batch size here w/o a constant step count
-            #   is controversial; see here for discussion on it:
-            #   - https://discordapp.com/channels/1354881461060243556/1442534344622215178/1442602508496273553
-            #   - https://github.com/marin-community/marin/pull/1460#issuecomment-3156920910
-            # - TODO: Run sensitivity analysis on this vs fixed LR at the end?
-            lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
-
-            # Skip configs with unstable LRs
-            if lr > cfg.max_learning_rate:
-                continue
-
-            # TODO: Make sure that setting max_eval_batches based on target
-            # token count works given that TrainerConfig ultimately sets batch
-            # size (eval_batch_size) as `per_device_eval_parallelism * data_axis_size`
-            max_eval_batches = cfg.num_eval_tokens // (batch_size * cfg.seq_len)
-            eval_tokens = max_eval_batches * batch_size * cfg.seq_len
             train_tokens = train_steps * batch_size * cfg.seq_len
             # Subtract 1 from num_evals to account for the first evaluation
             num_evals = max(1, cfg.num_evals - 1)
             steps_per_eval = max(1, train_steps // num_evals)
 
-            # Set beta2 based on https://arxiv.org/pdf/2507.07101
-            b2 = 0.98 ** (batch_size / 128)
+            if architecture == "llama":
+                model_cfg = LlamaConfig(
+                    seq_len=cfg.seq_len,
+                    hidden_dim=hidden_size,
+                    intermediate_dim=intermediate_dim,
+                    num_heads=n_heads,
+                    num_kv_heads=n_kv_heads,
+                    num_layers=num_layers,
+                )
+            elif architecture == "qwen":
+                model_cfg = Qwen3Config(
+                    seq_len=cfg.seq_len,
+                    hidden_dim=hidden_size,
+                    intermediate_dim=intermediate_dim,
+                    num_heads=n_heads,
+                    num_kv_heads=n_kv_heads,
+                    num_layers=num_layers,
+                )
+            else:
+                raise ValueError(f"Unknown architecture: {architecture}")
+
+            num_params = compute_num_parameters(model_cfg, cfg.vocab_size)
 
             yield IsoFlopRunConfig(
+                architecture=architecture,
                 hidden_size=hidden_size,
                 intermediate_dim=intermediate_dim,
                 num_layers=num_layers,
@@ -308,9 +358,9 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
                 beta2=b2,
                 budget=budget,
                 steps_per_eval=steps_per_eval,
-                max_eval_batches=max_eval_batches,
-                eval_tokens=eval_tokens,
                 train_tokens=train_tokens,
+                num_params=num_params,
+                model_config=model_cfg,
             )
 
 
@@ -319,6 +369,12 @@ def _log_isoflop_run_configs(all_configs: list[IsoFlopRunConfig]):
     if all_configs:
         df = pd.DataFrame([dataclasses.asdict(c) for c in all_configs])
 
+        # Format large numbers for readability
+        if "num_params" in df.columns:
+            df["num_params"] = df["num_params"].apply(format_num)
+        if "train_tokens" in df.columns:
+            df["train_tokens"] = df["train_tokens"].apply(format_num)
+
         pd.set_option("display.max_rows", None)
         pd.set_option("display.max_columns", None)
         pd.set_option("display.width", 1000)
@@ -326,7 +382,7 @@ def _log_isoflop_run_configs(all_configs: list[IsoFlopRunConfig]):
         logger.info("\n" + "=" * 80)
         logger.info("Configuration Summary Dataframe")
         logger.info("=" * 80)
-        logger.info("\n" + str(df))
+        logger.info("\n" + str(df.drop(columns=["model_config"])))
 
         logger.info("\n" + "=" * 50)
         logger.info("Configs per Budget")
@@ -334,9 +390,9 @@ def _log_isoflop_run_configs(all_configs: list[IsoFlopRunConfig]):
         logger.info("\n" + str(df.groupby("budget").size()))
 
         logger.info("\n" + "=" * 50)
-        logger.info("Configs per Batch Size")
+        logger.info("Configs per Architecture")
         logger.info("=" * 50)
-        logger.info("\n" + str(df.groupby("batch_size").size()))
+        logger.info("\n" + str(df.groupby("architecture").size()))
 
         logger.info("=" * 50 + "\n")
     else:
@@ -348,42 +404,33 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
 
     # Collect all run configs first
     all_configs: list[IsoFlopRunConfig] = []
+
     for budget in config.budgets:
         for c in generate_run_configs(config, budget):
             all_configs.append(c)
 
-    if all_configs:
-        # Validate that eval_tokens is consistent to ensure that validation loss is comparable
-        logger.info("Validating that eval_tokens is identical across all configs")
-        eval_token_counts = {c.eval_tokens for c in all_configs}
-        if len(eval_token_counts) > 1:
-            raise ValueError(f"eval_tokens must be the same for all run configs, but got: {sorted(eval_token_counts)}")
+    _log_isoflop_run_configs(all_configs)
 
+    if all_configs:
         # Validate that train_tokens are never too high
-        logger.info("Validating that train_tokens doesn't exceed available tokens (no epoching)")
+        logger.info("Validating that train_tokens doesn't exceed available tokens")
         effective_token_count = config.total_token_count * (config.output_seq_len / config.input_seq_len)
+        max_allowed_tokens = effective_token_count * config.max_train_token_multiplier
         max_train_tokens = max(c.train_tokens for c in all_configs)
-        if max_train_tokens > effective_token_count:
+        if max_train_tokens > max_allowed_tokens:
             raise ValueError(
                 f"Maximum train_tokens ({max_train_tokens:,}) exceeds available tokens "
-                f"after cropping ({effective_token_count:,.0f}). "
+                f"after cropping ({effective_token_count:,.0f}) with multiplier {config.max_train_token_multiplier}. "
                 f"Original token count: {config.total_token_count:,}, "
                 f"Cropping ratio: {config.output_seq_len}/{config.input_seq_len}"
             )
 
-    _log_isoflop_run_configs(all_configs)
-
     # Generate executor steps from validated configs
     steps: list[ExecutorStep] = []
     for c in all_configs:
-        model_cfg = Qwen3Config(
-            seq_len=config.seq_len,
-            hidden_dim=c.hidden_size,
-            intermediate_dim=c.intermediate_dim,
-            num_heads=c.n_heads,
-            num_kv_heads=c.n_kv_heads,
-            num_layers=c.num_layers,
-        )
+        # Use the pre-computed model config
+        model_cfg = c.model_config
+
         tpu_type = pick_v5p_type(
             config=model_cfg,
             hidden=c.hidden_size,
@@ -399,16 +446,18 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
             learning_rate=c.lr,
             num_train_steps=c.train_steps,
             steps_per_eval=c.steps_per_eval,
-            max_eval_batches=c.max_eval_batches,
+            per_device_eval_parallelism=config.per_device_eval_parallelism,
+            max_eval_batches=config.max_eval_batches,
             resources=TpuPodConfig(tpu_type=tpu_type),
             optimizer_config=optimizer_cfg,
         )
 
-        param_count = compute_num_parameters(model_cfg, config.vocab_size)
+        param_count = c.num_params
         step = default_train(
             name="-".join(
                 [
                     config.experiment_name,
+                    f"A_{c.architecture}",
                     f"F{c.budget:.1e}",
                     f"P{format_num(param_count)}",
                     f"T{format_num(c.train_tokens)}",
@@ -422,6 +471,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
             eval_harness_tasks=[],
             use_default_validation=False,
             tags=(
+                f"architecture={c.architecture}",
                 f"flops_budget={c.budget:.1e}",
                 f"hidden_size={c.hidden_size}",
                 f"num_layers={c.num_layers}",

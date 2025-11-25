@@ -44,7 +44,7 @@ def fetch_plantcad_runs():
     api = wandb.Api()
     runs = api.runs(
         "marin",
-        filters={"display_name": {"$regex": "^plantcad_isoflop_xbs_01"}},
+        filters={"display_name": {"$regex": "^plantcad_isoflop_01"}},
     )
 
     data = []
@@ -94,6 +94,7 @@ def fetch_plantcad_runs():
             "total_tokens": run.summary.get("throughput/total_tokens"),
             "run_progress": run.summary.get("run_progress"),
             # Tags
+            "architecture": tags_dict.get("architecture"),
             "batch_size": tags_dict.get("batch_size"),
             "flops_budget": tags_dict.get("flops_budget"),
             "hidden_size": tags_dict.get("hidden_size"),
@@ -126,41 +127,44 @@ def summarize_runs(df):
     print("\n" + "=" * 80)
     print("SIMPLIFIED SUMMARY")
     print("=" * 80)
-    summary = df[["run_name", "state", "flops_budget", "batch_size", "run_progress"]].copy()
+    summary = df[["run_name", "state", "flops_budget", "architecture", "run_progress"]].copy()
     print(summary.to_string())
 
 
 def visualize_loss_by_token_count(
     df, metric="eval_loss", output_path="experiments/plantcad/results/plantcad_loss_by_tokens.png"
 ):
-    """Plot loss vs tokens, grouped by budget and faceted by batch size."""
-    df_clean = df[df["state"] == "finished"].dropna(subset=[metric, "tokens", "batch_size", "flops_budget"])
+    """Plot loss vs tokens, grouped by budget and faceted by architecture."""
+    df_clean = df[df["state"] == "finished"].dropna(subset=[metric, "tokens", "architecture", "flops_budget"])
 
-    batch_sizes = sorted(df_clean["batch_size"].unique())
+    architectures = sorted(df_clean["architecture"].unique())
     budgets = sorted(df_clean["flops_budget"].unique())
 
     # Get global y-limits for consistent scales
     y_min, y_max = df_clean[metric].min(), df_clean[metric].max()
+    y_padding = (y_max - y_min) * 0.1
 
-    fig, axes = plt.subplots(1, len(batch_sizes), figsize=(5 * len(batch_sizes), 5), squeeze=False)
+    fig, axes = plt.subplots(1, len(architectures), figsize=(5 * len(architectures), 5), squeeze=False)
 
-    for idx, bs in enumerate(batch_sizes):
+    for idx, arch in enumerate(architectures):
         ax = axes[0, idx]
         for budget in budgets:
-            data = df_clean[(df_clean["batch_size"] == bs) & (df_clean["flops_budget"] == budget)].sort_values("tokens")
+            data = df_clean[(df_clean["architecture"] == arch) & (df_clean["flops_budget"] == budget)].sort_values(
+                "tokens"
+            )
             ax.plot(data["tokens"], data[metric], alpha=0.5, linewidth=1)
             ax.scatter(data["tokens"], data[metric], label=f"{budget:.1e}", alpha=0.7)
         ax.set_xlabel("Token Count")
-        ax.set_ylabel(metric.replace("_", " ").title())
-        ax.set_title(f"Batch Size = {bs}")
+        ax.set_ylabel("Validation Loss")
+        ax.set_title(f"Architecture = {arch}")
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_ylim(y_min * 0.95, y_max * 1.05)
+        ax.set_ylim(y_min - y_padding, y_max + y_padding)
         ax.grid(alpha=0.3)
 
     # Single legend to the right of all plots
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, title="Budget", loc="center left", bbox_to_anchor=(1, 0.5))
+    fig.legend(handles, labels, title="FLOPS", loc="center left", bbox_to_anchor=(1, 0.5))
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
@@ -170,34 +174,37 @@ def visualize_loss_by_token_count(
 def visualize_loss_by_param_count(
     df, metric="eval_loss", output_path="experiments/plantcad/results/plantcad_loss_by_params.png"
 ):
-    """Plot loss vs params, grouped by budget and faceted by batch size."""
-    df_clean = df[df["state"] == "finished"].dropna(subset=[metric, "params", "batch_size", "flops_budget"])
+    """Plot loss vs params, grouped by budget and faceted by architecture."""
+    df_clean = df[df["state"] == "finished"].dropna(subset=[metric, "params", "architecture", "flops_budget"])
 
-    batch_sizes = sorted(df_clean["batch_size"].unique())
+    architectures = sorted(df_clean["architecture"].unique())
     budgets = sorted(df_clean["flops_budget"].unique())
 
     # Get global y-limits for consistent scales
     y_min, y_max = df_clean[metric].min(), df_clean[metric].max()
+    y_padding = (y_max - y_min) * 0.1
 
-    fig, axes = plt.subplots(1, len(batch_sizes), figsize=(5 * len(batch_sizes), 5), squeeze=False)
+    fig, axes = plt.subplots(1, len(architectures), figsize=(5 * len(architectures), 5), squeeze=False)
 
-    for idx, bs in enumerate(batch_sizes):
+    for idx, arch in enumerate(architectures):
         ax = axes[0, idx]
         for budget in budgets:
-            data = df_clean[(df_clean["batch_size"] == bs) & (df_clean["flops_budget"] == budget)].sort_values("params")
+            data = df_clean[(df_clean["architecture"] == arch) & (df_clean["flops_budget"] == budget)].sort_values(
+                "params"
+            )
             ax.plot(data["params"], data[metric], alpha=0.5, linewidth=1)
             ax.scatter(data["params"], data[metric], label=f"{budget:.1e}", alpha=0.7)
         ax.set_xlabel("Param Count")
-        ax.set_ylabel(metric.replace("_", " ").title())
-        ax.set_title(f"Batch Size = {bs}")
+        ax.set_ylabel("Validation Loss")
+        ax.set_title(f"Architecture = {arch}")
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_ylim(y_min * 0.95, y_max * 1.05)
+        ax.set_ylim(y_min - y_padding, y_max + y_padding)
         ax.grid(alpha=0.3)
 
     # Single legend to the right of all plots
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, title="Budget", loc="center left", bbox_to_anchor=(1, 0.5))
+    fig.legend(handles, labels, title="FLOPS", loc="center left", bbox_to_anchor=(1, 0.5))
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
