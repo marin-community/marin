@@ -25,7 +25,7 @@ from test_utils import skip_if_not_enough_devices
 class MyModule(eqx.Module):
     named: NamedArray
     unnamed1: Array
-    static_field: int = eqx.static_field()
+    static_field: int = eqx.field(static=True)
 
 
 Dim1 = Axis("dim1", 8)
@@ -94,7 +94,7 @@ class MyModuleInit(eqx.Module):
     named: NamedArray
     unnamed1: Array
     named2: NamedArray
-    static_field: int = eqx.static_field()
+    static_field: int = eqx.field(static=True)
 
     def __init__(self):
         self.named = hax.ones((Dim2, Dim3))
