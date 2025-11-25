@@ -229,11 +229,6 @@ class NamedArray(metaclass=NamedArrayMeta):
         if are_shape_checks_enabled():
             self._validate_axes_against_shape(self.axis_names, provided_sizes)
 
-    def _ensure_shape_matches_axes(self):
-        """This is typically called automatically, but sometimes we need to call it manually if
-        are_shape_checks_enabled() is False"""
-        self._validate_axes_against_shape(self.axis_names, None)
-
     def _validate_axes_against_shape(
         self, axis_names: Sequence[str], provided_sizes: Sequence[int | None] | None
     ) -> None:
