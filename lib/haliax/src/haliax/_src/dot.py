@@ -8,8 +8,8 @@ import typing
 import warnings
 
 import jax
+from jax.sharding import NamedSharding
 
-import haliax
 from haliax.axis import (
     Axis,
     AxisSelection,
@@ -22,6 +22,7 @@ from haliax.axis import (
 )
 from haliax.core import NamedArray
 from haliax.jax_utils import _jittable_dg_einsum
+from haliax.partitioning import _resolve_mesh, current_thread_local_mapping, pspec_for_axis
 from haliax.types import DTypeLike, PrecisionLike
 
 
@@ -34,6 +35,7 @@ def dot(
     preferred_element_type: DTypeLike | None = None,
     out_axes: PartialAxisSpec | None = ...,
     dot_general=jax.lax.dot_general,
+    out_sharding=None,
 ) -> NamedArray: ...
 
 
@@ -45,6 +47,7 @@ def dot(
     preferred_element_type: DTypeLike | None = None,
     out_axes: PartialAxisSpec | None = ...,
     dot_general=jax.lax.dot_general,
+    out_sharding=None,
 ) -> NamedArray: ...
 
 
@@ -54,6 +57,7 @@ def dot(
     preferred_element_type: DTypeLike | None = None,
     out_axes: PartialAxisSpec | None = None,
     dot_general=jax.lax.dot_general,
+    out_sharding=None,
     **kwargs,
 ) -> NamedArray:
     """Returns the tensor product of two NamedArrays. The axes `axis` are contracted over,
@@ -83,6 +87,8 @@ def dot(
             This argument is passed to `jax.numpy.einsum`.
         out_axes (PartialAxisSpec | None, optional): a potentially partial specification of the output axes.
             If provided, the output will be transposed to match the provided axes. Defaults to None.
+        out_sharding: Passed through to the underlying `dot_general`/`einsum` implementation. Useful in explicit
+            sharding mode to request a specific output sharding.
 
 
     Returns:
@@ -145,16 +151,30 @@ def dot(
         jax_str = f"contract {', '.join(axis)} -> {', '.join(a.name for a in output_axes)}"
 
     with jax.named_scope(jax_str):
+        inferred_out_sharding = out_sharding
+        if inferred_out_sharding is None:
+            inferred_out_sharding = _infer_out_sharding(output_axes)
+
         output = _jittable_dg_einsum(
             ", ".join(array_specs) + "-> " + output_spec,
             *[a.array for a in arrays],
             precision=precision,
             preferred_element_type=preferred_element_type,
             _dot_general=dot_general,
+            out_sharding=inferred_out_sharding,
         )
 
-    out = NamedArray(output, output_axes)
-    return haliax.auto_sharded(out)
+    return NamedArray(output, output_axes)
+
+
+def _infer_out_sharding(output_axes: tuple[Axis, ...]):
+    mapping = current_thread_local_mapping()
+    mesh = _resolve_mesh()
+    if mesh is None:
+        return None
+
+    pspec = pspec_for_axis(output_axes, mapping)
+    return NamedSharding(mesh, pspec)
 
 
 def _ensure_no_mismatched_axes(*arrays: NamedArray):

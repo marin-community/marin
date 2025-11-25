@@ -7,12 +7,14 @@ import functools
 from types import EllipsisType
 
 import jax.lax
+from jax.sharding import NamedSharding
 
 import haliax
 
 from ..axis import Axis, AxisSelector, axis_name, eliminate_axes, rearrange_for_partial_order, union_axes
 from ..core import NamedArray
 from ..jax_utils import _jittable_dg_einsum
+from ..partitioning import _resolve_mesh, current_thread_local_mapping, pspec_for_axis
 from ..quantization import DotGeneralOp
 from ..types import DTypeLike, PrecisionLike
 from ..util import ensure_tuple
@@ -25,6 +27,7 @@ def einsum(
     precision: PrecisionLike = None,
     preferred_element_type: DTypeLike | None = None,
     _dot_general: DotGeneralOp = jax.lax.dot_general,
+    out_sharding=None,
     **axis_aliases: AxisSelector,
 ) -> NamedArray:
     """Compute the tensor contraction of the input arrays according to Haliax's named variant of the Einstein summation
@@ -52,6 +55,8 @@ def einsum(
        precision: The precision of the computation.
        preferred_element_type: The preferred element type of the computation.
        _dot_general: The dot_general function to use.
+       out_sharding: Optional output sharding to pass through to the underlying
+         dot_general/einsum implementation (useful in explicit sharding mode).
        axis_aliases: The axis aliases to use.
 
     Returns:
@@ -86,10 +91,20 @@ def einsum(
         precision=precision,
         preferred_element_type=preferred_element_type,
         _dot_general=_dot_general,
+        out_sharding=out_sharding or _infer_out_sharding(out_axes),
     )
 
-    out = haliax.named(out_raw, out_axes)
-    return haliax.auto_sharded(out)
+    return haliax.named(out_raw, out_axes)
+
+
+def _infer_out_sharding(out_axes: tuple[Axis, ...]):
+    mapping = current_thread_local_mapping()
+    mesh = _resolve_mesh()
+    if mesh is None:
+        return None
+
+    pspec = pspec_for_axis(out_axes, mapping)
+    return NamedSharding(mesh, pspec)
 
 
 def _unordered_einsum(arrays, equation, lhs, rhs, axis_aliases):

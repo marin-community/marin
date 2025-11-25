@@ -120,7 +120,7 @@ out_qdq.defvjp(out_qdq_fwd, out_qdq_bwd)
 
 
 @partial(custom_jvp, nondiff_argnums=(2, 3, 4))
-def dot_general_with_precision(lhs, rhs, dimension_numbers, precision=None, preferred_element_type=None):
+def dot_general_with_precision(lhs, rhs, dimension_numbers, precision=None, preferred_element_type=None, **kwargs):
     if precision is not None or preferred_element_type is not None:
         # einsum sets preferred_element_type and so this is just noisy
         # warnings.warn(
@@ -129,7 +129,7 @@ def dot_general_with_precision(lhs, rhs, dimension_numbers, precision=None, pref
         #     "values."
         # )
         pass
-    return lax.dot_general(lhs, rhs, dimension_numbers, precision=lax.Precision.DEFAULT)
+    return lax.dot_general(lhs, rhs, dimension_numbers, precision=lax.Precision.DEFAULT, **kwargs)
 
 
 @dot_general_with_precision.defjvp
