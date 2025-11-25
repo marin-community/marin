@@ -69,7 +69,7 @@ def maybe_fused_next_token_loss(
     # Create a mask that excludes the last token
     not_last_loss_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))  # type: ignore
     if loss_mask is not None:
-        loss_mask = loss_mask * not_last_loss_mask
+        loss_mask = hax.logical_and(loss_mask.astype(jnp.bool_), not_last_loss_mask) # loss_mask may be int32
     else:
         loss_mask = not_last_loss_mask
 

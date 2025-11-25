@@ -372,6 +372,9 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
         attn_backend=None,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
         tie_word_embeddings=False,
+        # Use block-wise cross-entropy to avoid materializing full logits (batch*seq*vocab)
+        # Without this, a batch of 128*4096*128000 = 134 GiB of logits would be computed!
+        cross_entropy_block_size=4096,
     )
     return {
         "130m": HackableTransformerConfig(
@@ -519,7 +522,8 @@ if __name__ == "__main__":
         _cls.__module__ = _IMPORT_PATH
     ###
 
-    sizes = ["130m", "300m", "520m", "1_2b"]
+    # sizes = ["130m", "300m", "520m", "1_2b"]
+    sizes = ["130m"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
     steps = []
     for s in sizes:

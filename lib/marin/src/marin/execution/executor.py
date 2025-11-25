@@ -1121,6 +1121,44 @@ class ExecutorMainConfig:
 def _setup_logging():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+def _detect_local_resources() -> dict[str, float]:
+    from ray.util.accelerators import accelerators
+    resources = {"head_node": 1}
+
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return resources
+
+        device_name = torch.cuda.get_device_name(0)
+        # map devices available on Colab
+        mapping = [
+            ("A100", "80GB", accelerators.NVIDIA_A100_80G),
+            ("A100", "40GB", accelerators.NVIDIA_A100_40G),
+            ("A100", None, accelerators.NVIDIA_A100),
+            ("H100", None, accelerators.NVIDIA_H100),
+            ("V100", None, accelerators.NVIDIA_TESLA_V100),
+            ("T4", None, accelerators.NVIDIA_TESLA_T4),
+            ("L4", None, accelerators.NVIDIA_L4),
+        ]
+
+        accel_type = None
+        for gpu_model, memory_variant, ray_constant in mapping:
+            if gpu_model in device_name:
+                if memory_variant and memory_variant not in device_name:
+                    continue
+                accel_type = ray_constant
+                break
+
+        if accel_type:
+            logger.info(f"Auto-detected GPU: '{device_name}'. Labeling as accelerator_type:{accel_type}")
+            resources[f"accelerator_type:{accel_type}"] = 1
+        else:
+            logger.warning(f"Could not map GPU '{device_name}' to a known Ray accelerator type.")
+    except ImportError:
+        logger.warning("torch is not installed. Please install it to use this feature.")
+
+    return resources
 
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
@@ -1132,7 +1170,7 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     ray.init(
         namespace="marin",
         ignore_reinit_error=True,
-        resources={"head_node": 1} if is_local_ray_cluster() else None,
+        resources=_detect_local_resources() if is_local_ray_cluster() else None,
         runtime_env={"worker_process_setup_hook": _setup_logging},
     )  # We need to init ray here to make sure we have the correct namespace for actors
     # (status_actor in particular)
