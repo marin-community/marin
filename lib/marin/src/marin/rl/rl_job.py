@@ -28,15 +28,12 @@ import uuid
 from dataclasses import dataclass, field
 
 import ray
+from fray.cluster.ray.tpu import run_on_pod_ray
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServerConfig
-from levanter.infra.ray_tpu import run_on_pod_ray
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import TrainerConfig
-from ray.runtime_env import RuntimeEnv
-from transformers import AutoTokenizer, PreTrainedTokenizer
-
 from marin.resources import TpuPodConfig
 from marin.rl.curriculum import CurriculumConfig, SamplingParams
 from marin.rl.replay_buffer import ReplayBufferConfig
@@ -46,7 +43,10 @@ from marin.rl.rollout_worker import RolloutWorker, RolloutWorkerConfig
 from marin.rl.train_worker import TrainWorker, TrainWorkerConfig
 from marin.rl.weight_transfer import WeightTransferConfig
 from marin.training.training import _add_run_env_variables
+from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utils import remove_tpu_lockfile_on_exit
+from ray.runtime_env import RuntimeEnv
+from transformers import AutoTokenizer, PreTrainedTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +275,8 @@ class RLJob:
 
         # create a unique name for the weight-transfer coordinator based on our config hash
         # this ensures we get the same name across multiple calls
-        config_json = json.dumps(dataclasses.asdict(self.config.weight_transfer), sort_keys=True)
+        config_json = json.dumps(dataclasses.asdict(self.config.weight_transfer), sort_keys=True, cls=CustomJsonEncoder)
+
         config_hash = hashlib.md5(config_json.encode("utf-8")).hexdigest()[:8]
 
         weight_transfer_coordinator_name = f"wt-coord-{config_hash}"

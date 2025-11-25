@@ -52,7 +52,6 @@ import levanter.checkpoint
 import levanter.tracker
 import levanter.tracker.wandb
 import levanter.utils.logging
-from levanter import tracker
 from levanter.callbacks import Callback, CBInfo, JitCallback, LambdaCallback, StepInfo
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig, is_checkpoint_path, load_checkpoint_or_initialize
@@ -63,8 +62,9 @@ from levanter.distributed import DistributedConfig, RayConfig
 from levanter.grad_accum import microbatched
 from levanter.metrics import Metric, auto_metric_from_name, unwrap_metrics
 from levanter.optim.model_averaging import ModelAveragingConfig
-from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, value_at_step
+from levanter.schedule import BatchSchedule, IntSchedule, ScheduleStep, distinct_values, value_at_step
 from levanter.tracker import TrackerConfig, capture_time
+from levanter.tracker.wandb import WandbConfig
 from levanter.trainer_state import InsideJitInfo, TrainerState, saveable_training_mask
 from levanter.utils import cloud_utils, fsspec_utils
 from levanter.utils.jax_utils import create_fsdp_mesh, zeros_like_tree
@@ -757,11 +757,11 @@ class TrainerConfig:
     quantization: Optional[QuantizationConfig] = None
     model_averaging: ModelAveragingConfig | None = None
 
-    wandb: Optional[tracker.wandb.WandbConfig] = None
+    wandb: Optional[WandbConfig] = None
     log_dir: Path = Path("logs/")
     id: Optional[str] = None  # run id. if None, will be set to a random string
 
-    tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=tracker.wandb.WandbConfig)
+    tracker: TrackerConfig | Tuple[TrackerConfig, ...] = field(default_factory=WandbConfig)
     watch: WatchConfig = WatchConfig()
 
     # TODO: refactor callbacks
@@ -1074,7 +1074,7 @@ class TrainerConfig:
 
         if self.per_device_eval_parallelism == -1:
             if self.per_device_parallelism == -1:
-                tbs = max(levanter.schedule.distinct_values(self.train_batch_size))
+                tbs = max(distinct_values(self.train_batch_size))
                 self.per_device_eval_parallelism = (
                     _round_to_nearest_multiple(tbs, self.data_axis_size) // self.data_axis_size
                 )

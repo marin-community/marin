@@ -38,16 +38,6 @@ def is_local_ray_cluster():
     return False
 
 
-def get_head_ip() -> str:
-    # detail=True yields NodeState objects with is_head_node & node_ip fields
-    nodes = list_nodes(detail=True)
-    try:
-        head = next(n for n in nodes if n.is_head_node)
-        return head.node_ip
-    except StopIteration:
-        raise RuntimeError("No head node found in the Ray cluster. Ensure the cluster is running.") from None
-
-
 def get_head_node_id() -> str:
     """Get the node ID of the Ray head node."""
     try:

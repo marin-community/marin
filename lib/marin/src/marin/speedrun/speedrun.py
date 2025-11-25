@@ -30,7 +30,7 @@ import fsspec
 import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
-from levanter.infra.ray_tpu import TPU_CONFIGS
+from fray.cluster.ray.tpu import TPU_CONFIGS
 
 from experiments.defaults import _get_tokenizer_for_train, default_train
 from experiments.llama import llama3_tokenizer_vocab_size
@@ -137,7 +137,10 @@ class SpeedrunConfig:
 
         # model size
         model_size = self.model_config.total_trainable_params(self.vocab_size)
-        logger.info(f"Model size: {model_size/1e6:.2f} million parameters")
+        if model_size is None:
+            logger.info("Model size: unknown (model did not report total_trainable_params).")
+        else:
+            logger.info(f"Model size: {model_size/1e6:.2f} million parameters")
 
     def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
@@ -155,6 +158,8 @@ class SpeedrunConfig:
             )
 
         flops_per_token = self.model_config.flops_per_token(self.vocab_size)
+        if flops_per_token is None:
+            raise ValueError("Model config must provide flops_per_token to compute model FLOPs.")
 
         flops_per_token *= 3  # fwd + bwd
 
@@ -175,7 +180,10 @@ This is calculated based on assumed MFU values and can be used as a rough estima
     @property
     def device_flops(self) -> float:
         """Get the peak FLOPs/s for the device type."""
-        return self.train_config.resources.device_flops()
+        device_flops = self.train_config.resources.device_flops()
+        if device_flops is None:
+            raise ValueError("Resources must provide device_flops() for speedrun calculations.")
+        return device_flops
 
     @property
     def num_devices(self) -> int:

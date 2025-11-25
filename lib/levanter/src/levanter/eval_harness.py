@@ -80,7 +80,7 @@ from levanter.data import batched
 from levanter.data.loader import stack_batches
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
-from levanter.utils.jax_utils import broadcast_shard, use_cpu_device
+from levanter.utils.jax_utils import broadcast_shard, parameter_count, use_cpu_device
 from levanter.utils.py_utils import FailSafeJSONEncoder
 from levanter.utils.tree_utils import inference_mode
 
@@ -199,7 +199,7 @@ class _LmEvalHarnessWorker:
                 Vocab=model.Vocab,
                 logits=logits,
                 true_ids=packed_example.tokens,
-                loss_mask=packed_example.loss_mask,
+                loss_weight=packed_example.loss_weight,
                 reduction=None,
             )
 
@@ -290,7 +290,7 @@ class _LmEvalHarnessWorker:
 
     def dispatch_loglikelihood(self, packed_request):
         self._send_message(_Message.LOGLIKELIHOOD)
-        self._send_payload(packed_request)
+        packed_request = self._send_payload(packed_request)
         return self.process_loglikelihood(packed_request)
 
     def stop(self):
@@ -346,6 +346,7 @@ class LevanterHarnessLM(TemplateLM):
     def __init__(self, leader: _LmEvalHarnessWorker):
         super().__init__()
         self.leader = leader
+        self.axis_resources = leader.axis_resources
         # Storage for prompts and generations to include in outputs
         self.sample_outputs: dict[str, list[dict]] = {}
         self.sample_logging_config = leader.sample_logging_config
@@ -539,11 +540,14 @@ class LevanterHarnessLM(TemplateLM):
             # Handle profiler start/stop based on step
             self._handle_profiler_step()
 
+            batch = hax.shard(batch, self.axis_resources)
+
             segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
 
             padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
+            batch = jax.device_put(batch)
 
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
 
@@ -761,6 +765,7 @@ class LevanterHarnessLM(TemplateLM):
             max_seqs=256,
             page_size=8,
             compute_dtype=jnp.bfloat16,
+            hbm_utilization=0.5,
         )
         engine = InferenceEngine.from_model_with_config(
             model=self.leader.model, tokenizer=self.tokenizer, config=engine_cfg
@@ -1208,7 +1213,7 @@ def _actually_run_eval_harness(
     max_length = config.max_length
 
     EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
-    num_parameters = levanter.utils.jax_utils.parameter_count(model)
+    num_parameters = parameter_count(model)
     logger.info(
         f"Evaluating with max length {EvalPos.size} and batch size {EvalBatch.size}. There are"
         f" {num_parameters} parameters in the model."
@@ -1371,7 +1376,8 @@ def run_eval_harness_main(config: EvalHarnessMainConfig):
         if config.trainer.profiler:
             # Get the run_id that was set during initialize()
             run_id = config.trainer._maybe_set_id()
-            profile_path = config.trainer.log_dir / run_id / "profiler"
+            run_dir = config.trainer.log_dir if run_id is None else config.trainer.log_dir / run_id
+            profile_path = run_dir / "profiler"
             profiler_config = ProfilerConfig(
                 enabled=True,
                 start_step=config.trainer.profiler_start_step,
@@ -1580,7 +1586,7 @@ def _pack_requests(
 def _make_dummy_batch(EvalBatch, EvalPos):
     dummy_batch = hax.vmap(LmExample.causal, EvalBatch)(
         hax.zeros(EvalPos, dtype=jnp.int32),
-        loss_mask=hax.zeros(EvalPos, dtype=jnp.int32),
+        loss_weight=hax.zeros(EvalPos, dtype=jnp.float32),
         segment_ids=hax.zeros(EvalPos, dtype=jnp.int32),
     )
     out = hax.shard(dummy_batch, {})

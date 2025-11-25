@@ -102,7 +102,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from functools import cached_property
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
@@ -269,11 +269,20 @@ def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
     return InputName(step=step, name=name)
 
 
-@dataclass(frozen=True)
-class OutputName:
-    """To be interpreted as part of this step's output_path joined with `name`."""
+if TYPE_CHECKING:
 
-    name: str | None
+    class OutputName(str):
+        """Type-checking stub treated as a string so defaults like THIS_OUTPUT_PATH fit `str`."""
+
+        name: str | None
+
+else:
+
+    @dataclass(frozen=True)
+    class OutputName:
+        """To be interpreted as part of this step's output_path joined with `name`."""
+
+        name: str | None
 
 
 def this_output_path(name: str | None = None):
@@ -312,9 +321,29 @@ def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
     """
     Unwrap the value if it is a VersionedValue, otherwise return the value as is.
 
-    Sometimes we need to actually use a value that is wrapped in a VersionedValue before it is used in a config.
+    Recurses into dataclasses, dicts and lists to unwrap any nested VersionedValue instances.
+    This method cannot handle InputName, OutputName, or ExecutorStep instances inside VersionedValue as
+    their values depend on execution results.
     """
-    return value.value if isinstance(value, VersionedValue) else value
+
+    def recurse(obj: Any):
+        if isinstance(obj, VersionedValue):
+            return recurse(obj.value)
+        if isinstance(obj, OutputName | InputName | ExecutorStep):
+            raise ValueError(f"Cannot unwrap VersionedValue containing {type(obj)}: {obj}")
+        if is_dataclass(obj):
+            result = {}
+            for field in fields(obj):
+                val = getattr(obj, field.name)
+                result[field.name] = recurse(val)
+            return replace(obj, **result)
+        if isinstance(obj, dict):
+            return {k: recurse(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [recurse(x) for x in obj]
+        return obj
+
+    return recurse(value)  # type: ignore
 
 
 ############################################################

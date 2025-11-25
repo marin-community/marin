@@ -49,7 +49,7 @@ from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path, versioned
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
-from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
+from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
 from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
 
 # Unfortunately, the international corpus of english is not publicly accessible and cannot be redistributed.
@@ -179,7 +179,7 @@ def get_all_revisions(repo_id):
     return combined
 
 
-def get_all_eval_sets(tokenizer):
+def distributional_eval_sets(tokenizer):
     eval_sets = default_validation_sets(tokenizer=versioned(tokenizer))
     md3_raw = ExecutorStep(
         name="raw/WillHeld/MD3",
@@ -197,8 +197,8 @@ def get_all_eval_sets(tokenizer):
     tokenized_domains = {}
     for split in get_dataset_split_names("WillHeld/MD3"):
         json = ExecutorStep(
-            name=f"raw2json/md3/{split}",
-            fn=raw2json,
+            name=f"hf_dataset_to_jsonl/md3/{split}",
+            fn=hf_dataset_to_jsonl,
             config=DatasetConversionConfig(
                 dataset_name="WillHeld/MD3",
                 subsets=["*"],
@@ -229,8 +229,8 @@ def get_all_eval_sets(tokenizer):
 
         for split in get_dataset_split_names("WillHeld/ICE_Cleaned"):
             json = ExecutorStep(
-                name=f"raw2json/ICE/{split}",
-                fn=raw2json,
+                name=f"hf_dataset_to_jsonl/ICE/{split}",
+                fn=hf_dataset_to_jsonl,
                 config=DatasetConversionConfig(
                     dataset_name="WillHeld/ICE_Cleaned",
                     subsets=["*"],
@@ -260,8 +260,8 @@ def get_all_eval_sets(tokenizer):
 
     for subset in get_dataset_config_names("WillHeld/paloma_subreddits"):
         json = ExecutorStep(
-            name=f"raw2json/paloma_subreddits/{subset}",
-            fn=raw2json,
+            name=f"hf_dataset_to_jsonl/paloma_subreddits/{subset}",
+            fn=hf_dataset_to_jsonl,
             config=DatasetConversionConfig(
                 dataset_name="WillHeld/paloma_subreddits",
                 subsets=[subset],
@@ -291,8 +291,8 @@ def get_all_eval_sets(tokenizer):
 
     for subset in get_dataset_config_names("WillHeld/paloma_programming_languages"):
         json = ExecutorStep(
-            name=f"raw2json/paloma_programming_languages/{subset}",
-            fn=raw2json,
+            name=f"hf_dataset_to_jsonl/paloma_programming_languages/{subset}",
+            fn=hf_dataset_to_jsonl,
             config=DatasetConversionConfig(
                 dataset_name="WillHeld/paloma_programming_languages",
                 subsets=[subset],
@@ -330,7 +330,7 @@ for model in models:
 gemstone_splits = {"main": {}, "cooldown": {}, "lr_ablation": {}}
 gemstone_tokenizer = "tomg-group-umd/Gemstone-1280x15"
 
-evaluation_mixture = get_all_eval_sets(gemstone_tokenizer)
+evaluation_mixture = distributional_eval_sets(gemstone_tokenizer)
 
 for model, revision in model_revision_pairs:
     config = GemstoneConfig.from_model_revision(model, revision)
@@ -373,7 +373,7 @@ if __name__ == "__main__":
         ("allenai/OLMo-2-1124-13B", "stage1-step596000-tokens5000B"),
     ]
     for model, revision in baselines:
-        local_evaluation_mixture = get_all_eval_sets(model)
+        local_evaluation_mixture = distributional_eval_sets(model)
         model_instance = download_model_step(ModelConfig(hf_repo_id=model, hf_revision=revision))
         model_config = HFCheckpointConverter.from_hf(f"{model}@{revision}").config_from_hf_checkpoint(
             f"{model}@{revision}"

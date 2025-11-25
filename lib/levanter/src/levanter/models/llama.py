@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Type, Union
+from typing import Callable, Dict, Optional, Type, Union, cast
 
 import equinox as eqx
 import jax
@@ -88,9 +88,18 @@ class LlamaConfig(HFCompatConfig):
     tokenizer: Optional[str] = None
 
     # Axis
-    Pos = property(lambda self: Axis(name="position", size=self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
-    Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
+    @property
+    def Pos(self) -> Axis:
+        return Axis(name="position", size=self.seq_len)
+
+    @property
+    def KeyPos(self) -> Axis:
+        return self.Pos.alias("key_position")
+
+    @property
+    def Embed(self) -> Axis:
+        return Axis(name="embed", size=self.hidden_dim)
+
     Layers = property(lambda self: Axis(name="layer", size=self.num_layers))
     Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
 
@@ -404,7 +413,7 @@ class LlamaTransformer(eqx.Module):
         self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
+        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
 
         return x
@@ -487,7 +496,7 @@ class LlamaEmbedding(ModuleWithStateDictSerialization, eqx.Module):
 
     @property
     def Embed(self) -> Axis:
-        return self.token_embeddings.Embed
+        return cast(Axis, self.token_embeddings.Embed)
 
     @named_call
     def embed(self, input_ids, *args):

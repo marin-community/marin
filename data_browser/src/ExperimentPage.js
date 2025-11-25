@@ -37,15 +37,11 @@ function ExperimentPage() {
       try {
         // Get the main experiment JSON
         const response = await axios.get(apiViewUrl({path}));
-        checkJsonResponse(response, setError);
-
-        if (response.data.error) {
-          console.error(response.data.error);
-          setError(response.data.error);
+        const payload = checkJsonResponse(response, setError);
+        if (!payload) {
           return;
         }
-
-        const experiment = response.data.data;
+        const experiment = payload.data || payload;
         setExperiment(experiment);
 
         // Prefetch all the urls (e.g., for status, results)
@@ -55,8 +51,11 @@ function ExperimentPage() {
         const promises = urls.map(async (url) => {
           try {
             const response = await axios.get(url);
-            checkJsonResponse(response, setError);
-            setAuxiliaryData(auxiliaryData => Object.assign({}, auxiliaryData, {[url]: response.data}));
+            const payload = checkJsonResponse(response, setError);
+            if (!payload) {
+              return;
+            }
+            setAuxiliaryData(auxiliaryData => Object.assign({}, auxiliaryData, {[url]: payload}));
           } catch (error) {
             console.error(error);
           }
@@ -269,7 +268,7 @@ function renderTrainClassifierStep({step, steps}) {
 
 function renderHfLaunchTrainingStep({step, steps}) {
   const resources = step.config.resource_config;
-  const hardwareSummary = `${resources.num_tpu} * ${resources.tpu_type}`;
+  const hardwareSummary = summarizeResources(resources);
   const trainingConfig = step.config.training_config;
   const modelName = trainingConfig.model_name;
   const modelLink = <a href={`https://huggingface.co/${modelName}`} target="_blank" rel="noreferrer">{huggingfaceIcon}{modelName}</a>;
@@ -298,18 +297,44 @@ function renderConsolidateStep({step, steps}) {
 
 function renderTokenizeStepDescription({step, steps}) {
   const tokenizer = step.config.tokenizer;
-  const hfUrl = `https://huggingface.co/${tokenizer}/raw/main/tokenizer.json`;
-  const paths = step.config.train_paths.concat(step.config.validation_paths);
-  const links = paths.map((path, index) => {
-    return <div key={index}>{renderPath({path, steps})}</div>;
-  });
-  const description = <table>
-    <tbody>
-      <tr><td>Tokenizer:</td><td><a href={hfUrl} target="_blank" rel="noreferrer">{tokenizer}</a></td></tr>
-      <tr><td>Raw text:</td><td>{links}</td></tr>
-    </tbody>
-  </table>;
-  return {name: "tokenize", description};
+  const tokenizerUrl = tokenizer ? `https://huggingface.co/${tokenizer}/raw/main/tokenizer.json` : null;
+  const trainPaths = Array.isArray(step.config.train_paths) ? step.config.train_paths : [];
+  const validationPaths = Array.isArray(step.config.validation_paths) ? step.config.validation_paths : [];
+  const localPaths = trainPaths.concat(validationPaths);
+
+  let rawSourceDescription;
+  if (localPaths.length > 0) {
+    rawSourceDescription = localPaths.map((path, index) => <div key={index}>{renderPath({path, steps})}</div>);
+  } else if (step.config.id) {
+    const datasetId = step.config.id;
+    const hfDatasetUrl = `https://huggingface.co/datasets/${datasetId}`;
+    const revision = step.config.revision ? `@${step.config.revision}` : "";
+    rawSourceDescription = <a href={hfDatasetUrl} target="_blank" rel="noreferrer">{huggingfaceIcon}{datasetId}{revision}</a>;
+  } else if (step.config.dataset) {
+    rawSourceDescription = step.config.dataset;
+  } else {
+    rawSourceDescription = "See step config";
+  }
+
+  const rows = [
+    <tr key="tokenizer">
+      <td>Tokenizer:</td>
+      <td>{tokenizerUrl ? <a href={tokenizerUrl} target="_blank" rel="noreferrer">{tokenizer}</a> : tokenizer}</td>
+    </tr>,
+    <tr key="raw">
+      <td>Raw text:</td>
+      <td>{rawSourceDescription}</td>
+    </tr>,
+  ];
+
+  if (step.config.sample_count) {
+    rows.push(<tr key="sample-count"><td>Sample count:</td><td>{step.config.sample_count}</td></tr>);
+  }
+
+  return {
+    name: "tokenize",
+    description: <table><tbody>{rows}</tbody></table>,
+  };
 }
 
 function renderTrainLmStep({step, steps}) {
@@ -358,7 +383,7 @@ function renderTrainLmStep({step, steps}) {
 
   // Hardware
   const resources = step.config.resources;
-  const resourcesSummary = resources ? `${resources.slice_count || 1} * ${resources.tpu_type}` : "n/a";
+  const resourcesSummary = summarizeResources(resources);
 
   const wandbLink = <a href={getWandbUrl({step})} title="Go to the WandB page for this training run" target="_blank" rel="noreferrer">[WandB {wandbIcon}]</a>;
   const description = (
@@ -493,7 +518,7 @@ const stepRenderers = {
   "marin.download.huggingface.download_gated_manual.download_and_upload_to_store": renderDownloadStep,
   "marin.download.nemotron_cc.download_nemotron_cc.download_nemotron_cc": renderDownloadNemotronCCStep,
   "marin.download.filesystem.transfer.transfer_files": renderTransferStep,
-  "marin.raw2json.huggingface.qa.raw2json.raw2json": renderRaw2JsonStep,
+  "marin.transform.huggingface.dataset_to_eval.hf_dataset_to_jsonl": renderRaw2JsonStep,
   "marin.transform.conversation.transform_conversation.transform_hf_dataset": renderRaw2JsonStep,
   "marin.transform.fasttext.transform.main": renderFastTextTransformStep,
   "marin.transform.evaluation.eval_to_dolma.convert_eval_to_dolma": renderConvertEvalToDolmaStep,
@@ -634,4 +659,33 @@ function computeNumTokens({numSteps, batchSize, seqLen}) {
 
 function getBasename(path) {
   return path.split("/").pop();
+}
+
+function summarizeResources(resources) {
+  if (!resources) {
+    return "n/a";
+  }
+
+  if (resources.tpu_type) {
+    const slices = resources.slice_count ?? resources.num_slices ?? resources.num_tpu ?? 1;
+    return `${slices} x ${resources.tpu_type}`;
+  }
+
+  if (resources.gpu_type || resources.num_gpus || resources.gpu_count) {
+    const count = resources.num_gpus ?? resources.gpu_count ?? resources.gpu_per_node ?? 1;
+    const gpuType = resources.gpu_type || resources.accelerator_type || "GPU";
+    return `${count} x ${gpuType}`;
+  }
+
+  if (resources.num_cpus) {
+    const count = resources.num_cpus;
+    const suffix = count === 1 ? "" : "s";
+    return `${count} CPU${suffix}`;
+  }
+
+  if (resources.instance_type) {
+    return resources.instance_type;
+  }
+
+  return "n/a";
 }

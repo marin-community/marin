@@ -22,6 +22,7 @@ import shutil
 from dataclasses import dataclass
 
 import ray
+from levanter.compat.hf_checkpoints import RepoRef
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
 from levanter.main.eval_lm import EvalLmConfig as LevanterEvalLmConfig
@@ -36,6 +37,7 @@ from marin.utilities.executor_utils import ckpt_path_to_step_name
 from marin.resources import ResourceConfig
 
 HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
+GCSFUSE_MOUNT_POINT = "/opt/gcsfuse_mount"
 
 
 @dataclass
@@ -117,17 +119,23 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
         config (EvalLmConfig): The configuration for visualizing log probabilities.
     """
     try:
-        if config.hf_checkpoint:
+        local_path = None
+        # for hf checkpoints, levanter can read hf://, gs:// directly
+        # but for non-gcs hf checkpoints, we download to gcs fuse for now.
+        if config.hf_checkpoint and is_remote_path(config.hf_checkpoint.model_name_or_path):
+            pass
+        elif config.hf_checkpoint:
             # Use GCSFuse directly so that we don't have to download the checkpoint to the local filesystem
-            local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.hf_checkpoint))
+            checkpoint_ref = str(config.hf_checkpoint)
+            local_path = os.path.join(config.local_model_dir, ckpt_path_to_step_name(checkpoint_ref))
             download_from_gcs(
-                gcs_path=config.hf_checkpoint,
+                gcs_path=checkpoint_ref,
                 destination_path=local_path,
             )
-            config.hf_checkpoint = local_path
+            config.hf_checkpoint = RepoRef.from_string(local_path)
             print(f"Downloaded model checkpoint to {local_path}: {os.listdir(local_path)}")
         elif config.checkpoint_path and is_remote_path(config.checkpoint_path):
-            local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.checkpoint_path))
+            local_path = os.path.join(config.local_model_dir, ckpt_path_to_step_name(config.checkpoint_path))
             download_from_gcs(
                 gcs_path=config.checkpoint_path,
                 destination_path=local_path,
@@ -136,13 +144,11 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
         eval_lm_main(config)
     finally:
         if config.hf_checkpoint:
-            if os.path.exists(config.hf_checkpoint):
-                shutil.rmtree(config.hf_checkpoint, ignore_errors=True)
-                print(f"Deleted local checkpoint at {config.checkpoint_path}.")
-            else:
+            hf_checkpoint_path = str(config.hf_checkpoint)
+            if not os.path.exists(hf_checkpoint_path):
                 shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
-                print(f"Deleted local checkpoint at {HUGGINGFACE_CACHE_PATH}.")
-        if "gcsfuse" not in local_path:
+                print(f"Deleted HuggingFace cache at {HUGGINGFACE_CACHE_PATH}.")
+        if local_path and not local_path.startswith(GCSFUSE_MOUNT_POINT):
             shutil.rmtree(local_path, ignore_errors=True)
             print(f"Deleted local checkpoint at {local_path}.")
 
@@ -168,7 +174,7 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
 
     levanter_config = LevanterEvalLmConfig(
         checkpoint_path=config.checkpoint_path if not config.checkpoint_is_hf else None,
-        hf_checkpoint=config.checkpoint_path if config.checkpoint_is_hf else None,
+        hf_checkpoint=RepoRef.from_string(config.checkpoint_path) if config.checkpoint_is_hf else None,
         model=config.model,
         data=config.datasets,
         trainer=TrainerConfig(

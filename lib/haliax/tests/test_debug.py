@@ -58,8 +58,8 @@ def test_diagnose_common_issues_repeated_nested():
 
 def test_diagnose_common_issues_static():
     class M(eqx.Module):
-        a: jnp.ndarray = eqx.static_field()
-        b: hax.NamedArray = eqx.static_field()
+        a: jnp.ndarray = eqx.field(static=True)
+        b: hax.NamedArray = eqx.field(static=True)
 
         def __init__(self):
             super().__init__()
@@ -76,8 +76,8 @@ def test_diagnose_common_issues_static():
 
 def test_diagnose_common_issues_static_nested():
     class M(eqx.Module):
-        a: jnp.ndarray = eqx.static_field()
-        b: hax.NamedArray = eqx.static_field()
+        a: jnp.ndarray = eqx.field(static=True)
+        b: hax.NamedArray = eqx.field(static=True)
 
         def __init__(self):
             super().__init__()
