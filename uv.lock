@@ -3205,6 +3205,7 @@ dependencies = [
     { name = "tqdm-loggable" },
     { name = "transformers" },
     { name = "wandb" },
+    { name = "zephyr" },
     { name = "zstandard" },
 ]
 
@@ -3321,6 +3322,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'serve'", specifier = ">=0.23.0" },
     { name = "wandb", specifier = ">=0.17.8" },
     { name = "xprof", marker = "extra == 'profiling'" },
+    { name = "zephyr", editable = "lib/zephyr" },
     { name = "zstandard", specifier = ">=0.18.0" },
 ]
 provides-extras = ["gpu", "tpu", "torch-test", "profiling", "serve", "lm-eval", "gcp"]

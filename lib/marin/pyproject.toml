@@ -22,7 +22,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "jax==0.6.2",
-    "haliax>=1.4.dev443",
+    "haliax",
     "levanter[serve]",
     "lz4",
     "zephyr",

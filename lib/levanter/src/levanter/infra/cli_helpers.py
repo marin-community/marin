@@ -9,6 +9,7 @@ import subprocess
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
+from pathlib import Path
 from typing import Optional
 
 import draccus
@@ -128,6 +129,15 @@ def default_run_id():
     for char in run_id:
         assert char in "abcdefghijklmnopqrstuvwxyz0123456789"
     return run_id
+
+
+def find_repo_root(start: Path | None = None) -> Path:
+    """Return the nearest parent containing a .git directory."""
+    here = (start or Path(__file__)).resolve()
+    for p in [here] + list(here.parents):
+        if (p / ".git").exists():
+            return p
+    return Path.cwd()
 
 
 def add_capacity_type_args(parser, config):
