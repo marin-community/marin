@@ -236,3 +236,34 @@ def test_group_by_with_hash_key_large(backend, large_document_dataset):
     # Verify all hashes are unique
     hashes = [r["hash"] for r in results]
     assert len(set(hashes)) == 100
+
+
+def test_group_by_with_none_and_filter(backend):
+    """Test group_by with None results followed by filter operations."""
+    data = [
+        {"cat": "a"},
+        {"cat": "a"},
+        {"cat": "b"},
+        {"cat": "foo"},
+        {"cat": "foo"},
+        {"cat": "bar"},
+    ]
+
+    # Reducer returns None for non-duplicates, key for duplicates
+    def reducer(key, items):
+        items_list = list(items)
+        if len(items_list) > 1:
+            return key
+        return None
+
+    ds = (
+        Dataset.from_list(data)
+        .group_by(key=lambda x: x["cat"], reducer=reducer)
+        .filter(lambda x: x is not None)  # Filter out None values
+    )
+
+    results = list(backend.execute(ds))
+
+    # Should only have duplicate keys: "a" and "foo"
+    assert len(results) == 2
+    assert sorted(results) == ["a", "foo"]

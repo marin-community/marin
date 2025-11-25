@@ -102,7 +102,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from functools import cached_property
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
@@ -269,11 +269,20 @@ def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
     return InputName(step=step, name=name)
 
 
-@dataclass(frozen=True)
-class OutputName:
-    """To be interpreted as part of this step's output_path joined with `name`."""
+if TYPE_CHECKING:
 
-    name: str | None
+    class OutputName(str):
+        """Type-checking stub treated as a string so defaults like THIS_OUTPUT_PATH fit `str`."""
+
+        name: str | None
+
+else:
+
+    @dataclass(frozen=True)
+    class OutputName:
+        """To be interpreted as part of this step's output_path joined with `name`."""
+
+        name: str | None
 
 
 def this_output_path(name: str | None = None):

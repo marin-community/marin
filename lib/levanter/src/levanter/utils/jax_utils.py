@@ -321,7 +321,7 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
         else:
             return NamedSharding(mesh, PartitionSpec(None))
 
-        axis_sharding = [None] * len(shape)
+        axis_sharding: list[str | None] = [None] * len(shape)
         axis_sharding[sharded_axis] = hax.partitioning.ResourceAxis.DATA
         sharding = NamedSharding(mesh, PartitionSpec(*axis_sharding))
 
@@ -639,7 +639,7 @@ def sharded_tree_size(
 
     def _size(x):
         if isinstance(x, hax.NamedArray):
-            pspec = haliax.partitioning.pspec_for(x, mapping, preserve_existing_shardings=False)
+            pspec = haliax.partitioning.pspec_for(x, mapping)
             num_shards = _shards_for_pspec(pspec)
             x_a = x.array
             if hasattr(x_a, "nbytes"):
