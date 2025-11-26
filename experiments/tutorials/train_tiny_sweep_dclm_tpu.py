@@ -18,7 +18,7 @@ on a 30M parameter DCLM model using TPU hardware.
 """
 import dataclasses
 
-from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
+from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from experiments.evals.task_configs import CORE_TASKS
 from marin.execution.executor import executor_main, versioned
 from marin.resources import TpuPodConfig
