@@ -1,0 +1,15 @@
+[package]
+name = "rbloom"
+version = "1.6.5"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "rbloom"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.26", features = [
+    "extension-module",
+    "abi3-py311",
+] } # stable ABI with minimum Python version 3.11

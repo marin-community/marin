@@ -1,0 +1,25 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "rbloom"
+description = "Highly optimized Bloom filter that mimics the Python set API, written in Rust"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
+
+[project.urls]
+"Source Code" = "https://github.com/KenanHanke/rbloom"
+Homepage = "https://github.com/KenanHanke/rbloom"
+Issues = "https://github.com/KenanHanke/rbloom/issues"
+
+[tool.maturin]
+sdist-include = ["LICENSE", "README.md"]
