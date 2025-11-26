@@ -124,6 +124,7 @@ conflicts = [
 zephyr = { workspace = true }
 levanter = { workspace = true }
 fray = { workspace = true }
+dupekit = { workspace = true }
 
 torch = [
     # Default to the CPU index for TPU/CPU builds
@@ -215,10 +216,10 @@ quality_dedup_consolidate = [
     "cattrs==24.1.3",
     "datasets",
     "ddsketch",
+    "dupekit",
     "fasttext",
     "huggingface_hub",
     "nltk>=3.8.1",
-    "rbloom_gcs",
     "transformers",
     "zstandard>=0.23.0",
 ]

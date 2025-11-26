@@ -1,3 +1,31 @@
+/*
+MIT License
+
+Copyright (c) 2023-2025 Kenan Hanke
+Copyright (c) 2023-2025 Zachary Dremann
+Copyright (c) 2023 Rory McNamara
+Copyright (c) 2024 Dan Lenski
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
+
 use bitline::BitLine;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -6,7 +34,7 @@ use pyo3::{basic::CompareOp, types::PyBytes, types::PyTuple, PyTraverseError, Py
 use std::mem;
 use std::path::PathBuf;
 
-#[pyclass(module = "rbloom")]
+#[pyclass(module = "dupekit")]
 struct Bloom {
     filter: BitLine,
     k: u64, // Number of hash functions (implemented via a LCG that uses
@@ -616,7 +644,7 @@ fn check_compatible(a: &Bloom, b: &Bloom) -> PyResult<()> {
 }
 
 #[pymodule]
-fn rbloom(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn dupekit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Bloom>()?;
     Ok(())
 }

@@ -18,7 +18,7 @@ import os
 from hashlib import sha256
 from pickle import dumps
 
-from rbloom import Bloom
+from dupekit import Bloom
 
 
 def hash_func(obj):

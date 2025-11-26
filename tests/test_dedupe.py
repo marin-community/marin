@@ -20,11 +20,7 @@ import pytest
 from marin.utils import fsspec_exists
 from zephyr import load_jsonl, write_jsonl_file
 
-try:
-    import rbloom  # noqa: F401
-    from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
-except ImportError:
-    pytest.skip("Dedupe module not available", allow_module_level=True)
+from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 
 
 def load_dedup_outputs(output_dir: str) -> dict[str, dict]:

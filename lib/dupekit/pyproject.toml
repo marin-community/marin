@@ -1,0 +1,34 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "dupekit"
+version = "0.1.0"
+description = "Optimized code for text de-duplication, written in Rust"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/marin-community/marin"
+Issues = "https://github.com/marin-community/marin/issues"
+
+[tool.maturin]
+sdist-include = ["README.md"]
+# Avoid linking libpython, making wheels portable
+features = ["pyo3/extension-module"]
+
+[tool.uv]
+# Force rebuild if Rust sources or Cargo manifests change
+cache-keys = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "pyproject.toml",
+    "src/**/*.rs"
+]

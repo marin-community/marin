@@ -89,7 +89,7 @@ import draccus
 import fsspec
 import orjson
 import ray
-from rbloom import Bloom
+from dupekit import Bloom
 from tqdm_loggable.auto import tqdm
 
 from marin.utils import fsspec_exists, fsspec_glob
