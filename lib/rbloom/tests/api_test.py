@@ -27,7 +27,7 @@ def hash_func(obj):
     return int.from_bytes(h[:16], "big", signed=True)
 
 
-def test_bloom(bloom: Bloom):
+def _test_bloom(bloom: Bloom):
     assert not bloom
     assert bloom.approx_items == 0.0
 
@@ -224,18 +224,14 @@ def operations_with_self():
     assert bloom.intersection(bloom, bloom) == bloom
 
 
-def api_suite():
+def test_api_suite():
     assert repr(Bloom(27_000, 0.0317)) == "<Bloom size_in_bits=193960 approx_items=0.0>"
 
-    test_bloom(Bloom(13242, 0.0000001))
-    test_bloom(Bloom(9874124, 0.01))
-    test_bloom(Bloom(2837, 0.5))
+    _test_bloom(Bloom(13242, 0.0000001))
+    _test_bloom(Bloom(9874124, 0.01))
+    _test_bloom(Bloom(2837, 0.5))
 
     operations_with_self()
     test_chunked_write()
 
     print("All API tests passed")
-
-
-if __name__ == "__main__":
-    api_suite()
