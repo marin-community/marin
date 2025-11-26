@@ -35,7 +35,6 @@ def dot(
     preferred_element_type: DTypeLike | None = None,
     out_axes: PartialAxisSpec | None = ...,
     dot_general=jax.lax.dot_general,
-    out_sharding=None,
 ) -> NamedArray: ...
 
 
@@ -47,7 +46,6 @@ def dot(
     preferred_element_type: DTypeLike | None = None,
     out_axes: PartialAxisSpec | None = ...,
     dot_general=jax.lax.dot_general,
-    out_sharding=None,
 ) -> NamedArray: ...
 
 
@@ -57,7 +55,6 @@ def dot(
     preferred_element_type: DTypeLike | None = None,
     out_axes: PartialAxisSpec | None = None,
     dot_general=jax.lax.dot_general,
-    out_sharding=None,
     **kwargs,
 ) -> NamedArray:
     """Returns the tensor product of two NamedArrays. The axes `axis` are contracted over,
@@ -87,8 +84,6 @@ def dot(
             This argument is passed to `jax.numpy.einsum`.
         out_axes (PartialAxisSpec | None, optional): a potentially partial specification of the output axes.
             If provided, the output will be transposed to match the provided axes. Defaults to None.
-        out_sharding: Passed through to the underlying `dot_general`/`einsum` implementation. Useful in explicit
-            sharding mode to request a specific output sharding.
 
 
     Returns:
@@ -151,9 +146,7 @@ def dot(
         jax_str = f"contract {', '.join(axis)} -> {', '.join(a.name for a in output_axes)}"
 
     with jax.named_scope(jax_str):
-        inferred_out_sharding = out_sharding
-        if inferred_out_sharding is None:
-            inferred_out_sharding = _infer_out_sharding(output_axes)
+        inferred_out_sharding = _infer_out_sharding(output_axes, arrays)
 
         output = _jittable_dg_einsum(
             ", ".join(array_specs) + "-> " + output_spec,
@@ -167,9 +160,15 @@ def dot(
     return NamedArray(output, output_axes)
 
 
-def _infer_out_sharding(output_axes: tuple[Axis, ...]):
+def _infer_out_sharding(output_axes: tuple[Axis, ...], operands):
     mapping = current_thread_local_mapping()
     mesh = _resolve_mesh()
+    if mesh is None:
+        for op in operands:
+            sh = getattr(op, "sharding", None)
+            if getattr(sh, "mesh", None) is not None:
+                mesh = sh.mesh
+                break
     if mesh is None:
         return None
 

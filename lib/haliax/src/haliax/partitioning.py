@@ -15,8 +15,9 @@ from typing import Callable, ContextManager, Mapping, Optional, ParamSpec, Seque
 import equinox as eqx
 import jax
 from equinox import is_array, module_update_wrapper
+from jax._src.pjit import reshard
 from jax.lax import with_sharding_constraint
-from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, get_abstract_mesh
+from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, get_abstract_mesh, AxisType
 
 
 from jaxtyping import PyTree
@@ -157,6 +158,36 @@ def set_mesh(mesh: MeshLike) -> ContextManager[None]:
     return mesh_context(mesh)
 
 
+def _all_mesh_axes_explicit(mesh: MeshLike | None, pspec: PartitionSpec | None) -> bool:
+    """
+    Returns True iff every mesh axis referenced by ``pspec`` is Explicit.
+    Falls back to False when mesh/pspec/axis_types are missing.
+    """
+    if mesh is None or pspec is None:
+        return False
+
+    axis_types = mesh.axis_types
+    axis_names = mesh.axis_names
+    if axis_types is None or axis_names is None:
+        return False
+
+    referenced: set[str] = set()
+    for entry in pspec:
+        if entry is None or entry is PartitionSpec.UNCONSTRAINED:
+            continue
+        if isinstance(entry, str):
+            referenced.add(entry)
+        else:
+            for e in entry:
+                if e is not None:
+                    referenced.add(e)
+
+    for name, atype in zip(axis_names, axis_types):
+        if name in referenced and not atype == AxisType.Explicit:
+            return False
+    return True
+
+
 def auto_sharded(x: T, mesh: Optional[Mesh] = None) -> T:
     """
     Shard a PyTree using the global axis mapping. NamedArrays in the PyTree are sharded using the axis mapping
@@ -216,10 +247,15 @@ def shard(x: T, mapping: ResourceMapping | None = None, mesh: Mesh | None = None
 
         pspec = pspec_for(named, mapping)
         assert isinstance(pspec, PartitionSpec)
-        sharding = NamedSharding(resolved_mesh, pspec)
         if is_in_jit():
-            return with_sharding_constraint(named, sharding)
+            # ok so jax is mildly annoying right now. we have to use reshard if *all* mesh axes are explicit.
+            # otherwise, we need to use with_sharding_constraint.
+            if _all_mesh_axes_explicit(resolved_mesh, pspec):
+                return reshard(named, pspec)
+
+            return with_sharding_constraint(named, pspec)
         else:
+            sharding = NamedSharding(resolved_mesh, pspec)
             ret = jax.device_put(named, sharding)
             return ret
 
@@ -248,25 +284,6 @@ def pspec_for(
 
     if resource_mapping is None:
         raise ValueError("No resource mapping found")
-
-    def _pspec_from_typeof(x: typing.Any) -> PartitionSpec | None:
-        """
-        Try to recover a PartitionSpec from the JAX-level type (jax.typeof) of ``x``.
-
-        Newer versions of JAX include sharding information in the abstract values for
-        explicitly-sharded arrays. When available, prefer that over concrete sharding
-        info so we respect sharding-in-types even for plain arrays.
-        """
-        try:
-            typeof = jax.typeof(x)
-        except Exception:
-            return None
-
-        sharding = getattr(typeof, "sharding", None)
-        spec = getattr(sharding, "spec", None)
-        if isinstance(spec, PartitionSpec):
-            return spec
-        return None
 
     def partition_spec(node: typing.Any):
         if isinstance(node, NamedArray):
@@ -297,14 +314,12 @@ def pspec_for(
 
             return new_node
         elif is_jax_array_like(node):
-            type_pspec = _pspec_from_typeof(node)
-            # TODO: these are usually replicated. Is there a better way to tell?
-            if node.shape == ():
-                return PartitionSpec()
-            elif type_pspec is not None:
+            tpe = jax.typeof(node)
+            type_pspec = tpe.sharding.spec
+            if type_pspec is not None:
                 return type_pspec
 
-            return PartitionSpec(None)
+            return PartitionSpec((PartitionSpec.UNCONSTRAINED,) * len(tpe.shape))
         elif isinstance(node, (bool, float, complex, int)):
             return PartitionSpec()
         else:

@@ -55,8 +55,7 @@ def einsum(
        precision: The precision of the computation.
        preferred_element_type: The preferred element type of the computation.
        _dot_general: The dot_general function to use.
-       out_sharding: Optional output sharding to pass through to the underlying
-         dot_general/einsum implementation (useful in explicit sharding mode).
+       out_sharding: Optional output sharding for explicit sharding mode. If not provided, will be inferred from names and axis mapping
        axis_aliases: The axis aliases to use.
 
     Returns:
@@ -100,6 +99,7 @@ def einsum(
 def _infer_out_sharding(out_axes: tuple[Axis, ...]):
     mapping = current_thread_local_mapping()
     mesh = _resolve_mesh()
+
     if mesh is None:
         return None
 
@@ -250,6 +250,7 @@ def _positional_einsum_spec(equation, arrays, lhses, rhs, axis_aliases):
             final_lhs_axis_off = axis_off
 
             axis_off = len(a.axes) - 1
+            reverse_spec = ""
             for capture in reversed(lhs.captures):
                 if capture is Ellipsis:
                     break
@@ -262,12 +263,15 @@ def _positional_einsum_spec(equation, arrays, lhses, rhs, axis_aliases):
                         raise ValueError("Mismatched number of axes in einsum")
                     table.bind_alias(name, a.axes[axis_off], equation, capture.char_range)
                     letter = _assign_letter_to_name(name, name_mappings_for_einsum, used_letters)
-                    spec += letter
+                    reverse_spec += letter
                     axis_off -= 1
+
+            spec += reverse_spec[::-1]
         else:
             if axis_off != len(a.axes):
                 raise ValueError("Mismatched number of axes in einsum")
 
+    # starts with all, but we remove
     named_on_left_but_not_right = set(table.bindings.keys())
     spec += "->"
     out_axes: list[AxisSelector | EllipsisType] = []
@@ -308,10 +312,23 @@ def _positional_einsum_spec(equation, arrays, lhses, rhs, axis_aliases):
 
     if has_ellipsis_rhs:
         all_input_axes = _all_input_axes(arrays)
-        # eliminate the axes that are contracted
-        unmentioned = tuple(table.dealias_binding(name) for name in named_on_left_but_not_right)
-        out = eliminate_axes(all_input_axes, unmentioned)  # type: ignore
-        return spec, out
+        rhs_named_axes = [ax for ax in out_axes if ax is not Ellipsis]
+        rhs_named_names = {axis_name(ax) for ax in rhs_named_axes}
+        contracted_axes = {axis_name(table.dealias_binding(name)) for name in named_on_left_but_not_right}
+        ellipsis_axes = [
+            ax
+            for ax in all_input_axes
+            if axis_name(ax) not in rhs_named_names and axis_name(ax) not in contracted_axes
+        ]
+
+        expanded_out: list[Axis] = []
+        for ax in out_axes:
+            if ax is Ellipsis:
+                expanded_out.extend(ellipsis_axes)
+            else:
+                expanded_out.append(ax)  # type: ignore[arg-type]
+
+        return spec, tuple(expanded_out)
     else:
         return spec, out_axes
 
