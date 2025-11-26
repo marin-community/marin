@@ -79,8 +79,20 @@ def start_vllm_server(
         f.write(chat_template)
         chat_template_file = f.name
 
-    # Build command as list for better security and compatibility
-    cmd = ["vllm", "serve", model_name_or_path, "--trust-remote-code", "--host", host, "--port", str(port)]
+    cmd = [
+        "vllm",
+        "serve",
+        model_name_or_path,
+        "--served-model-name",
+        model_name_or_path,
+        "default",
+        model_name_or_path.split("/")[-1],
+        "--trust-remote-code",
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
     cmd.extend(["--chat-template", chat_template_file])
 
     for key, value in engine_kwargs.items():
@@ -146,8 +158,8 @@ def vllm_server_worker(
     ) as venv:
         logger.info(f"Created isolated venv for vLLM at {venv.venv_path}")
 
-        # Install vllm-tpu first, then upgrade libtpu to override vllm-tpu's older libtpu dependency
-        logger.info("Installing vllm-tpu and libtpu")
+        vllm_dep = "vllm-tpu" if model.device == "tpu" else "vllm"
+
         env = venv.get_env()
         subprocess.check_call(
             [
@@ -157,7 +169,7 @@ def vllm_server_worker(
                 "--python",
                 venv.python_path,
                 "--python-preference=only-managed",
-                "vllm-tpu",
+                vllm_dep,
             ],
             env=env,
         )
@@ -189,17 +201,17 @@ def vllm_server_worker(
 
             request = lease.item
             request_id = request.get("_request_id")
+            method = request.get("_method")
             logger.info(f"Processing request {request_id}")
 
             try:
-                endpoint = request.get("_endpoint", "/chat/completions")
+                endpoint = request["_endpoint"]
                 payload = {k: v for k, v in request.items() if not k.startswith("_")}
-                if "model" not in payload or payload["model"] is None:
-                    payload["model"] = model.name
 
                 url = f"{server_url}{endpoint}"
-                logger.info(f"Sending request to vLLM at {url}")
-                http_response = requests.post(
+                logger.info(f"Sending request to vLLM at {url} with method {method}, payload {payload}")
+                http_response = requests.request(
+                    method,
                     url,
                     json=payload,
                     timeout=300,

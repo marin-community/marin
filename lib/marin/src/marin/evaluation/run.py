@@ -38,24 +38,14 @@ logger = logging.getLogger(__name__)
 
 
 def evaluate(config: EvaluationConfig) -> None:
-    """Run evaluation using the Fray-based inference pool.
-
-    This function:
-    1. Creates a Fray cluster and queues
-    2. Starts the inference pool with VLLM servers
-    3. Runs the evaluator with the pool's OpenAI-compatible API
-    4. Shuts down the pool and cluster
-    """
+    """Run evaluation using the Fray-based inference pool."""
     logger.info(f"Running evals with args: {config}")
-
-    # Get model config from pool config
     model: ModelConfig = config.pool_config.model_config
 
     # Handle checkpoint discovery if needed
     if config.discover_latest_checkpoint and config.model_path:
         discovered_path = discover_hf_checkpoints(config.model_path)[-1]
         logger.info(f"Discovered latest checkpoint: {discovered_path}")
-        # Update the model config with the discovered path
         model = ModelConfig(
             name=model.name,
             path=discovered_path,
@@ -73,7 +63,7 @@ def evaluate(config: EvaluationConfig) -> None:
     cluster = current_cluster()
     logger.info(f"Using cluster: {cluster.__class__.__name__}")
 
-    # Create HTTP queue server for distributed communication
+    # Use an HTTP queue server to communicate with vllm inference servers
     with HttpQueueServer(port=9999) as queue_server:
         request_queue = queue_server.new_queue("requests")
         response_queue = queue_server.new_queue("responses")

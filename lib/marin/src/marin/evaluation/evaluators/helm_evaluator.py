@@ -164,7 +164,10 @@ class HELMEvaluator(Evaluator):
 
         # Use isolated venv for HELM to avoid dependency conflicts
         with TemporaryVenv(
-            pip_install_args=["crfm-helm@git+https://github.com/stanford-crfm/helm.git"],
+            pip_install_args=[
+                "crfm-helm@git+https://github.com/stanford-crfm/helm.git",
+                "openai",  # Required by HELM's OpenAI client
+            ],
             prefix="helm_venv_",
         ) as venv:
             try:
@@ -175,7 +178,7 @@ class HELMEvaluator(Evaluator):
                 for helm_eval in evals:
                     run_entries_file: str = f"run_entries_{helm_eval.name}.conf"
                     run_entries_url: str = RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
-                    ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
+                    ensure_file_downloaded(url=run_entries_url, target_path=run_entries_file)
                     assert os.path.exists(
                         run_entries_file
                     ), f"Failed to download. Does {run_entries_file} exist at {ALL_RUN_ENTRIES_URL}?"
@@ -183,7 +186,7 @@ class HELMEvaluator(Evaluator):
 
                     schema_file: str = f"schema_{helm_eval.name}.yaml"
                     schema_url: str = SCHEMA_TEMPLATE.format(schema_file=schema_file)
-                    ensure_file_downloaded(source_url=schema_url, target_path=schema_file)
+                    ensure_file_downloaded(url=schema_url, target_path=schema_file)
                     assert os.path.exists(
                         schema_file
                     ), f"Failed to download. Does {schema_file} exist at {ALL_SCHEMA_URL}?"
@@ -193,7 +196,6 @@ class HELMEvaluator(Evaluator):
 
                 max_eval_instances = max_eval_instances or DEFAULT_MAX_EVAL_INSTANCES
 
-                # Run helm-run in isolated venv
                 venv.run(
                     [
                         "helm-run",
@@ -259,7 +261,7 @@ if __name__ == "__main__":
         ),
     )
 
-    with tempfile.TemporaryDirectory() as tmp_dir, LocalCluster() as cluster, HttpQueueServer() as queue_server:
+    with LocalCluster() as cluster, HttpQueueServer() as queue_server:
         request_queue = queue_server.new_queue("requests")
         response_queue = queue_server.new_queue("responses")
 

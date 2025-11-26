@@ -208,7 +208,6 @@ class TemporaryVenv:
             env = self.get_env()
 
         logger.info("Running %s", " ".join(cmd))
-        logger.info("Running with env %s", "\n".join(f"{k}={v}" for k, v in sorted(env.items())))
         return subprocess.run(cmd, env=env, check=check, **kwargs)
 
     def run_async(
@@ -233,7 +232,6 @@ class TemporaryVenv:
                 kwargs["preexec_fn"] = _set_pdeathsig_preexec
 
         logger.info("Running %s", " ".join(cmd))
-        logger.info("Running with env %s", "\n".join(f"{k}={v}" for k, v in sorted(env.items())))
         process = subprocess.Popen(cmd, env=env, **kwargs)
         self._processes.append(process)
         return process

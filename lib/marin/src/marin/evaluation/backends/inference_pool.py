@@ -51,13 +51,14 @@ class ProxyServerThread(threading.Thread):
     def run(self) -> None:
         app = FastAPI(title="Inference Pool Proxy")
 
-        async def handle_inference_request(request: dict[str, Any], endpoint: str) -> dict[str, Any]:
+        async def handle_inference_request(request: dict[str, Any], endpoint: str, method: str) -> dict[str, Any]:
             logger.info(f"{endpoint} request: {request}")
 
             # Add internal request ID and endpoint to the incoming dict
             request_id = str(uuid.uuid4())
             request["_request_id"] = request_id
             request["_endpoint"] = endpoint
+            request["_method"] = method
 
             self.request_queue.push(request)
             logger.info(f"Pushed request {request_id} to queue")
@@ -91,25 +92,15 @@ class ProxyServerThread(threading.Thread):
 
         @app.post("/v1/chat/completions")
         async def chat_completions(request: dict[str, Any]) -> dict[str, Any]:
-            return await handle_inference_request(request, "/chat/completions")
+            return await handle_inference_request(request, "/chat/completions", "POST")
 
         @app.post("/v1/completions")
         async def completions(request: dict[str, Any]) -> dict[str, Any]:
-            return await handle_inference_request(request, "/completions")
+            return await handle_inference_request(request, "/completions", "POST")
 
         @app.get("/v1/models")
         async def list_models() -> dict[str, Any]:
-            return {
-                "object": "list",
-                "data": [
-                    {
-                        "id": "default",
-                        "object": "model",
-                        "created": int(time.time()),
-                        "owned_by": "marin",
-                    }
-                ],
-            }
+            return await handle_inference_request({}, "/models", "GET")
 
         @app.get("/health")
         async def health() -> dict[str, str]:
@@ -228,21 +219,13 @@ class InferencePool:
                 raise RuntimeError(f"Pool job failed during startup: {info.error_message}")
 
             try:
-                response = requests.post(
-                    f"{proxy_url}/v1/completions",
-                    json={
-                        "model": "default",
-                        "prompt": "test",
-                        "max_tokens": 1,
-                        "temperature": 0,
-                    },
-                    timeout=60,
-                )
-                # we don't care about the response, we just want to know if the worker is healthy
-                if response.status_code == 200 or response.status_code == 404:
-                    logger.info("VLLM worker is healthy and responding via queues")
+                response = requests.get(f"{proxy_url}/v1/models", timeout=60)
+                if response.status_code == 200:
+                    logger.info("VLLM worker is healthy")
                     return
             except requests.RequestException as e:
-                logger.debug(f"VLLM worker health check failed: {e}")
+                logger.info(f"VLLM worker health check failed: {e}")
+
+            time.sleep(30)
 
         raise RuntimeError("VLLM worker failed to start")
