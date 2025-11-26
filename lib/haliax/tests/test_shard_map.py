@@ -22,42 +22,12 @@ def test_shard_map_basic():
     def fn(x):
         return x + 1
 
-    sm = hax.shard_map(fn, out_specs=Dim, mesh=mesh, check_rep=False)
-    x = hax.ones(Dim)
-    with axis_mapping({"dim": ResourceAxis.DATA}), mesh:
-        out = sm(x)
-    assert out.axes == (Dim,)
-    assert jnp.allclose(out.array, x.array + 1)
-
-
-@skip_if_not_enough_devices(2)
-def test_shard_map_infer_out():
-    mesh = Mesh(np.array(jax.devices()), (ResourceAxis.DATA,))
-
-    def fn(x):
-        return x + 2
-
     sm = hax.shard_map(fn, mesh=mesh, check_rep=False)
     x = hax.ones(Dim)
     with axis_mapping({"dim": ResourceAxis.DATA}), mesh:
         out = sm(x)
     assert out.axes == (Dim,)
-    assert jnp.allclose(out.array, x.array + 2)
-
-
-@skip_if_not_enough_devices(2)
-def test_shard_map_explicit_out_spec():
-    mesh = Mesh(np.array(jax.devices()), (ResourceAxis.DATA,))
-
-    def fn(x):
-        return x * 3
-
-    sm = hax.shard_map(fn, out_specs=Dim, mesh=mesh, check_rep=False)
-    x = hax.ones(Dim)
-    with axis_mapping({"dim": ResourceAxis.DATA}), mesh:
-        out = sm(x)
-    assert out.axes == (Dim,)
-    assert jnp.allclose(out.array, x.array * 3)
+    assert jnp.allclose(out.array, x.array + 1)
 
 
 @skip_if_not_enough_devices(2)
@@ -94,7 +64,7 @@ def test_shard_map_multiple_args():
     def fn(a, b):
         return a + b
 
-    sm = hax.shard_map(fn, out_specs=Dim, mesh=mesh, check_rep=False)
+    sm = hax.shard_map(fn, mesh=mesh, check_rep=False)
     x = hax.ones(Dim)
     y = hax.arange(Dim)
     with axis_mapping({"dim": ResourceAxis.DATA}), mesh:
@@ -124,14 +94,12 @@ def test_shard_map_decorator_usage():
 def test_shard_map_decorator_no_kwargs():
     mesh = Mesh(np.array(jax.devices()), (ResourceAxis.DATA,))
 
-    with mesh:
-
-        @hax.shard_map
-        def fn(x):
-            return x - 1
+    @hax.shard_map
+    def fn(x):
+        return x - 1
 
     x = hax.ones(Dim)
-    with axis_mapping({"dim": ResourceAxis.DATA}), mesh:
+    with axis_mapping({"dim": ResourceAxis.DATA}), hax.partitioning.set_mesh(mesh):
         out = fn(x)
 
     assert out.axes == (Dim,)
