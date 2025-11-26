@@ -806,7 +806,7 @@ def shard_map(
         if mesh is not None:
             this_mesh = mesh
         else:
-            this_mesh = get_abstract_mesh()
+            this_mesh = _resolve_mesh()
 
         def inner(args, kwargs):
             return f(*args, **kwargs)
@@ -814,7 +814,7 @@ def shard_map(
         if in_specs is None:
             this_in_specs = pspec_for((args, kwargs), axis_mapping)
         else:
-            this_in_specs = in_specs
+            this_in_specs = (in_specs, {})
 
         # for output, we need to evaluate the function on placeholder inputs to get the output shape
         # we have to do this under shard_map so that psum etc. work
