@@ -21,6 +21,7 @@ as a lightweight scaffold for ISOFlop scaling law experiments.
 
 import dataclasses
 import math
+import os
 from dataclasses import dataclass, replace
 
 from levanter.data.text import LMMixtureDatasetConfig
@@ -310,8 +311,9 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                 optimizer_config=optimizer_cfg,
             )
 
+            run_name = f"isoflop-{budget:.0e}-d{hidden_size}-L{num_layers}-B{batch_size}-{experiment_name}"
             step = default_train(
-                name=f"isoflop-{budget:.0e}-d{hidden_size}-L{num_layers}-B{batch_size}-{experiment_name}",
+                name=run_name,
                 tokenized=config.tokenized_dataset,
                 model_config=model_cfg,
                 train_config=train_cfg,
@@ -326,7 +328,13 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                 ),
             )
             metadata.append((budget, hidden_size, num_layers, batch_size, train_steps))
-            steps.append(step)
+            # Reuse checkpoints by pinning every sweep run to a deterministic directory.
+            static_output_path = os.path.join(
+                "checkpoints",
+                "isoflop",
+                run_name,
+            )
+            steps.append(step.with_output_path(static_output_path))
 
     return steps, metadata
 
@@ -357,6 +365,20 @@ dclm_mix = lm_mixture_data_config(
     num_validation_sequences={"dclm": 1024},
 )
 
+dolma3_mix_tokenized = dataclasses.replace(
+    default_tokenize(
+        name="dolma3_mix-150B-1025",
+        dataset=downloads["dolma3_mix_150b_1025"],
+        tokenizer=llama3_tokenizer,
+    ).with_output_path("tokenized/dolma3_mix-150B-1025-15d04ee/"),
+)
+
+dolma3_mix = lm_mixture_data_config(
+    components={"dolma3_mix-150B-1025": dolma3_mix_tokenized},
+    weights={"dolma3_mix-150B-1025": 1.0},
+    num_validation_sequences={"dolma3_mix-150B-1025": 1024},
+)
+
 MARIN_SCALING_SUITES = {
     "nemotron": generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt"),
     "common_pile": generate_isoflop_sweep(comma_main_mixture(permutation_type="linear"), experiment_name="comma-mix"),
@@ -364,8 +386,9 @@ MARIN_SCALING_SUITES = {
         comma_main_mixture(permutation_type="feistel"), experiment_name="comma-mix-feistel"
     ),
     "dclm-default": generate_isoflop_sweep(dclm_mix, experiment_name="dclm-default"),
+    "dolma3_mix_150b": generate_isoflop_sweep(dolma3_mix, experiment_name="dolma3-mix-150b-1025"),
 }
 
 if __name__ == "__main__":
-    steps = MARIN_SCALING_SUITES["common_pile"]
-    executor_main(steps=steps[0])
+    steps, _ = MARIN_SCALING_SUITES["dolma3_mix_150b"]
+    executor_main(steps=steps)
