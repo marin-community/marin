@@ -22,6 +22,7 @@ import time
 from typing import Any
 
 import requests
+from fray.isolated_env import TemporaryVenv
 from fray.queue.base import Queue
 from marin.evaluation.evaluation_config import ModelConfig
 
@@ -53,7 +54,9 @@ def start_vllm_server(
     host: str = "127.0.0.1",
     port: int = 8000,
     timeout_seconds: int = 3600,
-    vllm_venv: str | None = None,
+    vllm_cmd: str = "vllm",
+    vllm_env: dict[str, Any] | None = None,
+    venv: TemporaryVenv | None = None,
 ) -> str:
     """Start VLLM server in a subprocess and wait for it to be ready.
 
@@ -64,7 +67,9 @@ def start_vllm_server(
         host: Server host
         port: Server port
         timeout_seconds: Maximum time to wait for server to be ready
-        vllm_venv: Path to venv directory with vllm installed (optional)
+        vllm_cmd: Path to vllm binary command
+        vllm_env: Environment dict for vllm process (deprecated, use venv instead)
+        venv: TemporaryVenv instance for process tracking
 
     Returns:
         Server URL (e.g., "http://127.0.0.1:8000/v1")
@@ -72,34 +77,39 @@ def start_vllm_server(
     Raises:
         TimeoutError: If server doesn't start within timeout
     """
-    import tempfile
 
     chat_template = "{% for message in messages %}{{ message.content }}\n{% endfor %}"
     with tempfile.NamedTemporaryFile(mode="w", suffix=".jinja", delete=False) as f:
         f.write(chat_template)
         chat_template_file = f.name
 
-    if vllm_venv is None:
-        vllm_cmd = "vllm"
-    else:
-        vllm_cmd = os.path.join(vllm_venv, "bin", "vllm")
-
-    command = (
-        f"{vllm_cmd} serve {model_name_or_path} "
-        f"--trust-remote-code "
-        f"--host {host} "
-        f"--port {port} "
-        f"--chat-template {chat_template_file} "
-    )
-
-    if device == "tpu":
-        command += "--distributed-executor-backend mp "
+    # Build command as list for better security and compatibility
+    cmd = [vllm_cmd, "serve", model_name_or_path, "--trust-remote-code", "--host", host, "--port", str(port)]
+    cmd.extend(["--chat-template", chat_template_file])
 
     for key, value in engine_kwargs.items():
-        command += f" --{key.replace('_', '-')} {value}"
+        cmd.append(f"--{key.replace('_', '-')}")
+        cmd.append(str(value))
 
-    logger.info(f"Starting VLLM server: {command}")
-    process = subprocess.Popen(command, shell=True, stdout=None, stderr=None)
+    logger.info(f"Starting VLLM server: {' '.join(cmd)}")
+
+    # Set up environment with VLLM-specific variables
+    if venv is not None:
+        env = venv.get_env()
+    elif vllm_env is not None:
+        env = vllm_env
+    else:
+        env = os.environ.copy()
+
+    env["VLLM_TARGET_DEVICE"] = device
+    env["VLLM_LOGGING_LEVEL"] = "DEBUG"
+
+    if venv is not None:
+        logger.info(f"Using venv at {venv.venv_path}")
+        process = venv.run_async(cmd, env=env, stdout=None, stderr=None, text=True)
+    else:
+        # Fallback for backwards compatibility
+        process = subprocess.Popen(cmd, env=env, stdout=None, stderr=None, text=True)
 
     server_url = f"http://{host}:{port}/v1"
     start_time = time.time()
@@ -125,11 +135,13 @@ def start_vllm_server(
 
         exit_code = process.poll()
         if exit_code is not None:
+            logger.error(f"vLLM server exited with code {exit_code}")
             raise ValueError(f"vLLM server exited with code {exit_code}")
 
         elapsed = time.time() - start_time
         if elapsed > timeout_seconds:
             process.kill()
+            logger.error(f"VLLM server timed out after {timeout_seconds}s")
             raise TimeoutError(f"VLLM server failed to start within {timeout_seconds}s")
 
         time.sleep(5)
@@ -144,30 +156,29 @@ def vllm_server_worker(
     response_queue: Queue[dict[str, Any]],
 ) -> None:
     """Worker process that runs VLLM server and processes queue requests."""
-    # Create isolated venv for vLLM to avoid dependency conflicts with Ray environment
-    with tempfile.TemporaryDirectory(prefix="vllm_venv_") as vllm_venv:
-        logger.info(f"Creating isolated venv for vLLM at {vllm_venv}")
-        subprocess.check_call(["uv", "venv", "--managed-python", vllm_venv])
+    with TemporaryVenv(
+        venv_args=["--seed"],
+        prefix="vllm_venv_",
+    ) as venv:
+        logger.info(f"Created isolated venv for vLLM at {venv.venv_path}")
 
-        vllm_python = os.path.join(vllm_venv, "bin", "python")
+        # Install vllm-tpu first, then upgrade libtpu to override vllm-tpu's older libtpu dependency
+        logger.info("Installing vllm-tpu==0.11.1 and libtpu==0.0.30")
+        env = venv.get_env()
+        subprocess.check_call(
+            ["uv", "pip", "install", "--python", venv.python_path, "vllm-tpu==0.11.1"],
+            env=env,
+        )
+        # Install newer libtpu to override the older version pulled in by vllm-tpu
+        subprocess.check_call(
+            ["uv", "pip", "install", "--python", venv.python_path, "--upgrade", "libtpu==0.0.30"],
+            env=env,
+        )
 
-        if model.device == "tpu":
-            logger.info("Installing vllm-tpu in isolated venv")
-            subprocess.check_call(
-                [
-                    "uv",
-                    "pip",
-                    "install",
-                    "--python",
-                    vllm_python,
-                    "--prerelease=allow",
-                    "vllm-tpu",
-                    "torch_xla[tpu, pallas]==2.8.0",
-                ]
-            )
-        else:
-            logger.info("Installing vllm==0.11.0 in isolated venv")
-            subprocess.check_call(["uv", "pip", "install", "--python", vllm_python, "vllm==0.11.0"])
+        vllm_cmd_path = os.path.join(venv.bin_path, "vllm")
+        if not os.path.exists(vllm_cmd_path):
+            raise FileNotFoundError(f"vLLM binary not found at {vllm_cmd_path} after installation")
+        logger.info(f"vLLM binary verified at {vllm_cmd_path}")
 
         port = find_free_port()
         logger.info(f"Auto-assigned port {port} for vLLM")
@@ -177,7 +188,8 @@ def vllm_server_worker(
             engine_kwargs=model.engine_kwargs,
             device=model.device,
             port=port,
-            vllm_venv=vllm_venv,
+            vllm_cmd=vllm_cmd_path,
+            venv=venv,
         )
 
         logger.info("VLLM worker ready, polling request queue")

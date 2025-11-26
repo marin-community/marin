@@ -14,17 +14,17 @@
 
 import logging
 import os
-import subprocess
 import tempfile
 import traceback
 from pathlib import Path
 
 from fray.cluster.base import CpuConfig, Entrypoint, JobRequest, ResourceConfig, create_environment
+from fray.isolated_env import TemporaryVenv
 from fray.queue.http import HttpQueueServer
 
 from marin.evaluation.evaluation_config import EvalTaskConfig, InferencePoolConfig, ModelConfig
 from marin.evaluation.evaluators.evaluator import Evaluator
-from marin.evaluation.utils import run_bash_command, upload_to_gcs, write_yaml
+from marin.evaluation.utils import upload_to_gcs, write_yaml
 from marin.run.ray_deps import build_runtime_env_for_packages
 
 # Following the defaults set in HELM: https://github.com/stanford-crfm/helm/blob/main/src/helm/benchmark/run.py
@@ -162,74 +162,81 @@ class HELMEvaluator(Evaluator):
         prod_env_path = Path(results_path) / "prod_env"
         results_folder = Path(results_path) / "run" / "results"
 
-        subprocess.check_call(["uv", "pip", "install", "crfm-helm@git+https://github.com/stanford-crfm/helm.git"])
+        # Use isolated venv for HELM to avoid dependency conflicts
+        with TemporaryVenv(
+            pip_install_args=["crfm-helm@git+https://github.com/stanford-crfm/helm.git"],
+            prefix="helm_venv_",
+        ) as venv:
+            try:
+                # Download the run_entries files and schema files for the specified evals
+                assert len(evals) > 0, "Please specify at least one eval to run."
+                run_entries_files: list[str] = []
+                schema_files: list[str] = []
+                for helm_eval in evals:
+                    run_entries_file: str = f"run_entries_{helm_eval.name}.conf"
+                    run_entries_url: str = RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
+                    ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
+                    assert os.path.exists(
+                        run_entries_file
+                    ), f"Failed to download. Does {run_entries_file} exist at {ALL_RUN_ENTRIES_URL}?"
+                    run_entries_files.append(run_entries_file)
 
-        try:
-            # Download the run_entries files and schema files for the specified evals
-            assert len(evals) > 0, "Please specify at least one eval to run."
-            run_entries_files: list[str] = []
-            schema_files: list[str] = []
-            for helm_eval in evals:
-                run_entries_file: str = f"run_entries_{helm_eval.name}.conf"
-                run_entries_url: str = RUN_ENTRIES_TEMPLATE.format(run_entries_file=run_entries_file)
-                ensure_file_downloaded(source_url=run_entries_url, target_path=run_entries_file)
-                assert os.path.exists(
-                    run_entries_file
-                ), f"Failed to download. Does {run_entries_file} exist at {ALL_RUN_ENTRIES_URL}?"
-                run_entries_files.append(run_entries_file)
+                    schema_file: str = f"schema_{helm_eval.name}.yaml"
+                    schema_url: str = SCHEMA_TEMPLATE.format(schema_file=schema_file)
+                    ensure_file_downloaded(source_url=schema_url, target_path=schema_file)
+                    assert os.path.exists(
+                        schema_file
+                    ), f"Failed to download. Does {schema_file} exist at {ALL_SCHEMA_URL}?"
+                    schema_files.append(schema_file)
 
-                schema_file: str = f"schema_{helm_eval.name}.yaml"
-                schema_url: str = SCHEMA_TEMPLATE.format(schema_file=schema_file)
-                ensure_file_downloaded(source_url=schema_url, target_path=schema_file)
-                assert os.path.exists(schema_file), f"Failed to download. Does {schema_file} exist at {ALL_SCHEMA_URL}?"
-                schema_files.append(schema_file)
+                write_model_config_files(model, openai_base_url, prod_env_path)
 
-            write_model_config_files(model, openai_base_url, prod_env_path)
+                max_eval_instances = max_eval_instances or DEFAULT_MAX_EVAL_INSTANCES
 
-            max_eval_instances = max_eval_instances or DEFAULT_MAX_EVAL_INSTANCES
+                # Run helm-run in isolated venv
+                venv.run(
+                    [
+                        "helm-run",
+                        "--conf-paths",
+                        *run_entries_files,
+                        "--models-to-run",
+                        model.name,
+                        "--max-eval-instances",
+                        str(max_eval_instances),
+                        "--output-path",
+                        results_path,
+                        "--suite",
+                        str(results_folder),
+                        "--local-path",
+                        str(prod_env_path),
+                        "--num-threads",
+                        "1",
+                        "--exit-on-error",
+                    ],
+                    check=True,
+                )
+                assert os.path.exists(results_folder), f"Results not found at {results_folder}. Did HELM run?"
 
-            run_bash_command(
-                [
-                    "helm-run",
-                    "--conf-paths",
-                    *run_entries_files,
-                    "--models-to-run",
-                    model.name,
-                    "--max-eval-instances",
-                    str(max_eval_instances),
-                    "--output-path",
-                    results_path,
-                    "--suite",
-                    str(results_folder),
-                    "--local-path",
-                    str(prod_env_path),
-                    "--num-threads",
-                    "1",
-                    "--exit-on-error",
-                ],
-                verbose=True,
-            )
-            assert os.path.exists(results_folder), f"Results not found at {results_folder}. Did HELM run?"
+                # Run helm-summarize, which aggregates all the results and generates tables for them.
+                # See https://crfm-helm.readthedocs.io/en/latest/get_helm_rank for more information.
+                venv.run(
+                    [
+                        "helm-summarize",
+                        "--suite",
+                        str(results_folder),
+                        "--output-path",
+                        results_path,
+                        "--schema-path",
+                        # helm-summarize only takes one schema file, so we just use the first one
+                        schema_files[0],
+                    ],
+                    check=True,
+                )
 
-            # Run helm-summarize, which aggregates all the results and generates tables for them.
-            # See https://crfm-helm.readthedocs.io/en/latest/get_helm_rank for more information.
-            run_bash_command(
-                [
-                    "helm-summarize",
-                    "--suite",
-                    str(results_folder),
-                    "--output-path",
-                    results_path,
-                    "--schema-path",
-                    # helm-summarize only takes one schema file, so we just use the first one
-                    schema_files[0],
-                ]
-            )
-
-            upload_to_gcs(results_path, output_path)
-        except Exception as e:
-            traceback.print_exc()
-            raise RuntimeError("HELM failed. Please check the logs for more information.") from e
+                upload_to_gcs(results_path, output_path)
+            except Exception as e:
+                traceback.print_exc()
+                raise RuntimeError("HELM failed. Please check the logs for more information.") from e
 
 
 if __name__ == "__main__":

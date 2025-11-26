@@ -181,7 +181,7 @@ class InferencePool:
                 if response.status_code == 200:
                     logger.info(f"Proxy server ready at {proxy_url}")
                     break
-            except requests.ConnectionError:
+            except Exception:
                 time.sleep(1)
         else:
             raise TimeoutError("Proxy server failed to start")

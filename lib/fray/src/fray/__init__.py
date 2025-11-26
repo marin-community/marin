@@ -26,6 +26,7 @@ from fray.cluster import (
     ResourceConfig,
     TpuConfig,
 )
+from fray.isolated_env import TemporaryVenv
 from fray.job_context import (
     ContextConfig,
     ExecutionContext,
@@ -48,6 +49,7 @@ __all__ = [
     "RayContext",
     "ResourceConfig",
     "SyncContext",
+    "TemporaryVenv",
     "ThreadContext",
     "TpuConfig",
     "create_context",

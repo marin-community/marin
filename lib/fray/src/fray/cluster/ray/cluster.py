@@ -344,7 +344,7 @@ class RayCluster(Cluster):
             tpu_type=device.type,
             num_slices=request.resources.replicas,
             max_retries_preemption=10000,
-            max_retries_failure=10,
+            max_retries_failure=1,
         )
 
         # Track via ObjectRef
