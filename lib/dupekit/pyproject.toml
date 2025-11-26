@@ -32,3 +32,6 @@ cache-keys = [
     "pyproject.toml",
     "src/**/*.rs"
 ]
+
+[dependency-groups]
+test = ["pytest", "pytest-timeout"]

@@ -1425,6 +1425,20 @@ wheels = [
 name = "dupekit"
 source = { editable = "lib/dupekit" }
 
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
 [[package]]
 name = "einops"
 version = "0.8.1"
