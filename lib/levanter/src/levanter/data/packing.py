@@ -103,6 +103,9 @@ class SequencePacker:
             loss_mask = hax.named(loss_mask, self.Pos).astype(jnp.int32)
 
             attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
+            # HACK: Set prefix_lm_mask to zeros so that AttentionMasks can be stacked
+            # with UL2R/eval examples that have a real prefix_lm_mask.
+            attn_mask = attn_mask.with_prefix_lm_mask(hax.zeros(self.Pos, dtype=jnp.bool_))
 
             return LmExample(tokens=tokens, loss_mask=loss_mask, attn_mask=attn_mask)
 
@@ -331,10 +334,13 @@ def greedy_pack_prompt_completions(
         segment_ids_array = hax.named(np.array(segment_ids), Pos)
         attn_mask = AttentionMask.causal().with_segment_ids(segment_ids_array)
 
+        prefix_lm_mask_array = None
         if use_prefix_lm:
             prefix_lm_mask_array = hax.named(np.array(prefix_lm_mask), Pos)
-            attn_mask = attn_mask.with_prefix_lm_mask(prefix_lm_mask_array)
+        else:
+            prefix_lm_mask_array = hax.zeros(Pos, dtype=jnp.bool_)
 
+        attn_mask = attn_mask.with_prefix_lm_mask(prefix_lm_mask_array)
         out.append(LmExample(tokens=tokens, loss_mask=loss_mask, attn_mask=attn_mask))
 
     return out

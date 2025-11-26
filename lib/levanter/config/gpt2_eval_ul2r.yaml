@@ -25,20 +25,23 @@ trainer:
   train_batch_size: 32 # TODO determine
 
 optimizer:
-  learning_rate: 1e-6
+  learning_rate: 1e-5
   weight_decay: 0.1
 
 eval_harness:
-  task_spec: ["hellaswag"] # did xcopa cause Missing points assertion?
+  task_spec: ["hellaswag", "piqa"]
   max_examples: 2048
 eval_harness_steps: 1000
 
 data:
   tokenizer: ./gpt2_ul2r_DEV
+  # tokenizer: openai-community/gpt2
   configs:
     wikitext:
-      id: dlwh/wikitext_103_detokenized
-      cache_dir: /tmp/marin_cache_pile
+      # id: dlwh/wikitext_103_detokenized
+      id: Salesforce/wikitext
+      name: wikitext-103-raw-v1
+      cache_dir: /tmp/marin_cache_wikitext
     ul2r:
       #id: dlwh/wikitext_103_detokenized
       id: Salesforce/wikitext

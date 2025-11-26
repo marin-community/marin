@@ -263,18 +263,17 @@ class Checkpointer:
             logger.info(f"Removing checkpoint {checkpoint}")
             self._async_checkpoint_remover_queue.put(checkpoint)
 
-    def _do_rm_checkpoint(self, checkpoint):
-        fs, plain_path = _get_fs_and_plain_path(self.base_path)
+    def _do_rm_checkpoint(self, cp_path):
+        fs, plain_path = _get_fs_and_plain_path(cp_path)
         # have to strip protocol from path because fsspec filesystems don't like them
         try:
-            cp_path = fsspec_utils.join_path(plain_path, checkpoint)
-            logger.info(f"Deleting old checkpoint {checkpoint} from {cp_path}")
+            logger.info(f"Deleting old checkpoint from {cp_path}")
             time_in = time.time()
-            fs.rm(cp_path, recursive=True)
+            fs.rm(plain_path, recursive=True)
             time_out = time.time()
-            logger.info(f"Deleted old checkpoint {checkpoint} from {cp_path} in {time_out - time_in:.2f} seconds")
+            logger.info(f"Deleted old checkpoint from {cp_path} in {time_out - time_in:.2f} seconds")
         except Exception:  # pylint: disable=broad-except
-            logger.exception(f"Failed to delete checkpoint {checkpoint}", exc_info=True)
+            logger.exception(f"Failed to delete checkpoint {cp_path}", exc_info=True)
 
     def save_checkpoint(
         self,

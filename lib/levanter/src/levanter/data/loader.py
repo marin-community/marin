@@ -509,7 +509,11 @@ def _make_dummy_instance(batch, Pos):
     """
     dummy_instance: LmExample = tree_zeros_like(batch[0])
     dummy_segment_mask = hax.full(Pos, -1, dtype=jnp.int32)
-    dummy_attn = AttentionMask.causal().with_segment_ids(dummy_segment_mask)
+    # HACK Ideally we don't have to set prefix_lm_mask to zeros even when we
+    # aren't using PrefixLM / UL2R. We'd have to make stack_tree support
+    # stacking None w/ tensors. Maybe None should become 0 and broadcast? Or
+    # we could store a 0D tensor containing 0?
+    dummy_attn = AttentionMask.causal().with_segment_ids(dummy_segment_mask).with_prefix_lm_mask(hax.zeros(Pos, dtype=jnp.bool_))
     dummy_instance = dataclasses.replace(dummy_instance, attn_mask=dummy_attn)
     return dummy_instance
 
@@ -559,6 +563,11 @@ class _JaxCpuBackgroundIterator(BackgroundIterator[Ex]):
 @functools.partial(jax.jit, static_argnums=(0,))
 def stack_tree(batch_name, individual_datums):
     def _stack_leaves_unchecked(*leaves):
+        # DEBUG
+        for leaf in leaves:
+            if leaf is None:
+                raise ValueError(f"leaf is None; {str(leaves)}")
+
         if is_named_array(leaves[0]):
             return hax.stack(batch_name, leaves)
         else:
