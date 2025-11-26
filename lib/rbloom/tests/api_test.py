@@ -1,4 +1,18 @@
 #!/usr/bin/env python3
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import io
 import os
 from hashlib import sha256
@@ -17,19 +31,19 @@ def test_bloom(bloom: Bloom):
     assert not bloom
     assert bloom.approx_items == 0.0
 
-    bloom.add(hash_func('foo'))
+    bloom.add(hash_func("foo"))
     assert bloom
     assert bloom.approx_items > 0.0
 
-    bloom.add(hash_func('bar'))
+    bloom.add(hash_func("bar"))
 
-    assert hash_func('foo') in bloom
-    assert hash_func('bar') in bloom
-    assert hash_func('baz') not in bloom
+    assert hash_func("foo") in bloom
+    assert hash_func("bar") in bloom
+    assert hash_func("baz") not in bloom
 
-    bloom.update([hash_func('baz'), hash_func('qux')])
-    assert hash_func('baz') in bloom
-    assert hash_func('qux') in bloom
+    bloom.update([hash_func("baz"), hash_func("qux")])
+    assert hash_func("baz") in bloom
+    assert hash_func("qux") in bloom
 
     other = bloom.copy()
     assert other == bloom
@@ -39,12 +53,12 @@ def test_bloom(bloom: Bloom):
     assert not other
     assert other.approx_items == 0.0
 
-    other.update([hash_func('foo'), hash_func('bar'), hash_func('baz'), hash_func('qux')])
+    other.update([hash_func("foo"), hash_func("bar"), hash_func("baz"), hash_func("qux")])
     assert other == bloom
 
-    other.update(hash_func(str(i).encode()*500) for i in range(100000))
+    other.update(hash_func(str(i).encode() * 500) for i in range(100000))
     for i in range(100000):
-        assert hash_func(str(i).encode()*500) in other
+        assert hash_func(str(i).encode() * 500) in other
     assert bloom != other
     assert bloom & other == bloom
     assert bloom | other == other
@@ -79,9 +93,9 @@ def test_bloom(bloom: Bloom):
 
     # TEST FILE PERSISTENCE
     i = 0
-    while os.path.exists(f'test{i}.bloom'):
+    while os.path.exists(f"test{i}.bloom"):
         i += 1
-    filename = f'test{i}.bloom'
+    filename = f"test{i}.bloom"
 
     try:
         # save and load from file path
@@ -101,7 +115,7 @@ def test_bloom(bloom: Bloom):
 
     # TEST bytes PERSISTENCE
     bloom_bytes = bloom.save_bytes()
-    assert type(bloom_bytes) == bytes
+    assert isinstance(bloom_bytes, bytes)
     bloom4 = Bloom.load_bytes(bloom_bytes)
     assert bloom == bloom4
 
@@ -161,14 +175,14 @@ def test_chunked_write():
     huge_bloom.save(huge_tracker)
 
     # With 32MB chunks, a ~115MB filter should have 4+ writes (1 for k + 3+ chunks)
-    assert len(huge_tracker.write_calls) >= 4, \
-        f"Expected 4+ writes for large filter, got {len(huge_tracker.write_calls)}"
+    assert (
+        len(huge_tracker.write_calls) >= 4
+    ), f"Expected 4+ writes for large filter, got {len(huge_tracker.write_calls)}"
 
     # Verify each chunk after k value is <= 32MB
     CHUNK_SIZE = 32 * 1024 * 1024
     for i, size in enumerate(huge_tracker.write_calls[1:]):  # Skip k value
-        assert size <= CHUNK_SIZE, \
-            f"Chunk {i} is {size} bytes, exceeds 32MB limit"
+        assert size <= CHUNK_SIZE, f"Chunk {i} is {size} bytes, exceeds 32MB limit"
 
     # Verify data integrity for huge filter
     huge_tracker.seek(0)
@@ -182,21 +196,21 @@ def test_chunked_write():
 
 def operations_with_self():
     bloom = Bloom(1000, 0.1)
-    bloom.add(hash_func('foo'))
-    assert hash_func('foo') in bloom
+    bloom.add(hash_func("foo"))
+    assert hash_func("foo") in bloom
     bloom |= bloom
     bloom &= bloom
     bloom.update(bloom)
     bloom.update(bloom, bloom)
-    bloom.update(bloom, [hash_func('bob')], bloom)
-    assert hash_func('foo') in bloom
-    assert hash_func('bob') in bloom
+    bloom.update(bloom, [hash_func("bob")], bloom)
+    assert hash_func("foo") in bloom
+    assert hash_func("bob") in bloom
 
     bloom.intersection_update(bloom)
     bloom.intersection_update(bloom, bloom)
-    bloom.intersection_update(bloom, [hash_func('foo')], bloom)
-    assert hash_func('foo') in bloom
-    assert hash_func('bob') not in bloom
+    bloom.intersection_update(bloom, [hash_func("foo")], bloom)
+    assert hash_func("foo") in bloom
+    assert hash_func("bob") not in bloom
     assert bloom == bloom
     assert bloom <= bloom
     assert bloom >= bloom
@@ -220,8 +234,8 @@ def api_suite():
     operations_with_self()
     test_chunked_write()
 
-    print('All API tests passed')
+    print("All API tests passed")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     api_suite()
