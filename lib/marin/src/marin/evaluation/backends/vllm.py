@@ -147,7 +147,7 @@ def vllm_server_worker(
         logger.info(f"Created isolated venv for vLLM at {venv.venv_path}")
 
         # Install vllm-tpu first, then upgrade libtpu to override vllm-tpu's older libtpu dependency
-        logger.info("Installing vllm-tpu==0.11.1 and libtpu==0.0.30")
+        logger.info("Installing vllm-tpu and libtpu")
         env = venv.get_env()
         subprocess.check_call(
             [
@@ -157,21 +157,7 @@ def vllm_server_worker(
                 "--python",
                 venv.python_path,
                 "--python-preference=only-managed",
-                "vllm-tpu==0.11.1",
-            ],
-            env=env,
-        )
-        # Install newer libtpu to override the older version pulled in by vllm-tpu
-        subprocess.check_call(
-            [
-                "uv",
-                "pip",
-                "install",
-                "--python",
-                venv.python_path,
-                "--python-preference=only-managed",
-                "--upgrade",
-                "libtpu==0.0.30",
+                "vllm-tpu",
             ],
             env=env,
         )

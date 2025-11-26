@@ -238,7 +238,8 @@ class InferencePool:
                     },
                     timeout=60,
                 )
-                if response.status_code == 200:
+                # we don't care about the response, we just want to know if the worker is healthy
+                if response.status_code == 200 or response.status_code == 404:
                     logger.info("VLLM worker is healthy and responding via queues")
                     return
             except requests.RequestException as e:
