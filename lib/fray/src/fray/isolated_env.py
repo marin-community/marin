@@ -39,7 +39,6 @@ def _set_pdeathsig_preexec():
 
 
 def _signal_process(process: subprocess.Popen, sig: int) -> None:
-    """Send signal to process, handling Windows vs Unix differences."""
     if sys.platform == "win32":
         if sig == signal.SIGKILL:
             process.kill()
@@ -49,18 +48,11 @@ def _signal_process(process: subprocess.Popen, sig: int) -> None:
         os.killpg(process.pid, sig)
 
 
-def _terminate_process(process: subprocess.Popen, timeout: float = 5.0) -> None:
-    """Terminate process, escalating to SIGKILL if needed."""
-    logger.info(f"Terminating process {process.pid}")
-    _signal_process(process, signal.SIGTERM)
+def _terminate_process(process: subprocess.Popen) -> None:
     try:
-        process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Process {process.pid} did not respond to SIGTERM, sending SIGKILL")
-        try:
-            _signal_process(process, signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            pass
+        _signal_process(process, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        pass
 
 
 class TemporaryVenv:
@@ -98,16 +90,14 @@ class TemporaryVenv:
         self._venv_args = venv_args
 
         self._temp_dir: tempfile.TemporaryDirectory | None = None
-        self._venv_path: str | None = None
         self._processes: list[subprocess.Popen] = []
-        self._entered = False
 
     @property
     def venv_path(self) -> str:
         """Path to the virtual environment directory."""
-        if not self._entered:
+        if not self._temp_dir:
             raise RuntimeError("TemporaryVenv must be entered before accessing venv_path")
-        return self._venv_path
+        return self._temp_dir.name
 
     @property
     def python_path(self) -> str:
@@ -121,17 +111,15 @@ class TemporaryVenv:
 
     def __enter__(self) -> "TemporaryVenv":
         """Create venv, install packages, return self."""
-        if self._entered:
+        if self._temp_dir:
             raise RuntimeError("TemporaryVenv cannot be entered twice")
-        self._entered = True
 
         self._temp_dir = tempfile.TemporaryDirectory(prefix=self._prefix)
-        self._venv_path = self._temp_dir.name
 
         py_version = sys.version_info
         python_spec = f"{py_version.major}.{py_version.minor}"
 
-        logger.info(f"Creating temporary venv at {self._venv_path} with Python {python_spec}")
+        logger.info(f"Creating temporary venv at {self.venv_path} with Python {python_spec}")
 
         venv_args = []
         if self._venv_args:
@@ -146,7 +134,7 @@ class TemporaryVenv:
                 "--no-project",
                 "--clear",
                 *venv_args,
-                self._venv_path,
+                self.venv_path,
             ]
         )
 
@@ -160,8 +148,13 @@ class TemporaryVenv:
 
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Kill all tracked processes and clean up venv directory."""
+        try:
+            self._temp_dir.cleanup()
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temporary directory: {e}")
+
         for process in self._processes:
             if process.poll() is not None:
                 continue
@@ -171,21 +164,32 @@ class TemporaryVenv:
             except (ProcessLookupError, OSError):
                 logger.debug(f"Process {process.pid} already terminated")
 
-        try:
-            self._temp_dir.cleanup()
-        except Exception as e:
-            logger.warning(f"Failed to cleanup temporary directory: {e}")
-
-        return False
-
     def get_env(self, base_env: dict[str, str] | None = None) -> dict[str, str]:
         """Get environment dict with venv activation."""
-        if not self._entered:
+        if not self._temp_dir:
             raise RuntimeError("TemporaryVenv must be entered before calling get_env()")
 
         env = (base_env or os.environ).copy()
         env["VIRTUAL_ENV"] = self.venv_path
-        env["PATH"] = f"{self.bin_path}:{env.get('PATH', '')}"
+        env["PATH"] = f"{self.bin_path}:{env['PATH']}"
+
+        bad_env_vars = ("TPU_LIBRARY_PATH", "PYTHONPATH")
+        for var in bad_env_vars:
+            env.pop(var, None)
+
+        for var in list(env.keys()):
+            if var.startswith("RAY_") or var.startswith("CONDA_"):
+                env.pop(var, None)
+
+        env["PYTHONNOUSERSITE"] = "1"
+
+        # Isolate library paths to prevent system libraries (like libtpu) from leaking in
+        # Prepend venv lib to LD_LIBRARY_PATH to ensure venv packages take precedence
+        venv_lib = os.path.join(self.venv_path, "lib")
+        if "LD_LIBRARY_PATH" in env:
+            env["LD_LIBRARY_PATH"] = f"{venv_lib}:{env['LD_LIBRARY_PATH']}"
+        else:
+            env["LD_LIBRARY_PATH"] = venv_lib
         return env
 
     def run(
@@ -197,12 +201,14 @@ class TemporaryVenv:
         **kwargs,
     ) -> subprocess.CompletedProcess:
         """Run a command within the venv and wait for completion."""
-        if not self._entered:
+        if not self._temp_dir:
             raise RuntimeError("TemporaryVenv must be entered before calling run()")
 
         if env is None:
             env = self.get_env()
 
+        logger.info("Running %s", " ".join(cmd))
+        logger.info("Running with env %s", "\n".join(f"{k}={v}" for k, v in sorted(env.items())))
         return subprocess.run(cmd, env=env, check=check, **kwargs)
 
     def run_async(
@@ -213,7 +219,7 @@ class TemporaryVenv:
         **kwargs,
     ) -> subprocess.Popen:
         """Start a command within the venv without waiting."""
-        if not self._entered:
+        if not self._temp_dir:
             raise RuntimeError("TemporaryVenv must be entered before calling run_async()")
 
         if env is None:
@@ -226,6 +232,8 @@ class TemporaryVenv:
             if "preexec_fn" not in kwargs:
                 kwargs["preexec_fn"] = _set_pdeathsig_preexec
 
+        logger.info("Running %s", " ".join(cmd))
+        logger.info("Running with env %s", "\n".join(f"{k}={v}" for k, v in sorted(env.items())))
         process = subprocess.Popen(cmd, env=env, **kwargs)
         self._processes.append(process)
         return process

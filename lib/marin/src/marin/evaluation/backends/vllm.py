@@ -50,13 +50,11 @@ def download_model(model: ModelConfig, cache_path: str = "/tmp") -> str:
 def start_vllm_server(
     model_name_or_path: str,
     engine_kwargs: dict[str, Any],
+    venv: TemporaryVenv,
     device: str = "auto",
     host: str = "127.0.0.1",
     port: int = 8000,
     timeout_seconds: int = 3600,
-    vllm_cmd: str = "vllm",
-    vllm_env: dict[str, Any] | None = None,
-    venv: TemporaryVenv | None = None,
 ) -> str:
     """Start VLLM server in a subprocess and wait for it to be ready.
 
@@ -67,8 +65,6 @@ def start_vllm_server(
         host: Server host
         port: Server port
         timeout_seconds: Maximum time to wait for server to be ready
-        vllm_cmd: Path to vllm binary command
-        vllm_env: Environment dict for vllm process (deprecated, use venv instead)
         venv: TemporaryVenv instance for process tracking
 
     Returns:
@@ -84,7 +80,7 @@ def start_vllm_server(
         chat_template_file = f.name
 
     # Build command as list for better security and compatibility
-    cmd = [vllm_cmd, "serve", model_name_or_path, "--trust-remote-code", "--host", host, "--port", str(port)]
+    cmd = ["vllm", "serve", model_name_or_path, "--trust-remote-code", "--host", host, "--port", str(port)]
     cmd.extend(["--chat-template", chat_template_file])
 
     for key, value in engine_kwargs.items():
@@ -93,23 +89,11 @@ def start_vllm_server(
 
     logger.info(f"Starting VLLM server: {' '.join(cmd)}")
 
-    # Set up environment with VLLM-specific variables
-    if venv is not None:
-        env = venv.get_env()
-    elif vllm_env is not None:
-        env = vllm_env
-    else:
-        env = os.environ.copy()
-
+    env = venv.get_env()
     env["VLLM_TARGET_DEVICE"] = device
     env["VLLM_LOGGING_LEVEL"] = "DEBUG"
 
-    if venv is not None:
-        logger.info(f"Using venv at {venv.venv_path}")
-        process = venv.run_async(cmd, env=env, stdout=None, stderr=None, text=True)
-    else:
-        # Fallback for backwards compatibility
-        process = subprocess.Popen(cmd, env=env, stdout=None, stderr=None, text=True)
+    process = venv.run_async(cmd, env=env, stdout=None, stderr=None, text=True)
 
     server_url = f"http://{host}:{port}/v1"
     start_time = time.time()
@@ -166,12 +150,29 @@ def vllm_server_worker(
         logger.info("Installing vllm-tpu==0.11.1 and libtpu==0.0.30")
         env = venv.get_env()
         subprocess.check_call(
-            ["uv", "pip", "install", "--python", venv.python_path, "vllm-tpu==0.11.1"],
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                venv.python_path,
+                "--python-preference=only-managed",
+                "vllm-tpu==0.11.1",
+            ],
             env=env,
         )
         # Install newer libtpu to override the older version pulled in by vllm-tpu
         subprocess.check_call(
-            ["uv", "pip", "install", "--python", venv.python_path, "--upgrade", "libtpu==0.0.30"],
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                venv.python_path,
+                "--python-preference=only-managed",
+                "--upgrade",
+                "libtpu==0.0.30",
+            ],
             env=env,
         )
 
@@ -188,7 +189,6 @@ def vllm_server_worker(
             engine_kwargs=model.engine_kwargs,
             device=model.device,
             port=port,
-            vllm_cmd=vllm_cmd_path,
             venv=venv,
         )
 
