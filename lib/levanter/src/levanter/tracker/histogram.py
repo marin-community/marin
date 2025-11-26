@@ -125,9 +125,7 @@ def _shardmap_histogram(a: NamedArray, bins):
     def _wrapped_hist(arr):
         return _single_shard_histogram(arr, bin_edges=bins, reduce_mesh=flattened_spec)
 
-    shard_h = shard_map(
-        _wrapped_hist,
-    )
+    shard_h = shard_map(_wrapped_hist)
     res = shard_h(a)
 
     # the filter misses the last bin, so we need to add it
