@@ -78,7 +78,7 @@ from transformers.dynamic_module_utils import get_class_from_dynamic_module  # n
 from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
 
 
-DEFAULT_MAX_SHARD_SIZE = int(10e9)
+DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
 logger = logging.getLogger(__name__)
 

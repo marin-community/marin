@@ -149,6 +149,8 @@ def main(config: TrainLmConfig):
 
         if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
             state = load_checkpoint(state, config.initialize_from_checkpoint_path)
+            # reset to step 0, we're just initializing weights here
+            state = dataclasses.replace(state, step=jnp.array(0))
 
         if int(state.step) == 0:
             # TODO: I don't love that we init the model twice, but it's not a big deal i think?
