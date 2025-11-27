@@ -86,9 +86,9 @@ from transformers import AutoTokenizer, FlaxAutoModelForSequenceClassification
 from warcio import ArchiveIterator
 
 from marin.crawl.common.utils import decode_html
-from marin.schemas.web.convert import ResiliparseConfig
+from marin.convert import ResiliparseConfig
 from marin.utils import fsspec_exists, fsspec_glob
-from marin.web.convert import convert_page
+from marin.convert import convert_page
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

@@ -41,7 +41,7 @@ import xml.etree.ElementTree as ET
 from enum import Enum
 from typing import Any
 
-from marin.markdown import to_markdown
+from marin.convert import to_markdown
 
 # Initialize Logger
 logger = logging.getLogger(__name__)

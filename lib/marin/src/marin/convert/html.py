@@ -17,17 +17,53 @@ import re
 from dataclasses import asdict
 from urllib.parse import urljoin
 
-from marin.markdown import to_markdown
-from marin.schemas.web.convert import (
+from bs4 import BeautifulSoup
+
+from .config import (
     ExtractionConfig,
     HtmlToMarkdownConfig,
     ResiliparseConfig,
     TrafilaturaConfig,
 )
-from marin.web.utils import extract_content_from_dom
+from .markdown import to_markdown
 
 logger = logging.getLogger("ray")
 HTML_CORRECTION_PREFIX = "<!DOCTYPE html>"
+
+
+def extract_content_from_dom(
+    html: str,
+    kwargs: dict,
+    markdownify_config: HtmlToMarkdownConfig,
+) -> str:
+    """
+    This function extracts the main content DOM from the HTML content. We have a custom fork of Resiliparse at
+    https://github.com/krypticmouse/chatnoir-resiliparse/tree/develop/resiliparse which modifies the `extract_plain_text`
+    method to return the main content DOM instead of plain text.
+
+    This method then converts the main content DOM to markdown using the `to_markdown` method via markdownify.
+
+    Parameters:
+        html (str): HTML content to extract.
+        kwargs (dict): Keyword arguments to pass to the `extract_plain_text` method.
+        markdownify_config (HtmlToMarkdownConfig): Configuration for markdownify.
+
+    Returns:
+        str: Markdown content of the main content DOM.
+
+    NOTE: This method is using as custom fork of Resiliparse that is not meant to be merged into the main repository of
+    Resiliparse. This is a custom modification for the purpose of this experiment. So, this method will not work with
+    the main Resiliparse package. No plans to merge this into the main Resiliparse package yet.
+    """
+
+    from resiliparse_dom.extract.html2text import extract_simplified_dom
+
+    tree = extract_simplified_dom(html, **kwargs)
+    tree = BeautifulSoup(str(tree), "html.parser")
+
+    # convert to markdown
+    markdown = to_markdown(tree, markdownify_config)
+    return markdown.replace("\x00", "").strip()
 
 
 def convert_page_with_trafilatura(
@@ -148,7 +184,6 @@ def convert_page_with_readability(
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
     """
     import htmlmin
-    from bs4 import BeautifulSoup
     from readability import Document
 
     # remove null character and control characters
@@ -192,7 +227,6 @@ def convert_page_with_readability(
 def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
     print("This is Legacy method, use convert_page_python instead")
     import htmlmin
-    from bs4 import BeautifulSoup
     from readabilipy import simple_json_from_html_string
 
     reabilitied = simple_json_from_html_string(html, use_readability=True)

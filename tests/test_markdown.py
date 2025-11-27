@@ -14,7 +14,7 @@
 
 import pytest
 
-from marin.markdown import mathml_to_markdown, minimal_markdown_escape, to_markdown
+from marin.convert import mathml_to_markdown, minimal_markdown_escape, to_markdown
 
 
 def test_always_escaped():
