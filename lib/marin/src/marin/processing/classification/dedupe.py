@@ -455,6 +455,97 @@ def _run_deduplication(config: DedupeConfig):
     }
 
 
+def _run_exact_doc_deduplication(config: DedupeConfig):
+    """
+    Exact document deduplication: identify duplicate documents based on full text hash.
+    This is a temporary implementation, primarily to compare directly with the Ai2 duplodocus.
+    """
+    input_files = collect_input_files(config.input_path)
+
+    def _compute_hash(record: dict) -> dict:
+        text = record.get(config.text_field, "")
+        record_id = _record_id(record)
+        return {
+            "hash": _str_hash(text),
+            "id": record_id,
+        }
+
+    def _count_reduce(key, items):
+        items = list(items)
+        if len(items) <= 1:
+            return None  # Not a duplicate
+
+        return {
+            "hash": key,
+            "canonical": items[0]["id"],
+        }
+
+    # first compute the full set of duplicate keys.
+    backend = flow_backend(max_parallelism=config.processes)
+    duplicate_key_shards = list(
+        backend.execute(
+            Dataset.from_list(input_files)
+            .flat_map(load_file)
+            .reshard(num_shards=config.processes)
+            .map(_compute_hash)
+            .group_by(
+                lambda key_fn: key_fn["hash"],
+                _count_reduce,
+            )
+            .filter(lambda record: record)
+            .reshard(1)
+            .write_parquet(f"{config.output_path}/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
+            verbose=True,
+        )
+    )
+
+    # Determine base path for rebasing
+    base_path = config.input_path[0] if isinstance(config.input_path, list) else config.input_path
+    if base_path in input_files:
+        # NOTE: if the base_path is in the input_files, means it's a specific file, so rebase to its directory
+        base_path = os.path.dirname(base_path)
+
+    # Load duplicate map once (will be captured in closure)
+    logger.info("Loading duplicate map")
+    dup_map = {}
+    num_duplicates = 0
+    for record in load_parquet(duplicate_key_shards[0]):
+        dup_map[record["hash"]] = {
+            "canonical": record["canonical"],
+        }
+        num_duplicates += 1
+
+    logger.info(f"There are {num_duplicates} duplicate documents.")
+
+    def mark_exact_dups(record: dict) -> dict:
+        """Mark exact duplicate documents using exact hash matching."""
+        record_id = _record_id(record)
+        hash_val = _str_hash(record.get(config.text_field, ""))
+        return {
+            "id": record_id,
+            "attributes": {config.attribute_name: hash_val in dup_map},
+        }
+
+    # Use write_jsonl with callable output pattern
+    backend.execute(
+        Dataset.from_list(input_files).flat_map(load_file)
+        # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
+        # the shards of the input files for rebase_file_path to work correctly.
+        .map(mark_exact_dups).write_jsonl(
+            output_pattern=lambda shard_idx, total: rebase_file_path(
+                base_path, input_files[shard_idx], config.output_path
+            ),
+            skip_existing=True,
+        ),
+        verbose=True,
+    )
+
+    return {
+        "success": True,
+        "mode": "exact_doc_deduplication",
+    }
+
+
 def _run_decontamination(config: DedupeConfig):
     """
     Decontamination: build filter from contamination source, apply to input (read-only)
@@ -536,6 +627,8 @@ def dedupe(config: DedupeConfig):
         return _run_decontamination(config)
     elif config.mode == DedupMode.DEDUPLICATE:
         return _run_deduplication(config)
+    elif config.mode == DedupMode.EXACT_DOC_DEDUPLICATE:
+        return _run_exact_doc_deduplication(config)
     elif config.mode == DedupMode.TRAIN_TEST_OVERLAP:
         return _run_train_test_overlap(config)
     else:
