@@ -2,20 +2,19 @@ import dspy
 import json
 import os
 import random
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Callable
 from dspy.datasets.dataloader import DataLoader
+from dspy.primitives.prediction import Prediction
+from dspy.teleprompt.bootstrap_trace import bootstrap_trace_data
 from transformers import AutoTokenizer
 
 from experiments.dspy.programs.simplified_baleen import SimplifiedBaleen
 from experiments.dspy.programs.claim_verification import ClaimVerification
 from experiments.dspy.programs.field_extraction import FieldExtraction
 from experiments.dspy.adapters.baml import BAMLAdapter
+from experiments.dspy.metrics import claim_verification_metric, field_extraction_metric
 
 # Initialize Llama 3 tokenizer
-rm = dspy.ColBERTv2(url="http://20.102.90.50:2017/wiki17_abstracts")
-lm = dspy.LM(model="openai/gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
-dspy.settings.configure(lm=lm, adapter=BAMLAdapter(), rm=rm)
-
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3.1-8B-Instruct")
 
 # ==========================================
@@ -28,6 +27,7 @@ def load_hotpotqa():
     dl = DataLoader()
     dataset = dl.from_huggingface(
         "hotpotqa/hotpot_qa", 
+            "fullwiki",
             split="train",
             input_keys=("question",),
     )
@@ -42,7 +42,7 @@ def load_hover():
     dataset = dl.from_huggingface(
         "Dzeniks/hover",
         split="train",
-        input_keys=("claim", "evidence",),          # type: ignore
+        input_keys=("claim", "evidence",),  # type: ignore
     )
     return dataset
 
@@ -69,14 +69,24 @@ def load_fhir(file_path="data/note.json"):
 # 2. Trace Collection
 # ==========================================
 
-def get_chat_from_trace(trace: Dict[str, Any]) -> List[Dict[str, str]]:
-    chat = trace["messages"]
-    chat.append({"role": "assistant", "content": trace["outputs"][0]})
-    return chat
+def format_data_for_finetuning(trace: tuple[Any, dict[str, Any], Prediction], adapter: dspy.Adapter) -> list[dict[str, str]]:
+    pred, inputs, outputs = trace
 
-def collect_traces_for_module(module: dspy.Module, examples: List[dspy.Example], num_traces: int) -> List[List[Dict[str, str]]]:
+    demos = pred.demos if hasattr(pred, "demos") else []
+    input_chat = adapter.format(
+        signature=pred.signature,
+        demos=demos,
+        inputs=inputs,
+    )
+    output_chat = adapter.format_assistant_message_content(
+        signature=pred.signature,
+        outputs=outputs.toDict(),
+    )
+    return input_chat + [{"role": "assistant", "content": output_chat}]
 
-    print(f"Collecting traces for {module.__class__.__name__}...") 
+def collect_traces_for_module(module: dspy.Module, examples: List[dspy.Example], num_traces: int, metric: Callable) -> List[List[dict[str, str]]]:
+    print(f"Collecting traces for {module.__class__.__name__}...")
+    
     # Check if we have enough examples
     # Randomly sample num_traces examples (or all if insufficient)
     if len(examples) >= num_traces:
@@ -84,29 +94,43 @@ def collect_traces_for_module(module: dspy.Module, examples: List[dspy.Example],
     else:
         selected_examples = examples
 
-    batch_size = 2500
-    traces = []
-    for i in range(0, len(selected_examples), batch_size):
-        batch = selected_examples[i:i+batch_size]
-        pred = module.batch(examples=batch, num_threads=32)
-        traces.extend([get_chat_from_trace(trace) for trace in lm.history])
-    return traces
+    traces = bootstrap_trace_data(module, selected_examples, num_threads=32, metric=metric)
+    all_finetuning_data = []
+    for trace_data in traces:
+        trace_info = trace_data["trace"]
+        assert metric is not None
+        assert trace_data["score"] is not None
+
+        if trace_data["score"] == 0:
+            continue
+
+        for ti in trace_info:
+            assert dspy.settings.adapter is not None
+            finetuning_data = format_data_for_finetuning(ti, dspy.settings.adapter)
+            all_finetuning_data.append(finetuning_data)
+    return all_finetuning_data
+
 
 # ==========================================
 # 3. Filtering and Sampling
 # ==========================================
 
-def filter_and_sample(traces: List[List[Dict[str, str]]], final_count: int = 3000, max_tokens: int = 2048):
-    # Heuristics: Length
-    
+def filter_and_sample(traces: List[Dict[str, Any]], final_count: int = 3000, max_tokens: int = 2048):
     filtered = []
     for trace in traces:
-        # Serialize prediction to string for token counting
-        # This is a rough approximation, ideally we format it exactly as the model sees it
-        token_count = len(tokenizer.encode(str(trace)))
-        
-        if token_count <= max_tokens:
-            filtered.append(trace)
+        # Serialize trace to string for token counting
+        # This is a rough approximation
+        try:
+            # We convert to string to estimate tokens.
+            # We use a custom encoder or str() for non-serializable objects
+            s = json.dumps(trace, default=lambda x: str(x))
+            token_count = len(tokenizer.encode(s))
+            
+            if token_count <= max_tokens:
+                filtered.append(trace)
+        except Exception as e:
+            print(f"Error processing trace: {e}")
+            continue
         
     if len(filtered) > final_count:
         return random.sample(filtered, final_count)
@@ -128,10 +152,14 @@ if __name__ == "__main__":
     # or assume the user will run this with proper setup.
     
     # Placeholder configuration to prevent immediate crash if run without setup
+    print("Configuring DSPy...")
+    rm = dspy.ColBERTv2(url="http://20.102.90.50:2017/wiki17_abstracts")
+    lm = dspy.LM(model="openai/gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
+    dspy.settings.configure(lm=lm, rm=rm, adapter=BAMLAdapter())
 
     # 1. Data
     print("Loading data...")
-    hotpot_data = None #load_hotpotqa()
+    hotpot_data = load_hotpotqa()
     hover_data = load_hover()
     fhir_data = load_fhir()
     
@@ -149,28 +177,69 @@ if __name__ == "__main__":
     # HotpotQA
     if hotpot_data:
         print(f"Collecting HotpotQA traces ({len(hotpot_data)} available)...")
-        traces = collect_traces_for_module(baleen, hotpot_data, num_traces=1)
+        traces = collect_traces_for_module(baleen, hotpot_data, num_traces=1, metric=dspy.evaluate.answer_exact_match)
         all_traces.extend([{"dataset": f"hotpotqa_{i}", "chat": t} for i, t in enumerate(traces)])
         
     # HoVer
     if hover_data:
         print(f"Collecting HoVer traces ({len(hover_data)} available)...")
-        print(hover_data[0])
-        traces = collect_traces_for_module(claim_verifier, hover_data, num_traces=1)
+        traces = collect_traces_for_module(claim_verifier, hover_data, num_traces=1, metric=claim_verification_metric)
         all_traces.extend([{"dataset": f"hover_{i}", "chat": t} for i, t in enumerate(traces)])
         
     # FHIR
     if fhir_data:
         print(f"Collecting FHIR traces ({len(fhir_data)} available)...")
-        traces = collect_traces_for_module(fhir_module, fhir_data, num_traces=1)
+        traces = collect_traces_for_module(fhir_module, fhir_data, num_traces=1, metric=field_extraction_metric)
         all_traces.extend([{"dataset": f"fhir_{i}", "chat": t} for i, t in enumerate(traces)])
-        
+
     # 4. Filter and Save
     print(f"Total traces collected: {len(all_traces)}")
     final_dataset = filter_and_sample(all_traces, final_count=3000, max_tokens=4096)
     
     output_file = "experiments/dspy/format_adaptation_dataset.json"
     with open(output_file, "w") as f:
-        json.dump(final_dataset, f, indent=2)
+        # Serialize predictions if needed (they are objects)
+        # For simplicity, just dumping inputs/predictions structure
+        serializable = []
+        for item in final_dataset:
+            # item is a dict (TraceData + dataset key)
+            clean_item = {}
+            for k, v in item.items():
+                if k == "prediction":
+                     if hasattr(v, "toDict"):
+                         clean_item[k] = v.toDict()
+                     elif hasattr(v, "__dict__"):
+                         clean_item[k] = vars(v)
+                     else:
+                         clean_item[k] = str(v)
+                elif k == "example":
+                     if hasattr(v, "toDict"):
+                         clean_item[k] = v.toDict()
+                     elif hasattr(v, "__dict__"):
+                         clean_item[k] = vars(v)
+                     else:
+                         clean_item[k] = str(v)
+                elif k == "trace":
+                     # trace is list of (module, input, prediction)
+                     # We convert to string representation for modules/objects
+                     clean_trace = []
+                     if isinstance(v, list):
+                         for step in v:
+                             if isinstance(step, (list, tuple)) and len(step) >= 3:
+                                 # (module, input, prediction)
+                                 mod, inp, step_pred = step[0], step[1], step[2]
+                                 clean_trace.append({
+                                     "module": str(mod),
+                                     "input": inp,
+                                     "prediction": str(step_pred)
+                                 })
+                             else:
+                                 clean_trace.append(str(step))
+                     clean_item[k] = clean_trace
+                else:
+                     clean_item[k] = v
+            serializable.append(clean_item)
+            
+        json.dump(serializable, f, indent=2)
         
     print(f"Saved {len(final_dataset)} trajectories to {output_file}")
