@@ -117,14 +117,14 @@ class Gpt2Config(HFCompatConfig):
             upcast_attn=hf_config.reorder_and_upcast_attn,
         )
 
-    def flops_per_token(self, vocab_size: int) -> Optional[float]:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> Optional[float]:
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.hidden_dim * self.mlp_scale,
             num_layers=self.num_layers,
             num_kv_heads=self.num_heads,
             num_heads=self.num_heads,
-            seq_len=self.max_seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=False,
         )

@@ -60,7 +60,7 @@ def test_llama_flops():
     hf_config = transformers.LlamaConfig.from_pretrained("NousResearch/Llama-2-7b-hf")
     llama_config = LlamaConfig.from_hf_config(hf_config)
     n_params = 6.738415616e9
-    ratio = llama_config.flops_per_token(hf_config.vocab_size) / (2 * n_params)
+    ratio = llama_config.flops_per_token(hf_config.vocab_size, llama_config.max_seq_len) / (2 * n_params)
     assert ratio > 1.1, f"ratio {ratio} < 1.1"
     assert ratio < 1.2, f"ratio {ratio} > 1.2"
 

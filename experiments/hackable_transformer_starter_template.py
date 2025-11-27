@@ -155,14 +155,14 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     def actual_head_size(self) -> int:
         return self.head_dim or (self.hidden_dim // self.num_heads)
 
-    def flops_per_token(self, vocab_size: int) -> float | None:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> float | None:
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.max_seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )

@@ -149,8 +149,8 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     param_count = param_counts[size]
     batch_size = batch_sizes[size]
-    model_config = dataclasses.replace(model_cfgs[size], seq_len=4096)
-    seq_len = model_config.seq_len
+    model_config = dataclasses.replace(model_cfgs[size], max_seq_len=4096)
+    seq_len = model_config.max_seq_len
     resource_config = resource_cfgs[size]
     adam = adam_configs[size]
     description = descriptions[size]

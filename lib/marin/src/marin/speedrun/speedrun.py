@@ -144,20 +144,18 @@ class SpeedrunConfig:
 
     def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
+        context_length = self.train_config.max_train_length
+
         if isinstance(self.train_config.train_batch_size, list) and len(self.train_config.train_batch_size) > 0:
             from levanter.schedule import BatchSchedule
 
             batch_schedule = BatchSchedule(self.train_config.train_batch_size)
-            total_tokens = (
-                batch_schedule.global_data_offset_by_step(self.train_config.num_train_steps) * self.model_config.seq_len
-            )
+            total_tokens = batch_schedule.global_data_offset_by_step(self.train_config.num_train_steps) * context_length
         else:
             # integer batch size
-            total_tokens = (
-                self.train_config.train_batch_size * self.model_config.seq_len * self.train_config.num_train_steps
-            )
+            total_tokens = self.train_config.train_batch_size * context_length * self.train_config.num_train_steps
 
-        flops_per_token = self.model_config.flops_per_token(self.vocab_size)
+        flops_per_token = self.model_config.flops_per_token(self.vocab_size, context_length)
         if flops_per_token is None:
             raise ValueError("Model config must provide flops_per_token to compute model FLOPs.")
 
@@ -235,12 +233,17 @@ def speedrun_results(config: SpeedrunResultsConfig):
 
     model_flops = config.speedrun_config.compute_model_flops()
     model_size = config.speedrun_config.model_config.total_trainable_params(config.speedrun_config.vocab_size)
+    context_length = getattr(
+        config.speedrun_config.train_config, "max_train_length", config.speedrun_config.model_config.max_seq_len
+    )
     total_tokens = (
         config.speedrun_config.train_config.train_batch_size
-        * config.speedrun_config.model_config.seq_len
+        * context_length
         * config.speedrun_config.train_config.num_train_steps
     )
-    flops_per_token = config.speedrun_config.model_config.flops_per_token(config.speedrun_config.vocab_size)
+    flops_per_token = config.speedrun_config.model_config.flops_per_token(
+        config.speedrun_config.vocab_size, context_length
+    )
 
     training_time = sum(step_times)
     num_devices = config.speedrun_config.num_devices

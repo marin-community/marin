@@ -97,7 +97,7 @@ class MistralConfig(LlamaConfig):
         rope_theta = hf_config.rope_theta
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, None)
         return MistralConfig(
-            seq_len=hf_config.max_position_embeddings,  # this might be too big...
+            max_seq_len=hf_config.max_position_embeddings,  # this might be too big...
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,
@@ -147,14 +147,14 @@ class MistralConfig(LlamaConfig):
     def model_type(cls) -> Type["MistralLMHeadModel"]:
         return MistralLMHeadModel
 
-    def flops_per_token(self, vocab_size: int) -> float:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> float:
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_heads,
             num_heads=self.num_heads,
-            seq_len=self.max_seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=False,
         )
