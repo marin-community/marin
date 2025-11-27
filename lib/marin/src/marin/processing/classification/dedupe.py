@@ -481,7 +481,7 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
         }
 
     # first compute the full set of duplicate keys.
-    backend = flow_backend(max_parallelism=config.processes)
+    backend = flow_backend()
     duplicate_key_shards = list(
         backend.execute(
             Dataset.from_list(input_files)
