@@ -1913,13 +1913,19 @@ def cached_token_count(cache_path: str, field: str = "input_ids") -> int:
     return cache.store.tree[field].data_size
 
 
-def count_corpus_sizes(config: LMMixtureDatasetConfig | SingleDatasetLMConfig, prefix: str = "data/stats/") -> dict:
+def count_corpus_sizes(
+    config: LMMixtureDatasetConfig | SingleDatasetLMConfig,
+    prefix: str = "data/stats/",
+    seq_len: int = 4096,
+) -> dict:
     """
     Counts the number of tokens in each dataset in the config.
 
     Args:
         config: the config to count the sizes of
         prefix: prefix to use for all metric keys. Defaults to "data/stats/"
+        seq_len: sequence length to assume when computing per-sequence stats (padding/truncation);
+            defaults to 4096.
 
     Returns:
         dict containing statistics about the datasets, with keys flattened using /
@@ -1934,7 +1940,6 @@ def count_corpus_sizes(config: LMMixtureDatasetConfig | SingleDatasetLMConfig, p
     else:
         sources = config.sources
 
-    seq_len = 4096
     Pos = hax.Axis("position", seq_len)
 
     weights: dict[str, float]

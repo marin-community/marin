@@ -143,7 +143,7 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
     value because it usually faster to compute the loss in larger blocks.
     """
 
-    def flops_per_token(self, vocab_size: int) -> Optional[float]:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> Optional[float]:
         return None
 
     def total_trainable_params(self, vocab_size: int) -> Optional[float]:
