@@ -764,11 +764,11 @@ def shard_map(
         def fn(x):
             ...
 
-    Note that, unlike the JAX version, you don't need to provide in_specs, out_specs, if all arguments and return value
-    are ``NamedArray`` objects. Mesh can be inferred from the context mesh (which JAX could do, but doesn't).
+    Note that, unlike the JAX version, you don't need to provide in_specs or out_specs if all arguments and the return value
+    are ``NamedArray`` objects. The mesh can be inferred from the context mesh (which JAX could do, but doesn't).
     Axis mapping can be inferred from the context axis mapping or provided explicitly.
 
-    Also note that this function will call ``f`` twice unless out_specs is provided: once to infer the output
+    Also note that this function will call ``f`` twice at trace time unless out_specs is provided: once to infer the output
     pspec, and once to actually run the computation.
 
     Args:
