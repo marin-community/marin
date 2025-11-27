@@ -15,13 +15,6 @@ from haliax.nn.normalization import softmax
 from haliax.partitioning import axis_mapping, pspec_for_axis, set_mesh
 from test_utils import skip_if_not_enough_devices
 
-# Prefer 8 CPU devices when available to exercise multi-axis meshes.
-try:
-    jax.config.update("jax_num_cpu_devices", 8)
-except Exception:
-    pass
-
-
 SeqQ = Axis("seq_q", 4)
 SeqK = Axis("seq_k", 4)
 Embed = Axis("embed", 16)
@@ -124,7 +117,7 @@ def test_transformer_block_explicit_sharding():
         params = hax.shard(params, param_map)
         x = hax.shard(x, compute_map)
 
-        fn = jax.jit(lambda p, i: _tiny_transformer(p, i))
+        fn = jax.jit(_tiny_transformer)
         with axis_mapping(compute_map):
             logits = fn(params, x)
 

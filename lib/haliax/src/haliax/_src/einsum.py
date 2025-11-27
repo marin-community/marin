@@ -7,14 +7,13 @@ import functools
 from types import EllipsisType
 
 import jax.lax
-from jax.sharding import NamedSharding
 
 import haliax
 
+from .dot import _infer_out_sharding
 from ..axis import Axis, AxisSelector, axis_name, eliminate_axes, rearrange_for_partial_order, union_axes
 from ..core import NamedArray
 from ..jax_utils import _jittable_dg_einsum
-from ..partitioning import _resolve_mesh, current_thread_local_mapping, pspec_for_axis
 from ..quantization import DotGeneralOp
 from ..types import DTypeLike, PrecisionLike
 from ..util import ensure_tuple
@@ -84,27 +83,17 @@ def einsum(
 
         spec, out_axes = _positional_einsum_spec(equation, arrays, lhses, rhs, axis_aliases)
 
+    raw_arrays = [a.array for a in arrays]
     out_raw = _jittable_dg_einsum(
         spec,
-        *[a.array for a in arrays],
+        *raw_arrays,
         precision=precision,
         preferred_element_type=preferred_element_type,
         _dot_general=_dot_general,
-        out_sharding=out_sharding or _infer_out_sharding(out_axes),
+        out_sharding=out_sharding or _infer_out_sharding(out_axes, raw_arrays),
     )
 
     return haliax.named(out_raw, out_axes)
-
-
-def _infer_out_sharding(out_axes: tuple[Axis, ...]):
-    mapping = current_thread_local_mapping()
-    mesh = _resolve_mesh()
-
-    if mesh is None:
-        return None
-
-    pspec = pspec_for_axis(out_axes, mapping)
-    return NamedSharding(mesh, pspec)
 
 
 def _unordered_einsum(arrays, equation, lhs, rhs, axis_aliases):

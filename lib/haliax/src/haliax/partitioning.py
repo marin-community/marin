@@ -158,7 +158,7 @@ def set_mesh(mesh: MeshLike) -> ContextManager[None]:
     return mesh_context(mesh)
 
 
-def _all_mesh_axes_explicit(mesh: MeshLike | None, pspec: PartitionSpec | None) -> bool:
+def all_mesh_axes_explicit(mesh: MeshLike | None, pspec: PartitionSpec | None) -> bool:
     """
     Returns True iff every mesh axis referenced by ``pspec`` is Explicit.
     Falls back to False when mesh/pspec/axis_types are missing.
@@ -183,7 +183,7 @@ def _all_mesh_axes_explicit(mesh: MeshLike | None, pspec: PartitionSpec | None) 
                     referenced.add(e)
 
     for name, atype in zip(axis_names, axis_types):
-        if name in referenced and not atype == AxisType.Explicit:
+        if name in referenced and atype != AxisType.Explicit:
             return False
     return True
 
@@ -250,7 +250,7 @@ def shard(x: T, mapping: ResourceMapping | None = None, mesh: Mesh | None = None
         if is_in_jit():
             # ok so jax is mildly annoying right now. we have to use reshard if *all* mesh axes are explicit.
             # otherwise, we need to use with_sharding_constraint.
-            if _all_mesh_axes_explicit(resolved_mesh, pspec):
+            if all_mesh_axes_explicit(resolved_mesh, pspec):
                 return reshard(named, pspec)
 
             return with_sharding_constraint(named, pspec)
