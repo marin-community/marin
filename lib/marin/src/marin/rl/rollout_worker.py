@@ -47,7 +47,7 @@ from marin.rl.inference_ctx import InferenceContext
 from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
-from .types import (
+from marin.rl.types import (
     RolloutBatch,
     RolloutGroup,
     RolloutMetadata,
@@ -233,6 +233,7 @@ class RolloutWorker:
                 temperature=temperature,
                 prng_key=rng,
                 mode=mode,
+                step=self._current_weight_step,
             )
 
         if len(rollout_groups) == 0:
@@ -376,9 +377,9 @@ class RolloutWorker:
         metrics[f"{prefix}/{lesson_id}/total_count"] = stats.total_count
         return metrics
 
-    def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> dict:
+    def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> RolloutBatchStats:
         """Evaluate a single lesson and log metrics."""
-        batch, _ = self._sample_batch(
+        batch, env_metrics = self._sample_batch(
             lesson_id=lesson_id,
             n_examples=n_examples,
             n_generations=1,
@@ -388,6 +389,11 @@ class RolloutWorker:
         stats = _compute_batch_stats(batch, lesson_id)
         self._log_prompt_example(lesson_id, batch, step, eval_type=eval_type)
         metrics = self._build_eval_metrics(prefix=f"inference.{eval_type}", lesson_id=lesson_id, batch=batch)
+        
+        # Log environment metrics if available
+        if env_metrics:
+            metrics.update({f"test/env/{k}": v for k, v in env_metrics.items()})
+
         self.tracker.log(metrics, step=step)
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, step, metrics)
         # only update curriculum for full evals
@@ -484,7 +490,7 @@ class RolloutWorker:
             if self.config.log_freq > 0 and step % self.config.log_freq == 0:
                 log_metrics = eval_metrics
                 log_metrics.update(self._transfer_client.get_metrics())
-                log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
+                log_metrics.update({f"env/{k}": v for k, v in (env_metrics or {}).items()})
                 log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                 logger.info(f"Logging metrics at step {step}... {log_metrics}")
                 self.tracker.log(log_metrics, step=step)
