@@ -205,7 +205,11 @@ def main():
         default=None,
         help="Custom submission ID for the job. If not provided, a default ID will be generated.",
     )
-    parser.add_argument("--auto-stop", action="store_true", help="Automatically stop the cluster on shutdown.")
+    parser.add_argument(
+        "--auto-stop",
+        action="store_true",
+        help="Automatically stop the submitted job on exit (including ctrl+c interrupt).",
+    )
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
     args = parser.parse_args()
