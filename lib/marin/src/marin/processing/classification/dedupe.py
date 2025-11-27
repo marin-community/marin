@@ -28,7 +28,9 @@ import logging
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum, auto
+
+from marin.execution.executor import THIS_OUTPUT_PATH
 
 import draccus
 import fsspec
@@ -48,10 +50,11 @@ def _bloom_hash(x: str) -> int:
     return int.from_bytes(hashlib.blake2b(x.encode(), digest_size=8).digest(), "big")
 
 
-class DedupMode(str, Enum):
-    DECONTAMINATE = "decontaminate"
-    DEDUPLICATE = "deduplicate"
-    TRAIN_TEST_OVERLAP = "train_test_overlap"
+class DedupMode(StrEnum):
+    DECONTAMINATE = auto()
+    DEDUPLICATE = auto()
+    EXACT_DOC_DEDUPLICATE = auto()
+    TRAIN_TEST_OVERLAP = auto()
 
 
 @dataclass
@@ -80,7 +83,7 @@ class NGramConfig:
     overlap_threshold: float = 0.7
 
 
-@dataclass
+@dataclass(frozen=True)
 class DedupeConfig:
     """
     Configuration class for running deduplication on docs using Zephyr.
@@ -104,8 +107,10 @@ class DedupeConfig:
         text_field (str): field to use for text content in Parquet files
     """
 
-    input_path: str | list[str]
-    output_path: str
+    # TODO (rav): had to make this optional to avoid default argument issues in dataclass, what is the
+    #   best way to handle this in marin and draccus?
+    input_path: str | list[str] | None = None
+    output_path: str = THIS_OUTPUT_PATH
     attribute_name: str = "duplicate_text"
     min_length: int = 0
     min_words: int = 0
@@ -386,9 +391,10 @@ def _run_deduplication(config: DedupeConfig):
 
     # first compute the full set of duplicate keys.
     duplicate_key_shards = list(
-        flow_backend().execute(
+        flow_backend(max_parallelism=config.processes).execute(
             Dataset.from_list(input_files)
             .flat_map(load_file)
+            .reshard(num_shards=config.processes)
             .flat_map(_compute_hash)
             .group_by(
                 lambda key_fn: key_fn["hash"],
@@ -538,6 +544,8 @@ def dedupe(config: DedupeConfig):
 
 @draccus.wrap()
 def main(config: DedupeConfig):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
     result = dedupe(config)
     print(f"Deduplication completed: {result}")
 
