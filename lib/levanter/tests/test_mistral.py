@@ -54,7 +54,7 @@ def test_mistral_lm_head_model(num_kv_heads):
     mistral_config = _get_mistral_config(num_kv_heads=num_kv_heads)
     Batch = hax.Axis("batch", 2)
     Vocab = hax.Axis("vocab", 1000)
-    Pos = mistral_config.Pos
+    Pos = mistral_config.max_Pos
     input_ids = hax.random.randint(random.PRNGKey(0), (Batch, Pos), 0, Vocab.size)
     mask = AttentionMask.causal()
 
@@ -71,7 +71,7 @@ def test_mistral_lm_head_model_bwd(use_flash, num_kv_heads):
     llama_config = _get_mistral_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
     Batch = hax.Axis("batch", 2)
     Vocab = hax.Axis("vocab", 1000)
-    Pos = llama_config.Pos
+    Pos = llama_config.max_Pos
     input_ids = hax.random.randint(random.PRNGKey(0), (Batch, Pos), 0, Vocab.size)
     mask = AttentionMask.causal()
 
@@ -103,7 +103,7 @@ def test_mistral_roundtrip(num_kv_heads):
     hf_config = config.to_hf_config(Vocab.size)
 
     # Make input and attn_mask
-    input = hax.random.randint(random.PRNGKey(0), config.Pos, 0, Vocab.size)
+    input = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
     attn_mask = AttentionMask.causal()
     input_torch = torch.from_numpy(np.array(input.array)).to(torch.int32).unsqueeze(0)
 

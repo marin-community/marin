@@ -86,7 +86,7 @@ class QwenConfig(LlamaConfig):
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
         return HfQwenConfig(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -117,7 +117,7 @@ class QwenConfig(LlamaConfig):
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=self.max_seq_len,
             vocab_size=vocab_size,
             glu=True,
         )

@@ -24,12 +24,13 @@ model:
     theta: 10000
     type: default
   scan_layers: true
-  seq_len: 4096
+  max_seq_len: 4096
   tie_word_embeddings: false
   type: llama
   upcast_attn: false
   use_bias: false
   use_layer_norm_weight: true
+train_length: 4096
 optimizer:
   beta1: 0.9
   beta2: 0.95

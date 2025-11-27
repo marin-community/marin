@@ -116,20 +116,20 @@ class LmExample(eqx.Module):
 # TODO: for some reason, mypy doesn't like the discover_packages_path argument?
 @dataclass(frozen=True)
 class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_path="levanter.models"):  # type: ignore
+    max_seq_len: int
+
     @property
     @abc.abstractmethod
     def model_type(cls) -> Type[LmT]:
         pass
 
     @property
-    @abc.abstractmethod
     def KeyPos(self) -> Axis:
-        pass
+        return self.max_Pos.alias("key_position")
 
     @property
-    @abc.abstractmethod
-    def Pos(self) -> Axis:
-        pass
+    def max_Pos(self) -> Axis:
+        return Axis("position", self.max_seq_len)
 
     @property
     @abc.abstractmethod
@@ -170,11 +170,16 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
 
     @property
     def Pos(self) -> Axis:
-        return self.config.Pos
+        return self.config.max_Pos
 
     @property
     def KeyPos(self) -> Axis:
         return self.config.KeyPos
+
+    @property
+    def max_length(self) -> int:
+        """Maximum sequence length the model supports for inputs."""
+        return self.config.max_seq_len
 
     @property
     def Embed(self) -> Axis:

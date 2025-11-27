@@ -50,14 +50,6 @@ class Gpt2HyenaConfig(LmConfig):
 
     # Axes
     @property
-    def Pos(self) -> Axis:
-        return self.hyena.Pos
-
-    @property
-    def KeyPos(self) -> Axis:
-        return self.Pos.alias("key_position")
-
-    @property
     def Embed(self) -> Axis:
         return self.hyena.Embed
 
@@ -155,7 +147,7 @@ class Gpt2HyenaModel(LmHeadModel[Gpt2HyenaConfig]):
 
     @property
     def Pos(self) -> Axis:
-        return self.config.Pos
+        return self.config.max_Pos
 
     @classmethod
     def init(cls, Vocab: Axis, config: Gpt2HyenaConfig, *, key) -> "Gpt2HyenaModel":

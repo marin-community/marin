@@ -88,7 +88,7 @@ SUBMISSION_AUTHOR_URL = "__SUBMISSION_AUTHOR_URL__"
 @dataclass(frozen=True)
 class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     # Core dims
-    seq_len: int = 2048
+    max_seq_len: int = 2048
     hidden_dim: int = 4096
     intermediate_dim: int = 11008
     num_layers: int = 32
@@ -126,8 +126,6 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     def model_type(self) -> type["HackableLMHeadModel"]:
         return HackableLMHeadModel
 
-    Pos = property(lambda self: Axis("position", self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
     Embed = property(lambda self: Axis("embed", self.hidden_dim))
     Layers = property(lambda self: Axis("layers", self.num_layers))
     Mlp = property(lambda self: Axis("mlp", self.intermediate_dim))
@@ -164,7 +162,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=self.max_seq_len,
             vocab_size=vocab_size,
             glu=True,
         )
@@ -367,7 +365,7 @@ def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: i
 
 def _size_presets() -> dict[str, HackableTransformerConfig]:
     base = dict(
-        seq_len=4096,
+        max_seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
         attn_backend=None,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
@@ -481,7 +479,7 @@ def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]
     model_cfg = sizes[size]
 
     batch = _batch_sizes()[size]
-    seq_len = model_cfg.seq_len
+    seq_len = model_cfg.max_seq_len
     params = int(model_cfg.total_trainable_params(llama3_tokenizer_vocab_size))
     steps = _get_num_train_steps(params, batch, seq_len, tpp=20)
 

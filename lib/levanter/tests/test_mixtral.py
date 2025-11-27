@@ -268,8 +268,8 @@ def test_mixtral_roundtrip():
     hf_config = config.to_hf_config(Vocab.size)
 
     # Make input and attn_mask
-    input = hax.random.randint(random.PRNGKey(0), config.Pos, 0, Vocab.size)
-    attn_mask = hax.nn.attention.causal_mask(config.Pos, config.KeyPos)
+    input = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
+    attn_mask = hax.nn.attention.causal_mask(config.max_Pos, config.KeyPos)
     input_torch = torch.from_numpy(np.array(input.array)).to(torch.int32).unsqueeze(0)
 
     torch.random.manual_seed(0)
@@ -327,7 +327,7 @@ def _get_random_inputs(config: MixtralConfig, override_Pos=None):
     if override_Pos is not None:
         Pos = override_Pos
     else:
-        Pos = config.Pos
+        Pos = config.max_Pos
     Batch = hax.Axis("batch", 2)
     x = hax.random.normal(random.PRNGKey(0), (Batch, Pos, Embed))
     mask = AttentionMask.causal()

@@ -144,8 +144,9 @@ model:
   num_heads: 6
   num_kv_heads: 6
   num_layers: 12
-  seq_len: 1024
+  max_seq_len: 1024
   gradient_checkpointing: true
+train_length: 1024
 trainer:
   tracker:
     project: "levanter"

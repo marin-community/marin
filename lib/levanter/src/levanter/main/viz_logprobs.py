@@ -39,6 +39,8 @@ class VizLmConfig:
     data: SingleDatasetLMConfigBase | LMMixtureDatasetConfig = field(default_factory=SingleDatasetLMConfigBase)
     model: LmConfig = field(default_factory=LlamaConfig)
 
+    max_eval_length: int = 4095
+
     num_docs: int = 32
 
     checkpoint_is_hf: bool = False
@@ -57,12 +59,9 @@ def main(config: VizLmConfig):
 
     # some axes we use outside the model proper
     EvalBatch = config.trainer.EvalBatch
-    Pos = config.model.Pos
+    Pos = config.model.max_Pos.resize(config.max_eval_length)
 
     validation_sets = config.data.validation_sets(Pos)
-
-    # some axes we use outside the model proper
-    Pos = config.model.Pos
 
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
@@ -89,7 +88,7 @@ def main(config: VizLmConfig):
                 logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
 
                 loss = next_token_loss(
-                    model.Pos,
+                    model.max_Pos,
                     model.Vocab,
                     logits=logits,
                     true_ids=example.tokens,

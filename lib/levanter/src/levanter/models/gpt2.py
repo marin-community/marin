@@ -34,7 +34,7 @@ from transformers import PretrainedConfig as HfConfig  # noqa: E402
 @LmConfig.register_subclass("gpt2")
 @dataclass(frozen=True)
 class Gpt2Config(HFCompatConfig):
-    seq_len: int = 1024
+    max_seq_len: int = 1024
     hidden_dim: int = 768
     num_layers: int = 12
     num_heads: int = 12
@@ -64,14 +64,6 @@ class Gpt2Config(HFCompatConfig):
 
     # Axes
     @property
-    def Pos(self) -> Axis:
-        return Axis(name="position", size=self.seq_len)
-
-    @property
-    def KeyPos(self) -> Axis:
-        return self.Pos.alias("key_position")
-
-    @property
     def Embed(self) -> Axis:
         return Axis(name="embed", size=self.hidden_dim)
 
@@ -94,7 +86,7 @@ class Gpt2Config(HFCompatConfig):
 
         return HfGpt2Config(
             vocab_size=vocab_size,
-            n_positions=self.seq_len,
+            n_positions=self.max_seq_len,
             n_layer=self.num_layers,
             n_head=self.num_heads,
             n_embd=self.hidden_dim,
@@ -111,7 +103,7 @@ class Gpt2Config(HFCompatConfig):
     @classmethod
     def from_hf_config(cls, hf_config: HfConfig):
         return Gpt2Config(
-            seq_len=hf_config.n_positions,
+            max_seq_len=hf_config.n_positions,
             # vocab_size=config.vocab_size,
             num_layers=hf_config.n_layer,
             num_heads=hf_config.n_head,
@@ -132,7 +124,7 @@ class Gpt2Config(HFCompatConfig):
             num_layers=self.num_layers,
             num_kv_heads=self.num_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=self.max_seq_len,
             vocab_size=vocab_size,
             glu=False,
         )
@@ -301,7 +293,7 @@ class Gpt2Embeddings(ModuleWithStateDictSerialization, eqx.Module):
             Vocab, config.Embed, key=k_wte, initializer_range=config.initializer_range
         )
         position_embeddings = hnn.Embedding.init(
-            config.Pos, config.Embed, key=k_wpe, initializer_range=config.initializer_range / 2
+            config.max_Pos, config.Embed, key=k_wpe, initializer_range=config.initializer_range / 2
         )
         dropout = hnn.Dropout(pdrop=config.embed_pdrop)
 
@@ -341,7 +333,7 @@ class Gpt2LMHeadModel(LmWithHfSerializationMixin[Gpt2Config]):
 
     @property
     def Pos(self) -> Axis:
-        return self.config.Pos
+        return self.config.max_Pos
 
     @classmethod
     def init(cls, Vocab: Axis, config: Gpt2Config, *, key) -> "Gpt2LMHeadModel":

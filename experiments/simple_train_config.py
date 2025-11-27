@@ -32,6 +32,7 @@ class SimpleTrainConfig:
     """
     num_train_steps: int
     learning_rate: float
+    max_train_length: int = 4096
     data_seed: int | None = None
     weight_decay: float | None = None
     beta1: float | None = None
@@ -94,6 +95,10 @@ class SimpleTrainConfig:
     """Which step to start profiling."""
     profiler_num_steps: int = 100
     """How many steps to profile for once started."""
+
+    def __post_init__(self):
+        if isinstance(self.train_batch_size, IntSchedule):
+            object.__setattr__(self, "train_batch_size", int(self.train_batch_size))
 
     @property
     def tpu_type(self) -> str | None:

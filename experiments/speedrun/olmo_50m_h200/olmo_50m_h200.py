@@ -29,7 +29,7 @@ from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 logger = logging.getLogger("ray")
 
 olmo_50m = Olmo2Config(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=192,
     intermediate_dim=448,
     num_heads=2,

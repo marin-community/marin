@@ -1,13 +1,14 @@
 data: !include data/rpv1_llama.yaml
 model:
   type: llama  # Llama2-3.4B
-  seq_len: 4096
+  max_seq_len: 4096
   hidden_dim: 4096
   intermediate_dim: 8640
   num_layers: 26
   num_heads: 32
   attn_backend: jax_flash
   flash_attention_block_size: 2048
+train_length: 4096
 trainer:
   tracker:
     type: wandb

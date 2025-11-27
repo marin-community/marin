@@ -49,7 +49,7 @@ def _to_parallel_llama_from_llama(llama_cfg, *, seq_len_override=None) -> Parall
     Build a ParallelLlamaConfig with identical sizes to a given LLaMA config.
     """
     parallel_llama = ParallelLlamaConfig(
-        seq_len=seq_len_override if seq_len_override is not None else llama_cfg.seq_len,
+        max_seq_len=seq_len_override if seq_len_override is not None else llama_cfg.max_seq_len,
         hidden_dim=llama_cfg.hidden_dim,
         intermediate_dim=llama_cfg.intermediate_dim,
         num_layers=llama_cfg.num_layers,
@@ -164,7 +164,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     # Convert to ParallelLlamaConfig and keep seq_len from original config
     model_config = _to_parallel_llama_from_llama(llama_cfg)
-    seq_len = model_config.seq_len
+    seq_len = model_config.max_seq_len
 
     num_train_steps = get_num_train_steps(param_counts[size], batch_size, seq_len)
 

@@ -92,7 +92,7 @@ silence_transformer_nag()
 @dataclass(frozen=True)
 class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     # Core dims
-    seq_len: int = 2048
+    max_seq_len: int = 2048
     hidden_dim: int = 4096
     intermediate_dim: int = 11008
     num_layers: int = 32
@@ -130,8 +130,6 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     def model_type(self) -> type["HackableLMHeadModel"]:
         return HackableLMHeadModel
 
-    Pos = property(lambda self: Axis("position", self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
     Embed = property(lambda self: Axis("embed", self.hidden_dim))
     Layers = property(lambda self: Axis("layers", self.num_layers))
     Mlp = property(lambda self: Axis("mlp", self.intermediate_dim))
@@ -168,7 +166,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            max_seq_len=self.max_seq_len,
             vocab_size=vocab_size,
             glu=True,
         )
@@ -360,14 +358,14 @@ class HackableLMHeadModel(
 AUTHOR = Author(name="Calvin Xu", affiliation="Stanford University", url="https://pinlinxu.com")  # TODO: update me
 
 
-def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: int = 20) -> int:
+def _get_num_train_steps(param_count: int, batch_size: int, max_seq_len: int, tpp: int = 20) -> int:
     total_tokens = param_count * tpp
-    return max(1, total_tokens // (batch_size * seq_len))
+    return max(1, total_tokens // (batch_size * max_seq_len))
 
 
 def _size_presets() -> dict[str, HackableTransformerConfig]:
     base = dict(
-        seq_len=4096,
+        max_seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
         attn_backend=None,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
@@ -508,10 +506,10 @@ def build_run(
     model_cfg = dataclasses.replace(sizes[size], use_attention_sink=use_sink)
 
     batch = _batch_sizes()[size]
-    seq_len = model_cfg.seq_len
+    max_seq_len = model_cfg.max_seq_len
     params = int(model_cfg.total_trainable_params(llama3_tokenizer_vocab_size))
     print(params)
-    steps = _get_num_train_steps(params, batch, seq_len, tpp=20)
+    steps = _get_num_train_steps(params, batch, max_seq_len, tpp=20)
 
     muon = _muon_presets()[size]
     if lr_multiplier is not None:
@@ -532,7 +530,7 @@ def build_run(
     )
 
     lr_tag = f"_lr_x{_format_multiplier_label(lr_multiplier)}" if lr_multiplier is not None else ""
-    run_name = f"hacktx_{size}_{'attnsink' if use_sink else 'stdattn'}_{seq_len}_splash_lr_sweep{lr_tag}"
+    run_name = f"hacktx_{size}_{'attnsink' if use_sink else 'stdattn'}_{max_seq_len}_splash_lr_sweep{lr_tag}"
     desc = (
         f"Hackable Transformer ({size}); "
         f"{'AttentionWithSink' if use_sink else 'Attention'} (Splash); "
