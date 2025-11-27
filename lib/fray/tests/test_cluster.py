@@ -18,6 +18,9 @@ Parameterized tests run for both implementations via fixtures.
 Implementation-specific tests are kept as separate manual tests.
 """
 
+import json
+import os
+
 import pytest
 from fray.cluster import (
     Entrypoint,
@@ -114,41 +117,6 @@ def test_cluster_monitor_logs(cluster):
     assert len(logs) > 0
 
 
-def test_ray_cluster_get_runtime_env():
-    # Use remote address to test runtime_env building (local clusters return None)
-    from fray.cluster import RayCluster
-
-    remote_cluster = RayCluster(address="ray://remote:8265")
-    request = JobRequest(
-        name="runtime-env-test",
-        entrypoint=Entrypoint(binary="python", args=["-m", "json.tool"]),
-        environment=create_environment(
-            extra_dependency_groups=["cpu"],
-            env_vars={"CUSTOM_VAR": "value"},
-        ),
-    )
-
-    runtime_env = remote_cluster._get_runtime_env(request)
-
-    # Should have env_vars and pip
-    assert "env_vars" in runtime_env
-    assert "PYTHONPATH" in runtime_env["env_vars"]
-    assert "CUSTOM_VAR" in runtime_env["env_vars"]
-    assert runtime_env["env_vars"]["CUSTOM_VAR"] == "value"
-    assert "pip" in runtime_env
-
-
-def test_ray_cluster_get_ray_resources_cpu(ray_cluster):
-    request = JobRequest(
-        name="cpu-resource-test",
-        entrypoint=Entrypoint(binary="python", args=["-m", "my_module"]),
-        resources=ResourceConfig(),  # Default is CPU
-    )
-
-    resources = ray_cluster.get_ray_resources(request)
-    assert resources == {}
-
-
 def test_ray_cluster_get_ray_resources_gpu(ray_cluster):
     """GPU resources should map to Ray GPU resource."""
 
@@ -175,61 +143,113 @@ def test_ray_cluster_get_ray_resources_tpu(ray_cluster):
     assert resources == {"TPU": 8.0, "v5e-16-head": 1.0}
 
 
-def test_ray_cluster_environment_variable_injection():
-    # Use remote address to test runtime_env building (local clusters return None)
-    from fray.cluster import RayCluster
+def test_environment_integration(cluster, cluster_type, tmp_path):
+    """Integration test to verify environment variable injection."""
 
-    remote_cluster = RayCluster(address="ray://remote:8265")
+    def _check_env_closure(output_path: str):
+        import json
+        import os
+
+        with open(output_path, "w") as f:
+            json.dump(dict(os.environ), f)
+
+    output_path = str(tmp_path / "env.json")
+
+    # Create job request with function_args
     request = JobRequest(
-        name="env-var-test",
-        entrypoint=Entrypoint(binary="python", args=["-m", "json.tool"]),
+        name="env-integration-test",
+        entrypoint=Entrypoint(
+            callable=_check_env_closure,
+            function_args={"output_path": output_path},
+        ),
         environment=create_environment(
-            env_vars={"TEST_VAR": "test_value"},
+            env_vars={"TEST_INTEGRATION_VAR": "test_value_123"},
         ),
     )
 
-    runtime_env = remote_cluster._get_runtime_env(request)
+    # Launch and wait
+    job_id = cluster.launch(request)
+    info = cluster.wait(job_id)
 
-    # Check that our custom var is present
-    assert "TEST_VAR" in runtime_env["env_vars"]
-    assert runtime_env["env_vars"]["TEST_VAR"] == "test_value"
+    assert info.status == "succeeded"
 
-    # Check that default vars are present
-    assert "HF_DATASETS_TRUST_REMOTE_CODE" in runtime_env["env_vars"]
-    assert "TOKENIZERS_PARALLELISM" in runtime_env["env_vars"]
+    # Read the output file
+    if not os.path.exists(output_path):
+        pytest.fail(f"Output file {output_path} was not created by the job.")
+
+    with open(output_path) as f:
+        env_vars = json.load(f)
+
+    # Verify our custom var
+    assert "TEST_INTEGRATION_VAR" in env_vars
+    assert env_vars["TEST_INTEGRATION_VAR"] == "test_value_123"
+
+    # Verify Ray specific vars if applicable
+    if cluster_type == "ray":
+        # These are usually injected by Ray
+        assert "RAY_ADDRESS" in env_vars or "RAY_JOB_ID" in env_vars
 
 
-def test_ray_cluster_extra_dependency_groups():
-    # Use remote address to test runtime_env building (local clusters return None)
-    from fray.cluster import RayCluster
+def test_local_cluster_replica_integration(local_cluster, tmp_path):
+    """Integration test for replica functionality: env vars, logs, status aggregation."""
 
-    remote_cluster = RayCluster(address="ray://remote:8265")
+    def replica_worker(output_path: str):
+        import json
+        import os
+        import sys
+
+        replica_id = int(os.environ.get("FRAY_REPLICA_ID", "0"))
+        replica_count = os.environ.get("FRAY_REPLICA_COUNT", "MISSING")
+
+        # Log from each replica
+        print(f"Hello from replica {replica_id}")
+
+        # Write env vars to file
+        output_file = f"{output_path}_{replica_id}.json"
+        with open(output_file, "w") as f:
+            json.dump({"replica_id": str(replica_id), "replica_count": replica_count}, f)
+
+        # Replica 1 fails to test status aggregation
+        if replica_id == 1:
+            print("Replica 1 intentionally failing")
+            sys.exit(1)
+
+    output_path = str(tmp_path / "replica_output")
+
     request = JobRequest(
-        name="deps-test",
-        entrypoint=Entrypoint(binary="python", args=["-m", "json.tool"]),
-        environment=create_environment(
-            extra_dependency_groups=["cpu", "eval"],
-        ),
+        name="replica-integration-test",
+        entrypoint=Entrypoint(callable=replica_worker, function_args={"output_path": output_path}),
+        resources=ResourceConfig(replicas=3),
+        environment=create_environment(),
     )
 
-    runtime_env = remote_cluster._get_runtime_env(request)
-    assert "pip" in runtime_env
-    assert "env_vars" in runtime_env
+    job_id = local_cluster.launch(request)
 
+    # Collect logs
+    logs = list(local_cluster.monitor(job_id))
 
-def test_ray_cluster_job_with_custom_environment(ray_cluster):
-    request = JobRequest(
-        name="custom-env-job",
-        entrypoint=Entrypoint(binary="python", args=["-m", "json.tool", "--help"]),
-        environment=create_environment(
-            extra_dependency_groups=["cpu"],
-            env_vars={"MY_CUSTOM_VAR": "my_value"},
-        ),
-    )
+    # Check log prefixes - each replica should log with [replica-N] prefix
+    replica_0_logs = [log for log in logs if "[replica-0]" in log and "Hello from replica 0" in log]
+    replica_1_logs = [log for log in logs if "[replica-1]" in log and "Replica 1 intentionally failing" in log]
+    replica_2_logs = [log for log in logs if "[replica-2]" in log and "Hello from replica 2" in log]
 
-    job_id = ray_cluster.launch(request)
+    assert len(replica_0_logs) > 0, "No logs from replica-0"
+    assert len(replica_1_logs) > 0, "No logs from replica-1"
+    assert len(replica_2_logs) > 0, "No logs from replica-2"
 
-    # Verify job was created
-    info = ray_cluster.poll(job_id)
-    assert info.job_id == job_id
-    assert info.name == "custom-env-job"
+    # Check status - should be failed because replica 1 failed (conservative aggregation)
+    info = local_cluster.poll(job_id)
+    assert info.status == "failed"
+    assert info.error_message is not None
+    assert "1" in info.error_message  # Should mention replica 1
+
+    # Check environment variables were set correctly
+    for replica_id in [0, 2]:  # Replica 1 failed, may not have written file
+        output_file = f"{output_path}_{replica_id}.json"
+        assert os.path.exists(output_file), f"Replica {replica_id} did not write output file"
+
+        with open(output_file) as f:
+            data = json.load(f)
+
+        assert data["replica_id"] == str(replica_id)
+        assert data["replica_count"] == "3"

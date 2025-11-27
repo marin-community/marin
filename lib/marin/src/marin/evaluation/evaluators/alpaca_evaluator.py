@@ -12,29 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import shutil
+import logging
+import tempfile
 import traceback
 
-from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.evaluators.evaluator import ModelConfig
-from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
-from marin.evaluation.utils import is_remote_path, upload_to_gcs, write_yaml
+from marin.evaluation.evaluation_config import EvalTaskConfig, ModelConfig
+from marin.evaluation.evaluators.evaluator import Evaluator
+from marin.evaluation.utils import upload_to_gcs
 from marin.run.ray_deps import build_runtime_env_for_packages
 
+logger = logging.getLogger(__name__)
 
-class AlpacaEvaluator(VllmTpuEvaluator):
-    """
-    Evaluator that runs AlpacaEval: https://github.com/tatsu-lab/alpaca_eval
+# Default annotator for AlpacaEval using GPT-4 Turbo
+# This has high agreement with human annotations and is cost-efficient
+# Source: https://github.com/tatsu-lab/alpaca_eval?tab=readme-ov-file#quick-start
+DEFAULT_ANNOTATOR_CONFIG: str = "weighted_alpaca_eval_gpt4_turbo"
 
-    Ensure OPENAI_API_KEY is set in the environment to use the default auto evaluator:
-    "weighted_alpaca_eval_gpt4_turbo", which has a high agreement rate with their human
-    annotation data and is relatively cost-efficient.
-    Source: https://github.com/tatsu-lab/alpaca_eval?tab=readme-ov-file#quick-start
-    """
 
-    CACHE_PATH: str = "/tmp/alpaca-eval"
-    BASE_RESULTS_PATH: str = os.path.join(CACHE_PATH, "alpaca_results")
+class AlpacaEvaluator(Evaluator):
+    """Evaluator that runs AlpacaEval: https://github.com/tatsu-lab/alpaca_eval"""
 
     # AlpacaEval has 805 examples: https://huggingface.co/datasets/tatsu-lab/alpaca_eval/raw/main/alpaca_eval.json
     # so if the number of instances is not specified, we will run on all of them.
@@ -44,83 +40,13 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         """
         Returns the runtime environment to run the evaluator on the Ray cluster.
         """
-        return build_runtime_env_for_packages(pip_packages=["alpaca-eval"])
-
-    @staticmethod
-    def write_model_config_file(model: ModelConfig, path: str) -> None:
-        """
-        Write out the necessary model configuration files for AlpacaEval
-
-        Args:
-            model (ModelConfig): The model configuration
-            path (str): Path where to write the config file
-            generation_params (dict, optional): Dictionary of generation parameters. Defaults to None.
-        """
-        model_name_or_path: str = model.name if model.path is None else model.path
-        generation_params = model.generation_params
-        # Set default parameters if not provided
-        if generation_params is None:
-            generation_params = {}
-
-        # Default values for generation parameters
-        temp = generation_params.get("temperature", 0.7)
-        presence_penalty = generation_params.get("presence_penalty", 0.0)
-        frequency_penalty = generation_params.get("frequency_penalty", 0.0)
-        repetition_penalty = generation_params.get("repetition_penalty", 1.0)
-        top_p = generation_params.get("top_p", 1.0)
-        top_k = generation_params.get("top_k", -1)
-        stop_token_ids = generation_params.get("stop_token_ids", None)
-        # On how to write the model configuration file, see
-        # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/main.py#L241
-        content: dict = {
-            model_name_or_path.split("/")[-1]: {
-                # Could be any arbitrary prompt template but the Cohere one prompts
-                # with the just instruction without any prompt engineering: {instruction}
-                # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/models_configs/cohere/prompt.txt
-                "prompt_template": "Mixtral-8x7B-Instruct-v0.1/togetherai_prompt.txt",
-                "fn_completions": "vllm_local_completions",
-                "completions_kwargs": {
-                    "model_name": model_name_or_path,
-                    # Mandatory argument for `vllm_local_completions` in AlpacaEval
-                    # https://github.com/tatsu-lab/alpaca_eval/blob/main/src/alpaca_eval/decoders/vllm_local.py#L21
-                    "max_new_tokens": None,  # Following the config above, set to None to go up to EOS or context length
-                    "temperature": temp,
-                    "top_p": top_p,
-                    "top_k": top_k,
-                    "presence_penalty": presence_penalty,
-                    "frequency_penalty": frequency_penalty,
-                    "repetition_penalty": repetition_penalty,
-                    "stop_token_ids": stop_token_ids,
-                    "model_kwargs": {
-                        "max_model_len": model.engine_kwargs.get("max_model_len", 4096),  # Cap at 4096 tokens
-                        "enforce_eager": model.engine_kwargs.get("enforce_eager", False),
-                        "dtype": "bfloat16",  # Explicitly use bfloat16 for TPU
-                        # "enforce_eager": True, # Uncomment if you want to enforce eager execution to save memory
-                        "device": "tpu",
-                    },
-                    "is_chatml_prompt": True,
-                },
-            }
-        }
-        write_yaml(content, path)
-        return content
-
-    @staticmethod
-    def set_openai_api_key() -> None:
-        """
-        Set the OPENAI_API_KEY environment variable. We assume the API key is stored in ~/.cache/openai/token.
-        """
-        # If the environment variable is already set, we don't need to do anything
-        if os.environ.get("OPENAI_API_KEY") is not None:
-            return
-
-        with open(os.path.expanduser("~/.cache/openai/token"), "r") as f:
-            os.environ["OPENAI_API_KEY"] = f.read().strip()
+        return build_runtime_env_for_packages(pip_packages=["alpaca-eval", "datasets"])
 
     def evaluate(
         self,
         model: ModelConfig,
         evals: list[EvalTaskConfig],
+        openai_base_url: str,
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
@@ -128,50 +54,143 @@ class AlpacaEvaluator(VllmTpuEvaluator):
         """
         Runs AlpacaEval on the specified model.
 
+        This evaluator runs in two phases:
+        1. Generate model outputs by calling the vLLM server at openai_base_url
+        2. Evaluate outputs using OpenAI's GPT-4 judge (requires OPENAI_API_KEY)
+
         Args:
             model (ModelConfig): The model configuration of the model we want to evaluate
             evals (List[str]): Does nothing. We just run on the default eval set.
+            openai_base_url (str): Base URL for the vLLM server to generate model outputs
             output_path (str): The path to save the evaluation results.
             max_eval_instances (int | None): The maximum number of evaluation instances to run.
             wandb_tags (list[str] | None): Optional tags to add to the wandb run (unused).
         """
+        results_tmp = tempfile.TemporaryDirectory()
+        results_path = results_tmp.name
+
         try:
-            # Set the OPENAI_API_KEY environment variable for the auto evaluator
-            self.set_openai_api_key()
+            import datasets
+            from alpaca_eval import decoders, evaluate
 
-            # Download the model from GCS or HuggingFace
-            model_name_or_path: str = self.download_model(model)
+            # Load the AlpacaEval dataset
+            logger.info("Loading AlpacaEval dataset")
+            eval_set = datasets.load_dataset(
+                "tatsu-lab/alpaca_eval", "alpaca_eval", split="eval", trust_remote_code=True
+            )
 
-            model_config_path: str = os.path.join(AlpacaEvaluator.CACHE_PATH, model_name_or_path, "model_config.yaml")
-            model_config_content = self.write_model_config_file(model, model_config_path)
-
-            # Construct the command and run AlpacaEval
+            # Limit instances if requested
             max_eval_instances = max_eval_instances or self.DEFAULT_MAX_INSTANCES
-            model_name = os.path.basename(model_name_or_path)
-            results_path: str = os.path.join(AlpacaEvaluator.BASE_RESULTS_PATH, model_name)
+            if max_eval_instances < len(eval_set):
+                eval_set = eval_set.select(range(max_eval_instances))
+                logger.info(f"Limited to {max_eval_instances} instances")
 
-            from alpaca_eval import evaluate_from_model
+            # Extract prompts from the dataset
+            prompts = [example["instruction"] for example in eval_set]
 
-            # We don't want to overload the vLLM inference engine or else we will have to recompute the cache
-            if max_eval_instances is None or max_eval_instances == AlpacaEvaluator.DEFAULT_MAX_INSTANCES:
-                evaluate_from_model(
-                    model_configs=model_config_content,
-                    output_path=results_path,
-                    chunksize=64,
-                )
-            else:
-                evaluate_from_model(
-                    model_configs=model_config_content,
-                    output_path=results_path,
-                    max_instances=max_eval_instances,
-                )
+            # Phase 1: Generate model outputs using vLLM server
+            logger.info(f"Generating outputs for {len(prompts)} prompts using {openai_base_url}")
+            generation_params = model.generation_params or {}
 
-            # Upload the results to GCS
-            if is_remote_path(output_path):
-                upload_to_gcs(local_path=results_path, gcs_path=output_path)
+            openai_completions = decoders.get_fn_completions("openai_completions")
+
+            # We set requires_chatml=False because vLLM handles chat formatting internally.
+            # For max_tokens, default to 2048 for normal models, but cap at max_model_len - 256
+            # to leave room for the input prompt
+            max_tokens = generation_params.get("max_tokens", 2048)
+            max_model_len = model.engine_kwargs.get("max_model_len")
+            if max_model_len:
+                # Reserve at least 256 tokens for input, or half the context for very small models
+                reserved_for_input = min(256, max_model_len // 2)
+                max_tokens = min(max_tokens, max_model_len - reserved_for_input)
+
+            completions_result = openai_completions(
+                prompts=prompts,
+                model_name=model.name,
+                max_tokens=max_tokens,
+                temperature=generation_params.get("temperature", 0.7),
+                top_p=generation_params.get("top_p", 1.0),
+                openai_api_base=openai_base_url,
+                requires_chatml=False,
+            )
+
+            # Prepare outputs in AlpacaEval format
+            outputs = [
+                {
+                    "instruction": example["instruction"],
+                    "output": completion,
+                    "generator": model.name,
+                }
+                for example, completion in zip(eval_set, completions_result["completions"], strict=True)
+            ]
+
+            logger.info(f"Generated {len(outputs)} outputs")
+
+            # Phase 2: Evaluate using GPT-4 judge
+            logger.info(f"Evaluating outputs with {DEFAULT_ANNOTATOR_CONFIG}")
+            evaluate(
+                model_outputs=outputs,
+                annotators_config=DEFAULT_ANNOTATOR_CONFIG,
+                output_path=results_path,
+            )
+
+            upload_to_gcs(results_path, output_path)
         except Exception as e:
             traceback.print_exc()
             raise RuntimeError("AlpacaEval failed. Please check the logs for more information.") from e
-        finally:
-            self.cleanup(model)
-            shutil.rmtree(AlpacaEvaluator.BASE_RESULTS_PATH, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(filename)s:%(lineno)d:%(levelname)s:%(message)s")
+    from pathlib import Path
+
+    from fray.cluster import LocalCluster
+    from fray.cluster.base import CpuConfig, Entrypoint, JobRequest, ResourceConfig, create_environment
+    from fray.queue.file import FileQueue
+
+    from marin.evaluation.backends.inference_pool import InferencePool
+    from marin.evaluation.evaluation_config import InferencePoolConfig
+
+    pool_config = InferencePoolConfig(
+        resource_config=ResourceConfig(cpu=1, ram="4g", device=CpuConfig(), replicas=1),
+        model_config=ModelConfig(
+            name="timinar/baby-llama-58m",
+            path="timinar/baby-llama-58m",
+            engine_kwargs={
+                "max_model_len": 128,
+            },
+            device="auto",
+        ),
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir, LocalCluster() as cluster:
+        from typing import Any
+
+        request_queue = FileQueue[dict[str, Any]](Path(tmp_dir) / "requests")
+        response_queue = FileQueue[dict[str, Any]](Path(tmp_dir) / "responses")
+
+        with InferencePool(
+            pool_config, cluster=cluster, request_queue=request_queue, response_queue=response_queue
+        ) as pool:
+            evaluator = AlpacaEvaluator()
+            job_request = JobRequest(
+                name="alpaca",
+                entrypoint=Entrypoint(
+                    callable=evaluator.evaluate,
+                    function_args={
+                        "model": pool_config.model_config,
+                        "evals": [],
+                        "openai_base_url": "http://localhost:9000/v1",
+                        "output_path": "/tmp/alpaca/test",
+                        "max_eval_instances": 10,
+                    },
+                ),
+                resources=ResourceConfig(cpu=1, ram="4g", device=CpuConfig(), replicas=1),
+                environment=create_environment(
+                    pip_packages=["alpaca-eval", "datasets"],
+                    extras=["eval"],
+                ),
+            )
+            job_id = cluster.launch(job_request)
+            logger.info("Started AlpacaEval task with job id %s", job_id)
+            cluster.wait(job_id)

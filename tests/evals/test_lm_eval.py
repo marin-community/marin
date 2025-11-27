@@ -16,8 +16,7 @@
 import pytest
 
 from experiments.evals.task_configs import EvalTaskConfig
-from marin.evaluation.evaluation_config import EvaluationConfig
-from marin.evaluation.evaluators.evaluator import ModelConfig
+from marin.evaluation.evaluation_config import EvaluationConfig, ModelConfig
 from marin.evaluation.run import evaluate
 
 
@@ -29,8 +28,7 @@ def model_config():
         engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
         generation_params={"max_tokens": 16},
     )
-    yield config
-    config.destroy()
+    return config
 
 
 @pytest.mark.tpu_ci

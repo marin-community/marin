@@ -13,8 +13,71 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+from typing import Any
 
-from experiments.evals.resource_configs import ResourceConfig
+from fray.cluster.base import CpuConfig, GpuConfig, ResourceConfig, TpuConfig
+
+
+def infer_device_from_resource_config(resource_config: ResourceConfig) -> str:
+    """Infer device type from ResourceConfig.device."""
+    if isinstance(resource_config.device, TpuConfig):
+        return "tpu"
+    elif isinstance(resource_config.device, GpuConfig):
+        return "cuda"
+    elif isinstance(resource_config.device, CpuConfig):
+        return "cpu"
+    else:
+        return "auto"
+
+
+@dataclass
+class ModelConfig:
+    name: str
+    """The name of the model e.g., allenai/olmo-7b"""
+
+    path: str | None
+    """
+    The path to the model checkpoint. Can be a local path or a path on GCS.
+    """
+
+    engine_kwargs: dict[str, Any]
+    """
+    Additional keyword arguments to pass to the vLLM engine.
+    """
+
+    device: str = "auto"
+    """
+    Device to run VLLM on: "auto", "cpu", "cuda", or "tpu".
+    Auto will try to detect available accelerators.
+    """
+
+    generation_params: dict | None = None
+    """
+    Additional keyword arguments passed to the SamplingParams for the vLLM engine
+    """
+
+    apply_chat_template: bool = False
+    """
+    Whether or not this model was trained with a Chat Template in the tokenizer
+    """
+
+
+@dataclass
+class InferencePoolConfig:
+    """Configuration for the inference pool.
+
+    Args:
+        resource_config: Fray ResourceConfig for workers (TPU/GPU resources).
+            The number of VLLM server workers is determined by resource_config.replicas.
+        model_config: Model to load in the servers
+        proxy_host: Host for the OpenAI proxy server
+        proxy_port: Port for the OpenAI proxy server
+    """
+
+    resource_config: ResourceConfig
+    model_config: ModelConfig
+    proxy_host: str = "127.0.0.1"
+    proxy_port: int = 9000
 
 
 @dataclass(frozen=True)
@@ -33,6 +96,12 @@ class EvalTaskConfig:
 class EvaluationConfig:
     evaluator: str
     """Name of the evaluator to run."""
+
+    pool_config: InferencePoolConfig
+    """
+    Configuration for the inference pool. All evaluations use the
+    Fray-based inference pool with load-balanced VLLM servers.
+    """
 
     model_name: str | None
     """
@@ -68,34 +137,9 @@ class EvaluationConfig:
     Whether to discover the latest HF checkpoint in the model path.
     """
 
-    launch_with_ray: bool = True
-    """
-    Whether to launch the evaluation run with Ray.
-    """
-
     max_eval_instances: int | None = None
     """
     Maximum number of evaluation instances to run.
-    """
-
-    engine_kwargs: dict | None = None
-    """
-    Additional keyword arguments to pass to the vLLM engine.
-    """
-
-    resource_config: ResourceConfig | None = None
-    """
-    Additional keyword arguments to pass to the Ray resources.
-    """
-
-    generation_params: dict | None = None
-    """
-    Additional keyword arguments passed to the vLLM sampling params engine
-    """
-
-    apply_chat_template: bool = False
-    """
-    Whether or not this model was trained with a Chat Template in the tokenizer
     """
 
     wandb_tags: list[str] | None = None
