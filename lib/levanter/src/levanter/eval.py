@@ -356,7 +356,7 @@ class TaggedEvaluator:
 
                 if self.bytes_per_token is not None:
                     next_tokens = hax.roll(
-                        batch.tokens, -1, m.Pos.name
+                        batch.tokens, -1, "position"
                     )  # [Batch, Pos], rolled by 1 for next token task
                     bytes_per_pos = self.bytes_per_token.take("vocab", next_tokens)  # [Batch, Pos]
                     bytes_per_tag = hax.einsum("-> tag", mask, bytes_per_pos, tags)  # [Tag]

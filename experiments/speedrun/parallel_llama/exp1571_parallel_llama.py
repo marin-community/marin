@@ -56,7 +56,7 @@ class ParallelLlamaConfig(HFCompatConfig):
     where attention and MLP are computed simultaneously instead of sequentially.
 
     Args:
-        seq_len (int, optional): maximum length of the input sequence. Defaults to 2048.
+        max_seq_len (int, optional): maximum length of the input sequence. Defaults to 2048.
         hidden_dim (int, optional): dimension of the hidden state. Defaults to 4096.
         intermediate_dim (int, optional): dimension of the intermediate state. Defaults to 11008.
         num_layers (int, optional): number of hidden layers in the Transformer encoder. Defaults to 32.
@@ -66,7 +66,7 @@ class ParallelLlamaConfig(HFCompatConfig):
         use_parallel_blocks (bool, optional): whether to use parallel attention and MLP computation. Defaults to True.
     """
 
-    seq_len: int = 2048
+    max_seq_len: int = 2048
     hidden_dim: int = 4096
     intermediate_dim: int = 11008
     num_layers: int = 32
@@ -97,8 +97,6 @@ class ParallelLlamaConfig(HFCompatConfig):
     tokenizer: str | None = None
 
     # Axis properties
-    Pos = property(lambda self: Axis(name="position", size=self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
     Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
     Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
     Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
@@ -122,7 +120,7 @@ class ParallelLlamaConfig(HFCompatConfig):
         rope_theta = hf_config.rope_theta
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, getattr(hf_config, "rope_scaling", None))
         return ParallelLlamaConfig(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,
@@ -147,7 +145,7 @@ class ParallelLlamaConfig(HFCompatConfig):
             rope_scaling = None
 
         return HfLlamaConfig(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -188,7 +186,7 @@ class ParallelLlamaConfig(HFCompatConfig):
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=self.max_seq_len,
             vocab_size=vocab_size,
             glu=True,
         )

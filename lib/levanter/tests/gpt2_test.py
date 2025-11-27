@@ -21,7 +21,7 @@ def test_gradient_checkpointing(num_blocks, attn_backend):
     # ensure that gradient checkpointing doesn't change the output
     # (this is a regression test for a bug that caused the output to change)
     config = Gpt2Config(
-        seq_len=64,
+        max_seq_len=64,
         hidden_dim=64,
         num_layers=num_blocks,
         num_heads=8,
@@ -37,7 +37,7 @@ def test_gradient_checkpointing(num_blocks, attn_backend):
     model = Gpt2LMHeadModel.init(Vocab, config, key=key)
     model_checkpoint = Gpt2LMHeadModel.init(Vocab, config_checkpoint, key=key)
 
-    input_ids = hax.arange(config.Pos, dtype=jnp.int32)
+    input_ids = hax.arange(config.max_Pos, dtype=jnp.int32)
 
     causal_mask = AttentionMask.causal()
 

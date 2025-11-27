@@ -132,8 +132,6 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     def model_type(self) -> type["HackableLMHeadModel"]:
         return HackableLMHeadModel
 
-    Pos = property(lambda self: Axis("position", self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
     Embed = property(lambda self: Axis("embed", self.hidden_dim))
     Layers = property(lambda self: Axis("layers", self.num_layers))
     Mlp = property(lambda self: Axis("mlp", self.intermediate_dim))
@@ -170,7 +168,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=self.max_seq_len,
             vocab_size=vocab_size,
             glu=True,
         )
@@ -508,7 +506,7 @@ def build_run(size: str, use_sink: bool, *, use_gpu: bool = False) -> tuple[str,
     model_cfg = dataclasses.replace(sizes[size], use_attention_sink=use_sink)
 
     batch = _batch_sizes()[size]
-    seq_len = model_cfg.seq_len
+    seq_len = model_cfg.max_seq_len
     params = int(model_cfg.total_trainable_params(llama3_tokenizer_vocab_size))
     print(params)
     steps = _get_num_train_steps(params, batch, seq_len, tpp=20)

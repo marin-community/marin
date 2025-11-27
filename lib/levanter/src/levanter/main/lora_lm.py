@@ -46,7 +46,7 @@ class LoraLmConfig:
     merged_hf_upload: Optional[str] = None
 
     trust_remote_code: bool = False
-    max_train_length: Optional[int] = None  # if set, train on sequences of this length
+    max_train_length: int = 4096
 
 
 def main(config: LoraLmConfig):
@@ -68,13 +68,7 @@ def main(config: LoraLmConfig):
 
     # some axes we need
     Batch = config.trainer.TrainBatch
-    Pos = model_config.Pos
-    KeyPos = model_config.KeyPos
-
-    if config.max_train_length is not None:
-        logger.info(f"Setting max tune length to {config.max_train_length}")
-        Pos = Pos.resize(config.max_train_length)
-        KeyPos = KeyPos.resize(config.max_train_length)
+    Pos = model_config.max_Pos.resize(config.max_train_length)
 
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
