@@ -219,7 +219,12 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, mistral_tokenizer)
     choice = create_choice_with_logprobs(mistral_tokenizer, response_text, logprobs_values)
 
     rollout = inference_ctx.create_rollout_from_choice(
-        prompt=prompt, choice=choice, env_name="math_env", env_example_id="ex_001", reward=reward, temperature=1.0,
+        prompt=prompt,
+        choice=choice,
+        env_name="math_env",
+        env_example_id="ex_001",
+        reward=reward,
+        temperature=1.0,
     )
 
     # Verify metadata
