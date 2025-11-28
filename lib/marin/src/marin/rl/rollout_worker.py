@@ -143,6 +143,15 @@ def create_inference_context(
 ) -> BaseInferenceContext:
     """Create an inference context based on the configuration."""
     if inference_type == "levanter":
+        # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
+        # For inference servers, we shard across all local devices on a single host.
+        inference_config.inference_server_config = dataclasses.replace(
+            inference_config.inference_server_config,
+            trainer=dataclasses.replace(
+                inference_config.inference_server_config.trainer,
+                model_axis_size=jax.local_device_count(),
+            ),
+        )
         return LevanterInferenceContext(
             inference_config=inference_config,
         )
@@ -173,17 +182,6 @@ class RolloutWorker:
     def __init__(self, config: RolloutWorkerConfig):
         config.trainer.id = f"{config.run_id}-rollout"
         levanter.initialize(config.trainer)
-
-        # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
-        # For inference servers, we shard across all local devices on a single host.
-        if config.inference_type == "levanter":
-            config.inference_server_config = dataclasses.replace(
-                config.inference_server_config,
-                trainer=dataclasses.replace(
-                    config.inference_server_config.trainer,
-                    model_axis_size=jax.local_device_count(),
-                ),
-            )
 
         self.tracker = levanter.current_tracker()
         self.config = config
