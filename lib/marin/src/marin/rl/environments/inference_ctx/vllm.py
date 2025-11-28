@@ -67,12 +67,9 @@ class vLLMInferenceContextConfig:
 
 def levanter_llama_to_vllm_mapping():
     """Return a mapping of the the Levanter parameter names (from the training checkpoint) to vLLM names.
-    
     This is used to map the Levanter parameter names to the vLLM parameter names so that we can sync the weights.
     The structure is as follows:
-    
     levanter_param_name: (vllm_param_name, partition_spec),
-    
     The partition_spec is a tuple of the axes that the parameter is partitioned along.
     """
     return {

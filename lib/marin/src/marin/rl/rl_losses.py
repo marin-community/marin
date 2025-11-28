@@ -66,7 +66,7 @@ def compute_metadata_metrics(
             ReductionType.MEAN,
         ),
         "max_advantages": Metric.from_value(jnp.max(loss_weights_array), ReductionType.MAX),
-        "mean_advantages": Metric.from_value(jnp.mean(loss_weights_array), ReductionType.MEAN), 
+        "mean_advantages": Metric.from_value(jnp.mean(loss_weights_array), ReductionType.MEAN),
         "policy_entropy": Metric.from_value(
             -jnp.sum(policy_logprobs_array * loss_masks_array) / jnp.sum(loss_masks_array),
             ReductionType.MEAN,

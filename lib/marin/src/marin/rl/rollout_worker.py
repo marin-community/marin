@@ -137,18 +137,18 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
         avg_reward=(reward_sum / total_count) if total_count > 0 else 0.0,
     )
 
-def create_inference_context(config: RolloutWorkerConfig) -> BaseInferenceContext:
+def create_inference_context(inference_type: str, inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig) -> BaseInferenceContext:
     """Create an inference context based on the configuration."""
-    if config.inference_type == "levanter":
+    if inference_type == "levanter":
         return LevanterInferenceContext(
-            inference_config=config.inference_config,
+            inference_config=inference_config,
         )
-    elif config.inference_type == "vllm":
+    elif inference_type == "vllm":
         return vLLMInferenceContext(
-            inference_config=config.inference_config,
+            inference_config=inference_config,
         )
     else:
-        raise ValueError(f"Invalid inference type: {config.inference_type}")
+        raise ValueError(f"Invalid inference type: {inference_type}")
 
 class RolloutWorker:
     """Asynchronous inference & rollout worker for RL training.
@@ -193,7 +193,7 @@ class RolloutWorker:
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
 
         self._rollout_writer = config.rollout_storage.create_writer()
-        self._policy_ctx = create_inference_context(self.config)
+        self._policy_ctx = create_inference_context(self.config.inference_type, self.config.inference_config)
 
         # Need to build the policy model and then use that to start the inference server
         self._build_models()
