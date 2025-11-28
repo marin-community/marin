@@ -62,7 +62,7 @@ class DummyInferenceContext(LevanterInferenceContext):
         self._stop_tokens = None
         self.max_tokens = 512
 
-    def batch_completions(self, prompts, temperature, n, max_tokens=None, stop=None):
+    def batch_completions(self, prompts, temperature, n, max_tokens=None, stop=None, system_prompt=None):
         """Return mock completions for each prompt."""
 
         return [create_mock_chat_completion(self.tokenizer) for prompt in prompts]

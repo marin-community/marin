@@ -130,7 +130,7 @@ def test_ppo_objective(
     trainer_inference_importance_sampling_ratio,
     expected_loss,
 ):
-    loss = compute_ppo_loss_objective(
+    loss, _ = compute_ppo_loss_objective(
         importance_sampling_ratio,
         loss_weights,
         loss_masks,

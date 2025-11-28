@@ -78,6 +78,8 @@ def test_basic_conversion():
         "loss_weights",
         "loss_masks",
         "policy_logprobs",
+        "temperature",
+        "truncated",
     }
     assert set(result.keys()) == expected_keys
 
