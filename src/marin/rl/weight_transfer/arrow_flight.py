@@ -201,11 +201,11 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
         buffers = [part.as_buffer() for part in parts]
         buffer_parts = [np.frombuffer(buf, dtype=np.uint8) for buf in buffers]
         array_np = np.concatenate(buffer_parts)
-        array_np = array_np.view(dtype).reshape(shape)
+        res = array_np.view(dtype).reshape(shape)
         # Convert to JAX array directly
         # If we place on the TPU then we OOM. Need the context manager or default device is TPU
-        with jax.default_device(jax.devices("cpu")[0]):
-            res = jax.numpy.asarray(array_np)
+        # with jax.default_device(jax.devices("cpu")[0]):
+        #     res = jax.numpy.asarray(array_np)
         ed = time.time()
         if ed - st > 0.1:
             logger.debug(f"Deserialized param {param_name} of shape {shape} and dtype {dtype} in {ed - st:.2f}s")
@@ -221,6 +221,13 @@ class ArrowFlightCoordinator:
         self._server_info = None
 
     def update_server(self, weight_id: int, param_names: list[str], server_locations: list[tuple[str, int]]) -> None:
+
+        # TODO(chris): how about when trainer dies? we should reset the server info.
+        # Only accept if newer than current
+        if self._server_info is not None and weight_id <= self._server_info.weight_id:
+            logger.warning(f"Ignoring stale weight update: {weight_id} <= {self._server_info.weight_id}")
+            return
+        
         self._server_info = ServerInfo(
             weight_id=weight_id,
             server_addresses=[f"grpc://{host}:{port}" for host, port in server_locations],
@@ -518,8 +525,8 @@ class ArrowFlightClient(WeightTransferClient):
         """
         self.metrics.total_polls += 1
 
-        if old_model is None:
-            raise ValueError("old_model is required for Arrow Flight weight transfer to preserve model structure")
+        # if old_model is None:
+        #     raise ValueError("old_model is required for Arrow Flight weight transfer to preserve model structure")
 
         try:
             start_time = time.time()
@@ -558,8 +565,8 @@ class ArrowFlightClient(WeightTransferClient):
             fetch_time = time.time()
 
             # Convert back to model using state_dict and move to target device
-            with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
-                model = update_model(old_model, state_dict)
+            # with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
+            #     model = update_model(old_model, state_dict)
 
             decode_time = time.time()
 
@@ -575,7 +582,7 @@ class ArrowFlightClient(WeightTransferClient):
                 f"decode={decode_time - fetch_time:.2f}s)"
             )
 
-            return WeightUpdate(model=model, weight_id=server_info.weight_id)
+            return WeightUpdate(state_dict=state_dict, weight_id=server_info.weight_id)
 
         except Exception:
             self.metrics.failed_receives += 1

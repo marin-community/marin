@@ -33,7 +33,10 @@ logger = logging.getLogger(__name__)
 class BaseInferenceContext:
     """Base class for inference contexts."""
 
-    def reload_model(self, model: LmHeadModel) -> None:
+    def reload_model(self, model: LmHeadModel | None, state_dict: dict):
+        raise NotImplementedError
+
+    def shutdown(self):
         raise NotImplementedError
 
     def batch_completions(
@@ -134,15 +137,15 @@ class BaseInferenceContext:
         if len(prompt_tokens) == 0:
             logger.error(f"Prompt tokenization failed for {env_example_id}")
 
-        token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
+        token_rewards = np.full(len(response_tokens), reward, dtype=np.float32)
         is_truncated = choice.finish_reason == "length"
 
         return Rollout(
             env_name=env_name,
             env_example_id=env_example_id,
-            prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
-            response_tokens=jnp.array(response_tokens, dtype=jnp.int32),
-            response_logprobs=jnp.array(response_logprobs, dtype=jnp.float32),
+            prompt_tokens=prompt_tokens,
+            response_tokens=response_tokens,
+            response_logprobs=response_logprobs,
             token_rewards=token_rewards,
             episode_reward=float(reward),
             correctness_reward=correctness_reward,

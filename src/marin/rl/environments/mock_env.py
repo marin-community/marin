@@ -383,7 +383,7 @@ class MockEnv(MarinEnv):
 
         # Sample examples
         n_to_sample = min(n_examples, len(available_examples))
-        seed = jax.random.randint(prng_key, (), 0, 1_000_000).item()
+        seed = extract_seed(prng_key)
         logger.info("Selecting %d examples with seed %d", n_to_sample, seed)
         rng = np.random.default_rng(seed)
         indices = rng.choice(len(available_examples), size=n_to_sample, replace=True)

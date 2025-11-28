@@ -27,6 +27,7 @@ from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.distributed import DistributedConfig
 from transformers import AutoConfig, AutoTokenizer
 
 from marin.execution.executor import (
@@ -40,6 +41,7 @@ from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss, RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
+from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 from marin.rl.environments.math_env import RewardConfig, LengthPenaltyConfig
@@ -128,6 +130,18 @@ class ExperimentConfig:
 
     # length penalty params
     reward_config: RewardConfig | None = None
+
+    debug_mode: bool = False
+
+    inflight_weight_updates: bool = False
+    """Whether to use inflight weight updates."""
+
+    max_rollout_step_delay: int = 0
+    """Maximum number of steps to delay before applying weight updates."""
+
+    learning_rate: float = 1e-7
+
+    max_grad_norm: float = 1.00
 
 MODEL = llama1b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
@@ -279,13 +293,17 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         fsdp_axis="embed",
         batch_axis="batch",
         ray=RayConfig(auto_start_cluster=False),
+        # distributed=DistributedConfig(
+        #     initialize_jax_distributed=False,
+        # )
     )
 
     opt_config = AdamConfig(
-        learning_rate=1e-7,
+        learning_rate=experiment_config.learning_rate,
         weight_decay=1e-2,
         warmup=0,
         lr_schedule="constant",
+        max_grad_norm=experiment_config.max_grad_norm,
     )
 
     rollout_storage = RolloutStorageConfig(
@@ -313,7 +331,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
                 capacity=4096,
                 alpha=3,
                 max_samples=1,
-                max_rollout_step_delay=0,
+                max_rollout_step_delay=experiment_config.max_rollout_step_delay,
             ),
         ),
         curriculum=curriculum_config,
@@ -351,6 +369,12 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             within <think> </think> and answer is enclosed within <answer> </answer> tags,
             respectively, i.e., <think> reasoning process here </think> <answer> answer here
             </answer>.""",
+        inflight_weight_updates=experiment_config.inflight_weight_updates,
+        rollout_tracker=RolloutTrackerConfig(
+            project="rl-mockenv-testing",
+            name=f"{name}-rollout",
+            tags=["rl", "math", "rollout", experiment_config.model_config.name.split("/")[-1]],
+        ),
     )
 
     return ExecutorStep(
@@ -372,7 +396,8 @@ def main():
         model_config=qwen3_1_7b,
         rl_loss=RLOOLoss(
             kl_coef=0.01,
-            clip_epsilon=0.2,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
             synchronous=True,
             do_trainer_inference_mismatch_importance_sampling=True,
             # do_overlong_filtering=True,
@@ -382,14 +407,15 @@ def main():
         max_output_tokens=4096,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=3072), length_penalty_coef=1.0),
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
     )
 
     max_length_8192_exp = ExperimentConfig(
         model_config=qwen3_1_7b,
         rl_loss=RLOOLoss(
             kl_coef=0.01,
-            clip_epsilon=0.2,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
             synchronous=True,
             do_trainer_inference_mismatch_importance_sampling=True,
             # do_overlong_filtering=True,
@@ -402,9 +428,290 @@ def main():
         n_generations_per_prompt=16,
     )
 
+    llama_8b_length_penalty_exp = ExperimentConfig(
+        model_config=llama_3_1_8b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.01,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+        ),
+        experiment_name_suffix="math-tis-r1-b128-t4096-n8-g16-lp",
+        train_batch_size=128,
+        per_device_parallelism=4,
+        max_output_tokens=4096,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+    )
+
+    qwen3_1_7b_inflight_weight_updates_exp = ExperimentConfig(
+        model_config=qwen3_1_7b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.01,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+        ),
+        experiment_name_suffix="math-tis-r1-b128-t512-n8-g16-iwu",
+        train_batch_size=128,
+        per_device_parallelism=8,
+        max_output_tokens=512,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        max_rollout_step_delay=1,
+        inflight_weight_updates=True,
+        debug_mode=True,
+    )
+
+    small_length_iwu =  ExperimentConfig(
+        model_config=qwen3_1_7b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.01,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
+            synchronous=False,
+            # do_trainer_inference_mismatch_importance_sampling=True,
+            # do_overlong_filtering=True,
+        ),
+        experiment_name_suffix="math-tis-r1-bsz128-t4096-n8-g16-lp-iwu",
+        train_batch_size=128,
+        max_output_tokens=4096,
+        per_device_parallelism=4,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        debug_mode=True,
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
+    small_length_iwu_with_correction =  ExperimentConfig(
+        model_config=qwen3_1_7b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.01,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
+            synchronous=False,
+            do_trainer_inference_mismatch_importance_sampling=True,
+            # do_overlong_filtering=True,
+        ),
+        experiment_name_suffix="math-tis-r1-bsz128-t4096-n8-g16-lp-iwuc",
+        train_batch_size=128,
+        max_output_tokens=4096,
+        per_device_parallelism=4,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        debug_mode=True,
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
+    small_length_iwu_with_correction_synchronous =  ExperimentConfig(
+        model_config=qwen3_1_7b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.01,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+            # do_overlong_filtering=True,
+        ),
+        experiment_name_suffix="math-tis-r1-bsz128-t4096-n8-g16-lp-iwucs",
+        train_batch_size=128,
+        max_output_tokens=4096,
+        per_device_parallelism=4,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        debug_mode=True,
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
+    small_length =  ExperimentConfig(
+        model_config=qwen3_1_7b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.01,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+            # do_overlong_filtering=True,
+        ),
+        experiment_name_suffix="math-tis-r1-bsz128-t512-n8-g16-lp",
+        train_batch_size=128,
+        max_output_tokens=512,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        debug_mode=True,
+    )
+
+    llama_8b_length_penalty_async = ExperimentConfig(
+        model_config=llama_3_1_8b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.01,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+        ),
+        experiment_name_suffix="math-tis-r1-b128-t4096-n8-g16-lp-iwu",
+        train_batch_size=128,
+        per_device_parallelism=4,
+        max_output_tokens=4096,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
+    llama_8b_length_penalty_async_kl0 = ExperimentConfig(
+        model_config=llama_3_1_8b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.0,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+        ),
+        experiment_name_suffix="math-tis-r1-b128-t4096-n8-g16-lp-iwu-kl0",
+        train_batch_size=128,
+        per_device_parallelism=4,
+        max_output_tokens=4096,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
+    llama_8b_length_penalty_async_kl0_1 = ExperimentConfig(
+        model_config=llama_3_1_8b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.1,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+        ),
+        experiment_name_suffix="math-tis-r1-b128-t4096-n8-g16-lp-iwu-kl0.1",
+        train_batch_size=128,
+        per_device_parallelism=4,
+        max_output_tokens=4096,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
+    llama_8b_length_penalty_async_kl0_1_no_length_penalty = ExperimentConfig(
+        model_config=llama_3_1_8b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.01,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.2,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+        ),
+        experiment_name_suffix="math-tis-r1-b128-t4096-n8-g16-iwu-kl0.1",
+        train_batch_size=128,
+        per_device_parallelism=4,
+        max_output_tokens=4096,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=0.0),
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
+    llama_8b_length_penalty_async_clip_higher = ExperimentConfig(
+        model_config=llama_3_1_8b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.0,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.28,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+            tis_importance_sampling_ratio_max=2.0,
+        ),
+        experiment_name_suffix="math-tis-r1-iwucs-tis2-ceh0.28-kl0-2-mg0.5-lr5e-8",
+        train_batch_size=128,
+        per_device_parallelism=4,
+        learning_rate=5e-8,
+        max_output_tokens=4096,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
+    qwen3_8b_length_penalty_async_clip_higher = ExperimentConfig(
+        model_config=qwen3_8b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.0,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.28,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+            tis_importance_sampling_ratio_max=2.0,
+        ),
+        experiment_name_suffix="math-tis-r1-b128-iwucs-tis2-ceh0.28-kl0-2-mg0.5",
+        train_batch_size=128,
+        per_device_parallelism=4,
+        max_output_tokens=4096,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
+    llama_8b_length_penalty_async_clip_higher_dapo = ExperimentConfig(
+        model_config=llama_3_1_8b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.0,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.28,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+            tis_importance_sampling_ratio_max=2.0,
+        ),
+        experiment_name_suffix="math-tis-iwucs-tis2-ceh0.28-kl0-2-mg0.5-lr5e-8-d",
+        train_batch_size=128,
+        per_device_parallelism=4,
+        learning_rate=5e-8,
+        max_output_tokens=4096,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
     experiment_configs = [
         # length_penalty,
-        max_length_8192_exp,
+        # max_length_8192_exp,
+        # llama_8b_length_penalty_exp,
+        # qwen3_1_7b_inflight_weight_updates_exp,
+        # small_length,
+        # small_length_iwu,
+        # small_length_iwu_with_correction,
+        # small_length_iwu_with_correction_synchronous,
+        # llama_8b_length_penalty_async,
+        # llama_8b_length_penalty_async_kl0,
+        # llama_8b_length_penalty_async_kl0_1,
+        # llama_8b_length_penalty_async_kl0_1_no_length_penalty,
+        llama_8b_length_penalty_async_clip_higher_dapo,
+        # qwen3_8b_length_penalty_async_clip_higher,
         # ExperimentConfig(
         #     # model_config=llama_3_1_8b,
         #     # model_config=llama1b,
@@ -501,9 +808,16 @@ def main():
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     for experiment_config in experiment_configs:
         model_base_name = experiment_config.model_config.name.split("/")[-1].lower()
+        model_base_name = model_base_name.replace("-instruct", "i")
+
+        if experiment_config.debug_mode:
+            name = f"{model_base_name}-{experiment_config.experiment_name_suffix}-{datestamp}"
+        else:
+            name = f"{model_base_name}-{experiment_config.experiment_name_suffix}"
+            
         experiments.append(
             rl_train(
-                name=f"{model_base_name}-{experiment_config.experiment_name_suffix}-{datestamp}",
+                name=name,
                 experiment_config=experiment_config,
             ),
         )

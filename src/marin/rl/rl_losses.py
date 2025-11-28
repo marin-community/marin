@@ -61,10 +61,22 @@ def compute_metadata_metrics(
     ) / jnp.sum(loss_masks_array, axis=1)
     mean_ratio_difference = jnp.mean(mean_ratio_difference)
 
-    policy_entropy = -jnp.sum(
-        jnp.exp(policy_logprobs_array) * policy_logprobs_array * loss_masks_array, axis=1
-    ) / jnp.sum(loss_masks_array, axis=1)
-    policy_entropy = jnp.mean(policy_entropy)
+    flattened_current_logprobs = current_logprobs.reshape(-1)
+    flattened_policy_logprobs = policy_logprobs_array.reshape(-1)
+    flattened_loss_masks = loss_masks_array.reshape(-1)
+
+    policy_entropy = -jnp.sum(flattened_policy_logprobs * flattened_loss_masks) / jnp.sum(flattened_loss_masks)
+    current_entropy = -jnp.sum(flattened_current_logprobs * flattened_loss_masks) / jnp.sum(flattened_loss_masks)
+
+    # policy_entropy = -jnp.sum(
+    #    policy_logprobs_array * loss_masks_array, axis=1 
+    # ) / jnp.sum(loss_masks_array, axis=1)
+    # policy_entropy = jnp.mean(policy_entropy)
+
+    # current_entropy = -jnp.sum(
+    #     current_logprobs * loss_masks_array, axis=1
+    # ) / jnp.sum(loss_masks_array, axis=1)
+    # current_entropy = jnp.mean(current_entropy)
 
     mean_advantages = jnp.sum(loss_weights_array * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
     mean_advantages = jnp.mean(mean_advantages)
@@ -72,6 +84,7 @@ def compute_metadata_metrics(
     return {
         "max_ratio_difference": jnp.max((jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array))) * loss_masks_array),
         "mean_ratio_difference": mean_ratio_difference,
+        "current_entropy": current_entropy,
         "max_advantages": jnp.max(loss_weights_array),
         "mean_advantages": mean_advantages,
         "policy_entropy": policy_entropy,
@@ -119,7 +132,8 @@ def compute_ppo_loss_objective(
     loss_weights: jax.Array,
     loss_masks: jax.Array,
     *,
-    clip_epsilon: float,
+    clip_epsilon_low: float,
+    clip_epsilon_high: float,
     max_output_tokens: int,
     trainer_inference_importance_sampling_ratio: jax.Array | None = None,
     response_truncated_array: jax.Array | None = None,  # [batch]
@@ -127,7 +141,7 @@ def compute_ppo_loss_objective(
     """Compute PPO loss objective."""
     non_clipped_objective = importance_sampling_ratio * loss_weights * loss_masks
     clipped_objective = (
-        jnp.clip(importance_sampling_ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon) * loss_weights * loss_masks
+        jnp.clip(importance_sampling_ratio, min=1.0 - clip_epsilon_low, max=1.0 + clip_epsilon_high) * loss_weights * loss_masks
     )
 
     loss_objective = jnp.minimum(non_clipped_objective, clipped_objective)
@@ -141,7 +155,10 @@ def compute_ppo_loss_objective(
         loss_objective = loss_objective * (1 - response_truncated_array.reshape(batch_size, 1))
 
     # Dr GRPO loss, token-level loss
-    loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / max_output_tokens)
+    # loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / max_output_tokens)
+
+    # more like DAPO loss
+    loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
 
     metadata = {
         "loss_max_over_batch": -jnp.max(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)),
@@ -226,7 +243,9 @@ def rloo_loss_with_importance_sampling(
     *,
     key: jax.Array | None,
     kl_coef: float,
-    clip_epsilon: float,
+    clip_epsilon_low: float,
+    clip_epsilon_high: float,
+    tis_importance_sampling_ratio_max: float,
     do_trainer_inference_mismatch_importance_sampling: bool = False,
     synchronous: bool = False,
     do_overlong_filtering: bool = False,
@@ -238,7 +257,8 @@ def rloo_loss_with_importance_sampling(
         batch: dict containing rollout data with RLOO advantages
         key: JAX random key for dropout
         kl_coef: Coefficient for KL regularization
-        clip_epsilon: Clipping epsilon for importance sampling ratio
+        clip_epsilon_low: Lower clipping epsilon for importance sampling ratio
+        clip_epsilon_high: Upper clipping epsilon for importance sampling ratio
 
     Returns:
         Tuple of (loss, aux_metrics)
@@ -267,10 +287,10 @@ def rloo_loss_with_importance_sampling(
 
     # N.B. This should be enabled, but we seem to be training far enough
     # off of policy that we're not learning anything when we clip.
-    clipped_ratio = jnp.clip(ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon)
+    clipped_ratio = jnp.clip(ratio, min=1.0 - clip_epsilon_low, max=1.0 + clip_epsilon_high)
 
     # Compute fraction of ratios that were clipped
-    is_clipped = jnp.logical_or(ratio > 1.0 + clip_epsilon, ratio < 1.0 - clip_epsilon)
+    is_clipped = jnp.logical_or(ratio > 1.0 + clip_epsilon_high, ratio < 1.0 - clip_epsilon_low)
     clip_fraction = jnp.mean(jnp.sum(is_clipped * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1))
 
     if do_trainer_inference_mismatch_importance_sampling:
@@ -281,8 +301,8 @@ def rloo_loss_with_importance_sampling(
             stop_current_logprob_gradient=True,
             stop_policy_logprob_gradient=True,
         )
-        trainer_inference_importance_sampling_ratio = jnp.clip(
-            trainer_inference_importance_sampling_ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon
+        trainer_inference_importance_sampling_ratio = jnp.minimum(
+            trainer_inference_importance_sampling_ratio, tis_importance_sampling_ratio_max
         )
     else:
         trainer_inference_importance_sampling_ratio = jnp.ones_like(current_logprobs)
@@ -291,7 +311,8 @@ def rloo_loss_with_importance_sampling(
         importance_sampling_ratio=ratio,
         loss_weights=loss_weights_array,
         loss_masks=loss_masks_array,
-        clip_epsilon=clip_epsilon,
+        clip_epsilon_low=clip_epsilon_low,
+        clip_epsilon_high=clip_epsilon_high,
         max_output_tokens=batch.max_output_tokens,
         trainer_inference_importance_sampling_ratio=trainer_inference_importance_sampling_ratio,
         response_truncated_array=batch.truncated if do_overlong_filtering else None,
@@ -309,7 +330,8 @@ def rloo_loss_with_importance_sampling(
         kl_penalty = jnp.exp(reference_logprobs - current_logprobs) - (reference_logprobs - current_logprobs) - 1
         # https://github.com/openai/lm-human-preferences/blob/cbfd210bb8b08f6bc5c26878c10984b90f516c66/lm_human_preferences/train_policy.py#L151
         # kl_penalty = jnp.abs(log_ratio)
-        kl_loss = kl_coef * jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
+        kl_loss = jnp.mean(jnp.sum(kl_penalty * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1))
+        kl_loss = kl_coef * kl_loss
     else:
         kl_penalty = 0
         kl_loss = 0
@@ -379,7 +401,9 @@ class RLOOLoss(RLLossModule):
     """RLOO loss with importance sampling."""
 
     kl_coef: float = 0.1
-    clip_epsilon: float = 0.2
+    clip_epsilon_low: float = 0.2
+    clip_epsilon_high: float = 0.2
+    tis_importance_sampling_ratio_max: float = 2.0
     synchronous: bool = False
     do_trainer_inference_mismatch_importance_sampling: bool = False
     do_overlong_filtering: bool = False
@@ -402,7 +426,9 @@ class RLOOLoss(RLLossModule):
                 batch,
                 key=key,
                 kl_coef=self.kl_coef,
-                clip_epsilon=self.clip_epsilon,
+                clip_epsilon_low=self.clip_epsilon_low,
+                clip_epsilon_high=self.clip_epsilon_high,
+                tis_importance_sampling_ratio_max=self.tis_importance_sampling_ratio_max,
                 synchronous=self.synchronous,
                 do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
                 do_overlong_filtering=self.do_overlong_filtering,
@@ -432,8 +458,12 @@ class GRPOLoss(RLOOLoss):
                 batch,
                 key=key,
                 kl_coef=self.kl_coef,
-                clip_epsilon=self.clip_epsilon,
-                divide_by_entire_length=self.divide_by_entire_length,
+                clip_epsilon_low=self.clip_epsilon_low,
+                clip_epsilon_high=self.clip_epsilon_high,
+                tis_importance_sampling_ratio_max=self.tis_importance_sampling_ratio_max,
+                synchronous=self.synchronous,
+                do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
+                do_overlong_filtering=self.do_overlong_filtering,
             )
 
         return loss_fn

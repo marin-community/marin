@@ -27,6 +27,7 @@ from dataclasses import dataclass
 import equinox as eqx
 import haliax.haxtyping as ht
 import jax
+import numpy as np
 from haliax import NamedArray
 
 
@@ -62,16 +63,16 @@ class Rollout(eqx.Module):
     env_example_id: str
     """An identifier for the example used to initialize the environment."""
 
-    prompt_tokens: jax.Array
+    prompt_tokens: np.ndarray
     """Array of (prompt_length,) token IDs representing the input prompt."""
 
-    response_tokens: jax.Array
+    response_tokens: np.ndarray
     """Array of (response_length,) token IDs representing the generated response."""
 
-    response_logprobs: jax.Array
+    response_logprobs: np.ndarray
     """Array of (response_length,) log probabilities for each generated token."""
 
-    token_rewards: jax.Array
+    token_rewards: np.ndarray
     """The reward assigned to each generated token."""
 
     episode_reward: float

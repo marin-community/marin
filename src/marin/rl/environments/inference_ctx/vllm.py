@@ -19,6 +19,7 @@ import re
 import jax
 import jax.numpy as jnp
 import numpy as np
+from enum import StrEnum
 from dataclasses import dataclass
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
@@ -27,14 +28,18 @@ from openai.types.completion_usage import CompletionUsage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
 from haliax.partitioning import ResourceAxis
 from levanter.models.lm_model import LmHeadModel
-from marin.rl.weight_utils import levanter_to_nnx_state
+from transformers import AutoTokenizer
+from marin.rl.weight_utils import levanter_to_nnx_state, levanter_state_dict_to_nnx_state_on_cpu
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
+from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 
 logger = logging.getLogger(__name__)
 
 try:
     from vllm import LLM, SamplingParams
     from vllm.outputs import RequestOutput
+    from vllm.sampling_params import RequestOutputKind
 except ImportError:
     logger.warning("vLLM is not installed, so we will not be able to use vLLM inference context.")
     LLM = None
@@ -48,6 +53,10 @@ os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 os.environ["JAX_RANDOM_WEIGHTS"] = "True"
 
 
+class InferenceMode(StrEnum):
+    SYNC = "sync"
+    ASYNC = "async"
+
 @dataclass
 class vLLMInferenceContextConfig:
     """Configuration for vLLM engine and sampling parameters."""
@@ -57,94 +66,7 @@ class vLLMInferenceContextConfig:
     tensor_parallel_size: int
     gpu_memory_utilization: float
     sampling_params: SamplingParams
-
-
-def levanter_llama_to_vllm_mapping():
-    return {
-        "lm_head": ("model.lm_head", (None, "model")),
-        "model.embed_tokens": (
-            "model.embed.embedding",
-            ("model", None),
-        ),
-        "model.layers.*.input_layernorm": (
-            "model.layers.*.input_layernorm.scale",
-            (None,),
-        ),
-        "model.layers.*.mlp.down_proj": (
-            "model.layers.*.mlp.down_proj.kernel",
-            ("model", None),
-        ),
-        "model.layers.*.mlp.gate_proj": (
-            "model.layers.*.mlp.gate_proj.kernel",
-            (None, "model"),
-        ),
-        "model.layers.*.mlp.up_proj": (
-            "model.layers.*.mlp.up_proj.kernel",
-            (None, "model"),
-        ),
-        "model.layers.*.post_attention_layernorm": (
-            "model.layers.*.post_attention_layernorm.scale",
-            (None,),
-        ),
-        "model.layers.*.self_attn.k_proj": (
-            "model.layers.*.self_attn.k_proj.kernel",
-            (None, "model", None),
-        ),
-        "model.layers.*.self_attn.o_proj": (
-            "model.layers.*.self_attn.o_proj.kernel",
-            ("model", None, None),
-        ),
-        "model.layers.*.self_attn.q_proj": (
-            "model.layers.*.self_attn.q_proj.kernel",
-            (None, "model", None),
-        ),
-        "model.layers.*.self_attn.v_proj": (
-            "model.layers.*.self_attn.v_proj.kernel",
-            (None, "model", None),
-        ),
-        "model.norm": ("model.norm.scale", (None,)),
-    }
-
-
-def levanter_qwen_to_vllm_mapping():
-    mapping = levanter_llama_to_vllm_mapping()
-    mapping.update(
-        {
-            "model.layers.*.self_attn.q_norm": ("model.layers.*.self_attn.q_norm.scale", (None,)),
-            "model.layers.*.self_attn.k_norm": ("model.layers.*.self_attn.k_norm.scale", (None,)),
-        }
-    )
-    return mapping
-
-
-llama_transpose_keys = {
-    "lm_head": (1, 0),
-    "gate_proj": (1, 0),
-    "up_proj": (1, 0),
-    "down_proj": (1, 0),
-    "q_proj": (2, 0, 1),
-    "k_proj": (2, 0, 1),
-    "v_proj": (2, 0, 1),
-    "o_proj": (1, 2, 0),
-}
-
-MODEL_MAPPINGS: dict[str, dict[str, tuple[str, tuple[str, ...]]]] = {
-    "meta-llama/Llama-3.2-1B-Instruct": levanter_llama_to_vllm_mapping(),
-    "meta-llama/Llama-3.2-3B-Instruct": levanter_llama_to_vllm_mapping(),
-    "Qwen/Qwen3-0.6B": levanter_qwen_to_vllm_mapping(),
-    "Qwen/Qwen3-1.7B": levanter_qwen_to_vllm_mapping(),
-    "meta-llama/Llama-3.1-8B-Instruct": levanter_llama_to_vllm_mapping(),
-    "Qwen/Qwen3-8B": levanter_qwen_to_vllm_mapping(),
-}
-
-MODEL_TRANSPOSE_KEYS: dict[str, tuple[int, ...]] = {
-    "meta-llama/Llama-3.2-1B-Instruct": llama_transpose_keys,
-    "meta-llama/Llama-3.2-3B-Instruct": llama_transpose_keys,
-    "Qwen/Qwen3-0.6B": llama_transpose_keys,
-    "Qwen/Qwen3-1.7B": llama_transpose_keys,
-    "meta-llama/Llama-3.1-8B-Instruct": llama_transpose_keys,
-    "Qwen/Qwen3-8B": llama_transpose_keys,
-}
+    mode: InferenceMode = InferenceMode.SYNC
 
 
 class vLLMInferenceContext(BaseInferenceContext):
@@ -154,23 +76,38 @@ class vLLMInferenceContext(BaseInferenceContext):
         self,
         inference_config: vLLMInferenceContextConfig,
     ):
-        self.llm = LLM(
+        self.llm = self._get_llm_engine(inference_config)
+        # Mesh for the weight transfer client should be on the CPU and then
+        # in sync_weights function, we will reshard to the TPU
+        # self.mesh = jax.make_mesh(
+        #     (1, 1, 1),
+        #     (ResourceAxis.DATA, ResourceAxis.REPLICA, ResourceAxis.MODEL),
+        #     devices=jax.local_devices(backend="cpu")[:1],
+        # )
+        self.mesh = None
+        self.axis_mapping = {}
+        self.tokenizer = AutoTokenizer.from_pretrained(inference_config.model_name)
+        self.model_name = inference_config.model_name
+        self.sampling_params = inference_config.sampling_params
+
+        if inference_config.mode == InferenceMode.ASYNC:
+            self.sampling_params.output_kind = RequestOutputKind.FINAL_ONLY
+
+    @staticmethod
+    def _get_llm_engine(inference_config: vLLMInferenceContextConfig):
+        if inference_config.mode == InferenceMode.SYNC:
+            llm_engine_cls = LLM
+        elif inference_config.mode == InferenceMode.ASYNC:
+            llm_engine_cls = SyncVLLMWrapper
+        else:
+            raise ValueError(f"Invalid inference mode: {inference_config.mode}")
+
+        return llm_engine_cls(
             model=inference_config.model_name,
             max_model_len=inference_config.max_model_len,
             tensor_parallel_size=inference_config.tensor_parallel_size,
             gpu_memory_utilization=inference_config.gpu_memory_utilization,
         )
-        # Mesh for the weight transfer client should be on the CPU and then
-        # in sync_weights function, we will reshard to the TPU
-        self.mesh = jax.make_mesh(
-            (1, 1, 1),
-            (ResourceAxis.DATA, ResourceAxis.REPLICA, ResourceAxis.MODEL),
-            devices=jax.local_devices(backend="cpu")[:1],
-        )
-        self.axis_mapping = {}
-        self.tokenizer = self.llm.get_tokenizer()
-        self.model_name = inference_config.model_name
-        self.sampling_params = inference_config.sampling_params
 
     def _convert_vllm_state_dict_to_trainer_keys(
         self, state_dict_trainer: dict, state_dict_vllm: dict, mapping: dict
@@ -302,8 +239,9 @@ class vLLMInferenceContext(BaseInferenceContext):
             usage=usage,
         )
 
-    def reload_model(self, model: LmHeadModel) -> None:
-        nnx_state = levanter_to_nnx_state(model)
+    def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> None:
+        # TODO(chris): levanter to vllm state dict
+        nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
         self.llm.llm_engine.model_executor.driver_worker.sync_weights(
             nnx_state,
             mappings=MODEL_MAPPINGS[self.model_name],
@@ -314,6 +252,9 @@ class vLLMInferenceContext(BaseInferenceContext):
         self.llm.llm_engine.reset_prefix_cache()  # Reset prefix cache because of new weights
 
     def start_server(self, model: LmHeadModel) -> None:
+        pass
+
+    def shutdown(self):
         pass
 
     def batch_completions(
@@ -334,6 +275,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             stop=stop or self.sampling_params.stop,
             logprobs=1,
             include_stop_str_in_output=self.sampling_params.include_stop_str_in_output,
+            output_kind=self.sampling_params.output_kind,
         )
 
         if system_prompt:

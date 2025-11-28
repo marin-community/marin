@@ -26,6 +26,7 @@ import datasets
 import jax
 import numpy as np
 
+
 from marin.rl.math_utils import (
     grade_answer,
     last_boxed_only_string,
@@ -35,7 +36,7 @@ from marin.rl.math_utils import (
 )
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import Rollout, RolloutGroup
-from .base import MarinEnv
+from .base import MarinEnv, extract_seed
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +224,7 @@ class MathEnv(MarinEnv):
             raise ValueError(f"No examples available for mode '{mode}'")
 
         n_to_sample = min(n_examples, len(available_examples))
-        seed = jax.random.randint(prng_key, (), 0, 1_000_000).item()
+        seed = extract_seed(prng_key)
         rng = np.random.default_rng(seed)
         indices = rng.choice(len(available_examples), size=n_to_sample, replace=False)
         sampled_examples = [available_examples[int(idx)] for idx in indices]
@@ -332,13 +333,20 @@ class MathEnv(MarinEnv):
         if self.reward_config.length_penalty_config is None:
             length_penalty = 0.0
         else:
-            if len(response_text_tokens) <= self.reward_config.length_penalty_config.cache_response_tokens:
+            l_cache = self.reward_config.length_penalty_config.cache_response_tokens
+            l_max = self.reward_config.length_penalty_config.max_response_tokens
+
+            
+            if len(response_text_tokens) <= l_max - l_cache:
                 length_penalty = 0.0
-            elif len(response_text_tokens) <= self.reward_config.length_penalty_config.max_response_tokens:
-                length_difference = len(response_text_tokens) - self.reward_config.length_penalty_config.cache_response_tokens
-                length_penalty = length_difference / (self.reward_config.length_penalty_config.max_response_tokens - self.reward_config.length_penalty_config.cache_response_tokens)
+            elif len(response_text_tokens) <= l_max:
+                length_difference =  (l_max - l_cache) - len(response_text_tokens)
+                length_penalty = length_difference / l_cache
             else:
                 length_penalty = -1.0
+
+        if float(grade) == 0.0:
+            grade = -1.0
 
         reward = self.reward_config.format_reward_coef * float(validation["is_valid"]) + self.reward_config.correctness_reward_coef * float(grade) + self.reward_config.length_penalty_coef * length_penalty
 

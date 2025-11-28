@@ -14,6 +14,7 @@
 
 from .levanter import LevanterInferenceContext, LevanterInferenceContextConfig
 from .vllm import vLLMInferenceContext, vLLMInferenceContextConfig, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from .async_vllm import AsyncvLLMInferenceContext
 
 __all__ = [
     "MODEL_MAPPINGS",
@@ -22,4 +23,5 @@ __all__ = [
     "LevanterInferenceContextConfig",
     "vLLMInferenceContext",
     "vLLMInferenceContextConfig",
+    "AsyncvLLMInferenceContext",
 ]

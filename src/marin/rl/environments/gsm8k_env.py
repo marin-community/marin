@@ -25,10 +25,12 @@ import datasets
 import jax
 import numpy as np
 
+from marin.rl.environments.base import extract_seed
+
 from marin.rl.math_utils import grade_answer, normalize_answer, validate_format
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import Rollout, RolloutGroup
-from .base import MarinEnv
+from .base import MarinEnv, extract_seed
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +204,7 @@ class GSM8KEnv(MarinEnv):
             raise ValueError(f"No examples available for mode '{mode}'")
 
         n_to_sample = min(n_examples, len(available_examples))
-        seed = jax.random.randint(prng_key, (), 0, 1_000_000).item()
+        seed = extract_seed(prng_key)
         rng = np.random.default_rng(seed)
         indices = rng.choice(len(available_examples), size=n_to_sample, replace=False)
         sampled_examples = [available_examples[int(idx)] for idx in indices]

@@ -60,7 +60,7 @@ class WeightTransferClientMetrics:
 class WeightUpdate:
     """Result of receiving weights from a weight transfer server."""
 
-    model: PyTree
+    state_dict: dict
     weight_id: int
 
 
