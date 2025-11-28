@@ -36,7 +36,6 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
-from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
@@ -52,12 +51,12 @@ from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
+    VersionedValue,
     ensure_versioned,
     get_executor_step,
     this_output_path,
@@ -124,9 +123,9 @@ def default_tokenize(
     name: str,
     dataset: InputName | ExecutorStep | str | HfDatasetSpec,
     tokenizer: str,
-    options: CacheOptions | None = None,
     format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
     *,
+    sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
 ) -> ExecutorStep:
     """
@@ -140,11 +139,11 @@ def default_tokenize(
             dataset with a particular subset name.
         tokenizer: string HuggingFace tokenizer name. Should be the same as you intend to use in the tokenizer
             spec for the training run.
-        options: CacheOptions to use for tokenization. You typically don't need to set this.
         format: The format of the dataset. This is used to determine how to tokenize the data.
 
             See [Levanter's documentation](https://levanter.readthedocs.io/en/latest/reference/Data-Formats/)
             for more details.
+        sample_count: Optional limit on the number of samples to tokenize per shard. If ``None``, tokenize everything.
         is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
     Returns:
         An ExecutorStep that represents the tokenized dataset.
@@ -158,6 +157,7 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
+            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
     elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
         config = HfTokenizeConfig(
@@ -165,6 +165,7 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
+            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
     else:
         config = TokenizeConfig(
@@ -173,10 +174,8 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
+            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
-
-    if options is not None:
-        config = dataclasses.replace(config, cache_options=options)
 
     return ExecutorStep(
         name=os.path.join("tokenized", name),
@@ -346,6 +345,9 @@ def default_train(
             quantization=QuantizationConfig(int8=train_config.int8) if train_config.int8 else None,
             initialize_from=None if train_config.reset_data_loader_on_init else checkpoint_path_to_load_from,
             watch=train_config.watch,
+            profiler=train_config.profiler,
+            profiler_start_step=train_config.profiler_start_step,
+            profiler_num_steps=train_config.profiler_num_steps,
             axis_resources={
                 # Special axes for MoEs
                 "token": (ResourceAxis.REPLICA, ResourceAxis.DATA),
@@ -401,10 +403,12 @@ def default_train(
         output_path=this_output_path(),
     )
 
+    model_config = unwrap_versioned_value(model_config)
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
-            f"Train a {compute_num_parameters(model_config, vocab_size) :,} parameter model for "
+            f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
             f"{model_config.seq_len} (seq_len) "

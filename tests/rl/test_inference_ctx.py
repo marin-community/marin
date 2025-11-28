@@ -23,7 +23,11 @@ from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from transformers import AutoTokenizer
 
+<<<<<<< HEAD
 from marin.rl.environments.inference_ctx import LevanterInferenceContext
+=======
+from marin.rl.environments.inference_ctx import LevanterInferenceContext, LevanterInferenceContextConfig
+>>>>>>> main
 
 
 @dataclass
@@ -65,7 +69,18 @@ def dummy_server():
 @pytest.fixture
 def inference_ctx(mistral_tokenizer, dummy_server):
     return LevanterInferenceContext(
+<<<<<<< HEAD
         tokenizer=mistral_tokenizer, stop_tokens=None, inference_server=dummy_server, max_tokens=100
+=======
+        LevanterInferenceContextConfig(
+            inference_server_config=None,
+            tokenizer=mistral_tokenizer,
+            stop_tokens=None,
+            max_tokens=100,
+            mesh=None,
+            axis_mapping={},
+        )
+>>>>>>> main
     )
 
 
@@ -142,7 +157,18 @@ def test_tokenize_prompt_adds_special_tokens(inference_ctx, mistral_tokenizer):
 def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     """Test fallback when tokenizer has no chat template."""
     ctx = LevanterInferenceContext(
+<<<<<<< HEAD
         tokenizer=gpt2_tokenizer, stop_tokens=None, inference_server=dummy_server, max_tokens=100
+=======
+        LevanterInferenceContextConfig(
+            inference_server_config=None,
+            tokenizer=gpt2_tokenizer,
+            stop_tokens=None,
+            max_tokens=100,
+            mesh=None,
+            axis_mapping={},
+        )
+>>>>>>> main
     )
 
     prompt = "Test prompt"

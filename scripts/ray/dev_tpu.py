@@ -39,7 +39,6 @@ Usage:
 
 """
 
-
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -65,7 +64,7 @@ import yaml
 import ray.cloudpickle as cloudpickle
 
 import marin.utils
-from marin.cluster import ray as ray_utils
+from fray.cluster import ray as ray_utils
 from marin.cluster.config import RayClusterConfig, find_config_by_region
 from marin.utils import _hacky_remove_tpu_lockfile
 
@@ -129,7 +128,7 @@ def build_env_dict(extra_env: list[str] | None = None, forward_all: bool = False
             try:
                 config_yaml = yaml.safe_load(open(config_file).read())
             except Exception as e:
-                raise RuntimeError(f"Failed to load config from environment")
+                raise RuntimeError("Failed to load config from environment") from e
 
             for key, value in config_yaml.get("env", {}).items():
                 env_dict[key] = str(value)
@@ -458,7 +457,7 @@ def hold_tpu_allocation(
     """
     logger.info(f"{tpu_name}: Beginning TPU allocation")
 
-    from marin.cluster.ray import DashboardConfig
+    from fray.cluster.ray import DashboardConfig
 
     with ray_utils.ray_dashboard(DashboardConfig.from_cluster(config_file, ray_init=True)):
         try:

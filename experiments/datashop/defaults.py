@@ -27,7 +27,7 @@ from experiments.datashop.default_configs import (
     default_quality_filter_train_config_kwargs,
     default_text_generation_config_kwargs,
 )
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.defaults import default_anneal, default_tokenize
 from experiments.evals.resource_configs import ResourceConfig
 from experiments.llama import llama3_tokenizer

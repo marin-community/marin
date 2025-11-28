@@ -12,18 +12,44 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 
 import pytest
 
-from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from experiments.evals.task_configs import EvalTaskConfig
 from marin.evaluation.evaluation_config import EvaluationConfig
+from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.run import evaluate
 
 
-@pytest.mark.gcp
-@pytest.mark.skipif(os.getenv("TPU_CI") != "true", reason="Skip this test if not running with a TPU in CI.")
+@pytest.fixture
+def model_config():
+    config = ModelConfig(
+        name="test-llama-200m",
+        path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",
+        engine_kwargs={"enforce_eager": True, "max_model_len": 1024},
+        generation_params={"max_tokens": 16},
+    )
+    yield config
+    config.destroy()
+
+
+@pytest.mark.tpu_ci
+def test_lm_eval_harness_levanter(current_date_time, ray_tpu_cluster, model_config):
+    mmlu_config = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
+    config = EvaluationConfig(
+        evaluator="levanter_lm_evaluation_harness",
+        model_name=model_config.name,
+        model_path=model_config.path,
+        evaluation_path=f"gs://marin-us-east5/evaluation/lm_eval/{model_config.name}-{current_date_time}",
+        evals=[mmlu_config],
+        max_eval_instances=5,
+        launch_with_ray=True,
+        engine_kwargs=model_config.engine_kwargs,
+    )
+    evaluate(config=config)
+
+
+@pytest.mark.tpu_ci
 def test_lm_eval_harness(current_date_time, ray_tpu_cluster, model_config):
     gsm8k_config = EvalTaskConfig(name="gsm8k_cot", num_fewshot=8)
     config = EvaluationConfig(
@@ -35,6 +61,27 @@ def test_lm_eval_harness(current_date_time, ray_tpu_cluster, model_config):
         max_eval_instances=1,
         launch_with_ray=True,
         engine_kwargs=model_config.engine_kwargs,
-        resource_config=SINGLE_TPU_V6E_8,
+    )
+    evaluate(config=config)
+
+
+@pytest.mark.tpu_ci
+def test_alpaca_eval(current_date_time, ray_tpu_cluster, model_config):
+    config = EvaluationConfig(
+        evaluator="alpaca",
+        model_name=model_config.name,
+        model_path=model_config.path,
+        evaluation_path=f"gs://marin-us-east5/evaluation/alpaca_eval/{model_config.name}-{current_date_time}",
+        max_eval_instances=1,
+        launch_with_ray=True,
+        engine_kwargs={
+            "temperature": 0.7,
+            "presence_penalty": 0.0,
+            "frequency_penalty": 0.0,
+            "repetition_penalty": 1.0,
+            "top_p": 1.0,
+            "top_k": -1,
+            **model_config.engine_kwargs,
+        },
     )
     evaluate(config=config)

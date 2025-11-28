@@ -1,16 +1,16 @@
-.PHONY: help clean check autoformat cluster_docker cluster_docker_build cluster_docker_push
+.PHONY: help clean check fix cluster_docker cluster_docker_build cluster_docker_push setup_pre_commit
 .DEFAULT: help
 
-# Help, clean, check and autoformat targets remain unchanged
+
 help:
 	@echo "make clean"
 	@echo "    Remove all temporary pyc/pycache files"
 	@echo "make check"
 	@echo "    Run code style and linting (black, ruff) *without* changing files!"
-	@echo "make autoformat"
-	@echo "    Run code styling (black, ruff) and update in place - committing with pre-commit also does this."
+	@echo "make fix"
+	@echo "    Run infra/pre-commit.py --fix on your modified files and re-stage them."
 	@echo "make lint"
-	@echo "    Run linter including changing files"
+	@echo "    Run infra/pre-commit.py --all-files (no auto-fixing)."
 	@echo "make test"
 	@echo "    Run all tests"
 	@echo "make init"
@@ -19,7 +19,6 @@ help:
 init:
 	conda install -c conda-forge pandoc
 	npm install -g pandiff
-	pre-commit install
 	uv sync
 	huggingface-cli login
 
@@ -28,16 +27,18 @@ clean:
 	find . -name "__pycache__" | xargs rm -rf
 
 check:
-	ruff check --output-format concise .
-	black --check .
-	mypy .
+	uv run python infra/pre-commit.py
 
-autoformat:
-	ruff check --fix --show-fixes .
-	black .
+fix:
+	@FILES=$$(git diff --name-only HEAD); \
+	if [ -n "$$FILES" ]; then \
+		uv run python infra/pre-commit.py --fix $$FILES && git add $$FILES; \
+	else \
+		echo "No modified files to fix"; \
+	fi
 
 lint:
-	pre-commit run --all-files
+	uv run python infra/pre-commit.py --all-files
 
 test:
 	export HUGGING_FACE_HUB_TOKEN=$HF_TOKEN
@@ -70,9 +71,9 @@ cluster_docker_build:
 
 cluster_tag:
 	@if [ "$$(uname)" = "Darwin" ]; then \
-		sed -i '' -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py; \
+		sed -i '' -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" lib/marin/src/marin/cluster/config.py; \
 	else \
-		sed -i -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" src/marin/cluster/config.py; \
+		sed -i -e "s/LATEST = \".*\"/LATEST = \"$(TAG_DATE)\"/" lib/marin/src/marin/cluster/config.py; \
 	fi
 
 # Target to push the tagged Docker images to their respective Artifact Registries
@@ -113,13 +114,54 @@ configure_gcp_registry_all:
 
 
 # stuff for setting up locally
+install_uv:
+	@if ! command -v uv > /dev/null 2>&1; then \
+		echo "Installing uv..."; \
+		curl -LsSf https://astral.sh/uv/install.sh | sh; \
+		echo "uv installed. Please restart your shell or run: source ~/.cargo/env"; \
+	else \
+		echo "uv is already installed."; \
+	fi
+
+install_gcloud:
+	@if ! command -v gcloud > /dev/null 2>&1; then \
+		echo "Installing gcloud CLI..."; \
+		mkdir -p ~/.local; \
+		if [ "$$(uname)" = "Darwin" ]; then \
+			if [ "$$(uname -m)" = "arm64" ]; then \
+				GCLOUD_ARCHIVE="google-cloud-cli-darwin-arm.tar.gz"; \
+			else \
+				GCLOUD_ARCHIVE="google-cloud-cli-darwin-x86_64.tar.gz"; \
+			fi; \
+		else \
+			GCLOUD_ARCHIVE="google-cloud-cli-linux-x86_64.tar.gz"; \
+		fi; \
+		cd ~/.local && \
+		curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/$$GCLOUD_ARCHIVE && \
+		tar -xzf $$GCLOUD_ARCHIVE && \
+		rm $$GCLOUD_ARCHIVE && \
+		./google-cloud-sdk/install.sh --quiet --usage-reporting=false --path-update=true --command-completion=true && \
+		echo "gcloud installed. Please restart your shell or run: source ~/.zshrc (or ~/.bashrc)"; \
+	else \
+		echo "gcloud is already installed."; \
+	fi
+
+	gcloud config set project hai-gcp-models
+
 
 # get secret ssh key from gcp secrets
-get_secret_key:
+get_secret_key: install_gcloud
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PRIVATE_KEY > ~/.ssh/marin_ray_cluster.pem && \
 	chmod 600 ~/.ssh/marin_ray_cluster.pem
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
 
-dev_setup: get_secret_key
-	echo "Dev setup complete."
+setup_pre_commit:
+	@HOOK_PATH=.git/hooks/pre-commit; \
+	mkdir -p .git/hooks; \
+	printf '%s\n' '#!/bin/sh' 'set -e' 'REPO_ROOT="$$(git rev-parse --show-toplevel)"' 'cd "$$REPO_ROOT"' 'uv run python infra/pre-commit.py --fix' > $$HOOK_PATH; \
+	chmod +x $$HOOK_PATH; \
+	echo "Installed git pre-commit hook -> $$HOOK_PATH"
+
+dev_setup: install_uv install_gcloud get_secret_key setup_pre_commit
+	@echo "Dev setup complete."

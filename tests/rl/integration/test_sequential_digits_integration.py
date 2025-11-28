@@ -16,17 +16,16 @@
 
 import logging
 import os
-import time
 import uuid
 
 import numpy as np
 import pytest
-
 from marin.rl.curriculum import CurriculumConfig, LessonConfig, SamplingParams
 from marin.rl.environments import EnvConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
+
 from tests.rl.integration.config import (
     DummyTokenizer,
     RolloutBatchFeeder,
@@ -182,12 +181,12 @@ def test_full_integration_sequential_digits(ray_tpu_cluster, tmp_path):
     with training_runner, inference_runner:
         training_runner.wait_for_result()
 
-    assert inference_runner.rollouts_generated >= 5, (
-        f"Expected at least 5 rollouts, got {inference_runner.rollouts_generated}"
-    )
-    assert training_runner.steps_completed >= 2, (
-        f"Expected at least 2 training steps, got {training_runner.steps_completed}"
-    )
+    assert (
+        inference_runner.rollouts_generated >= 5
+    ), f"Expected at least 5 rollouts, got {inference_runner.rollouts_generated}"
+    assert (
+        training_runner.steps_completed >= 2
+    ), f"Expected at least 2 training steps, got {training_runner.steps_completed}"
 
     assert inference_runner.weight_transfers >= 1, "Should have at least one weight transfer during long run"
 

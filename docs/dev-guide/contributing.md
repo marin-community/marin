@@ -5,15 +5,21 @@
 1. Clone the repository
 2. Create and activate a virtual environment
 3. Install dependencies
-4. Set up pre-commit hooks
+4. Set up the Git hook that runs `infra/pre-commit.py`
 
 ```bash
 git clone https://github.com/marin-community/marin.git
 cd marin
 uv venv --python 3.11
 source .venv/bin/activate
-uv sync --group dev
-pre-commit install
+uv sync --package marin --group dev
+cat <<'EOF' > .git/hooks/pre-commit
+#!/bin/sh
+set -e
+cd "$(git rev-parse --show-toplevel)"
+uv run python infra/pre-commit.py --fix
+EOF
+chmod +x .git/hooks/pre-commit
 ```
 
 Alternatively, you can install all the core dependencies and build `marin` as a Python
@@ -21,8 +27,8 @@ package with `make init`.
 
 ### Linting
 
-Pre-commit hooks will run automatically lint your code when you commit (assuming you have run `pre-commit install`).
-You can also run them manually with `make lint`.
+The Git hook configured above runs `uv run python infra/pre-commit.py` before each commit so that the repo-standard lint/format checks pass.
+You can also run them manually with `uv run python infra/pre-commit.py --all-files` or via `make lint`.
 
 ### Testing
 

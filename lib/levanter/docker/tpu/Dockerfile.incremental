@@ -1,0 +1,16 @@
+ARG IMAGE=ghcr.io/marin-community/levanter-base
+ARG TAG=latest
+
+FROM ${IMAGE}:${TAG}
+
+ENV TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS=60\
+    TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES=1024\
+    RAY_USAGE_STATS_ENABLED=0\
+    PATH=/opt/levanter/.venv/bin:$PATH\
+    HOME=/home/levanter
+
+WORKDIR /opt/marin
+ADD . /opt/marin
+RUN uv sync --package levanter --extra serve --extra tpu
+
+WORKDIR /opt/marin/lib/levanter

@@ -172,7 +172,7 @@ class RolloutWorker:
 
 ### Phase 1: Create RolloutManager class skeleton
 
-Add new class to `src/marin/rl/rollout_worker.py` above `RolloutWorker`:
+Add new class to `lib/marin/src/marin/rl/rollout_worker.py` above `RolloutWorker`:
 
 ```python
 class RolloutManager:

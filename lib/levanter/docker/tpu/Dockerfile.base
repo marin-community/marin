@@ -1,0 +1,18 @@
+FROM python:3.11 AS build
+RUN apt-get update && apt-get install -y clang
+RUN pip install virtualenv
+
+# venv binaries encode their directory, so we need to setup the venv in the final location
+RUN pip install uv
+
+# Install package dependencies to make incremental builds faster, using the monorepo workspace.
+WORKDIR /opt/marin
+ADD . /opt/marin
+# Resolve only the Levanter package (with TPU/serve extras) to avoid pulling root-only deps like torch.
+RUN uv sync --package levanter --extra serve --extra tpu
+
+FROM python:3.11
+
+# reinstall uv
+RUN pip install uv
+COPY --from=build /opt/marin/.venv /opt/marin/.venv

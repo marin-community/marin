@@ -26,16 +26,19 @@ from dataclasses import dataclass
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import click
 import yaml
 
-from marin.cluster import gcp, monitoring, ray
+from fray.cluster.ray.dashboard import DashboardConfig, ray_dashboard
+from marin.cluster import gcp
 from marin.cluster.cleanup import cleanup_iteration, submit_cleanup_cron_job
 from marin.cluster.config import (
     RayClusterConfig,
@@ -44,22 +47,402 @@ from marin.cluster.config import (
     update_cluster_configs,
 )
 
+TPU_TYPE_TO_VM_IMAGE = {
+    "v5litepod": "v2-alpha-tpuv5-lite",
+    "v5p": "v2-alpha-tpuv5",
+    "v6e": "v2-alpha-tpuv6e",
+}
+
+
 logger = logging.getLogger(__name__)
 
 
-def check_cluster_head_running(config_path: str) -> bool:
+def _list_jobs(filters: list[str] | None = None) -> list[dict]:
+    """Fetch the list of jobs using the Ray CLI."""
+    cmd = ["ray", "list", "jobs", "--detail", "--format=json", "--limit=10000"]
+    for f in filters or []:
+        cmd.extend(["--filter", f])
+
+    result = subprocess.check_output(cmd, text=True, timeout=60)
+    try:
+        return json.loads(result)
+    except json.JSONDecodeError:
+        logger.warning(f"Failed to parse JSON output from ray list jobs: {result}")
+        return []
+
+
+def _submit_job(
+    entrypoint: str,
+    working_dir: str | None = None,
+    runtime_env: dict[str, Any] | None = None,
+    resources: dict[str, Any] | None = None,
+) -> str:
+    """Submit a job to Ray cluster and return job ID."""
+    cmd = ["ray", "job", "submit"]
+
+    if working_dir:
+        cmd.extend(["--working-dir", working_dir])
+
+    if runtime_env:
+        cmd.extend(["--runtime-env-json", json.dumps(runtime_env)])
+
+    if resources:
+        for resource, amount in resources.items():
+            cmd.extend([f"--{resource}", str(amount)])
+
+    cmd.extend(["--", entrypoint])
+
+    result = subprocess.check_output(cmd, text=True, timeout=500)
+    # Extract job ID from output (usually in format "Job submitted with ID: <id>")
+    output_lines = result.strip().split("\n")
+    for line in output_lines:
+        if "submitted with ID:" in line:
+            return line.split(":")[-1].strip()
+
+    # Fallback: return full output if we can't parse job ID
+    return result.strip()
+
+
+def _stop_job(job_id: str) -> None:
+    """Stop a running Ray job.
+
+    Note: This requires RAY_ADDRESS to be set, typically via ray_dashboard context manager.
+
+    Args:
+        job_id: The job ID or submission ID to stop
+    """
+    cmd = ["ray", "job", "stop", job_id]
+    subprocess.check_output(cmd, text=True, timeout=60)
+
+
+def _add_manual_worker(
+    config: RayClusterConfig,
+    tpu_type: str,
+    capacity_type: str = "preemptible",
+    tpu_name: str | None = None,
+    version: str | None = None,
+) -> None:
+    """Add a manual TPU worker to the cluster.
+
+    Args:
+        config: Cluster configuration
+        tpu_type: TPU type (e.g., v4-128, v5p-8)
+        capacity_type: Capacity type (reserved, preemptible, best_effort)
+        tpu_name: Custom TPU name (generated if None)
+        version: TPU VM image version (auto-detected if None)
+    """
+    from levanter.infra.cli_helpers import default_run_id
+    from levanter.infra.tpus import (
+        setup_vm_docker,
+        start_tpu_vm_queued_resources,
+    )
+
+    # Generate TPU name if not provided
+    if tpu_name is None:
+        tpu_name = f"ray-worker-manual-{default_run_id()}"
+
+    # Determine TPU generation and version
+    tpu_gen = tpu_type.split("-")[0]
+    if version is None:
+        version = TPU_TYPE_TO_VM_IMAGE.get(tpu_gen, "tpu-ubuntu2204-base")
+
+    logger.info(f"Creating TPU with name: {tpu_name}")
+    start_tpu_vm_queued_resources(
+        tpu_name=tpu_name,
+        tpu_type=tpu_type,
+        capacity_type=capacity_type,
+        version=version,
+        zone=config.zone,
+        node_count=1,
+    )
+
+    # Setup Docker
+    setup_vm_docker(
+        tpu_name=tpu_name,
+        zone=config.zone,
+        node_count=1,
+    )
+
+    # Setup worker entrypoint
+    logger.info(f"Setting up worker on TPU: {tpu_name}")
+    _initialize_manual_worker(config.config_file, tpu_name)
+
+
+def _initialize_manual_worker(config_file: str, tpu_name: str) -> None:
+    """Setup the worker entrypoint script and start the container.
+
+    This script configures the worker to automatically poll for a new head_ip
+    at startup. This allows manual workers to resume in the case of a cluster restart.
+    """
+    from levanter.infra.tpus import run_command, tpu_ssh
+
+    with open(config_file, "r") as f:
+        cluster_config = yaml.safe_load(f)
+
+    initialization_commands = cluster_config.get("initialization_commands", [])
+    setup_commands = cluster_config.get("setup_commands", []) + cluster_config.get("worker_setup_commands", [])
+    worker_run_options = cluster_config["docker"]["worker_run_options"]
+    zone = cluster_config["provider"]["availability_zone"]
+    cluster_name = cluster_config["cluster_name"]
+    docker_container_name = cluster_config["docker"]["container_name"]
+    docker_image = cluster_config["docker"]["image"]
+    region = cluster_config["provider"]["region"]
+    bucket = f"marin-{region}"
+
+    print(f"Initializing Ray on worker {tpu_name}...")
+    print(f"Zone: {zone}")
+    print(f"Cluster name: {cluster_name}")
+    print(f"Container name: {docker_container_name}")
+    print(f"Docker image: {docker_image}")
+
+    setup_commands = "\n".join(setup_commands)
+
+    entry_script_content = f"""#!/bin/bash
+set -x
+set -eo pipefail
+
+export BUCKET="{bucket}"
+
+{setup_commands}
+
+# Entry and setup commands will automatically re-run if the container is restarted
+
+echo 'Checking for head node IP...'
+gcloud compute instances list \\
+  --filter="labels.ray-node-name:ray-{cluster_name}-head AND labels.ray-node-type=head" \\
+  --format="value(networkInterfaces[0].networkIP)" > /tmp/head_ip
+
+HEAD_IP=$(cat /tmp/head_ip | head -1 | awk '{{print $1}}' || true)
+if [ -z "$HEAD_IP" ]; then
+  echo 'Failed to resolve head node IP' >&2
+  exit 1
+fi
+
+echo "Found head node IP: $HEAD_IP"
+ray start --address=${{HEAD_IP}}:6379 --block
+echo "Ray worker crashed. Sleeping 10 seconds to avoid rapid restart..."
+sleep 10
+    """
+
+    init_commands = "\n".join(initialization_commands)
+
+    init_script_content = f"""#!/bin/bash
+{init_commands}
+"""
+
+    with (
+        tempfile.NamedTemporaryFile("w", prefix="entry", suffix=".sh", delete=False) as entry_sh,
+        tempfile.NamedTemporaryFile("w", prefix="init", suffix=".sh", delete=False) as init_sh,
+    ):
+        entry_sh.write(entry_script_content)
+        init_sh.write(init_script_content)
+
+        entry_sh.flush()
+        init_sh.flush()
+        run_command(
+            *[
+                "gcloud",
+                "compute",
+                "tpus",
+                "tpu-vm",
+                "scp",
+                "--worker=all",
+                f"--zone={zone}",
+                entry_sh.name,
+                init_sh.name,
+                f"{tpu_name}:/tmp/",
+            ]
+        )
+        entry_name = os.path.basename(entry_sh.name)
+        init_name = os.path.basename(init_sh.name)
+        tpu_ssh(
+            tpu_name,
+            zone,
+            1,
+            " && ".join(
+                [
+                    f"mv /tmp/{init_name} /tmp/init.sh",
+                    f"mv /tmp/{entry_name} /tmp/entry.sh",
+                    "chmod 755 /tmp/init.sh /tmp/entry.sh",
+                    "bash /tmp/init.sh",
+                    f"(docker rm -f {docker_container_name} || true)",
+                ]
+            ),
+        )
+
+    # Start the Docker container
+    docker_command = [
+        "docker",
+        "run",
+        "-d",
+        "--net=host",
+        f"--name={docker_container_name}",
+        "--init",
+        "--privileged",
+        *worker_run_options,
+        docker_image,
+        "/bin/bash",
+        "/tmp/entry.sh",
+    ]
+
+    logger.info(f"Starting container: {' '.join(docker_command)}")
+    tpu_ssh(tpu_name, zone, 1, *docker_command)
+
+
+def _check_cluster_head_running(config_path: str) -> bool:
     """Check if a Ray cluster head is already running.
 
     Returns True if a cluster head is detected, False otherwise.
     """
     try:
-        # Try to connect to the dashboard to see if cluster is running
-        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-            ray.print_cluster_status()
+        with ray_dashboard(DashboardConfig.from_cluster(config_path)):
             return True
     except Exception:
-        # Any exception means we couldn't connect to a running cluster
         return False
+
+
+def _download_working_directory(
+    cluster_config: str, job_id: str, working_dir: str, remote_working_dir: str, local_path: str
+) -> str:
+    """Download the working directory for `job_id`."""
+    dest_dir = os.path.join(local_path, job_id, working_dir)
+    os.makedirs(dest_dir, exist_ok=True)
+    dest_dir = os.path.join(dest_dir, "")  # Add trailing slash for rsync
+
+    rsync_command = ["ray", "rsync-down", cluster_config, remote_working_dir, dest_dir]
+    subprocess.check_output(rsync_command, text=True, timeout=300)
+
+    logger.info(f"Working directory for job {remote_working_dir} saved to {dest_dir}")
+    return dest_dir
+
+
+def _save_runtime_env_entrypoint(job_details: dict[str, Any], job_id: str, local_path: str) -> dict[str, Any]:
+    """Save the runtime environment and entrypoint for the job."""
+    runtime_env = job_details.get("runtime_env", {})
+    runtime_env.pop("working_dir", None)  # Remove unnecessary fields
+    runtime_env.pop("_ray_commit", None)
+    runtime_env["entrypoint"] = job_details["entrypoint"]
+
+    env_file = os.path.join(local_path, job_id, "runtime_env.json")
+    with open(env_file, "w") as f:
+        json.dump(runtime_env, f, indent=4)
+    return runtime_env
+
+
+def _resubmit_job(
+    job_id: str,
+    entrypoint: str,
+    working_dir: str,
+    runtime_env: dict[str, Any] | None,
+    raise_errors: bool,
+) -> None:
+    """Resubmit the job using the working directory and runtime environment."""
+    runtime_env_args = ["--runtime-env-json", json.dumps(runtime_env)] if runtime_env else []
+
+    logger.info(f"Resubmitting job {job_id}...")
+    import shlex
+
+    job_array = [
+        "ray",
+        "job",
+        "submit",
+        "--no-wait",
+        "--working-dir",
+        working_dir,
+        *runtime_env_args,
+        "--",
+        *shlex.split(entrypoint),
+    ]
+    job_str = " ".join(job_array)
+
+    logger.info(f"Submitting the job: {shlex.quote(job_str)}")
+
+    try:
+        subprocess.check_output(job_array, text=True, timeout=500)
+        logger.info(f"Successfully resubmitted job {job_id}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to resubmit job {job_id}: {e}")
+        if raise_errors:
+            raise ValueError(f"Failed to resubmit job {job_id}") from e
+
+
+def _backup_jobs(cluster_config: str, local_path: str, raise_errors: bool = False) -> None:
+    """Backup jobs from the given Ray cluster.
+
+    Note: This requires RAY_ADDRESS to be set, typically via start_ray_dashboard_with_wait.
+    """
+    logger.info("Fetching jobs from Ray Jobs API...")
+
+    # Clear the backup directory if it exists
+    backup_dir = Path(local_path)
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
+    backup_dir.mkdir(parents=True)
+
+    jobs_data = _list_jobs()
+    if not jobs_data:
+        logger.info("No jobs found.")
+        return
+
+    for job_details in jobs_data:
+        job_id = job_details["job_id"]
+        status = job_details["status"]
+        if status in {"SUCCEEDED", "FAILED", "STOPPED", "PENDING"}:
+            continue
+        logger.info(f"Backing up job {job_id} with status {status}...")
+        runtime_env = job_details["runtime_env"]
+        working_dir = runtime_env["working_dir"].split("/")[-1][:-4]
+        remote_working_dir = f"/tmp/ray/session_latest/runtime_resources/working_dir_files/{working_dir}/"
+
+        try:
+            _download_working_directory(cluster_config, job_id, working_dir, remote_working_dir, local_path)
+            _save_runtime_env_entrypoint(job_details, job_id, local_path)
+        except Exception as e:
+            logger.error(f"Error processing job {job_id}: {e}")
+            if raise_errors:
+                raise e
+
+    logger.info("All jobs backed up.")
+
+
+def _restore_jobs(local_path: str, raise_errors: bool = False) -> None:
+    """Perform the 'after' stage actions: resubmit jobs.
+
+    Note: This requires RAY_ADDRESS to be set, typically via start_ray_dashboard_with_wait.
+    """
+    backup_dir = Path(local_path)
+    if not backup_dir.exists():
+        logger.error("No backup data found. Run _backup_jobs() first.")
+        return
+
+    for job_id_dir in backup_dir.iterdir():
+        if not job_id_dir.is_dir():
+            continue
+
+        files = list(job_id_dir.iterdir())
+        if len(files) != 2:
+            logger.warning(f"Incomplete backup for job {job_id_dir.name}. Skipping.")
+            continue
+        working_dir = next((f for f in files if f.is_dir()), None)
+        runtime_env_file = job_id_dir / "runtime_env.json"
+
+        if not working_dir or not runtime_env_file.exists():
+            logger.warning(f"Incomplete backup for job {job_id_dir.name}. Skipping.")
+            continue
+
+        with open(runtime_env_file, "r") as f:
+            runtime_env = json.load(f)
+
+        entrypoint = runtime_env.pop("entrypoint", None)
+        if not entrypoint:
+            logger.error(f"No entrypoint found for job {job_id_dir.name}. Skipping.")
+            if raise_errors:
+                raise ValueError(f"No entrypoint found for job {job_id_dir.name}.")
+            continue
+
+        _resubmit_job(job_id_dir.name, entrypoint, str(working_dir), runtime_env, raise_errors)
+
+    logger.info("All jobs resubmitted.")
 
 
 @dataclass
@@ -115,7 +498,11 @@ def start_cluster(ctx):
         print("Error: --config required for cluster commands", file=sys.stderr)
         sys.exit(1)
 
+<<<<<<< HEAD
     if check_cluster_head_running(config_path):
+=======
+    if _check_cluster_head_running(config_path):
+>>>>>>> main
         print(f"Warning: Cluster head for {config_obj.cluster_name} appears to already be running.")
         print("This may cause conflicts or unexpected behavior.")
         print("Consider running 'status' to check the current state,")
@@ -126,7 +513,11 @@ def start_cluster(ctx):
     subprocess.run(["ray", "up", "-y", config_path], check=True)
 
     print("Starting automated cleanup cron...")
+<<<<<<< HEAD
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+=======
+    with ray_dashboard(DashboardConfig.from_cluster(config_path)):
+>>>>>>> main
         job_id = submit_cleanup_cron_job(
             project=config_obj.project_id,
             cluster=config_obj.cluster_name,
@@ -188,8 +579,8 @@ def restart_cluster(ctx, preserve_jobs):
     if preserve_jobs:
         print("Backing up jobs...")
         try:
-            with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-                ray.backup_jobs(config_path, str(backup_dir))
+            with ray_dashboard(DashboardConfig.from_cluster(config_path)):
+                _backup_jobs(config_path, backup_dir.name)
         except Exception as e:
             print()
             print("=" * 60)
@@ -213,12 +604,16 @@ def restart_cluster(ctx, preserve_jobs):
 
     if preserve_jobs:
         print("Restoring jobs...")
-        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-            ray.restore_jobs(str(backup_dir))
+        with ray_dashboard(DashboardConfig.from_cluster(config_path)):
+            _restore_jobs(str(backup_dir))
 
     # Auto-start cleanup cron
     print("Starting automated cleanup cron...")
+<<<<<<< HEAD
     with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
+=======
+    with ray_dashboard(DashboardConfig.from_cluster(config_path)):
+>>>>>>> main
         job_id = submit_cleanup_cron_job(
             project=config_obj.project_id,
             cluster=config_obj.cluster_name,
@@ -235,9 +630,9 @@ def restart_cluster(ctx, preserve_jobs):
 @click.pass_context
 def cluster_backup_jobs(ctx, backup_dir):
     """Backup Ray jobs to specified directory."""
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
         Path(backup_dir).mkdir(parents=True, exist_ok=True)
-        ray.backup_jobs(ctx.obj.config_file, backup_dir)
+        _backup_jobs(ctx.obj.config_file, backup_dir)
         print(f"Jobs backed up successfully to {backup_dir}")
 
 
@@ -246,44 +641,9 @@ def cluster_backup_jobs(ctx, backup_dir):
 @click.pass_context
 def cluster_restore_jobs(ctx, backup_dir):
     """Restore Ray jobs from specified directory."""
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
-        ray.restore_jobs(backup_dir)
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        _restore_jobs(backup_dir)
         print(f"Jobs restored successfully from {backup_dir}")
-
-
-@cli.command("get-status")
-@click.pass_context
-def get_status(ctx):
-    """Get cluster status."""
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
-        ray.print_cluster_status()
-
-
-@cli.command("cluster-info")
-@click.pass_context
-def cluster_info(ctx):
-    """Display cluster information. Shows all clusters if no config specified."""
-    config_path = ctx.obj.config_file
-
-    if config_path:
-        # Show info for specific cluster
-        info = ray.load_cluster_info(config_path)
-        clusters = {info.cluster_name: info}
-    else:
-        # Discover and show all active clusters
-        clusters = ray.discover_active_clusters()
-        if not clusters:
-            print("No active clusters found")
-            return
-
-    print(f"Active Clusters ({len(clusters)}):")
-    for name, info in sorted(clusters.items()):
-        print(f"\n{name}:")
-        print(f"  Config: {info.config_path}")
-        print(f"  Zone: {info.zone}")
-        print(f"  Project: {info.project}")
-        print(f"  Internal IP: {info.head_ip}")
-        print(f"  External IP: {info.external_ip}")
 
 
 @cli.command("list-configs")
@@ -351,8 +711,13 @@ def ssh_head(ctx, extra_args):
 @click.pass_context
 def list_workers(ctx):
     """List Ray workers."""
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
-        print(json.dumps(ray.list_workers(), indent=2))
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        result = subprocess.check_output(
+            ["ray", "list", "workers", "--format=json", f"--limit={1000}"],
+            text=True,
+            timeout=60,
+        )
+        print(json.dumps(json.loads(result), indent=2))
 
 
 # Job commands
@@ -360,8 +725,8 @@ def list_workers(ctx):
 @click.pass_context
 def list_jobs(ctx):
     """List Ray jobs."""
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
-        print(json.dumps(ray.list_jobs(), indent=2))
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        print(json.dumps(_list_jobs(), indent=2))
 
 
 @cli.command("submit-job")
@@ -373,8 +738,8 @@ def submit_job(ctx, entrypoint, working_dir, runtime_env):
     """Submit a Ray job."""
     runtime_env_dict = json.loads(runtime_env) if runtime_env else None
 
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
-        job_id = ray.submit_job(entrypoint, working_dir, runtime_env_dict)
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        job_id = _submit_job(entrypoint, working_dir, runtime_env_dict)
         print(f"Job submitted with ID: {job_id}")
 
 
@@ -383,8 +748,8 @@ def submit_job(ctx, entrypoint, working_dir, runtime_env):
 @click.pass_context
 def stop_job(ctx, job_id):
     """Stop a running Ray job."""
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
-        ray.stop_job(job_id)
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
+        _stop_job(job_id)
         print(f"Job {job_id} stop requested")
 
 
@@ -399,7 +764,7 @@ def start_cleanup(ctx, interval):
         print("Error: --config required for cleanup commands", file=sys.stderr)
         sys.exit(1)
 
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
         job_id = submit_cleanup_cron_job(
             project=config_obj.project_id,
             cluster=config_obj.cluster_name,
@@ -419,7 +784,7 @@ def run_cleanup(ctx, dry_run):
         print("Error: --config required for cleanup commands", file=sys.stderr)
         sys.exit(1)
 
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file, ray_init=True)):
+    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file, ray_init=True)):
         print("Running cleanup iteration...")
         results = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=dry_run)
         print(f"Result: {results}")
@@ -440,7 +805,7 @@ def add_worker(ctx, tpu_type, capacity, name):
     """Add manual TPU worker to cluster."""
     config_obj = ctx.obj.config_obj
     print(f"Adding {tpu_type} worker with {capacity} capacity...")
-    ray.add_manual_worker(config_obj, tpu_type, capacity, name)
+    _add_manual_worker(config_obj, tpu_type, capacity, name)
     print("Worker added successfully!")
 
 
@@ -451,77 +816,45 @@ def init_worker(ctx, name):
     """Initialize Ray on a manual TPU worker."""
     config_obj = ctx.obj.config_obj
     print(f"Initializing Ray on worker {name}...")
-    ray.initialize_manual_worker(config_obj.config_file, name)
+    _initialize_manual_worker(config_obj.config_file, name)
     print("Worker initialized successfully!")
 
 
 @cli.command("dashboard")
-@click.option("--port", default=9999, help="Proxy dashboard port")
 @click.pass_context
-def open_dashboard(ctx, port):
+def open_dashboard(ctx):
     """Open dashboard for all active Ray clusters."""
     config_obj = ctx.obj.config_obj
     if config_obj:
-        with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)) as dashboard:
-            print(f"Connected to {config_obj.cluster_name} dashboard at {dashboard.get_dashboard_url()}")
+        with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
             try:
                 time.sleep(86400)
             except KeyboardInterrupt:
                 print("\nShutting down...")
         return
 
-    with ray.ray_dashboard(ray.DashboardConfig(proxy_port=port)) as conn:
+    with ray_dashboard(DashboardConfig()) as conn:
         if not conn.clusters:
             print("No active clusters found")
             return
-
-        if conn.proxy:
-            print(f"📊 Proxy dashboard: {conn.get_dashboard_url()}")
-            print()
 
         print(f"Connected to {len(conn.clusters)} clusters:")
         for name, info in conn.clusters.items():
             ports = conn.port_mappings[name]
             direct_url = f"http://localhost:{ports.dashboard_port}"
-            proxy_url = f"http://localhost:{conn.proxy.proxy_port}/{name}/" if conn.proxy else ""
-            urls = f"{direct_url} | {proxy_url}" if proxy_url else direct_url
-            print(f"  {name} ({info.zone}) - {urls}")
+            print(f"  {name} ({info.zone}) - {direct_url}")
             print(f"    IP: {info.external_ip} ({info.head_ip})")
-            print(
-                f"    Dashboard: http://localhost:{ports.dashboard_port} | GCS: localhost:{ports.gcs_port} | API: localhost:{ports.api_port}"
-            )
+            dashboard_url = f"http://localhost:{ports.dashboard_port}"
+            gcs_url = f"localhost:{ports.gcs_port}"
+            api_url = f"localhost:{ports.api_port}"
+            print(f"    Dashboard: {dashboard_url} | GCS: {gcs_url} | API: {api_url}")
             print()
 
-        if conn.proxy:
-            print("\nPress Ctrl+C to stop")
-
-            try:
-                time.sleep(86400)
-            except KeyboardInterrupt:
-                print("\nShutting down...")
-
-
-@cli.command("monitor-cluster")
-@click.option("--wandb", is_flag=True, help="Log metrics to wandb")
-@click.pass_context
-def monitor_cluster(ctx, wandb):
-    """Monitor cluster health."""
-    config_obj = ctx.obj.config_obj
-    if not config_obj:
-        print("Error: --config required for monitoring", file=sys.stderr)
-        sys.exit(1)
-
-    config_zones = {config_obj.region: [config_obj.zone]}
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(ctx.obj.config_file)):
-        health_data = monitoring.monitor_cluster_health(
-            config_zones=config_zones, project=config_obj.project_id, log_to_wandb=wandb
-        )
-
-        summary = monitoring.get_cluster_health_summary(health_data)
-        print(summary)
-
-    if wandb:
-        print("Metrics logged to wandb")
+        print("\nPress Ctrl+C to stop")
+        try:
+            time.sleep(86400)
+        except KeyboardInterrupt:
+            print("\nShutting down...")
 
 
 @cli.command("show-logs")

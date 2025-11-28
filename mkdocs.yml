@@ -55,7 +55,7 @@ extra:
 
 watch:
   - docs/
-  - src/
+  - lib/marin/src/
 
 
 nav:
@@ -64,6 +64,8 @@ nav:
     - Installation: tutorials/installation.md
     - First Experiment: tutorials/first-experiment.md
     - Setting up a Local GPU Environment: tutorials/local-gpu.md
+    - Prepare a Storage Bucket: tutorials/storage-bucket.md
+    - Setting up a TPU Cluster: tutorials/tpu-cluster-setup.md
     - Executor 101: tutorials/executor-101.md
     - Data Browser: tutorials/data-browser.md
     - Using Data Shop: tutorials/datashop.md
@@ -133,7 +135,7 @@ plugins:
       default_handler: python
       handlers:
         python:
-          paths: [".", "src"]
+          paths: [".", "lib/marin/src"]
           inventories:
             - https://docs.python.org/3/objects.inv
             - https://jax.readthedocs.io/en/latest/objects.inv

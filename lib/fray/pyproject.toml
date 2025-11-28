@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fray"
+version = "0.1.0"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "click>=8.0",
+    "cloudpickle>=3.1.2",
+    "fsspec>=2024.0.0",
+    "humanfriendly>=10.0",
+    "mergedeep",
+    "pyyaml>=6.0",
+    "typing-extensions>=4.0",
+    "zstandard>=0.22.0",
+]
+
+[project.scripts]
+fray = "fray.cli:main"
+
+[project.optional-dependencies]
+ray = ["ray>=2.45"]
+
+[dependency-groups]
+fray_test = ["pytest>=8.3.2", "pytest-timeout", "ray[default]", "numpy",]
+fray_tpu_test = ["jax[tpu]", { include-group = "fray_test" }]
+
+dev = [{ include-group = "fray_test" }]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fray"]
