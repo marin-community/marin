@@ -521,14 +521,14 @@ class RolloutWorker:
             rollout = random.choice(group.rollouts)
             prompt_text = self._tokenizer.decode(rollout.prompt_tokens, skip_special_tokens=True)
             response_text = self._tokenizer.decode(rollout.response_tokens, skip_special_tokens=True)
-            rows.append({"prompt": prompt_text, "response": response_text})
+            rows.append({"prompt": prompt_text, "response": response_text, "reward": rollout.episode_reward, "step": step})
 
         if not rows:
             return
 
-        table = wandb.Table(columns=["prompt", "response"])
+        table = wandb.Table(columns=["prompt", "response", "reward", "step"])
         for row in rows:
-            table.add_data(row["prompt"], row["response"])
+            table.add_data(row["prompt"], row["response"], row["reward"], row["step"])
 
         prefix = f"inference.{eval_type}/{lesson_id}"
         metrics = {f"{prefix}/sample_table": table}
