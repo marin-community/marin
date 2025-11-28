@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 
 import equinox as eqx
+import jax
 import jax.random as jrandom
 from jaxtyping import PRNGKeyArray
 
@@ -365,11 +366,11 @@ def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: i
     return max(1, total_tokens // (batch_size * seq_len))
 
 
-def _size_presets() -> dict[str, HackableTransformerConfig]:
+def _size_presets(attn_backend: AttentionBackend | None = None) -> dict[str, HackableTransformerConfig]:
     base = dict(
         seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
-        attn_backend=None,
+        attn_backend=attn_backend,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
         tie_word_embeddings=False,
         # Use block-wise cross-entropy to avoid materializing full logits (batch*seq*vocab)
@@ -477,8 +478,10 @@ def _batch_sizes() -> dict[str, int]:
     return {"130m": 128, "300m": 128, "520m": 128, "1_2b": 256}
 
 
-def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]:
-    sizes = _size_presets()
+def build_run(
+    size: str, *, use_gpu: bool = False, attn_backend: AttentionBackend | None = None
+) -> tuple[str, SpeedrunConfig]:
+    sizes = _size_presets(attn_backend=attn_backend)
     if size not in sizes:
         raise ValueError(f"Unknown size: {size}")
     model_cfg = sizes[size]
@@ -506,6 +509,14 @@ def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]
     return run_name, cfg
 
 
+def _detect_hw() -> bool:
+    """Returns True if GPU (CUDA) is available."""
+    try:
+        return any(d.platform == "gpu" for d in jax.local_devices())
+    except Exception:
+        return False
+
+
 if __name__ == "__main__":
     ###
     # make the current __main__ module importable under its canonical name
@@ -524,10 +535,10 @@ if __name__ == "__main__":
 
     # sizes = ["130m", "300m", "520m", "1_2b"]
     sizes = ["130m"]
-    use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
+
     steps = []
     for s in sizes:
-        name, cfg = build_run(s, use_gpu=use_gpu)
+        name, cfg = build_run(s, use_gpu=_detect_hw(), attn_backend=AttentionBackend.JAX_FLASH)
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
     executor_main(steps=steps, description=SUBMISSION_DESCRIPTION)

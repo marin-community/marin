@@ -1,7 +1,6 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import contextlib
 import dataclasses
 import functools
 import gc
@@ -32,16 +31,6 @@ from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 
 logger = logging.getLogger(__name__)
-
-
-def _te_mesh_guard():
-    """Return a context manager that sets an empty TE MeshResource for single-GPU/CPU runs."""
-    try:
-        from transformer_engine.jax.sharding import MeshResource, global_shard_guard  # type: ignore[import]
-
-        return global_shard_guard(MeshResource())
-    except Exception:
-        return contextlib.nullcontext()
 
 
 @dataclass
@@ -81,11 +70,6 @@ class TrainLmConfig:
 
 
 def main(config: TrainLmConfig):
-    with _te_mesh_guard():
-        _main_impl(config)
-
-
-def _main_impl(config: TrainLmConfig):
     tokenizer = config.data.the_tokenizer
 
     # this is some unpleasant code to allow us to initialize from a hf checkpoint. If this is your first read through,
