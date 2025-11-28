@@ -23,7 +23,7 @@ from zephyr import Dataset, flow_backend
 def main():
     backend = flow_backend()  # Get backend from CLI context
     pipeline = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
-    list(backend.execute(pipeline))
+    backend.execute(pipeline)
 ```
 
 Run with: `uv run zephyr --backend=ray --max-parallelism=1000 --memory=8GB script.py`

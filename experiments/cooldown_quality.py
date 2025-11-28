@@ -27,9 +27,9 @@ from dataclasses import dataclass
 
 
 from experiments.anneal_config import AnnealConfig
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.defaults import default_anneal
-from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
+from experiments.pretraining_datasets import tokenize_dolma
 from marin.execution.executor import ExecutorStep
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config, PermutationType
 from marin.resources import TpuPodConfig
@@ -41,7 +41,7 @@ class QualityAblationConfig:
 
     # Dataset components and weights
     baseline_component: TokenizerStep = dclm_components_llama3["dclm_baseline"]
-    mcq_component: TokenizerStep = tokenize_dolma_steps()["dolma/flan"]
+    mcq_component: TokenizerStep = tokenize_dolma()["dolma/flan"]
     baseline_weight: float = 0.7
     mcq_weight: float = 0.15
     candidate_weight: float = 0.15

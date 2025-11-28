@@ -89,6 +89,16 @@ class CleanupIterationResult:
     low_disk_terminated: list[str] = field(default_factory=list)
 
 
+def list_nodes() -> list[dict[str, Any]]:
+    """Get list of Ray nodes."""
+    result = subprocess.check_output(
+        ["ray", "list", "nodes", "--format=json", "--limit=10000"],
+        text=True,
+        timeout=60,
+    )
+    return json.loads(result)
+
+
 def get_tpu_worker_resources() -> dict[str, int]:
     """Get list of unique worker resource names from Ray cluster.
 
@@ -100,8 +110,6 @@ def get_tpu_worker_resources() -> dict[str, int]:
         - ray-marin-us-east5-a-worker-09614199-tpu
         - ray-marin-us-east5-a-worker-2f248a95-tpu
     """
-    from .ray import list_nodes
-
     worker_resources = {}
     try:
         nodes = list_nodes()
@@ -453,7 +461,7 @@ def run_cleanup_loop(gcp_project: str, zone: str, interval: int = 600, disk_thre
 
 def running_cleanup_jobs() -> Sequence[dict[str, Any]]:
     """Return a list of job dicts for any currently running or pending cleanup jobs."""
-    from .ray import list_jobs
+    from marin.cluster.ray import list_jobs
 
     running_jobs = list_jobs(filters=["status=RUNNING"])
     pending_jobs = list_jobs(filters=["status=PENDING"])

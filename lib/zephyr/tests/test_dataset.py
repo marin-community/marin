@@ -16,17 +16,14 @@
 
 import json
 import time
+from functools import partial
 from pathlib import Path
 
 import pytest
+
 from zephyr import Dataset, create_backend, load_file, load_parquet
+from zephyr._test_helpers import SampleDataclass
 from zephyr.dataset import FilterOp, MapOp, WindowOp
-
-
-@pytest.fixture(autouse=True)
-def ensure_ray(ray_cluster):
-    """Ensure Ray is initialized for all tests."""
-    pass
 
 
 @pytest.fixture(
@@ -45,6 +42,20 @@ def test_from_list(sample_data, backend):
     """Test creating dataset from list."""
     ds = Dataset.from_list(sample_data)
     assert list(backend.execute(ds)) == sample_data
+
+
+def test_dataclass_round_trip_preserves_type(backend):
+    """Ensure dataclass items are not downcast to dicts during execution."""
+    items = [SampleDataclass("alpha", 1), SampleDataclass("beta", 2)]
+
+    ds = Dataset.from_list(items)
+    result = list(backend.execute(ds))
+
+    assert [item.name for item in result] == ["alpha", "beta"]
+    assert all(isinstance(item, SampleDataclass) for item in result)
+
+    doubled = Dataset.from_list(items).map(lambda x: x.value * 2)
+    assert list(backend.execute(doubled)) == [2, 4]
 
 
 def test_from_iterable(backend):
@@ -798,6 +809,7 @@ def test_sorted_merge_join_shard_mismatch(backend):
     left = Dataset.from_list([{"id": 1, "text": "hello"}]).group_by(
         key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
     )
+
     right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
         key=lambda x: x["id"],
         reducer=lambda k, items: next(iter(items)),
@@ -1062,3 +1074,20 @@ def test_skip_existing_parquet(tmp_path):
     assert len(result) == 3
     assert counter.map_count == 0
     assert counter.processed_ids == []  # No shards ran
+
+
+def test_repr_handles_partials():
+    """__repr__ should unwrap functools.partial"""
+    assert repr(MapOp(partial(int, base=2))) == "MapOp(fn=int)"
+
+    def my_base(n: str, base: int = 10) -> int:
+        return int(n, base)
+
+    op = MapOp(partial(my_base, base=2))
+    assert repr(op) == "MapOp(fn=test_repr_handles_partials.<locals>.my_base)"
+
+
+def test_repr_handles_lambdas():
+    """Ensure anonymous lambdas work correctly."""
+    op = FilterOp(lambda x: x > 0)
+    assert repr(op) == "FilterOp(predicate=test_repr_handles_lambdas.<locals>.<lambda>)"

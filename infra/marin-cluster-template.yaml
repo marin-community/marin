@@ -68,6 +68,7 @@ setup_commands:
   - echo 'export TPU_MIN_LOG_LEVEL=3' >> $HOME/.bashrc
   - echo 'export TPU_STDERR_LOG_LEVEL=3' >> $HOME/.bashrc
   - gcsfuse --implicit-dirs --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
+  - echo 'export TPU_LOG_DIR=disabled' >> $HOME/.bashrc
   - mkdir -p /home/ray/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > /home/ray/.ssh/authorized_keys && chmod 600 /home/ray/.ssh/authorized_keys
   - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
