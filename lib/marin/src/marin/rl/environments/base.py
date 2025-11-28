@@ -84,6 +84,7 @@ def load_environment_from_spec(config: EnvConfig) -> MarinEnv:
     # TODO(power) - thread random seed from the rollout worker.
     return env_class(**env_args)
 
+
 def extract_seed(prng_key) -> int:
     """Extract an integer seed from either a JAX PRNG key or an integer."""
     if isinstance(prng_key, int):

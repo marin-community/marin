@@ -56,10 +56,12 @@ class MathEnvExample:
     example_id: str
     metadata: dict[str, Any] = field(default_factory=dict)
 
+
 @dataclass
 class LengthPenaltyConfig:
     max_response_tokens: int
     cache_response_tokens: int
+
 
 @dataclass
 class RewardConfig:
@@ -67,6 +69,7 @@ class RewardConfig:
     length_penalty_config: LengthPenaltyConfig | None = None
     correctness_reward_coef: float = 1.0
     format_reward_coef: float = 0.1
+
 
 LoadDatasetFn = Callable[..., Any]
 
@@ -287,7 +290,7 @@ class MathEnv(MarinEnv):
 
                 if choice.finish_reason == "length":
                     truncated_count += 1
-            
+
             mean_max_response_token_length += max_response_token_length
 
             if group_rollouts:
@@ -336,11 +339,10 @@ class MathEnv(MarinEnv):
             l_cache = self.reward_config.length_penalty_config.cache_response_tokens
             l_max = self.reward_config.length_penalty_config.max_response_tokens
 
-            
             if len(response_text_tokens) <= l_max - l_cache:
                 length_penalty = 0.0
             elif len(response_text_tokens) <= l_max:
-                length_difference =  (l_max - l_cache) - len(response_text_tokens)
+                length_difference = (l_max - l_cache) - len(response_text_tokens)
                 length_penalty = length_difference / l_cache
             else:
                 length_penalty = -1.0
@@ -348,7 +350,11 @@ class MathEnv(MarinEnv):
         if float(grade) == 0.0:
             grade = -1.0
 
-        reward = self.reward_config.format_reward_coef * float(validation["is_valid"]) + self.reward_config.correctness_reward_coef * float(grade) + self.reward_config.length_penalty_coef * length_penalty
+        reward = (
+            self.reward_config.format_reward_coef * float(validation["is_valid"])
+            + self.reward_config.correctness_reward_coef * float(grade)
+            + self.reward_config.length_penalty_coef * length_penalty
+        )
 
         return reward, float(validation["is_valid"]), float(grade), reward
 

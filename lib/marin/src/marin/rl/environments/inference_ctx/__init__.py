@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .base import BaseInferenceContext
 from .levanter import LevanterInferenceContext, LevanterInferenceContextConfig
 from .vllm import vLLMInferenceContext, vLLMInferenceContextConfig, MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 from .async_vllm import AsyncvLLMInferenceContext
@@ -19,9 +20,10 @@ from .async_vllm import AsyncvLLMInferenceContext
 __all__ = [
     "MODEL_MAPPINGS",
     "MODEL_TRANSPOSE_KEYS",
+    "AsyncvLLMInferenceContext",
+    "BaseInferenceContext",
     "LevanterInferenceContext",
     "LevanterInferenceContextConfig",
     "vLLMInferenceContext",
     "vLLMInferenceContextConfig",
-    "AsyncvLLMInferenceContext",
 ]

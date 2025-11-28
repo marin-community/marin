@@ -31,6 +31,7 @@ from transformers import PreTrainedTokenizer
 from levanter.models.lm_model import LmHeadModel
 import haliax as hax
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
+
 # TODO(chris): use a different weight transfer method update model, take it out from here
 from marin.rl.weight_transfer.arrow_flight import update_model
 
@@ -73,7 +74,7 @@ class LevanterInferenceContext(BaseInferenceContext):
     def openai_address(self) -> str:
         return f"http://{self._inference_server.address()}/v1"
 
-    def reload_model(self, model: LmHeadModel | None, state_dict: dict):
+    def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
         with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
             model = update_model(model, state_dict)
         self._inference_server.reload(lambda _: model)
@@ -89,7 +90,7 @@ class LevanterInferenceContext(BaseInferenceContext):
         self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
         self._inference_thread.start()
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         self._inference_server.shutdown()
 
     # TODO: add support for ChatCompletion style [ { role, content} ] messages

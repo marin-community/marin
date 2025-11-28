@@ -25,8 +25,6 @@ import datasets
 import jax
 import numpy as np
 
-from marin.rl.environments.base import extract_seed
-
 from marin.rl.math_utils import grade_answer, normalize_answer, validate_format
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import Rollout, RolloutGroup

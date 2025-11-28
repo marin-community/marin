@@ -26,10 +26,9 @@ from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
 from openai.types.completion_usage import CompletionUsage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
-from haliax.partitioning import ResourceAxis
 from levanter.models.lm_model import LmHeadModel
 from transformers import AutoTokenizer
-from marin.rl.weight_utils import levanter_to_nnx_state, levanter_state_dict_to_nnx_state_on_cpu
+from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
@@ -56,6 +55,7 @@ os.environ["JAX_RANDOM_WEIGHTS"] = "True"
 class InferenceMode(StrEnum):
     SYNC = "sync"
     ASYNC = "async"
+
 
 @dataclass
 class vLLMInferenceContextConfig:
@@ -96,6 +96,8 @@ class vLLMInferenceContext(BaseInferenceContext):
     @staticmethod
     def _get_llm_engine(inference_config: vLLMInferenceContextConfig):
         if inference_config.mode == InferenceMode.SYNC:
+            if LLM is None:
+                raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
             llm_engine_cls = LLM
         elif inference_config.mode == InferenceMode.ASYNC:
             llm_engine_cls = SyncVLLMWrapper
@@ -162,7 +164,7 @@ class vLLMInferenceContext(BaseInferenceContext):
                     mean diff: {jnp.mean(jnp.abs(weight - weight_other))}"
                 )
 
-    def tokenize_prompt(self, prompt: str, choice: Choice, system_prompt: str | None = None) -> np.ndarray:
+    def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.
 
         NOTE(chris): This is a hack to get the prompt token IDs the same since
@@ -239,7 +241,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             usage=usage,
         )
 
-    def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> None:
+    def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
         # TODO(chris): levanter to vllm state dict
         nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
         self.llm.llm_engine.model_executor.driver_worker.sync_weights(
@@ -250,11 +252,12 @@ class vLLMInferenceContext(BaseInferenceContext):
         )
 
         self.llm.llm_engine.reset_prefix_cache()  # Reset prefix cache because of new weights
+        return model
 
     def start_server(self, model: LmHeadModel) -> None:
         pass
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         pass
 
     def batch_completions(
@@ -267,6 +270,8 @@ class vLLMInferenceContext(BaseInferenceContext):
         system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Batch completions from the inference server."""
+        if SamplingParams is None:
+            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
         sampling_params = SamplingParams(
             temperature=temperature,
             n=n,

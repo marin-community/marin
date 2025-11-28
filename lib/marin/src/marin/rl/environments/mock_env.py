@@ -19,14 +19,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Protocol
 
-import jax
 import numpy as np
 from transformers import PreTrainedTokenizer
 
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import RolloutGroup
 
-from .base import MarinEnv
+from .base import MarinEnv, extract_seed
 
 NUM_TRAIN_EXAMPLES = 1000
 NUM_EVAL_EXAMPLES = 100
@@ -370,11 +369,10 @@ class MockEnv(MarinEnv):
         n_generations: int,
         temperature: float,
         prng_key,
-        max_tokens: int | None = None,
-        stop: list[str] | None = None,
         mode: str = "train",
         max_tokens: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample examples, generate responses, and create rollouts."""
         # Select dataset

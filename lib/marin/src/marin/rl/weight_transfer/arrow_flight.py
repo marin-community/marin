@@ -38,7 +38,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import partial
 
-import haliax as hax
 import haliax.state_dict as hsd
 import jax
 import numpy as np
@@ -213,7 +212,7 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
 class ArrowFlightCoordinator:
     """Ray actor for coordinating Arrow Flight weight transfers."""
 
-    _server_info = ServerInfo | None
+    _server_info: ServerInfo | None
 
     def __init__(self):
         self._server_info = None
@@ -222,10 +221,11 @@ class ArrowFlightCoordinator:
 
         # TODO(chris): how about when trainer dies? we should reset the server info.
         # Only accept if newer than current
-        if self._server_info is not None and weight_id <= self._server_info.weight_id:
-            logger.warning(f"Ignoring stale weight update: {weight_id} <= {self._server_info.weight_id}")
+        current_weight_id = self._server_info.weight_id if self._server_info is not None else None
+        if current_weight_id is not None and weight_id <= current_weight_id:
+            logger.warning(f"Ignoring stale weight update: {weight_id} <= {current_weight_id}")
             return
-        
+
         self._server_info = ServerInfo(
             weight_id=weight_id,
             server_addresses=[f"grpc://{host}:{port}" for host, port in server_locations],

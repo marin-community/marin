@@ -70,7 +70,7 @@ def compute_metadata_metrics(
     current_entropy = -jnp.sum(flattened_current_logprobs * flattened_loss_masks) / jnp.sum(flattened_loss_masks)
 
     # policy_entropy = -jnp.sum(
-    #    policy_logprobs_array * loss_masks_array, axis=1 
+    #    policy_logprobs_array * loss_masks_array, axis=1
     # ) / jnp.sum(loss_masks_array, axis=1)
     # policy_entropy = jnp.mean(policy_entropy)
 
@@ -82,14 +82,15 @@ def compute_metadata_metrics(
     mean_advantages = jnp.sum(loss_weights_array * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
     mean_advantages = jnp.mean(mean_advantages)
 
+    max_ratio_diff = jnp.max(jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array)) * loss_masks_array)
     return {
-        "max_ratio_difference": jnp.max((jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array))) * loss_masks_array),
-        "mean_ratio_difference": mean_ratio_difference,
-        "current_entropy": current_entropy,
-        "max_advantages": jnp.max(loss_weights_array),
-        "mean_advantages": mean_advantages,
-        "policy_entropy": policy_entropy,
-        "response_tokens_length": jnp.sum(loss_masks_array) / batch_size,
+        "max_ratio_difference": Metric.from_value(max_ratio_diff, ReductionType.MAX),
+        "mean_ratio_difference": Metric.from_value(mean_ratio_difference, ReductionType.MEAN),
+        "current_entropy": Metric.from_value(current_entropy, ReductionType.MEAN),
+        "max_advantages": Metric.from_value(jnp.max(loss_weights_array), ReductionType.MAX),
+        "mean_advantages": Metric.from_value(mean_advantages, ReductionType.MEAN),
+        "policy_entropy": Metric.from_value(policy_entropy, ReductionType.MEAN),
+        "response_tokens_length": Metric.from_value(jnp.sum(loss_masks_array) / batch_size, ReductionType.MEAN),
     }
 
 
@@ -98,7 +99,7 @@ def compute_logprobs(
     batch: TrainingBatch,
     key: jax.Array | None,
 ):
-    batch_size, seq_len = batch.input_ids.array.shape
+    batch_size, _seq_len = batch.input_ids.array.shape
 
     model_output = model(
         input_ids=batch.input_ids,
@@ -142,7 +143,9 @@ def compute_ppo_loss_objective(
     """Compute PPO loss objective."""
     non_clipped_objective = importance_sampling_ratio * loss_weights * loss_masks
     clipped_objective = (
-        jnp.clip(importance_sampling_ratio, min=1.0 - clip_epsilon_low, max=1.0 + clip_epsilon_high) * loss_weights * loss_masks
+        jnp.clip(importance_sampling_ratio, min=1.0 - clip_epsilon_low, max=1.0 + clip_epsilon_high)
+        * loss_weights
+        * loss_masks
     )
 
     loss_objective = jnp.minimum(non_clipped_objective, clipped_objective)
@@ -161,9 +164,10 @@ def compute_ppo_loss_objective(
     # more like DAPO loss
     loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks))
 
+    per_batch_loss = jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)
     metadata = {
-        "loss_max_over_batch": -jnp.max(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)),
-        "loss_std_over_batch": jnp.std(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)),
+        "loss_max_over_batch": Metric.from_value(-jnp.max(per_batch_loss), ReductionType.MAX),
+        "loss_std_over_batch": Metric.from_value(jnp.std(per_batch_loss), ReductionType.MEAN),
     }
     return loss, metadata
 
@@ -180,8 +184,6 @@ def cispo_loss_with_importance_sampling(
     policy_logprobs_array = batch.policy_logprobs.array
     loss_weights_array = batch.loss_weights.array
     loss_masks_array = batch.loss_masks.array
-
-    batch_size, seq_len = batch.input_ids.array.shape
 
     current_logprobs = compute_logprobs(model, batch.input_ids, batch.position_ids, key)
     reference_logprobs = compute_logprobs(reference_model, batch.input_ids, batch.position_ids, key)
@@ -201,10 +203,6 @@ def cispo_loss_with_importance_sampling(
 
     # Compute fraction of ratios that were clipped
     is_clipped = jnp.logical_or(ratio > 1.0 + epsilon_high, ratio < 1.0 - epsilon_low)
-    clip_fraction = jnp.sum(is_clipped * loss_masks_array) / jnp.sum(loss_masks_array)
-
-    # Compute fraction of ratios that were clipped
-    is_clipped = jnp.logical_or(ratio > 1.0 + clip_epsilon, ratio < 1.0 - clip_epsilon)
     clip_fraction = jnp.sum(is_clipped * loss_masks_array) / jnp.sum(loss_masks_array)
 
     # RLOO loss with importance sampling
@@ -272,7 +270,6 @@ def rloo_loss_with_importance_sampling(
     loss_weights_array = batch.loss_weights.array
     loss_masks_array = batch.loss_masks.array
 
-    batch_size, seq_len = batch.input_ids.array.shape
     # Get logits from current policy
     current_logprobs = compute_logprobs(model, batch, key)
     current_logprobs = current_logprobs * loss_masks_array
@@ -347,7 +344,6 @@ def rloo_loss_with_importance_sampling(
         jnp.sum(trainer_inference_importance_sampling_ratio * loss_masks_array, axis=1)
         / jnp.sum(loss_masks_array, axis=1)
     )
-    trainer_inference_importance_sampling_ratio_min = jnp.min(trainer_inference_importance_sampling_ratio)
     ratio_mean_over_responses_only = jnp.mean(jnp.sum(ratio, axis=1) / jnp.sum(loss_masks_array, axis=1))
     clipped_ratio_mean_over_responses_only = jnp.mean(
         jnp.sum(clipped_ratio * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
@@ -357,14 +353,15 @@ def rloo_loss_with_importance_sampling(
     )
 
     return loss, {
-        "ratio_mean": ratio_mean_over_responses_only,
-        "clipped_ratio_mean": clipped_ratio_mean_over_responses_only,
-        "clip_fraction": clip_fraction,
-        "reinforce_loss": reinforce_loss,
-        "kl_loss": kl_loss,
-        "kl_penalty": kl_penalty_over_responses_only,
-        "trainer_inference_importance_sampling_ratio_mean": trainer_inference_importance_sampling_ratio_mean,
-        "trainer_inference_importance_sampling_ratio_min": trainer_inference_importance_sampling_ratio_min,
+        "ratio_mean": Metric.from_value(ratio_mean_over_responses_only, ReductionType.MEAN),
+        "clipped_ratio_mean": Metric.from_value(clipped_ratio_mean_over_responses_only, ReductionType.MEAN),
+        "clip_fraction": Metric.from_value(clip_fraction, ReductionType.MEAN),
+        "reinforce_loss": Metric.from_value(reinforce_loss, ReductionType.MEAN),
+        "kl_loss": Metric.from_value(kl_loss, ReductionType.MEAN),
+        "kl_penalty": Metric.from_value(kl_penalty_over_responses_only, ReductionType.MEAN),
+        "trainer_inference_importance_sampling_ratio_mean": Metric.from_value(
+            trainer_inference_importance_sampling_ratio_mean, ReductionType.MEAN
+        ),
         **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
         **metadata,
     }

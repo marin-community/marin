@@ -14,14 +14,11 @@
 
 import os
 import logging
-from dataclasses import dataclass
 
 import numpy as np
 from levanter.models.lm_model import LmHeadModel
-from openai.types.chat import ChatCompletion
 
-from marin.rl.weight_utils import levanter_to_nnx_state, levanter_state_dict_to_nnx_state_on_cpu
-from marin.rl.environments.inference_ctx.vllm import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS, InferenceMode, vLLMInferenceContext, vLLMInferenceContextConfig
+from marin.rl.environments.inference_ctx.vllm import InferenceMode, vLLMInferenceContext, vLLMInferenceContextConfig
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +37,7 @@ os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 
 def serialize_state_dict_for_rpc(state_dict: dict) -> dict:
     """Serialize numpy arrays to (bytes, dtype, shape) tuples for RPC transfer.
-    
+
     vLLM's collective_rpc can corrupt numpy arrays during serialization.
     This converts them to a format that survives pickling.
     """

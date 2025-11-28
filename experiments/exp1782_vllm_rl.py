@@ -27,7 +27,6 @@ from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from levanter.distributed import DistributedConfig
 from transformers import AutoConfig, AutoTokenizer
 
 from marin.execution.executor import (
@@ -142,6 +141,7 @@ class ExperimentConfig:
     learning_rate: float = 1e-7
 
     max_grad_norm: float = 1.00
+
 
 MODEL = llama1b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
@@ -261,7 +261,9 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
     config = experiment_config.model_config.config_class.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=experiment_config.max_output_tokens, tokenizer=experiment_config.model_config.tokenizer)
+    model_config = dataclasses.replace(
+        config, seq_len=experiment_config.max_output_tokens, tokenizer=experiment_config.model_config.tokenizer
+    )
 
     _ = WandbConfig
 
@@ -392,7 +394,7 @@ def main():
         return
 
     # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
-    length_penalty = ExperimentConfig(
+    _length_penalty = ExperimentConfig(
         model_config=qwen3_1_7b,
         rl_loss=RLOOLoss(
             kl_coef=0.01,
@@ -407,10 +409,13 @@ def main():
         max_output_tokens=4096,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
     )
 
-    max_length_8192_exp = ExperimentConfig(
+    _max_length_8192_exp = ExperimentConfig(
         model_config=qwen3_1_7b,
         rl_loss=RLOOLoss(
             kl_coef=0.01,
@@ -428,7 +433,7 @@ def main():
         n_generations_per_prompt=16,
     )
 
-    llama_8b_length_penalty_exp = ExperimentConfig(
+    _llama_8b_length_penalty_exp = ExperimentConfig(
         model_config=llama_3_1_8b,
         rl_loss=RLOOLoss(
             kl_coef=0.01,
@@ -443,10 +448,13 @@ def main():
         max_output_tokens=4096,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
     )
 
-    qwen3_1_7b_inflight_weight_updates_exp = ExperimentConfig(
+    _qwen3_1_7b_inflight_weight_updates_exp = ExperimentConfig(
         model_config=qwen3_1_7b,
         rl_loss=RLOOLoss(
             kl_coef=0.01,
@@ -461,13 +469,16 @@ def main():
         max_output_tokens=512,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
         max_rollout_step_delay=1,
         inflight_weight_updates=True,
         debug_mode=True,
     )
 
-    small_length_iwu =  ExperimentConfig(
+    _small_length_iwu = ExperimentConfig(
         model_config=qwen3_1_7b,
         rl_loss=RLOOLoss(
             kl_coef=0.01,
@@ -483,13 +494,16 @@ def main():
         per_device_parallelism=4,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
         debug_mode=True,
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
     )
 
-    small_length_iwu_with_correction =  ExperimentConfig(
+    _small_length_iwu_with_correction = ExperimentConfig(
         model_config=qwen3_1_7b,
         rl_loss=RLOOLoss(
             kl_coef=0.01,
@@ -505,13 +519,16 @@ def main():
         per_device_parallelism=4,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
         debug_mode=True,
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
     )
 
-    small_length_iwu_with_correction_synchronous =  ExperimentConfig(
+    _small_length_iwu_with_correction_synchronous = ExperimentConfig(
         model_config=qwen3_1_7b,
         rl_loss=RLOOLoss(
             kl_coef=0.01,
@@ -527,13 +544,16 @@ def main():
         per_device_parallelism=4,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
         debug_mode=True,
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
     )
 
-    small_length =  ExperimentConfig(
+    _small_length = ExperimentConfig(
         model_config=qwen3_1_7b,
         rl_loss=RLOOLoss(
             kl_coef=0.01,
@@ -548,11 +568,14 @@ def main():
         max_output_tokens=512,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
         debug_mode=True,
     )
 
-    llama_8b_length_penalty_async = ExperimentConfig(
+    _llama_8b_length_penalty_async = ExperimentConfig(
         model_config=llama_3_1_8b,
         rl_loss=RLOOLoss(
             kl_coef=0.01,
@@ -567,12 +590,15 @@ def main():
         max_output_tokens=4096,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
     )
 
-    llama_8b_length_penalty_async_kl0 = ExperimentConfig(
+    _llama_8b_length_penalty_async_kl0 = ExperimentConfig(
         model_config=llama_3_1_8b,
         rl_loss=RLOOLoss(
             kl_coef=0.0,
@@ -587,12 +613,15 @@ def main():
         max_output_tokens=4096,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
     )
 
-    llama_8b_length_penalty_async_kl0_1 = ExperimentConfig(
+    _llama_8b_length_penalty_async_kl0_1 = ExperimentConfig(
         model_config=llama_3_1_8b,
         rl_loss=RLOOLoss(
             kl_coef=0.1,
@@ -607,12 +636,15 @@ def main():
         max_output_tokens=4096,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
     )
 
-    llama_8b_length_penalty_async_kl0_1_no_length_penalty = ExperimentConfig(
+    _llama_8b_length_penalty_async_kl0_1_no_length_penalty = ExperimentConfig(
         model_config=llama_3_1_8b,
         rl_loss=RLOOLoss(
             kl_coef=0.01,
@@ -627,12 +659,15 @@ def main():
         max_output_tokens=4096,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=0.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=0.0,
+        ),
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
     )
 
-    llama_8b_length_penalty_async_clip_higher = ExperimentConfig(
+    _llama_8b_length_penalty_async_clip_higher = ExperimentConfig(
         model_config=llama_3_1_8b,
         rl_loss=RLOOLoss(
             kl_coef=0.0,
@@ -649,12 +684,15 @@ def main():
         max_output_tokens=4096,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
     )
 
-    qwen3_8b_length_penalty_async_clip_higher = ExperimentConfig(
+    _qwen3_8b_length_penalty_async_clip_higher = ExperimentConfig(
         model_config=qwen3_8b,
         rl_loss=RLOOLoss(
             kl_coef=0.0,
@@ -670,7 +708,10 @@ def main():
         max_output_tokens=4096,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
     )
@@ -692,7 +733,10 @@ def main():
         max_output_tokens=4096,
         n_prompts=8,
         n_generations_per_prompt=16,
-        reward_config=RewardConfig(length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024), length_penalty_coef=1.0),
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
     )
@@ -777,7 +821,6 @@ def main():
         #     n_prompts=8,
         #     n_generations_per_prompt=16,
         # ),
-
         # ExperimentConfig(
         #     model_config=qwen3_8b,
         #     rl_loss=RLOOLoss(
@@ -814,7 +857,7 @@ def main():
             name = f"{model_base_name}-{experiment_config.experiment_name_suffix}-{datestamp}"
         else:
             name = f"{model_base_name}-{experiment_config.experiment_name_suffix}"
-            
+
         experiments.append(
             rl_train(
                 name=name,

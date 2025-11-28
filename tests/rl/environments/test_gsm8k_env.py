@@ -116,4 +116,3 @@ def test_extract_final_answer_handles_missing_separator():
     env = GSM8KEnv(train_dataset=[], eval_dataset=[], max_train_examples=0, max_eval_examples=0)
     assert env._extract_final_answer("No hash answer") == "No hash answer"
     assert env._extract_final_answer("Reasoning #### 19") == "19"
-

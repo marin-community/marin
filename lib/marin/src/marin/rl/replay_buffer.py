@@ -231,7 +231,7 @@ class ReplayBuffer:
 
                 if np.std(batch_rewards[group_idx]) > 0.0:
                     env_examples[rollout.env_name].extend(maybe_used_rollouts)
-                else: # group has no variance in rewards
+                else:  # group has no variance in rewards
                     if not self.filter_out_groups_with_no_variance:
                         env_examples[rollout.env_name].extend(maybe_used_rollouts)
 

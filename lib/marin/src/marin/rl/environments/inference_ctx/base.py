@@ -33,10 +33,11 @@ logger = logging.getLogger(__name__)
 
 class BaseInferenceContext:
     """Base class for inference contexts."""
-    def reload_model(self, model: LmHeadModel | None, state_dict: dict):
+
+    def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
         raise NotImplementedError
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         raise NotImplementedError
 
     def batch_completions(
@@ -50,7 +51,7 @@ class BaseInferenceContext:
         """Batch completions from the inference server."""
         raise NotImplementedError
 
-    def tokenize_prompt(self, prompt: str, choice: Choice | None = None) -> np.ndarray:
+    def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize with chat template matching server behavior."""
         messages = [{"role": "user", "content": prompt}]
         try:

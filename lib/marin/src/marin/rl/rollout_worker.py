@@ -27,7 +27,8 @@ import socket
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 import wandb
 
 import equinox as eqx
@@ -72,7 +73,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RolloutTrackerConfig:
     """Configuration for the rollout worker's WandB tracker.
-    
+
     This is a standalone tracker that doesn't depend on JAX initialization,
     avoiding deadlocks when running vLLM inference workers.
     """
@@ -95,7 +96,7 @@ class RolloutTrackerConfig:
 
 class RolloutTracker:
     """A simple WandB tracker for rollout workers.
-    
+
     Unlike Levanter's tracker, this doesn't call jax.process_index() during init,
     avoiding JAX distributed initialization deadlocks.
     """
@@ -266,6 +267,7 @@ class RolloutWorker:
     _rollout_writer: RolloutWriter
     _tokenizer: PreTrainedTokenizer
     _environments: dict[str, MarinEnv]
+    tracker: Any  # levanter.Tracker or RolloutTracker
 
     def __init__(self, config: RolloutWorkerConfig):
         config.trainer.id = f"{config.run_id}-rollout"
@@ -294,7 +296,9 @@ class RolloutWorker:
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
 
         self._rollout_writer = config.rollout_storage.create_writer()
-        self._policy_ctx = create_inference_context(self.config.inference_type, self.config.inference_config, self.config.inflight_weight_updates)
+        self._policy_ctx = create_inference_context(
+            self.config.inference_type, self.config.inference_config, self.config.inflight_weight_updates
+        )
 
         # Need to build the policy model and then use that to start the inference server
         self._build_models()
@@ -344,8 +348,8 @@ class RolloutWorker:
         if mode == "eval":
             temperature = 0.0
         else:
-            temperature = lesson_config.sampling_params.temperature 
-            
+            temperature = lesson_config.sampling_params.temperature
+
         stop_tokens = lesson_config.sampling_params.stop_tokens
         max_tokens = lesson_config.sampling_params.max_tokens
 
@@ -446,7 +450,7 @@ class RolloutWorker:
         self._current_weight_step = update.weight_id
         logger.info("Received new weights from step %d", update.weight_id)
         self._policy_model = self._policy_ctx.reload_model(self._policy_model, update.state_dict)
-        
+
         # Signal that we've received the first weights
         if not self._first_weights_received.is_set():
             logger.info("First weight transfer complete, inference can proceed")
@@ -506,7 +510,6 @@ class RolloutWorker:
         finally:
             logger.info("Background weight sync loop exiting")
 
-
     def _log_prompt_example(self, lesson_id: str, batch: RolloutBatch, step: int, eval_type: str = "eval") -> None:
         """Log representative samples from an evaluation batch.
 
@@ -530,7 +533,9 @@ class RolloutWorker:
             rollout = random.choice(group.rollouts)
             prompt_text = self._tokenizer.decode(rollout.prompt_tokens, skip_special_tokens=True)
             response_text = self._tokenizer.decode(rollout.response_tokens, skip_special_tokens=True)
-            rows.append({"prompt": prompt_text, "response": response_text, "reward": rollout.episode_reward, "step": step})
+            rows.append(
+                {"prompt": prompt_text, "response": response_text, "reward": rollout.episode_reward, "step": step}
+            )
 
         if not rows:
             return
@@ -563,7 +568,7 @@ class RolloutWorker:
     def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> dict:
         """Evaluate a single lesson and log metrics."""
         N_EVAL_GENERATIONS = 1
-        
+
         batch, _ = self._sample_batch(
             lesson_id=lesson_id,
             n_examples=n_examples,
