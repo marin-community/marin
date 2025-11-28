@@ -49,11 +49,13 @@ from marin.rl.environments.inference_ctx import (
     LevanterInferenceContextConfig,
     vLLMInferenceContextConfig,
     vLLMInferenceContext,
+    BaseInferenceContext,
 )
 from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .types import (
+    Rollout,
     RolloutBatch,
     RolloutGroup,
     RolloutMetadata,
@@ -135,6 +137,18 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
         avg_reward=(reward_sum / total_count) if total_count > 0 else 0.0,
     )
 
+def create_inference_context(config: RolloutWorkerConfig) -> BaseInferenceContext:
+    """Create an inference context based on the configuration."""
+    if config.inference_type == "levanter":
+        return LevanterInferenceContext(
+            inference_config=config.inference_config,
+        )
+    elif config.inference_type == "vllm":
+        return vLLMInferenceContext(
+            inference_config=config.inference_config,
+        )
+    else:
+        raise ValueError(f"Invalid inference type: {config.inference_type}")
 
 class RolloutWorker:
     """Asynchronous inference & rollout worker for RL training.
@@ -179,15 +193,7 @@ class RolloutWorker:
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
 
         self._rollout_writer = config.rollout_storage.create_writer()
-
-        if self.config.inference_type == "levanter":
-            self._policy_ctx = LevanterInferenceContext(
-                inference_config=self.config.inference_config,
-            )
-        elif self.config.inference_type == "vllm":
-            self._policy_ctx = vLLMInferenceContext(
-                inference_config=self.config.inference_config,
-            )
+        self._policy_ctx = create_inference_context(self.config)
 
         # Need to build the policy model and then use that to start the inference server
         self._build_models()
