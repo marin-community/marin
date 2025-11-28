@@ -42,7 +42,7 @@ from marin.training.training import _add_run_env_variables
 from marin.execution import ExecutorStep
 from marin.rl.environments.base import MarinEnv, EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
-from marin.rl.rollout_worker import create_inference_context, RolloutWorkerConfig
+from marin.rl.rollout_worker import create_inference_context
 from marin.rl.types import RolloutGroup
 from marin.utils import remove_tpu_lockfile_on_exit
 

@@ -237,7 +237,7 @@ class vLLMInferenceContext(BaseInferenceContext):
                     mean diff: {jnp.mean(jnp.abs(weight - weight_other))}"
                 )
 
-    def tokenize_prompt(self, prompt: str, choice: Choice) -> np.ndarray:
+    def tokenize_prompt(self, prompt: str, choice: Choice | None = None) -> np.ndarray:
         """Tokenize the prompt with the choice's prompt token IDs.
 
         NOTE(chris): This is a hack to get the prompt token IDs the same since
@@ -245,6 +245,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         This is a known issue documented here:
         https://github.com/vllm-project/vllm/issues/27486
         """
+        assert choice is not None, "Choice is required to tokenize the prompt"
         return np.array(choice.prompt_token_ids, dtype=np.int32)
 
     def _convert_vllm_to_openai(self, request_output: RequestOutput) -> ChatCompletion:

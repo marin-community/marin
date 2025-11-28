@@ -55,7 +55,6 @@ from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
 from .types import (
-    Rollout,
     RolloutBatch,
     RolloutGroup,
     RolloutMetadata,
@@ -137,7 +136,9 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
         avg_reward=(reward_sum / total_count) if total_count > 0 else 0.0,
     )
 
-def create_inference_context(inference_type: str, inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig) -> BaseInferenceContext:
+def create_inference_context(inference_type: str,
+                             inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig,
+) -> BaseInferenceContext:
     """Create an inference context based on the configuration."""
     if inference_type == "levanter":
         return LevanterInferenceContext(
