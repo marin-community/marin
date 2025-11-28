@@ -24,7 +24,7 @@ import numpy as np
 
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.process_vllm_results import process_vllm_chat_results
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.environments.inference_ctx import BaseInferenceContext
 from marin.rl.types import Rollout, RolloutGroup
 
 # Lazy import for optional dependencies
@@ -87,12 +87,14 @@ class PrimeIntellectEnv(MarinEnv):
 
     def sample(
         self,
-        inference_ctx: InferenceContext,
+        inference_ctx: BaseInferenceContext,
         n_examples: int,
         n_generations: int,
         temperature: float,
         prng_key,
         mode: str = "train",
+        max_tokens: int | None = None,
+        stop: list[str] | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample problems and generate responses using the model."""
         self._ensure_verifiers_installed()
@@ -108,9 +110,10 @@ class PrimeIntellectEnv(MarinEnv):
 
         # Prepare sampling arguments
         sampling_args = {
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_tokens or self.max_tokens,
             "temperature": temperature,
             "logprobs": True,
+            "stop": stop,
             # Note: return_tokens_as_token_ids is not supported by current vLLM version
             # We use convert_tokens_to_ids() in process_vllm_results.py instead
         }

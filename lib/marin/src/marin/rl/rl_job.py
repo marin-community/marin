@@ -24,9 +24,11 @@ import hashlib
 import json
 import logging
 import os
+from typing import Literal
 import uuid
 from dataclasses import dataclass, field
 
+from marin.rl.environments.inference_ctx import LevanterInferenceContextConfig, vLLMInferenceContextConfig
 import ray
 from fray.cluster.ray.tpu import run_on_pod_ray
 from levanter.inference.engine import InferenceEngineConfig
@@ -35,7 +37,7 @@ from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import TrainerConfig
 from marin.resources import TpuPodConfig
-from marin.rl.curriculum import CurriculumConfig, SamplingParams
+from marin.rl.curriculum import CurriculumConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_losses import RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
@@ -109,6 +111,9 @@ class RLJobConfig:
     train_params: TrainParams
     curriculum: CurriculumConfig
     tokenizer: str | PreTrainedTokenizer
+
+    inference_type: Literal["levanter", "vllm"]
+
     seed: int = 42
 
     # Model & initialization (with defaults)
@@ -128,10 +133,8 @@ class RLJobConfig:
     """Configuration for TPU pod deployment. If None, uses simple Ray actors."""
 
     # Inference server (auto-configured by default)
-    inference_server_config: InferenceServerConfig | None = None  # type: ignore
-
-    # Sampling configuration
-    eval_sampling_params: SamplingParams = field(default_factory=SamplingParams)
+    inference_config: InferenceServerConfig | vLLMInferenceContextConfig | None = None
+    """Configuration for inference context."""
 
     # Logging
     run_id: str = field(default_factory=lambda: f"rl-{uuid.uuid4().hex[:8]}")
@@ -286,14 +289,14 @@ class RLJob:
         )
 
         # Create inference server config if not provided
-        if self.config.inference_server_config is None:
+        if self.config.inference_config is None and self.config.inference_type == "levanter":
             inference_server_config = InferenceServerConfig(
                 trainer=dataclasses.replace(
                     self.config.trainer,
                     tensor_parallel_axes=["mlp", "kv_head"],
                 ),
                 tokenizer=tokenizer,
-                temperature=self.config.eval_sampling_params.temperature,
+                temperature=1.0,
                 service=InferenceEngineConfig(
                     max_seqs=max_seqs,
                     max_seq_len=max_tokens,
@@ -305,8 +308,15 @@ class RLJob:
             logger.info(
                 "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_tokens=%d", max_seqs, max_tokens
             )
+            inference_config = LevanterInferenceContextConfig(
+                inference_server_config=inference_server_config,
+                tokenizer=tokenizer,
+                mesh=self.config.trainer.device_mesh,
+                axis_mapping=self.config.trainer.compute_axis_mapping,
+            )
         else:
-            inference_server_config = self.config.inference_server_config
+            assert self.config.inference_config is not None, "Inference config must be provided for vllm inference"
+            inference_config = self.config.inference_config
 
         # Create train worker config
         train_worker_config = TrainWorkerConfig(
@@ -327,7 +337,6 @@ class RLJob:
         # Create rollout worker config
         rollout_worker_config = RolloutWorkerConfig(
             trainer=self.config.trainer,
-            inference_server_config=inference_server_config,
             model=self.config.model,
             curriculum_config=self.config.curriculum,
             tokenizer=tokenizer,
@@ -338,6 +347,8 @@ class RLJob:
             rollout_storage=self.config.rollout_storage,
             run_id=self.config.run_id,
             seed=self.config.seed + 1000,
+            inference_type=self.config.inference_type,
+            inference_config=inference_config,
         )
 
         return train_worker_config, rollout_worker_config

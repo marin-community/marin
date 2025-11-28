@@ -42,7 +42,7 @@ from marin.training.training import _add_run_env_variables
 from marin.execution import ExecutorStep
 from marin.rl.environments.base import MarinEnv, EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
-from marin.rl.rollout_worker import InferenceContext
+from marin.rl.rollout_worker import create_inference_context
 from marin.rl.types import RolloutGroup
 from marin.utils import remove_tpu_lockfile_on_exit
 
@@ -216,11 +216,9 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
                 env = load_environment_from_spec(config.env_config)
                 logger.info(f"Loaded environment: {env}")
 
-                policy_ctx = InferenceContext(
-                    tokenizer=tokenizer,
-                    inference_server=inference_server,
-                    max_tokens=config.max_input_length + config.max_output_length,
-                    stop_tokens=config.stop_tokens,
+                policy_ctx = create_inference_context(
+                    inference_type="levanter",
+                    inference_config=inference_server_config,
                 )
 
                 # Sample examples, generate responses, and create rollouts from selected lesson
