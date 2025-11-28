@@ -16,12 +16,19 @@ import logging
 
 import numpy as np
 from marin.rl.environments.inference_ctx.inflight.async_bridge import AsyncBridge
-from vllm import AsyncEngineArgs, SamplingParams
-from vllm.v1.engine.async_llm import AsyncLLM
 from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 
 logger = logging.getLogger(__name__)
+
+try:
+    from vllm import AsyncEngineArgs, SamplingParams
+    from vllm.v1.engine.async_llm import AsyncLLM
+except ImportError:
+    AsyncEngineArgs = None
+    SamplingParams = None
+    AsyncLLM = None
+    logger.warning("vLLM async engine is not available. Please install vLLM v1 with: pip install vllm")
 
 
 def deserialize_state_dict_from_rpc(serialized_state_dict: dict) -> dict:
@@ -73,6 +80,9 @@ class SyncVLLMWrapper:
     def __init__(
         self, model: str, max_model_len: int = 1024, tensor_parallel_size: int = 1, gpu_memory_utilization: float = 0.95
     ):
+        if AsyncEngineArgs is None:
+            raise RuntimeError("vLLM async engine is not available. Please install vLLM v1 with: pip install vllm")
+
         self.bridge = AsyncBridge()
         self.bridge.start()
 

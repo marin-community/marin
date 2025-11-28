@@ -39,6 +39,8 @@ def create_test_rollout(
         response_logprobs=response_logprobs,
         token_rewards=token_rewards,
         episode_reward=episode_reward,
+        temperature=1.0,
+        is_truncated=False,
     )
 
 
@@ -132,7 +134,9 @@ def test_ppo_objective(
         importance_sampling_ratio,
         loss_weights,
         loss_masks,
-        clip_epsilon=clip_epsilon,
+        clip_epsilon_low=clip_epsilon,
+        clip_epsilon_high=clip_epsilon,
+        max_output_tokens=loss_masks.shape[-1],
         trainer_inference_importance_sampling_ratio=trainer_inference_importance_sampling_ratio,
     )
 
