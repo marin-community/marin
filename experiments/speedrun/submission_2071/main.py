@@ -23,7 +23,7 @@ How to run:
   1) Set env vars (WANDB_API_KEY, HF_TOKEN, etc.) as in the tutorial:
      https://marin.readthedocs.io/en/latest/tutorials/submitting-speedrun/
   2) From repo root:
-       python marin/run/ray_run.py -- python -m __SUBMISSION_IMPORT_PATH__ --force_run_failed true
+       python marin/run/ray_run.py -- python -m experiments.speedrun.submission_2071.main --force_run_failed true
   3) Optional: SR_USE_GPU=1 to use GPU resource presets.
 """
 
@@ -72,11 +72,11 @@ silence_transformer_nag()
 # Submission metadata (filled by onboarding)
 # =========================
 # The onboarding workflow replaces these placeholders before committing the file.
-SUBMISSION_BRANCH = "__SUBMISSION_BRANCH__"
-SUBMISSION_DESCRIPTION = "__SUBMISSION_DESCRIPTION__"
-SUBMISSION_AUTHOR_NAME = "__SUBMISSION_AUTHOR_NAME__"
-SUBMISSION_AUTHOR_AFFILIATION = "__SUBMISSION_AUTHOR_AFFILIATION__"
-SUBMISSION_AUTHOR_URL = "__SUBMISSION_AUTHOR_URL__"
+SUBMISSION_BRANCH = "calvin-xu/submission_2071"
+SUBMISSION_DESCRIPTION = "We'll do what everyone else does but 10x."
+SUBMISSION_AUTHOR_NAME = "Calvin Xu"
+SUBMISSION_AUTHOR_AFFILIATION = "Stanford University"
+SUBMISSION_AUTHOR_URL = "pinlinxu.com"
 
 
 # =========================
@@ -372,7 +372,9 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
         attn_backend=None,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
         tie_word_embeddings=False,
-        cross_entropy_block_size=8000, # lower if you get OOM
+        # Use block-wise cross-entropy to avoid materializing full logits (batch*seq*vocab)
+        # Without this, a batch of 128*4096*128000 = 134 GiB of logits would be computed!
+        cross_entropy_block_size=4096,
     )
     return {
         "130m": HackableTransformerConfig(
@@ -520,7 +522,8 @@ if __name__ == "__main__":
         _cls.__module__ = _IMPORT_PATH
     ###
 
-    sizes = ["130m", "300m", "520m", "1_2b"]
+    # sizes = ["130m", "300m", "520m", "1_2b"]
+    sizes = ["130m"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
     steps = []
     for s in sizes:
