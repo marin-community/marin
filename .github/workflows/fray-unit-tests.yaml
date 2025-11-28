@@ -44,7 +44,7 @@ jobs:
   tpu-test:
     runs-on: [tpu-ci]
     timeout-minutes: 10
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
