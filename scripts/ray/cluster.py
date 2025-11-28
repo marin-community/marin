@@ -498,11 +498,7 @@ def start_cluster(ctx):
         print("Error: --config required for cluster commands", file=sys.stderr)
         sys.exit(1)
 
-<<<<<<< HEAD
-    if check_cluster_head_running(config_path):
-=======
     if _check_cluster_head_running(config_path):
->>>>>>> main
         print(f"Warning: Cluster head for {config_obj.cluster_name} appears to already be running.")
         print("This may cause conflicts or unexpected behavior.")
         print("Consider running 'status' to check the current state,")
@@ -513,11 +509,7 @@ def start_cluster(ctx):
     subprocess.run(["ray", "up", "-y", config_path], check=True)
 
     print("Starting automated cleanup cron...")
-<<<<<<< HEAD
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-=======
     with ray_dashboard(DashboardConfig.from_cluster(config_path)):
->>>>>>> main
         job_id = submit_cleanup_cron_job(
             project=config_obj.project_id,
             cluster=config_obj.cluster_name,
@@ -609,11 +601,7 @@ def restart_cluster(ctx, preserve_jobs):
 
     # Auto-start cleanup cron
     print("Starting automated cleanup cron...")
-<<<<<<< HEAD
-    with ray.ray_dashboard(ray.DashboardConfig.from_cluster(config_path)):
-=======
     with ray_dashboard(DashboardConfig.from_cluster(config_path)):
->>>>>>> main
         job_id = submit_cleanup_cron_job(
             project=config_obj.project_id,
             cluster=config_obj.cluster_name,

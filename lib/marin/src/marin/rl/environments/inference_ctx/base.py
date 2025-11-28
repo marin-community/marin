@@ -25,6 +25,7 @@ import numpy as np
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
 from marin.rl.types import Rollout
+
 from levanter.models.lm_model import LmHeadModel
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,11 @@ logger = logging.getLogger(__name__)
 
 class BaseInferenceContext:
     """Base class for inference contexts."""
+    def reload_model(self, model: LmHeadModel | None, state_dict: dict):
+        raise NotImplementedError
+
+    def shutdown(self):
+        raise NotImplementedError
 
     def batch_completions(
         self,

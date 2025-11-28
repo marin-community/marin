@@ -16,7 +16,6 @@ import jax
 from flax import nnx
 import jax.numpy as jnp
 from levanter.models.lm_model import LmHeadModel
-import numpy as np
 
 def levanter_to_nnx_state(levanter_model: LmHeadModel) -> dict:
     # The format of this state dict is flat like:
