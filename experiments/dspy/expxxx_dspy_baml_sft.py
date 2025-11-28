@@ -29,123 +29,77 @@ Then upload to GCS:
   gsutil cp traces.jsonl gs://your-bucket/path/to/traces.jsonl
 
 Usage:
-  uv run levanter.train experiments.dspy.expxxx_dspy_baml_sft:DSPyFormatAdaptationSFTConfig \
+  uv run marin.execution.executor:executor_main experiments.dspy.expxxx_dspy_baml_sft \
     --chat_train_urls '["gs://your-bucket/path/to/traces*.jsonl.gz"]'
 """
 
-from dataclasses import dataclass, field
-from typing import Optional
+from levanter.data.text import ChatLmDatasetFormat
 
-import jmp
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
-from levanter.main.sft import DatasetType, SFTConfig
-from levanter.models.llama import LlamaConfig
-from levanter.optim import AdamConfig
-from levanter.trainer import TrainerConfig
-from levanter.tracker.wandb import WandbConfig
+from experiments.defaults import default_sft, default_tokenize
+from experiments.llama import llama3_instruct_tokenizer, llama_8b
+from experiments.simple_sft_config import SimpleSFTConfig
+from marin.execution.executor import executor_main
+from marin.processing.tokenize.data_configs import lm_data_config
+from marin.resources import TpuPodConfig
 
-from experiments.llama import llama3_instruct_tokenizer
+# Default GCS path for trace data - override via command line or modify this variable
+DEFAULT_CHAT_TRAIN_URLS = "gs://marin-us-central2/scratch/dspy-format-adaptation/traces/*.jsonl.gz"
 
+# Chat format configuration - uses "chat" field instead of default "messages"
+dspy_chat_format = ChatLmDatasetFormat(
+    messages_field="chat",  # Field name in JSONL containing messages array
+    single_turn=False,
+    pack=True,
+    mask_user_turns=True,
+)
 
-@dataclass
-class DSPyFormatAdaptationSFTConfig(SFTConfig):
-    """Configuration for SFT on DSPy format adaptation traces."""
+# Tokenize chat JSONL data
+tokenize_step = default_tokenize(
+    name="dspy-format-adaptation-tokenize",
+    dataset=DEFAULT_CHAT_TRAIN_URLS,
+    tokenizer=llama3_instruct_tokenizer,
+    format=dspy_chat_format,
+)
 
-    # Model configuration - Llama 8B
-    model: LlamaConfig = field(
-        default_factory=lambda: LlamaConfig(
-            seq_len=4096,
-            hidden_dim=4096,
-            intermediate_dim=14336,
-            num_layers=32,
-            num_heads=32,
-            num_kv_heads=8,
-            flash_attention_block_size=512,
-            use_bias=False,
-            use_layer_norm_weight=True,
-            initializer_range=0.02,
-            rope=Llama3RotaryEmbeddingsConfig(),
-        )
-    )
+# Create data config from tokenized data
+tokenized_data = lm_data_config(tokenize_step, permutation_type="linear")
 
-    # Trainer configuration
-    trainer: TrainerConfig = field(
-        default_factory=lambda: TrainerConfig(
-            mp=jmp.get_policy("p=f32,c=bfloat16"),
-            tracker=WandbConfig(project="marin-dspy-format-adaptation", tags=["dspy", "format-adaptation", "llama-8b"]),
-            num_train_steps=5000,
-            train_batch_size=64,
-            tensor_parallel_axes=["mlp", "heads"],
-            fsdp_axis="embed",
-            batch_axis="batch",
-            steps_per_eval=500,
-        )
-    )
+# SFT configuration
+sft_config = SimpleSFTConfig(
+    resources=TpuPodConfig(tpu_type="v5p-8"),
+    train_batch_size=64,
+    num_train_steps=5000,
+    learning_rate=2e-5,
+    weight_decay=0.0,
+    tokenizer=llama3_instruct_tokenizer,
+    model_name_or_path="meta-llama/Meta-Llama-3.1-8B-Instruct",
+    max_seq_len=4096,
+    warmup=0.02,  # 100 steps / 5000 steps
+    cooldown=0.0,
+    lr_schedule="linear",
+    min_lr_ratio=0.1,
+    steps_per_eval=500,
+    steps_per_checkpoint=1000,
+    steps_per_hf_export=1000,
+    reinit_tokens=True,
+    seed=0,
+)
 
-    # Optimizer configuration
-    optimizer: AdamConfig = field(
-        default_factory=lambda: AdamConfig(
-            learning_rate=2e-5,
-            weight_decay=0.0,
-            min_lr_ratio=0.1,
-            warmup=100,
-        )
-    )
+# Create SFT step
+sft_step = default_sft(
+    name="dspy-format-adaptation-sft",
+    tokenized=tokenized_data,
+    model_config=llama_8b,
+    sft_config=sft_config,
+    tags=["dspy", "format-adaptation", "llama-8b"],
+).with_output_path("checkpoints/dspy-format-adaptation-sft")
 
-    # Dataset configuration
-    dataset_type: DatasetType = DatasetType.CHAT_JSONL
-    chat_train_urls: Optional[list[str]] = None
-    messages_field: str = "chat"  # Field name in JSONL containing messages array (matches trace data format)
-    input_role: str = "user"
-    output_role: str = "assistant"
-
-    # Model initialization
-    initialize_from_hf: bool = True
-    model_name_or_path: str = "meta-llama/Meta-Llama-3.1-8B-Instruct"
-    tokenizer: str = llama3_instruct_tokenizer
-    max_seq_len: int = 4096
-
-    # Supervised data cache
-    supervised_data: Optional[dict] = field(
-        default_factory=lambda: dict(
-            cache_dir="gs://marin-us-central2/scratch/dspy-format-adaptation-sft-cache",
-        )
-    )
-
-    # Reinitialize tokens for Llama 3 tokenizer
-    reinit_tokens: bool = True
-    reinit_lm_head: bool = True
-    reinit_embeddings: bool = True
-
-    # Checkpointing
-    hf_save_steps: int = 1000
-    hf_save_path: Optional[str] = None
-
-
-def main():
-    """Main entry point for SFT training."""
-    import draccus
-
-    # Parse config from command line or use defaults
-    config = draccus.parse(DSPyFormatAdaptationSFTConfig)
-
-    # Validate that chat_train_urls is provided
-    if config.chat_train_urls is None:
-        raise ValueError(
-            "chat_train_urls must be provided. "
-            "Example: --chat_train_urls '[\"gs://bucket/path/to/traces/*.jsonl.gz\"]'"
-        )
-
-    # Set default HF save path if not provided
-    if config.hf_save_path is None:
-        config.hf_save_path = "gs://marin-us-central2/checkpoints/dspy-format-adaptation-sft/llama-8b"
-
-    # Import and run training
-    from levanter.main.sft import train
-
-    train(config)
-
-
+# Pipeline entry point
 if __name__ == "__main__":
-    main()
-
+    executor_main(
+        steps=[tokenize_step, sft_step],
+        description=(
+            "SFT for Llama 8B using DSPy format adaptation trace data. "
+            "Traces are collected from HotpotQA, HoVer, and FHIR datasets."
+        ),
+    )
