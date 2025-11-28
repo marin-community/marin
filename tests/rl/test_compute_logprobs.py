@@ -18,7 +18,7 @@ import pytest
 
 from types import SimpleNamespace
 
-from marin.rl.rl_losses import compute_logprobs, current_and_policy_importance_sampling_ratio
+from marin.rl.rl_losses import compute_logprobs, importance_sampling_ratio
 
 
 class DummyNamedArray:
@@ -64,8 +64,10 @@ def test_current_and_policy_importance_sampling_ratio_equals_one_when_equal():
     policy_logprobs = jnp.array([[0.0, 1.0, 2.0, 3.0]])
     loss_masks = jnp.array([[1.0, 1.0, 1.0, 1.0]])
 
-    importance_sampling_ratio = current_and_policy_importance_sampling_ratio(
-        current_logprobs, policy_logprobs, loss_masks, clip_epsilon=0.0
+    importance_sampling_ratio = importance_sampling_ratio(
+        current_logprobs, 
+        policy_logprobs,
+        loss_masks, 
     )
 
     assert importance_sampling_ratio.shape == (1, 4)
@@ -80,8 +82,10 @@ def test_current_and_policy_importance_sampling_ratio_is_clipped_when_large_diff
     policy_logprobs = jnp.array([[0.0, 10.0, 2.0, -10.0]])
     loss_masks = jnp.array([[1.0, 1.0, 1.0, 1.0]])
 
-    importance_sampling_ratio = current_and_policy_importance_sampling_ratio(
-        current_logprobs, policy_logprobs, loss_masks, clip_epsilon=0.2
+    importance_sampling_ratio = importance_sampling_ratio(
+        current_logprobs,
+        policy_logprobs,
+        loss_masks,
     )
 
     assert importance_sampling_ratio.shape == (1, 4)
