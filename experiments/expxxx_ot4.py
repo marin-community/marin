@@ -13,8 +13,7 @@
 # limitations under the License.
 from dataclasses import replace
 
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, executor_main
 from experiments.models import qwen3_32b, get_model_local_path
 from marin.export.hf_upload import upload_dir_to_hf

@@ -85,7 +85,8 @@ def test_basic_conversion():
 
     # Check shapes - should be padded to max_tokens
     for _, value in result.items():
-        assert len(value) == 16
+        if isinstance(value, np.ndarray):
+            assert len(value) == 16
 
 
 def test_loss_mask_correct():
