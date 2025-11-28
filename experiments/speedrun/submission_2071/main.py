@@ -29,7 +29,6 @@ How to run:
 
 # nodryrun
 import sys
-import os
 import dataclasses
 import logging
 from dataclasses import dataclass
@@ -365,15 +364,21 @@ def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: i
     return max(1, total_tokens // (batch_size * seq_len))
 
 
-def _size_presets() -> dict[str, HackableTransformerConfig]:
+def _size_presets(use_gpu: bool = False) -> dict[str, HackableTransformerConfig]:
+    # Use NVTE on GPU if available, otherwise default (JAX cuDNN for GPU, Splash for TPU)
+    def _nvte_ok():
+        try:
+            import transformer_engine  # noqa: F401
+            return True
+        except ImportError:
+            return False
+    attn_backend = AttentionBackend.NVTE if (use_gpu and _nvte_ok()) else None
     base = dict(
         seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
-        attn_backend=None,
+        attn_backend=attn_backend,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
         tie_word_embeddings=False,
-        # Use block-wise cross-entropy to avoid materializing full logits (batch*seq*vocab)
-        # Without this, a batch of 128*4096*128000 = 134 GiB of logits would be computed!
         cross_entropy_block_size=4096,
     )
     return {
@@ -478,7 +483,7 @@ def _batch_sizes() -> dict[str, int]:
 
 
 def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]:
-    sizes = _size_presets()
+    sizes = _size_presets(use_gpu=use_gpu)
     if size not in sizes:
         raise ValueError(f"Unknown size: {size}")
     model_cfg = sizes[size]
@@ -524,7 +529,9 @@ if __name__ == "__main__":
 
     # sizes = ["130m", "300m", "520m", "1_2b"]
     sizes = ["130m"]
-    use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
+
+    import jax
+    use_gpu = jax.default_backend() == "gpu"
     steps = []
     for s in sizes:
         name, cfg = build_run(s, use_gpu=use_gpu)

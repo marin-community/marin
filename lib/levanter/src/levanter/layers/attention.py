@@ -9,11 +9,12 @@ import warnings
 from dataclasses import dataclass
 from enum import Enum
 from numbers import Integral
-from typing import Optional, Union, overload
+from typing import Optional, Union, cast, overload
 
 import equinox as eqx
 import jax
 import jax.random as jrandom
+from equinox import Partial
 from jax import numpy as jnp
 
 from ..inference.utils import is_valid
@@ -59,13 +60,14 @@ class AttentionBackend(Enum):
     NVTE = "nvte"  # with Transformer Engine on NVIDIA GPUs
     SPLASH = "splash"  # on TPU.
     JAX_FLASH = "jax_flash"  # Use the JAX reference implementation
+    JAX_CUDNN = "jax_cudnn"  # Use jax.nn.dot_product_attention with cuDNN backend
     VANILLA = "vanilla"  # regular dot product attention
 
 
 def default_attention_type() -> AttentionBackend:
     accelerator_type = jax.local_devices()[0].platform
     if accelerator_type == "gpu":
-        return AttentionBackend.NVTE
+        return AttentionBackend.JAX_CUDNN
     elif accelerator_type == "tpu":
         return AttentionBackend.SPLASH
     else:
@@ -201,6 +203,27 @@ def dot_product_attention(
                 attention_dtype=attention_dtype,
                 precision=precision,
                 block_size=flash_block_size,
+                scaling_factor=scaling_factor,
+                logits_soft_cap=logits_soft_cap,
+                attn_sink=attn_sink,
+            )
+
+        case AttentionBackend.JAX_CUDNN:
+            attention_out = _try_jax_cudnn_attention(
+                QPos,
+                KPos,
+                Key,
+                query,
+                key,
+                value,
+                mask=mask,
+                bias=bias,
+                dropout=dropout,
+                inference=inference,
+                prng=prng,
+                attention_dtype=attention_dtype,
+                precision=precision,
+                force_cudnn=not was_default,
                 scaling_factor=scaling_factor,
                 logits_soft_cap=logits_soft_cap,
                 attn_sink=attn_sink,
@@ -638,6 +661,225 @@ def _te_get_mask_type(mask):
         return AttnMaskType.NO_MASK
 
 
+def _try_jax_cudnn_attention(
+    QPos: AxisSelector,
+    KPos: AxisSelection,
+    Key: AxisSelector,
+    query: NamedArray,
+    key: NamedArray,
+    value: NamedArray,
+    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
+    bias: Optional[NamedArray] = None,
+    dropout: float = 0.0,
+    inference: bool = False,
+    *,
+    prng: Optional[PRNGKeyArray] = None,
+    attention_dtype: Optional[jnp.dtype] = None,
+    precision: PrecisionLike = None,
+    force_cudnn: bool = False,
+    scaling_factor: float,
+    logits_soft_cap: Optional[float] = None,
+    attn_sink: Optional[NamedArray] = None,
+) -> Optional[NamedArray]:
+    """
+    Try JAX cuDNN attention via jax.nn.dot_product_attention.
+    Falls back to reference implementation if unsupported.
+    """
+    if attn_sink is not None:
+        msg = "JAX cuDNN attention does not support attention sinks; falling back to reference."
+        if force_cudnn:
+            raise NotImplementedError("JAX cuDNN attention does not support attention sinks.")
+        warnings.warn(msg)
+        return None
+
+    if logits_soft_cap is not None:
+        msg = "JAX cuDNN attention does not support logits_soft_cap; falling back to reference."
+        if force_cudnn:
+            raise NotImplementedError("JAX cuDNN attention does not support logits_soft_cap.")
+        warnings.warn(msg)
+        return None
+
+    if dropout != 0.0:
+        msg = "JAX cuDNN attention does not support dropout; falling back to reference."
+        if force_cudnn:
+            raise NotImplementedError("JAX cuDNN attention does not support dropout.")
+        warnings.warn(msg)
+        return None
+
+    try:
+        return _jax_cudnn_attention(
+            QPos,
+            KPos,
+            Key,
+            query,
+            key,
+            value,
+            mask=mask,
+            bias=bias,
+            attention_dtype=attention_dtype,
+            precision=precision,
+            scaling_factor=scaling_factor,
+        )
+    except Exception as e:
+        message = f"Could not use JAX cuDNN attention: {str(e)}."
+        if force_cudnn:
+            raise NotImplementedError(message)
+        warnings.warn(f"{message} Falling back to the reference implementation.")
+        return None
+
+
+def _reshape_to_bnts(
+    arr: NamedArray,
+    batch_axes: tuple[Axis, ...],
+    head_axes: tuple[Axis, ...],
+    QPos: Axis,
+    KPos: Axis,
+) -> jax.Array:
+    """Reshape a NamedArray to BNTS format (Batch, Heads, Target seq, Source seq) for cuDNN.
+
+    Broadcasts missing batch/head axes and flattens to the required 4D format.
+    """
+    # Broadcast to include batch and head axes if not present
+    for ax in batch_axes:
+        if ax.name not in arr.axes:
+            arr = arr.broadcast_axis(ax)
+    for ax in head_axes:
+        if ax.name not in arr.axes:
+            arr = arr.broadcast_axis(ax)
+
+    # Flatten and rearrange to BNTS
+    arr = _maybe_flatten(arr, batch_axes, "B")
+    arr = _maybe_flatten(arr, head_axes, "H")
+    arr = _maybe_flatten(arr, [QPos], "T")
+    arr = _maybe_flatten(arr, [KPos], "S")
+    arr = arr.rearrange(("B", "H", "T", "S"))
+    return arr.array
+
+
+def _jax_cudnn_attention(
+    QPos: AxisSelector,
+    KPos: AxisSelection,
+    Key: AxisSelector,
+    query: NamedArray,
+    key: NamedArray,
+    value: NamedArray,
+    mask: Optional[Union[NamedArray, "AttentionMask"]] = None,
+    bias: Optional[NamedArray] = None,
+    *,
+    attention_dtype: Optional[jnp.dtype] = None,
+    precision: PrecisionLike = None,
+    scaling_factor: float,
+) -> NamedArray:
+    """
+    JAX cuDNN attention using jax.nn.dot_product_attention with implementation='cudnn'.
+
+    Expects query shape: (B, T, N, H) - Batch, Target seq, Num heads, Head dim
+    Expects key/value shape: (B, S, K, H) - Batch, Source seq, KV heads, Head dim
+
+    Note: When explicit masks are needed (segment IDs, sliding window, etc.), performance
+    will be slower than pure causal attention because cuDNN cannot skip computing masked
+    regions. For best performance with segment IDs, consider using NVTE backend if available.
+    """
+    attention_dtype = attention_dtype or query.dtype
+    query = query.astype(attention_dtype)
+    key = key.astype(attention_dtype)
+    value = value.astype(attention_dtype)
+
+    if precision is not None:
+        warnings.warn("precision is not directly supported for JAX cuDNN attention. Ignoring.")
+
+    # Bin axes into BSHD format (Batch, Sequence, Head, Dimension)
+    q_class, k_class, v_class = _bin_and_group_axes_by_function(query, key, value, QPos, KPos, Key)
+
+    # Reshape to BTNH for query and BSKH for key/value (JAX cuDNN format)
+    q_: jax.Array = _reshape_axes_for_bshd_bins(query, q_class, output_order=("B", "S", "H", "D")).array
+    k_ = _reshape_axes_for_bshd_bins(key, k_class, output_order=("B", "S", "H", "D")).array
+    v_ = _reshape_axes_for_bshd_bins(value, v_class, output_order=("B", "S", "H", "D")).array
+
+    QPos = query.resolve_axis(QPos)
+    KPos = key.resolve_axis(KPos)
+
+    batch_axes = tuple(q_class["B"])
+    head_axes = tuple(q_class["H"])
+
+    # Determine mask configuration
+    is_causal = False
+    needs_explicit_mask = False
+
+    if isinstance(mask, AttentionMask):
+        if mask.is_causal:
+            if mask.causal_offset is not None:
+                raise NotImplementedError(
+                    "Causal offset is not supported for JAX cuDNN attention. Please use the JAX reference"
+                    " implementation."
+                )
+            is_causal = True
+        if mask.explicit_mask is not None:
+            needs_explicit_mask = True
+        if mask.sliding_window is not None:
+            needs_explicit_mask = True  # Materialize sliding window into mask
+        if mask.segment_ids is not None:
+            needs_explicit_mask = True
+    elif isinstance(mask, NamedArray):
+        needs_explicit_mask = True
+
+    # Materialize mask if needed (for segment IDs, explicit masks, or sliding window)
+    # cuDNN supports explicit boolean masks in BNTS format
+    mask_array = None
+    if needs_explicit_mask:
+        # Materialize the full mask including causal, segment, explicit, and sliding window
+        materialized = materialize_mask(mask, QPos, KPos)
+        if materialized is not None:
+            mask_array = _reshape_to_bnts(materialized, batch_axes, head_axes, QPos, KPos)
+            # When using explicit mask, don't use is_causal (it's already in the mask)
+            is_causal = False
+
+    # Handle bias - cuDNN supports bias in BNTS format (added to logits before softmax)
+    bias_array = None
+    if bias is not None:
+        bias_array = _reshape_to_bnts(bias, batch_axes, head_axes, QPos, KPos)
+
+    # Call jax.nn.dot_product_attention with cuDNN implementation
+    # Query: BTNH, Key: BSKH, Value: BSKH
+    # Mask: BNTS (boolean, True = attend), Bias: BNTS (float, added to logits)
+    attn_output = jax.nn.dot_product_attention(
+        query=q_,
+        key=k_,
+        value=v_,
+        bias=bias_array,
+        mask=mask_array,
+        scale=scaling_factor,
+        is_causal=is_causal,
+        implementation="cudnn",
+    )
+
+    # Reshape output back to original format
+    # Output is BTNH, convert to named array
+    attn_output = haliax.named(attn_output, ("B", "S", "H", "D"))
+    attn_output = _unflatten_bshd(attn_output, q_class, v_class)
+
+    # Compute reference output shape for axis ordering
+    reference_out_shape = eqx.filter_eval_shape(
+        simple_attention_with_dropout,
+        QPos,
+        KPos,
+        Key,
+        query,
+        key,
+        value,
+        mask,
+        bias,
+        True,  # inference
+        0.0,  # dropout
+        attention_dtype,
+        precision,
+        prng=None,
+    )
+    attn_output = attn_output.rearrange(reference_out_shape.axes).astype(reference_out_shape.dtype)
+
+    return attn_output
+
+
 _DUMMY_HEAD = "__head__"
 _DUMMY_BATCH = "__batch__"
 
@@ -813,7 +1055,7 @@ def _materialize_segment_mask(
         kv_segment_ids = segment_ids.rename({QPos.name: KPos.name})[KPos.name, k_slice]
         q_segment_ids = segment_ids[QPos.name, q_slice]
 
-    return q_segment_ids.broadcast_axis(kv_segment_ids.axes) == kv_segment_ids
+    return cast(NamedArray, q_segment_ids.broadcast_axis(kv_segment_ids.axes) == kv_segment_ids)
 
 
 def _materialize_sliding_window_mask(
@@ -1844,8 +2086,8 @@ def _do_tpu_ragged_paged_attention(
     kv_lens = hax.where(~is_valid(kv_lens), 0, kv_lens)
 
     o = shard_map(
-        functools.partial(tpu_ragged_paged_attention, sm_scale=sm_scale, soft_cap=soft_cap),
-        haliax.partitioning._get_mesh(),
+        Partial(tpu_ragged_paged_attention, sm_scale=sm_scale, soft_cap=soft_cap),
+        jax.sharding.get_abstract_mesh(),
         in_specs=(
             haliax.partitioning.pspec_for_axis(q_flat.axes),
             haliax.partitioning.pspec_for_axis(kv_pages_padded.axes),
