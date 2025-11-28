@@ -1,3 +1,4 @@
+import time
 import dspy
 import json
 import os
@@ -7,7 +8,7 @@ from dspy.datasets.dataloader import DataLoader
 from dspy.primitives.prediction import Prediction
 from dspy.teleprompt.bootstrap_trace import bootstrap_trace_data
 from transformers import AutoTokenizer
-
+from experiments.dspy.inference_server import start_inference_server
 from experiments.dspy.programs.simplified_baleen import SimplifiedBaleen
 from experiments.dspy.programs.claim_verification import ClaimVerification
 from experiments.dspy.programs.field_extraction import FieldExtraction
@@ -151,7 +152,8 @@ if __name__ == "__main__":
     # For this script to run in a CI/Sandbox without keys, we check environment variables
     # or assume the user will run this with proper setup.
     
-    # Placeholder configuration to prevent immediate crash if run without setup
+    start_inference_server(model_path="meta-llama/Meta-Llama-3.1-8B-Instruct", port=8000, device_type="tpu")
+    time.sleep(10)
     print("Configuring DSPy...")
     rm = dspy.ColBERTv2(url="http://20.102.90.50:2017/wiki17_abstracts")
     lm = dspy.LM(model="openai/gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
