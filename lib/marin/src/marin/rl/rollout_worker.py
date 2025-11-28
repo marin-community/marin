@@ -136,8 +136,10 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
         avg_reward=(reward_sum / total_count) if total_count > 0 else 0.0,
     )
 
-def create_inference_context(inference_type: str,
-                             inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig,
+
+def create_inference_context(
+    inference_type: str,
+    inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig,
 ) -> BaseInferenceContext:
     """Create an inference context based on the configuration."""
     if inference_type == "levanter":
@@ -150,6 +152,7 @@ def create_inference_context(inference_type: str,
         )
     else:
         raise ValueError(f"Invalid inference type: {inference_type}")
+
 
 class RolloutWorker:
     """Asynchronous inference & rollout worker for RL training.

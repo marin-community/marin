@@ -58,8 +58,8 @@ def compute_metadata_metrics(
     batch_size, _ = policy_logprobs_array.shape
     return {
         "max_ratio_difference": Metric.from_value(
-             jnp.max(jnp.abs(current_logprobs - policy_logprobs_array) * loss_masks_array),
-             ReductionType.MAX,
+            jnp.max(jnp.abs(current_logprobs - policy_logprobs_array) * loss_masks_array),
+            ReductionType.MAX,
         ),
         "mean_ratio_difference": Metric.from_value(
             jnp.sum(jnp.abs(current_logprobs - policy_logprobs_array) * loss_masks_array) / jnp.sum(loss_masks_array),
@@ -201,6 +201,7 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     leave_one_out_baselines = (total - rewards) / (n - 1)
     advantages = rewards - leave_one_out_baselines
     return advantages
+
 
 @dataclass
 class RLOOLoss:
