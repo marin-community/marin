@@ -61,17 +61,6 @@ class BaseInferenceContext:
 
         return np.array(tokens, dtype=np.int32)
 
-    def tokenize_response(self, text: str) -> np.ndarray:
-        """Extract token IDs from the response text.
-
-        In general this should roundtrip via `encode`, as the chat template should
-        terminate with a special token to indicate the end of the template and start
-        of the assistant response, that is, we should not have a situation [pppprrrr]
-        where `pr` can be interpreted as a valid token.
-        """
-        tokens = self.tokenizer.encode(text, add_special_tokens=False)
-        return np.array(tokens, dtype=np.int32)
-
     def response_tokens_from_choice(self, choice: Choice) -> np.ndarray:
         """Extract token IDs with BPE round-trip."""
         if not choice.logprobs or not choice.logprobs.content:
@@ -109,14 +98,9 @@ class BaseInferenceContext:
         env_example_id: str,
         reward: float,
     ) -> Rollout:
-        """Construct Rollout from a choice with validation."""
+        """Given an openai Choice, extract tokens and logprobs and construct a Rollout with the given reward."""
 
         prompt_tokens = self.tokenize_prompt(prompt, choice)
-        # print(f"prompt_tokens: {prompt_tokens}")
-        # print(f"prompt token ids: {choice.prompt_token_ids}")
-
-        # assert choice.prompt_token_ids == prompt_tokens,
-        # f"Prompt token IDs mismatch: {choice.prompt_token_ids} != {prompt_tokens}"
         response_tokens = self.response_tokens_from_choice(choice)
         response_logprobs = self.logprobs_from_choice(choice)
 

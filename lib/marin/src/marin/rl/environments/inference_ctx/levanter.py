@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Inference context for rollout construction.
+Context which uses the native Levanter engine for inference.
 
 This context is provided to environments and provides access to the inference server
 as well as methods for tokenization and logprob extraction from an OpenAI ChatCompletion.
