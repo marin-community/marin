@@ -106,5 +106,5 @@ def test_math_env_reward_calculation():
     decoded_prompt = tokenizer.decode(rollout.prompt_tokens.tolist())
     assert "user:" in decoded_prompt.lower()
 
-    np.testing.assert_allclose(rollout.token_rewards, 1.2), (rollout, metrics)
-    assert rollout.episode_reward == pytest.approx(1.2), (rollout, metrics)
+    np.testing.assert_allclose(rollout.token_rewards, 1.1), (rollout, metrics)
+    assert rollout.episode_reward == pytest.approx(1.1), (rollout, metrics)
