@@ -20,7 +20,7 @@ https://github.com/marin-community/marin/issues/442
 from levanter.models.llama import LlamaConfig
 
 from experiments.defaults import default_train
-from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
+from experiments.pretraining_datasets import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma
 from experiments.llama import llama_1_4b, llama_1_4b_train_config
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
@@ -30,7 +30,7 @@ from marin.resources import TpuPodConfig
 EXPERIMENT_TAG = ["442_dolma"]
 
 dolma_llama3_tokenized = lm_mixture_data_config(
-    components=tokenize_dolma_steps(),
+    components=tokenize_dolma(),
     weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
     permutation_type="linear",
 )
@@ -47,7 +47,7 @@ dolma_1_4b = default_train(
 
 # (neox is close enough to olmo tokenizer)
 dolma_neox_tokenized = lm_mixture_data_config(
-    components=tokenize_dolma_steps(tokenizer="EleutherAI/gpt-neox-20b"),
+    components=tokenize_dolma(tokenizer="EleutherAI/gpt-neox-20b"),
     weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
     permutation_type="linear",
 )

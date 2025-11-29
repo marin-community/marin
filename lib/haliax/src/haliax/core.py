@@ -198,34 +198,66 @@ class NamedArrayMeta(type):
 @dataclass(frozen=True)
 class NamedArray(metaclass=NamedArrayMeta):
     array: jnp.ndarray
-    axes: tuple[Axis, ...]
+    axis_names: tuple[str, ...]
 
-    def __init__(self, array: jnp.ndarray, axes: AxisSpec):
+    def __init__(self, array: jnp.ndarray, axes: AxisSpec | Sequence[str | Axis]):
         object.__setattr__(self, "array", array)
+
         if isinstance(axes, Mapping):
             axes = tuple(Axis(name, size) for name, size in axes.items())
-        object.__setattr__(self, "axes", ensure_tuple(axes))
 
-        # ensure axes are all Axis objects
-        # TODO: anonymous positional axes?
-        for axis in self.axes:
-            if not isinstance(axis, Axis):
-                raise TypeError(f"Expected Axis, got {type(axis)}")
+        axes_tuple = ensure_tuple(axes)
+
+        axis_names: list[str] = []
+        provided_sizes: list[int | None] = []
+
+        for axis in axes_tuple:
+            if isinstance(axis, Axis):
+                axis_names.append(axis.name)
+                provided_sizes.append(axis.size)
+            elif isinstance(axis, str):
+                axis_names.append(axis)
+                provided_sizes.append(None)
+            else:
+                raise TypeError(f"Expected Axis or str, got {type(axis)}")
 
         # ensure unique axes for now
-        if len(set(a.name for a in self.axes)) != len(self.axes):
-            raise ValueError(f"Axes must be unique, but {self.axes} are not")
+        if len(set(axis_names)) != len(axis_names):
+            raise ValueError(f"Axes must be unique, but {axis_names} are not")
 
+        object.__setattr__(self, "axis_names", tuple(axis_names))
         if are_shape_checks_enabled():
-            self._ensure_shape_matches_axes()
+            self._validate_axes_against_shape(self.axis_names, provided_sizes)
 
-    def _ensure_shape_matches_axes(self):
-        """This is typically called automatically, but sometimes we need to call it manually if
-        are_shape_checks_enabled() is False"""
-        if is_jax_array_like(self.array):
-            s = jnp.shape(self.array)
-            if s != tuple(a.size for a in self.axes):
-                raise ValueError(f"Shape of underlying array {s} does not match shape of axes {self.axes}")
+    def _validate_axes_against_shape(
+        self, axis_names: Sequence[str], provided_sizes: Sequence[int | None] | None
+    ) -> None:
+        if not is_jax_array_like(self.array):
+            return
+
+        shape = jnp.shape(self.array)
+        if len(shape) != len(axis_names):
+            raise ValueError(f"Shape of underlying array {shape} does not match number of axes {axis_names}")
+
+        if provided_sizes is None:
+            return
+
+        if len(provided_sizes) != len(axis_names):
+            raise ValueError(
+                f"Axis size hints {provided_sizes} do not match number of axes {axis_names}; "
+                "this usually indicates inconsistent pytree metadata"
+            )
+
+        for name, expected_size, actual_size in zip(axis_names, provided_sizes, shape):
+            _check_size_consistency(axis_names, shape, name, expected_size, actual_size)
+
+    @ft.cached_property
+    def axes(self) -> tuple[Axis, ...]:
+        shape = jnp.shape(self.array)
+        if len(shape) != len(self.axis_names):
+            raise ValueError(f"Shape of underlying array {shape} does not match number of axes {self.axis_names}")
+
+        return tuple(Axis(name, size) for name, size in zip(self.axis_names, shape))
 
     def item(self):  # pragma: no cover
         """Returns the value of this NamedArray as a python scalar."""
@@ -270,13 +302,15 @@ class NamedArray(metaclass=NamedArrayMeta):
     """The number of bytes in the underlying array"""
 
     def tree_flatten(self) -> Any:
-        return ((self.array,), self.axes)
+        return ((self.array,), self.axis_names)
 
     @classmethod
     def tree_unflatten(cls, aux, tree: Any) -> Any:
         assert len(tree) == 1
         # We don't want check shapes b/c there are intermediate states where the shape is wrong
         # e.g. in eqxi.while_loop
+        if tree[0] is None:
+            return None
         with enable_shape_checks(False):
             return cls(tree[0], axes=aux)
 

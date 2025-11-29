@@ -387,7 +387,7 @@ If you want to just run the script, you can skip to the [Setup](#setup) section.
 Levanter's existing main entry points are designed for "pure" causal language modeling, where you have a single sequence
 and don't have any prompts or custom formatting. So we'll instead write a custom script that does the following:
 
-* Preprocesses the dataset into a single sequence, interpolating prompts as we go. We'll also construct a `loss_mask` and do any padding.
+* Preprocesses the dataset into a single sequence, interpolating prompts as we go. We'll also construct a `loss_weight` and do any padding.
 * Loads the model and resizes the vocabulary to match the tokenizer.
 * Runs the training loop.
 * Export the final model to Hugging Face.
@@ -461,13 +461,13 @@ def mk_dataset(config: TrainArgs, tokenizer: transformers.PreTrainedTokenizerBas
 ```python
 class LmExample(eqx.Module):
     tokens: hax.NamedArray
-    loss_mask: hax.NamedArray
+    loss_weight: hax.NamedArray
     attn_mask: AttentionMask = AttentionMask.causal()
 ```
 
-So we need to populate the first two fields. `tokens` is the input sequence, and `loss_mask` is a boolean mask
-that tells the model which tokens to compute the loss for. (We mask out the loss for everything before the start
-of the output.)
+So we need to populate the first two fields. `tokens` is the input sequence, and `loss_weight` is a per-token weight
+that tells the model how much (often 0 or 1) to weigh each prediction in the loss. We set the weight to zero for
+everything before the start of the output.
 
 ```python
 class SupervisedDataset(Dataset[LmExample]):
@@ -486,13 +486,13 @@ class SupervisedDataset(Dataset[LmExample]):
 
             # mask out padding and anything before the start of the target
             Pos = input_ids.resolve_axis("position")
-            loss_mask = hax.arange(Pos) >= ex["source_lens"]
+            loss_weight = hax.arange(Pos) >= ex["source_lens"]
 
             # don't predict the padding
             targets = hax.roll(input_ids, -1, Pos)
-            loss_mask = loss_mask & (targets != self.tokenizer.pad_token_id)
+            loss_weight = loss_weight * (targets != self.tokenizer.pad_token_id).astype(loss_weight.dtype)
 
-            yield LmExample(input_ids, loss_mask)
+            yield LmExample(input_ids, loss_weight)
 ```
 
 ### The Rest

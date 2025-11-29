@@ -3,7 +3,7 @@
 
 import abc
 from dataclasses import dataclass
-from typing import Generic, Optional, Type, TypeVar
+from typing import Generic, Optional, Type, TypeVar, cast
 
 import draccus
 import equinox as eqx
@@ -23,14 +23,14 @@ LmT = TypeVar("LmT", bound="LmHeadModel")
 
 class LmExample(eqx.Module):
     tokens: hax.NamedArray
-    loss_mask: hax.NamedArray
+    loss_weight: hax.NamedArray
     attn_mask: AttentionMask | NamedArray = AttentionMask.causal()
 
     @staticmethod
     def causal(
         tokens: hax.NamedArray,
         *,
-        loss_mask: Optional[hax.NamedArray] = None,
+        loss_weight: Optional[hax.NamedArray] = None,
         ignore_id: Optional[int] = None,
         eos_id: Optional[int] = None,
         segment_ids: Optional[hax.NamedArray] = None,
@@ -46,18 +46,20 @@ class LmExample(eqx.Module):
 
         causal_loss_mask = LmExample.causal_loss_mask(Pos)
 
-        if loss_mask is not None:
-            loss_mask = loss_mask & causal_loss_mask.astype(loss_mask.dtype)
+        if loss_weight is not None:
+            dtype = jnp.result_type(loss_weight.dtype, jnp.float32)
+            loss_weight = loss_weight.astype(dtype) * causal_loss_mask.astype(dtype)
         else:
-            loss_mask = causal_loss_mask
+            dtype = jnp.float32
+            loss_weight = causal_loss_mask.astype(dtype)
 
         if ignore_id is not None:
             # we don't compute loss for any tokens matching the ignore index
             ignore_mask = hax.roll(tokens, -1, Pos) != ignore_id
-            ignore_mask = ignore_mask.astype(loss_mask.dtype)
-            loss_mask = loss_mask & ignore_mask
+            ignore_mask = ignore_mask.astype(loss_weight.dtype)
+            loss_weight = loss_weight * ignore_mask
 
-        loss_mask = loss_mask.astype(jnp.int32)
+        loss_weight = loss_weight.astype(dtype)
 
         attn_mask = AttentionMask.causal(sliding_window=sliding_window)
 
@@ -71,7 +73,7 @@ class LmExample(eqx.Module):
         elif segment_ids is not None:
             attn_mask = attn_mask.with_segment_ids(segment_ids)
 
-        return LmExample(tokens=tokens, loss_mask=loss_mask, attn_mask=attn_mask)
+        return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
     @staticmethod
     def from_prompt_and_completion(
@@ -90,25 +92,25 @@ class LmExample(eqx.Module):
             raise NotImplementedError("Not implemented yet")
 
         # mask out the prompt tokens
-        loss_mask = LmExample.causal_loss_mask(Pos, prompt_length=prompt_length)
+        loss_weight = LmExample.causal_loss_mask(Pos, prompt_length=prompt_length).astype(jnp.float32)
 
         if ignore_id is not None:
             # we don't compute loss for any tokens matching the ignore index
             ignore_mask = hax.roll(tokens, -1, Pos) != ignore_id
-            loss_mask = loss_mask * ignore_mask
+            loss_weight = loss_weight * ignore_mask.astype(loss_weight.dtype)
 
-        return LmExample(tokens=tokens, loss_mask=loss_mask, attn_mask=attn_mask)
+        return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
     @staticmethod
     def causal_loss_mask(Pos: Axis, prompt_length: Optional[int] = None) -> NamedArray:
-        loss_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
+        loss_weight = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
 
         if prompt_length is not None:
             # don't predict the prompt tokens
             prompt_mask = hax.arange(Pos) >= prompt_length - 1
-            loss_mask = hax.logical_and(loss_mask, prompt_mask)
+            loss_weight = hax.logical_and(loss_weight, prompt_mask)
 
-        return loss_mask
+        return loss_weight
 
 
 # TODO: for some reason, mypy doesn't like the discover_packages_path argument?
@@ -144,7 +146,7 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
     def flops_per_token(self, vocab_size: int) -> Optional[float]:
         return None
 
-    def total_trainable_params(self) -> Optional[float]:
+    def total_trainable_params(self, vocab_size: int) -> Optional[float]:
         return None
 
     def build(self, Vocab: Axis, *, key: PRNGKeyArray) -> "LmT":
@@ -220,7 +222,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         *,
         key=None,
         pos_ids: NamedArray | None = None,
-    ) -> NamedArray:
+    ) -> NamedArray | tuple[NamedArray, NamedArray | float]:
         """
         Compute the activations for the next token in a sequence.
         Args:
@@ -259,7 +261,7 @@ def compute_next_token_loss(
     example: LmExample,
     *,
     key=None,
-    reduction: Optional[hax.ReductionFunction] = hax.mean,
+    reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
     reduction_axis: Optional[hax.AxisSelection] = None,
     logsumexp_weight: Optional[float] = None,
     loss_dtype: Optional[jnp.dtype] = jnp.float32,
@@ -283,7 +285,7 @@ def compute_next_token_loss(
         activations,
         model.get_lm_head(),
         example.tokens,
-        loss_mask=example.loss_mask,
+        loss_weight=example.loss_weight,
         reduction=reduction,
         reduction_axis=reduction_axis,
         logsumexp_weight=logsumexp_weight,
