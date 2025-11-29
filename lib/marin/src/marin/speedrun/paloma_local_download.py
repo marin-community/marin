@@ -35,7 +35,7 @@ paloma_speedrun = ExecutorStep(
         wait_for_completion=True,
         append_sha_to_path=True,
     ),
-)
+).cd("65cd6fc")
 
 
 def speedrun_paloma_tokenized(tokenizer: str = llama3_tokenizer):
