@@ -461,7 +461,7 @@ def _muon_presets() -> dict[str, MuonConfig]:
 def _resource_presets(use_gpu: bool = False):
     if use_gpu:
         return {
-            "130m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
+            "130m": GpuConfig(gpu_count=2, accelerator_type="A100-40G"),
             "300m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
             "520m": GpuConfig(gpu_count=2, accelerator_type="A100-80G"),
             "1_2b": GpuConfig(gpu_count=4, accelerator_type="A100-80G"),

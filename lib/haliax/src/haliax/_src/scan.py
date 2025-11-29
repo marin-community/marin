@@ -30,7 +30,8 @@ Args = ParamSpec("Args")
 
 
 def is_named_or_shaped_array_like(x):
-    return (is_jax_array_like(x) and x.ndim >= 1) or is_named_array(x)
+    # Check for NamedArray first to avoid triggering the shape property
+    return is_named_array(x) or (is_jax_array_like(x) and x.ndim >= 1)
 
 
 class ScanFn(Protocol[Carry, Args, Y]):
@@ -613,10 +614,13 @@ class _PassiveNamedArray:
         return NamedArray(self.array, (scan_axis,) + self.main_axes)
 
     def strip_axis(self, axis: AxisSelector):
+        # Use name-based lookup to handle cases where sizes might differ
+        # (e.g., during tracing with placeholder sizes)
         if isinstance(axis, Axis):
-            index = self.main_axes.index(axis)
+            axis_name = axis.name
         else:
-            index = index_where(lambda a: a.name == axis, self.main_axes)
+            axis_name = axis
+        index = index_where(lambda a: a.name == axis_name, self.main_axes)
         return NamedArray(self.array, self.main_axes[:index] + self.main_axes[index + 1 :])
 
     def to_named_array(self):
