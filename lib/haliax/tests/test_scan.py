@@ -403,13 +403,6 @@ def test_checkpoint_carries(name, policy, expected_scan_shapes, check_offloading
     closed_call = next(eqn for eqn in jaxpr.jaxpr.eqns if eqn.primitive in [jax.lax.scan_p])
     out_shapes = [out.aval.shape for out in closed_call.outvars]
 
-    print(name)
-    print(jaxpr)
-    from jax._src.ad_checkpoint import saved_residuals
-
-    for residual in saved_residuals(loss_fn, m, hax.random.uniform(jax.random.PRNGKey(1), (E,))):
-        print(residual)
-
     assert out_shapes == expected_scan_shapes, f"{name}: Expected {expected_scan_shapes}, got {out_shapes}"
 
     # Add check for offloading if specified

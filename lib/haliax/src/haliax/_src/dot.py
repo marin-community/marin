@@ -8,8 +8,8 @@ import typing
 import warnings
 
 import jax
+from jax.sharding import NamedSharding
 
-import haliax
 from haliax.axis import (
     Axis,
     AxisSelection,
@@ -22,6 +22,7 @@ from haliax.axis import (
 )
 from haliax.core import NamedArray
 from haliax.jax_utils import _jittable_dg_einsum
+from haliax.partitioning import _resolve_mesh, all_mesh_axes_explicit, current_thread_local_mapping, pspec_for_axis
 from haliax.types import DTypeLike, PrecisionLike
 
 
@@ -145,16 +146,19 @@ def dot(
         jax_str = f"contract {', '.join(axis)} -> {', '.join(a.name for a in output_axes)}"
 
     with jax.named_scope(jax_str):
+        raw_arrays = [a.array for a in arrays]
+        inferred_out_sharding = _infer_out_sharding(output_axes, raw_arrays)
+
         output = _jittable_dg_einsum(
             ", ".join(array_specs) + "-> " + output_spec,
-            *[a.array for a in arrays],
+            *raw_arrays,
             precision=precision,
             preferred_element_type=preferred_element_type,
             _dot_general=dot_general,
+            out_sharding=inferred_out_sharding,
         )
 
-    out = NamedArray(output, output_axes)
-    return haliax.auto_sharded(out)
+    return NamedArray(output, output_axes)
 
 
 def _ensure_no_mismatched_axes(*arrays: NamedArray):
@@ -170,3 +174,22 @@ def _ensure_no_mismatched_axes(*arrays: NamedArray):
                     raise ValueError(f"Axis {ax.name} has multiple sizes: {known_sizes[ax.name]} and {ax.size}")
             else:
                 known_sizes[ax.name] = ax.size
+
+
+def _infer_out_sharding(out_axes: tuple[Axis, ...], operands: list[jax.Array]):
+    mapping = current_thread_local_mapping()
+    mesh = _resolve_mesh()
+
+    if mesh is None:
+        for op in operands:
+            sh = op.sharding
+            mesh = getattr(sh, "mesh", None)
+
+    if mesh is None:
+        return None
+
+    pspec = pspec_for_axis(out_axes, mapping)
+    if not all_mesh_axes_explicit(mesh, pspec):
+        # JAX doesn't like it when you pass out_sharding for non-explicit axes
+        return None
+    return NamedSharding(mesh, pspec)
