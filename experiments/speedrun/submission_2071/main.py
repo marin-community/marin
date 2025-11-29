@@ -29,7 +29,6 @@ How to run:
 
 # nodryrun
 import sys
-import os
 import dataclasses
 import logging
 from dataclasses import dataclass
@@ -373,9 +372,7 @@ def _size_presets(attn_backend: AttentionBackend | None = None) -> dict[str, Hac
         attn_backend=attn_backend,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
         tie_word_embeddings=False,
-        # Use block-wise cross-entropy to avoid materializing full logits (batch*seq*vocab)
-        # Without this, a batch of 128*4096*128000 = 134 GiB of logits would be computed!
-        cross_entropy_block_size=4096,
+        cross_entropy_block_size=4096,  # lower if you get OOM
     )
     return {
         "130m": HackableTransformerConfig(
@@ -461,7 +458,7 @@ def _muon_presets() -> dict[str, MuonConfig]:
 def _resource_presets(use_gpu: bool = False):
     if use_gpu:
         return {
-            "130m": GpuConfig(gpu_count=2, accelerator_type="A100-40G"),
+            "130m": GpuConfig(gpu_count=1, accelerator_type="A100-40G"),
             "300m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
             "520m": GpuConfig(gpu_count=2, accelerator_type="A100-80G"),
             "1_2b": GpuConfig(gpu_count=4, accelerator_type="A100-80G"),

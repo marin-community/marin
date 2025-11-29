@@ -271,7 +271,7 @@ class NamedArray(metaclass=NamedArrayMeta):
             # This can happen during intermediate states like jax.eval_shape, while_loop, etc.
             # where placeholder arrays might have wrong shapes. We return axes with size 0
             # to allow downstream code to still access axis names for partitioning, etc.
-            # See the comment in tree_unflatten about shape checks being disabled.
+            # (see the comment in tree_unflatten about shape checks being disabled)
             return tuple(Axis(name, 0) for name in self.axis_names)
 
         return tuple(Axis(name, size) for name, size in zip(self.axis_names, shape))

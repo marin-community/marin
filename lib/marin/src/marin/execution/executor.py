@@ -1130,10 +1130,11 @@ class ExecutorMainConfig:
 def _setup_logging():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+
 def _detect_local_resources() -> dict[str, float]:
     from marin.resources_utils import torch_device_name_to_ray_accel_type
 
-    resources = {"head_node": 1}
+    resources: dict[str, float] = {"head_node": 1}
     try:
         import torch
 
@@ -1153,6 +1154,7 @@ def _detect_local_resources() -> dict[str, float]:
     except ImportError:
         logger.warning("torch is not installed. GPU detection skipped.")
     return resources
+
 
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):

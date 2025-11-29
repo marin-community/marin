@@ -57,7 +57,7 @@ class StringHolderEnum(type):
 
 
 def is_jax_or_hax_array_like(x):
-    # Check for NamedArray first to avoid triggering the shape property
+    # check for NamedArray first to avoid triggering the shape property
     return is_named_array(x) or is_jax_array_like(x)
 
 

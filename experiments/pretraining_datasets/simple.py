@@ -120,6 +120,20 @@ downloads = {
             override_output_path="raw/SlimPajama-6B-be35b7",
         ).cd("b5f90f4/huggingface.co/datasets/DKYoon/SlimPajama-6B/resolve/b5f90f4")
     ),
+    "dolma3_mix_150b_1025": (
+        ExecutorStep(
+            name="raw/dolma3_mix-150B-1025",
+            fn=download_hf,
+            config=DownloadConfig(
+                hf_dataset_id="allenai/dolma3_mix-150B-1025",
+                revision="15d04ee",
+                gcs_output_path=this_output_path(),
+                wait_for_completion=True,
+                append_sha_to_path=True,
+            ),
+            override_output_path="raw/dolma3_mix-150B-1025-15d04ee",
+        ).cd("15d04ee")
+    ),
     "dclm_baseline_wrong": ExecutorStep(
         name="raw/dclm-baseline-1.0",
         fn=download_hf,
@@ -232,5 +246,11 @@ tokenized = {
         "fineweb-edu",
         downloads["fineweb_edu"],
         tokenizer=llama3_tokenizer,
+    ),
+    "dolma3_mix_150b_1025": _tokenize_simple(
+        "dolma3_mix-150B-1025",
+        downloads["dolma3_mix_150b_1025"],
+        tokenizer=llama3_tokenizer,
+        override_path="tokenized/dolma3_mix-150B-1025-15d04ee/",
     ),
 }
