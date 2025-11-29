@@ -29,7 +29,7 @@ from ray.job_submission import JobSubmissionClient
 
 from marin.cluster.config import find_config_by_region
 from fray.cluster.ray import DashboardConfig, ray_dashboard
-from marin.run.ray_deps import build_runtime_env_for_packages
+from marin.run.ray_deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,11 @@ async def submit_and_track_job(
     }
 
     # add the TPU dependency for cluster jobs.
-    runtime_dict = build_runtime_env_for_packages(extra=[*extra.split(","), "tpu"], env_vars=env_vars) | runtime_dict
+    extra_list = extra.split(",") if extra else []
+    if accelerator_type_from_extra(extra_list) == AcceleratorType.NONE:
+        extra_list.append("tpu")
+
+    runtime_dict = build_runtime_env_for_packages(extra=[*extra_list], env_vars=env_vars) | runtime_dict
 
     logger.info(
         f"Terminal command: \n"
@@ -205,7 +209,11 @@ def main():
         default=None,
         help="Custom submission ID for the job. If not provided, a default ID will be generated.",
     )
-    parser.add_argument("--auto-stop", action="store_true", help="Automatically stop the cluster on shutdown.")
+    parser.add_argument(
+        "--auto-stop",
+        action="store_true",
+        help="Automatically stop the submitted job on exit (including ctrl+c interrupt).",
+    )
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
     args = parser.parse_args()

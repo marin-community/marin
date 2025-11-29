@@ -9,11 +9,12 @@ import warnings
 from dataclasses import dataclass
 from enum import Enum
 from numbers import Integral
-from typing import Optional, Union, overload
+from typing import Optional, Union, cast, overload
 
 import equinox as eqx
 import jax
 import jax.random as jrandom
+from equinox import Partial
 from jax import numpy as jnp
 
 from ..inference.utils import is_valid
@@ -813,7 +814,7 @@ def _materialize_segment_mask(
         kv_segment_ids = segment_ids.rename({QPos.name: KPos.name})[KPos.name, k_slice]
         q_segment_ids = segment_ids[QPos.name, q_slice]
 
-    return q_segment_ids.broadcast_axis(kv_segment_ids.axes) == kv_segment_ids
+    return cast(NamedArray, q_segment_ids.broadcast_axis(kv_segment_ids.axes) == kv_segment_ids)
 
 
 def _materialize_sliding_window_mask(
@@ -1844,8 +1845,8 @@ def _do_tpu_ragged_paged_attention(
     kv_lens = hax.where(~is_valid(kv_lens), 0, kv_lens)
 
     o = shard_map(
-        functools.partial(tpu_ragged_paged_attention, sm_scale=sm_scale, soft_cap=soft_cap),
-        haliax.partitioning._get_mesh(),
+        Partial(tpu_ragged_paged_attention, sm_scale=sm_scale, soft_cap=soft_cap),
+        jax.sharding.get_abstract_mesh(),
         in_specs=(
             haliax.partitioning.pspec_for_axis(q_flat.axes),
             haliax.partitioning.pspec_for_axis(kv_pages_padded.axes),

@@ -242,7 +242,7 @@ def run_inference(inference_config: InferenceConfig):
 
     for input_filepath in filepaths:
         # Throttle submissions
-        while len(pending_refs) >= max_in_flight:
+        while max_in_flight is not None and len(pending_refs) >= max_in_flight:
             ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
             ready_ref = ready_refs[0]
             file_for_ref = pending_refs.pop(ready_ref)

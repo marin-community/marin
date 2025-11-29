@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
-from typing import Optional
+from typing import Optional, cast
 
 import equinox
 import jax
@@ -12,6 +12,8 @@ import haliax as hax
 from haliax import NamedArray
 from haliax.nn import cross_entropy_loss_and_log_normalizers
 
+DEFAULT_REDUCTION = cast(hax.ReductionFunction, hax.mean)
+
 
 def maybe_fused_next_token_loss(
     Pos: hax.AxisSelector,
@@ -20,8 +22,8 @@ def maybe_fused_next_token_loss(
     pred_embeddings: NamedArray,
     pred_lm_head: NamedArray,
     true_ids: NamedArray,
-    loss_mask: Optional[NamedArray] = None,
-    reduction: Optional[hax.ReductionFunction] = hax.mean,
+    loss_weight: Optional[NamedArray] = None,
+    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
     logsumexp_weight: Optional[float] = None,
     block_size: Optional[int] = None,
@@ -37,7 +39,7 @@ def maybe_fused_next_token_loss(
         pred_embeddings (NamedArray): Predicted embeddings.
         pred_lm_head (NamedArray): Language model head weights.
         true_ids (NamedArray): True token IDs.
-        loss_mask (Optional[NamedArray]): Mask to apply to the loss.
+        loss_weight (Optional[NamedArray]): Mask to apply to the loss.
         reduction (Optional[hax.ReductionFunction]): Reduction function.
         reduction_axis (Optional[hax.AxisSelection]): Axis to apply reduction.
         logsumexp_weight (Optional[float]): Weight for logsumexp penalty.
@@ -61,17 +63,18 @@ def maybe_fused_next_token_loss(
             logits = hax.tanh(logits / logit_soft_cap) * logit_soft_cap
 
         # Shift target tokens to predict the next token
-        return next_token_loss(Pos, Vocab, logits, true_ids, loss_mask, reduction, reduction_axis, logsumexp_weight)
+        return next_token_loss(Pos, Vocab, logits, true_ids, loss_weight, reduction, reduction_axis, logsumexp_weight)
 
     # Shift target tokens to predict the next token
     target_y = hax.roll(true_ids, -1, Pos)
 
     # Create a mask that excludes the last token
-    not_last_loss_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))  # type: ignore
-    if loss_mask is not None:
-        loss_mask = hax.logical_and(loss_mask.astype(jnp.bool_), not_last_loss_mask) # loss_mask may be int32
+    not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))  # type: ignore
+    if loss_weight is not None:
+        dtype = loss_weight.dtype
+        loss_weight = loss_weight.astype(dtype) * not_last_mask.astype(dtype)
     else:
-        loss_mask = not_last_loss_mask
+        loss_weight = not_last_mask.astype(jnp.float32)
 
     # Compute the loss with optional block-wise processing
     return fused_cross_entropy_loss_and_logsumexp_penalty(
@@ -82,7 +85,7 @@ def maybe_fused_next_token_loss(
         target_y=target_y,
         reduction=reduction,
         reduction_axis=reduction_axis,
-        where=loss_mask,
+        weight=loss_weight,
         logsumexp_weight=logsumexp_weight,
         block_size=block_size,
         dtype=dtype,
@@ -95,8 +98,8 @@ def next_token_loss(
     Vocab: hax.AxisSelector,
     logits: NamedArray,
     true_ids: NamedArray,
-    loss_mask: Optional[NamedArray] = None,
-    reduction: Optional[hax.ReductionFunction] = hax.mean,
+    loss_weight: Optional[NamedArray] = None,
+    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
     logsumexp_weight: Optional[float] = None,
 ):
@@ -108,7 +111,7 @@ def next_token_loss(
         Vocab: axis selector for the vocabulary axis
         logits: predicted logits
         true_ids: true token IDs (not shifted)
-        loss_mask: mask to apply to the loss
+        loss_weight: mask to apply to the loss
         reduction: reduction function or None to disable reduction
         reduction_axis: axis to apply reduction. None means all axes
         logsumexp_weight: weight for the logsumexp penalty
@@ -122,11 +125,12 @@ def next_token_loss(
     target_y_full = hax.nn.one_hot(target_y, Vocab, dtype=logits.dtype)
 
     # Create a mask that excludes the last token
-    not_last_loss_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
-    if loss_mask is not None:
-        loss_mask = hax.logical_and(loss_mask, not_last_loss_mask)
+    not_last_mask = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jnp.bool_))
+    if loss_weight is not None:
+        dtype = loss_weight.dtype
+        loss_weight = loss_weight.astype(dtype) * not_last_mask.astype(dtype)
     else:
-        loss_mask = not_last_loss_mask
+        loss_weight = not_last_mask.astype(jnp.float32)
 
     return cross_entropy_and_logsumexp_penalty(
         Vocab=Vocab,
@@ -134,7 +138,7 @@ def next_token_loss(
         target_y=target_y_full,
         reduction=reduction,
         reduction_axis=reduction_axis,
-        where=loss_mask,
+        weight=loss_weight,
         logsumexp_weight=logsumexp_weight,
     )
 
@@ -144,9 +148,9 @@ def cross_entropy_and_logsumexp_penalty(
     pred_y: NamedArray,
     target_y: NamedArray,
     *,
-    reduction: Optional[hax.ReductionFunction] = hax.mean,
+    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
-    where: Optional[NamedArray] = None,
+    weight: Optional[NamedArray] = None,
     logsumexp_weight=0.0,
 ) -> NamedArray:
     """A loss function that combines cross entropy loss with a logsumexp penalty."""
@@ -156,7 +160,7 @@ def cross_entropy_and_logsumexp_penalty(
     if logsumexp_weight is not None and logsumexp_weight != 0.0:
         loss = loss + logsumexp_weight * (log_normalizers**2)
 
-    return hax.nn.loss.maybe_reduce_loss(loss, reduction, reduction_axis, where)
+    return hax.nn.loss.reduce_loss(loss, reduction, reduction_axis, weight=weight)
 
 
 def fused_cross_entropy_loss_and_logsumexp_penalty(
@@ -166,9 +170,9 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     Label: hax.AxisSelector,
     target_y: NamedArray,
     *,
-    reduction: Optional[hax.ReductionFunction] = hax.mean,
+    reduction: Optional[hax.ReductionFunction] = DEFAULT_REDUCTION,
     reduction_axis: Optional[hax.AxisSelection] = None,
-    where: Optional[NamedArray] = None,
+    weight: Optional[NamedArray] = None,
     logsumexp_weight: float | None = 0.0,
     block_size: int,
     dtype: Optional[jnp.dtype] = jnp.float32,
@@ -186,7 +190,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
         target_y (NamedArray): One-hot encoded target tokens.
         reduction (Optional[hax.ReductionFunction]): Reduction function.
         reduction_axis (Optional[hax.AxisSelection]): Axis to apply reduction.
-        where (Optional[NamedArray]): Mask to apply to the loss.
+        weight (Optional[NamedArray]): Sample weights to apply to the loss.
         logsumexp_weight (float): Weight for logsumexp penalty.
         block_size (int): Size of each block for processing.
         dtype (Optional[jnp.dtype]): Data type for the loss.
@@ -209,7 +213,7 @@ def fused_cross_entropy_loss_and_logsumexp_penalty(
     if logsumexp_weight is not None and (not isinstance(logsumexp_weight, (int, float)) or logsumexp_weight != 0.0):
         loss = loss + logsumexp_weight * (log_normalizers**2)
 
-    return hax.nn.loss.maybe_reduce_loss(loss, reduction, reduction_axis, where)
+    return hax.nn.loss.maybe_reduce_loss(loss, reduction, reduction_axis, where=None, weight=weight)
 
 
 @equinox.filter_custom_vjp

@@ -109,12 +109,12 @@ class DomainTaggedDataset(AsyncDataset[tuple[T, hax.NamedArray]]):
     async def async_len(self) -> int:
         return int((await self._get_offsets())[-1])
 
-    async def getitem_async(self, item: int) -> tuple[T, hax.NamedArray]:
+    async def getitem_async(self, index: int) -> tuple[T, hax.NamedArray]:
         offsets = await self._get_offsets()
-        dataset_index = np.searchsorted(offsets, item, side="right") - 1
+        dataset_index = np.searchsorted(offsets, index, side="right") - 1
         offset = offsets[dataset_index]
         dataset, tags = self.datasets[dataset_index]
-        return await dataset.getitem_async(int(item - offset)), self._tag_arrays[dataset_index]
+        return await dataset.getitem_async(int(index - offset)), self._tag_arrays[dataset_index]
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[tuple[T, hax.NamedArray]]:
         # Chatgpt wrote this. pretty sure it's correct
@@ -167,7 +167,7 @@ def cb_tagged_lm_evaluate(
     tagged_eval_sets: Sequence[tuple[AsyncDataset[LmExample], Sequence[str]]],
     tokenizer: Optional[HfTokenizer] = None,
     device_mesh: Optional[Mesh] = None,
-    axis_mapping: ResourceMapping = None,
+    axis_mapping: ResourceMapping | None = None,
     max_examples_per_dataset: Optional[int] = None,
     eval_current: bool = True,
     eval_ema: bool = True,
@@ -337,20 +337,21 @@ class TaggedEvaluator:
                 if axis_mapping is not None:
                     context.enter_context(hax.axis_mapping(axis_mapping))
                 losses = compute_next_token_loss(m, batch, reduction=None, reduction_axis=())
-                mask = batch.loss_mask  # [Batch, Pos]
-                this_tokens = hax.sum(mask)
-                this_loss = hax.einsum("->", losses, mask)  # to scalar
+                weights = batch.loss_weight  # [Batch, Pos]
+                this_tokens = hax.sum(weights)
+                this_loss = hax.einsum("->", losses, weights)  # to scalar
 
                 # all the *_per_tag variables are [Tag]
-                this_tokens_per_tag = hax.einsum("-> tag", mask, tags)
-                this_loss_per_tag = hax.einsum("-> tag", mask, losses, tags)  # [Tag]
+                this_tokens_per_tag = hax.einsum("-> tag", weights, tags)
+                this_loss_per_tag = hax.einsum("-> tag", weights, losses, tags)  # [Tag]
 
                 mean = state.token_avg_loss.add(this_loss / this_tokens, this_tokens)
                 state = dataclasses.replace(state, token_avg_loss=mean)
 
                 if len(self.dataset.tag_to_index) > 0:
                     # careful: this_tokens_per_tag can be 0 if there are no tokens for that tag
-                    safe_mean = hax.where(this_tokens_per_tag, this_loss_per_tag / this_tokens_per_tag, 0.0)
+                    nonzero_token_mask = this_tokens_per_tag > 0
+                    safe_mean = hax.where(nonzero_token_mask, this_loss_per_tag / this_tokens_per_tag, 0.0)
                     mean_per_tag = state.loss_per_tag.add(safe_mean, this_tokens_per_tag)
                     state = dataclasses.replace(state, loss_per_tag=mean_per_tag)
 
@@ -359,8 +360,8 @@ class TaggedEvaluator:
                         batch.tokens, -1, m.Pos.name
                     )  # [Batch, Pos], rolled by 1 for next token task
                     bytes_per_pos = self.bytes_per_token.take("vocab", next_tokens)  # [Batch, Pos]
-                    bytes_per_tag = hax.einsum("-> tag", mask, bytes_per_pos, tags)  # [Tag]
-                    this_bytes = hax.einsum("->", bytes_per_pos, mask)  # Scalar
+                    bytes_per_tag = hax.einsum("-> tag", weights, bytes_per_pos, tags)  # [Tag]
+                    this_bytes = hax.einsum("->", bytes_per_pos, weights)  # Scalar
 
                     # log loss -> bits is log2(e) * loss
                     bpb_per_tag = this_loss_per_tag / hax.maximum(bytes_per_tag, 1) * jnp.log2(jnp.e)
