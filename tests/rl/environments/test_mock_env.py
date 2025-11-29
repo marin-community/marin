@@ -98,7 +98,7 @@ def create_test_inference_context():
         def __init__(self):
             self.tokenizer = create_test_tokenizer()
 
-        def batch_completions(self, prompts, temperature, n):
+        def batch_completions(self, prompts, temperature, n, max_tokens=None, stop=None, system_prompt=None):
             completions = []
             for prompt in prompts:
                 responses = [f"mock_response_{i}" for i in range(n)]
@@ -115,7 +115,7 @@ def create_test_inference_context():
         def get_choice_logprobs(self, choice):
             return np.full(len(choice.message.content), -1.0, dtype=np.float32)
 
-        def create_rollout_from_choice(self, prompt, choice, env_name, env_example_id, reward):
+        def create_rollout_from_choice(self, prompt, choice, env_name, env_example_id, reward, temperature, system_prompt=None, correctness_reward=None):
             prompt_tokens = self.tokenize_prompt(prompt)
             response_tokens = self.get_choice_tokens(choice)
             response_logprobs = self.get_choice_logprobs(choice)
@@ -129,6 +129,9 @@ def create_test_inference_context():
                 response_logprobs=jnp.array(response_logprobs, dtype=jnp.float32),
                 token_rewards=token_rewards,
                 episode_reward=float(reward),
+                temperature=temperature,
+                is_truncated=False,
+                correctness_reward=correctness_reward,
             )
 
         def create_rollout_group_from_completion(self, prompt, completion, env_name, env_example_id, reward_fn):
@@ -136,7 +139,7 @@ def create_test_inference_context():
             for choice in completion.choices:
                 response_text = choice.message.content
                 reward = reward_fn(response_text)
-                rollout = self.create_rollout_from_choice(prompt, choice, env_name, env_example_id, reward)
+                rollout = self.create_rollout_from_choice(prompt, choice, env_name, env_example_id, reward, temperature=1.0)
                 rollouts.append(rollout)
 
             return RolloutGroup(rollouts=rollouts)
