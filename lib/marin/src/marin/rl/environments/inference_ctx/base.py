@@ -20,11 +20,11 @@ as well as methods for tokenization and logprob extraction from an OpenAI ChatCo
 """
 
 import logging
-import jax.numpy as jnp
 import numpy as np
 from openai.types.chat import ChatCompletion
 from openai.types.chat.chat_completion import Choice
 from marin.rl.types import Rollout
+
 from levanter.models.lm_model import LmHeadModel
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,10 @@ logger = logging.getLogger(__name__)
 class BaseInferenceContext:
     """Base class for inference contexts."""
 
-    def reload_model(self, model: LmHeadModel) -> None:
+    def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
+        raise NotImplementedError
+
+    def shutdown(self) -> None:
         raise NotImplementedError
 
     def batch_completions(
@@ -47,7 +50,7 @@ class BaseInferenceContext:
         """Batch completions from the inference server."""
         raise NotImplementedError
 
-    def tokenize_prompt(self, prompt: str, choice: Choice | None = None) -> np.ndarray:
+    def tokenize_prompt(self, prompt: str, choice: Choice | None = None, system_prompt: str | None = None) -> np.ndarray:
         """Tokenize with chat template matching server behavior."""
         messages = [{"role": "user", "content": prompt}]
         try:
@@ -97,10 +100,18 @@ class BaseInferenceContext:
         env_name: str,
         env_example_id: str,
         reward: float,
+        temperature: float,
+        system_prompt: str | None = None,
+        correctness_reward: float | None = None,
     ) -> Rollout:
-        """Given an openai Choice, extract tokens and logprobs and construct a Rollout with the given reward."""
+        """Construct Rollout from a choice with validation."""
 
-        prompt_tokens = self.tokenize_prompt(prompt, choice)
+        prompt_tokens = self.tokenize_prompt(prompt, choice, system_prompt)
+        # print(f"prompt_tokens: {prompt_tokens}")
+        # print(f"prompt token ids: {choice.prompt_token_ids}")
+
+        # assert choice.prompt_token_ids == prompt_tokens,
+        # f"Prompt token IDs mismatch: {choice.prompt_token_ids} != {prompt_tokens}"
         response_tokens = self.response_tokens_from_choice(choice)
         response_logprobs = self.logprobs_from_choice(choice)
 
@@ -112,14 +123,18 @@ class BaseInferenceContext:
         if len(prompt_tokens) == 0:
             logger.error(f"Prompt tokenization failed for {env_example_id}")
 
-        token_rewards = jnp.full(len(response_tokens), reward, dtype=jnp.float32)
+        token_rewards = np.full(len(response_tokens), reward, dtype=np.float32)
+        is_truncated = choice.finish_reason == "length"
 
         return Rollout(
             env_name=env_name,
             env_example_id=env_example_id,
-            prompt_tokens=jnp.array(prompt_tokens, dtype=jnp.int32),
-            response_tokens=jnp.array(response_tokens, dtype=jnp.int32),
-            response_logprobs=jnp.array(response_logprobs, dtype=jnp.float32),
+            prompt_tokens=prompt_tokens,
+            response_tokens=response_tokens,
+            response_logprobs=response_logprobs,
             token_rewards=token_rewards,
             episode_reward=float(reward),
+            correctness_reward=correctness_reward,
+            temperature=temperature,
+            is_truncated=is_truncated,
         )

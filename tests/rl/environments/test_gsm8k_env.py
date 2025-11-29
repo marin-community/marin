@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Basic tests for MathEnv with new InferenceContext paradigm."""
+"""Tests for the GSM8KEnv environment."""
 
 import jax.random
 import numpy as np
@@ -23,13 +23,14 @@ from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenL
 from openai.types.completion_usage import CompletionUsage
 from transformers import AutoTokenizer
 
-from marin.rl.environments.math_env import MathEnv
+from marin.rl.environments.gsm8k_env import GSM8KEnv
 from marin.rl.environments.inference_ctx import LevanterInferenceContext
 
 
 def create_mock_chat_completion(tokenizer) -> ChatCompletion:
-    """Create a mock ChatCompletion with logprobs for testing."""
-    response_text: str = "<answer>4</answer>"
+    """Create a mock ChatCompletion mirroring the MathEnv tests."""
+
+    response_text = "<answer>72</answer>"
     tokens = tokenizer.encode(response_text, add_special_tokens=False)
     logprobs_content = [
         ChatCompletionTokenLogprob(
@@ -63,48 +64,55 @@ class DummyInferenceContext(LevanterInferenceContext):
 
     def batch_completions(self, prompts, temperature, n, max_tokens=None, stop=None, system_prompt=None):
         """Return mock completions for each prompt."""
+
         return [create_mock_chat_completion(self.tokenizer) for prompt in prompts]
 
 
-def test_math_env_reward_calculation():
-    """Test that math env correctly calculates rewards and creates rollouts."""
+def test_gsm8k_env_samples_and_scores_rollouts():
+    """Ensure GSM8KEnv builds rollouts and metrics mirroring MathEnv behavior."""
+
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     inference_ctx = DummyInferenceContext(tokenizer)
     train_data = [
-        {"problem": "What is 2+2?", "solution": "\\boxed{4}"},
+        {
+            "question": "Natalia sold clips to 48 of her friends in April, and half as many in May.",
+            "answer": "Natalia sold 48/2 = 24 clips in May.\nNatalia sold 48+24 = 72 clips altogether.\n#### 72",
+        }
     ]
 
-    env = MathEnv(train_dataset=train_data, eval_dataset=[], max_train_examples=1)
+    env = GSM8KEnv(train_dataset=train_data, eval_dataset=[], max_train_examples=1, max_eval_examples=0)
+    assert env.train_examples[0].processed_answer == "72"
 
-    prng_key = jax.random.PRNGKey(42)
+    prng_key = jax.random.PRNGKey(0)
     rollout_groups, metrics = env.sample(
         inference_ctx=inference_ctx,
         n_examples=1,
         n_generations=1,
-        temperature=0.7,
+        temperature=0.5,
         prng_key=prng_key,
         mode="train",
     )
 
-    # Verify structure
     assert len(rollout_groups) == 1
     rollout = rollout_groups[0].rollouts[0]
+    prompt_text = tokenizer.decode(rollout.prompt_tokens)
+    response_text = tokenizer.decode(rollout.response_tokens)
 
-    response_txt = tokenizer.decode(rollout.response_tokens)
-    prompt_txt = tokenizer.decode(rollout.prompt_tokens)
-    assert "What is 2+2?" in prompt_txt, (prompt_txt, rollout)
-    assert "<answer>4</answer>" in response_txt, (response_txt, rollout)
-
-    # Verify basic rollout properties
-    assert rollout.env_name == "math"
-    assert rollout.prompt_tokens.dtype == np.int32
+    assert "Natalia sold clips" in prompt_text
+    assert "<answer>72</answer>" in response_text
+    assert rollout.env_name == "gsm8k"
     assert rollout.response_tokens.dtype == np.int32
-    assert len(rollout.response_logprobs) == len(rollout.response_tokens)
-    assert len(rollout.token_rewards) == len(rollout.response_tokens)
 
-    # Verify chat template was applied to prompt
-    decoded_prompt = tokenizer.decode(rollout.prompt_tokens.tolist())
-    assert "user:" in decoded_prompt.lower()
+    np.testing.assert_allclose(rollout.token_rewards, 1.2)
+    assert rollout.episode_reward == pytest.approx(1.2)
 
-    np.testing.assert_allclose(rollout.token_rewards, 1.1), (rollout, metrics)
-    assert rollout.episode_reward == pytest.approx(1.1), (rollout, metrics)
+    assert metrics["gsm8k.train_mean_reward"] == pytest.approx(1.2)
+    assert metrics["gsm8k.train_correct_accuracy"] == pytest.approx(1.0)
+
+
+def test_extract_final_answer_handles_missing_separator():
+    """Fallback to the raw answer when #### is absent."""
+
+    env = GSM8KEnv(train_dataset=[], eval_dataset=[], max_train_examples=0, max_eval_examples=0)
+    assert env._extract_final_answer("No hash answer") == "No hash answer"
+    assert env._extract_final_answer("Reasoning #### 19") == "19"

@@ -84,6 +84,8 @@ def create_test_batch(
             response_logprobs=response_logprobs,
             token_rewards=token_rewards,
             episode_reward=episode_reward,
+            temperature=1.0,
+            is_truncated=False,
             metadata=batch_metadata,
         )
         rollouts.append(rollout)
@@ -115,6 +117,7 @@ def test_replay_buffer():
         max_samples=-1,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -166,6 +169,7 @@ def test_replay_buffer_recency_bias():
         max_samples=-1,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -201,6 +205,7 @@ def test_replay_buffer_capacity_eviction():
         max_samples=-1,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -228,6 +233,7 @@ def test_replay_buffer_max_resamples():
         max_samples=3,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -266,6 +272,7 @@ def test_replay_buffer_max_resamples_disabled():
         max_samples=-1,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -300,6 +307,7 @@ def test_replay_buffer_max_resamples_multiple_envs():
         max_samples=2,
         max_rollout_step_delay=1000,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -340,6 +348,7 @@ def test_replay_buffer_weight_step_filtering():
         max_samples=-1,
         max_rollout_step_delay=30,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -402,6 +411,7 @@ def test_replay_buffer_rollout_delay_progressive():
         max_samples=-1,
         max_rollout_step_delay=10,
         max_rollout_timestamp_delay=3600.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )
@@ -452,6 +462,7 @@ def test_is_rollout_fresh():
         max_samples=-1,
         max_rollout_step_delay=10,
         max_rollout_timestamp_delay=100.0,
+        filter_out_groups_with_no_variance=False,
         loss_module=RLOOLoss(),
         seed=42,
     )

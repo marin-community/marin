@@ -86,6 +86,8 @@ def convert_rollout_to_training_format(rollout: Rollout, advantage: float, max_t
         "loss_weights": loss_weight,
         "loss_masks": loss_mask,
         "policy_logprobs": policy_logprob,
+        "temperature": rollout.temperature,
+        "truncated": rollout.is_truncated,
     }
 
 
@@ -118,7 +120,10 @@ def create_training_batch_from_rollouts(
     # Stack the examples into a single batch with proper 2D arrays
     stacked = {}
     for key in training_examples[0].keys():
-        stacked[key] = jnp.stack([ex[key] for ex in training_examples], axis=0)
+        if isinstance(training_examples[0][key], float):
+            stacked[key] = jnp.array([ex[key] for ex in training_examples], dtype=np.float32)
+        else:
+            stacked[key] = jnp.stack([ex[key] for ex in training_examples], axis=0)
 
     assert stacked["loss_masks"].sum() > 0, (
         "All loss masks are zero in the batch, this will trigger NaNs during training."
@@ -131,6 +136,9 @@ def create_training_batch_from_rollouts(
         loss_weights=hax.named(stacked["loss_weights"], ["batch", "position"]),
         loss_masks=hax.named(stacked["loss_masks"], ["batch", "position"]),
         policy_logprobs=hax.named(stacked["policy_logprobs"], ["batch", "position"]),
+        temperature=hax.named(stacked["temperature"], ["batch"]),
+        truncated=stacked["truncated"],
+        max_output_tokens=max_tokens,
     )
 
     return batch
