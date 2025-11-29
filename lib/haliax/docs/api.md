@@ -503,6 +503,7 @@ See also the section on [Partitioning](partitioning.md).
 ::: haliax.shard
 ::: haliax.named_jit
 ::: haliax.fsdp
+::: haliax.shard_map
 ::: haliax.partitioning.round_axis_for_partitioning
 ::: haliax.partitioning.physical_axis_name
 ::: haliax.partitioning.physical_axis_size
