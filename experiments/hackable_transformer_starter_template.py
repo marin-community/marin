@@ -365,11 +365,11 @@ def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: i
     return max(1, total_tokens // (batch_size * seq_len))
 
 
-def _size_presets() -> dict[str, HackableTransformerConfig]:
+def _size_presets(attn_backend: AttentionBackend | None = None) -> dict[str, HackableTransformerConfig]:
     base = dict(
         seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
-        attn_backend=None,
+        attn_backend=attn_backend,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
         tie_word_embeddings=False,
         cross_entropy_block_size=4096,  # lower if you get OOM
