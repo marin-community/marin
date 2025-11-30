@@ -44,7 +44,6 @@ def main(args: RayCachedLMDatasetConfig):
             cache_dir=split_cache_dir,
             source=source,
             processor=batch_tokenizer,
-            await_finished=False,
         )
 
         cache.await_finished()

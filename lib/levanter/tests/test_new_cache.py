@@ -119,7 +119,6 @@ def test_full_end_to_end_cache():
             tmpdir,
             SimpleShardSource(num_shards=15),
             TestProcessor(),
-            await_finished=True,
         )
 
         expected = simple_process(TestProcessor(), SimpleShardSource(num_shards=15))
@@ -136,7 +135,6 @@ def test_full_end_to_end_cache_with_groups():
             tmpdir,
             SimpleShardSource(num_shards=5),
             TestProcessor(),
-            await_finished=True,
         )
 
         expected = simple_process(TestProcessor(), SimpleShardSource(num_shards=5))
@@ -149,14 +147,14 @@ def test_full_end_to_end_cache_with_groups():
 def test_cache_remembers_its_cached():
     directory = tempfile.TemporaryDirectory()
     with directory as tmpdir:
-        ds1 = build_or_load_cache(tmpdir, SimpleShardSource(), TestProcessor(), await_finished=True)
+        ds1 = build_or_load_cache(tmpdir, SimpleShardSource(), TestProcessor())
 
         class ThrowingProcessor(TestProcessor):
             def __call__(self, batch: Sequence[Sequence[int]]):
                 raise RuntimeError("This should not be called")
 
         # testing this doesn't throw
-        ds2 = build_or_load_cache(tmpdir, SimpleShardSource(), ThrowingProcessor(), await_finished=True)
+        ds2 = build_or_load_cache(tmpdir, SimpleShardSource(), ThrowingProcessor())
 
         check_datasets_equal(ds1, ds2)
 
@@ -204,10 +202,10 @@ def test_cache_recover_from_crash():
 
         # testing this doesn't throw
         source = CrashingShardSource(100000)
-        reader1 = build_or_load_cache(tmpdir, source, TestProcessor(), await_finished=True)
+        reader1 = build_or_load_cache(tmpdir, source, TestProcessor())
 
         # compare to the original with no crash
-        reader2 = build_or_load_cache(tmpdir2, SimpleShardSource(num_shards=4), TestProcessor(), await_finished=True)
+        reader2 = build_or_load_cache(tmpdir2, SimpleShardSource(num_shards=4), TestProcessor())
 
         check_datasets_equal(reader1, reader2)
 
@@ -233,7 +231,7 @@ def test_shard_cache_crashes_if_processor_throws():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         with pytest.raises(RuntimeError):
-            build_or_load_cache(tmpdir, SimpleShardSource(), ThrowingProcessor(), await_finished=True)
+            build_or_load_cache(tmpdir, SimpleShardSource(), ThrowingProcessor())
 
 
 def test_shard_cache_fails_with_multiple_shards_with_the_same_name():
@@ -253,7 +251,7 @@ def test_shard_cache_fails_with_multiple_shards_with_the_same_name():
                 [f"{tmpdir}/data.txt", f"{tmpdir}/data.txt.1"],
             )
 
-            build_or_load_cache(tmpdir, dataset, TestProcessor(), await_finished=True)
+            build_or_load_cache(tmpdir, dataset, TestProcessor())
 
 
 @pytest.mark.asyncio
@@ -267,19 +265,10 @@ async def test_shard_cache_fails_gracefully_with_unknown_file_type_async():
         )
 
         with pytest.raises(ValueError):
-            build_or_load_cache(tmpdir, dataset, TestProcessor(), await_finished=True)
-
-        # now make sure it works in non-blocking mode
-
-        cache = build_or_load_cache(tmpdir, dataset, TestProcessor(), await_finished=False)
+            build_or_load_cache(tmpdir, dataset, TestProcessor())
 
         with pytest.raises(ValueError):
-            await cache.get_batch([0])
-
-        with pytest.raises(ValueError):
-            cache.await_finished(timeout=10)
-
-        del cache
+            build_or_load_cache(tmpdir, dataset, TestProcessor())
 
 
 def test_shard_cache_fails_gracefully_with_unknown_file_type():
@@ -292,16 +281,7 @@ def test_shard_cache_fails_gracefully_with_unknown_file_type():
         )
 
         with pytest.raises(ValueError):
-            build_or_load_cache(tmpdir, dataset, TestProcessor(), await_finished=True)
-
-        # now make sure it works in non-blocking mode
-
-        cache = build_or_load_cache(tmpdir, dataset, TestProcessor(), await_finished=False)
+            build_or_load_cache(tmpdir, dataset, TestProcessor())
 
         with pytest.raises(ValueError):
-            cache.get_batch_sync([0])
-
-        with pytest.raises(ValueError):
-            cache.await_finished(timeout=10)
-
-        del cache
+            build_or_load_cache(tmpdir, dataset, TestProcessor())

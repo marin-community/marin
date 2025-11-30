@@ -68,8 +68,6 @@ class ShardedDataSource(Generic[T_co]):
     def build_or_load_cache(
         self,
         path: str,
-        *,
-        await_finished: bool = True,
     ) -> AsyncDataset[T]:
         """
         Constructs a shard cache version of this dataset using Ray.
@@ -93,7 +91,6 @@ class ShardedDataSource(Generic[T_co]):
             path,
             source,
             processor,
-            await_finished=await_finished,
         )
         return cache
 

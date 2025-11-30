@@ -60,7 +60,6 @@ def build_or_load_cache(
     cache_dir: str,
     source: ShardedDataSource[T],
     processor: BatchProcessor[T, U],
-    await_finished: bool = True,
     options: CacheOptions = CacheOptions.default(),
 ) -> "TreeCache[U]":
     """
@@ -74,36 +73,14 @@ def build_or_load_cache(
 
     # Distributed coordination: only process 0 builds; others wait and then load.
     if jax.distributed.is_initialized() and jax.process_count() > 1:
-        if jax.process_index() != 0:
-            _wait_for_leader_cache(cache_dir, processor.output_exemplar, metadata)
-            return TreeCache.load(cache_dir, processor.output_exemplar, metadata)
-
-    if await_finished:
-        if jax.distributed.is_initialized() and jax.process_count() > 1:
-            if jax.process_index() == 0:
-                ledger = _distributed_build_cache(cache_dir, source, processor, options, metadata)
-            else:
-                _wait_for_leader_cache(cache_dir, processor.output_exemplar, metadata)
-                ledger = CacheLedger.load(cache_dir, metadata)
+        if jax.process_index() == 0:
+            _distributed_build_cache(cache_dir, source, processor, options, metadata)
         else:
-            ledger = build_cache(cache_dir, source, processor, options, metadata)
-        return TreeCache(cache_dir, processor.output_exemplar, ledger, None)
+            _wait_for_leader_cache()
+    else:
+        build_cache(cache_dir, source, processor, options, metadata)
 
-    build_future: concurrent.futures.Future[CacheLedger] = concurrent.futures.Future()
-
-    def _runner():
-        try:
-            ledger = build_cache(cache_dir, source, processor, options, metadata)
-            build_future.set_result(ledger)
-        except Exception as exc:  # noqa: BLE001
-            _safe_remove(os.path.join(cache_dir, "__shards__"))
-            if not build_future.done():
-                build_future.set_exception(exc)
-
-    import threading
-
-    threading.Thread(target=_runner, daemon=True).start()
-    return TreeCache(cache_dir=cache_dir, exemplar=processor.output_exemplar, ledger=None, _build_future=build_future)
+    return TreeCache.load(cache_dir, processor.output_exemplar, metadata)
 
 
 class TreeCache(AsyncDataset[T_co]):
@@ -229,7 +206,7 @@ class TreeCache(AsyncDataset[T_co]):
     ) -> "TreeCache[U]":
         if options is None:
             options = CacheOptions.default()
-        return build_or_load_cache(cache_dir, shard_source, processor, await_finished=True, options=options)
+        return build_or_load_cache(cache_dir, shard_source, processor, options=options)
 
     @property
     def is_finished(self):
@@ -624,7 +601,7 @@ def _distributed_build_cache(
     return ledger
 
 
-def _wait_for_leader_cache(cache_dir: str, exemplar, metadata: CacheMetadata):
+def _wait_for_leader_cache():
     status = np.array(0, dtype=np.int32)
     while True:
         status = broadcast_one_to_all(status, is_source=False)
@@ -633,7 +610,6 @@ def _wait_for_leader_cache(cache_dir: str, exemplar, metadata: CacheMetadata):
         if status == -1:
             raise RuntimeError("Cache build failed on leader process.")
         time.sleep(1)
-    CacheLedger.load(cache_dir, metadata)
 
 
 def _safe_remove(path: str):

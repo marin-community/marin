@@ -300,7 +300,6 @@ class ProcessedAudioCache(AsyncDataset[AudioTextDict]):
         tokenizer: PreTrainedTokenizerBase,
         enforce_bos=True,
         enforce_eos=True,
-        await_finished=True,
         override_resources=None,
         max_length=448,
         cache_options: CacheOptions = CacheOptions.default(),
@@ -314,7 +313,7 @@ class ProcessedAudioCache(AsyncDataset[AudioTextDict]):
             override_resources=override_resources,
             max_length=max_length,
         )
-        cache = build_or_load_cache(cache_dir, source, bp, await_finished=await_finished, options=cache_options)
+        cache = build_or_load_cache(cache_dir, source, bp, options=cache_options)
         if cache.is_finished:
             logger.info(f"Cache {cache_dir} is complete.")
         else:
@@ -416,7 +415,6 @@ class AudioIODatasetConfig(AudioDatasetSourceConfig, AudioTaskConfig):
             self.the_tokenizer,
             enforce_bos=self.enforce_bos,
             enforce_eos=self.enforce_eos,
-            await_finished=(split == "validation"),
             max_length=self.max_length,
             cache_options=cache_options,
         )

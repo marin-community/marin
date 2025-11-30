@@ -811,7 +811,6 @@ def mk_supervised_dataset(
         config.cache_dir,
         source,
         processor,
-        await_finished=True,
     )
 
     if tokenizer.pad_token is None:
@@ -904,7 +903,9 @@ def mk_single_turn_cached_sft_dataset(
     )
 
     # Cache the processed data
-    cached_dataset: AsyncDataset[dict] = dataset.build_or_load_cache(config.cache_dir, await_finished=True)
+    cached_dataset: AsyncDataset[dict] = dataset.build_or_load_cache(
+        config.cache_dir,
+    )
     return cached_dataset
 
 
@@ -952,7 +953,6 @@ def build_lm_dataset_cache(
         cache_dir,
         source,
         processor,
-        await_finished=False,
         options=options,
     )
 
@@ -998,7 +998,9 @@ def mk_chat_sft_dataset(
     )
 
     # Cache the processed data
-    cached_dataset: AsyncDataset[dict] = dataset.build_or_load_cache(config.cache_dir, await_finished=True)
+    cached_dataset: AsyncDataset[dict] = dataset.build_or_load_cache(
+        config.cache_dir,
+    )
 
     # Ensure padding token is set (needed by _prepare_supervised_example)
     if tokenizer.pad_token is None:
