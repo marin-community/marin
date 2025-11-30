@@ -56,7 +56,7 @@ def test_gpt2_configs(config_file):
 
 def test_pass_different_length_seq_to_gpt2():
     config = Gpt2Config(
-        seq_len=64,
+        max_seq_len=64,
         hidden_dim=16,
         num_layers=4,
         num_heads=2,

@@ -40,7 +40,7 @@ from marin.resources import TpuPodConfig
 SEQ_LEN = 2048
 BATCH_SIZE = 256
 llama_1_4b_dclm = LlamaConfig(
-    seq_len=SEQ_LEN,  # Maximum sequence length for processing context
+    max_seq_len=SEQ_LEN,  # Maximum sequence length for processing context
     hidden_dim=2048,  # Dimension of hidden representations
     intermediate_dim=8192,  # Dimension of feedforward layers (4x hidden_dim)
     num_heads=16,  # Number of attention heads
@@ -57,6 +57,7 @@ NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)  # 256 is the batch
 # Define training configuration with hyperparameters
 # https://github.com/mlfoundations/dclm/blob/main/training/configs/1b_1x_fast.json
 training_config = SimpleTrainConfig(
+    train_seq_length=SEQ_LEN,
     resources=TpuPodConfig(tpu_type="v4-128"),  # Hardware configuration: 128 v4 TPU cores, can be swapped for GpuConfig
     train_batch_size=BATCH_SIZE,  # Number of sequences processed per step
     num_train_steps=NUM_TRAIN_STEPS,  # Total training steps

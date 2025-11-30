@@ -31,7 +31,7 @@ from marin.execution.executor import ExecutorStep, InputName
 from marin.resources import TpuPodConfig
 
 DEFAULT_MODEL_CONFIG = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2048,
     intermediate_dim=7168,
     num_heads=16,

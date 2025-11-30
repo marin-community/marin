@@ -186,7 +186,7 @@ class ParallelLlamaConfig(HFCompatConfig):
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=context_length,
+            max_seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )
