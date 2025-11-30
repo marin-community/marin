@@ -8,6 +8,8 @@ import dataclasses
 import logging as pylogging
 import operator
 import os
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
 
@@ -24,6 +26,7 @@ from zephyr import Dataset, flow_backend, Backend
 from zephyr.writers import write_levanter_cache
 
 from levanter.data.dataset import AsyncDataset
+from levanter.utils.jax_utils import broadcast_one_to_all
 
 from ..data._preprocessor import BatchProcessor, BatchResult, dict_from_record_batch
 from ..data.sharded_datasource import ShardedDataSource
@@ -60,14 +63,30 @@ def build_or_load_cache(
     await_finished: bool = True,
     options: CacheOptions = CacheOptions.default(),
 ) -> "TreeCache[U]":
+    """
+    Build or load a TreeCache from a sharded data source using a Zephyr backend.
+    """
     metadata = CacheMetadata(preprocessor_metadata=processor.metadata)
     try:
         return TreeCache.load(cache_dir, processor.output_exemplar, metadata)
     except FileNotFoundError:
         logger.info(f"Cache not found at {cache_dir}. Building with zephyr pipeline.")
 
+    # Distributed coordination: only process 0 builds; others wait and then load.
+    if jax.distributed.is_initialized() and jax.process_count() > 1:
+        if jax.process_index() != 0:
+            _wait_for_leader_cache(cache_dir, processor.output_exemplar, metadata)
+            return TreeCache.load(cache_dir, processor.output_exemplar, metadata)
+
     if await_finished:
-        ledger = build_cache(cache_dir, source, processor, options, metadata)
+        if jax.distributed.is_initialized() and jax.process_count() > 1:
+            if jax.process_index() == 0:
+                ledger = _distributed_build_cache(cache_dir, source, processor, options, metadata)
+            else:
+                _wait_for_leader_cache(cache_dir, processor.output_exemplar, metadata)
+                ledger = CacheLedger.load(cache_dir, metadata)
+        else:
+            ledger = build_cache(cache_dir, source, processor, options, metadata)
         return TreeCache(cache_dir, processor.output_exemplar, ledger, None)
 
     build_future: concurrent.futures.Future[CacheLedger] = concurrent.futures.Future()
@@ -575,6 +594,48 @@ def cpu_only_backend() -> Backend:
     return flow_backend(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}})
 
 
+def _distributed_build_cache(
+    cache_dir: str,
+    source: ShardedDataSource[T],
+    processor: BatchProcessor[T, U],
+    options: CacheOptions,
+    metadata: CacheMetadata,
+) -> CacheLedger:
+    status = {"val": np.array(0, dtype=np.int32)}
+    stop_event = threading.Event()
+
+    def broadcaster():
+        while not stop_event.is_set():
+            broadcast_one_to_all(status["val"], is_source=True)
+            time.sleep(1)
+        broadcast_one_to_all(status["val"], is_source=True)
+
+    b_thread = threading.Thread(target=broadcaster, daemon=True)
+    b_thread.start()
+    try:
+        ledger = build_cache(cache_dir, source, processor, options, metadata)
+        status["val"] = np.array(1, dtype=np.int32)
+    except Exception:
+        status["val"] = np.array(-1, dtype=np.int32)
+        raise
+    finally:
+        stop_event.set()
+    b_thread.join()
+    return ledger
+
+
+def _wait_for_leader_cache(cache_dir: str, exemplar, metadata: CacheMetadata):
+    status = np.array(0, dtype=np.int32)
+    while True:
+        status = broadcast_one_to_all(status, is_source=False)
+        if status == 1:
+            break
+        if status == -1:
+            raise RuntimeError("Cache build failed on leader process.")
+        time.sleep(1)
+    CacheLedger.load(cache_dir, metadata)
+
+
 def _safe_remove(path: str):
     try:
         if fsspec_exists(path):
@@ -705,16 +766,12 @@ def _canonicalize_batch(batch: Union[dict, List[dict]]) -> List[dict]:
         batch = dict_from_record_batch(batch)
 
     if isinstance(batch, dict):
-        return _to_list_of_dicts(batch)
+        keys = list(batch.keys())
+        values = list(batch.values())
+        num_rows = len(values[0]) if values else 0
+        return [{key: values[i][j] for i, key in enumerate(keys)} for j in range(num_rows)]
     else:
         return list(batch)
-
-
-def _to_list_of_dicts(batch: dict) -> List[dict]:
-    keys = list(batch.keys())
-    values = list(batch.values())
-    num_rows = len(values[0]) if values else 0
-    return [{key: values[i][j] for i, key in enumerate(keys)} for j in range(num_rows)]
 
 
 def _try_load(path):
