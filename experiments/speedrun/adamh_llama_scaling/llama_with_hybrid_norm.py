@@ -20,7 +20,7 @@ These models can't be converted to huggingface models due to the use of hybrid n
 from levanter.models.llama import LlamaConfig
 
 llama_150m_all_norm = LlamaConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=512,
     intermediate_dim=1792,
     num_heads=8,
@@ -31,7 +31,7 @@ llama_150m_all_norm = LlamaConfig(
 )
 
 llama_300m_all_norm = LlamaConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=768,
     intermediate_dim=2688,
     num_heads=12,
@@ -42,7 +42,7 @@ llama_300m_all_norm = LlamaConfig(
 )
 
 llama_600m_all_norm = LlamaConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=1024,
     intermediate_dim=3584,
     num_heads=16,
@@ -53,7 +53,7 @@ llama_600m_all_norm = LlamaConfig(
 )
 
 llama_1_4b_all_norm = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2048,
     intermediate_dim=7168,
     num_heads=16,

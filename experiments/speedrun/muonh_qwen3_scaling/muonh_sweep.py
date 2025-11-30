@@ -50,7 +50,7 @@ def _to_qwen3_from_llama(llama_cfg: LlamaConfig, *, seq_len_override=None) -> Qw
     Build a Qwen3Config with identical sizes to a given LLaMA config.
     """
     qwen = Qwen3Config(
-        seq_len=seq_len_override if seq_len_override is not None else llama_cfg.max_seq_len,
+        max_seq_len=seq_len_override if seq_len_override is not None else llama_cfg.max_seq_len,
         hidden_dim=llama_cfg.hidden_dim,
         intermediate_dim=llama_cfg.intermediate_dim,
         num_layers=llama_cfg.num_layers,

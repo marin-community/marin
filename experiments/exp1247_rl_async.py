@@ -154,7 +154,7 @@ def rl_train(name: str) -> ExecutorStep:
     config = MODEL.config_class.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=MODEL.tokenizer)
+    model_config = dataclasses.replace(config, max_seq_len=MAX_TOKENS, tokenizer=MODEL.tokenizer)
 
     _ = WandbConfig
 

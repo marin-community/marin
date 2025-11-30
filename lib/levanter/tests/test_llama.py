@@ -282,7 +282,7 @@ def test_llama_roundtrip(scan_layers, num_kv_heads):
 
 def _get_llama_config(use_flash=False, num_kv_heads=4, seq_len=128) -> LlamaConfig:
     return LlamaConfig(
-        seq_len=seq_len,
+        max_seq_len=seq_len,
         hidden_dim=32,
         num_heads=4,
         num_kv_heads=num_kv_heads,
@@ -316,7 +316,7 @@ def test_llama_configs(config_file):
 @pytest.mark.parametrize("num_kv_heads", [1, 2])
 def test_pass_different_length_seq(num_kv_heads):
     config = LlamaConfig(
-        seq_len=64,
+        max_seq_len=64,
         hidden_dim=64,
         intermediate_dim=32,
         num_heads=2,
@@ -332,7 +332,7 @@ def test_state_dict_consistency(scan_layers, num_kv_heads):
     from transformers import LlamaForCausalLM
 
     config = LlamaConfig(
-        seq_len=128,
+        max_seq_len=128,
         hidden_dim=16,
         num_heads=4,
         num_layers=4,

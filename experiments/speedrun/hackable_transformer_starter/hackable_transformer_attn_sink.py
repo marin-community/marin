@@ -166,7 +166,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=context_length,
+            max_seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )
@@ -530,7 +530,7 @@ def build_run(
     )
 
     lr_tag = f"_lr_x{_format_multiplier_label(lr_multiplier)}" if lr_multiplier is not None else ""
-    run_name = f"hacktx_{size}_{'attnsink' if use_sink else 'stdattn'}_{train.max_train_length}_splash_lr_sweep{lr_tag}"
+    run_name = f"hacktx_{size}_{'attnsink' if use_sink else 'stdattn'}_{train.train_seq_length}_splash_lr_sweep{lr_tag}"
     desc = (
         f"Hackable Transformer ({size}); "
         f"{'AttentionWithSink' if use_sink else 'Attention'} (Splash); "

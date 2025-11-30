@@ -151,7 +151,7 @@ def test_lora_load_in_peft():
     import torch
 
     converter: HFCheckpointConverter = Gpt2Config().hf_checkpoint_converter()
-    config = Gpt2Config(seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
+    config = Gpt2Config(max_seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
     Vocab = converter.Vocab
 
     model = Gpt2LMHeadModel.init(Vocab, config=config, key=jax.random.PRNGKey(0))
@@ -201,7 +201,7 @@ def test_lora_merged_load_in_hf():
     import torch
 
     converter: HFCheckpointConverter = Gpt2Config().hf_checkpoint_converter()
-    config = Gpt2Config(seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
+    config = Gpt2Config(max_seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
     Vocab = converter.Vocab
 
     model = Gpt2LMHeadModel.init(Vocab, config=config, key=jax.random.PRNGKey(0))

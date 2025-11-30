@@ -27,7 +27,7 @@ def test_eval_lm():
         num_layers=2,
         num_heads=2,
         num_kv_heads=2,
-        seq_len=64,
+        max_seq_len=64,
         hidden_dim=32,
     )
 
@@ -72,7 +72,7 @@ def test_eval_lm_from_hf():
         num_layers=2,
         num_heads=2,
         num_kv_heads=2,
-        seq_len=1024,
+        max_seq_len=1024,
         hidden_dim=32,
     )
 

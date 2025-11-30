@@ -20,7 +20,7 @@ from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config, QwenConfig
 
 qwen3_0_6b = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=1024,
     intermediate_dim=3072,
     num_heads=16,
@@ -31,7 +31,7 @@ qwen3_0_6b = Qwen3Config(
 )
 
 qwen3_1_7b = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2048,
     intermediate_dim=6144,
     num_heads=16,
@@ -42,7 +42,7 @@ qwen3_1_7b = Qwen3Config(
 )
 
 qwen3_4b = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2560,
     intermediate_dim=9728,
     num_heads=32,
@@ -53,7 +53,7 @@ qwen3_4b = Qwen3Config(
 )
 
 qwen3_8b = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=4096,
     intermediate_dim=12288,
     num_heads=32,
@@ -64,7 +64,7 @@ qwen3_8b = Qwen3Config(
 
 # same as olmo 32b
 qwen3_32b = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=5120,
     intermediate_dim=27648,
     num_heads=40,
@@ -75,7 +75,7 @@ qwen3_32b = Qwen3Config(
 
 # seems not supported by levanter yet
 qwen2_5_32b = QwenConfig(
-    seq_len=131072,
+    max_seq_len=131072,
     hidden_dim=5120,
     intermediate_dim=27648,
     num_heads=40,
@@ -85,7 +85,7 @@ qwen2_5_32b = QwenConfig(
 )
 
 marin_32b = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=5120,
     intermediate_dim=27648,
     num_heads=40,
