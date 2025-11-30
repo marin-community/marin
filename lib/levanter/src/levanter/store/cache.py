@@ -422,7 +422,14 @@ def _build_cache_with_zephyr(
     shard_results = list(backend.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False))
     shard_results = sorted(shard_results, key=lambda r: r["index"])
 
-    ledger = _consolidate_shard_caches(shard_results, cache_dir, processor.output_exemplar, metadata)
+    shard_cache_paths = [s["path"] for s in shard_results]
+    ledger = consolidate_shard_caches(
+        shard_cache_paths=shard_cache_paths,
+        output_path=cache_dir,
+        exemplar=processor.output_exemplar,
+        metadata=metadata,
+        backend=backend,
+    )
     _safe_remove(temp_root)
     return ledger
 
@@ -475,13 +482,27 @@ def _build_single_shard_cache(
     return {"shard_name": shard_name, "path": shard_path, "ledger": ledger, "index": shard_index}
 
 
-def _consolidate_shard_caches(
-    shard_results: list[dict],
+def consolidate_shard_caches(
+    shard_cache_paths: list[str],
     output_path: str,
     exemplar,
-    metadata: CacheMetadata,
+    metadata: CacheMetadata | None = None,
+    backend=None,
 ) -> CacheLedger:
-    if not shard_results:
+    """
+    Consolidate multiple shard caches into a single cache directory.
+
+    Args:
+        shard_cache_paths: List of shard cache directories.
+        output_path: Destination cache directory.
+        exemplar: Output exemplar structure.
+        metadata: CacheMetadata to use for the final ledger.
+        backend: Optional Zephyr backend; defaults to CPU-only flow backend.
+    """
+    if metadata is None:
+        metadata = CacheMetadata.empty()
+
+    if not shard_cache_paths:
         ledger = CacheLedger(
             total_num_rows=0,
             shard_rows={},
@@ -493,43 +514,51 @@ def _consolidate_shard_caches(
         ledger._serialize_and_commit(output_path)
         return ledger
 
-    logger.info(f"Consolidating {len(shard_results)} shard caches into {output_path}")
+    logger.info(f"Consolidating {len(shard_cache_paths)} shard caches into {output_path}")
 
-    first_cache = TreeStore.open(exemplar, shard_results[0]["path"], mode="r", cache_metadata=True)
+    first_cache = TreeStore.open(exemplar, shard_cache_paths[0], mode="r", cache_metadata=True)
     data_offset_tree = jax.tree.map(lambda x: 0, first_cache.tree)
 
     shard_info: list[dict] = []
     total_rows = 0
-    for shard in shard_results:
-        ledger: CacheLedger = shard["ledger"]
+
+    shard_ledgers = [CacheLedger.load(p, metadata) for p in shard_cache_paths]
+
+    for shard_path, ledger in zip(shard_cache_paths, shard_ledgers):
+        shard_name = os.path.basename(shard_path)
         shard_info.append(
             {
-                "path": shard["path"],
-                "shard_name": shard["shard_name"],
+                "path": shard_path,
+                "shard_name": shard_name,
                 "row_offset": total_rows,
                 "data_offset_tree": copy.deepcopy(data_offset_tree),
                 "ledger": ledger,
             }
         )
         total_rows += ledger.total_num_rows
-        this_cache = TreeStore.open(exemplar, shard["path"], mode="r", cache_metadata=True)
+
+        this_cache = TreeStore.open(exemplar, shard_path, mode="r", cache_metadata=True)
         this_offsets = jax.tree.map(lambda x: x.data_size, this_cache.tree)
         data_offset_tree = jax.tree.map(operator.add, data_offset_tree, this_offsets)
 
     TreeStore.open(exemplar, output_path, mode="w", cache_metadata=True)
 
-    for shard in shard_info:
+    def _copy_shard(info: dict):
         asyncio.run(
-            extend_cache_with_other_cache(
-                output_path, shard["path"], exemplar, shard["data_offset_tree"], shard["row_offset"]
+            _extend_cache_with_other_cache(
+                output_path, info["path"], exemplar, info["data_offset_tree"], info["row_offset"]
             )
         )
         asyncio.run(
-            extend_cache_metadata_with_other(
-                output_path, shard["path"], exemplar, shard["data_offset_tree"], shard["row_offset"]
+            _extend_cache_metadata_with_other(
+                output_path, info["path"], exemplar, info["data_offset_tree"], info["row_offset"]
             )
         )
 
+    backend = backend or cpu_only_backend()
+    list(backend.execute(Dataset.from_list(shard_info).map(_copy_shard), verbose=False))
+
+    # Merge ledgers
     final_ledger = CacheLedger(
         total_num_rows=0,
         shard_rows={},
@@ -537,18 +566,22 @@ def _consolidate_shard_caches(
         field_counts={},
         metadata=metadata,
     )
-    for shard in shard_info:
-        shard_ledger: CacheLedger = shard["ledger"]
-        final_ledger.shard_rows[shard["shard_name"]] = shard_ledger.total_num_rows
-        final_ledger.finished_shards.append(shard["shard_name"])
-        final_ledger.total_num_rows += shard_ledger.total_num_rows
-        for field, count in shard_ledger.field_counts.items():
+    for shard_path, ledger in zip(shard_cache_paths, shard_ledgers):
+        shard_name = os.path.basename(shard_path)
+        final_ledger.shard_rows[shard_name] = ledger.total_num_rows
+        final_ledger.finished_shards.append(shard_name)
+        final_ledger.total_num_rows += ledger.total_num_rows
+        for field, count in ledger.field_counts.items():
             final_ledger.field_counts[field] = final_ledger.field_counts.get(field, 0) + count
 
     final_ledger.is_finished = True
     final_ledger._serialize_and_commit(output_path)
-    expose_cache_rows(output_path, exemplar, final_ledger.total_num_rows)
+    _expose_cache_rows(output_path, exemplar, final_ledger.total_num_rows)
     return final_ledger
+
+
+def cpu_only_backend() -> Backend:
+    return flow_backend(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}})
 
 
 def _safe_remove(path: str):
@@ -559,34 +592,14 @@ def _safe_remove(path: str):
         logger.exception(f"Failed to remove temporary cache path {path}")
 
 
-def expose_cache_rows(cache_path: str, exemplar: T, num_rows: int) -> None:
+def _expose_cache_rows(cache_path: str, exemplar: T, num_rows: int) -> None:
     cache = TreeStore.open(exemplar, cache_path, mode="a", cache_metadata=False)
-    _expose_available_rows(cache, num_rows)
-
-
-def merge_ledgers(dest: CacheLedger, source: CacheLedger) -> CacheLedger:
-    assert not dest.is_finished
-    dest.total_num_rows += source.total_num_rows
-    for shard, rows in source.shard_rows.items():
-        current_value = dest.shard_rows.get(shard, 0)
-        if current_value != 0:
-            raise ValueError(f"Shard {shard} already has {current_value} rows")
-        dest.shard_rows[shard] = rows
-
-    dest.finished_shards.extend(source.finished_shards)
-    for field, count in source.field_counts.items():
-        dest.field_counts[field] = dest.field_counts.get(field, 0) + count
-
-    return dest
-
-
-def _expose_available_rows(permanent_cache, num_available_rows):
-    futures = jax.tree.leaves(jax.tree.map(lambda x: x.offsets[0].write(num_available_rows), permanent_cache.tree))
+    futures = jax.tree.leaves(jax.tree.map(lambda x: x.offsets[0].write(num_rows), cache.tree))
     for future in futures:
         future.result()
 
 
-async def extend_cache_with_other_cache(
+async def _extend_cache_with_other_cache(
     dest_path: str, source_path: str, exemplar: dict, data_offset_tree: PyTree[int], row_offset
 ) -> int:
     try:
@@ -631,7 +644,7 @@ async def _copy_in_batches(dest_array, dest_offset, src_array, src_len, elems_pe
         await last_future
 
 
-async def extend_cache_metadata_with_other(
+async def _extend_cache_metadata_with_other(
     dest_path: str, source_path: str, exemplar: dict, data_offset_tree: PyTree[int], row_offset
 ) -> int:
     try:
@@ -731,8 +744,6 @@ __all__ = [
     "CacheLedger",
     "CacheMetadata",
     "CacheOptions",
-    "merge_ledgers",
-    "expose_cache_rows",
-    "extend_cache_with_other_cache",
-    "extend_cache_metadata_with_other",
+    "_expose_cache_rows",
+    "consolidate_shard_caches",
 ]
