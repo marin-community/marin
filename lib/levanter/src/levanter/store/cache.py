@@ -20,7 +20,7 @@ import tensorstore as ts
 from dataclasses_json import dataclass_json
 from fsspec import AbstractFileSystem
 from jaxtyping import PyTree
-from zephyr import Dataset, flow_backend
+from zephyr import Dataset, flow_backend, Backend
 from zephyr.writers import write_levanter_cache
 
 from levanter.data.dataset import AsyncDataset
@@ -549,16 +549,27 @@ def consolidate_shard_caches(
                 output_path, info["path"], exemplar, info["data_offset_tree"], info["row_offset"]
             )
         )
+
+    backend = backend or cpu_only_backend()
+    list(backend.execute(Dataset.from_list(shard_info).map(_copy_shard), verbose=False))
+
+    # do metadata serially b/c of write amplification concerns
+    for info in shard_info:
         asyncio.run(
             _extend_cache_metadata_with_other(
                 output_path, info["path"], exemplar, info["data_offset_tree"], info["row_offset"]
             )
         )
 
-    backend = backend or cpu_only_backend()
-    list(backend.execute(Dataset.from_list(shard_info).map(_copy_shard), verbose=False))
+    final_ledger = _merge_ledgers(output_path, shard_cache_paths, shard_ledgers, metadata)
+    # as a final step, set the total num rows in the final cache
+    _expose_cache_rows(output_path, exemplar, final_ledger.total_num_rows)
+    return final_ledger
 
-    # Merge ledgers
+
+def _merge_ledgers(
+    output_path: str, shard_cache_paths: list[str], shard_ledgers: list[CacheLedger], metadata: CacheMetadata
+) -> CacheLedger:
     final_ledger = CacheLedger(
         total_num_rows=0,
         shard_rows={},
@@ -576,7 +587,6 @@ def consolidate_shard_caches(
 
     final_ledger.is_finished = True
     final_ledger._serialize_and_commit(output_path)
-    _expose_cache_rows(output_path, exemplar, final_ledger.total_num_rows)
     return final_ledger
 
 
