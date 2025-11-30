@@ -7,20 +7,7 @@ import json
 import os
 import warnings
 from functools import cached_property
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Generic,
-    Iterable,
-    Iterator,
-    List,
-    Optional,
-    Sequence,
-    Sized,
-    Tuple,
-    TypeVar,
-)
+from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, Sized, Tuple, TypeVar
 
 import datasets
 import fsspec
@@ -39,10 +26,6 @@ from ._preprocessor import (
     _MapTransform,
 )
 from .utils import batched
-
-
-if TYPE_CHECKING:
-    from .metrics_monitor import MetricsMonitor
 
 T = TypeVar("T")
 T_contra = TypeVar("T_contra", contravariant=True)
@@ -87,7 +70,6 @@ class ShardedDataSource(Generic[T_co]):
         path: str,
         *,
         await_finished: bool = True,
-        monitors: Optional[Sequence["MetricsMonitor"]] = None,
     ) -> AsyncDataset[T]:
         """
         Constructs a shard cache version of this dataset using Ray.
@@ -112,7 +94,6 @@ class ShardedDataSource(Generic[T_co]):
             source,
             processor,
             await_finished=await_finished,
-            monitors=monitors,
         )
         return cache
 

@@ -64,7 +64,6 @@ from transformers import BatchEncoding, PreTrainedTokenizer, PreTrainedTokenizer
 
 from levanter.compat.hf_checkpoints import load_tokenizer  # noqa
 from levanter.data._preprocessor import BatchProcessor, IdentityProcessor, U, dict_from_record_batch  # noqa
-from levanter.data.metrics_monitor import LoggerMetricsMonitor, LoggingMetricsMonitor, MetricsMonitor  # noqa
 from levanter.data.sharded_datasource import (  # noqa
     JsonlDataSource,
     ShardedDataSource,
@@ -74,6 +73,10 @@ from levanter.data.sharded_datasource import (  # noqa
 )
 from levanter.shapes import NamedShapeSpec, ShapeSpec  # noqa
 from levanter.store.cache import build_or_load_cache  # noqa
+
+
+# Metrics monitoring removed; keep alias for type hints.
+MetricsMonitor = Any
 from levanter.utils.jax_utils import key_iterator, use_cpu_device  # noqa
 
 
@@ -584,7 +587,6 @@ class LMTaskConfig(abc.ABC):
         self,
         Pos: Axis,
         batch_schedule: BatchSchedule,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         *,
         key: PRNGKeyArray,
         epochs: Optional[int] = None,
@@ -595,7 +597,6 @@ class LMTaskConfig(abc.ABC):
     def train_sets(
         self,
         Pos: Axis,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         *,
         key: PRNGKeyArray,
         epochs: Optional[int] = None,
@@ -603,17 +604,11 @@ class LMTaskConfig(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def validation_sets(
-        self,
-        Pos: Axis,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
-    ) -> Mapping[str, AsyncDataset[LmExample]]:
+    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
         pass
 
     @abc.abstractmethod
-    def build_caches(
-        self, split: str, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Mapping[str, TreeCache[dict]]:
+    def build_caches(self, split: str) -> Mapping[str, TreeCache[dict]]:
         pass
 
     @property
@@ -621,11 +616,9 @@ class LMTaskConfig(abc.ABC):
     def sources(self) -> Mapping[str, LmDatasetSourceConfigBase]:
         pass
 
-    def tagged_eval_sets(
-        self, Pos: Axis, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> list[Tuple[AsyncDataset[LmExample], List[str]]]:
+    def tagged_eval_sets(self, Pos: Axis) -> list[Tuple[AsyncDataset[LmExample], List[str]]]:
         tags = {name: (config.tags or []) + [name] for name, config in self.sources.items()}
-        eval_sets = self.validation_sets(Pos, monitors)
+        eval_sets = self.validation_sets(Pos)
 
         return [(eval_sets[name], tags[name]) for name in eval_sets]
 
@@ -922,7 +915,6 @@ def build_lm_dataset_cache(
     tokenizer: HfTokenizer,
     options: CacheOptions = CacheOptions.default(),
     enforce_eos=True,
-    monitors: Union[bool, List[MetricsMonitor]] = True,
 ):
     """
     Creates a cache for a dataset. If the cache already exists, it will be loaded. Otherwise, it will be built.
@@ -934,7 +926,6 @@ def build_lm_dataset_cache(
         tokenizer: the tokenizer
         options: the cache options to control how it's built
         enforce_eos: whether to enforce EOS
-        monitors: the metrics monitors to use
 
     Returns:
 
@@ -957,18 +948,10 @@ def build_lm_dataset_cache(
         return None
 
     logger.info(f"Building cache for {name}...")
-    if monitors is True:
-        monitors = [
-            LoggingMetricsMonitor(prefix=f"preprocessing/{name}", commit=False),
-            LoggerMetricsMonitor(f"preprocessing.{name}"),
-        ]
-    elif monitors is False:
-        monitors = []
     return build_or_load_cache(
         cache_dir,
         source,
         processor,
-        monitors=monitors,
         await_finished=False,
         options=options,
     )
@@ -1034,14 +1017,13 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
         self,
         Pos: Axis,
         batch_schedule: BatchSchedule,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         *,
         key: PRNGKeyArray,
         epochs: Optional[int] = None,
     ) -> AsyncDataset[LmExample]:
         del batch_schedule  # unused
 
-        cache = self.build_or_load_cache("train", monitors=monitors)
+        cache = self.build_or_load_cache("train")
         if cache is None:
             raise ValueError("No training set!")
         else:
@@ -1070,22 +1052,20 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
     def train_sets(
         self,
         Pos: Axis,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         *,
         key: PRNGKeyArray,
         epochs: Optional[int] = None,
     ) -> Mapping[str, AsyncDataset[LmExample]]:
         return {
             # we don't care about BatchSchedule in this class
-            "": self.train_set(Pos, BatchSchedule(32), monitors, key=key, epochs=epochs)
+            "": self.train_set(Pos, BatchSchedule(32), key=key, epochs=epochs)
         }
 
     def validation_set(
         self,
         Pos: Axis,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
     ) -> AsyncDataset[LmExample] | None:
-        cache = self.build_or_load_cache("validation", monitors=monitors)
+        cache = self.build_or_load_cache("validation")
         if cache is None:
             return None
 
@@ -1093,10 +1073,8 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
             self.format, Pos, cache, eos_id=self.the_tokenizer.eos_token_id, ignore_index=self.ignore_token_id
         )
 
-    def validation_sets(
-        self, Pos: Axis, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Mapping[str, AsyncDataset[LmExample]]:
-        validation_set = self.validation_set(Pos, monitors)
+    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+        validation_set = self.validation_set(Pos)
         if validation_set is not None:
             return {"": validation_set}
         else:
@@ -1106,18 +1084,14 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
     def sources(self) -> Mapping[str, LmDatasetSourceConfigBase]:
         return {"": self}
 
-    def build_caches(
-        self, split: str, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Mapping[str, TreeCache[dict]]:
+    def build_caches(self, split: str) -> Mapping[str, TreeCache[dict]]:
         out = {}
-        cache = self.build_or_load_cache(split, monitors)
+        cache = self.build_or_load_cache(split)
         if cache is not None:
             out[""] = cache
         return out
 
-    def build_or_load_cache(
-        self, split: str, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Optional[TreeCache[dict]]:
+    def build_or_load_cache(self, split: str) -> Optional[TreeCache[dict]]:
         tokenizer = self.the_tokenizer
         cache_dir = self.cache_dir
         source = self.get_shard_source(split)
@@ -1140,7 +1114,7 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
             logger.warning(f"Skipping {split} because no source was provided")
             return None
 
-        return build_lm_dataset_cache(cache_dir, source, format, tokenizer, options, enforce_eos, monitors)
+        return build_lm_dataset_cache(cache_dir, source, format, tokenizer, options, enforce_eos)
 
 
 @dataclass(frozen=True)
@@ -1230,7 +1204,6 @@ class LMMixtureDatasetConfig(LMTaskConfig):
         self,
         Pos: Axis,
         batch_schedule: BatchSchedule,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         *,
         key: PRNGKeyArray,
         epochs: Optional[int] = None,
@@ -1243,9 +1216,7 @@ class LMMixtureDatasetConfig(LMTaskConfig):
 
         initial_batch_size = batch_schedule.batch_size_at_step(0)
 
-        causal_datasets = self.train_sets(
-            Pos, monitors, key=shuffle_key, epochs=epochs, initial_batch_size=initial_batch_size
-        )
+        causal_datasets = self.train_sets(Pos, key=shuffle_key, epochs=epochs, initial_batch_size=initial_batch_size)
 
         mixture = MixtureDataset(
             datasets=causal_datasets,
@@ -1260,13 +1231,12 @@ class LMMixtureDatasetConfig(LMTaskConfig):
     def train_sets(
         self,
         Pos: Axis,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         *,
         initial_batch_size: Optional[int] = None,
         epochs: Optional[int] = None,
         key: PRNGKeyArray,
     ) -> Mapping[str, AsyncDataset[LmExample]]:
-        doc_caches = self.build_caches("train", monitors=monitors)
+        doc_caches = self.build_caches("train")
         datasets = self.build_token_datasets(doc_caches, Pos)
 
         if epochs:
@@ -1342,14 +1312,12 @@ class LMMixtureDatasetConfig(LMTaskConfig):
 
         return datasets
 
-    def validation_sets(
-        self, Pos: Axis, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Mapping[str, AsyncDataset[LmExample]]:
-        doc_caches = self.build_caches("validation", monitors=monitors)
+    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+        doc_caches = self.build_caches("validation")
         validation_datasets = self.build_token_datasets(doc_caches, Pos)
 
         if self.num_validation_sequences is not None:
-            train_doc_caches = self.build_caches("train", monitors=monitors)
+            train_doc_caches = self.build_caches("train")
             train_datasets = self.build_token_datasets(train_doc_caches, Pos)
 
             for name, num_sequences in self.num_validation_sequences.items():
@@ -1369,9 +1337,7 @@ class LMMixtureDatasetConfig(LMTaskConfig):
 
         return validation_datasets
 
-    def build_caches(
-        self, split: str, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Dict[str, TreeCache[dict]]:
+    def build_caches(self, split: str) -> Dict[str, TreeCache[dict]]:
         caches = {}
         for name, source_config in self.configs.items():
             # Skip datasets with zero weight in all stages
@@ -1418,7 +1384,6 @@ class LMMixtureDatasetConfig(LMTaskConfig):
                     self.the_tokenizer,
                     self.cache_options,
                     self.enforce_eos,
-                    monitors,
                 )
 
         # In practice, it works best if we block on validation caches

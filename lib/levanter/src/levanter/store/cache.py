@@ -8,7 +8,6 @@ import dataclasses
 import logging as pylogging
 import operator
 import os
-import threading
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, TypeVar, Union
 
@@ -27,7 +26,6 @@ from zephyr.writers import write_levanter_cache
 from levanter.data.dataset import AsyncDataset
 
 from ..data._preprocessor import BatchProcessor, BatchResult, dict_from_record_batch
-from ..data.metrics_monitor import InProgressCacheMetrics, LoggerMetricsMonitor, MetricsMonitor
 from ..data.sharded_datasource import ShardedDataSource
 from ..utils.fsspec_utils import exists as fsspec_exists
 from ..utils.fsspec_utils import remove as fsspec_remove
@@ -49,14 +47,6 @@ LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 @dataclass_json
 @dataclass(frozen=True)
 class CacheOptions:
-    """
-    Configuration for a cache build.
-
-    The legacy implementation allowed exposing prefixes of partially built caches.
-    The simplified zephyr-based pipeline always materializes the full cache before it
-    is readable, but we keep the same options structure for compatibility.
-    """
-
     num_shard_groups: Optional[int] = 128
     target_size_per_flush: int | str = "512MB"
     batch_size: int = 128
@@ -89,19 +79,8 @@ def build_or_load_cache(
     source: ShardedDataSource[T],
     processor: BatchProcessor[T, U],
     await_finished: bool = True,
-    monitors: Optional[Sequence["MetricsMonitor"]] = None,
     options: CacheOptions = CacheOptions.default(),
 ) -> "TreeCache[U]":
-    """
-    Build a sharded cache of a dataset using a simplified zephyr-based pipeline.
-
-    The new pipeline processes each shard independently, writes temporary per-shard
-    caches, and then consolidates them into a single TreeStore once all shards finish.
-    Unlike the legacy implementation, partial caches are not exposed for reading.
-    """
-    if monitors is None:
-        monitors = [LoggerMetricsMonitor()]
-
     metadata = CacheMetadata(preprocessor_metadata=processor.metadata)
     try:
         return TreeCache.load(cache_dir, processor.output_exemplar, metadata)
@@ -109,19 +88,21 @@ def build_or_load_cache(
         logger.info(f"Cache not found at {cache_dir}. Building with zephyr pipeline.")
 
     if await_finished:
-        ledger = _build_cache_with_zephyr(cache_dir, source, processor, options, metadata, monitors)
+        ledger = _build_cache_with_zephyr(cache_dir, source, processor, options, metadata)
         return TreeCache(cache_dir, processor.output_exemplar, ledger, None)
 
     build_future: concurrent.futures.Future[CacheLedger] = concurrent.futures.Future()
 
     def _runner():
         try:
-            ledger = _build_cache_with_zephyr(cache_dir, source, processor, options, metadata, monitors)
+            ledger = _build_cache_with_zephyr(cache_dir, source, processor, options, metadata)
             build_future.set_result(ledger)
         except Exception as exc:  # noqa: BLE001
             _safe_remove(os.path.join(cache_dir, "__shards__"))
             if not build_future.done():
                 build_future.set_exception(exc)
+
+    import threading
 
     threading.Thread(target=_runner, daemon=True).start()
     return TreeCache(cache_dir=cache_dir, exemplar=processor.output_exemplar, ledger=None, _build_future=build_future)
@@ -143,7 +124,6 @@ class TreeCache(AsyncDataset[T_co]):
         self._exemplar = exemplar
         self._build_future = _build_future
         self._store_future: concurrent.futures.Future[TreeStore] = concurrent.futures.Future()
-        self._metrics_monitors: list[MetricsMonitor] = []
 
         if ledger is not None and ledger.is_finished:
             store = TreeStore.open(self._exemplar, self.cache_dir, mode="r", cache_metadata=False)
@@ -169,8 +149,6 @@ class TreeCache(AsyncDataset[T_co]):
         self.ledger = ledger
         store = TreeStore.open(self._exemplar, self.cache_dir, mode="r", cache_metadata=False)
         self._store_future.set_result(store)
-        for monitor in self._metrics_monitors:
-            monitor(_ledger_to_metrics(ledger))
 
     async def async_len(self) -> int:
         await self._await_build_async()
@@ -235,20 +213,10 @@ class TreeCache(AsyncDataset[T_co]):
             return fut
         return asyncio.wrap_future(self._build_future)
 
-    def attach_metrics_monitor(self, monitor: MetricsMonitor):
-        if self._store_future.done():
-            monitor(_ledger_to_metrics(self.ledger))  # type: ignore[arg-type]
-            return
-        self._metrics_monitors.append(monitor)
-
     @staticmethod
     def load(cache_dir: str, exemplar: T, options: Optional["CacheMetadata"] = None) -> "TreeCache":
         logger.info(f"Loading cache from {cache_dir}")
-        time_in = os.times()[4]
         ledger = CacheLedger.load(cache_dir, options)
-        time_out = os.times()[4]
-        if time_out - time_in > 4:
-            logger.info(f"Loaded cache ledger in {time_out - time_in:.2f}s")
 
         if not ledger.is_finished:
             raise FileNotFoundError(f"Cache at {cache_dir} is not finished. Use build_or_load to build it.")
@@ -417,7 +385,6 @@ def _build_cache_with_zephyr(
     processor: BatchProcessor[T, U],
     options: CacheOptions,
     metadata: CacheMetadata,
-    monitors: Sequence[MetricsMonitor],
 ) -> CacheLedger:
     pylogging.basicConfig(format=LOG_FORMAT)
     logger.setLevel(DEFAULT_LOG_LEVEL)
@@ -436,7 +403,6 @@ def _build_cache_with_zephyr(
             metadata=metadata,
         )
         ledger._serialize_and_commit(cache_dir)
-        _notify_monitors(monitors, ledger)
         return ledger
 
     temp_root = os.path.join(cache_dir, "__shards__")
@@ -458,7 +424,6 @@ def _build_cache_with_zephyr(
 
     ledger = _consolidate_shard_caches(shard_results, cache_dir, processor.output_exemplar, metadata)
     _safe_remove(temp_root)
-    _notify_monitors(monitors, ledger)
     return ledger
 
 
@@ -494,7 +459,6 @@ def _build_single_shard_cache(
     result = write_levanter_cache(records(), shard_path, metadata=metadata.preprocessor_metadata or {})
 
     if result.get("count", 0) == 0:
-        # Ensure an empty cache directory and ledger exist so downstream consolidation succeeds.
         TreeStore.open(processor.output_exemplar, shard_path, mode="w", cache_metadata=True)
         ledger = CacheLedger(
             total_num_rows=0,
@@ -507,6 +471,7 @@ def _build_single_shard_cache(
         ledger._serialize_and_commit(shard_path)
     else:
         ledger = CacheLedger.load(shard_path, metadata)
+
     return {"shard_name": shard_name, "path": shard_path, "ledger": ledger, "index": shard_index}
 
 
@@ -748,15 +713,6 @@ def _to_list_of_dicts(batch: dict) -> List[dict]:
     return [{key: values[i][j] for i, key in enumerate(keys)} for j in range(num_rows)]
 
 
-def _ledger_to_metrics(ledger: CacheLedger) -> InProgressCacheMetrics:
-    return InProgressCacheMetrics(
-        rows_finished=ledger.total_num_rows,
-        is_finished=ledger.is_finished,
-        shards_finished=len(ledger.finished_shards),
-        field_counts=ledger.field_counts,
-    )
-
-
 def _try_load(path):
     try:
         ledger = CacheLedger.load(path)
@@ -766,12 +722,6 @@ def _try_load(path):
         return None
     except FileNotFoundError:
         return None
-
-
-def _notify_monitors(monitors: Sequence[MetricsMonitor], ledger: CacheLedger):
-    metrics = _ledger_to_metrics(ledger)
-    for monitor in monitors:
-        monitor(metrics)
 
 
 __all__ = [
