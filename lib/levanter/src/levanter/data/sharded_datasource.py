@@ -160,6 +160,8 @@ class UrlBackedShardedDataSource(ShardedDataSource[T_co], abc.ABC):
 
     def __init__(self, urls):
         self.urls = urls
+        # Force materialization early so duplicate shard names surface immediately.
+        _ = self._shard_name_to_url_mapping
 
     @cached_property
     def _shard_name_to_url_mapping(self):
