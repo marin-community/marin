@@ -22,8 +22,8 @@ from dataclasses_json import dataclass_json
 from fsspec import AbstractFileSystem
 from jaxtyping import PyTree
 from zephyr import Dataset, flow_backend
+from zephyr.writers import write_levanter_cache
 
-from levanter.data import batched
 from levanter.data.dataset import AsyncDataset
 
 from ..data._preprocessor import BatchProcessor, BatchResult, dict_from_record_batch
@@ -173,7 +173,7 @@ class TreeCache(AsyncDataset[T_co]):
             monitor(_ledger_to_metrics(ledger))
 
     async def async_len(self) -> int:
-        self._ensure_store_ready()
+        await self._await_build_async()
         return len(await self.store_async())
 
     def __len__(self):
@@ -181,9 +181,7 @@ class TreeCache(AsyncDataset[T_co]):
         return len(self.store)
 
     async def final_length_is_known(self) -> bool:
-        if self.ledger is None:
-            return False
-        if self.ledger.is_finished:
+        if self.is_finished:
             return True
         if self._build_future is not None:
             await asyncio.wrap_future(self._build_future)
@@ -199,8 +197,6 @@ class TreeCache(AsyncDataset[T_co]):
         if self._build_future is not None and self._build_future.done():
             self._ensure_store_ready()
             return len(self.store)
-        if self.ledger is not None:
-            return self.ledger.total_num_rows
         return 0
 
     def __getitem__(self, item):
@@ -208,37 +204,24 @@ class TreeCache(AsyncDataset[T_co]):
         return self.store[item]
 
     async def get_batch(self, indices: Sequence[int] | slice):
-        if self._build_future is not None:
-            await asyncio.wrap_future(self._build_future)
-        self._ensure_store_ready()
-
+        await self._await_build_async()
         if isinstance(indices, slice):
             indices = range(indices.start or 0, indices.stop or len(self), indices.step or 1)
-        max_index = max(indices)
-        await self.wait_until_len_at_least(max_index + 1)
         return await self.store.get_batch(indices)
 
     def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None):
-        if self._build_future is not None:
-            self._build_future.result(timeout=timeout)
-        self._ensure_store_ready(timeout=timeout)
-
+        self._await_build_sync(timeout=timeout)
         if isinstance(indices_or_slice, slice):
             indices_or_slice = range(
                 indices_or_slice.start or 0,
                 indices_or_slice.stop or len(self),
                 indices_or_slice.step or 1,
             )
-        max_index = max(indices_or_slice)
-        if max_index >= len(self.store):
-            raise IndexError(f"Index {max_index} out of bounds for cache of size {len(self.store)}")
         return self.store.get_batch_sync(indices_or_slice)
 
     def await_finished(self, timeout: Optional[float] = None, await_cleanup: bool = False):
         if self._build_future is not None:
-            # propagate exceptions
-            self._build_future.result(timeout=timeout)
-            self._ensure_store_ready(timeout=timeout)
+            self._await_build_sync(timeout=timeout)
 
     async def finished(self):
         if self._build_future is not None:
@@ -284,11 +267,23 @@ class TreeCache(AsyncDataset[T_co]):
 
     @property
     def is_finished(self):
-        if self.ledger is not None and self.ledger.is_finished:
+        if self._store_future.done():
             return True
         if self._build_future is not None and self._build_future.done() and not self._build_future.exception():
             return True
+        if self.ledger is not None and self.ledger.is_finished:
+            return True
         return False
+
+    def _await_build_sync(self, timeout: Optional[float] = None):
+        if self._build_future is not None:
+            self._build_future.result(timeout=timeout)
+        self._ensure_store_ready(timeout=timeout)
+
+    async def _await_build_async(self):
+        if self._build_future is not None:
+            await asyncio.wrap_future(self._build_future)
+        self._ensure_store_ready()
 
 
 @dataclass_json
@@ -483,13 +478,35 @@ def _build_single_shard_cache(
         return {"shard_name": shard_name, "path": shard_path, "ledger": existing, "index": shard_index}
 
     logger.info(f"Building shard {shard_name} -> {shard_path}")
-    iterator = source.open_shard_at_row(shard_name, 0)
-    with SerialCacheWriter(shard_path, processor.output_exemplar, metadata=metadata, shard_name=shard_name) as writer:
-        for batch in batched(iterator, options.batch_size):
-            processed = processor(batch)
-            writer.write_batch(_canonicalize_batch(processed))
 
-    ledger = CacheLedger.load(shard_path, metadata)
+    def records():
+        batch = []
+        for example in source.open_shard_at_row(shard_name, 0):
+            batch.append(example)
+            if len(batch) >= options.batch_size:
+                processed = processor(batch)
+                yield from _canonicalize_batch(processed)
+                batch.clear()
+        if batch:
+            processed = processor(batch)
+            yield from _canonicalize_batch(processed)
+
+    result = write_levanter_cache(records(), shard_path, metadata=metadata.preprocessor_metadata or {})
+
+    if result.get("count", 0) == 0:
+        # Ensure an empty cache directory and ledger exist so downstream consolidation succeeds.
+        TreeStore.open(processor.output_exemplar, shard_path, mode="w", cache_metadata=True)
+        ledger = CacheLedger(
+            total_num_rows=0,
+            shard_rows={shard_name: 0},
+            is_finished=True,
+            finished_shards=[shard_name],
+            field_counts={},
+            metadata=metadata,
+        )
+        ledger._serialize_and_commit(shard_path)
+    else:
+        ledger = CacheLedger.load(shard_path, metadata)
     return {"shard_name": shard_name, "path": shard_path, "ledger": ledger, "index": shard_index}
 
 
