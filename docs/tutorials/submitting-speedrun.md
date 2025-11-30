@@ -1,8 +1,14 @@
 # Submitting to the Speedrun Leaderboard
 
-## tl;dr (using GPUs w/ CUDA 12)
+There are just three easy steps to submit a speedrun experiment to Marin:
 
-Prerequisites you may already fulfill:
+![Marin speedrun 3 steps](../images/marin-speedrun-3-steps.png){width=75%}
+
+## tl;dr (using GPUs with CUDA 12)
+
+If you are at a terminal with GPUs, the following should work for you.
+
+_Prerequisites you may already fulfill:_
 
 <details><summary>Install uv</summary>
 
@@ -12,17 +18,19 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 </details>
 
-<details><summary>Fork marin (or have GitHub CLI)</summary>
+**1. Fork & Setup Marin**
 
-Fork Marin at <a href="https://github.com/marin-community/marin/fork">https://github.com/marin-community/marin/fork</a>, or let the script do it for you automatically if you have installed and logged in to the GitHub CLI.
-
-</details>
-
-Run the following to setup
+[Click here](https://github.com/marin-community/marin/fork) to fork Marin, then clone your fork, or let the setup script do it for you if GitHub CLI is installed and authenticated. Run the setup script:
 
 ```bash
-git clone https://github.com/marin-community/marin
-cd marin
+curl -LsSf https://raw.githubusercontent.com/marin-community/marin/refs/heads/main/scripts/speedrun/onboarding_setup.sh | bash
+```
+
+<details><summary>Manual Setup Steps (alternative)</summary>
+
+Inside your fork of Marin:
+
+```bash
 uv venv --python 3.11
 . .venv/bin/activate
 uv sync --all-packages --extra=cuda12
@@ -36,18 +44,31 @@ export HF_TOKEN='...' # or `uvx hf auth login`
 
 ```
 
-Start training the hackable transformer:
+Create a subdirectory under `experiments/speedrun` and copy a starter file there (see details below).
+
+</details>
+
+**2. Develop & Test Submission**
+
+You can now work on your speedrun submission! You can check your code and your estimated compute cost using a dry run
 
 ```bash
-python -m experiments.hackable_transformer_starter_template \
-    --force_run_failed true --prefix local_store
-
-# prefix specifies the output directory of all artifacts
+python -m experiments.speedrun.my_submission.main --dry_run true --prefix local_store
 ```
 
-When you are done, open a PR and contribute to Marin! We ask that you include the output of `print_run_info()` in the PR description (obtainable via a dryrun with `--dry_run true`), and any `speedrun_results.json` files generated.
+then fire off training on your hardware.
 
-Leave "Allow edits by maintainers" on so we can work on your code and provide compute to scale up your ideas.
+**3. Open PR & Merge**
+
+When you are ready, open a PR and contribute to Marin. We ask that you
+
+- give a brief explanation of your approach (model architecture, training strategy, optimizations)
+
+- include the output of `print_run_info()` in the PR description (obtainable via a dry run), and `speedrun_results.json` files.
+
+- leave "Allow edits by maintainers" on so we can help work on your code and scale up your ideas on TPU clusters.
+
+Once the PR is merged, your run will appear on the [public leaderboard](https://marin.community/speedrun/).
 
 ## The Complete Introduction to Marin Speedruns
 
@@ -65,7 +86,7 @@ Submitting to the Speedrun Leaderboard consists of the following steps:
 3. Submit the configuration and the generated results file to the Marin GitHub repository via a pull request.
 4. Watch it appear on the leaderboard once merged!
 
-Here is an [hello world submission](https://github.com/marin-community/marin/blob/main/experiments/speedrun/hello_world_gpu_speedrun/hello_world_gpu_speedrun.py),
+Here is a [hello world submission](https://github.com/marin-community/marin/blob/main/experiments/speedrun/hello_world_gpu_speedrun/hello_world_gpu_speedrun.py),
 and here is the [current leaderboard](https://marin.community/speedrun). You can explore the code for different runs [here](https://github.com/marin-community/marin/tree/main/experiments/speedrun). We will now use the hello-world example to show you how to submit a speedrun to the leaderboard.
 
 ## Prerequisites
@@ -84,13 +105,7 @@ Before you get started, you will need the following:
     mkdir -p experiments/speedrun/YOUR_RUN_NAME
     ```
 
-2.  Create your training script in this directory- you'll need to specify congfigs related to author/affiliation, model configuration, and training configuration (as part of which you should also specify what kind of hardware you're using via `GpuConfig` or `TpuPodConfig`).
-
-Marin typically uses [Levanter](https://github.com/marin-community/levanter) for model training. In the example above, we use the `llama_nano` configuration for the Llama model implemented in Levanter. Feel free to go through each of the configuration classes' definitions to get an idea of the design space here. The training configuration can either be a `SimpleTrainConfig` or `TrainLmOnPodConfig`. Also, note that in this example, you only have one Python file, but if your submission is more complex, you can split it into multiple files. To see examples of other speedruns and configurations, check out the [speedrun directory](https://github.com/marin-community/marin/tree/main/experiments/speedrun).
-
-If you are interested in modifying model architectures, you can refer to the "[hackable transformer](https://github.com/marin-community/marin/tree/main/experiments/speedrun/hackable_transformer_starter/hackable_transformer_attn_sink.py)" starter file, where a generic transformer language model is implemented for you to make changes easily (without needing to merge a Levanter pull request), in addition to all other necessary code for you to make a submission.
-
-You can also [add new optimizers](https://github.com/marin-community/marin/blob/main/docs/tutorials/add-optimizer.md), change learning rate schedules, play with hyperparameters, etc.
+2.  Create your training script in this directory. You can start by copying the "[hackable transformer](https://github.com/marin-community/marin/tree/main/experiments/hackable_transformer_starter_template.py)" starter file, where a generic transformer language model is implemented for you to make changes easily, in addition to all other necessary code for you to make a submission. To see examples of other speedruns and configurations, check out the [speedrun directory](https://github.com/marin-community/marin/tree/main/experiments/speedrun). You can also [add new optimizers](https://github.com/marin-community/marin/blob/main/docs/tutorials/add-optimizer.md), change learning rate schedules, play with hyperparameters, etc.
 
 3.  Before running your speedrun, you may find it helpful to call [speedrun_config.print_run_info()](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/speedrun/speedrun.py#L76) to see the estimated training HW FLOPs, model FLOPs, model size, and your speedrun configs displayed. This will help you sanity-check your run, and also can be helpful in estimating the resources needed for your run.
 
@@ -110,9 +125,13 @@ You can also [add new optimizers](https://github.com/marin-community/marin/blob/
 
     - `WANDB_ENTITY` and `WANDB_PROJECT` are used to specify the Weights and Biases team/entity and project names. You may use your own organization and project identifiers, but we ask that the run link corresponding to your speedrun is publicly accessible when submitting to the leaderboard.
 
-5.  Train your model:
+5.  Train your model (example):
     ```bash
-    python marin/run/ray_run.py -- python experiments/speedrun/llama_nano_tpu_speedrun/llama_nano_tpu_speedrun.py
+    python -m experiments.speedrun.my_submission.main --force_run_failed true --prefix local_store
+    ```
+    If you have setup a remote Ray cluster, use
+    ```bash
+    python marin/run/ray_run.py -- python -m experiments.speedrun.my_submission.main --force_run_failed true --prefix local_store
     ```
 
 ## Submitting Your Run

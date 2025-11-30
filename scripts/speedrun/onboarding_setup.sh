@@ -38,7 +38,7 @@ else
     if [[ -d "marin" ]]; then
         log_warn "Directory 'marin' found. Attempting to enter..."
         cd marin
-        
+
         if is_marin_root; then
             log_success "Entered directory 'marin'."
         else
@@ -47,7 +47,7 @@ else
         fi
     else
         log_warn "Current directory is not the root of the 'marin' repository."
-        
+
         # Check for GitHub CLI
         if command -v gh &> /dev/null && gh auth status &> /dev/null; then
             echo -e "GitHub CLI detected and logged in."
@@ -55,7 +55,7 @@ else
             read -p "Would you like to fork and clone marin-community/marin now? (y/n): " confirm_fork < /dev/tty
             if [[ "$confirm_fork" =~ ^[Yy]$ ]]; then
                 gh repo fork marin-community/marin --clone --remote
-                
+
                 if [[ -d "marin" ]]; then
                     cd marin
                     log_success "Entered directory 'marin'."
@@ -196,9 +196,9 @@ TARGET_FILE="$TARGET_DIR/main.py"
 
 if [[ -f "$TEMPLATE_PATH" ]]; then
     cp "$TEMPLATE_PATH" "$TARGET_FILE"
-    
+
     IMPORT_PATH="experiments.speedrun.${RUN_NAME}.main"
-    
+
     # Use sed to replace placeholders.
     if [[ "$OSTYPE" == "darwin"* ]]; then
         sed -i '' "s|__SUBMISSION_IMPORT_PATH__|$IMPORT_PATH|g" "$TARGET_FILE"
@@ -227,18 +227,18 @@ echo ""
 echo -e "${GREEN}⚓ All set! Your Marin Speedrun environment is ready.${NC}"
 echo ""
 echo -e "We have created a starter file at ${CYAN}$TARGET_FILE${NC}."
-echo -e "This is your dedicated workspace. You are free to ${BLUE}hack, modify, and test${NC} this code to build your submission."
+echo -e "This is your dedicated workspace. Hack here to build your submission!"
 echo ""
 echo -e "${BLUE}Next Steps:${NC}"
 echo "1. Enter your experiment directory:"
 echo -e "   ${CYAN}cd $FINAL_PATH${NC}"
 echo "2. Open 'main.py' and fill in your author details."
-echo "3. Load your environment variables (run this once per session):"
+echo "3. Load your WANDB_API_KEY and HF_TOKEN:"
 echo -e "   ${CYAN}export \$(grep -v '^#' $REPO_ROOT/.env | xargs)${NC}"
 echo "4. Launch your training run:"
 echo -e "   ${CYAN}python -m experiments.speedrun.${RUN_NAME}.main --force_run_failed true --prefix $REPO_ROOT/local_store${NC}"
 echo ""
-echo -e "Final Tips:"
+echo -e "Tips:"
 echo "- The '--prefix' argument specifies the output directory of all artifacts. The env var MARIN_PREFIX can also be set to control it."
 echo "- WANDB_ENTITY and WANDB_PROJECT can be set to configure WandB logging."
 echo "- Check out https://marin.readthedocs.io/en/latest/tutorials/submitting-speedrun/ for more details."
