@@ -9,7 +9,7 @@ import pytest
 
 from levanter.data import BatchProcessor, ShardedDataSource, batched
 from levanter.data.sharded_datasource import TextUrlDataSource
-from levanter.store.cache import CacheOptions, SerialCacheWriter, TreeStore, build_or_load_cache
+from levanter.store.cache import SerialCacheWriter, TreeStore, build_or_load_cache
 
 
 class TestProcessor(BatchProcessor[Sequence[int], dict[str, np.ndarray]]):
@@ -120,7 +120,6 @@ def test_full_end_to_end_cache():
             SimpleShardSource(num_shards=15),
             TestProcessor(),
             await_finished=True,
-            options=CacheOptions(num_shard_groups=3, batch_size=8),
         )
 
         expected = simple_process(TestProcessor(), SimpleShardSource(num_shards=15))
@@ -138,7 +137,6 @@ def test_full_end_to_end_cache_with_groups():
             SimpleShardSource(num_shards=5),
             TestProcessor(),
             await_finished=True,
-            options=CacheOptions(num_shard_groups=2, batch_size=8),
         )
 
         expected = simple_process(TestProcessor(), SimpleShardSource(num_shards=5))
@@ -198,7 +196,7 @@ def test_cache_recover_from_crash():
     with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as tmpdir2:
         source = CrashingShardSource(4)
         with pytest.raises(_CustomException):
-            build_or_load_cache(tmpdir, source, TestProcessor(), CacheOptions(target_size_per_flush=1))
+            build_or_load_cache(tmpdir, source, TestProcessor())
 
         source = CrashingShardSource(5)
         with pytest.raises(_CustomException):

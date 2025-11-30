@@ -67,14 +67,14 @@ def build_or_load_cache(
         logger.info(f"Cache not found at {cache_dir}. Building with zephyr pipeline.")
 
     if await_finished:
-        ledger = _build_cache_with_zephyr(cache_dir, source, processor, options, metadata)
+        ledger = build_cache(cache_dir, source, processor, options, metadata)
         return TreeCache(cache_dir, processor.output_exemplar, ledger, None)
 
     build_future: concurrent.futures.Future[CacheLedger] = concurrent.futures.Future()
 
     def _runner():
         try:
-            ledger = _build_cache_with_zephyr(cache_dir, source, processor, options, metadata)
+            ledger = build_cache(cache_dir, source, processor, options, metadata)
             build_future.set_result(ledger)
         except Exception as exc:  # noqa: BLE001
             _safe_remove(os.path.join(cache_dir, "__shards__"))
@@ -358,16 +358,18 @@ def _serialize_json_and_commit(path: str, obj):
             logger.exception(f"Failed to write {path}")
 
 
-def _build_cache_with_zephyr(
+def build_cache(
     cache_dir: str,
     source: ShardedDataSource[T],
     processor: BatchProcessor[T, U],
     options: CacheOptions,
     metadata: CacheMetadata,
+    backend: Optional[Backend] = None,
 ) -> CacheLedger:
-    pylogging.basicConfig(format=LOG_FORMAT)
-    logger.setLevel(DEFAULT_LOG_LEVEL)
-    backend = flow_backend()
+    """
+    Build a cache from a sharded data source using a Zephyr backend.
+    """
+    backend = backend or cpu_only_backend()
     shard_names = list(source.shard_names)
 
     if len(shard_names) == 0:
@@ -733,6 +735,5 @@ __all__ = [
     "CacheLedger",
     "CacheMetadata",
     "CacheOptions",
-    "_expose_cache_rows",
     "consolidate_shard_caches",
 ]

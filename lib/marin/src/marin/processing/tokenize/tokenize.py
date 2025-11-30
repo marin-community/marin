@@ -266,16 +266,6 @@ def cpu_only_backend():
     return flow_backend(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}})
 
 
-def consolidate_shard_group(shard_cache_paths: list[str], output_path: str, exemplar):
-    # Convenience wrapper that mirrors previous signature; delegates to shared consolidate_shard_caches.
-    return consolidate_shard_caches(
-        shard_cache_paths=shard_cache_paths,
-        output_path=output_path,
-        exemplar=exemplar,
-        backend=cpu_only_backend(),
-    )
-
-
 def tokenize(config: TokenizeConfigBase):
     """Tokenize datasets using zephyr pipeline.
 
@@ -348,7 +338,12 @@ def tokenize(config: TokenizeConfigBase):
         )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
-        consolidate_shard_group(shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar)
+        consolidate_shard_caches(
+            shard_cache_paths=shard_paths,
+            output_path=prefix,
+            exemplar=exemplar,
+            backend=cpu_only_backend(),
+        )
 
     if train_paths:
         run_pipeline(train_paths, "train")
