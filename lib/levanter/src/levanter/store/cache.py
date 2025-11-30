@@ -44,34 +44,13 @@ DEFAULT_LOG_LEVEL = pylogging.INFO
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 
 
-@dataclass_json
 @dataclass(frozen=True)
 class CacheOptions:
-    num_shard_groups: Optional[int] = 128
-    target_size_per_flush: int | str = "512MB"
     batch_size: int = 128
-
-    @property
-    def target_bytes_per_flush(self):
-        if isinstance(self.target_size_per_flush, int):
-            return self.target_size_per_flush
-        import humanfriendly
-
-        return humanfriendly.parse_size(self.target_size_per_flush)
 
     @staticmethod
     def default():
         return CacheOptions()
-
-    @staticmethod
-    def no_fanciness(batch_size: Optional[int] = None):
-        if batch_size is None:
-            batch_size = 128
-        return CacheOptions(num_shard_groups=None, batch_size=batch_size)
-
-    @staticmethod
-    def one_group():
-        return CacheOptions(num_shard_groups=1, batch_size=128)
 
 
 def build_or_load_cache(
