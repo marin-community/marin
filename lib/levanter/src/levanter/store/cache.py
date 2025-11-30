@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import concurrent.futures
 import copy
 import dataclasses
 import logging as pylogging
@@ -84,86 +83,52 @@ def build_or_load_cache(
 
 
 class TreeCache(AsyncDataset[T_co]):
-    ledger: Optional["CacheLedger"]
+    ledger: "CacheLedger"
 
     def __init__(
         self,
         cache_dir: str,
         exemplar: T_co,
-        ledger: Optional["CacheLedger"],
-        _build_future: Optional[concurrent.futures.Future["CacheLedger"]],
+        ledger: "CacheLedger",
     ):
         super().__init__()
         self.cache_dir = cache_dir
         self.ledger = ledger
         self._exemplar = exemplar
-        self._build_future = _build_future
-        self._store_future: concurrent.futures.Future[TreeStore] = concurrent.futures.Future()
 
-        if ledger is not None and ledger.is_finished:
-            store = TreeStore.open(self._exemplar, self.cache_dir, mode="r", cache_metadata=False)
-            self._store_future.set_result(store)
+        if not ledger.is_finished:
+            raise RuntimeError(f"Cache at {cache_dir} is not finished.")
+
+        self._store = TreeStore.open(self._exemplar, self.cache_dir, mode="r", cache_metadata=False)
 
     @property
     def store(self) -> TreeStore[T_co]:
-        self._ensure_store_ready()
-        return self._store_future.result()
-
-    async def store_async(self) -> TreeStore[T_co]:
-        if self._store_future.done():
-            return self._store_future.result()
-        await asyncio.wrap_future(self._store_future)
-        return self._store_future.result()
-
-    def _ensure_store_ready(self, timeout: Optional[float] = None):
-        if self._store_future.done():
-            return
-        if self._build_future is None:
-            raise FileNotFoundError("Cache is not finished building.")
-        ledger = self._build_future.result(timeout=timeout)
-        self.ledger = ledger
-        store = TreeStore.open(self._exemplar, self.cache_dir, mode="r", cache_metadata=False)
-        self._store_future.set_result(store)
+        return self._store
 
     async def async_len(self) -> int:
-        await self._await_build_async()
-        return len(await self.store_async())
+        return len(self.store)
 
     def __len__(self):
-        self._ensure_store_ready()
         return len(self.store)
 
     async def final_length_is_known(self) -> bool:
-        if self.is_finished:
-            return True
-        if self._build_future is not None:
-            await asyncio.wrap_future(self._build_future)
-            return True
-        return False
+        return True
 
     def is_finite(self) -> bool:
         return True
 
     async def current_len(self) -> int:
-        if self._store_future.done():
-            return len(await self.store_async())
-        if self._build_future is not None and self._build_future.done():
-            self._ensure_store_ready()
-            return len(self.store)
-        return 0
+        return len(self.store)
 
     def __getitem__(self, item):
-        self._ensure_store_ready()
         return self.store[item]
 
     async def get_batch(self, indices: Sequence[int] | slice):
-        await self._await_build_async()
         if isinstance(indices, slice):
             indices = range(indices.start or 0, indices.stop or len(self), indices.step or 1)
         return await self.store.get_batch(indices)
 
     def get_batch_sync(self, indices_or_slice, *, timeout: Optional[float] = None):
-        self._await_build_sync(timeout=timeout)
         if isinstance(indices_or_slice, slice):
             indices_or_slice = range(
                 indices_or_slice.start or 0,
@@ -172,22 +137,6 @@ class TreeCache(AsyncDataset[T_co]):
             )
         return self.store.get_batch_sync(indices_or_slice)
 
-    def await_finished(self, timeout: Optional[float] = None, await_cleanup: bool = False):
-        if self._build_future is not None:
-            self._await_build_sync(timeout=timeout)
-
-    async def finished(self):
-        if self._build_future is not None:
-            await asyncio.wrap_future(self._build_future)
-            self._ensure_store_ready()
-
-    def finished_sentinel(self):
-        if self._build_future is None:
-            fut = asyncio.get_event_loop().create_future()
-            fut.set_result(None)
-            return fut
-        return asyncio.wrap_future(self._build_future)
-
     @staticmethod
     def load(cache_dir: str, exemplar: T, options: Optional["CacheMetadata"] = None) -> "TreeCache":
         logger.info(f"Loading cache from {cache_dir}")
@@ -195,7 +144,7 @@ class TreeCache(AsyncDataset[T_co]):
 
         if not ledger.is_finished:
             raise FileNotFoundError(f"Cache at {cache_dir} is not finished. Use build_or_load to build it.")
-        return TreeCache(cache_dir, exemplar, ledger, None)
+        return TreeCache(cache_dir, exemplar, ledger)
 
     @staticmethod
     def build_or_load(
@@ -210,23 +159,7 @@ class TreeCache(AsyncDataset[T_co]):
 
     @property
     def is_finished(self):
-        if self._store_future.done():
-            return True
-        if self._build_future is not None and self._build_future.done() and not self._build_future.exception():
-            return True
-        if self.ledger is not None and self.ledger.is_finished:
-            return True
-        return False
-
-    def _await_build_sync(self, timeout: Optional[float] = None):
-        if self._build_future is not None:
-            self._build_future.result(timeout=timeout)
-        self._ensure_store_ready(timeout=timeout)
-
-    async def _await_build_async(self):
-        if self._build_future is not None:
-            await asyncio.wrap_future(self._build_future)
-        self._ensure_store_ready()
+        return True
 
 
 @dataclass_json

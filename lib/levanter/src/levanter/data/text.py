@@ -105,17 +105,16 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         super().__init__()
         self.doc_cache = doc_cache
         self.seq_len = seq_len
-        self._store: Optional[TreeStore] = None
+        self._store: Optional[TreeStore] = doc_cache.store
         self._cached_len: Optional[int] = None
 
     async def async_len(self) -> int:
-        await self.doc_cache.finished()
         token_arrays = await self._await_token_cache()
         return token_arrays.data_size // self.seq_len
 
     async def _await_token_cache(self) -> JaggedArrayStore:
         if self._store is None:
-            self._store = await self.doc_cache.store_async()
+            self._store = self.doc_cache.store
         return self._store.tree["input_ids"]
 
     async def final_length_is_known(self) -> bool:
@@ -1629,8 +1628,6 @@ class MultiturnChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, Processed
     ):
         # NB the GreedyPackedDataset returns a tuple, where the first has the packed leaves
         # and the second has the segment ids
-        # TODO: do better with blocking
-        cache.await_finished()
         self.packed: GreedyPrepackedDataset[ProcessedChatDict] = GreedyPrepackedDataset(
             cache.store.tree,
             Pos.size,
@@ -1748,8 +1745,6 @@ class SupervisedDataset(MappedAsyncDataset[tuple[ProcessedSupervisedDict, Proces
         slice_strategy: Literal["left", "right", "raise"] = "right",
     ):
         self.mask_inputs = mask_inputs
-        # TODO: do better with blocking
-        cache.await_finished()
         self.packed = GreedyPrepackedDataset(
             cache.store.tree,
             Pos.size,
@@ -1920,7 +1915,6 @@ def count_corpus_sizes(config: LMMixtureDatasetConfig | SingleDatasetLMConfig, p
 
     for name, cache in train_caches.items():
         source = sources[name]
-        cache.await_finished()
         metric_prefix = f"{prefix}train/{name}/"
 
         stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size
@@ -1945,7 +1939,6 @@ def count_corpus_sizes(config: LMMixtureDatasetConfig | SingleDatasetLMConfig, p
     validation_caches = config.build_caches("validation")
     for name, cache in validation_caches.items():
         source = sources[name]
-        cache.await_finished()
         metric_prefix = f"{prefix}validation/{name}/"
 
         stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size

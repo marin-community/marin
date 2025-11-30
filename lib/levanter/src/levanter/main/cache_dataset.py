@@ -40,13 +40,12 @@ def main(args: RayCachedLMDatasetConfig):
             logger.warning(f"Skipping {split} because it is empty.")
             continue
 
-        cache = build_or_load_cache(
+        build_or_load_cache(
             cache_dir=split_cache_dir,
             source=source,
             processor=batch_tokenizer,
         )
 
-        cache.await_finished()
         print(f"Finished caching {split} to {split_cache_dir}.")
 
 
