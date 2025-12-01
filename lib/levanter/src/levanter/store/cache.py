@@ -21,6 +21,7 @@ import tensorstore as ts
 from dataclasses_json import dataclass_json
 from fsspec import AbstractFileSystem
 from jaxtyping import PyTree
+from tqdm_loggable.tqdm_logging import tqdm_logging
 from zephyr import Dataset, flow_backend, Backend
 from zephyr.writers import write_levanter_cache
 
@@ -363,12 +364,14 @@ def _build_single_shard_cache(
 
     def records():
         batch = []
+        pbar = tqdm_logging(desc=f"Shard {shard_name}")
         for example in source.open_shard_at_row(shard_name, 0):
             batch.append(example)
             if len(batch) >= options.batch_size:
                 processed = processor(batch)
                 yield from _canonicalize_batch(processed)
                 batch.clear()
+            pbar.update(1)
         if batch:
             processed = processor(batch)
             yield from _canonicalize_batch(processed)
