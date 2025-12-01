@@ -1148,44 +1148,27 @@ def _setup_logging():
 
 
 def _detect_local_resources() -> dict[str, float]:
-    from ray.util.accelerators import accelerators
+    from marin.resources_utils import torch_device_name_to_ray_accel_type
 
     resources: dict[str, float] = {"head_node": 1.0}
-
     try:
         import torch
 
         if not torch.cuda.is_available():
             return resources
-
+        gpu_count = torch.cuda.device_count()
+        if gpu_count == 0:
+            return resources
+        # TODO: assuming same GPU type
         device_name = torch.cuda.get_device_name(0)
-        # map devices available on Colab
-        mapping = [
-            ("A100", "80GB", accelerators.NVIDIA_A100_80G),
-            ("A100", "40GB", accelerators.NVIDIA_A100_40G),
-            ("A100", None, accelerators.NVIDIA_A100),
-            ("H100", None, accelerators.NVIDIA_H100),
-            ("V100", None, accelerators.NVIDIA_TESLA_V100),
-            ("T4", None, accelerators.NVIDIA_TESLA_T4),
-            ("L4", None, accelerators.NVIDIA_L4),
-        ]
-
-        accel_type = None
-        for gpu_model, memory_variant, ray_constant in mapping:
-            if gpu_model in device_name:
-                if memory_variant and memory_variant not in device_name:
-                    continue
-                accel_type = ray_constant
-                break
-
+        accel_type = torch_device_name_to_ray_accel_type(device_name)
         if accel_type:
-            logger.info(f"Auto-detected GPU: '{device_name}'. Labeling as accelerator_type:{accel_type}")
-            resources[f"accelerator_type:{accel_type}"] = 1.0
+            logger.info(f"Auto-detected {gpu_count} GPU(s): '{device_name}' -> accelerator_type:{accel_type}")
+            resources[f"accelerator_type:{accel_type}"] = gpu_count
         else:
             logger.warning(f"Could not map GPU '{device_name}' to a known Ray accelerator type.")
     except ImportError:
-        logger.warning("torch is not installed. Please install it to use this feature.")
-
+        logger.warning("torch is not installed. GPU detection skipped.")
     return resources
 
 

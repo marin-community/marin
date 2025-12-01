@@ -79,6 +79,23 @@ ray_device_name_to_jax_name_map: dict[AcceleratorType, str] = {
 
 FlopDtype = Literal["bf16", "fp16", "fp32", "int8", "int4", "fp8"]
 
+def torch_device_name_to_ray_accel_type(device_name: str) -> AcceleratorType | None:
+    """Map a torch CUDA device name to a Ray accelerator type.
+
+    Args:
+        device_name: The torch device name (e.g., "NVIDIA A100-SXM4-80GB")
+
+    Returns:
+        The Ray accelerator type (e.g., "A100-80G") or None if not recognized
+    """
+    device_upper = device_name.upper()
+    # Check more specific patterns first (longer names like "A100-80G" before "A100")
+    for ray_type in sorted(ray_device_name_to_jax_name_map.keys(), key=len, reverse=True):
+        # "A100-80G" -> check for "A100" and "80G" in device name
+        if all(part in device_upper for part in ray_type.upper().replace("-", " ").split()):
+            return ray_type
+    return None
+
 
 def flop_count_per_device_from_accel_type(accel_type: AcceleratorType, dtype: FlopDtype = "bf16") -> float | None:
     """
