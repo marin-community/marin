@@ -17,8 +17,9 @@ Deduplication using rbloom bloom filters and zephyr streaming.
 
 This module provides three deduplication workflows:
 1. DEDUPLICATE: Remove duplicate paragraphs within a dataset
-2. DECONTAMINATE: Mark paragraphs that appear in a contamination source
-3. TRAIN_TEST_OVERLAP: Detect train-test overlap using n-gram matching
+2. EXACT_DOC_DEDUPLICATE: Remove duplicate documents based on full text hash
+3. DECONTAMINATE: Mark paragraphs that appear in a contamination source
+4. TRAIN_TEST_OVERLAP: Detect train-test overlap using n-gram matching
 
 All workflows use rbloom bloom filters for efficient duplicate detection.
 """
@@ -410,37 +411,37 @@ def _run_deduplication(config: DedupeConfig):
     # Determine base path for rebasing
     base_path = config.input_path[0] if isinstance(config.input_path, list) else config.input_path
 
-    # Load duplicate map once (will be captured in closure)
-    logger.info("Loading duplicate map")
-    dup_map = {}
-    for record in load_parquet(duplicate_key_shards[0]):
-        dup_map[record["hash"]] = {
-            "canonical": record["canonical"],
-        }
-
-    def mark_exact_dups(record: dict) -> dict:
+    def mark_exact_dups(records: Iterator[dict]) -> Iterator[dict]:
         """Mark duplicate paragraphs in a single record using exact hash matching."""
-        record_id = _record_id(record)
-        spans = []
-        offset = 0
-        paras = record.get(config.text_field, "").split("\n")
-        for para in paras:
-            hash_val = _str_hash(para)
-            if hash_val in dup_map:
-                if record_id != dup_map[hash_val]["canonical"]:
-                    spans.append([offset, offset + len(para), 1.0])
-            offset = offset + len(para) + 1  # +1 for newline
 
-        return {
-            "id": record_id,
-            "attributes": {config.attribute_name: spans},
-        }
+        dup_map = {}
+        for record in load_parquet(duplicate_key_shards[0]):
+            dup_map[record["hash"]] = record["canonical"]
+
+        logger.info(f"There are {len(dup_map)} duplicate paragraphs.")
+
+        for record in records:
+            record_id = _record_id(record)
+            spans = []
+            offset = 0
+            paras = record.get(config.text_field, "").split("\n")
+            for para in paras:
+                hash_val = _str_hash(para)
+                if hash_val in dup_map:
+                    if record_id != dup_map[hash_val]:
+                        spans.append([offset, offset + len(para), 1.0])
+                offset = offset + len(para) + 1  # +1 for newline
+
+            yield {
+                "id": record_id,
+                "attributes": {config.attribute_name: spans},
+            }
 
     # Use write_jsonl with callable output pattern
     flow_backend().execute(
         Dataset.from_list(input_files)
         .flat_map(load_file)
-        .map(mark_exact_dups)
+        .map_shard(mark_exact_dups)
         .write_jsonl(
             output_pattern=lambda shard_idx, total: rebase_file_path(
                 base_path, input_files[shard_idx], config.output_path
@@ -505,29 +506,28 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
         # NOTE: if the base_path is in the input_files, means it's a specific file, so rebase to its directory
         base_path = os.path.dirname(base_path)
 
-    # Load duplicate map once (will be captured in closure)
-    logger.info("Loading duplicate map")
-    dup_map = {}
-    num_duplicates = 0
-    for record in load_parquet(duplicate_key_shards[0]):
-        dup_map[record["hash"]] = record["canonical"]
-        num_duplicates += 1
-
-    logger.info(f"There are {num_duplicates} duplicate documents.")
-
-    def mark_exact_dups(record: dict) -> dict:
+    def mark_exact_dups(records: Iterator[dict]) -> Iterator[dict]:
         """Mark exact duplicate documents using exact hash matching."""
-        record_id = _record_id(record)
-        hash_val = _str_hash(record.get(config.text_field, ""))
-        assert hash_val
-        return {"id": record_id, "attributes": {config.attribute_name: dup_map.get(hash_val, record_id) != record_id}}
+        dup_map = {}
+        num_duplicates = 0
+        for record in load_parquet(duplicate_key_shards[0]):
+            dup_map[record["hash"]] = record["canonical"]
+            num_duplicates += 1
+
+        logger.info(f"There are {num_duplicates} duplicate documents.")
+
+        for record in records:
+            record_id = _record_id(record)
+            hash_val = _str_hash(record.get(config.text_field, ""))
+            assert hash_val
+            yield {"id": record_id, "attributes": {config.attribute_name: dup_map.get(hash_val, record_id) != record_id}}
 
     # Use write_jsonl with callable output pattern
     backend.execute(
         Dataset.from_list(input_files).flat_map(load_file)
         # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
         # the shards of the input files for rebase_file_path to work correctly.
-        .map(mark_exact_dups).write_jsonl(
+        .map_shard(mark_exact_dups).write_jsonl(
             output_pattern=lambda shard_idx, total: rebase_file_path(
                 base_path, input_files[shard_idx], config.output_path
             ),
