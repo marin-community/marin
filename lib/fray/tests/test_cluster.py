@@ -102,7 +102,6 @@ def test_cluster_job_success(cluster, cluster_type):
 
     assert info.status == "succeeded"
     assert info.error_message is None
-    assert info.end_time is not None
 
 
 def test_cluster_monitor_logs(cluster):
@@ -209,7 +208,6 @@ def test_local_cluster_replica_integration(local_cluster, tmp_path):
         with open(output_file, "w") as f:
             json.dump({"replica_id": str(replica_id), "replica_count": replica_count}, f)
 
-        # Replica 1 fails to test status aggregation
         if replica_id == 1:
             print("Replica 1 intentionally failing")
             sys.exit(1)
@@ -224,11 +222,8 @@ def test_local_cluster_replica_integration(local_cluster, tmp_path):
     )
 
     job_id = local_cluster.launch(request)
-
-    # Collect logs
     logs = list(local_cluster.monitor(job_id))
 
-    # Check log prefixes - each replica should log with [replica-N] prefix
     replica_0_logs = [log for log in logs if "[replica-0]" in log and "Hello from replica 0" in log]
     replica_1_logs = [log for log in logs if "[replica-1]" in log and "Replica 1 intentionally failing" in log]
     replica_2_logs = [log for log in logs if "[replica-2]" in log and "Hello from replica 2" in log]
@@ -237,14 +232,12 @@ def test_local_cluster_replica_integration(local_cluster, tmp_path):
     assert len(replica_1_logs) > 0, "No logs from replica-1"
     assert len(replica_2_logs) > 0, "No logs from replica-2"
 
-    # Check status - should be failed because replica 1 failed (conservative aggregation)
     info = local_cluster.poll(job_id)
     assert info.status == "failed"
     assert info.error_message is not None
-    assert "1" in info.error_message  # Should mention replica 1
+    assert info.tasks[1].status == "failed"
 
-    # Check environment variables were set correctly
-    for replica_id in [0, 2]:  # Replica 1 failed, may not have written file
+    for replica_id in [0, 2]:
         output_file = f"{output_path}_{replica_id}.json"
         assert os.path.exists(output_file), f"Replica {replica_id} did not write output file"
 

@@ -41,7 +41,6 @@ from fray.cluster.base import (
     JobId,
     JobInfo,
     JobRequest,
-    JobStatus,
     ResourceConfig,
     TpuConfig,
     TpuType,

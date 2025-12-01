@@ -21,7 +21,8 @@ import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import cast
+from dataclasses import dataclass
+from typing import Literal
 
 import humanfriendly
 import ray
@@ -34,7 +35,6 @@ from fray.cluster.base import (
     JobId,
     JobInfo,
     JobRequest,
-    JobStatus,
     TpuConfig,
     create_environment,
 )
@@ -44,6 +44,13 @@ from fray.cluster.ray.tpu import run_on_pod_ray
 from fray.fn_thunk import create_thunk_entrypoint
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TpuJobInfo:
+    ref: ray.ObjectRef
+    name: str
+    start_time: float
 
 
 class RayCluster(Cluster):
@@ -77,7 +84,7 @@ class RayCluster(Cluster):
             logger.info(f"Using provided namespace: {self._namespace}")
 
         self._dashboard_address = dashboard_address or self._get_dashboard_address()
-        self._tpu_jobs: dict[str, dict] = {}  # Track TPU jobs: job_id -> {ref, name, start_time}
+        self._tpu_jobs: dict[str, TpuJobInfo] = {}  # Track TPU jobs: job_id -> {ref, name, start_time}
 
     @classmethod
     def from_spec(cls, query_params: dict[str, list[str]]) -> "RayCluster":
@@ -232,17 +239,13 @@ class RayCluster(Cluster):
         return JobInfo(
             job_id=job_id,
             status=status,
+            tasks=[],
             name=info.metadata.get("name", "") if info.metadata else "",
-            start_time=info.start_time / 1000 if info.start_time else None,
-            end_time=info.end_time / 1000 if info.end_time else None,
             error_message=info.message if status == "failed" else None,
         )
 
     def terminate(self, job_id: JobId) -> None:
-        """Stop a job with the given job identifier.
-
-        Waits for the job to actually stop before returning.
-        """
+        """Stop a job with the given job identifier."""
         if job_id.startswith("tpu-"):
             self._terminate_tpu_job(job_id)
             return
@@ -253,7 +256,7 @@ class RayCluster(Cluster):
             logger.warning("Failed to stop job %s: %s", job_id, e)
             return
 
-        # Wait for job to actually stop
+        # Wait for job to stop
         for _ in range(100):
             try:
                 info = self._job_client().get_job_info(job_id)
@@ -262,6 +265,7 @@ class RayCluster(Cluster):
                     break
             except Exception:
                 break
+            logger.info("Waiting for job %s to stop", job_id)
             time.sleep(1.0)
 
     def list_jobs(self) -> list[JobInfo]:
@@ -272,12 +276,14 @@ class RayCluster(Cluster):
                 JobInfo(
                     job_id=JobId(job_info.submission_id),
                     status=self._convert_ray_status(job_info.status),
+                    tasks=[],
                     name=job_info.metadata.get("name", "") if job_info.metadata else "",
-                    start_time=job_info.start_time / 1000 if job_info.start_time else None,
-                    end_time=job_info.end_time / 1000 if job_info.end_time else None,
                     error_message=job_info.message if self._convert_ray_status(job_info.status) == "failed" else None,
                 )
             )
+
+        for tpu_job_info in self._tpu_jobs.values():
+            result.append(self._poll_tpu_job(tpu_job_info.job_id))
         return result
 
     def get_ray_resources(self, request: JobRequest) -> dict[str, float]:
@@ -306,7 +312,9 @@ class RayCluster(Cluster):
 
         return resources
 
-    def _convert_ray_status(self, ray_status: RayJobStatus) -> JobStatus:
+    def _convert_ray_status(
+        self, ray_status: RayJobStatus
+    ) -> Literal["pending", "running", "succeeded", "failed", "stopped"]:
         mapping = {
             RayJobStatus.PENDING: "pending",
             RayJobStatus.RUNNING: "running",
@@ -314,7 +322,7 @@ class RayCluster(Cluster):
             RayJobStatus.FAILED: "failed",
             RayJobStatus.STOPPED: "stopped",
         }
-        return cast(JobStatus, mapping.get(ray_status, "failed"))
+        return mapping.get(ray_status, "failed")
 
     def _launch_tpu_job(self, request: JobRequest) -> JobId:
         entrypoint = request.entrypoint
@@ -344,11 +352,11 @@ class RayCluster(Cluster):
 
         # Track via ObjectRef
         job_id = f"tpu-{object_ref.hex()}"
-        self._tpu_jobs[job_id] = {
-            "ref": object_ref,
-            "name": request.name,
-            "start_time": time.time(),
-        }
+        self._tpu_jobs[job_id] = TpuJobInfo(
+            ref=object_ref,
+            name=request.name,
+            start_time=time.time(),
+        )
         return JobId(job_id)
 
     def _poll_tpu_job(self, job_id: JobId) -> JobInfo:
@@ -360,29 +368,24 @@ class RayCluster(Cluster):
         if not info:
             raise KeyError(f"TPU job {job_id} not found")
 
-        ready, _ = ray.wait([info["ref"]], timeout=0)
+        ready, _ = ray.wait([info.ref], timeout=0)
 
         if ready:
             try:
-                ray.get(info["ref"])
+                ray.get(info.ref)
                 status = "succeeded"
                 error_msg = None
-                end_time = time.time()
             except Exception as e:
                 status = "failed"
                 error_msg = str(e)
-                end_time = time.time()
         else:
             status = "running"
             error_msg = None
-            end_time = None
 
         return JobInfo(
             job_id=job_id,
             status=status,
-            name=info["name"],
-            start_time=info["start_time"],
-            end_time=end_time,
+            name=info.name,
             error_message=error_msg,
         )
 
@@ -390,7 +393,7 @@ class RayCluster(Cluster):
         """Cancel TPU job by canceling the ObjectRef."""
         info = self._tpu_jobs.get(job_id)
         if info:
-            ray.cancel(info["ref"])
+            ray.cancel(info.ref)
             del self._tpu_jobs[job_id]
 
     def _get_dashboard_address(self) -> str:

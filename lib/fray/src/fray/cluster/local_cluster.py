@@ -28,7 +28,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 
-from fray.cluster.base import Cluster, CpuConfig, EnvironmentConfig, JobId, JobInfo, JobRequest, JobStatus, TaskStatus
+from fray.cluster.base import Cluster, CpuConfig, EnvironmentConfig, JobId, JobInfo, JobRequest, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +153,6 @@ class LocalCluster(Cluster):
                         pass
             raise RuntimeError(f"Failed to launch job: {e}") from e
 
-        # Track job
         local_job = _LocalJob(
             job_id=job_id,
             request=request,
@@ -325,11 +324,11 @@ class _LocalJob:
 
         if any(ts.status == "running" for ts in task_status):
             # At least one replica still running
-            status = JobStatus("running")
+            status = "running"
             error_message = None
         elif any(ts.status == "failed" for ts in task_status):
             # At least one replica failed
-            status = JobStatus("failed")
+            status = "failed"
             error_message = "One or more replicas failed"
         else:
             status = "succeeded"

@@ -302,7 +302,6 @@ class JobRequest:
 
 
 JobId = NewType("JobId", str)
-JobStatus = Literal["pending", "running", "succeeded", "failed", "stopped"]
 
 
 @dataclass
@@ -314,7 +313,7 @@ class TaskStatus:
 @dataclass
 class JobInfo:
     job_id: JobId
-    status: JobStatus
+    status: Literal["pending", "running", "succeeded", "failed", "stopped"]
     tasks: list[TaskStatus]
     name: str
     error_message: str | None = None

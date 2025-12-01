@@ -80,7 +80,10 @@ def test_multiple_processes_cleanup():
         for _ in range(3):
             proc = venv.run_async([venv.python_path, "-c", "import time; time.sleep(100)"])
             processes.append(proc)
-            time.sleep(0.2)
+
+    # wait for processes to terminate.
+    time.sleep(0.5)
 
     for proc in processes:
+        print(proc, proc.poll())
         assert proc.poll() is not None
