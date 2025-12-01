@@ -48,8 +48,14 @@ MODELS = [
 def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
     """
     Takes in a list of ExecutorSteps for lm-eval tasks and compiles the results into a single DataFrame.
-    Reads the results.json files from each step's output path, extracts the 'results' field,
-    combines them into a DataFrame, and logs the results.
+
+    Newer lm-eval runs (with EvaluationTracker + log_samples=True) write per-task outputs under
+    paths like:
+
+        gs://.../evaluation/lm_evaluation_harness/{model_name}-{hash}/{dataset}_0shot/__tmp__{model}/samples_{dataset}_TIMESTAMP.jsonl
+
+    This helper scans each step's eval root for those `samples_*.jsonl` files, and aggregates the
+    JSONL records into a flat DataFrame, annotating each row with `dataset_name` and `model_name`.
     """
     import json
     import logging
@@ -74,43 +80,80 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
 
         # Read results from each step's output path
         for i, input_path in enumerate(input_paths):
-            logger.info(f"Loading results from {input_path}")
+            # Normalise input_path to the evaluation root directory.
+            # Older code passed .../{hash}/results.json; newer runs conceptually
+            # treat .../{hash}/ as the root. We strip any trailing "results.json"
+            # and then look for per-task sample files under that root.
+            base_dir = input_path
+            if base_dir.endswith("results.json"):
+                base_dir = base_dir.rsplit("/", 1)[0]
 
-            # Read the JSON file from the step's output path
-            with fsspec.open(input_path, "r") as f:
-                data = json.load(f)
+            logger.info(f"Loading lm-eval samples from root {base_dir}")
 
-            # Extract the 'results' field
-            if "results" in data:
-                results = data["results"]
-                # Add step identifier and model name
-                for task_name, task_results in results.items():
-                    task_results["task_name"] = task_name
-
-                    # Extract model name from the input path
-                    # The path format should be: gs://bucket/evaluation/lm_evaluation_harness/{model_name}-{hash}/results.json
-                    path_parts = input_path.split("/")
-                    if len(path_parts) > 1:
-                        # Get the directory name (second to last part)
-                        dir_name = path_parts[-2]
-                        if "-" in dir_name:
-                            # Remove the hash part
-                            model_name = dir_name.rsplit("-", 1)[0]
-                            # Remove the task prefix to get just the model name
-                            if "_" in model_name:
-                                # Split on underscores to remove 'lm_evaluation_harness_' prefix
-                                parts = model_name.split("_")
-                                if len(parts) >= 3:
-                                    model_name = "_".join(parts[2:])  # Get everything after 'lm_evaluation_harness_'
-                        else:
-                            model_name = dir_name
-                    else:
-                        model_name = f"unknown_model_{i}"
-
-                    task_results["model_name"] = model_name
-                    all_results.append(task_results)
+            # Normalize to a GCS URL if the scheme was stripped by the executor packaging.
+            # We assume eval outputs live in the "marin-us-east1" bucket when no scheme is present.
+            if base_dir.startswith("gs://"):
+                gcs_root = base_dir
             else:
-                logger.warning(f"No 'results' field found in {input_path}")
+                # Avoid accidental relative local paths like "marin-us-east1/..."
+                gcs_root = "gs://" + base_dir.lstrip("/")
+
+            # Pattern for per-task sample files, e.g.:
+            # {root}/{dataset}_0shot/__tmp__{model}/samples_{dataset}_TIMESTAMP.jsonl
+            pattern = gcs_root.rstrip("/") + "/*/__tmp__*/samples_*.jsonl"
+            fs = fsspec.filesystem("gcs")
+            sample_files: list[str] = fs.glob(pattern)
+
+            if not sample_files:
+                logger.warning(f"No samples_*.jsonl files found for input root {base_dir}")
+                continue
+
+            for sample_file in sample_files:
+                logger.info(f"Reading samples from {sample_file}")
+                path_parts = sample_file.split("/")
+
+                # Infer dataset_name from the task directory: {dataset}_0shot
+                # e.g. .../qwen-.../aime24_0shot/__tmp__.../samples_aime24_*.jsonl
+                if len(path_parts) >= 3:
+                    task_dir = path_parts[-3]
+                    # Strip trailing "_{shot}" suffix (e.g. "_0shot", "_5shot")
+                    if "_" in task_dir:
+                        dataset_name = task_dir.rsplit("_", 1)[0]
+                    else:
+                        dataset_name = task_dir
+                else:
+                    dataset_name = "unknown_dataset"
+
+                # Infer model_name from the model/hash directory
+                # e.g. .../evaluation/lm_evaluation_harness/qwen2.5-7b-instruct-47227c/aime24_0shot/...
+                if len(path_parts) >= 4:
+                    model_dir = path_parts[-4]
+                elif len(path_parts) >= 2:
+                    model_dir = path_parts[-2]
+                else:
+                    model_dir = "unknown_model"
+
+                if "-" in model_dir:
+                    model_name = model_dir.rsplit("-", 1)[0]
+                else:
+                    model_name = model_dir
+
+                # Read JSONL samples from GCS using the same filesystem
+                with fs.open(sample_file, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                        except Exception:
+                            logger.warning(f"Failed to parse JSON line in {sample_file}: {line[:200]}")
+                            continue
+
+                        # Annotate with dataset and model metadata
+                        record["dataset_name"] = dataset_name
+                        record["model_name"] = model_name
+                        all_results.append(record)
 
         if not all_results:
             raise Exception("No results found in any of the provided steps")

@@ -404,7 +404,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     confirm_run_unsafe_code=True,
                     limit=max_eval_instances if max_eval_instances is not None else None,
                     evaluation_tracker=evaluation_tracker,
-                    log_samples=False,
+                    log_samples=True,
                 )
 
                 if results is not None:
