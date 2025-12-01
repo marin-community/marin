@@ -25,6 +25,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
 
 import fsspec
 import wandb
@@ -103,14 +104,26 @@ class SpeedrunConfig:
     def as_json_dict(self) -> dict:
         """Convert SpeedrunConfig to a JSON-serializable dictionary."""
 
-        # runtimeenv is not serializable, so we exclude it by calling `asdict_excluding()`
+        def _make_serializable(obj):
+            """Recursively convert non-serializable objects (like Enums) to serializable forms."""
+            if isinstance(obj, Enum):
+                return obj.name
+            elif isinstance(obj, dict):
+                return {k: _make_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [_make_serializable(v) for v in obj]
+            return obj
+
+        # runtimeenv is not serializable
+        train_config_dict = asdict_excluding(self.train_config, exclude={"resources", "runtime_env"})
+        resources_dict = asdict_excluding(self.train_config.resources, exclude={"runtime_env"})
         return {
             "author": {"name": self.author.name, "affiliation": self.author.affiliation, "url": self.author.url},
             "description": self.description,
-            "model_config": dataclasses.asdict(self.model_config),
-            "train_config": asdict_excluding(self.train_config, exclude={"resources", "runtime_env"}),
+            "model_config": _make_serializable(dataclasses.asdict(self.model_config)),
+            "train_config": _make_serializable(train_config_dict),
             "tokenized_dataset": str(self.tokenized_dataset),
-            "resources": asdict_excluding(self.train_config.resources, exclude={"runtime_env"}),
+            "resources": _make_serializable(resources_dict),
         }
 
     def print_run_info(self) -> None:
