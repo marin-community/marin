@@ -421,7 +421,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
         filters=[
             FilterConfig(
                 type=FilterType.REMOVE_SPANS,
-                attribute_path=dedupe_output_dir,
+                attribute_path=f"{dedupe_output_dir}/data",
                 name="duplicate_text",
             )
         ],
