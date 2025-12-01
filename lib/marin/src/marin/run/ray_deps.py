@@ -174,6 +174,7 @@ def build_runtime_env_for_packages(
         python_path.extend(env_vars["PYTHONPATH"].split(":"))
 
     package_spec = compute_frozen_packages(extra)
+    accel_type = accelerator_type_from_extra(extra)
 
     requirements_txt = [
         """
@@ -186,12 +187,14 @@ def build_runtime_env_for_packages(
     for pkg in package_spec.package_specs + pip_packages:
         # Defer torch-family installs to the end so that the --find-links only applies to them
         if pkg.startswith(TORCH_GPU_PACKAGE_PREFIXES):
+            # uv sometimes emits torch==X+cpu builds that aren't published; strip the local tag for CPU/TPU jobs.
+            if accel_type != AcceleratorType.GPU and "+cpu" in pkg:
+                pkg = pkg.replace("+cpu", "")
             torch_pkgs.append(pkg)
             continue
         requirements_txt.append(pkg)
 
     # Force the correct PyTorch wheel index for the requested accelerator type
-    accel_type = accelerator_type_from_extra(extra)
     if accel_type in {AcceleratorType.CPU, AcceleratorType.TPU, AcceleratorType.NONE}:
         requirements_txt.append("--find-links https://download.pytorch.org/whl/cpu")
     elif accel_type == AcceleratorType.GPU:
