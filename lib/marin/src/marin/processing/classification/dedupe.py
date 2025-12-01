@@ -403,7 +403,7 @@ def _run_deduplication(config: DedupeConfig):
             )
             .filter(lambda record: record)
             .reshard(1)
-            .write_parquet(f"{config.output_path}/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
+            .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
             verbose=True,
         )
     )
@@ -444,7 +444,7 @@ def _run_deduplication(config: DedupeConfig):
         .map_shard(mark_exact_dups)
         .write_jsonl(
             output_pattern=lambda shard_idx, total: rebase_file_path(
-                base_path, input_files[shard_idx], config.output_path
+                base_path, input_files[shard_idx], f"{config.output_path}/data"
             ),
             skip_existing=True,
         )
@@ -495,7 +495,7 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
             )
             .filter(lambda record: record)
             .reshard(1)
-            .write_parquet(f"{config.output_path}/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
+            .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
             verbose=True,
         )
     )
@@ -529,7 +529,7 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
         # the shards of the input files for rebase_file_path to work correctly.
         .map_shard(mark_exact_dups).write_jsonl(
             output_pattern=lambda shard_idx, total: rebase_file_path(
-                base_path, input_files[shard_idx], config.output_path
+                base_path, input_files[shard_idx], f"{config.output_path}/data"
             ),
             skip_existing=True,
         ),
