@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Script to run an evaluator on a model checkpoint using the Fray-based inference pool.
+Script to run an evaluator on a model checkpoint.
 
 Usage:
 
@@ -25,12 +25,9 @@ import logging
 import time
 
 import draccus
-from fray.cluster import current_cluster
-from fray.queue.http import HttpQueueServer
 
-from marin.evaluation.backends.inference_pool import InferencePool
-from marin.evaluation.evaluation_config import EvaluationConfig, ModelConfig
-from marin.evaluation.evaluators.evaluator import Evaluator
+from marin.evaluation.evaluation_config import EvaluationConfig
+from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.evaluators.evaluator_factory import get_evaluator
 from marin.evaluation.utils import discover_hf_checkpoints
 
@@ -38,59 +35,82 @@ logger = logging.getLogger(__name__)
 
 
 def evaluate(config: EvaluationConfig) -> None:
-    """Run evaluation using the Fray-based inference pool."""
     logger.info(f"Running evals with args: {config}")
-    model: ModelConfig = config.pool_config.model_config
+    evaluator: Evaluator = get_evaluator(config)
 
-    # Handle checkpoint discovery if needed
-    if config.discover_latest_checkpoint and config.model_path:
-        discovered_path = discover_hf_checkpoints(config.model_path)[-1]
-        logger.info(f"Discovered latest checkpoint: {discovered_path}")
-        model = ModelConfig(
-            name=model.name,
-            path=discovered_path,
-            engine_kwargs=model.engine_kwargs,
-            device=model.device,
-            generation_params=model.generation_params,
-            apply_chat_template=model.apply_chat_template,
-        )
-        # Update pool config with new model config
-        from dataclasses import replace
-
-        config = replace(config, pool_config=replace(config.pool_config, model_config=model))
-
+    model: ModelConfig = _impute_model_config(config)
     logger.info(f"Evaluating {model.name} with {config.evals}")
-    cluster = current_cluster()
-    logger.info(f"Using cluster: {cluster.__class__.__name__}")
 
-    # Use an HTTP queue server to communicate with vllm inference servers
-    with HttpQueueServer(port=9999) as queue_server:
-        request_queue = queue_server.new_queue("requests")
-        response_queue = queue_server.new_queue("responses")
-        logger.info(f"Queue server ready at {queue_server.get_client_host()}:{queue_server.port}")
-
-        pool = InferencePool(
-            config=config.pool_config,
-            cluster=cluster,
-            request_queue=request_queue,
-            response_queue=response_queue,
+    start_time: float = time.time()
+    if config.launch_with_ray:
+        evaluator.launch_evaluate_with_ray(
+            model,
+            evals=config.evals,
+            output_path=config.evaluation_path,
+            max_eval_instances=config.max_eval_instances,
+            resource_config=config.resource_config,
+        )
+    else:
+        evaluator.evaluate(
+            model,
+            evals=config.evals,
+            output_path=config.evaluation_path,
+            max_eval_instances=config.max_eval_instances,
         )
 
-        start_time = time.time()
-        with pool:
-            openai_base_url = pool.base_url()
-            logger.info(f"Pool ready at {openai_base_url}")
-            evaluator: Evaluator = get_evaluator(config)
-            evaluator.evaluate(
-                model=model,
-                evals=config.evals,
-                openai_base_url=openai_base_url,
-                output_path=config.evaluation_path,
-                max_eval_instances=config.max_eval_instances,
-                wandb_tags=config.wandb_tags,
-            )
+    logger.info(f"Done (total time: {time.time() - start_time} seconds)")
 
-            logger.info(f"Evaluation complete (total time: {time.time() - start_time:.1f}s)")
+
+def _impute_model_config(config):
+    model_path = config.model_path
+
+    if config.model_path is None:
+        raise ValueError("model_name or model_path must be provided")
+
+    if config.discover_latest_checkpoint:
+        model_path = discover_hf_checkpoints(model_path)[-1]
+
+    if config.model_name is None and "gcsfuse" in model_path:
+        model_name = model_path.split("/")[-1]
+    elif config.model_name is None:
+        # have to impute the model name from the path
+        model_name_parts = model_path.split("/")
+        # we're looking for something that looks like a run name and something that looks like a step
+        # e.g. $RUN/hf/step-$STEP
+        step_part = model_name_parts[-1]
+        if step_part.startswith("step-"):
+            step_part = step_part.split("-")[1]
+
+        # don't assume there's an hf. look for a run name, which probably has a - in it
+        for part in reversed(model_name_parts[:-1]):
+            if "-" in part:
+                model_name = part
+                break
+        else:
+            # just use the penultimate part
+            model_name = model_name_parts[-2]
+
+        model_name = f"{model_name}-{step_part}"
+    else:
+        model_name = config.model_name
+    generation_params = {}
+    engine_kwargs = {}
+    if config.generation_params is None:
+        logger.warning(f"No generation params provided for {model_name}, using default params")
+    else:
+        generation_params = config.generation_params
+    if config.engine_kwargs is None:
+        logger.warning(f"No engine kwargs provided for {model_name}, using default params")
+    else:
+        engine_kwargs = config.engine_kwargs
+
+    return ModelConfig(
+        name=model_name,
+        path=model_path,
+        engine_kwargs=engine_kwargs,
+        generation_params=generation_params,
+        apply_chat_template=config.apply_chat_template,
+    )
 
 
 @draccus.wrap()
