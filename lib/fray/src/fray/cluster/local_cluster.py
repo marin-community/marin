@@ -201,9 +201,6 @@ class LocalCluster(Cluster):
                 except (ProcessLookupError, OSError):
                     # Process group already dead
                     logger.info(f"Replica {replica_id} process group already dead")
-                    pass
-            else:
-                logger.info(f"Replica {replica_id} already exited with code {process.returncode}")
 
     def list_jobs(self) -> list[JobInfo]:
         return [job.get_info() for job in self._jobs.values()]
