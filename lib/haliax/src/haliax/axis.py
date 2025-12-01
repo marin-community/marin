@@ -87,11 +87,6 @@ def selects_axis(selector: AxisSelection, selected: AxisSelection) -> bool:
         if selector_size is None or size is None:
             continue
 
-        # During tracing (eval_shape, etc.), arrays may have placeholder sizes (0).
-        # Treat size 0 as matching any size.
-        if selector_size == 0 or size == 0:
-            continue
-
         if selector_size != size:
             return False
 
@@ -776,9 +771,7 @@ __all__ = [
 def _check_size_consistency(
     spec1: AxisSelection, spec2: AxisSelection, name: str, size1: int | None, size2: int | None
 ):
-    # During tracing (eval_shape, etc.), arrays may have placeholder sizes (0).
-    # Only raise error if both sizes are non-None, non-zero, and different.
-    if size1 is not None and size2 is not None and size1 != 0 and size2 != 0 and size1 != size2:
+    if size1 is not None and size2 is not None and size1 != size2:
         raise ValueError(f"Axis {name} has different sizes in {spec1} and {spec2}: {size1} != {size2}")
 
 

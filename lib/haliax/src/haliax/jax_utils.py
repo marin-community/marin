@@ -162,11 +162,7 @@ def filter_checkpoint(
 
 
 def is_jax_array_like(x):
-    # check for NamedArray first to avoid triggering the shape property,
-    # which can fail during jax.eval_shape when placeholder arrays are used
-    if isinstance(x, haliax.NamedArray):
-        return False
-    return hasattr(x, "shape") and hasattr(x, "dtype")
+    return hasattr(x, "shape") and hasattr(x, "dtype")  # and not isinstance(x, haliax.NamedArray)
 
 
 # adapted from jax but exposed so i can use it

@@ -166,9 +166,7 @@ def _ensure_no_mismatched_axes(*arrays: NamedArray):
     for a in arrays:
         for ax in a.axes:
             if ax.name in known_sizes:
-                # During tracing (eval_shape, etc.), arrays may have placeholder sizes (0).
-                # Only raise error if both sizes are non-zero and different.
-                if known_sizes[ax.name] != ax.size and known_sizes[ax.name] != 0 and ax.size != 0:
+                if known_sizes[ax.name] != ax.size:
                     raise ValueError(f"Axis {ax.name} has multiple sizes: {known_sizes[ax.name]} and {ax.size}")
             else:
                 known_sizes[ax.name] = ax.size

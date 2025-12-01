@@ -200,21 +200,8 @@ class NamedArray(metaclass=NamedArrayMeta):
     array: jnp.ndarray
     axis_names: tuple[str, ...]
 
-    def __init__(
-        self,
-        array: jnp.ndarray,
-        axes: AxisSpec | Sequence[str | Axis] | None = None,
-        *,
-        axis_names: tuple[str, ...] | None = None,
-    ):
+    def __init__(self, array: jnp.ndarray, axes: AxisSpec | Sequence[str | Axis]):
         object.__setattr__(self, "array", array)
-
-        if axis_names is not None:
-            if axes is not None:
-                raise ValueError("Cannot specify both 'axes' and 'axis_names'")
-            axes = axis_names
-        elif axes is None:
-            raise ValueError("Must specify either 'axes' or 'axis_names'")
 
         if isinstance(axes, Mapping):
             axes = tuple(Axis(name, size) for name, size in axes.items())
@@ -268,11 +255,7 @@ class NamedArray(metaclass=NamedArrayMeta):
     def axes(self) -> tuple[Axis, ...]:
         shape = jnp.shape(self.array)
         if len(shape) != len(self.axis_names):
-            # This can happen during intermediate states like jax.eval_shape, while_loop, etc.
-            # where placeholder arrays might have wrong shapes. We return axes with size 0
-            # to allow downstream code to still access axis names for partitioning, etc.
-            # (see the comment in tree_unflatten about shape checks being disabled)
-            return tuple(Axis(name, 0) for name in self.axis_names)
+            raise ValueError(f"Shape of underlying array {shape} does not match number of axes {self.axis_names}")
 
         return tuple(Axis(name, size) for name, size in zip(self.axis_names, shape))
 
@@ -326,6 +309,8 @@ class NamedArray(metaclass=NamedArrayMeta):
         assert len(tree) == 1
         # We don't want check shapes b/c there are intermediate states where the shape is wrong
         # e.g. in eqxi.while_loop
+        if tree[0] is None:
+            return None
         with enable_shape_checks(False):
             return cls(tree[0], axes=aux)
 
@@ -506,13 +491,9 @@ class NamedArray(metaclass=NamedArrayMeta):
                 try:
                     axis_index = index_where(lambda a: a.name == ax_name, self.axes)
                     if axis_index >= 0:
-                        # During tracing (eval_shape, etc.), arrays may have placeholder sizes (0).
-                        # Only raise error if both sizes are non-zero and different.
-                        their_size = self.axes[axis_index].size
-                        if their_size != 0 and axis.size != 0:
-                            raise RuntimeError(
-                                f"Found axis with same name but different size: {axis} vs {self.axes[axis_index]}"
-                            )
+                        raise RuntimeError(
+                            f"Found axis with same name but different size: {axis} vs {self.axes[axis_index]}"
+                        )
                     return axis_index
                 except ValueError:
                     return None
