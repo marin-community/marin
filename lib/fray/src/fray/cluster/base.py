@@ -27,9 +27,6 @@ from typing import Any, Literal, NewType
 
 logger = logging.getLogger(__name__)
 
-JobId = NewType("JobId", str)
-JobStatus = Literal["pending", "running", "succeeded", "failed", "stopped"]
-
 TpuType = Literal[
     "v4-8",
     "v4-16",
@@ -304,13 +301,22 @@ class JobRequest:
     environment: EnvironmentConfig | None = None
 
 
+JobId = NewType("JobId", str)
+JobStatus = Literal["pending", "running", "succeeded", "failed", "stopped"]
+
+
+@dataclass
+class TaskStatus:
+    status: Literal["pending", "running", "succeeded", "failed", "stopped"]
+    error_message: str | None = None
+
+
 @dataclass
 class JobInfo:
     job_id: JobId
     status: JobStatus
+    tasks: list[TaskStatus]
     name: str
-    start_time: float | None = None
-    end_time: float | None = None
     error_message: str | None = None
 
 
@@ -439,15 +445,8 @@ class Cluster(ABC):
 
     @abstractmethod
     @contextmanager
-    def connect(self) -> Iterator[None]:
-        """Establish connection to cluster.
-
-        For RayCluster, this creates SSH tunnels and sets up dashboard access.
-        For LocalCluster, this is a no-op.
-
-        Yields:
-            None - connection is active within context
-        """
+    def connect(self):
+        """Establish connection to cluster."""
         ...
 
     def wait(self, job_id: JobId) -> JobInfo:

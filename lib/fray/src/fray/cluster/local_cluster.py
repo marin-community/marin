@@ -28,7 +28,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 
-from fray.cluster.base import Cluster, CpuConfig, EnvironmentConfig, JobId, JobInfo, JobRequest, JobStatus
+from fray.cluster.base import Cluster, CpuConfig, EnvironmentConfig, JobId, JobInfo, JobRequest, JobStatus, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +138,7 @@ class LocalCluster(Cluster):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
-                    bufsize=1,  # Line buffered
+                    bufsize=1,
                     start_new_session=True,  # Create new process group
                 )
                 processes.append(process)
@@ -313,40 +313,32 @@ class _LocalJob:
             self._log_threads.append(thread)
 
     def get_info(self) -> JobInfo:
-        """Get current job info with conservative status aggregation.
-
-        Conservative aggregation means:
-        - Status is "running" if ANY replica is still running
-        - Status is "failed" if ANY replica has failed
-        - Status is "succeeded" only if ALL replicas succeeded
-
-        Returns:
-            Job information with current status
-        """
         returncodes = [process.poll() for process in self.processes]
+        task_status = []
+        for rc in returncodes:
+            if rc is None:
+                task_status.append(TaskStatus(status="running", error_message=""))
+            elif rc != 0:
+                task_status.append(TaskStatus(status="failed", error_message=f"Replica failed with exit code {rc}"))
+            else:
+                task_status.append(TaskStatus(status="succeeded", error_message=""))
 
-        if any(rc is None for rc in returncodes):
+        if any(ts.status == "running" for ts in task_status):
             # At least one replica still running
-            status: JobStatus = "running"
-            end_time = None
+            status = JobStatus("running")
             error_message = None
-        elif any(rc != 0 for rc in returncodes):
+        elif any(ts.status == "failed" for ts in task_status):
             # At least one replica failed
-            status = "failed"
-            end_time = time.time()
-            failed_replicas = [i for i, rc in enumerate(returncodes) if rc != 0]
-            failed_codes = [returncodes[i] for i in failed_replicas]
-            error_message = f"Replica(s) {failed_replicas} failed with exit code(s) {failed_codes}"
+            status = JobStatus("failed")
+            error_message = "One or more replicas failed"
         else:
             status = "succeeded"
-            end_time = time.time()
             error_message = None
 
         return JobInfo(
             job_id=self.job_id,
             status=status,
+            tasks=task_status,
             name=self.request.name,
-            start_time=self.start_time,
-            end_time=end_time,
             error_message=error_message,
         )

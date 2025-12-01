@@ -56,14 +56,6 @@ _cluster_context: ContextVar[Cluster | None] = ContextVar("fray_cluster", defaul
 
 
 def set_current_cluster(cluster: Cluster) -> None:
-    """Set the current cluster for this context.
-
-    Used to inject a cluster instance into worker processes, allowing them
-    to access queues via current_cluster() without explicit passing.
-
-    Args:
-        cluster: Cluster instance to use
-    """
     _cluster_context.set(cluster)
 
 
@@ -86,7 +78,6 @@ def current_cluster() -> Cluster:
     if cluster is not None:
         return cluster
 
-    # Auto-detect Ray execution
     try:
         import ray
 
@@ -98,6 +89,7 @@ def current_cluster() -> Cluster:
             logger.info("Auto-detected Ray cluster from ray.is_initialized()")
             return cluster
     except ImportError:
+        # Ray is not installed; fall back to other cluster types
         pass
 
     # Check for FRAY_CLUSTER_SPEC

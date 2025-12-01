@@ -407,6 +407,7 @@ class RayCluster(Cluster):
                 if hasattr(ctx, "gcs_address"):
                     return ctx.gcs_address
             except Exception:
+                # Ignore errors getting GCS address; fall back to self._address
                 pass
         return self._address
 

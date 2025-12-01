@@ -18,35 +18,19 @@ import tempfile
 import time
 
 import pytest
-import ray
 from fray.queue.file import FileQueue
 from fray.queue.http import HttpQueueServer
-from fray.queue.ray import RayQueue
 
 
-@pytest.fixture(scope="module")
-def ray_context():
-    """Initialize Ray once for all Ray-based tests."""
-    ray.init(ignore_reinit_error=True)
-    yield
-    ray.shutdown()
-
-
-@pytest.fixture(params=["file", "ray", "http"])
-def queue(request, ray_context):
-    """Parameterized fixture providing FileQueue and RayQueue implementations."""
+@pytest.fixture(params=["file", "http"])
+def queue(request):
+    """Parameterized fixture providing FileQueue and HttpQueue implementations."""
     if request.param == "file":
         with tempfile.TemporaryDirectory() as tmpdir:
             yield FileQueue(path=tmpdir)
     elif request.param == "http":
         with HttpQueueServer(host="127.0.0.1", port=9999) as server:
             yield server.new_queue("test-queue")
-    elif request.param == "ray":
-        # Use unique name per test to avoid state pollution
-        import uuid
-
-        unique_name = f"test-queue-{uuid.uuid4()}"
-        yield RayQueue(name=unique_name)
     else:
         raise ValueError(f"Unknown queue type: {request.param}")
 

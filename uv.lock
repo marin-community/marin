@@ -1775,11 +1775,14 @@ source = { editable = "lib/fray" }
 dependencies = [
     { name = "click" },
     { name = "cloudpickle" },
+    { name = "fastapi" },
     { name = "fsspec" },
+    { name = "httpx" },
     { name = "humanfriendly" },
     { name = "mergedeep" },
     { name = "pyyaml" },
     { name = "typing-extensions" },
+    { name = "uvicorn" },
     { name = "zstandard" },
 ]
 
@@ -1816,12 +1819,15 @@ fray-tpu-test = [
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
+    { name = "fastapi" },
     { name = "fsspec", specifier = ">=2024.0.0" },
+    { name = "httpx" },
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "mergedeep" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ray", marker = "extra == 'ray'", specifier = ">=2.45" },
     { name = "typing-extensions", specifier = ">=4.0" },
+    { name = "uvicorn" },
     { name = "zstandard", specifier = ">=0.18.0" },
 ]
 provides-extras = ["ray"]

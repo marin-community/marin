@@ -140,6 +140,7 @@ class FileQueue(Queue[T]):
                     try:
                         self.fs.mv(file_path, self.pending_dir / new_filename)
                     except FileNotFoundError:
+                        # File was already moved or deleted by another process
                         pass
 
             except ValueError:
