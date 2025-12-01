@@ -14,7 +14,6 @@
 
 import os
 import shutil
-import time
 
 import pytest
 import ray
@@ -27,19 +26,6 @@ DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 class WorkerConfig(BaseModel):
     worker_count: int = 0
     cluster_address: str | None = None
-
-
-@pytest.fixture
-def test_crawl_file_path():
-    return "gs://marin-us-east5/documents/chris-test/test_50.jsonl.gz"
-
-
-@pytest.fixture
-def current_date_time():
-    # Get the current local time and format as MM-DD-YYYY-HH-MM-SS
-    formatted_time = time.strftime("%m-%d-%Y-%H-%M-%S", time.localtime())
-
-    return formatted_time
 
 
 @pytest.fixture(scope="session")

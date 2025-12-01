@@ -24,8 +24,6 @@ from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoConfig, AutoTokenizer
-
 from marin.execution.executor import (
     ExecutorStep,
     OutputName,
@@ -38,6 +36,7 @@ from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
+from transformers import AutoConfig, AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +175,8 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
 
     curriculum_config = create_math_curriculum(name, model_config.model_name)
 
-    # Create RLJobConfig using the new unified interface
     lev_config = RLJobConfig(
+        inference_type="levanter",
         model=lev_config,
         trainer=trainer_config,
         train_params=TrainParams(

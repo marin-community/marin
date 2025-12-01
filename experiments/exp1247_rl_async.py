@@ -203,6 +203,7 @@ def rl_train(name: str) -> ExecutorStep:
     curriculum_config = create_math_curriculum(name)
 
     config = RLJobConfig(
+        inference_type="vllm",
         model=model_config,
         trainer=trainer_config,
         train_params=TrainParams(

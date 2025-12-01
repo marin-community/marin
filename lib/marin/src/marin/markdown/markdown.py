@@ -263,15 +263,6 @@ class MyMarkdownConverter(MarkdownConverter):
     def escape(self, text):
         return minimal_markdown_escape(text)
 
-    def _infer_code_language(self, el):
-        text = el.get_text()
-        if not text:
-            return None
-        from .guess_code import predict
-
-        lang = predict(text)[0][0]
-        return lang.lower()
-
     def convert_figure(self, el, text, convert_as_inline):
         if convert_as_inline:
             return text
