@@ -79,6 +79,7 @@ ray_device_name_to_jax_name_map: dict[AcceleratorType, str] = {
 
 FlopDtype = Literal["bf16", "fp16", "fp32", "int8", "int4", "fp8"]
 
+
 def torch_device_name_to_ray_accel_type(device_name: str) -> AcceleratorType | None:
     """Map a torch CUDA device name to a Ray accelerator type.
 
