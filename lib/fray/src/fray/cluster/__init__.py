@@ -13,11 +13,6 @@
 # limitations under the License.
 
 """Fray cluster abstraction for job scheduling.
-
-The cluster module provides a clean interface for launching and managing
-jobs on different cluster backends. It supports both CLI-style job submissions
-and can be used to configure distributed computation patterns.
-
 Example:
     >>> from fray.cluster import LocalCluster, JobRequest, create_environment
     >>> cluster = LocalCluster()
@@ -126,28 +121,24 @@ def create_cluster(cluster_spec: str) -> Cluster:
     Args:
         cluster_spec: Cluster specification:
             - "local" -> LocalCluster
-            - "local?queue_dir=/path" -> LocalCluster with queue_dir
             - "ray?namespace=x" -> RayCluster
 
     Returns:
         Configured cluster instance
     """
-    if cluster_spec.startswith("local"):
-        from pathlib import Path
-        from urllib.parse import parse_qs, urlparse
+    from pathlib import Path
+    from urllib.parse import parse_qs, urlparse
 
-        parsed = urlparse(cluster_spec)
-        if parsed.query:
-            query_params = parse_qs(parsed.query)
-            queue_dir = query_params.get("queue_dir", [None])[0]
-            if queue_dir:
-                return LocalCluster(queue_dir=Path(queue_dir))
+    parsed = urlparse(cluster_spec)
+    query_params = parse_qs(parsed.query)
+
+    if cluster_spec.startswith("local"):
         return LocalCluster()
 
     if cluster_spec.startswith("ray"):
         from fray.cluster.ray.cluster import RayCluster
 
-        return RayCluster.from_spec(cluster_spec)
+        return RayCluster.from_spec(query_params)
 
     raise ValueError(f"Unknown cluster spec: {cluster_spec}")
 

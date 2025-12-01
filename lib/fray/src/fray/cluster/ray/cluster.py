@@ -80,16 +80,11 @@ class RayCluster(Cluster):
         self._tpu_jobs: dict[str, dict] = {}  # Track TPU jobs: job_id -> {ref, name, start_time}
 
     @classmethod
-    def from_spec(cls, spec: str) -> "RayCluster":
+    def from_spec(cls, query_params: dict[str, list[str]]) -> "RayCluster":
         namespace = None
         config_path = None
         address = "auto"
 
-        # parse query params to dictionary
-        from urllib.parse import parse_qs, urlparse
-
-        parsed = urlparse(spec)
-        query_params = parse_qs(parsed.query)
         if "namespace" in query_params:
             namespace = query_params["namespace"][0]
 
