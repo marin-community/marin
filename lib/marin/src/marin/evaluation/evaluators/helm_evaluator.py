@@ -18,11 +18,9 @@ import tempfile
 import traceback
 from pathlib import Path
 
-from fray.cluster.base import CpuConfig, Entrypoint, JobRequest, ResourceConfig, create_environment
 from fray.isolated_env import TemporaryVenv
-from fray.queue.http import HttpQueueServer
 
-from marin.evaluation.evaluation_config import EvalTaskConfig, InferencePoolConfig, ModelConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig, ModelConfig
 from marin.evaluation.evaluators.evaluator import Evaluator
 from marin.evaluation.utils import upload_to_gcs, write_yaml
 from marin.run.ray_deps import build_runtime_env_for_packages
@@ -239,51 +237,3 @@ class HELMEvaluator(Evaluator):
             except Exception as e:
                 traceback.print_exc()
                 raise RuntimeError("HELM failed. Please check the logs for more information.") from e
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(filename)s:%(lineno)d:%(levelname)s:%(message)s")
-    from fray.cluster import LocalCluster
-    from fray.cluster.base import CpuConfig, ResourceConfig
-
-    from marin.evaluation.backends.inference_pool import InferencePool
-    from marin.evaluation.evaluation_config import InferencePoolConfig
-
-    pool_config = InferencePoolConfig(
-        resource_config=ResourceConfig(cpu=1, ram="4g", device=CpuConfig(), replicas=1),
-        model_config=ModelConfig(
-            name="timinar/baby-llama-58m",
-            path="timinar/baby-llama-58m",
-            engine_kwargs={
-                "max_model_len": 128,
-            },
-            device="auto",
-        ),
-    )
-
-    with LocalCluster() as cluster, HttpQueueServer() as queue_server:
-        request_queue = queue_server.new_queue("requests")
-        response_queue = queue_server.new_queue("responses")
-
-        with InferencePool(
-            pool_config, cluster=cluster, request_queue=request_queue, response_queue=response_queue
-        ) as pool:
-            evaluator = HELMEvaluator()
-            job_request = JobRequest(
-                name="helm",
-                entrypoint=Entrypoint(
-                    callable=evaluator.evaluate,
-                    function_args={
-                        "model": pool_config.model_config,
-                        "evals": [EvalTaskConfig(name="mmlu", num_fewshot=0)],
-                        "openai_base_url": "http://localhost:9000/v1",
-                        "output_path": "/tmp/helm/mmlu",
-                        "max_eval_instances": 10,
-                    },
-                ),
-                resources=ResourceConfig(cpu=1, ram="4g", device=CpuConfig(), replicas=1),
-                environment=create_environment(extras=["eval"]),
-            )
-            job_id = cluster.launch(job_request)
-            logger.info("Started Helm task with job id %s", job_id)
-            cluster.wait(job_id)
