@@ -203,8 +203,8 @@ jobs:
       - name: Build and push Levanter base image
         run: |
           docker buildx build --file lib/levanter/docker/tpu/Dockerfile.base \
-            --tag ghcr.io/${{ github.repository }}-base:latest \
-            --tag ghcr.io/${{ github.repository }}-base:${{ env.DATE }} \
+            --tag ghcr.io/marin-community/levanter-base:latest \
+            --tag ghcr.io/marin-community/levanter-base:${{ env.DATE }} \
             --push .
 
   # Levanter TPU Incremental Image - Optimized TPU runtime
@@ -245,8 +245,8 @@ jobs:
       - name: Build and push Levanter TPU image
         run: |
           docker buildx build --file lib/levanter/docker/tpu/Dockerfile.incremental \
-            --tag ghcr.io/${{ github.repository }}-tpu:latest \
-            --tag ghcr.io/${{ github.repository }}-tpu:${{ env.DATE }} \
+            --tag ghcr.io/marin-community/levanter-tpu:latest \
+            --tag ghcr.io/marin-community/levanter-tpu:${{ env.DATE }} \
             --push .
 
   # Levanter Cluster Image - For cluster deployments
@@ -287,6 +287,6 @@ jobs:
       - name: Build and push Levanter cluster image
         run: |
           docker buildx build --file lib/levanter/docker/tpu/Dockerfile.cluster \
-            --tag ghcr.io/${{ github.repository }}-cluster:latest \
-            --tag ghcr.io/${{ github.repository }}-cluster:${{ env.DATE }} \
+            --tag ghcr.io/levanter-cluster:latest \
+            --tag ghcr.io/levanter-cluster:${{ env.DATE }} \
             --push .
