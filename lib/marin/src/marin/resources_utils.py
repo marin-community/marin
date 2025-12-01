@@ -60,6 +60,7 @@ ray_device_name_to_jax_name_map: dict[AcceleratorType, str] = {
     "L4": "l4",
     "L40S": "l40s",
     "H20": "h20",
+    "GB10": "gb10",
     # Entries with no DEVICE_AVAILABLE_FLOPS mapping
     # "Intel-GPU-Max-1550": "none",
     # "Intel-GPU-Max-1100": "none",
