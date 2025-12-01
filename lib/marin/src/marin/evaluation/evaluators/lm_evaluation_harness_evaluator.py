@@ -50,6 +50,13 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 "WANDB_SERVICE_WAIT": "0",
                 # Keep logs minimal from wandb in worker processes
                 "WANDB_SILENT": "true",
+                # Suppress noisy C++ / libtpu logs like build labels, warnings, etc.
+                # TF_CPP_MIN_LOG_LEVEL: 0=all, 1=filter INFO, 2=filter INFO/WARNING, 3=filter INFO/WARNING/ERROR.
+                # We use 3 here to hide INFO and WARNING; only FATAL errors will surface.
+                "TF_CPP_MIN_LOG_LEVEL": "3",
+                # Some libtpu builds also respect TPU_MIN_LOG_LEVEL for their own logging.
+                # Conventionally: 0=INFO, 1=WARNING, 2=ERROR, 3=FATAL; we set 2 to hide INFO/WARNING.
+                "TPU_MIN_LOG_LEVEL": "2",
             },  # Human eval tests code from the model which requires permission to run
         )
 
@@ -90,29 +97,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         print(f"Final model path: {downloaded_path}")
         return downloaded_path
 
-    def _cleanup_tpu_resources(self, wait_time: int = 2) -> None:
-        """
-        Clean up TPU resources (processes, lockfiles, cache).
-        """
-        try:
-            # Kill any lingering vLLM processes
-            subprocess.run(["pkill", "-f", "vllm"], check=False)
-            subprocess.run(["pkill", "-f", "python.*tpu"], check=False)
-
-            # Remove TPU lockfiles
-            for i in range(8):
-                try:
-                    os.unlink(f"/tmp/libtpu_lockfile_{i}")
-                except (FileNotFoundError, PermissionError):
-                    pass
-
-            # Wait for resources to be released
-            if wait_time > 0:
-                time.sleep(wait_time)
-
-        except Exception as e:
-            print(f"TPU resource cleanup failed: {e}")
-
     def cleanup(self, model: ModelConfig) -> None:
         """
         Clean up TPU resources and model checkpoint to prevent Ray runtime env cleanup issues.
@@ -120,8 +104,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         print("Cleaning up TPU resources and model checkpoint...")
 
         try:
-            # Clean up TPU resources
-            self._cleanup_tpu_resources(wait_time=2)
 
             # Clean up model checkpoint
             model.destroy()
@@ -176,6 +158,53 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             with open(config_json_path, "w") as f:
                 json.dump(cfg, f)
 
+    def _patch_max_position_embeddings_if_needed(self, model_local_dir: str, max_model_len: int) -> None:
+        """
+        Update max_position_embeddings and related fields in config.json to match max_model_len if needed.
+        This ensures vLLM uses the correct max length.
+        vLLM reads max_model_len from config.json fields like max_position_embeddings, n_positions, or max_seq_len.
+        """
+        logger.info(f"Patching config.json in {model_local_dir} with max_model_len={max_model_len}")
+        if not os.path.isdir(model_local_dir):
+            logger.warning(f"Model directory does not exist: {model_local_dir}")
+            return
+        config_json_path = os.path.join(model_local_dir, "config.json")
+        if not os.path.exists(config_json_path):
+            logger.warning(f"config.json does not exist at: {config_json_path}")
+            return
+        logger.info(f"Found config.json at: {config_json_path}")
+
+        with open(config_json_path, "r") as f:
+            cfg = json.load(f)
+
+        updated = False
+        # Update all relevant fields that vLLM might read
+        for key in ["max_position_embeddings", "n_positions", "max_seq_len"]:
+            if key in cfg and cfg[key] != max_model_len:
+                old_value = cfg[key]
+                cfg[key] = max_model_len
+                logger.info(f"Updating {key} from {old_value} to {max_model_len}")
+                updated = True
+        
+        if updated:
+            try:
+                with open(config_json_path, "w") as f:
+                    json.dump(cfg, f, indent=2)
+                logger.info(f"Updated config.json with max_model_len={max_model_len}")
+                # Verify the patch was applied correctly
+                with open(config_json_path, "r") as f:
+                    verify_cfg = json.load(f)
+                    for key in ["max_position_embeddings", "n_positions", "max_seq_len"]:
+                        if key in verify_cfg:
+                            logger.info(f"Verified {key} in config.json: {verify_cfg[key]}")
+                            if verify_cfg[key] != max_model_len:
+                                logger.warning(f"WARNING: {key} verification failed! Expected {max_model_len}, got {verify_cfg[key]}")
+            except Exception as e:
+                logger.error(f"Failed to write updated config.json: {e}")
+                raise
+        else:
+            logger.info(f"No config updates needed - all values already match max_model_len={max_model_len}")
+
     def evaluate(
         self,
         model: ModelConfig,
@@ -184,6 +213,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
         max_gen_toks: int | None = None,
+        generation_params: dict | None = None,
     ) -> None:
         """
         Runs EleutherAI's lm-eval harness on the specified model and set of  tasks.
@@ -202,14 +232,38 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
+            # Build model args string first to get engine_kwargs
+            engine_kwargs = dict(model.engine_kwargs) if model.engine_kwargs else {}
+            
+            # Patch config.json BEFORE vLLM initializes to ensure it reads the correct values
             # Ensure model config is compatible with vLLM rope scaling on TPU
             self._patch_rope_scaling_config_if_needed(model_name_or_path)
-
-            # Build model args string
-            pretrained_args: str = f"pretrained={model_name_or_path}"
-            if model.engine_kwargs:
-                for key, value in model.engine_kwargs.items():
-                    pretrained_args += f",{key}={value}"
+            
+            # Patch max_position_embeddings if max_model_len is specified and different
+            # This must happen BEFORE vLLM initializes, as vLLM reads from config.json
+            if "max_model_len" in engine_kwargs and engine_kwargs["max_model_len"] is not None:
+                self._patch_max_position_embeddings_if_needed(model_name_or_path, engine_kwargs["max_model_len"])
+            
+            pretrained_args_parts = [
+                f"pretrained={model_name_or_path}",
+                "device=tpu",
+                "enforce_eager=True",
+                "dtype=bfloat16",
+                "max_num_seqs=1",
+                "pipeline_parallel_size=1",
+            ]
+            for key, value in engine_kwargs.items():
+                # Skip None values to avoid passing "key=None" which might not be parsed correctly
+                if value is not None:
+                    pretrained_args_parts.append(f"{key}={value}")
+            pretrained_args = ",".join(pretrained_args_parts)
+            
+            # Log the model args to debug max_model_len
+            logger.info(f"Model args string: {pretrained_args}")
+            if "max_model_len" in engine_kwargs:
+                logger.info(f"max_model_len from engine_kwargs: {engine_kwargs['max_model_len']}")
+            else:
+                logger.warning("max_model_len not found in engine_kwargs! This may cause truncation issues.")
 
             from lm_eval.evaluator import simple_evaluate
             from lm_eval.loggers import EvaluationTracker, WandbLogger
@@ -235,24 +289,116 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 # wandb_config_args_dict = simple_parse_args_string("")
                 wandb_logger = WandbLogger(init_args=wandb_args_dict)
 
-                # Use vLLM directly with TPU configuration that avoids deserialization issues
-                # Set environment variables to help with TPU compilation
-                # Clean up TPU resources before vLLM initialization
-                print("Cleaning up TPU resources before vLLM initialization...")
-                self._cleanup_tpu_resources(wait_time=5)
-                print("TPU cleanup completed")
+                # Remove XLA_FLAGS that were meant for GPU - not needed on TPU
+                # os.environ["XLA_FLAGS"] = (
+                #     "--xla_gpu_enable_async_all_gather=false --xla_gpu_enable_async_all_reduce=false"
+                # )
+                # os.environ["XLA_USE_BF16"] = "1"
 
-                os.environ["XLA_FLAGS"] = (
-                    "--xla_gpu_enable_async_all_gather=false --xla_gpu_enable_async_all_reduce=false"
-                )
-                os.environ["XLA_USE_BF16"] = "1"
+                # Create minimal vllm package metadata to satisfy lm-eval's importlib.metadata.version("vllm") check
+                # vllm-tpu doesn't register vllm metadata, so we create it manually
+                import site
+                site_packages = site.getsitepackages()[0] if site.getsitepackages() else None
+                if site_packages:
+                    vllm_dist_info = os.path.join(site_packages, "vllm-0.11.1.dist-info")
+                    if not os.path.exists(vllm_dist_info):
+                        os.makedirs(vllm_dist_info, exist_ok=True)
+                        metadata_content = "Metadata-Version: 2.1\nName: vllm\nVersion: 0.11.1\n"
+                        with open(os.path.join(vllm_dist_info, "METADATA"), "w") as f:
+                            f.write(metadata_content)
+                        logger.info(f"Created vllm package metadata at {vllm_dist_info}")
+
+                # Monkey-patch resolve_hf_chat_template if it's missing or has issues.
+                # The lm-eval vLLM backend has changed this helper a few times, so we
+                # wrap it defensively to handle different call signatures.
+                try:
+                    import lm_eval.models.vllm_causallms as vllm_module
+                    if not hasattr(vllm_module, "resolve_hf_chat_template"):
+                        def resolve_hf_chat_template(tokenizer, *args, **kwargs):
+                            """Fallback implementation if the function is missing.
+
+                            We accept flexible arguments to match whatever lm-eval expects:
+                            - resolve_hf_chat_template(tokenizer, messages, **kwargs)
+                            - resolve_hf_chat_template(tokenizer=..., messages=..., **kwargs)
+                            - resolve_hf_chat_template(tokenizer=..., **kwargs)  # messages in kwargs
+                            """
+                            # Extract messages from positional args or kwargs
+                            if args:
+                                messages = args[0]
+                            else:
+                                messages = kwargs.get("messages")
+
+                            if messages is None:
+                                logger.warning("resolve_hf_chat_template called without messages; returning None")
+                                return None
+
+                            if hasattr(tokenizer, "apply_chat_template"):
+                                # Drop unsupported kwargs like 'tools'
+                                filtered_kwargs = {k: v for k, v in kwargs.items() if k != "tools"}
+                                return tokenizer.apply_chat_template(messages, **filtered_kwargs)
+                            return None
+                        vllm_module.resolve_hf_chat_template = resolve_hf_chat_template
+                        logger.info("Monkey-patched resolve_hf_chat_template (missing)")
+                    else:
+                        # Patch to handle unexpected kwargs like 'tools'
+                        original_resolve = vllm_module.resolve_hf_chat_template
+                        def patched_resolve_hf_chat_template(tokenizer, *args, **kwargs):
+                            """Wrapper around the upstream helper that is tolerant to extra kwargs."""
+                            # Pull out messages from args/kwargs in the same flexible way
+                            messages = None
+                            if args:
+                                messages = args[0]
+                                remaining_args = args[1:]
+                            else:
+                                remaining_args = ()
+                                messages = kwargs.get("messages")
+
+                            try:
+                                if messages is not None:
+                                    return original_resolve(tokenizer, messages, *remaining_args, **kwargs)
+                                # Fall back to original signature if we couldn't infer messages cleanly
+                                return original_resolve(tokenizer, *args, **kwargs)
+                            except TypeError as e:
+                                if "unexpected keyword argument" in str(e):
+                                    # Filter out problematic kwargs
+                                    filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ["tools"]}
+                                    if messages is not None:
+                                        return original_resolve(tokenizer, messages, *remaining_args, **filtered_kwargs)
+                                    return original_resolve(tokenizer, *remaining_args, **filtered_kwargs)
+                                raise
+                        vllm_module.resolve_hf_chat_template = patched_resolve_hf_chat_template
+                        logger.info("Monkey-patched resolve_hf_chat_template (to handle unexpected kwargs)")
+                except Exception as e:
+                    logger.warning(f"Failed to monkey-patch resolve_hf_chat_template: {e}")
+
+                # COMMENTED OUT: max_gen_toks monkey-patch
+                # We tried to set max_gen_toks on the vLLM model instance, but it's a read-only property
+                # and cannot be set. The max_gen_toks is controlled by lm-eval's internal logic.
+                # Instead, we rely on max_model_len being correctly set via config.json patching above.
+                # 
+                # if max_gen_toks_value is not None:
+                #     logger.info(f"Setting max_gen_toks={max_gen_toks_value} for lm-eval vLLM model")
+                #     import lm_eval.models.vllm_causallms as vllm_module
+                #     original_create_from_arg_string = vllm_module.VLLM.create_from_arg_string
+                #     
+                #     # Store original method and max_gen_toks on the module for the classmethod to access
+                #     vllm_module._original_vllm_create_from_arg_string = original_create_from_arg_string
+                #     vllm_module._patched_max_gen_toks = max_gen_toks_value
+                #     vllm_module.VLLM.create_from_arg_string = LMEvaluationHarnessEvaluator._vllm_patched_create_from_arg_string
+                # 
+                # Extract max_gen_toks from generation_params if provided (for reference, not used)
+                # max_gen_toks_value = None
+                # if generation_params and "max_gen_toks" in generation_params:
+                #     max_gen_toks_value = generation_params["max_gen_toks"]
+                # elif max_gen_toks is not None:
+                #     max_gen_toks_value = max_gen_toks
 
                 # Note: vLLM expects 'pretrained' argument, not 'model'
                 results = simple_evaluate(
                     model="vllm",
                     tasks=[eval_task.name],
                     num_fewshot=eval_task.num_fewshot,
-                    model_args=f"pretrained={model_name_or_path},device=tpu,enforce_eager=True,dtype=bfloat16,tensor_parallel_size=8,pipeline_parallel_size=1,max_num_seqs=1",
+                    model_args=pretrained_args,
                     apply_chat_template=model.apply_chat_template,
                     batch_size="auto",
                     confirm_run_unsafe_code=True,
@@ -262,19 +408,31 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 )
 
                 if results is not None:
-                    samples = results.pop("samples")
-                    evaluation_tracker.save_results_aggregated(results=results, samples=samples)
+                    # lm-eval sometimes omits "samples" (e.g., for some tasks or failure modes).
+                    # Be defensive here instead of hard-crashing with KeyError.
+                    samples = results.pop("samples", None)
+                    if samples is None:
+                        logger.warning(
+                            "lm-eval results missing 'samples' key; available keys: %s",
+                            list(results.keys()),
+                        )
+                        evaluation_tracker.save_results_aggregated(results=results, samples=None)
+                    else:
+                        evaluation_tracker.save_results_aggregated(results=results, samples=samples)
 
-                    try:
-                        wandb_logger.post_init(results)
-                        wandb_logger.log_eval_result()
-                        wandb_logger.log_eval_samples(samples)
-                        wandb_logger.run.finish()
-                    except Exception as e:
-                        print(f"Logging to Weights and Biases failed due to {e}")
+                        try:
+                            wandb_logger.post_init(results)
+                            wandb_logger.log_eval_result()
+                            wandb_logger.log_eval_samples(samples)
+                            wandb_logger.run.finish()
+                        except Exception as e:
+                            print(f"Logging to Weights and Biases failed due to {e}")
 
-                    for task_name in results["configs"].keys():
-                        evaluation_tracker.save_results_samples(task_name=task_name, samples=samples[task_name])
+                        for task_name in results.get("configs", {}).keys():
+                            evaluation_tracker.save_results_samples(
+                                task_name=task_name,
+                                samples=samples.get(task_name, []),
+                            )
 
                 assert os.path.exists(result_filepath), f"Results file {result_filepath} does not exist."
 

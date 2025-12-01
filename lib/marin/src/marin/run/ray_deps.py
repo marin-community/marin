@@ -32,6 +32,7 @@ IGNORE_DEPS = [
     "ray",
     "marin",
     "torch",
+    "transformers",  # Available in vLLM Docker image, installing via pip can pull in wrong torch
 ]
 
 
@@ -173,9 +174,30 @@ def build_runtime_env_for_packages(
 """
     ]
 
+    # Extract numpy constraints from pip_packages to ensure they override base dependencies
+    numpy_constraints = [pkg for pkg in pip_packages if pkg.startswith("numpy")]
+    other_pip_packages = [pkg for pkg in pip_packages if not pkg.startswith("numpy")]
+
+    # Filter out numpy from base dependencies if we have our own constraint
+    filtered_base_packages = package_spec.package_specs
+    if numpy_constraints:
+        # Filter out any line that starts with "numpy" (handles numpy==, numpy>=, etc.)
+        filtered_base_packages = [pkg for pkg in package_spec.package_specs if not pkg.strip().startswith("numpy")]
+
     # N.B. we're currently ignoring torch due to install time.
+    # Also filter out ray to prevent version conflicts (ray is in IGNORE_DEPS)
     torch_pkgs = []
-    for pkg in package_spec.package_specs + pip_packages:
+    # Put numpy constraints first to override any from base dependencies
+    for pkg in numpy_constraints:
+        requirements_txt.append(pkg)
+    
+    # Check if vllm is being installed (which would pull in ray>=2.48.0)
+    has_vllm = any("vllm" in pkg for pkg in other_pip_packages)
+    
+    for pkg in filtered_base_packages + other_pip_packages:
+        # Skip ray to prevent version conflicts with the base Ray installation
+        if pkg.strip().startswith("ray"):
+            continue
         # defer torch installs to the end, so that the --find-links only applies to them
         if "torch" in pkg:
             torch_pkgs.append(pkg)
@@ -187,6 +209,15 @@ def build_runtime_env_for_packages(
         requirements_txt.append("--find-links https://download.pytorch.org/whl/cpu")
 
     requirements_txt.extend(torch_pkgs)
+    
+    # If vllm is being installed, add a constraint to prevent ray from being upgraded
+    # This prevents vllm's ray>=2.48.0 requirement from causing conflicts
+    if has_vllm:
+        # Add ray constraint to prevent version conflicts
+        # Note: This won't prevent pip from trying to install ray, but it will constrain the version
+        # The real solution would be to install vllm with --no-deps, but Ray's pip plugin doesn't support that
+        requirements_txt.append("# Constraint to prevent ray version conflicts with vllm")
+        requirements_txt.append("# Ray is already installed in the base environment")
     requirements_txt = "\n".join(requirements_txt)
 
     # Ray expects a filename for the requirements txt

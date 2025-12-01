@@ -132,7 +132,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
         Returns the runtime environment to run the evaluator on the Ray cluster.
         """
-        return build_runtime_env_for_packages(extra=["eval", "tpu"])
+        return build_runtime_env_for_packages(extra=["eval", "vllm"])
 
     def launch_evaluate_with_ray(
         self,
@@ -143,13 +143,17 @@ class VllmTpuEvaluator(Evaluator, ABC):
         resource_config: ResourceConfig | None = None,
         wandb_tags: list[str] | None = None,
         max_length: int | None = None,
+        generation_params: dict | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
         """
 
         @ray.remote(
-            scheduling_strategy=self._get_scheduling_strategy(resource_config),
+            resources={
+                "TPU": resource_config.num_tpu,
+                f"{resource_config.tpu_type}-head": 1,
+            },
             runtime_env=self.get_runtime_env(),
             max_calls=1,
         )
@@ -161,10 +165,11 @@ class VllmTpuEvaluator(Evaluator, ABC):
             max_eval_instances: int | None = None,
             wandb_tags: list[str] | None = None,
             max_length: int | None = None,
+            generation_params: dict | None = None,
         ) -> None:
             import logging
 
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            self.evaluate(model, evals, output_path, max_eval_instances)
+            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags=wandb_tags, generation_params=generation_params)
 
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances, wandb_tags, max_length))
+        ray.get(launch.remote(model, evals, output_path, max_eval_instances, wandb_tags, max_length, generation_params))

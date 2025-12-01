@@ -64,6 +64,7 @@ def evaluate(config: EvaluationConfig) -> None:
                 resource_config=config.resource_config,
                 wandb_tags=config.wandb_tags,
                 max_length=config.max_length,
+                generation_params=config.generation_params,
             )
     else:
         # Pass generation_kwargs only for Levanter evaluator
