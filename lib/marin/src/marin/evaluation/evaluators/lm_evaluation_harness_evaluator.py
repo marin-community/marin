@@ -295,8 +295,9 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 # )
                 # os.environ["XLA_USE_BF16"] = "1"
 
-                # Create minimal vllm package metadata to satisfy lm-eval's importlib.metadata.version("vllm") check
-                # vllm-tpu doesn't register vllm metadata, so we create it manually
+                # === MONKEY PATCH ===
+                # We have the issue that lm-eval's importlib.metadata.version("vllm") check fails.
+                # Thus, we create minimal vllm package metadata to satisfy lm-eval's importlib.metadata.version("vllm") check
                 import site
                 site_packages = site.getsitepackages()[0] if site.getsitepackages() else None
                 if site_packages:
@@ -371,29 +372,9 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 except Exception as e:
                     logger.warning(f"Failed to monkey-patch resolve_hf_chat_template: {e}")
 
-                # COMMENTED OUT: max_gen_toks monkey-patch
-                # We tried to set max_gen_toks on the vLLM model instance, but it's a read-only property
-                # and cannot be set. The max_gen_toks is controlled by lm-eval's internal logic.
-                # Instead, we rely on max_model_len being correctly set via config.json patching above.
-                # 
-                # if max_gen_toks_value is not None:
-                #     logger.info(f"Setting max_gen_toks={max_gen_toks_value} for lm-eval vLLM model")
-                #     import lm_eval.models.vllm_causallms as vllm_module
-                #     original_create_from_arg_string = vllm_module.VLLM.create_from_arg_string
-                #     
-                #     # Store original method and max_gen_toks on the module for the classmethod to access
-                #     vllm_module._original_vllm_create_from_arg_string = original_create_from_arg_string
-                #     vllm_module._patched_max_gen_toks = max_gen_toks_value
-                #     vllm_module.VLLM.create_from_arg_string = LMEvaluationHarnessEvaluator._vllm_patched_create_from_arg_string
-                # 
-                # Extract max_gen_toks from generation_params if provided (for reference, not used)
-                # max_gen_toks_value = None
-                # if generation_params and "max_gen_toks" in generation_params:
-                #     max_gen_toks_value = generation_params["max_gen_toks"]
-                # elif max_gen_toks is not None:
-                #     max_gen_toks_value = max_gen_toks
+                # Note: max_gen_toks is controlled by lm-eval's internal logic, not vLLM.
+                # There is no way to set max_gen_toks on the vLLM model instance.
 
-                # Note: vLLM expects 'pretrained' argument, not 'model'
                 results = simple_evaluate(
                     model="vllm",
                     tasks=[eval_task.name],
@@ -404,7 +385,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     confirm_run_unsafe_code=True,
                     limit=max_eval_instances if max_eval_instances is not None else None,
                     evaluation_tracker=evaluation_tracker,
-                    log_samples=True,
+                    log_samples=True, # This controls whether to log samples to the results file
                 )
 
                 if results is not None:
