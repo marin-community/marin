@@ -122,9 +122,9 @@ if ! command -v uv &> /dev/null; then
     source $HOME/.cargo/env 2>/dev/null || source $HOME/.local/bin/env 2>/dev/null
 fi
 
-uv venv --python 3.11 > /dev/null 2>&1
+uv venv --python 3.11
 source .venv/bin/activate
-uv sync --all-packages --extra=cuda12 > /dev/null 2>&1
+uv sync --all-packages --extra=cuda12
 
 log_success "Environment created and dependencies synced."
 
