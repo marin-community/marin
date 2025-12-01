@@ -12,44 +12,36 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Math-focused RL environment mirroring post-training reward logic."""
+"""GSM8K RL environment with MathEnv-compatible scoring."""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
-from collections.abc import Callable, Iterable
 
 import datasets
 import jax
 import numpy as np
 
-
-from marin.rl.math_utils import (
-    grade_answer,
-    last_boxed_only_string,
-    latex_to_text,
-    normalize_answer,
-    validate_format,
-)
+from marin.rl.math_utils import grade_answer, normalize_answer, validate_format
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.types import Rollout, RolloutGroup
 from .base import MarinEnv, extract_seed
 
 logger = logging.getLogger(__name__)
 
-
-TRAIN_DATA_SOURCE = "di-zhang-fdu/MATH12000"
-EVAL_DATA_SOURCE = "HuggingFaceH4/MATH-500"
+TRAIN_DATA_SOURCE = "openai/gsm8k"
+EVAL_DATA_SOURCE = "openai/gsm8k"
+DATASET_CONFIG = "main"
 
 
 @dataclass(slots=True)
-class MathEnvExample:
-    """Single math example with cleaned prompt/answer."""
+class GSM8KExample:
+    """Container for a single GSM8K prompt/answer pair."""
 
-    raw_prompt: str
+    raw_question: str
     raw_answer: str
     processed_prompt: str
     processed_answer: str
@@ -57,25 +49,11 @@ class MathEnvExample:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
-class LengthPenaltyConfig:
-    max_response_tokens: int
-    cache_response_tokens: int
-
-
-@dataclass
-class RewardConfig:
-    length_penalty_coef: float = 0.0
-    length_penalty_config: LengthPenaltyConfig | None = None
-    correctness_reward_coef: float = 1.0
-    format_reward_coef: float = 0.1
-
-
 LoadDatasetFn = Callable[..., Any]
 
 
-class MathEnv(MarinEnv):
-    """Math environment for RL training and evaluation."""
+class GSM8KEnv(MarinEnv):
+    """GSM8K environment mirroring MathEnv formatting and scoring."""
 
     INSTRUCTION: str = (
         "Return the final answer in <answer> </answer> tags using standard math notation. "
@@ -87,6 +65,7 @@ class MathEnv(MarinEnv):
         train_source: str = TRAIN_DATA_SOURCE,
         eval_source: str = EVAL_DATA_SOURCE,
         *,
+        dataset_config: str = DATASET_CONFIG,
         max_train_examples: int | None = None,
         max_eval_examples: int | None = None,
         seed: int | None = None,
@@ -94,76 +73,60 @@ class MathEnv(MarinEnv):
         datasets_loader: LoadDatasetFn | None = None,
         train_dataset: Iterable[dict[str, Any]] | None = None,
         eval_dataset: Iterable[dict[str, Any]] | None = None,
-        reward_config: RewardConfig | None = None,
     ) -> None:
-        """Initialize the math environment.
-
-        Args:
-            train_source: Hugging Face dataset path for training split.
-            eval_source: Hugging Face dataset path for evaluation split.
-            max_train_examples: Optional limit on cached train examples.
-            max_eval_examples: Optional limit on cached eval examples.
-            seed: Seed for deterministic sampling.
-            trust_remote_code: Forwarded to HF dataset loader when used.
-            datasets_loader: Injection hook for tests; defaults to datasets.load_dataset.
-            train_dataset: Optional iterable of pre-loaded train examples.
-            eval_dataset: Optional iterable of pre-loaded eval examples.
-        """
-
         self.train_source = train_source
         self.eval_source = eval_source
+        self.dataset_config = dataset_config
         self.max_train_examples = max_train_examples
         self.max_eval_examples = max_eval_examples
         self._trust_remote_code = trust_remote_code
         self._datasets_loader = datasets_loader or datasets.load_dataset
         self._rng = np.random.default_rng(seed)
-        self.reward_config = reward_config or RewardConfig()
 
         self.train_examples = self._prepare_split(
             split_name="train",
+            hf_split="train",
             examples_iter=train_dataset,
             source=train_source,
             limit=max_train_examples,
         )
         self.eval_examples = self._prepare_split(
             split_name="test",
+            hf_split="test",
             examples_iter=eval_dataset,
             source=eval_source,
             limit=max_eval_examples,
         )
 
         logger.info(
-            "Initialized MathEnv with %d train examples and %d eval examples.",
+            "Initialized GSM8KEnv with %d train examples and %d eval examples.",
             len(self.train_examples),
             len(self.eval_examples),
         )
 
     # ------------------------------------------------------------------
-    # Dataset preparation helpers
+    # Dataset helpers
     # ------------------------------------------------------------------
-    def add_instruction(self, math_problem: str) -> str:
-        """Append the standard instruction to a math problem."""
+    def add_instruction(self, question: str) -> str:
+        """Append the standard instruction to the raw GSM8K question."""
 
-        return f"{math_problem}\n\n{self.INSTRUCTION}"
+        return f"{question.strip()}\n\n{self.INSTRUCTION}"
 
-    def clean_example(self, raw_prompt: str, raw_answer: str, example_id: str) -> MathEnvExample | None:
-        """Normalize prompt/answer pair.
+    def clean_example(self, raw_question: str, raw_answer: str, example_id: str) -> GSM8KExample | None:
+        """Normalize the GSM8K example into a usable prompt/answer pair."""
 
-        Returns None if processed answer could not be computed.
-        """
+        processed_prompt = self.add_instruction(raw_question)
+        final_answer = self._extract_final_answer(raw_answer)
+        normalized_answer = normalize_answer(final_answer)
 
-        boxed_answer = last_boxed_only_string(raw_answer)
-        cleaned_answer = normalize_answer(boxed_answer) if boxed_answer else normalize_answer(raw_answer)
-        if cleaned_answer is None:
+        if normalized_answer is None:
             return None
 
-        processed_prompt = self.add_instruction(latex_to_text(raw_prompt))
-
-        return MathEnvExample(
-            raw_prompt=raw_prompt,
+        return GSM8KExample(
+            raw_question=raw_question,
             raw_answer=raw_answer,
             processed_prompt=processed_prompt,
-            processed_answer=cleaned_answer,
+            processed_answer=normalized_answer,
             example_id=example_id,
         )
 
@@ -171,26 +134,28 @@ class MathEnv(MarinEnv):
         self,
         *,
         split_name: str,
+        hf_split: str,
         examples_iter: Iterable[dict[str, Any]] | None,
         source: str,
         limit: int | None,
-    ) -> list[MathEnvExample]:
-        """Load and clean dataset split."""
+    ) -> list[GSM8KExample]:
+        """Load and clean a dataset split."""
 
         if examples_iter is None:
-            dataset_dict = self._datasets_loader(source, trust_remote_code=self._trust_remote_code)
-            if isinstance(dataset_dict, dict):
-                dataset = dataset_dict.get(split_name) or dataset_dict.get("train")
-            else:
-                dataset = dataset_dict  # type: ignore[assignment]
+            dataset = self._datasets_loader(
+                source,
+                name=self.dataset_config,
+                split=hf_split,
+                trust_remote_code=self._trust_remote_code,
+            )
         else:
             dataset = examples_iter
 
-        cleaned_examples: list[MathEnvExample] = []
+        cleaned_examples: list[GSM8KExample] = []
         total = 0
         for idx, item in enumerate(dataset):
             example_id = f"{split_name}_{idx}"
-            example = self.clean_example(item["problem"], item["solution"], example_id)
+            example = self.clean_example(item["question"], item["answer"], example_id)
             if example is None:
                 continue
 
@@ -201,6 +166,16 @@ class MathEnv(MarinEnv):
                 break
 
         return cleaned_examples
+
+    def _extract_final_answer(self, raw_answer: str | None) -> str | None:
+        """Extract the canonical answer from the GSM8K solution text."""
+
+        if not raw_answer:
+            return None
+
+        parts = raw_answer.split("####")
+        final_segment = parts[-1].strip() if parts else raw_answer.strip()
+        return final_segment or None
 
     # ------------------------------------------------------------------
     # RL Environment interface
@@ -249,28 +224,19 @@ class MathEnv(MarinEnv):
         correct_sum = 0.0
         response_token_count = 0
         truncated_count = 0
-        mean_max_response_token_length = 0.0
 
-        print(f"Length of sampled examples: {len(sampled_examples)}")
-        print(f"Length of completions: {len(completions)}")
         for example, completion in zip(sampled_examples, completions, strict=True):
             group_rollouts: list[Rollout] = []
 
-            max_response_token_length = 0
             for choice in completion.choices:
-                (
-                    reward,
-                    fmt_score,
-                    correct_score,
-                    token_reward,
-                ) = self._score_choice(
+                reward, fmt_score, correct_score, token_reward = self._score_choice(
                     example=example, response_text=choice.message.content, tokenizer=inference_ctx.tokenizer
                 )
 
                 rollout = inference_ctx.create_rollout_from_choice(
                     prompt=example.processed_prompt,
                     choice=choice,
-                    env_name="math",
+                    env_name="gsm8k",
                     env_example_id=example.example_id,
                     reward=token_reward,
                     correctness_reward=correct_score,
@@ -279,19 +245,14 @@ class MathEnv(MarinEnv):
                 )
 
                 group_rollouts.append(rollout)
-
                 total_choices += 1
                 reward_sum += reward
                 format_sum += fmt_score
                 correct_sum += correct_score
                 response_token_count += rollout.response_tokens.size
 
-                max_response_token_length = max(max_response_token_length, rollout.response_tokens.size)
-
                 if choice.finish_reason == "length":
                     truncated_count += 1
-
-            mean_max_response_token_length += max_response_token_length
 
             if group_rollouts:
                 rollout_groups.append(RolloutGroup(rollouts=group_rollouts))
@@ -299,7 +260,7 @@ class MathEnv(MarinEnv):
         if total_choices == 0:
             raise RuntimeError("Inference context returned no choices; cannot compute metrics")
 
-        prefix = f"math.{mode}"
+        prefix = f"gsm8k.{mode}"
         metrics = {
             f"{prefix}_mean_reward": reward_sum / total_choices,
             f"{prefix}_format_accuracy": format_sum / total_choices,
@@ -308,22 +269,18 @@ class MathEnv(MarinEnv):
             f"{prefix}_total_responses": float(total_choices),
             f"{prefix}_sampled_examples": float(len(sampled_examples)),
             f"{prefix}_truncated_percentage": float(truncated_count) / total_choices,
-            f"{prefix}_mean_max_response_tokens": mean_max_response_token_length / len(completions),
         }
 
         return rollout_groups, metrics
 
-    def _score_choice(self, example: MathEnvExample, response_text: str, tokenizer) -> tuple[float, float, float, float]:
-        """Score a single generated response text.
-
-        Returns (reward, format_score, correct_score, token_reward_value).
-        """
+    def _score_choice(self, example: GSM8KExample, response_text: str, tokenizer) -> tuple[float, float, float, float]:
+        """Score a single generated response text using MathEnv logic."""
 
         decoded_response = response_text.strip()
-        validation = validate_format(decoded_response)
+        validation = validate_format(decoded_response + ">")
 
         true_answer = example.processed_answer.strip()
-        # weak_correct = 1.0 if true_answer and true_answer in decoded_response else 0.0
+        weak_correct = 1.0 if true_answer and true_answer in decoded_response else 0.0
 
         if validation["is_valid"]:
             grade = grade_answer(validation["answer"], true_answer)
@@ -331,42 +288,19 @@ class MathEnv(MarinEnv):
             tokens = decoded_response.split()
             grade = grade_answer(tokens[-1], true_answer) if tokens else 0.0
 
-        response_text_tokens = tokenizer.encode(response_text, add_special_tokens=False)
-
-        if self.reward_config.length_penalty_config is None:
-            length_penalty = 0.0
-        else:
-            l_cache = self.reward_config.length_penalty_config.cache_response_tokens
-            l_max = self.reward_config.length_penalty_config.max_response_tokens
-
-            if len(response_text_tokens) <= l_max - l_cache:
-                length_penalty = 0.0
-            elif len(response_text_tokens) <= l_max:
-                length_difference = (l_max - l_cache) - len(response_text_tokens)
-                length_penalty = length_difference / l_cache
-            else:
-                length_penalty = -1.0
-
-        if float(grade) == 0.0:
-            grade = -1.0
-
-        reward = (
-            self.reward_config.format_reward_coef * float(validation["is_valid"])
-            + self.reward_config.correctness_reward_coef * float(grade)
-            + self.reward_config.length_penalty_coef * length_penalty
-        )
+        reward = 0.3 * weak_correct + 0.1 * float(validation["is_valid"]) + 0.8 * float(grade)
 
         return reward, float(validation["is_valid"]), float(grade), reward
 
     # ------------------------------------------------------------------
     # Dataset inspection helpers
     # ------------------------------------------------------------------
-    def training_data(self) -> Iterator[MathEnvExample]:
+    def training_data(self) -> Iterator[GSM8KExample]:
         """Stream cleaned training examples for debugging."""
 
         yield from self.train_examples
 
-    def eval_data(self) -> Iterator[MathEnvExample]:
+    def eval_data(self) -> Iterator[GSM8KExample]:
         """Stream cleaned evaluation examples for debugging."""
 
         yield from self.eval_examples

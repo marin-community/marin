@@ -95,6 +95,7 @@ class PrimeIntellectEnv(MarinEnv):
         mode: str = "train",
         max_tokens: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample problems and generate responses using the model."""
         self._ensure_verifiers_installed()

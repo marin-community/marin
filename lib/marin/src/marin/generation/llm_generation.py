@@ -19,6 +19,7 @@ User -> Preset Prompt, Engine Kwargs, File -> Generate Text
 """
 
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
@@ -30,6 +31,10 @@ try:
 except ImportError:
     logger.warning("vLLM is not installed, so we will not be able to generate text.")
     TokensPrompt = Any
+
+# Disable multiprocessing since running on Ray, easier to clean
+# resources if not using a multiprocess.
+os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
 
 class BaseLLMProvider(ABC):
