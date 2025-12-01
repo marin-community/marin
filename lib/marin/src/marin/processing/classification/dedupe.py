@@ -110,7 +110,7 @@ class DedupeConfig:
 
     # TODO (rav): had to make this optional to avoid default argument issues in dataclass, what is the
     #   best way to handle this in marin and draccus?
-    input_path: str | list[str] | None = None
+    input_path: str | list[str]
     output_path: str = THIS_OUTPUT_PATH
     attribute_name: str = "duplicate_text"
     min_length: int = 0
