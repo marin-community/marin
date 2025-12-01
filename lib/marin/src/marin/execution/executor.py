@@ -181,12 +181,7 @@ class ExecutorStep(Generic[ConfigT]):
     doesn't match the automatically computed one."""
 
     pip_dependency_groups: list[str] | None = None
-    """List of dependency specifications for this step.
-
-    Entries can be either:
-    - Extra group names (e.g., "eval", "tpu") from pyproject.toml
-    - Direct pip packages with "pip:" prefix (e.g., "pip:package-name==1.0.0")
-    """
+    """List of `extra` dependencies from pyproject.toml to include with this step."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -727,21 +722,7 @@ class Executor:
             if is_local_ray_cluster():
                 runtime_env = {"env_vars": {"MARIN_PREFIX": self.prefix}}
             else:
-                # Separate pip_dependency_groups into extras and direct pip packages
-                # Format: "pip:package-spec" for direct pip packages, otherwise it's an extra
-                extras = []
-                pip_packages = []
-                if step.pip_dependency_groups:
-                    for dep in step.pip_dependency_groups:
-                        if dep.startswith("pip:"):
-                            pip_packages.append(dep[4:])  # Remove "pip:" prefix
-                        else:
-                            extras.append(dep)
-
-                runtime_env = build_runtime_env_for_packages(
-                    extra=extras if extras else None,
-                    pip_packages=pip_packages if pip_packages else None,
-                )
+                runtime_env = build_runtime_env_for_packages(extra=step.pip_dependency_groups)
                 # Inject the marin prefix into the runtime environment for each step.
                 runtime_env["env_vars"] = runtime_env.get("env_vars", {}) | {"MARIN_PREFIX": self.prefix}
 

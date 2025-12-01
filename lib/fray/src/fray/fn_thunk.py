@@ -14,9 +14,8 @@
 
 """Function thunk helper for executing cloudpickled callables.
 
-This module provides utilities for serializing and executing callables via cloudpickle.
-Used by cluster implementations to support callable entrypoints uniformly across
-different execution environments.
+This is primarily used to convert function invocations into Ray jobs -- the Ray
+"job" entrypoint only accepts a command to run, not callables.
 
 Usage as CLI:
     python -m fray.fn_thunk <fsspec-path>
