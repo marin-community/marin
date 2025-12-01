@@ -39,7 +39,7 @@ def _te_mesh_guard():
     try:
         from transformer_engine.jax.sharding import MeshResource, global_shard_guard  # type: ignore[import]
 
-        return global_shard_guard(MeshResource())
+        return global_shard_guard(MeshResource())  # TODO: this is just empty for now; works for single GPU
     except Exception:
         return contextlib.nullcontext()
 

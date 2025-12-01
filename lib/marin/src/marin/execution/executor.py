@@ -155,6 +155,7 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
         return copy.deepcopy(value)
 
     d = recurse(obj)
+    assert isinstance(d, dict)
     d.pop("description", None)
     return d
 
@@ -1145,12 +1146,15 @@ class ExecutorMainConfig:
 def _setup_logging():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+
 def _detect_local_resources() -> dict[str, float]:
     from ray.util.accelerators import accelerators
-    resources = {"head_node": 1}
+
+    resources: dict[str, float] = {"head_node": 1.0}
 
     try:
         import torch
+
         if not torch.cuda.is_available():
             return resources
 
@@ -1176,13 +1180,14 @@ def _detect_local_resources() -> dict[str, float]:
 
         if accel_type:
             logger.info(f"Auto-detected GPU: '{device_name}'. Labeling as accelerator_type:{accel_type}")
-            resources[f"accelerator_type:{accel_type}"] = 1
+            resources[f"accelerator_type:{accel_type}"] = 1.0
         else:
             logger.warning(f"Could not map GPU '{device_name}' to a known Ray accelerator type.")
     except ImportError:
         logger.warning("torch is not installed. Please install it to use this feature.")
 
     return resources
+
 
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
