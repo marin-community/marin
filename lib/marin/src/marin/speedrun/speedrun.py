@@ -37,7 +37,7 @@ from experiments.defaults import _get_tokenizer_for_train, default_train
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
-from marin.execution.executor import ExecutorStep, InputName, output_path_of
+from marin.execution.executor import ExecutorStep, InputName, output_path_of, unwrap_versioned_value
 from marin.processing.tokenize import add_validation_sets_to_mixture, lm_data_config
 from marin.resources import TpuPodConfig
 from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
@@ -116,7 +116,7 @@ class SpeedrunConfig:
 
         # runtimeenv is not serializable
         train_config_dict = asdict_excluding(self.train_config, exclude={"resources", "runtime_env"})
-        resources_dict = asdict_excluding(self.train_config.resources, exclude={"runtime_env"})
+        resources_dict = asdict_excluding(unwrap_versioned_value(self.train_config.resources), exclude={"runtime_env"})
         return {
             "author": {"name": self.author.name, "affiliation": self.author.affiliation, "url": self.author.url},
             "description": self.description,
@@ -193,7 +193,7 @@ This is calculated based on assumed MFU values and can be used as a rough estima
     @property
     def device_flops(self) -> float:
         """Get the peak FLOPs/s for the device type."""
-        device_flops = self.train_config.resources.device_flops()
+        device_flops = unwrap_versioned_value(self.train_config.resources).device_flops()
         if device_flops is None:
             raise ValueError("Resources must provide device_flops() for speedrun calculations.")
         return device_flops
@@ -201,13 +201,13 @@ This is calculated based on assumed MFU values and can be used as a rough estima
     @property
     def num_devices(self) -> int:
         """Get the number of devices."""
-        return self.train_config.resources.total_device_count()
+        return unwrap_versioned_value(self.train_config.resources).total_device_count()
 
     @property
     def num_chips(self) -> int:
         """Get the number of accelerator chips."""
 
-        return _num_accelerator_chips(self.train_config.resources)
+        return _num_accelerator_chips(unwrap_versioned_value(self.train_config.resources))
 
 
 @dataclass

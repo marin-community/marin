@@ -97,9 +97,10 @@ import re
 import subprocess
 import time
 import traceback
+import copy
 import urllib.parse
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
@@ -138,8 +139,22 @@ ExecutorFunction = Callable | ray.remote_function.RemoteFunction | None
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
-    """Return the `asdict` of an object, but remove the `description` field, because it doesn't affect the semantics."""
-    d = asdict(obj)
+    """Return the dict form of a dataclass, but remove the `description` field."""
+
+    def recurse(value: Any):
+        if is_dataclass(value):
+            return {f.name: recurse(getattr(value, f.name)) for f in fields(value)}
+        if isinstance(value, tuple) and hasattr(value, "_fields"):
+            return type(value)(*(recurse(v) for v in value))
+        if isinstance(value, (list, tuple)):
+            return type(value)(recurse(v) for v in value)
+        if isinstance(value, dict):
+            # RuntimeEnv (and other dict subclasses) require keyword-only init,
+            # so we normalize to a plain dict to avoid construction errors.
+            return {recurse(k): recurse(v) for k, v in value.items()}
+        return copy.deepcopy(value)
+
+    d = recurse(obj)
     d.pop("description", None)
     return d
 

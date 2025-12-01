@@ -57,7 +57,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, versioned
 from marin.resources import TpuPodConfig, GpuConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from levanter.optim import MuonConfig
@@ -495,7 +495,7 @@ def build_run(
     resources = _resource_presets(use_gpu=use_gpu)[size]
 
     train = SimpleTrainConfig(
-        resources,
+        resources=versioned(resources),
         train_batch_size=batch,
         num_train_steps=steps,
         learning_rate=muon.learning_rate,

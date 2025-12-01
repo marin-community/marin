@@ -317,7 +317,7 @@ def _gmm(lhs, rhs, group_sizes, out_axes, sharded=False, ar=False):
 
     out = gmm_fn(lhs.array, rhs.array, group_sizes.array)
 
-    return hax.NamedArray(out, axes=out_axes)
+    return hax.NamedArray(out, out_axes)
 
 
 def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray, ar: bool = False) -> jnp.ndarray:
