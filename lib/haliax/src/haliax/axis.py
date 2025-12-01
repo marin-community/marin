@@ -32,6 +32,10 @@ class Axis:
     def __str__(self):
         return f"{self.name}({self.size})"
 
+    def __post_init__(self):
+        if isinstance(self.name, Axis):
+            raise ValueError(f"Axis name cannot be an Axis object: {self.name}")
+
 
 def make_axes(**kwargs: int) -> tuple[Axis, ...]:
     """
