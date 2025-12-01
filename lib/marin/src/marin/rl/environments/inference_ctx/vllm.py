@@ -283,6 +283,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             output_kind=self.sampling_params.output_kind,
         )
 
+        bos_token = self.tokenizer.decode([self.tokenizer.bos_token_id])
         if system_prompt:
             prompts_with_templates = [
                 self.tokenizer.apply_chat_template(
@@ -292,6 +293,10 @@ class vLLMInferenceContext(BaseInferenceContext):
                 )
                 for prompt in prompts
             ]
+            # prompts_with_templates = [
+            #     [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
+            #     for prompt in prompts
+            # ]
         else:
             prompts_with_templates = [
                 self.tokenizer.apply_chat_template(
@@ -301,6 +306,16 @@ class vLLMInferenceContext(BaseInferenceContext):
                 )
                 for prompt in prompts
             ]
+
+        # .generate prepends a BOS token, so we just remove it here
+        prompts_with_templates = [
+            prompt.replace(bos_token, "") for prompt in prompts_with_templates
+        ]
+            
+            # prompts_with_templates = [
+            #     [{"role": "user", "content": prompt}]
+            #     for prompt in prompts
+            # ]
 
         outputs = self.llm.generate(prompts_with_templates, sampling_params)
 

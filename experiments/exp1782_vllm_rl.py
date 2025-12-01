@@ -110,6 +110,13 @@ llama_3_1_8b = ModelConfig(
     checkpoint="meta-llama/Llama-3.1-8B-Instruct",
     config_class=LlamaConfig,
 )
+marin_8b_instruct = ModelConfig(
+    name="marin-community/marin-8b-instruct",
+    type="llama",
+    tokenizer="marin-community/marin-8b-instruct",
+    checkpoint="marin-community/marin-8b-instruct",
+    config_class=LlamaConfig,
+)
 
 
 @dataclasses.dataclass
@@ -360,10 +367,10 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         run_id=name,
         log_freq=1,
         run_config=RunConfig(
-            train_tpu_type="v5p-8",
+            train_tpu_type="v6e-8",
             num_train_slices=1,
             num_rollout_workers=1,
-            inference_tpu_type="v5p-8",
+            inference_tpu_type="v6e-8",
         ),
         system_prompt="""A conversation between User and Assistant. The User asks a
             question, and the Assistant solves it. The Assistant first thinks about the reasoning process
@@ -741,6 +748,56 @@ def main():
         max_rollout_step_delay=1,
     )
 
+    marin_8b_length_penalty_async_clip_higher_dapo = ExperimentConfig(
+        model_config=marin_8b_instruct,
+        rl_loss=RLOOLoss(
+            kl_coef=0.0,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.28,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+            tis_importance_sampling_ratio_max=2.0,
+        ),
+        experiment_name_suffix="math-tis-iwucs-tis2-ceh0.28-kl0-2-mg0.5-lr5e-8-d",
+        train_batch_size=128,
+        per_device_parallelism=4,
+        learning_rate=5e-8,
+        max_output_tokens=4096,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
+    llama_8b_length_penalty_async_clip_higher_dapo_chat = ExperimentConfig(
+        model_config=llama_3_1_8b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.0,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.28,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+            tis_importance_sampling_ratio_max=2.0,
+        ),
+        experiment_name_suffix="math-tis-iwucs-tis2-ceh0.28-kl0-2-mg0.5-lr1e-7-dc",
+        train_batch_size=128,
+        per_device_parallelism=4,
+        learning_rate=1e-7,
+        max_output_tokens=4096,
+        n_prompts=8,
+        n_generations_per_prompt=16,
+        reward_config=RewardConfig(
+            length_penalty_config=LengthPenaltyConfig(max_response_tokens=4096, cache_response_tokens=1024),
+            length_penalty_coef=1.0,
+        ),
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
     experiment_configs = [
         # length_penalty,
         # max_length_8192_exp,
@@ -754,7 +811,9 @@ def main():
         # llama_8b_length_penalty_async_kl0,
         # llama_8b_length_penalty_async_kl0_1,
         # llama_8b_length_penalty_async_kl0_1_no_length_penalty,
-        llama_8b_length_penalty_async_clip_higher_dapo,
+        # llama_8b_length_penalty_async_clip_higher_dapo,
+        llama_8b_length_penalty_async_clip_higher_dapo_chat,
+        # marin_8b_length_penalty_async_clip_higher_dapo,
         # qwen3_8b_length_penalty_async_clip_higher,
         # ExperimentConfig(
         #     # model_config=llama_3_1_8b,

@@ -84,13 +84,15 @@ def compute_metadata_metrics(
 
     max_ratio_diff = jnp.max(jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array)) * loss_masks_array)
     return {
-        "max_ratio_difference": Metric.from_value(max_ratio_diff, ReductionType.MAX),
-        "mean_ratio_difference": Metric.from_value(mean_ratio_difference, ReductionType.MEAN),
-        "current_entropy": Metric.from_value(current_entropy, ReductionType.MEAN),
-        "max_advantages": Metric.from_value(jnp.max(loss_weights_array), ReductionType.MAX),
-        "mean_advantages": Metric.from_value(mean_advantages, ReductionType.MEAN),
-        "policy_entropy": Metric.from_value(policy_entropy, ReductionType.MEAN),
-        "response_tokens_length": Metric.from_value(jnp.sum(loss_masks_array) / batch_size, ReductionType.MEAN),
+        "max_ratio_difference": Metric.from_value(max_ratio_diff.astype(jnp.float32), ReductionType.MAX),
+        "mean_ratio_difference": Metric.from_value(mean_ratio_difference.astype(jnp.float32), ReductionType.MEAN),
+        "current_entropy": Metric.from_value(current_entropy.astype(jnp.float32), ReductionType.MEAN),
+        "max_advantages": Metric.from_value(jnp.max(loss_weights_array).astype(jnp.float32), ReductionType.MAX),
+        "mean_advantages": Metric.from_value(mean_advantages.astype(jnp.float32), ReductionType.MEAN),
+        "policy_entropy": Metric.from_value(policy_entropy.astype(jnp.float32), ReductionType.MEAN),
+        "response_tokens_length": Metric.from_value(
+            (jnp.sum(loss_masks_array) / batch_size).astype(jnp.float32), ReductionType.MEAN
+        ),
     }
 
 
@@ -166,8 +168,8 @@ def compute_ppo_loss_objective(
 
     per_batch_loss = jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1)
     metadata = {
-        "loss_max_over_batch": Metric.from_value(-jnp.max(per_batch_loss), ReductionType.MAX),
-        "loss_std_over_batch": Metric.from_value(jnp.std(per_batch_loss), ReductionType.MEAN),
+        "loss_max_over_batch": Metric.from_value((-jnp.max(per_batch_loss)).astype(jnp.float32), ReductionType.MAX),
+        "loss_std_over_batch": Metric.from_value(jnp.std(per_batch_loss).astype(jnp.float32), ReductionType.MEAN),
     }
     return loss, metadata
 
@@ -353,14 +355,14 @@ def rloo_loss_with_importance_sampling(
     )
 
     return loss, {
-        "ratio_mean": Metric.from_value(ratio_mean_over_responses_only, ReductionType.MEAN),
-        "clipped_ratio_mean": Metric.from_value(clipped_ratio_mean_over_responses_only, ReductionType.MEAN),
-        "clip_fraction": Metric.from_value(clip_fraction, ReductionType.MEAN),
-        "reinforce_loss": Metric.from_value(reinforce_loss, ReductionType.MEAN),
-        "kl_loss": Metric.from_value(kl_loss, ReductionType.MEAN),
-        "kl_penalty": Metric.from_value(kl_penalty_over_responses_only, ReductionType.MEAN),
+        "ratio_mean": Metric.from_value(ratio_mean_over_responses_only.astype(jnp.float32), ReductionType.MEAN),
+        "clipped_ratio_mean": Metric.from_value(clipped_ratio_mean_over_responses_only.astype(jnp.float32), ReductionType.MEAN),
+        "clip_fraction": Metric.from_value(clip_fraction.astype(jnp.float32), ReductionType.MEAN),
+        "reinforce_loss": Metric.from_value(reinforce_loss.astype(jnp.float32), ReductionType.MEAN),
+        "kl_loss": Metric.from_value(jnp.asarray(kl_loss, dtype=jnp.float32), ReductionType.MEAN),
+        "kl_penalty": Metric.from_value(jnp.asarray(kl_penalty_over_responses_only, dtype=jnp.float32), ReductionType.MEAN),
         "trainer_inference_importance_sampling_ratio_mean": Metric.from_value(
-            trainer_inference_importance_sampling_ratio_mean, ReductionType.MEAN
+            trainer_inference_importance_sampling_ratio_mean.astype(jnp.float32), ReductionType.MEAN
         ),
         **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
         **metadata,
