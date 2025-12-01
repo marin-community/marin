@@ -510,9 +510,7 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
     dup_map = {}
     num_duplicates = 0
     for record in load_parquet(duplicate_key_shards[0]):
-        dup_map[record["hash"]] = {
-            "canonical": record["canonical"],
-        }
+        dup_map[record["hash"]] = record["canonical"]
         num_duplicates += 1
 
     logger.info(f"There are {num_duplicates} duplicate documents.")
@@ -521,10 +519,8 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
         """Mark exact duplicate documents using exact hash matching."""
         record_id = _record_id(record)
         hash_val = _str_hash(record.get(config.text_field, ""))
-        return {
-            "id": record_id,
-            "attributes": {config.attribute_name: hash_val in dup_map},
-        }
+        assert hash_val
+        return {"id": record_id, "attributes": {config.attribute_name: dup_map.get(hash_val, record_id) != record_id}}
 
     # Use write_jsonl with callable output pattern
     backend.execute(

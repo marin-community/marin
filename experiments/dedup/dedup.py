@@ -14,10 +14,7 @@
 # limitations under the License.
 
 """
-Run deduplication on Pile.
-
-This script creates a single ExecutorStep that compares Pile against
-all evaluation datasets defined in eval_datasets_overlap.py.
+Run deduplication on fineweb-edu.
 
 Usage:
     python experiments/dedup/dedup.py --prefix gs://my-bucket
