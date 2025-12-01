@@ -33,19 +33,11 @@ from enum import Enum
 import draccus
 import fsspec
 import msgspec
+from dupekit import Bloom
+
 from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import Dataset, flow_backend, load_parquet
 from zephyr.readers import load_file
-
-# handle optional rbloom dependency for dry runs.
-try:
-    from rbloom import Bloom
-except ImportError:
-
-    class Bloom:
-        def __init__(self, *args, **kwargs):
-            raise ImportError("rbloom is required for deduplication. Please install rbloom.")
-
 
 logger = logging.getLogger(__name__)
 
