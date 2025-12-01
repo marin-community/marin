@@ -67,7 +67,9 @@ def run_dedup(config: DedupeConfig) -> str:
 
 
 def build_dedup_step(dataset: InputName) -> ExecutorStep:
-    config = DedupeConfig(input_path=dataset, attribute_name="is_duplicate", mode=DedupMode.EXACT_DOC_DEDUPLICATE)
+    config = DedupeConfig(
+        input_path=dataset.cd("sample/10BT"), attribute_name="is_duplicate", mode=DedupMode.EXACT_DOC_DEDUPLICATE
+    )
 
     return ExecutorStep(
         name=f"dedup_{dataset.name}",
