@@ -1146,6 +1146,31 @@ def _setup_logging():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
+def _detect_local_resources() -> dict[str, float]:
+    from marin.resources_utils import torch_device_name_to_ray_accel_type
+
+    resources: dict[str, float] = {"head_node": 1}
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return resources
+        gpu_count = torch.cuda.device_count()
+        if gpu_count == 0:
+            return resources
+        # TODO: assuming same GPU type
+        device_name = torch.cuda.get_device_name(0)
+        accel_type = torch_device_name_to_ray_accel_type(device_name)
+        if accel_type:
+            logger.info(f"Auto-detected {gpu_count} GPU(s): '{device_name}' -> accelerator_type:{accel_type}")
+            resources[f"accelerator_type:{accel_type}"] = gpu_count
+        else:
+            logger.warning(f"Could not map GPU '{device_name}' to a known Ray accelerator type.")
+    except ImportError:
+        logger.warning("torch is not installed. GPU detection skipped.")
+    return resources
+
+
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
@@ -1156,7 +1181,7 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     ray.init(
         namespace="marin",
         ignore_reinit_error=True,
-        resources={"head_node": 1} if is_local_ray_cluster() else None,
+        resources=_detect_local_resources() if is_local_ray_cluster() else None,
         runtime_env={"worker_process_setup_hook": _setup_logging},
     )  # We need to init ray here to make sure we have the correct namespace for actors
     # (status_actor in particular)

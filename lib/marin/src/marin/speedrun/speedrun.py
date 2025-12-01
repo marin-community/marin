@@ -116,7 +116,7 @@ class SpeedrunConfig:
 
         # runtimeenv is not serializable
         train_config_dict = asdict_excluding(self.train_config, exclude={"resources", "runtime_env"})
-        resources_dict = asdict_excluding(unwrap_versioned_value(self.train_config.resources), exclude={"runtime_env"})
+        resources_dict = asdict_excluding(self.train_config.resources, exclude={"runtime_env"})
         return {
             "author": {"name": self.author.name, "affiliation": self.author.affiliation, "url": self.author.url},
             "description": self.description,
