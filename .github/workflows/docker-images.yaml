@@ -173,9 +173,6 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - name: Checkout code
@@ -205,7 +202,7 @@ jobs:
 
       - name: Build and push Levanter base image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.base \
+          docker buildx build --file lib/levanter/docker/tpu/Dockerfile.base \
             --tag ghcr.io/${{ github.repository }}-base:latest \
             --tag ghcr.io/${{ github.repository }}-base:${{ env.DATE }} \
             --push .
@@ -218,9 +215,6 @@ jobs:
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     needs: levanter-base-image
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - name: Checkout code
@@ -250,7 +244,7 @@ jobs:
 
       - name: Build and push Levanter TPU image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.incremental \
+          docker buildx build --file lib/levanter/docker/tpu/Dockerfile.incremental \
             --tag ghcr.io/${{ github.repository }}-tpu:latest \
             --tag ghcr.io/${{ github.repository }}-tpu:${{ env.DATE }} \
             --push .
@@ -263,9 +257,6 @@ jobs:
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     needs: levanter-tpu-image
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - name: Checkout code
@@ -295,7 +286,7 @@ jobs:
 
       - name: Build and push Levanter cluster image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.cluster \
+          docker buildx build --file lib/levanter/docker/tpu/Dockerfile.cluster \
             --tag ghcr.io/${{ github.repository }}-cluster:latest \
             --tag ghcr.io/${{ github.repository }}-cluster:${{ env.DATE }} \
             --push .

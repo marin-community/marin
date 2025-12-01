@@ -241,6 +241,7 @@ def main(
         num_gpus=num_gpus,
         cluster=cluster,
         entry_point=entry_point,
+        backend=backend,
     )
 
     # in cluster mode: submit via ray_run.py
