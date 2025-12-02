@@ -35,16 +35,14 @@ train_steps = [
             model_name=model_name,
             nametag=f"-bs{batch_size}",
             tpu_type="v4-64",
-            # tpu_type="v5litepod-128",
-            # per_device_parallelism=2,
         )
     )
     for base_train_steps in [800]
-    for epochs in [4]
-    for weight_decay in [0.1]
+    for epochs in [8]
+    for weight_decay in [3.2]
     for batch_size in [64]
     for model_name, lr in [
-        ("moedebug", 1e-3),
+        ("3_2b4k_qkn", 1e-3),
     ]
 ]
 

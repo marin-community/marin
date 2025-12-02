@@ -34,7 +34,12 @@ from experiments.data_efficiency.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.log_probs import default_lm_log_probs, default_ensemble_log_probs
 from marin.execution.executor import ExecutorStep, this_output_path, output_path_of
-from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_mixture_data_config
+from marin.processing.tokenize.data_configs import (
+    LMMixtureDatasetConfig,
+    TokenizerStep,
+    add_validation_sets_to_mixture,
+    lm_mixture_data_config,
+)
 from marin.training.training import TpuPodConfig, TrainLmOnPodConfig, run_levanter_train_lm
 
 from experiments.data_efficiency.data import data_dict
@@ -48,6 +53,7 @@ class DataEfficiencyConfig:
     train_seed: int = 0
     data_seed: int = 42
 
+    val_name: str | None = None
     teacher_data_name: str | None = None
     teacher_data_weight: float = 0.0
 
@@ -124,14 +130,21 @@ class DataEfficiencyConfig:
     def build_data_config(self) -> LMMixtureDatasetConfig:
         components = {self.data_name: self.data}
         weights = {self.data_name: 1.0}
-        max_train_batches = {self.data_name: self.base_train_steps}
         num_validation_sequences = {self.data_name: 1024}
+        validation_only_components= {}
+
+        if self.val_name is not None:
+            validation_only_components[self.val_name] = data_dict[self.val_name]
+            num_validation_sequences = {}
+
+        max_train_batches = {self.data_name: self.base_train_steps}
 
         if self.teacher_data_name is not None and self.teacher_data_weight > 0.0:
             components[self.teacher_data_name] = data_dict[self.teacher_data_name]
             weights[self.teacher_data_name] = self.teacher_data_weight
             weights[self.data_name] = 1.0 - self.teacher_data_weight
-            num_validation_sequences[self.teacher_data_name] = 1024
+            if not validation_only_components:  
+                num_validation_sequences[self.teacher_data_name] = 1024
 
         data_config = lm_mixture_data_config(
             components=components,
@@ -139,6 +152,9 @@ class DataEfficiencyConfig:
             max_train_batches=max_train_batches,
             num_validation_sequences=num_validation_sequences,
         )
+
+        if validation_only_components:
+            data_config = add_validation_sets_to_mixture(data_config, validation_only_components)
 
         return _prepare_data_config(data_config, use_default_validation=True)
 

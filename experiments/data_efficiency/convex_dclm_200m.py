@@ -24,7 +24,8 @@ train_steps = [
     [
         data_efficiency_train_step(
             DataEfficiencyConfig(
-                data_name="dclm",
+                data_name="dclm_200m",
+                val_name="dclm_200m_val",
                 epochs=epochs,
                 base_train_steps=base_train_steps,
                 train_batch_size=64,
@@ -41,10 +42,13 @@ train_steps = [
     ]
     for candidate_hparams in [
         # Fixed regularized
-        # (800, 4, 1e-3, 3.2, "3_2b4k_alln"),
-        # (800, 8, 1e-3, 3.2, "3_2b4k_alln"),
-        # Fixed unregularized
-        (800, 4, 3e-4, 0.1, "3_2b4k_qkn", False),
+        # (750, 8, 3e-3, 0.8, "150m4k"),
+        # (750, 16, 3e-3, 1.6, "300m4k"),
+        # (750, 8, 1e-3, 3.2, "600m4k"),
+        # (750, 8, 1e-3, 3.2, "1_4b4k"),
+        # (750, 8, 1e-3, 3.2, "1_5b4k"),
+        # Ensemble 300m 
+        (750, 32, 3e-3, 0.8, "300m4k"),
     ]
 ]
 

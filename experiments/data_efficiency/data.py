@@ -129,6 +129,98 @@ octothinker_megamath_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 )
 
+dclm_200m_train = default_download(
+    name="raw/data_efficiency/dclm_200m_train",
+    hf_dataset_id="konwoo/dclm-164k-docs-train",
+    revision="c4f5716",
+    override_output_path="raw/data_efficiency/dclm_200m_train",
+)
+
+dclm_200m_tokenized_train = default_tokenize(
+    name="data_efficiency/dclm_200m_train",
+    dataset=dclm_200m_train,
+    tokenizer=llama3_tokenizer,
+)
+
+dclm_200m_val = default_download(
+    name="raw/data_efficiency/dclm_200m_val",
+    hf_dataset_id="konwoo/dclm-164k-docs-val",
+    revision="fb8ee7b",
+    override_output_path="raw/data_efficiency/dclm_200m_val",
+)
+
+dclm_200m_tokenized_val = default_tokenize(
+    name="data_efficiency/dclm_200m_val",
+    dataset=dclm_200m_val,
+    tokenizer=llama3_tokenizer,
+)
+
+hq_cpr16 = default_download(
+    name="raw/data_efficiency/hq_cpr16",
+    hf_dataset_id="konwoo/dclm-164k-instruct-hq-cpr16-ml512-train",
+    revision="981b0e3",
+    override_output_path="raw/data_efficiency/hq_cpr16",
+)
+
+hq_cpr16_tokenized = default_tokenize(
+    name="data_efficiency/hq_cpr16",
+    dataset=hq_cpr16,
+    tokenizer=llama3_tokenizer,
+)
+
+sd_cpr16 = default_download(
+    name="raw/data_efficiency/sd_cpr16",
+    hf_dataset_id="konwoo/dclm-164k-300m-raw-cpr16-ml1024",
+    revision="a938788",
+    override_output_path="raw/data_efficiency/sd_cpr16",
+)
+
+sd_cpr16_tokenized = default_tokenize(
+    name="data_efficiency/sd_cpr16",
+    dataset=sd_cpr16,
+    tokenizer=llama3_tokenizer,
+)
+
+
+sd_cpr200 = default_download(
+    name="raw/data_efficiency/sd_cpr200",
+    hf_dataset_id="konwoo/dclm-164k-300m-cpr200-ml1024",
+    revision="818adca",
+    override_output_path="raw/data_efficiency/sd_cpr200",
+)
+
+sd_cpr200_tokenized = default_tokenize(
+    name="data_efficiency/sd_cpr200",
+    dataset=sd_cpr200,
+    tokenizer=llama3_tokenizer,
+)
+
+synth_mixed_cpr16 = default_download(
+    name="raw/data_efficiency/synth_mixed_cpr16",
+    hf_dataset_id="konwoo/dclm-164k-old-cpr16-combined",
+    revision="e3ae5bc",
+    override_output_path="raw/data_efficiency/synth_mixed_cpr16",
+)
+
+synth_mixed_cpr16_tokenized = default_tokenize(
+    name="data_efficiency/synth_mixed_cpr16",
+    dataset=synth_mixed_cpr16,
+    tokenizer=llama3_tokenizer,
+)
+
+sd_cpr200_new = default_download(
+    name="raw/data_efficiency/sd_cpr200_new",
+    hf_dataset_id="konwoo/dclm-164k-new-300m-raw-cpr200-ml1024",
+    revision="fa7bffb",
+    override_output_path="raw/data_efficiency/sd_cpr200_new",
+)
+
+sd_cpr200_new_tokenized = default_tokenize(
+    name="data_efficiency/sd_cpr200_new",
+    dataset=sd_cpr200_new,
+    tokenizer=llama3_tokenizer,
+)
+
 data_dict = {
     "dclm": dclm_tokenized,
     "code": starcoderdata_tokenized,
@@ -140,5 +232,12 @@ data_dict = {
     "ens4x0728": ens4x0728_tokenized,
     "ens8x0730": ens8x0730_tokenized,
     "octo": octothinker_megamath_tokenized,
+    "dclm_200m": dclm_200m_tokenized_train,
+    "dclm_200m_val": dclm_200m_tokenized_val,
+    "hq_cpr16": hq_cpr16_tokenized,
+    "sd_cpr16": sd_cpr16_tokenized,
+    "sd_cpr200": sd_cpr200_tokenized,
+    "symx_c16": synth_mixed_cpr16_tokenized,
+    "sdn_c200": sd_cpr200_new_tokenized,
 }
 
