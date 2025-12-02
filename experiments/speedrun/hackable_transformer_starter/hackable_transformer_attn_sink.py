@@ -508,7 +508,7 @@ def build_run(
     batch = _batch_sizes()[size]
     max_seq_len = model_cfg.max_seq_len
     params = int(model_cfg.total_trainable_params(llama3_tokenizer_vocab_size))
-    print(params)
+
     steps = _get_num_train_steps(params, batch, max_seq_len, tpp=20)
 
     muon = _muon_presets()[size]
@@ -530,7 +530,7 @@ def build_run(
     )
 
     lr_tag = f"_lr_x{_format_multiplier_label(lr_multiplier)}" if lr_multiplier is not None else ""
-    run_name = f"hacktx_{size}_{'attnsink' if use_sink else 'stdattn'}_{train.train_seq_len}_splash_lr_sweep{lr_tag}"
+    run_name = f"hacktx_{size}_{'attnsink' if use_sink else 'stdattn'}_{max_seq_len}_splash_lr_sweep{lr_tag}"
     desc = (
         f"Hackable Transformer ({size}); "
         f"{'AttentionWithSink' if use_sink else 'Attention'} (Splash); "

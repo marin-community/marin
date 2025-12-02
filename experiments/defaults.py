@@ -224,8 +224,8 @@ def simulated_epoching_train(
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
     # Use explicit training length rather than inferring from the model
-    train_length = train_config.train_seq_len
     actual_model_config = unwrap_versioned_value(model_config)
+    train_length = train_config.train_seq_len or actual_model_config.max_seq_len
     if train_length > actual_model_config.max_seq_len:
         raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual_model_config.max_seq_len}.")
 
@@ -324,7 +324,7 @@ def default_train(
         raise ValueError("Cannot specify both initialize_from_checkpoint_path and initialize_from_hf")
 
     # Create the inner config
-    train_length = train_config.train_seq_len
+    train_length = train_config.train_seq_len or model_config.max_seq_len
     actual_model_config = unwrap_versioned_value(model_config)
     if train_length > actual_model_config.max_seq_len:
         raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual_model_config.max_seq_len}.")
