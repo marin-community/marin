@@ -33,7 +33,7 @@ qwen3_0_6b = Qwen3Config(
 
 # qwen3_0_6b_hd128: head_dim=128, identical to "Qwen/Qwen3-0.6B"
 qwen3_0_6b_hd128 = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=1024,
     intermediate_dim=3072,
     num_heads=16,
@@ -69,7 +69,7 @@ qwen3_4b = Qwen3Config(
 
 # qwen3_4b_hd128: head_dim=128, identical to "Qwen/Qwen3-4B"
 qwen3_4b_hd128 = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2560,
     intermediate_dim=9728,
     num_heads=32,
