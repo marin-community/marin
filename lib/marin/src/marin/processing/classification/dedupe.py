@@ -40,7 +40,7 @@ from dupekit import Bloom
 
 from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import Dataset, flow_backend, load_parquet
-from zephyr.readers import load_file
+from zephyr.readers import load_file, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +293,13 @@ def _record_id(record: dict) -> str:
         return str(_bloom_hash(s))
 
 
+def _get_extension(file_path: str) -> str:
+    for ext in SUPPORTED_EXTENSIONS:
+        if file_path.endswith(ext):
+            return ext
+    raise ValueError(f"Unsupported extension: {file_path}.")
+
+
 def mark_duplicates_bloom(
     input_path: str | list[str],
     bloom_path: str,
@@ -355,7 +362,9 @@ def mark_duplicates_bloom(
             .flat_map(load_file)
             .map_shard(process_shard_with_bloom)
             .write_jsonl(
-                output_pattern=lambda shard_idx, total: rebase_file_path(base_path, all_files[shard_idx], output_path),
+                output_pattern=lambda shard_idx, total: rebase_file_path(
+                    base_path, all_files[shard_idx], output_path, old_extension=_get_extension(all_files[shard_idx])
+                ),
                 skip_existing=True,
             )
         )
@@ -444,7 +453,10 @@ def _run_deduplication(config: DedupeConfig):
         .map_shard(mark_exact_dups)
         .write_jsonl(
             output_pattern=lambda shard_idx, total: rebase_file_path(
-                base_path, input_files[shard_idx], f"{config.output_path}/data"
+                base_path,
+                input_files[shard_idx],
+                f"{config.output_path}/data",
+                old_extension=_get_extension(input_files[shard_idx]),
             ),
             skip_existing=True,
         )
@@ -529,7 +541,10 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
         # the shards of the input files for rebase_file_path to work correctly.
         .map_shard(mark_exact_dups).write_jsonl(
             output_pattern=lambda shard_idx, total: rebase_file_path(
-                base_path, input_files[shard_idx], f"{config.output_path}/data"
+                base_path,
+                input_files[shard_idx],
+                f"{config.output_path}/data",
+                old_extension=_get_extension(input_files[shard_idx]),
             ),
             skip_existing=True,
         ),

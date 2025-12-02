@@ -128,6 +128,27 @@ def load_parquet(file_path: str, **kwargs) -> Iterator[dict]:
             yield from batch.to_pylist()
 
 
+SUPPORTED_EXTENSIONS = tuple(
+    sorted(
+        [
+            ".json",
+            ".json.gz",
+            ".json.xz",
+            ".json.zst",
+            ".json.zstd",
+            ".jsonl",
+            ".jsonl.gz",
+            ".jsonl.xz",
+            ".jsonl.zst",
+            ".jsonl.zstd",
+            ".parquet",
+        ],
+        key=len,
+        reverse=True,
+    )
+)
+
+
 def load_file(file_path: str, columns: list[str] | None = None, **parquet_kwargs) -> Iterator[dict]:
     """Load records from file, auto-detecting JSONL or Parquet format.
 
@@ -161,29 +182,18 @@ def load_file(file_path: str, columns: list[str] | None = None, **parquet_kwargs
         ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
         ... )
     """
-    if (
-        file_path.endswith(".jsonl")
-        or file_path.endswith(".jsonl.gz")
-        or file_path.endswith(".jsonl.zst")
-        or file_path.endswith(".jsonl.zstd")
-        or file_path.endswith(".jsonl.xz")
-        or file_path.endswith(".json")
-        or file_path.endswith(".json.gz")
-        or file_path.endswith(".json.zst")
-        or file_path.endswith(".json.zstd")
-        or file_path.endswith(".json.xz")
-    ):
+    if not file_path.endswith(SUPPORTED_EXTENSIONS):
+        raise ValueError(f"Unsupported extension: {file_path}.")
+    if file_path.endswith(".parquet"):
+        if columns is not None:
+            parquet_kwargs = {**parquet_kwargs, "columns": columns}
+        yield from load_parquet(file_path, **parquet_kwargs)
+    else:
         for record in load_jsonl(file_path):
             if columns is not None:
                 yield {k: v for k, v in record.items() if k in columns}
             else:
                 yield record
-    elif file_path.endswith(".parquet"):
-        if columns is not None:
-            parquet_kwargs = {**parquet_kwargs, "columns": columns}
-        yield from load_parquet(file_path, **parquet_kwargs)
-    else:
-        raise ValueError(f"Unsupported extension: {file_path}.")
 
 
 def load_zip_members(zip_path: str, pattern: str = "*") -> Iterator[dict]:
