@@ -168,7 +168,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            max_seq_len=context_length,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )
