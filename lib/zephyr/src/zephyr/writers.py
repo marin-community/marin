@@ -199,6 +199,7 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
     from levanter.store.cache import SerialCacheWriter
 
     ensure_parent_dir(output_path)
+    from levanter.store.cache import CacheMetadata
 
     try:
         exemplar = next(iter(records))
@@ -207,7 +208,8 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
 
     count = 1
     with atomic_rename(output_path) as tmp_path:
-        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=metadata) as writer:
+        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
+            print(exemplar)
             writer.write_batch([exemplar])
             for batch in batchify(records):
                 writer.write_batch(batch)

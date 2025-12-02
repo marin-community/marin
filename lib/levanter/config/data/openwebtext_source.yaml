@@ -6,4 +6,4 @@ cache_dir: "gs://levanter-data/tokenized/openwebtext/"
 tokenizer: "gpt2"
 cache_options:
   batch_size: 1024
-  num_shard_groups: 64
+

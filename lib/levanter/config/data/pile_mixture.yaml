@@ -2,7 +2,7 @@ cache_dir: "gs://levanter-data/tokenized/pile-domains/"
 tokenizer: "EleutherAI/gpt-neox-20b"
 cache_options:
   batch_size: 32
-  num_shard_groups: 16
+
 configs:
   arxiv:
     train_urls:

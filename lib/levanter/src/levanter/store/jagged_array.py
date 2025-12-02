@@ -65,7 +65,7 @@ def _prepare_batch(arrays, item_rank):
     if item_rank is None:
         item_rank = arrays[0].ndim
 
-    if item_rank != 1:
+    if item_rank > 1:
         shapes = np.array([data.shape[:-1] for data in arrays], dtype=np.int64)
     else:
 
@@ -299,7 +299,7 @@ class JaggedArrayStore:
         new_offsets = prepared.offsets
         shapes = prepared.shapes
 
-        if shapes is None and self.item_rank != 1:
+        if shapes is None and self.item_rank > 1:
             raise ValueError("Shapes must be provided for non-vector data")
         elif shapes is not None and shapes.shape[1] != self.item_rank - 1:
             raise ValueError(f"Shapes must have {self.item_rank - 1} dimensions, but got {shapes.shape[1]}")

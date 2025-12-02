@@ -1,18 +1,15 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import tempfile
 from typing import Any, Dict, Iterator, Sequence
 
 import numpy as np
 import pytest
-import ray
 
 from levanter.data import BatchProcessor, ShardedDataSource, batched
 from levanter.data.sharded_datasource import TextUrlDataSource
-from levanter.store.cache import CacheOptions, SerialCacheWriter, TreeStore, _get_builder_actor, build_or_load_cache
-from levanter.utils.py_utils import logical_cpu_core_count
+from levanter.store.cache import SerialCacheWriter, TreeStore, build_or_load_cache
 
 
 class TestProcessor(BatchProcessor[Sequence[int], dict[str, np.ndarray]]):
@@ -60,16 +57,6 @@ def process_interleave(processor, source, batch_size):
                 finished += 1
 
 
-def setup_module(module):
-    ray.init(
-        "local", num_cpus=max(2 * logical_cpu_core_count(), 8), ignore_reinit_error=True
-    )  # 2x cpu count is faster on my m1
-
-
-def teardown_module(module):
-    ray.shutdown()
-
-
 class SimpleProcessor(BatchProcessor[Sequence[int], dict[str, np.ndarray]]):
     def __call__(self, batch: Sequence[Sequence[int]]) -> Sequence[dict[str, Sequence[int]]]:
         return [{"data": x} for x in batch]
@@ -102,7 +89,6 @@ class SimpleShardSource(ShardedDataSource[list[int]]):
         return ([shard_num * 10 + i] * 10 for i in range(row, self._rows_per_shard))
 
 
-@pytest.mark.ray
 def test_serial_cache_writer():
     with tempfile.TemporaryDirectory() as tmpdir1:
         source = SimpleShardSource(num_shards=4)
@@ -126,56 +112,49 @@ def test_serial_cache_writer():
             np.testing.assert_array_equal(x["data"], np.asarray([i % 10 + i // 10 * 10] * 10))
 
 
-@pytest.mark.ray
 def test_full_end_to_end_cache():
     td = tempfile.TemporaryDirectory()
     with td as tmpdir:
-        ray_ds = build_or_load_cache(
+        cache = build_or_load_cache(
             tmpdir,
             SimpleShardSource(num_shards=15),
             TestProcessor(),
-            await_finished=True,
-            options=CacheOptions(num_shard_groups=3, batch_size=8),
         )
 
         expected = simple_process(TestProcessor(), SimpleShardSource(num_shards=15))
 
-        all_data = ray_ds[:]
+        all_data = cache[:]
 
         check_datasets_equal(all_data, expected)
 
 
-@pytest.mark.ray
 def test_full_end_to_end_cache_with_groups():
     td = tempfile.TemporaryDirectory()
     with td as tmpdir:
-        ray_ds = build_or_load_cache(
+        cache = build_or_load_cache(
             tmpdir,
             SimpleShardSource(num_shards=5),
             TestProcessor(),
-            await_finished=True,
-            options=CacheOptions(num_shard_groups=2, batch_size=8),
         )
 
         expected = simple_process(TestProcessor(), SimpleShardSource(num_shards=5))
 
-        all_data = ray_ds[:]
+        all_data = cache[:]
 
         check_datasets_equal(all_data, expected)
 
 
-@pytest.mark.ray
 def test_cache_remembers_its_cached():
     directory = tempfile.TemporaryDirectory()
     with directory as tmpdir:
-        ds1 = build_or_load_cache(tmpdir, SimpleShardSource(), TestProcessor(), await_finished=True)
+        ds1 = build_or_load_cache(tmpdir, SimpleShardSource(), TestProcessor())
 
         class ThrowingProcessor(TestProcessor):
             def __call__(self, batch: Sequence[Sequence[int]]):
                 raise RuntimeError("This should not be called")
 
         # testing this doesn't throw
-        ds2 = build_or_load_cache(tmpdir, SimpleShardSource(), ThrowingProcessor(), await_finished=True)
+        ds2 = build_or_load_cache(tmpdir, SimpleShardSource(), ThrowingProcessor())
 
         check_datasets_equal(ds1, ds2)
 
@@ -194,7 +173,6 @@ class _CustomException(Exception):
     pass
 
 
-@pytest.mark.ray
 def test_cache_recover_from_crash():
     class CrashingShardSource(ShardedDataSource[list[int]]):
         def __init__(self, crash_point: int):
@@ -216,34 +194,22 @@ def test_cache_recover_from_crash():
     with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as tmpdir2:
         source = CrashingShardSource(4)
         with pytest.raises(_CustomException):
-            build_or_load_cache(tmpdir, source, TestProcessor(), CacheOptions(target_size_per_flush=1))
-
-        # kill the broker actor so that we can test recovery
-        ray.kill(
-            _get_builder_actor(tmpdir, source, TestProcessor()),
-            no_restart=True,
-        )
+            build_or_load_cache(tmpdir, source, TestProcessor())
 
         source = CrashingShardSource(5)
         with pytest.raises(_CustomException):
             build_or_load_cache(tmpdir, source, TestProcessor())
 
-        ray.kill(
-            _get_builder_actor(tmpdir, source, TestProcessor()),
-            no_restart=True,
-        )
-
         # testing this doesn't throw
         source = CrashingShardSource(100000)
-        reader1 = build_or_load_cache(tmpdir, source, TestProcessor(), await_finished=True)
+        reader1 = build_or_load_cache(tmpdir, source, TestProcessor())
 
         # compare to the original with no crash
-        reader2 = build_or_load_cache(tmpdir2, SimpleShardSource(num_shards=4), TestProcessor(), await_finished=True)
+        reader2 = build_or_load_cache(tmpdir2, SimpleShardSource(num_shards=4), TestProcessor())
 
         check_datasets_equal(reader1, reader2)
 
 
-@pytest.mark.ray
 def test_no_hang_if_empty_shard_source():
     class EmptyShardSource(ShardedDataSource[list[int]]):
         @property
@@ -258,102 +224,6 @@ def test_no_hang_if_empty_shard_source():
         assert list(reader) == []
 
 
-@pytest.mark.ray
-def test_chunk_ordering_is_correct_with_slow_shards():
-    class SlowShardSource(ShardedDataSource[list[int]]):
-        @property
-        def shard_names(self) -> Sequence[str]:
-            return ["shard_0", "shard_1"]
-
-        def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[list[int]]:
-            assert shard_name in self.shard_names
-            max_count = 40 if shard_name == "shard_1" else 20
-            shard_id = int(shard_name.split("_")[1])
-            for i in range(0, max_count):
-                yield [i * 10 + shard_id] * 10
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        processor = TestProcessor()
-        cache = build_or_load_cache(
-            tmpdir,
-            SlowShardSource(),
-            processor,
-            await_finished=False,
-            options=CacheOptions.no_fanciness(16),
-        )
-
-        # now block until the cache is done
-        cache.await_finished(timeout=30)
-
-        expected = simple_process(processor, SlowShardSource())
-
-        check_datasets_equal(list(cache[:]), expected)
-
-
-@pytest.mark.asyncio
-@pytest.mark.ray
-async def test_can_get_elems_before_finished():
-    @ray.remote(num_cpus=0)
-    class Blocker:
-        def __init__(self):
-            self.future = asyncio.Future()
-
-        async def block(self):
-            await self.future
-
-        def unblock(self):
-            self.future.set_result(None)
-
-    blocker_to_wait_on_test = Blocker.remote()
-
-    class SlowShardSource(ShardedDataSource[list[int]]):
-        @property
-        def shard_names(self) -> Sequence[str]:
-            return ["shard_0"]
-
-        def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[list[int]]:
-            for i in range(10):
-                yield [i] * 10
-            ray.get(blocker_to_wait_on_test.block.remote())
-            for i in range(10, 20):
-                yield [i] * 10
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cache = build_or_load_cache(
-            tmpdir,
-            SlowShardSource(),
-            TestProcessor(),
-            await_finished=False,
-            options=CacheOptions(target_size_per_flush=1, batch_size=1),
-        )
-
-        # read the first 10 elements
-        # ensure the first 10 elements are [{"test": np.array([i] * 10)} for i in range(10)]
-        first_10 = list(await asyncio.wait_for(cache.get_batch(range(0, 10)), timeout=30.0))
-
-        for i, x in enumerate(first_10):
-            np.testing.assert_array_equal(x["test"], np.array([i] * 10))
-
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(cache.get_batch(range(10, 20)), timeout=0.1)
-
-        # then unblock:
-        ray.get(blocker_to_wait_on_test.unblock.remote())
-
-        # now ensure we can get the next 10 elements, which will be
-        # [{"test": np.array([i] * 10)} for i in range(10, 20)]
-        batch = await asyncio.wait_for(cache.get_batch(range(10, 20)), timeout=10.0)
-
-        for i, x in enumerate(batch):
-            np.testing.assert_array_equal(x["test"], np.array([i + 10] * 10))
-
-        ray.get(blocker_to_wait_on_test.block.remote())
-
-        # now wait until the cache is finished. mostly so that the tempdir cleanup works
-        cache.await_finished(timeout=10)
-
-
-@pytest.mark.ray
 def test_shard_cache_crashes_if_processor_throws():
     class ThrowingProcessor(SimpleProcessor):
         def __call__(self, batch: Sequence[Sequence[int]]):
@@ -361,11 +231,9 @@ def test_shard_cache_crashes_if_processor_throws():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         with pytest.raises(RuntimeError):
-            build_or_load_cache(tmpdir, SimpleShardSource(), ThrowingProcessor(), await_finished=True)
+            build_or_load_cache(tmpdir, SimpleShardSource(), ThrowingProcessor())
 
 
-@pytest.mark.ray
-@pytest.mark.skip("This test segfaults in CI. I think a ray bug")
 def test_shard_cache_fails_with_multiple_shards_with_the_same_name():
     with tempfile.TemporaryDirectory() as tmpdir:
         with open(f"{tmpdir}/data.txt", "w") as f:
@@ -383,10 +251,9 @@ def test_shard_cache_fails_with_multiple_shards_with_the_same_name():
                 [f"{tmpdir}/data.txt", f"{tmpdir}/data.txt.1"],
             )
 
-            build_or_load_cache(tmpdir, dataset, TestProcessor(), await_finished=True)
+            build_or_load_cache(tmpdir, dataset, TestProcessor())
 
 
-@pytest.mark.ray
 @pytest.mark.asyncio
 async def test_shard_cache_fails_gracefully_with_unknown_file_type_async():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -398,23 +265,12 @@ async def test_shard_cache_fails_gracefully_with_unknown_file_type_async():
         )
 
         with pytest.raises(ValueError):
-            build_or_load_cache(tmpdir, dataset, TestProcessor(), await_finished=True)
-
-        # now make sure it works in non-blocking mode
-
-        cache = build_or_load_cache(tmpdir, dataset, TestProcessor(), await_finished=False)
+            build_or_load_cache(tmpdir, dataset, TestProcessor())
 
         with pytest.raises(ValueError):
-            await cache.get_batch([0])
-
-        with pytest.raises(ValueError):
-            cache.await_finished(timeout=10)
-
-        del cache
+            build_or_load_cache(tmpdir, dataset, TestProcessor())
 
 
-@pytest.mark.skip("This test segfaults in CI. I think a ray bug")
-@pytest.mark.ray
 def test_shard_cache_fails_gracefully_with_unknown_file_type():
     with tempfile.TemporaryDirectory() as tmpdir:
         with open(f"{tmpdir}/data.not_a_real_extension", "w") as f:
@@ -425,16 +281,7 @@ def test_shard_cache_fails_gracefully_with_unknown_file_type():
         )
 
         with pytest.raises(ValueError):
-            build_or_load_cache(tmpdir, dataset, TestProcessor(), await_finished=True)
-
-        # now make sure it works in non-blocking mode
-
-        cache = build_or_load_cache(tmpdir, dataset, TestProcessor(), await_finished=False)
+            build_or_load_cache(tmpdir, dataset, TestProcessor())
 
         with pytest.raises(ValueError):
-            cache.get_batch_sync([0])
-
-        with pytest.raises(ValueError):
-            cache.await_finished(timeout=10)
-
-        del cache
+            build_or_load_cache(tmpdir, dataset, TestProcessor())

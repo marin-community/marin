@@ -197,6 +197,10 @@ def _choose_port(id):
 _already_initialized = False
 
 
+def _setup_logger():
+    logging.basicConfig(level=logging.INFO)
+
+
 def auto_ray_cluster(
     address: Optional[str] = None,
     namespace: Optional[str] = "levanter",
@@ -295,7 +299,12 @@ def auto_ray_cluster(
     # Ray has retry logic, but it doesn't seem to work super well, so we retry manually
     for i in range(0, 5):
         try:
-            ray.init(address=address, namespace=namespace, **kwargs)
+            ray.init(
+                address=address,
+                namespace=namespace,
+                runtime_env={"worker_process_setup_hook": _setup_logger},
+                **kwargs,
+            )
             break
         except Exception as e:
             if i == 4:

@@ -448,7 +448,7 @@ def mk_dataset(config: TrainArgs, tokenizer: transformers.PreTrainedTokenizerBas
         }
 
     dataset = dataset.map_batches(preprocess, batch_size=128, num_cpus=num_cpus_used_by_tokenizer(tokenizer))
-    dataset = dataset.build_or_load_cache(config.data_cache_dir, await_finished=True)
+    dataset = dataset.build_or_load_cache(config.data_cache_dir)
 
     dataset = SupervisedDataset(dataset, tokenizer, mask_inputs=config.mask_inputs)
 

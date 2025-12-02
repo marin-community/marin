@@ -146,7 +146,7 @@ def mk_dataset(config: TrainArgs, tokenizer: transformers.PreTrainedTokenizerBas
         }
 
     dataset = dataset.map_batches(preprocess, batch_size=128, num_cpus=num_cpus_used_by_tokenizer(tokenizer))  # type: ignore
-    dataset = dataset.build_or_load_cache(config.data_cache_dir, await_finished=True)  # type: ignore
+    dataset = dataset.build_or_load_cache(config.data_cache_dir)  # type: ignore
 
     def _prepare_example(ex: dict) -> LmExample:
         """

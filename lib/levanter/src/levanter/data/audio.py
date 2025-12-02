@@ -8,7 +8,7 @@ import logging
 import os
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 import braceexpand
 import datasets
@@ -22,11 +22,11 @@ from haliax import Axis
 from jaxtyping import PRNGKeyArray
 from typing_extensions import TypedDict
 
+
 from levanter.compat.hf_checkpoints import load_processor, load_tokenizer
 from levanter.data import AsyncDataset
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.dataset import MappedAsyncDataset
-from levanter.data.metrics_monitor import LoggerMetricsMonitor, LoggingMetricsMonitor, MetricsMonitor
 from levanter.data.mixture import MixtureDataset, StopStrategy
 from levanter.data.sharded_datasource import AudioTextUrlDataSource, ShardedDataSource, WrappedHFDataSource
 from levanter.data.text import BatchTokenizer
@@ -252,7 +252,6 @@ class AudioTaskConfig(abc.ABC):
     @abc.abstractmethod
     def train_set(
         self,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         options: CacheOptions = CacheOptions.default(),
         *,
         key: Optional[PRNGKeyArray] = None,
@@ -260,9 +259,7 @@ class AudioTaskConfig(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def validation_sets(
-        self, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Mapping[str, AsyncDataset[np.ndarray]]:
+    def validation_sets(self) -> Mapping[str, AsyncDataset[np.ndarray]]:
         pass
 
 
@@ -303,8 +300,6 @@ class ProcessedAudioCache(AsyncDataset[AudioTextDict]):
         tokenizer: PreTrainedTokenizerBase,
         enforce_bos=True,
         enforce_eos=True,
-        monitors=None,
-        await_finished=True,
         override_resources=None,
         max_length=448,
         cache_options: CacheOptions = CacheOptions.default(),
@@ -318,10 +313,7 @@ class ProcessedAudioCache(AsyncDataset[AudioTextDict]):
             override_resources=override_resources,
             max_length=max_length,
         )
-        monitors = monitors or []
-        cache = build_or_load_cache(
-            cache_dir, source, bp, await_finished=await_finished, monitors=monitors, options=cache_options
-        )
+        cache = build_or_load_cache(cache_dir, source, bp, options=cache_options)
         if cache.is_finished:
             logger.info(f"Cache {cache_dir} is complete.")
         else:
@@ -360,22 +352,21 @@ class AudioIODatasetConfig(AudioDatasetSourceConfig, AudioTaskConfig):
 
     def train_set(
         self,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         options: CacheOptions = CacheOptions.default(),
         *,
         key: Optional[PRNGKeyArray] = None,
     ) -> ProcessedAudioCache:
-        ds = self.build_or_load_cache(self.train_split, monitors=monitors)
+        ds = self.build_or_load_cache(self.train_split)
         if ds is None:
             raise ValueError("No training set!")
         return ds
 
-    def validation_set(self, monitors: Union[bool, List[MetricsMonitor]] = True) -> Optional[ProcessedAudioCache]:
-        return self.build_or_load_cache(self.validation_split, monitors=monitors)
+    def validation_set(self) -> Optional[ProcessedAudioCache]:
+        return self.build_or_load_cache(self.validation_split)
 
-    def validation_sets(self, monitors: Union[bool, List[MetricsMonitor]] = True) -> Mapping[str, ProcessedAudioCache]:
+    def validation_sets(self) -> Mapping[str, ProcessedAudioCache]:
         if self._has_validation_set:
-            validation_set = self.validation_set(monitors)
+            validation_set = self.validation_set()
             if validation_set is not None:
                 return {"": validation_set}
         return {}
@@ -400,12 +391,10 @@ class AudioIODatasetConfig(AudioDatasetSourceConfig, AudioTaskConfig):
     def build_or_load_cache(
         self,
         split: str,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         logger_name: Optional[str] = None,
         cache_options: CacheOptions = CacheOptions.default(),
     ) -> Optional[ProcessedAudioCache]:
         split_cache_dir = os.path.join(self.cache_dir, split)
-        name = logger_name or os.path.basename(self.cache_dir)
 
         try:
             return ProcessedAudioCache.load(split_cache_dir)
@@ -419,14 +408,6 @@ class AudioIODatasetConfig(AudioDatasetSourceConfig, AudioTaskConfig):
 
         logger.info(f"Building cache for {split}...")
 
-        if monitors is True:
-            monitors = [
-                LoggingMetricsMonitor(prefix=f"preprocessing/{name}/{split}", commit=False),
-                LoggerMetricsMonitor(f"preprocessing.{name}.{split}"),
-            ]
-        elif monitors is False:
-            monitors = []
-
         return ProcessedAudioCache.build_or_load(
             split_cache_dir,
             source,
@@ -434,8 +415,6 @@ class AudioIODatasetConfig(AudioDatasetSourceConfig, AudioTaskConfig):
             self.the_tokenizer,
             enforce_bos=self.enforce_bos,
             enforce_eos=self.enforce_eos,
-            monitors=monitors,
-            await_finished=(split == "validation"),
             max_length=self.max_length,
             cache_options=cache_options,
         )
@@ -511,12 +490,11 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
 
     def train_set(
         self,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         options: CacheOptions = CacheOptions.default(),
         *,
         key: Optional[PRNGKeyArray] = None,
     ) -> AsyncDataset[AudioTextDict]:
-        audio_datasets = self.training_sets(monitors)
+        audio_datasets = self.training_sets()
 
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -550,19 +528,15 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
 
         return mixture
 
-    def training_sets(self, monitors: Union[bool, List[MetricsMonitor]] = True) -> Mapping[str, ProcessedAudioCache]:
-        doc_caches = self.build_caches("train", monitors=monitors)
+    def training_sets(self) -> Mapping[str, ProcessedAudioCache]:
+        doc_caches = self.build_caches("train")
         return doc_caches
 
-    def validation_sets(
-        self, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Mapping[str, AsyncDataset[np.ndarray]]:
-        doc_caches = self.build_caches("validation", monitors=monitors)
+    def validation_sets(self) -> Mapping[str, AsyncDataset[np.ndarray]]:
+        doc_caches = self.build_caches("validation")
         return doc_caches
 
-    def build_caches(
-        self, split: str, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Dict[str, ProcessedAudioCache]:
+    def build_caches(self, split: str) -> Dict[str, ProcessedAudioCache]:
         # this is a bit gross, but we want to forward all "Task" config fields to the AudioIODatasetConfig for building.
         # We do this by just grabbing all the fields from the AudioTaskConfig and forwarding them.
         task_config_fields = set(x.name for x in dataclasses.fields(AudioTaskConfig))
@@ -592,11 +566,11 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
                 **task_config_dict,
             )
             if split == "train":
-                cache = dataset.build_or_load_cache(dataset.train_split, monitors)
+                cache = dataset.build_or_load_cache(dataset.train_split)
             elif split == "validation":
-                cache = dataset.build_or_load_cache(dataset.validation_split, monitors)
+                cache = dataset.build_or_load_cache(dataset.validation_split)
             else:
-                cache = dataset.build_or_load_cache(split, monitors)
+                cache = dataset.build_or_load_cache(split)
             # drop the data source and corresponding weight if the cache is not built
             if cache is None:
                 logger.warning(f"Skipping {name} for split {split} because no source was provided")

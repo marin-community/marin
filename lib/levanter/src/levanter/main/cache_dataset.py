@@ -6,7 +6,6 @@ import os
 from dataclasses import dataclass, field
 
 import levanter
-from levanter.data.metrics_monitor import LoggingMetricsMonitor
 from levanter.data.text import BatchTokenizer, SingleDatasetLMConfigBase
 from levanter.distributed import RayConfig
 from levanter.store.cache import build_or_load_cache
@@ -41,19 +40,12 @@ def main(args: RayCachedLMDatasetConfig):
             logger.warning(f"Skipping {split} because it is empty.")
             continue
 
-        monitors: list = []
-        if not isinstance(args.tracker, NoopConfig):
-            monitors.append(LoggingMetricsMonitor("preprocess/" + split, commit=True))
-
-        cache = build_or_load_cache(
+        build_or_load_cache(
             cache_dir=split_cache_dir,
             source=source,
             processor=batch_tokenizer,
-            await_finished=False,
-            monitors=monitors,
         )
 
-        cache.await_finished()
         print(f"Finished caching {split} to {split_cache_dir}.")
 
 
