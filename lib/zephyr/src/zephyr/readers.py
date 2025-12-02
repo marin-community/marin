@@ -129,23 +129,19 @@ def load_parquet(file_path: str, **kwargs) -> Iterator[dict]:
 
 
 SUPPORTED_EXTENSIONS = tuple(
-    sorted(
-        [
-            ".json",
-            ".json.gz",
-            ".json.xz",
-            ".json.zst",
-            ".json.zstd",
-            ".jsonl",
-            ".jsonl.gz",
-            ".jsonl.xz",
-            ".jsonl.zst",
-            ".jsonl.zstd",
-            ".parquet",
-        ],
-        key=len,
-        reverse=True,
-    )
+    [
+        ".json",
+        ".json.gz",
+        ".json.xz",
+        ".json.zst",
+        ".json.zstd",
+        ".jsonl",
+        ".jsonl.gz",
+        ".jsonl.xz",
+        ".jsonl.zst",
+        ".jsonl.zstd",
+        ".parquet",
+    ]
 )
 
 

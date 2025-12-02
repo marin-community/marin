@@ -294,7 +294,7 @@ def _record_id(record: dict) -> str:
 
 
 def _get_extension(file_path: str) -> str:
-    for ext in SUPPORTED_EXTENSIONS:
+    for ext in sorted(SUPPORTED_EXTENSIONS, key=len, reverse=True):
         if file_path.endswith(ext):
             return ext
     raise ValueError(f"Unsupported extension: {file_path}.")
