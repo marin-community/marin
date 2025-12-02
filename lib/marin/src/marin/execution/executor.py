@@ -99,6 +99,7 @@ import time
 import traceback
 import copy
 import urllib.parse
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
@@ -1148,27 +1149,29 @@ def _setup_logging():
 
 
 def _detect_local_resources() -> dict[str, float]:
-    from marin.resources_utils import torch_device_name_to_ray_accel_type
+
+    from marin.resources_utils import jax_device_kind_to_ray_accel_type
 
     resources: dict[str, float] = {"head_node": 1.0}
     try:
-        import torch
+        import jax
 
-        if not torch.cuda.is_available():
-            return resources
-        gpu_count = torch.cuda.device_count()
-        if gpu_count == 0:
-            return resources
-        # TODO: assuming same GPU type
-        device_name = torch.cuda.get_device_name(0)
-        accel_type = torch_device_name_to_ray_accel_type(device_name)
-        if accel_type:
-            logger.info(f"Auto-detected {gpu_count} GPU(s): '{device_name}' -> accelerator_type:{accel_type}")
-            resources[f"accelerator_type:{accel_type}"] = gpu_count
-        else:
-            logger.warning(f"Could not map GPU '{device_name}' to a known Ray accelerator type.")
+        # Group devices by their device_kind
+        devices_by_kind: defaultdict[str, list] = defaultdict(list)
+        for d in jax.devices():
+            if d.platform != "cpu":
+                devices_by_kind[d.device_kind].append(d)
+
+        for device_kind, devices in devices_by_kind.items():
+            accel_type = jax_device_kind_to_ray_accel_type(device_kind)
+            if accel_type:
+                logger.info(f"Auto-detected {len(devices)} device(s): '{device_kind}' -> accelerator_type:{accel_type}")
+                resources[f"accelerator_type:{accel_type}"] = len(devices)
+            else:
+                logger.warning(f"Could not map '{device_kind}' to a known Ray accelerator type.")
+
     except ImportError:
-        logger.warning("torch is not installed. GPU detection skipped.")
+        logger.warning("jax is not installed. Accelerator detection skipped.")
     return resources
 
 

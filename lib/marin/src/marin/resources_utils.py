@@ -80,18 +80,26 @@ ray_device_name_to_jax_name_map: dict[AcceleratorType, str] = {
 FlopDtype = Literal["bf16", "fp16", "fp32", "int8", "int4", "fp8"]
 
 
-def torch_device_name_to_ray_accel_type(device_name: str) -> AcceleratorType | None:
-    """Map a torch CUDA device name to a Ray accelerator type.
+def jax_device_kind_to_ray_accel_type(device_kind: str) -> AcceleratorType | None:
+    """Map a JAX device kind to a Ray accelerator type.
+
+    Works for both GPUs and TPUs by doing a reverse lookup in ray_device_name_to_jax_name_map.
 
     Args:
-        device_name: The torch device name (e.g., "NVIDIA A100-SXM4-80GB")
+        device_kind: The JAX device kind (e.g., "NVIDIA A100-SXM4-80GB" or "TPU v4")
 
     Returns:
-        The Ray accelerator type (e.g., "A100-80G") or None if not recognized
+        The Ray accelerator type (e.g., "A100-80G" or "TPU-V4") or None if not recognized
     """
-    device_upper = device_name.upper()
+    device_upper = device_kind.upper()
+    device_lower = device_kind.lower()
+
     # Check more specific patterns first (longer names like "A100-80G" before "A100")
-    for ray_type in sorted(ray_device_name_to_jax_name_map.keys(), key=len, reverse=True):
+    for ray_type, jax_name in sorted(ray_device_name_to_jax_name_map.items(), key=lambda x: len(x[0]), reverse=True):
+        # For TPUs: do case-insensitive match against the jax_name (e.g., "tpu v4")
+        if jax_name.lower() == device_lower:
+            return ray_type
+        # For GPUs: check if all parts of the ray_type are in the device name
         # "A100-80G" -> check for "A100" and "80G" in device name
         if all(part in device_upper for part in ray_type.upper().replace("-", " ").split()):
             return ray_type
