@@ -88,7 +88,7 @@ def main(config: VizLmConfig):
                 logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
 
                 loss = next_token_loss(
-                    model.max_Pos,
+                    model.Pos,
                     model.Vocab,
                     logits=logits,
                     true_ids=example.tokens,
