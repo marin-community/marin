@@ -75,12 +75,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         # Run the harness with the model and the specified evals
 
         try:
-            # Download the model from GCS or HuggingFace
-            print("before download")
-            model_name_or_path: str = self.download_model(model)
-            print(f"in lm_eval: {model_name_or_path}")
+            model_name_or_path: str = self.download_model_if_necessary(model)
             name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
-            print(name)
             logger.info(f"WandB Run Name: {name}")
             logger.info(f"Running eval harness on model: {model_name_or_path}")
             print("after wandb log")
@@ -99,9 +95,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
             logger.info(f"Tasks: {tasks}")
-            print("converted tasks")
 
-            model_path = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.path)
+            model_path = model_name_or_path
 
             logger.info(f"Model path: {model_path}")
             logger.info(f"Levanter Cache Path: {LevanterTpuEvaluator.CACHE_PATH}")
