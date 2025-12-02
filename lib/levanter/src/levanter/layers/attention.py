@@ -568,7 +568,26 @@ def _te_flash_attention(
     # For non-packed sequences, all sequences have full length.
     q_seqlens = jnp.full((B,), Sq, dtype=jnp.int32)
     kv_seqlens = jnp.full((B,), Sk, dtype=jnp.int32)
-    sequence_descriptor = SequenceDescriptor.from_seqlens((q_seqlens, kv_seqlens))
+
+    # Extract segment_ids from mask if present
+    segment_ids_for_te = None
+    if isinstance(mask, AttentionMask) and mask.segment_ids is not None:
+        q_segment_ids, kv_segment_ids = map(lambda x: x.astype(jnp.int32), mask.segment_ids)
+
+        batch_axes = tuple(q_class["B"])
+        for ax in batch_axes:
+            if ax.name not in q_segment_ids.axes:
+                q_segment_ids = q_segment_ids.broadcast_axis(ax)
+            if ax.name not in kv_segment_ids.axes:
+                kv_segment_ids = kv_segment_ids.broadcast_axis(ax)
+
+        q_seg_reshaped = _maybe_flatten(q_segment_ids, batch_axes, "B")
+        q_seg_reshaped = q_seg_reshaped.rearrange(("B", QPos)).array
+        kv_seg_reshaped = _maybe_flatten(kv_segment_ids, batch_axes, "B")
+        kv_seg_reshaped = kv_seg_reshaped.rearrange(("B", KPos)).array
+        segment_ids_for_te = (q_seg_reshaped, kv_seg_reshaped)
+
+    sequence_descriptor = SequenceDescriptor.from_seqlens((q_seqlens, kv_seqlens), segment_ids=segment_ids_for_te)
 
     attn_output = fused_attn(
         (q_, k_, v_),
