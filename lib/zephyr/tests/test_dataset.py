@@ -299,6 +299,25 @@ def test_reshard(backend):
     assert sorted(result) == list(range(10))
 
 
+def test_reshard_noop(backend):
+    """Test reshard with None is a noop, and non-positive values raise ValueError"""
+
+    def yield_1(it):
+        yield from [1]
+
+    ds = Dataset.from_list(range(10)).reshard(None).map_shard(yield_1)
+    assert sum(list(backend.execute(ds))) == 10
+
+    ds = Dataset.from_list(range(10)).reshard(2).map_shard(yield_1)
+    assert sum(list(backend.execute(ds))) == 2
+
+    with pytest.raises(ValueError, match="num_shards must be positive"):
+        Dataset.from_list(range(10)).reshard(-5)
+
+    with pytest.raises(ValueError, match="num_shards must be positive"):
+        Dataset.from_list(range(10)).reshard(0)
+
+
 def process_item(x):
     """Simulate some processing."""
     return {"value": x, "squared": x * x, "label": "even" if x % 2 == 0 else "odd"}
