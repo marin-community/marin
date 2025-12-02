@@ -226,7 +226,7 @@ def test_llama_roundtrip(scan_layers, num_kv_heads):
     converter = LlamaConfig().hf_checkpoint_converter()
 
     config = LlamaConfig(
-        seq_len=128,
+        max_seq_len=128,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
@@ -351,7 +351,7 @@ def test_state_dict_consistency(scan_layers, num_kv_heads):
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_llama_seq_len_doesnt_change_predictions(num_kv_heads):
     config = LlamaConfig(
-        seq_len=128,
+        max_seq_len=128,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
