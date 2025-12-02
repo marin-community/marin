@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Sequence
@@ -26,11 +27,6 @@ from typing import Any, Literal, NewType
 
 logger = logging.getLogger(__name__)
 
-# Job types
-JobId = NewType("JobId", str)
-JobStatus = Literal["pending", "running", "succeeded", "failed", "stopped"]
-
-# Device type literals
 TpuType = Literal[
     "v4-8",
     "v4-16",
@@ -160,13 +156,15 @@ TpuType = Literal[
 ]
 
 GpuType = Literal[
-    "A100",
-    "H100",
-    "V100",
-    "T4",
-    "L4",
-    "A10G",
     "A10",
+    "A100",
+    "A10G",
+    "B100",
+    "H100",
+    "H200",
+    "L4",
+    "T4",
+    "V100",
 ]
 
 
@@ -193,13 +191,11 @@ class TpuConfig:
         type: TPU accelerator type (e.g., "v5e-16", "v4-8")
         count: Number of TPU chips to request
         topology: Optional topology specification (e.g., "2x2x1")
-        num_slices: Number of TPU slices for multi-slice execution (supports sequences for fallback)
     """
 
     type: TpuType
     count: int
     topology: str | None = None
-    num_slices: int | Sequence[int] = 1
 
 
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig
@@ -214,7 +210,7 @@ class ResourceConfig:
         ram: RAM requirement (e.g., "8g", "16g")
         disk: Disk space requirement (e.g., "10g", "100g")
         device: Device configuration (CPU, GPU, or TPU)
-        count: Number of workers with these resources
+        replicas: Number of replicas (individual pods with these resources)
         regions: Preferred cloud regions for job placement
     """
 
@@ -222,7 +218,7 @@ class ResourceConfig:
     ram: str = "128m"
     disk: str = "1g"
     device: DeviceConfig = field(default_factory=CpuConfig)
-    count: int = 1
+    replicas: int = 1
     regions: Sequence[str] | None = None
 
 
@@ -238,14 +234,14 @@ class EnvironmentConfig:
         docker_image: Docker image for containerized execution
         pip_packages: Additional pip packages to install
         env_vars: Environment variables to set
-        extra_dependency_groups: Extra dependency groups for uv (e.g., ["tpu", "eval"])
+        extras: Extra dependency groups for uv (e.g., ["tpu", "eval"])
     """
 
     workspace: str | None = None
     docker_image: str | None = None
     pip_packages: Sequence[str] = field(default_factory=list)
     env_vars: dict[str, str] = field(default_factory=dict)
-    extra_dependency_groups: Sequence[str] = field(default_factory=list)
+    extras: Sequence[str] = field(default_factory=list)
 
     def __post_init__(self):
         if self.workspace and self.docker_image:
@@ -258,30 +254,22 @@ class EnvironmentConfig:
 class Entrypoint:
     """Job entrypoint specification.
 
-    Supports two execution modes:
-    - Command line: Execute any binary with arguments (e.g., "python", "uv", "bash")
-    - Function call: Execute a zero-argument callable directly (for TPU/Ray remote execution)
-
-    Exactly one of (binary, callable) must be specified.
-
     Args:
         binary: Binary to execute (e.g., "python", "uv", "bash")
         args: Command-line arguments for the binary
-        callable: Zero-argument callable for direct execution (use closures for arguments)
+        callable: Callable for direct execution
+        function_args: Keyword arguments to pass to callable
 
     Examples:
-        # Command-line execution
         Entrypoint(binary="python", args=["train.py", "--config", "config.yaml"])
-        Entrypoint(binary="uv", args=["run", "python", "script.py"])
-
-        # Function execution (with closure for arguments)
-        config = Config(...)
+        Entrypoint(callable=train_fn, function_args={"config": config, "epochs": 100})
         Entrypoint(callable=lambda: train_fn(config))
     """
 
     binary: str | None = None
     args: Sequence[str] = field(default_factory=list)
-    callable: Callable[[], Any] | None = None
+    callable: Callable[..., Any] | None = None
+    function_args: dict[str, Any] | None = None
 
     def __post_init__(self):
         if self.binary is None and self.callable is None:
@@ -290,6 +278,10 @@ class Entrypoint:
             raise ValueError("Cannot specify both binary and callable")
         if self.args and self.callable is not None:
             raise ValueError("args only valid with binary, not callable")
+        if self.function_args is not None and self.callable is None:
+            raise ValueError("function_args only valid with callable, not binary")
+        if self.function_args is not None and not isinstance(self.function_args, dict):
+            raise ValueError("function_args must be a dictionary")
 
 
 @dataclass
@@ -309,13 +301,21 @@ class JobRequest:
     environment: EnvironmentConfig | None = None
 
 
+JobId = NewType("JobId", str)
+
+
+@dataclass
+class TaskStatus:
+    status: Literal["pending", "running", "succeeded", "failed", "stopped"]
+    error_message: str | None = None
+
+
 @dataclass
 class JobInfo:
     job_id: JobId
-    status: JobStatus
+    status: Literal["pending", "running", "succeeded", "failed", "stopped"]
+    tasks: list[TaskStatus]
     name: str
-    start_time: float | None = None
-    end_time: float | None = None
     error_message: str | None = None
 
 
@@ -324,61 +324,51 @@ def create_environment(
     docker_image: str | None = None,
     pip_packages: Sequence[str] | None = None,
     env_vars: dict[str, str] | None = None,
-    extra_dependency_groups: Sequence[str] | None = None,
+    extras: Sequence[str] | None = None,
 ) -> EnvironmentConfig:
-    """Create an EnvironmentConfig with sensible defaults.
+    """Create an EnvironmentConfig
 
-    Sets default environment variables commonly needed for ML workloads:
+    By default, sets the following environment variables:
     - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
+    - HF_TOKEN
+    - WANDB_API_KEY
 
     Args:
         workspace: Path to workspace root (default: current directory)
         docker_image: Docker image (mutually exclusive with workspace)
         pip_packages: Additional pip packages to install
         env_vars: Custom environment variables (merged with defaults)
-        extra_dependency_groups: Extra dependency groups for uv
+        extras: Extra dependency groups for uv
 
     Returns:
         EnvironmentConfig with defaults applied
     """
-    import os
 
-    # Use current directory as workspace if neither workspace nor docker_image specified
     if workspace is None and docker_image is None:
         workspace = os.getcwd()
 
-    # Default environment variables for ML workloads
     default_env_vars = {
         "HF_DATASETS_TRUST_REMOTE_CODE": "1",
         "TOKENIZERS_PARALLELISM": "false",
+        "HF_TOKEN": os.getenv("HF_TOKEN"),
+        "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
     }
 
-    # Merge user env vars with defaults (user values take precedence)
-    merged_env_vars = {**default_env_vars, **(env_vars or {})}
+    # Filter out None values - Ray requires all env var values to be strings
+    merged_env_vars = {k: v for k, v in {**default_env_vars, **(env_vars or {})}.items() if v is not None}
 
     return EnvironmentConfig(
         workspace=workspace,
         docker_image=docker_image,
         pip_packages=list(pip_packages or []),
         env_vars=merged_env_vars,
-        extra_dependency_groups=list(extra_dependency_groups or []),
+        extras=list(extras or []),
     )
 
 
 class Cluster(ABC):
-    """Abstract interface for cluster job scheduling.
-
-    Provides methods to launch jobs, monitor their progress, and manage
-    their lifecycle. Implementations include RayCluster and LocalCluster.
-
-    The Cluster abstraction is designed to handle both:
-    1. CLI-style job submissions (fire-and-forget batch jobs)
-    2. ray.remote-style function execution (distributed computation)
-
-    Any execution pattern that resembles job-level scheduling (as opposed
-    to task-level execution within a running job) should use this interface.
-    """
+    """Abstract interface for cluster job scheduling."""
 
     @abstractmethod
     def launch(self, request: JobRequest) -> JobId:
@@ -454,26 +444,18 @@ class Cluster(ABC):
 
     @abstractmethod
     @contextmanager
-    def connect(self) -> Iterator[None]:
-        """Establish connection to cluster.
-
-        For RayCluster, this creates SSH tunnels and sets up dashboard access.
-        For LocalCluster, this is a no-op.
-
-        Yields:
-            None - connection is active within context
-        """
+    def connect(self):
+        """Establish connection to cluster."""
         ...
 
     def wait(self, job_id: JobId) -> JobInfo:
         """Block until the specified job completes, returning its final status."""
         # default implementation polls until job is no longer running
-        logger.info(f"[WAIT] Starting wait for job {job_id}")
+        logger.info(f"Starting wait for job {job_id}")
 
         while True:
             info = self.poll(job_id)
-            logger.info(f"[WAIT] Job {job_id} status: {info.status}")
             if info.status in ["succeeded", "failed", "stopped"]:
-                logger.info(f"[WAIT] Job {job_id} completed with status {info.status}")
+                logger.info(f"Job {job_id} completed with status {info.status}")
                 return info
-            time.sleep(0.5)
+            time.sleep(1.0)

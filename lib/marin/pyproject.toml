@@ -32,7 +32,7 @@ dependencies = [
     "openai",
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow>=22",
-    "ray==2.45",
+    "ray>=2.45",
     "regex",
     "requests",
     "s3fs>=2024",
@@ -221,7 +221,7 @@ quality_dedup_consolidate = [
     "huggingface_hub",
     "nltk>=3.8.1",
     "transformers",
-    "zstandard>=0.23.0",
+    "zstandard>=0.18.0",
 ]
 
 tokenize_train = [

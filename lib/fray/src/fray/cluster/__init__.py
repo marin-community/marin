@@ -13,11 +13,6 @@
 # limitations under the License.
 
 """Fray cluster abstraction for job scheduling.
-
-The cluster module provides a clean interface for launching and managing
-jobs on different cluster backends. It supports both CLI-style job submissions
-and can be used to configure distributed computation patterns.
-
 Example:
     >>> from fray.cluster import LocalCluster, JobRequest, create_environment
     >>> cluster = LocalCluster()
@@ -31,6 +26,10 @@ Example:
     ...     print(line)
 """
 
+import logging
+import os
+from contextvars import ContextVar
+
 from fray.cluster.base import (
     Cluster,
     CpuConfig,
@@ -42,18 +41,69 @@ from fray.cluster.base import (
     JobId,
     JobInfo,
     JobRequest,
-    JobStatus,
     ResourceConfig,
     TpuConfig,
     TpuType,
     create_environment,
 )
-from fray.cluster.local import LocalCluster
+from fray.cluster.local_cluster import LocalCluster
 
-try:
-    from fray.cluster.ray.cluster import RayCluster
-except ImportError:
-    RayCluster = None
+logger = logging.getLogger(__name__)
+
+# Context variable for current cluster
+_cluster_context: ContextVar[Cluster | None] = ContextVar("fray_cluster", default=None)
+
+
+def set_current_cluster(cluster: Cluster) -> None:
+    _cluster_context.set(cluster)
+
+
+def current_cluster() -> Cluster:
+    """Get the current cluster from context.
+
+    Auto-detection priority:
+    1. Context variable (set via set_current_cluster())
+    2. Ray cluster (if ray.is_initialized())
+    3. FRAY_CLUSTER_SPEC environment variable
+    4. LocalCluster (default fallback)
+
+    Returns:
+        The cluster instance
+
+    Raises:
+        RuntimeError: If cluster creation fails
+    """
+    cluster = _cluster_context.get()
+    if cluster is not None:
+        return cluster
+
+    try:
+        import ray
+
+        if ray.is_initialized():
+            from fray.cluster.ray.cluster import RayCluster
+
+            cluster = RayCluster()
+            set_current_cluster(cluster)
+            logger.info("Auto-detected Ray cluster from ray.is_initialized()")
+            return cluster
+    except ImportError:
+        # Ray is not installed; fall back to other cluster types
+        pass
+
+    # Check for FRAY_CLUSTER_SPEC
+    cluster_spec = os.environ.get("FRAY_CLUSTER_SPEC")
+    if cluster_spec is not None:
+        cluster = create_cluster(cluster_spec)
+        set_current_cluster(cluster)
+        logger.info(f"Auto-created cluster from FRAY_CLUSTER_SPEC={cluster_spec}")
+        return cluster
+
+    # Default to LocalCluster
+    cluster = LocalCluster()
+    set_current_cluster(cluster)
+    logger.info("Using default LocalCluster")
+    return cluster
 
 
 def create_cluster(cluster_spec: str) -> Cluster:
@@ -62,33 +112,24 @@ def create_cluster(cluster_spec: str) -> Cluster:
     Args:
         cluster_spec: Cluster specification:
             - "local" -> LocalCluster
-            - "ray:region_name" -> RayCluster with config from infra/marin-{region}.yaml
-            - "ray:/path/to/config.yaml" -> RayCluster with explicit config
+            - "ray?namespace=x" -> RayCluster
 
     Returns:
         Configured cluster instance
-
-    Examples:
-        >>> create_cluster("local")
-        LocalCluster()
-        >>> create_cluster("ray:us-west2")
-        RayCluster(address="http://localhost:8265")
-        >>> create_cluster("ray:infra/my-cluster.yaml")
-        RayCluster(address="http://localhost:8265")
     """
-    if cluster_spec == "local":
+    from pathlib import Path
+    from urllib.parse import parse_qs, urlparse
+
+    parsed = urlparse(cluster_spec)
+    query_params = parse_qs(parsed.query)
+
+    if cluster_spec.startswith("local"):
         return LocalCluster()
 
     if cluster_spec.startswith("ray"):
         from fray.cluster.ray.cluster import RayCluster
-        from fray.cluster.ray.config import find_config_by_region
 
-        if cluster_spec.startswith("ray:"):
-            config_or_region = cluster_spec[4:]
-            config_path = find_config_by_region(config_or_region)
-            return RayCluster(config_path=config_path)
-        else:
-            return RayCluster()
+        return RayCluster.from_spec(query_params)
 
     raise ValueError(f"Unknown cluster spec: {cluster_spec}")
 
@@ -106,10 +147,11 @@ __all__ = [
     "JobRequest",
     "JobStatus",
     "LocalCluster",
-    "RayCluster",
     "ResourceConfig",
     "TpuConfig",
     "TpuType",
     "create_cluster",
     "create_environment",
+    "current_cluster",
+    "set_current_cluster",
 ]

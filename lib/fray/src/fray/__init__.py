@@ -14,6 +14,19 @@
 
 """Fray: Execution contexts for distributed and parallel computing."""
 
+from fray.cluster import (
+    Cluster,
+    CpuConfig,
+    Entrypoint,
+    EnvironmentConfig,
+    GpuConfig,
+    JobId,
+    JobRequest,
+    LocalCluster,
+    ResourceConfig,
+    TpuConfig,
+)
+from fray.isolated_env import TemporaryVenv
 from fray.job_context import (
     ContextConfig,
     ExecutionContext,
@@ -24,10 +37,20 @@ from fray.job_context import (
 )
 
 __all__ = [
+    "Cluster",
     "ContextConfig",
+    "CpuConfig",
+    "Entrypoint",
+    "EnvironmentConfig",
     "ExecutionContext",
+    "JobId",
+    "JobRequest",
+    "LocalCluster",
     "RayContext",
+    "ResourceConfig",
     "SyncContext",
+    "TemporaryVenv",
     "ThreadContext",
+    "TpuConfig",
     "create_context",
 ]
