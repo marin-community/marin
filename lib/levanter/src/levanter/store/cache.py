@@ -73,10 +73,7 @@ def build_or_load_cache(
 
     # Distributed coordination: only process 0 builds; others wait and then load.
     if jax.distributed.is_initialized() and jax.process_count() > 1:
-        if jax.process_index() == 0:
-            _distributed_build_cache(cache_dir, source, processor, options, metadata)
-        else:
-            _wait_for_leader_cache()
+        _distributed_build_cache(cache_dir, source, processor, options, metadata, is_leader=jax.process_index() == 0)
     else:
         build_cache(cache_dir, source, processor, options, metadata)
 
@@ -172,6 +169,9 @@ class CacheLedger:
     finished_shards: List[str] = dataclasses.field(default_factory=list)
     field_counts: Dict[str, int] = dataclasses.field(default_factory=dict)
     metadata: "CacheMetadata" = dataclasses.field(default_factory=lambda: CacheMetadata({}))
+
+    def __post_init__(self):
+        assert self.metadata.preprocessor_metadata is not None
 
     @staticmethod
     def load_or_initialize(cache_dir: str, source: ShardedDataSource, processor: BatchProcessor):
@@ -355,7 +355,7 @@ def _build_single_shard_cache(
     metadata: CacheMetadata,
 ):
     shard_path = os.path.join(temp_root, f"{shard_index:05d}_{_sanitize_shard_name(shard_name)}")
-    existing = _try_load(shard_path)
+    existing = _try_load(shard_path, metadata)
     if existing is not None:
         logger.info(f"Found existing shard cache for {shard_name} at {shard_path}. Skipping build.")
         return {"shard_name": shard_name, "path": shard_path, "ledger": existing, "index": shard_index}
@@ -513,28 +513,46 @@ def _distributed_build_cache(
     processor: BatchProcessor[T, U],
     options: CacheOptions,
     metadata: CacheMetadata,
+    is_leader: bool,
 ) -> CacheLedger:
     status = {"val": np.array(0, dtype=np.int32)}
-    stop_event = threading.Event()
+    lock = threading.Lock()
 
     def broadcaster():
-        while not stop_event.is_set():
-            broadcast_one_to_all(status["val"], is_source=True)
-            time.sleep(1)
-        broadcast_one_to_all(status["val"], is_source=True)
+        while True:
+            with lock:
+                received = broadcast_one_to_all(status["val"], is_source=is_leader)
+                status["val"] = received
+                if received != 0:
+                    break
 
-    b_thread = threading.Thread(target=broadcaster, daemon=True)
-    b_thread.start()
-    try:
-        ledger = build_cache(cache_dir, source, processor, options, metadata)
-        status["val"] = np.array(1, dtype=np.int32)
-    except Exception:
-        status["val"] = np.array(-1, dtype=np.int32)
-        raise
-    finally:
-        stop_event.set()
-    b_thread.join()
-    return ledger
+            time.sleep(10)
+
+        return status["val"]
+
+    if is_leader:
+        b_thread = threading.Thread(target=broadcaster, daemon=True)
+        b_thread.start()
+
+        try:
+            ledger = build_cache(cache_dir, source, processor, options, metadata)
+            with lock:
+                status["val"] = np.array(1, dtype=np.int32)
+        except Exception:
+            with lock:
+                status["val"] = np.array(-1, dtype=np.int32)
+            raise
+        finally:
+            b_thread.join()
+        return ledger
+    else:
+        status_out = broadcaster()
+        if status_out == 1:
+            return CacheLedger.load(cache_dir, metadata)
+        elif status_out == -1:
+            raise RuntimeError("Cache build failed on leader process.")
+        else:
+            raise RuntimeError("Unexpected status received during distributed cache build.")
 
 
 def _wait_for_leader_cache():
@@ -686,9 +704,9 @@ def _canonicalize_batch(batch: Union[dict, List[dict]]) -> List[dict]:
         return list(batch)
 
 
-def _try_load(path):
+def _try_load(path, metadata):
     try:
-        ledger = CacheLedger.load(path)
+        ledger = CacheLedger.load(path, metadata)
         if ledger.is_finished:
             return ledger
         logger.debug(f"Cache exists but is not finished at {path}.")

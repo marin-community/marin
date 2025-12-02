@@ -198,13 +198,7 @@ _already_initialized = False
 
 
 def _setup_logger():
-    import sys
-
-    logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler(sys.stdout)
-    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+    logging.basicConfig(level=logging.INFO)
 
 
 def auto_ray_cluster(
