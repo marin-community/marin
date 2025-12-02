@@ -40,16 +40,16 @@ pip install fray[ray]
 ### Execution Contexts
 
 ```python
-from fray import create_context
+from fray import fray_job_ctx
 
 # Create a synchronous context
-ctx = create_context("sync")
+ctx = fray_job_ctx("sync")
 
 # Create a thread pool context
-ctx = create_context("threadpool", max_workers=4)
+ctx = fray_job_ctx("threadpool", max_workers=4)
 
 # Create a Ray context (requires ray to be installed)
-ctx = create_context("ray", memory=2*1024**3, num_cpus=2)
+ctx = fray_job_ctx("ray", memory=2*1024**3, num_cpus=2)
 
 # Use the context
 ref = ctx.put({"data": [1, 2, 3]})

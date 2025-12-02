@@ -15,7 +15,7 @@
 """Tests for execution contexts."""
 
 import pytest
-from fray import RayContext, SyncContext, ThreadContext, create_context
+from fray import RayContext, SyncContext, ThreadContext, fray_job_ctx
 
 
 @pytest.fixture
@@ -53,6 +53,6 @@ def test_context_wait(execution_context):
     assert len(pending) == 3
 
 
-def test_create_context_invalid():
+def test_fray_job_ctx_invalid():
     with pytest.raises(ValueError, match="Unknown context type"):
-        create_context("invalid")  # type: ignore
+        fray_job_ctx("invalid")  # type: ignore

@@ -273,22 +273,7 @@ class ContextConfig:
     ray_options: dict = field(default_factory=dict)
 
 
-def auto_detect_context_type() -> Literal["ray", "threadpool"]:
-    """Automatically detect the best available context type.
-
-    Returns:
-        "ray" if Ray is installed and initialized, "threadpool" otherwise
-    """
-    try:
-        if ray.is_initialized():
-            return "ray"
-    except ImportError:
-        pass
-
-    return "threadpool"
-
-
-def create_context(
+def fray_job_ctx(
     context_type: Literal["ray", "threadpool", "sync", "auto"] = "auto",
     max_workers: int = 1,
     memory: int | None = None,
@@ -315,13 +300,17 @@ def create_context(
         ValueError: If context_type is invalid
 
     Examples:
-        >>> context = create_context("sync")
-        >>> context = create_context("threadpool", max_workers=4)
-        >>> context = create_context("ray", memory=2*1024**3, num_cpus=2)
-        >>> context = create_context("auto")  # Auto-detect ray or threadpool
+        >>> context = fray_job_ctx("sync")
+        >>> context = fray_job_ctx("threadpool", max_workers=4)
+        >>> context = fray_job_ctx("ray", memory=2*1024**3, num_cpus=2)
+        >>> context = fray_job_ctx("auto")  # Auto-detect ray or threadpool
     """
     if context_type == "auto":
-        context_type = auto_detect_context_type()
+        try:
+            if ray.is_initialized():
+                context_type = "ray"
+        except ImportError:
+            context_type = "threadpool"
 
     if context_type == "sync":
         return SyncContext()

@@ -19,15 +19,13 @@ from typing import Any
 
 import fsspec
 import ray
+from marin.generation.chunk_utils import ChunkStrategy
+from marin.generation.pipeline import vLLMTextGeneration
+from marin.utils import fsspec_glob
 from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
 
-
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
-from marin.generation.pipeline import vLLMTextGeneration
-from marin.generation.ray_utils import get_ray_remote_args_scheduling_strategy_fn
-from marin.generation.chunk_utils import ChunkStrategy
-from marin.utils import fsspec_glob
 
 
 @dataclass
@@ -90,7 +88,7 @@ class OverwriteOutputFiletypeFilenameProvider(FilenameProvider):
         self.dataset_id = str(uuid.uuid4())
 
     def get_filename_for_block(self, block, task_index, block_index):
-        return f"{self.dataset_id}_{task_index:06}_{block_index:06}" f".{self.file_format}"
+        return f"{self.dataset_id}_{task_index:06}_{block_index:06}.{self.file_format}"
 
 
 def set_ray_data_config(config: TextGenerationInferenceConfig):
@@ -150,7 +148,6 @@ def get_ray_data_write_kwargs(config: TextGenerationInferenceConfig):
     return ray_data_write_kwargs
 
 
-@ray.remote
 def _find_finished_ids_for_file(checkpoint_filepath: str, id_column: str | dict[str, str]):
     from marin.processing.classification.dataset_utils import read_dataset
 

@@ -33,7 +33,7 @@ from fray.job_context import (
     RayContext,
     SyncContext,
     ThreadContext,
-    create_context,
+    fray_job_ctx,
 )
 
 __all__ = [
@@ -52,5 +52,5 @@ __all__ = [
     "TemporaryVenv",
     "ThreadContext",
     "TpuConfig",
-    "create_context",
+    "fray_job_ctx",
 ]
