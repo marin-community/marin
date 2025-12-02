@@ -26,7 +26,7 @@ Schedule details
   schedule is 0.05 / 0.75 / 0.20.
 """
 
-from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
 from experiments.defaults import default_sft, default_train
 from experiments.llama import llama3_tokenizer, llama_600m
 from experiments.midtraining_datasets import finemath_3_plus_tokenized, megamath_tokenized

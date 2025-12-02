@@ -14,14 +14,13 @@ import braceexpand
 import datasets
 import equinox as eqx
 import fsspec
+import haliax as hax
 import jax
 import numpy as np
 from draccus import field
+from haliax import Axis
 from jaxtyping import PRNGKeyArray
 from typing_extensions import TypedDict
-
-import haliax as hax
-from haliax import Axis
 
 from levanter.compat.hf_checkpoints import load_processor, load_tokenizer
 from levanter.data import AsyncDataset
@@ -38,7 +37,6 @@ from levanter.store.cache import CacheOptions, TreeCache, build_or_load_cache
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import key_iterator
 from levanter.utils.logging import silence_transformer_nag
-
 
 silence_transformer_nag()  # noqa
 from transformers import (  # noqa

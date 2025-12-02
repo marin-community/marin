@@ -24,6 +24,7 @@ import jax.numpy as jnp
 import numpy as np
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmHeadModel
+from levanter.metrics import Metric, ReductionType
 
 from marin.rl.types import Rollout, TrainingBatch
 
@@ -45,6 +46,33 @@ class RLLossModule(Protocol):
     def create_loss_fn(self, reference_model: eqx.Module, train_model: eqx.Module) -> Callable:
         """Create the loss function for training."""
         ...
+
+
+def compute_metadata_metrics(
+    current_logprobs: jax.Array,
+    policy_logprobs_array: jax.Array,
+    loss_weights_array: jax.Array,
+    loss_masks_array: jax.Array,
+) -> dict[str, Metric]:
+    """Compute metadata metrics for the loss function."""
+    batch_size, _ = policy_logprobs_array.shape
+    return {
+        "max_ratio_difference": Metric.from_value(
+            jnp.max(jnp.abs(current_logprobs - policy_logprobs_array) * loss_masks_array),
+            ReductionType.MAX,
+        ),
+        "mean_ratio_difference": Metric.from_value(
+            jnp.sum(jnp.abs(current_logprobs - policy_logprobs_array) * loss_masks_array) / jnp.sum(loss_masks_array),
+            ReductionType.MEAN,
+        ),
+        "max_advantages": Metric.from_value(jnp.max(loss_weights_array), ReductionType.MAX),
+        "mean_advantages": Metric.from_value(jnp.mean(loss_weights_array), ReductionType.MEAN),
+        "policy_entropy": Metric.from_value(
+            -jnp.sum(policy_logprobs_array * loss_masks_array) / jnp.sum(loss_masks_array),
+            ReductionType.MEAN,
+        ),
+        "response_tokens_length": Metric.from_value(jnp.sum(loss_masks_array) / batch_size, ReductionType.MEAN),
+    }
 
 
 def rloo_loss_with_importance_sampling(
@@ -112,6 +140,7 @@ def rloo_loss_with_importance_sampling(
     current_logprobs = jnp.concatenate([jnp.zeros((batch_size, 1)), current_logprobs_shifted], axis=1)
     reference_logprobs_array = jnp.concatenate([jnp.zeros((batch_size, 1)), reference_logprobs_shifted], axis=1)
 
+    # jax.debug.print("advantages sum: {loss_weights_array_sum}", loss_weights_array_sum=loss_weights_array.sum())
     # jax.debug.print("predicted_logprobs_array {current_logprobs}", current_logprobs=current_logprobs)
     # jax.debug.print(
     #     "reference_logprobs_array {reference_logprobs_array}", reference_logprobs_array=reference_logprobs_array
@@ -131,9 +160,14 @@ def rloo_loss_with_importance_sampling(
     # off of policy that we're not learning anything when we clip.
     clipped_ratio = jnp.clip(ratio, min=1.0 - clip_epsilon, max=1.0 + clip_epsilon)
 
+    # Compute fraction of ratios that were clipped
+    is_clipped = jnp.logical_or(ratio > 1.0 + clip_epsilon, ratio < 1.0 - clip_epsilon)
+    clip_fraction = jnp.sum(is_clipped * loss_masks_array) / jnp.sum(loss_masks_array)
+
     # RLOO loss with importance sampling
     # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
     weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
+
     reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)
 
     # KL regularization
@@ -143,18 +177,22 @@ def rloo_loss_with_importance_sampling(
     kl_loss = kl_coef * jnp.sum(kl_penalty * loss_masks_array) / jnp.sum(loss_masks_array)
 
     loss = reinforce_loss + kl_loss
+
     return loss, {
-        "ratio_mean": jnp.mean(ratio),
-        "clipped_ratio_mean": jnp.mean(clipped_ratio),
-        "reinforce_loss": reinforce_loss,
-        "kl_loss": kl_loss,
-        "kl_penalty": jnp.mean(kl_penalty),
+        "ratio_mean": Metric.from_value(jnp.mean(ratio), ReductionType.MEAN),
+        "clipped_ratio_mean": Metric.from_value(jnp.mean(clipped_ratio), ReductionType.MEAN),
+        "clip_fraction": Metric.from_value(clip_fraction, ReductionType.MEAN),
+        "reinforce_loss": Metric.from_value(reinforce_loss, ReductionType.MEAN),
+        "kl_loss": Metric.from_value(kl_loss, ReductionType.MEAN),
+        "kl_penalty": Metric.from_value(jnp.mean(kl_penalty), ReductionType.MEAN),
+        **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
     }
 
 
 def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     """Compute RLOO (Reward Leave-One-Out) advantages for a group of rollouts."""
     rewards = np.array([r.episode_reward for r in rollouts])
+
     n = len(rewards)
     if n <= 1:
         return np.zeros_like(rewards)

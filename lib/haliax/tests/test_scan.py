@@ -18,7 +18,7 @@ def test_unstacked():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, *, key):
             return x + self.array + self.static
@@ -55,7 +55,7 @@ def test_get_layer_stacked():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, *, key):  # pragma: no cover - unused in this test
             return x + self.array + self.static
@@ -85,7 +85,7 @@ def test_get_layer_blockseq():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, *, key):  # pragma: no cover - unused in this test
             return x + self.array + self.static
@@ -138,7 +138,7 @@ def test_seq_and_stacked_give_same_results():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, *, key):
             return x + self.array + self.static + hax.random.normal(key, x.axes)
@@ -171,7 +171,7 @@ def test_using_scan():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, *, key):
             return x + self.array + self.static + hax.random.normal(key, x.axes), x * 2
@@ -198,7 +198,7 @@ def test_scan_with_aux_named_args():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, y, *, key):
             return x + self.array + self.static + hax.random.normal(key, x.axes), x * 2 + y
@@ -281,7 +281,7 @@ def test_stacked_to_state_dict():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, *, key):
             return x + self.array + self.static + hax.random.normal(key, x.axes)

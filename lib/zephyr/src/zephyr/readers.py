@@ -104,7 +104,7 @@ def load_parquet(file_path: str, **kwargs) -> Iterator[dict]:
 
     Args:
         file_path: Path to Parquet file (local or remote)
-        **kwargs: Additional arguments for pd.read_parquet (e.g., columns, engine)
+        **kwargs: Additional arguments to the ParquetFile.iter_batches() method
 
     Yields:
         Records as dictionaries
@@ -119,12 +119,13 @@ def load_parquet(file_path: str, **kwargs) -> Iterator[dict]:
         ... )
         >>> output_files = list(backend.execute(ds))
     """
-    import pandas as pd
+    import pyarrow.parquet as pq
 
     with open_file(file_path, "rb") as f:
-        df = pd.read_parquet(f, **kwargs)
-        for _, row in df.iterrows():
-            yield row.to_dict()
+        # TODO: should we also expose kwargs for ParquetFile constructor?
+        parquet_file = pq.ParquetFile(f)
+        for batch in parquet_file.iter_batches(**kwargs):
+            yield from batch.to_pylist()
 
 
 def load_file(file_path: str, columns: list[str] | None = None, **parquet_kwargs) -> Iterator[dict]:

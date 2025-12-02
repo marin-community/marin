@@ -16,12 +16,14 @@
 
 import json
 import time
+from functools import partial
 from pathlib import Path
 
 import pytest
+
 from zephyr import Dataset, create_backend, load_file, load_parquet
-from zephyr.dataset import FilterOp, MapOp, WindowOp
 from zephyr._test_helpers import SampleDataclass
+from zephyr.dataset import FilterOp, MapOp, WindowOp
 
 
 @pytest.fixture(
@@ -1072,3 +1074,20 @@ def test_skip_existing_parquet(tmp_path):
     assert len(result) == 3
     assert counter.map_count == 0
     assert counter.processed_ids == []  # No shards ran
+
+
+def test_repr_handles_partials():
+    """__repr__ should unwrap functools.partial"""
+    assert repr(MapOp(partial(int, base=2))) == "MapOp(fn=int)"
+
+    def my_base(n: str, base: int = 10) -> int:
+        return int(n, base)
+
+    op = MapOp(partial(my_base, base=2))
+    assert repr(op) == "MapOp(fn=test_repr_handles_partials.<locals>.my_base)"
+
+
+def test_repr_handles_lambdas():
+    """Ensure anonymous lambdas work correctly."""
+    op = FilterOp(lambda x: x > 0)
+    assert repr(op) == "FilterOp(predicate=test_repr_handles_lambdas.<locals>.<lambda>)"

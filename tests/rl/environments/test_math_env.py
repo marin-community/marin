@@ -24,7 +24,7 @@ from openai.types.completion_usage import CompletionUsage
 from transformers import AutoTokenizer
 
 from marin.rl.environments.math_env import MathEnv
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.environments.inference_ctx import LevanterInferenceContext
 
 
 def create_mock_chat_completion(tokenizer) -> ChatCompletion:
@@ -55,7 +55,7 @@ def create_mock_chat_completion(tokenizer) -> ChatCompletion:
     )
 
 
-class DummyInferenceContext(InferenceContext):
+class DummyInferenceContext(LevanterInferenceContext):
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
         self._stop_tokens = None

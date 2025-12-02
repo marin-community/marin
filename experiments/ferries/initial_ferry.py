@@ -18,10 +18,10 @@ import math
 
 from experiments.defaults import SimpleTrainConfig, default_train
 from experiments.qwen3 import qwen3_1_7b, qwen3_8b
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
-from experiments.nemotron_cc.tokenize_nemotron import (
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
+from experiments.pretraining_datasets import (
     NEMOTRON_WEIGHTS,
-    tokenize_nemotron_steps,
+    tokenize_nemotron,
 )
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.midtraining_datasets import (
@@ -73,7 +73,7 @@ train_config_8b = SimpleTrainConfig(
 )
 
 # Build a varying mixture schedule similar to the Tootsie runs
-nemotron_steps = tokenize_nemotron_steps()
+nemotron_steps = tokenize_nemotron()
 proofpile_2_step = dclm_components_llama3["proofpile_2"]
 starcoder_step = dclm_components_llama3["starcoderdata"]
 

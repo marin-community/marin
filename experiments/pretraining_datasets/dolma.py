@@ -13,39 +13,41 @@
 # limitations under the License.
 
 """
-Tokenizes the Dolma 1.7 datasets.
+DOLMA 1.7 dataset definitions and tokenization.
+
+This module defines the raw DOLMA dataset download and tokenization
+logic for all 15 splits.
 """
 
 import os.path
-from dataclasses import dataclass
 
-from experiments.llama import llama3_tokenizer
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from marin.processing.tokenize.data_configs import TokenizerStep
 
-
-@dataclass(frozen=True)
-class _DummyConfig:
-    pass
-
-
-def _legacy_dolma():
-    # Dolma was added before we had a proper versioning system, so we need to hardcode the path
-    # We'll make a fake step for it.
-    return
-
-
-dolma_fake_step = ExecutorStep(
-    name="raw/dolma/v1.7",
-    fn=_legacy_dolma,
-    config=_DummyConfig(),
-).with_output_path("raw/dolma/v1.7")
-
-BASE_DIR_DOLMA = dolma_fake_step
+# Raw dataset download step
+downloads = {
+    "dolma": ExecutorStep(
+        name="raw/dolma",
+        fn=download_hf,
+        config=DownloadConfig(
+            hf_dataset_id="allenai/dolma",
+            revision="7f48140",
+            gcs_output_path=this_output_path(),
+            wait_for_completion=True,
+        ),
+        override_output_path="raw/dolma",
+    )
+}
 
 
-# sampling proportion comes from https://huggingface.co/datasets/allenai/dolma
+# For dolma 1.7, we hardcode the path since it was added before versioning
+_DOLMA_V1_7_PATH = "raw/dolma/v1.7"
+
+
+# Sampling proportion comes from https://huggingface.co/datasets/allenai/dolma
 DOLMA_OLMO_MIXTURE_WEIGHTS = {
     "dolma/algebraic-stack": 12.6,  # 12.6 * 1.0
     "dolma/arxiv": 28.0,  # 28.0 * 1.0
@@ -63,7 +65,6 @@ DOLMA_OLMO_MIXTURE_WEIGHTS = {
     "dolma/flan": 16.5,  # 6.5 * 1.0
     "dolma/wiki": 7.4,  # 3.7 * 2.0
 }
-
 
 DOLMA_DATASETS = {
     "algebraic-stack": ["algebraic-stack-train-{0000..0015}.json.gz"],
@@ -109,14 +110,20 @@ DOLMA_LLAMA3_OVERRIDES = {
 }
 
 
-def tokenize_dolma_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) -> dict[str, TokenizerStep]:
+def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
+    """Generate tokenization steps for all Dolma 1.7 dataset splits."""
+    if tokenizer is None:
+        from experiments.llama import llama3_tokenizer
+
+        tokenizer = llama3_tokenizer
+
     dolma_steps: dict[str, ExecutorStep[TokenizeConfig]] = {}
     for dataset, files in DOLMA_DATASETS.items():
         step = ExecutorStep(
-            name=os.path.join(base_path, "dolma", dataset),
+            name=os.path.join("tokenized", "dolma", dataset),
             fn=tokenize,
             config=TokenizeConfig(
-                train_paths=[BASE_DIR_DOLMA / file for file in files],
+                train_paths=[os.path.join(_DOLMA_V1_7_PATH, file) for file in files],
                 validation_paths=versioned([]),
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
@@ -124,12 +131,11 @@ def tokenize_dolma_steps(*, base_path="tokenized/", tokenizer=llama3_tokenizer) 
             pip_dependency_groups=["sentencepiece"],
         )
 
-        if tokenizer == llama3_tokenizer and dataset in DOLMA_LLAMA3_OVERRIDES:
+        # Check if we need to use override path for llama3
+        from experiments.llama import llama3_tokenizer as _llama3_tokenizer
+
+        if tokenizer == _llama3_tokenizer and dataset in DOLMA_LLAMA3_OVERRIDES:
             step = step.with_output_path(DOLMA_LLAMA3_OVERRIDES[dataset])
         dolma_steps[os.path.join("dolma", dataset)] = step
 
     return dolma_steps
-
-
-if __name__ == "__main__":
-    executor_main(steps=list(tokenize_dolma_steps().values()))

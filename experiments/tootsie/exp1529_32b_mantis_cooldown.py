@@ -32,11 +32,11 @@ from experiments.tootsie.exp1395_qwen3_32b import (
 )
 from experiments.evals.evals import default_base_eval
 from experiments.models import ModelConfig, download_model_step
-from experiments.nemotron_cc.tokenize_nemotron import (
+from experiments.pretraining_datasets import (
     NEMOTRON_WEIGHTS,
-    tokenize_nemotron_steps,
+    tokenize_nemotron,
 )
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.midtraining_datasets import (
     megamath_token_counts,
@@ -52,7 +52,7 @@ from experiments.evals.resource_configs import SINGLE_TPU_V5p_8
 PHASE_3_START = 160_000
 PHASE_3_END = 192_000  # 20% of Training for Cooldown
 
-nemotron_steps = tokenize_nemotron_steps()
+nemotron_steps = tokenize_nemotron()
 proofpile_2 = dclm_components_llama3["proofpile_2"]
 starcoderdata = dclm_components_llama3["starcoderdata"]
 
