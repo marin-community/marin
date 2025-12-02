@@ -233,9 +233,11 @@ def speedrun_results(config: SpeedrunResultsConfig):
 
     model_flops = config.speedrun_config.compute_model_flops()
     model_size = config.speedrun_config.model_config.total_trainable_params(config.speedrun_config.vocab_size)
-    context_length = getattr(
-        config.speedrun_config.train_config, "max_train_length", config.speedrun_config.model_config.max_seq_len
-    )
+    if isinstance(config.speedrun_config.train_config, SimpleTrainConfig):
+        context_length = config.speedrun_config.train_config.train_seq_len
+    else:
+        context_length = config.speedrun_config.train_config.train_config.train_seq_len
+
     total_tokens = (
         config.speedrun_config.train_config.train_batch_size
         * context_length

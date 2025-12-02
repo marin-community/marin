@@ -67,7 +67,7 @@ class HyenaConfig:
 
     # Axes
     Pos = property(lambda self: Axis(name="position", size=self.max_seq_len))
-    KeyPos = property(lambda self: self.max_Pos.alias("key_position"))
+    KeyPos = property(lambda self: self.Pos.alias("key_position"))
     Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
     Block = property(lambda self: Axis(name="blocks", size=self.num_blocks))
     PosPerBlock = property(lambda self: Axis(name="pos_per_block", size=self.max_seq_len // self.num_blocks))
