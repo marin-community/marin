@@ -144,7 +144,7 @@ class SpeedrunConfig:
 
     def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
-        context_length = self.train_config.train_seq_len
+        context_length: int | None = self.train_config.train_seq_len
         if context_length is None:
             context_length = self.model_config.max_seq_len
 
@@ -157,7 +157,7 @@ class SpeedrunConfig:
             total_tokens = batch_schedule.global_data_offset_by_step(self.train_config.num_train_steps) * context_length
         else:
             # integer batch size
-            total_tokens = self.train_config.train_batch_size * context_length * self.train_config.num_train_steps  # type: ignore
+            total_tokens = self.train_config.train_batch_size * self.train_config.num_train_steps * context_length
 
         flops_per_token = self.model_config.flops_per_token(self.vocab_size, context_length)
         if flops_per_token is None:
