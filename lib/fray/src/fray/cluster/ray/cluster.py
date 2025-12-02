@@ -167,7 +167,9 @@ class RayCluster(Cluster):
         # skip building the package environment for local clusters
         if self._address == "auto" or self._address == "local":
             logger.info("Skipping package environment for local cluster")
-            runtime_env = {}
+            runtime_env = {
+                "env_vars": env_vars,
+            }
         else:
             runtime_env = build_runtime_env_for_packages(
                 extra=list(environment.extras),

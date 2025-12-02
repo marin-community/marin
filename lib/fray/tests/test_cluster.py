@@ -118,8 +118,6 @@ def test_cluster_monitor_logs(cluster):
 
 
 def test_ray_cluster_get_ray_resources_gpu(ray_cluster):
-    """GPU resources should map to Ray GPU resource."""
-
     request = JobRequest(
         name="gpu-resource-test",
         entrypoint=Entrypoint(binary="python", args=["-m", "my_module"]),
@@ -131,8 +129,6 @@ def test_ray_cluster_get_ray_resources_gpu(ray_cluster):
 
 
 def test_ray_cluster_get_ray_resources_tpu(ray_cluster):
-    """TPU resources should map to Ray TPU resources with head."""
-
     request = JobRequest(
         name="tpu-resource-test",
         entrypoint=Entrypoint(binary="python", args=["-m", "my_module"]),
@@ -144,7 +140,7 @@ def test_ray_cluster_get_ray_resources_tpu(ray_cluster):
 
 
 def test_environment_integration(cluster, cluster_type, tmp_path):
-    """Integration test to verify environment variable injection."""
+    """Validate that environment variables are propogated into the job as expected."""
 
     def _check_env_closure(output_path: str):
         with open(output_path, "w") as f:
@@ -152,7 +148,6 @@ def test_environment_integration(cluster, cluster_type, tmp_path):
 
     output_path = str(tmp_path / "env.json")
 
-    # Create job request with function_args
     request = JobRequest(
         name="env-integration-test",
         entrypoint=Entrypoint(
@@ -164,13 +159,10 @@ def test_environment_integration(cluster, cluster_type, tmp_path):
         ),
     )
 
-    # Launch and wait
     job_id = cluster.launch(request)
     info = cluster.wait(job_id)
 
     assert info.status == "succeeded"
-
-    # Read the output file
     if not os.path.exists(output_path):
         pytest.fail(f"Output file {output_path} was not created by the job.")
 
@@ -178,13 +170,13 @@ def test_environment_integration(cluster, cluster_type, tmp_path):
         env_vars = json.load(f)
 
     # Verify our custom var
-    assert "TEST_INTEGRATION_VAR" in env_vars
-    assert env_vars["TEST_INTEGRATION_VAR"] == "test_value_123"
-
-    # Verify Ray specific vars if applicable
-    if cluster_type == "ray":
-        # These are usually injected by Ray
-        assert "RAY_ADDRESS" in env_vars or "RAY_JOB_ID" in env_vars
+    assert (
+        "TEST_INTEGRATION_VAR" in env_vars
+    ), f"TEST_INTEGRATION_VAR should be set by the cluster: found {env_vars.keys()}"
+    assert (
+        env_vars["TEST_INTEGRATION_VAR"] == "test_value_123"
+    ), f"TEST_INTEGRATION_VAR should be set to 'test_value_123': found {env_vars['TEST_INTEGRATION_VAR']}"
+    assert "FRAY_CLUSTER_SPEC" in env_vars, f"FRAY_CLUSTER_SPEC should be set by the cluster: found {env_vars.keys()}"
 
 
 def test_local_cluster_replica_integration(local_cluster, tmp_path):
