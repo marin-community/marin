@@ -808,7 +808,7 @@ class Backend:
         chunks_by_shard_idx = defaultdict(list)
 
         async def async_inner_execute_on_shards():
-            # NOTE: this semaphore controles how many concurrent shard tasks are run
+            # NOTE: this semaphore controls how many concurrent shard tasks are run
             semaphore = asyncio.Semaphore(self.config.max_parallelism)
 
             async def semaphore_wrapper(shard_idx, shard, aux_shards):
@@ -826,7 +826,7 @@ class Backend:
                     inner_chunks_by_shard_idx = defaultdict(list)
 
                     # NOTE: we want to ensure that we consume headers and data in lockstep.
-                    # For example it's unacctable if we consume a header, but for some reason
+                    # For example it's unacceptable if we consume a header, but for some reason
                     # (failure) the data inner async for loop never yields anything, these 2
                     # counters help us ensure that we have a 1:1 mapping between headers and data.
                     headers_consumed, data_consumed = 0, 0
