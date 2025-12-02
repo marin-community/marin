@@ -49,8 +49,6 @@ logger = logging.getLogger(__name__)
 # We can't launch TPU jobs directly via Ray, as it doesn't support gang-scheduling and jobs are always
 # started with a single task in Ray. Instead we use the ray_tpu helper/actor to stage TPU execution.
 # We store TPU "job" information separately here to report to the user.
-
-
 @dataclass
 class _TpuJobInfo:
     ref: ray.ObjectRef
@@ -166,11 +164,16 @@ class RayCluster(Cluster):
         if "FRAY_CLUSTER_SPEC" not in env_vars:
             env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
 
-        runtime_env = build_runtime_env_for_packages(
-            extra=list(environment.extras),
-            pip_packages=list(environment.pip_packages),
-            env_vars=env_vars,
-        )
+        # skip building the package environment for local clusters
+        if self._address == "auto" or self._address == "local":
+            logger.info("Skipping package environment for local cluster")
+            runtime_env = {}
+        else:
+            runtime_env = build_runtime_env_for_packages(
+                extra=list(environment.extras),
+                pip_packages=list(environment.pip_packages),
+                env_vars=env_vars,
+            )
 
         runtime_env["working_dir"] = environment.workspace
         runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
@@ -206,8 +209,16 @@ class RayCluster(Cluster):
             yield "Log streaming not supported for TPU jobs. Use Ray dashboard to view logs.\n"
             return
 
-        logs = asyncio.run(self._job_client().tail_job_logs(job_id))
-        yield from logs
+        def synchronize():
+            async def get_next_item() -> str:
+                try:
+                    return await self._job_client().tail_job_logs(job_id).__anext__()
+                except StopAsyncIteration:
+                    raise StopIteration from None
+
+            yield from asyncio.run(get_next_item())
+
+        yield from synchronize()
 
     def poll(self, job_id: JobId) -> JobInfo:
         """Poll job status, returning the current job information or raising KeyError."""
