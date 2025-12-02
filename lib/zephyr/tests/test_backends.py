@@ -19,6 +19,7 @@ import io
 import json
 
 import ray
+from zephyr import Dataset
 from zephyr.backend_factory import flow_backend
 from zephyr.backends import format_shard_path
 from zephyr.writers import write_jsonl_file
@@ -146,3 +147,20 @@ def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):
             assert len(lines) == 2
             assert json.loads(lines[0]) == {"id": 1, "text": "hello"}
             assert json.loads(lines[1]) == {"id": 2, "text": "world"}
+
+
+def test_run_inside_async_loop():
+    """Test that sync backend can be run within an async context"""
+    import asyncio
+
+    from zephyr.backend_factory import create_backend
+
+    async def main():
+        backend = create_backend("sync")
+
+        ds = Dataset.from_list(list(range(5))).map(lambda x: x * 2)
+
+        results = backend.execute(ds)
+        assert results == [0, 2, 4, 6, 8]
+
+    asyncio.run(main())
