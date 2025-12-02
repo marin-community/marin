@@ -31,54 +31,61 @@ def in_memory_table(tmp_path_factory: pytest.TempPathFactory, parquet_file: str)
     """
     pf = pq.ParquetFile(parquet_file)
     first_batch = next(pf.iter_batches(batch_size=250_000))
-    table = pa.Table.from_batches([first_batch])
-    return table
+    return pa.Table.from_batches([first_batch])
 
 
-def test_arrow_giant(benchmark: Any, in_memory_table: pa.Table) -> None:
+@pytest.mark.parametrize(
+    "batch_size",
+    [
+        pytest.param(1_000_000_000, id="giant"),
+        pytest.param(1024, id="small"),
+        pytest.param(1, id="tiny"),
+    ],
+)
+def test_arrow_marshaling(benchmark: Any, in_memory_table: pa.Table, batch_size: int | None) -> None:
     """
-    Python Memory -> One Giant RecordBatch -> Rust -> One Giant RecordBatch.
-    """
-
-    def _pipeline() -> int:
-        batch = in_memory_table.combine_chunks().to_batches()[0]
-        res = dupekit.process_arrow_batch(batch)
-        return len(res)
-
-    result = benchmark(_pipeline)
-    assert result > 0
-
-
-def test_arrow_small(benchmark: Any, in_memory_table: pa.Table) -> None:
-    """
-    Python Memory -> Stream of Batches (Size 1024) -> Rust (called per batch) -> Arrow Batches.
+    Benchmarks Python Memory -> Rust -> Arrow Batches with different chunk sizes.
+    batch_size=None simulates the "Giant" case (one massive batch).
     """
 
     def _pipeline() -> int:
-        count = 0
-        for b in in_memory_table.to_batches(max_chunksize=1024):
-            res = dupekit.process_arrow_batch(b)
-            count += len(res)
-        return count
+        return sum(len(dupekit.process_arrow_batch(b)) for b in in_memory_table.to_batches(max_chunksize=batch_size))
 
-    result = benchmark(_pipeline)
-    assert result > 0
+    assert benchmark(_pipeline) > 0
 
 
-def test_arrow_tiny(benchmark: Any, in_memory_table: pa.Table) -> None:
+@pytest.mark.parametrize(
+    "batch_size",
+    [
+        pytest.param(None, id="batch"),
+        pytest.param(1024, id="batched_stream"),
+    ],
+)
+def test_dicts_vectorized(benchmark: Any, in_memory_table: pa.Table, batch_size: int | None) -> None:
     """
-    Python Memory -> Stream of Batches (Size 1) -> Rust (called per batch) -> Arrow Batches.
+    Benchmarks Python Memory -> List[dict] -> Rust -> List[dict] (Vectorized).
+    Rust iterates the list internally.
     """
 
     def _pipeline() -> int:
-        count = 0
-        for b in in_memory_table.to_batches(max_chunksize=1):
-            res = dupekit.process_arrow_batch(b)
-            count += len(res)
-        return count
+        if batch_size is None:
+            batches = [in_memory_table.to_pylist()]
+        else:
+            batches = (b.to_pylist() for b in in_memory_table.to_batches(max_chunksize=batch_size))
+        return sum(len(dupekit.process_dicts_batch(batch)) for batch in batches)
 
-    result = benchmark(_pipeline)
-    assert result > 0
+    assert benchmark(_pipeline) > 0
+
+
+def test_dicts_loop(benchmark: Any, in_memory_table: pa.Table) -> None:
+    """
+    Benchmarks Python Memory -> List[dict] -> Python Loop calls Rust per item -> List[dict].
+    """
+
+    def _pipeline() -> int:
+        return len([dupekit.process_dicts_loop(d) for d in in_memory_table.to_pylist()])
+
+    assert benchmark(_pipeline) > 0
 
 
 def test_rust_structs(benchmark: Any, in_memory_table: pa.Table) -> None:
@@ -87,58 +94,7 @@ def test_rust_structs(benchmark: Any, in_memory_table: pa.Table) -> None:
     """
 
     def _pipeline() -> int:
-        pylist = in_memory_table.to_pylist()
-        docs = [dupekit.Document(row["id"], row["text"]) for row in pylist]
-        res = dupekit.process_rust_structs(docs)
-        return len(res)
+        docs = [dupekit.Document(row["id"], row["text"]) for row in in_memory_table.to_pylist()]
+        return len(dupekit.process_rust_structs(docs))
 
-    result = benchmark(_pipeline)
-    assert result > 0
-
-
-def test_dicts_batch(benchmark: Any, in_memory_table: pa.Table) -> None:
-    """
-    Python Memory -> Converts to List[dict] -> Rust -> List[dict].
-    """
-
-    def _pipeline() -> int:
-        docs = in_memory_table.to_pylist()
-        res = dupekit.process_dicts_batch(docs)
-        return len(res)
-
-    result = benchmark(_pipeline)
-    assert result > 0
-
-
-def test_dicts_loop(benchmark: Any, in_memory_table: pa.Table) -> None:
-    """
-    Python Memory -> List[dict] -> Python Loop calls Rust per item -> List[dict].
-    """
-
-    def _pipeline() -> int:
-        docs = in_memory_table.to_pylist()
-
-        res_list = []
-        for doc in docs:
-            res_list.append(dupekit.process_dicts_loop(doc))
-        return len(res_list)
-
-    result = benchmark(_pipeline)
-    assert result > 0
-
-
-def test_dicts_batched_stream(benchmark: Any, in_memory_table: pa.Table) -> None:
-    """
-    Python Memory -> Stream of Batches (1024) -> List[dict] -> Rust -> List[dict].
-    """
-
-    def _pipeline() -> int:
-        total = 0
-        for batch in in_memory_table.to_batches(max_chunksize=1024):
-            docs = batch.to_pylist()
-            res = dupekit.process_dicts_batch(docs)
-            total += len(res)
-        return total
-
-    result = benchmark(_pipeline)
-    assert result > 0
+    assert benchmark(_pipeline) > 0

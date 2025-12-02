@@ -26,8 +26,7 @@ def in_memory_table(parquet_file: str) -> pa.Table:
     """
     pf = pq.ParquetFile(parquet_file)
     first_batch = next(pf.iter_batches(batch_size=100_000))
-    table = pa.Table.from_batches([first_batch])
-    return table
+    return pa.Table.from_batches([first_batch])
 
 
 @pytest.mark.parametrize("batch_size", [1, 128, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072])
@@ -37,11 +36,6 @@ def test_arrow_batch_sizes(benchmark: Any, in_memory_table: pa.Table, batch_size
     """
 
     def _pipeline() -> int:
-        total = 0
-        for b in in_memory_table.to_batches(max_chunksize=batch_size):
-            res = dupekit.process_arrow_batch(b)
-            total += len(res)
-        return total
+        return sum(len(dupekit.process_arrow_batch(b)) for b in in_memory_table.to_batches(max_chunksize=batch_size))
 
-    result = benchmark(_pipeline)
-    assert result > 0
+    assert benchmark(_pipeline) > 0

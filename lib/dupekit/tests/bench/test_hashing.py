@@ -11,7 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 from typing import Any
+from collections.abc import Callable
 
 import pytest
 import pyarrow.parquet as pq
@@ -26,65 +28,26 @@ def text_samples(parquet_file: str) -> list[bytes]:
     return [t.encode("utf-8") for t in texts]
 
 
-def test_hash_python_blake2b(benchmark: Any, text_samples: list[bytes]) -> None:
-
-    def _run() -> list[bytes]:
-        res = []
-        for text in text_samples:
-            h = hashlib.blake2b(text)
-            res.append(h.digest())
-        return res
-
-    benchmark(_run)
+def _py_blake2b(text: bytes) -> bytes:
+    return hashlib.blake2b(text).digest()
 
 
-def test_hash_rust_blake2(benchmark: Any, text_samples: list[bytes]) -> None:
+@pytest.mark.parametrize(
+    "func, mode",
+    [
+        pytest.param(_py_blake2b, "scalar", id="python_blake2b"),
+        pytest.param(dupekit.hash_blake2, "scalar", id="rust_blake2"),
+        pytest.param(dupekit.hash_blake3, "scalar", id="rust_blake3"),
+        pytest.param(dupekit.hash_xxh3_128, "scalar", id="rust_xxh3_128"),
+        pytest.param(dupekit.hash_xxh3_64, "scalar", id="rust_xxh3_64_scalar"),
+        pytest.param(dupekit.hash_xxh3_64_batch, "batch", id="rust_xxh3_64_batch"),
+    ],
+)
+def test_hashing_throughput(benchmark: Any, text_samples: list[bytes], func: Callable, mode: str) -> None:
 
-    def _run() -> list[list[int]]:
-        res = []
-        for text in text_samples:
-            res.append(dupekit.hash_blake2(text))
-        return res
-
-    benchmark(_run)
-
-
-def test_hash_rust_blake3(benchmark: Any, text_samples: list[bytes]) -> None:
-
-    def _run() -> list[list[int]]:
-        res = []
-        for text in text_samples:
-            res.append(dupekit.hash_blake3(text))
-        return res
-
-    benchmark(_run)
-
-
-def test_hash_rust_xxh3_128(benchmark: Any, text_samples: list[bytes]) -> None:
-
-    def _run() -> list[int]:
-        res = []
-        for text in text_samples:
-            res.append(dupekit.hash_xxh3_128(text))
-        return res
-
-    benchmark(_run)
-
-
-def test_hash_rust_xxh3_64_scalar(benchmark: Any, text_samples: list[bytes]) -> None:
-
-    def _run() -> list[int]:
-        res = []
-        for text in text_samples:
-            res.append(dupekit.hash_xxh3_64(text))
-        return res
-
-    benchmark(_run)
-
-
-def test_hash_rust_xxh3_64_batch(benchmark: Any, text_samples: list[bytes]) -> None:
-
-    def _run() -> list[int]:
-        return dupekit.hash_xxh3_64_batch(text_samples)
+    def _run() -> list[Any]:
+        if mode == "batch":
+            return func(text_samples)
+        return [func(x) for x in text_samples]
 
     benchmark(_run)
