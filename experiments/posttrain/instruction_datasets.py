@@ -234,17 +234,24 @@ def instruct_msg_response_adapter(
     )
 
 
-def reasoning_to_chat_kwargs(row: dict[str, Any]) -> dict[str, Any]:
-    value = row.get("reasoning")
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"on", "true", "1"}:
-            return {"chat_template_kwargs": {"enable_thinking": True}}
-        if lowered in {"off", "false", "0"}:
-            return {"chat_template_kwargs": {"enable_thinking": False}}
-    if isinstance(value, bool):
-        return {"chat_template_kwargs": {"enable_thinking": value}}
-    return {}
+@dataclass
+class ReasoningToChatKwargs:
+    """Callable metadata helper to toggle thinking mode based on the "reasoning" column."""
+
+    def __call__(self, row: dict[str, Any]) -> dict[str, Any]:
+        value = row.get("reasoning")
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"on", "true", "1"}:
+                return {"chat_template_kwargs": {"enable_thinking": True}}
+            if lowered in {"off", "false", "0"}:
+                return {"chat_template_kwargs": {"enable_thinking": False}}
+        if isinstance(value, bool):
+            return {"chat_template_kwargs": {"enable_thinking": value}}
+        return {}
+
+
+reasoning_to_chat_kwargs = ReasoningToChatKwargs()
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {

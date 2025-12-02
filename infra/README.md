@@ -181,7 +181,7 @@ in [scripts/ray/README.md]. Some sample commands:
 ```
 uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml {start-cluster,stop-cluster,restart-cluster}
 uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml {add-worker}
-uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml open-dashboard
+uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml dashboard
 ```
 
 ### Ray Commands

@@ -843,7 +843,7 @@ class InferenceEngine:
 
         Keeps the KV cache memory allocated. Reuses current `PageTable` object with pages freed.
         """
-        self.gen_state = self.gen_state.reset()
+        self.gen_state = eqx.filter_jit(self.gen_state.reset, donate="all")()
         self.free_slots = list(range(int(self.gen_state.decode_state.max_seqs)))
         self.local_map.clear()
         self.sequences.clear()
