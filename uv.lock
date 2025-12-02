@@ -1775,11 +1775,14 @@ source = { editable = "lib/fray" }
 dependencies = [
     { name = "click" },
     { name = "cloudpickle" },
+    { name = "fastapi" },
     { name = "fsspec" },
+    { name = "httpx" },
     { name = "humanfriendly" },
     { name = "mergedeep" },
     { name = "pyyaml" },
     { name = "typing-extensions" },
+    { name = "uvicorn" },
     { name = "zstandard" },
 ]
 
@@ -1816,13 +1819,16 @@ fray-tpu-test = [
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
+    { name = "fastapi" },
     { name = "fsspec", specifier = ">=2024.0.0" },
+    { name = "httpx" },
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "mergedeep" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ray", marker = "extra == 'ray'", specifier = ">=2.45" },
     { name = "typing-extensions", specifier = ">=4.0" },
-    { name = "zstandard", specifier = ">=0.22.0" },
+    { name = "uvicorn" },
+    { name = "zstandard", specifier = ">=0.18.0" },
 ]
 provides-extras = ["ray"]
 
@@ -3900,7 +3906,7 @@ requires-dist = [
     { name = "py7zr", marker = "extra == 'download-transform'" },
     { name = "pyarrow", specifier = ">=22" },
     { name = "pylatexenc", marker = "extra == 'post-training'" },
-    { name = "ray", specifier = "==2.45" },
+    { name = "ray", specifier = ">=2.45" },
     { name = "readabilipy", marker = "extra == 'crawl'" },
     { name = "readabilipy", marker = "extra == 'download-transform'" },
     { name = "readability-lxml", marker = "extra == 'crawl'" },
@@ -3942,7 +3948,7 @@ requires-dist = [
     { name = "warcio", marker = "extra == 'download-transform'" },
     { name = "warcio", extras = ["all"], marker = "extra == 'crawl'", git = "https://github.com/marin-community/warcio?rev=077ea9359d5b439d152081a9a9c4aafb25046f79" },
     { name = "zephyr", editable = "lib/zephyr" },
-    { name = "zstandard", marker = "extra == 'quality-dedup-consolidate'", specifier = ">=0.23.0" },
+    { name = "zstandard", marker = "extra == 'quality-dedup-consolidate'", specifier = ">=0.18.0" },
 ]
 provides-extras = ["gcp", "cuda12", "tpu", "cpu", "crawl", "download-transform", "quality-dedup-consolidate", "tokenize-train", "rl", "post-training", "eval"]
 
@@ -9181,13 +9187,11 @@ dev = [
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-timeout" },
-    { name = "zstandard" },
 ]
 test = [
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-timeout" },
-    { name = "zstandard" },
 ]
 
 [package.metadata]
@@ -9201,7 +9205,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "tqdm-loggable", specifier = ">=0.2" },
     { name = "typing-extensions", specifier = ">=4.0" },
-    { name = "zstandard", specifier = ">=0.22.0" },
+    { name = "zstandard", specifier = ">=0.18.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -9209,13 +9213,11 @@ dev = [
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
-    { name = "zstandard", specifier = ">=0.22.0" },
 ]
 test = [
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
-    { name = "zstandard", specifier = ">=0.22.0" },
 ]
 
 [[package]]

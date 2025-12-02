@@ -208,4 +208,5 @@ def build_runtime_env_for_packages(
     return dict(
         env_vars=env_vars | {"PYTHONPATH": ":".join(python_path)},
         pip={"packages": req_path},
+        pip_check=False,
     )
