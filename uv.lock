@@ -256,6 +256,7 @@ fork-strategy = "fewest"
 
 [manifest]
 members = [
+    "dupekit",
     "fray",
     "haliax",
     "levanter",
@@ -1418,6 +1419,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5c/68/9a054c0d242a948c41b7ae9416a4148bf562df7d244c7a39a4b67e7ff742/draccus-0.11.5.tar.gz", hash = "sha256:b82e2c2027030ae1a0f105515125f914e050c0766ab518df3a0560a07d10ddc9", size = 67384, upload-time = "2025-04-22T20:41:48.972Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b9/52/3144a4a8341f125d357a8f6e07aeb23b0bde7133dabbd0c78b984c079a1f/draccus-0.11.5-py3-none-any.whl", hash = "sha256:67da70bfbdea8fe67667322c64068d6d8cd832694a418b6c71d9d3b9f5c3c005", size = 78447, upload-time = "2025-04-22T20:41:47.414Z" },
+]
+
+[[package]]
+name = "dupekit"
+source = { editable = "lib/dupekit" }
+
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
 ]
 
 [[package]]
@@ -3687,10 +3706,10 @@ quality-dedup-consolidate = [
     { name = "cattrs" },
     { name = "datasets" },
     { name = "ddsketch" },
+    { name = "dupekit" },
     { name = "fasttext" },
     { name = "huggingface-hub" },
     { name = "nltk" },
-    { name = "rbloom-gcs" },
     { name = "transformers" },
     { name = "zstandard" },
 ]
@@ -3822,6 +3841,7 @@ requires-dist = [
     { name = "ddsketch", marker = "extra == 'quality-dedup-consolidate'" },
     { name = "deepdiff" },
     { name = "draccus", specifier = ">=0.11.5" },
+    { name = "dupekit", marker = "extra == 'quality-dedup-consolidate'", editable = "lib/dupekit" },
     { name = "einops", marker = "extra == 'post-training'" },
     { name = "fasteners", specifier = ">=0.19" },
     { name = "fastparquet", marker = "extra == 'crawl'" },
@@ -3881,7 +3901,6 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=22" },
     { name = "pylatexenc", marker = "extra == 'post-training'" },
     { name = "ray", specifier = "==2.45" },
-    { name = "rbloom-gcs", marker = "extra == 'quality-dedup-consolidate'" },
     { name = "readabilipy", marker = "extra == 'crawl'" },
     { name = "readabilipy", marker = "extra == 'download-transform'" },
     { name = "readability-lxml", marker = "extra == 'crawl'" },
@@ -4017,6 +4036,7 @@ name = "marin-root"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "dupekit" },
     { name = "fray" },
     { name = "haliax" },
     { name = "levanter" },
@@ -4026,6 +4046,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dupekit", editable = "lib/dupekit" },
     { name = "fray", editable = "lib/fray" },
     { name = "haliax", editable = "lib/haliax" },
     { name = "levanter", editable = "lib/levanter" },
@@ -6557,14 +6578,6 @@ default = [
     { name = "requests" },
     { name = "smart-open" },
     { name = "virtualenv" },
-]
-
-[[package]]
-name = "rbloom-gcs"
-version = "1.5.6"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/cc/a0/b07539f527c2dc15498f0a3ad87077785d942df47aefbec0468f270d3afd/rbloom_gcs-1.5.6-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b4d0d4d9193cb4ce7d6a95d500d1b1308c8eba7273fa0d68e1fadf1d00c3eeb7", size = 4558423, upload-time = "2025-02-05T02:40:42.774Z" },
 ]
 
 [[package]]
