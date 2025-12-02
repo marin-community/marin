@@ -147,7 +147,7 @@ model:  # 7B class model
   num_layers: 32
   num_heads: 32
   num_kv_heads: 32
-  train_seq_length: 2048
+  train_seq_len: 2048
 #  flash_attention_block_size: 1024
 
   use_bias: false

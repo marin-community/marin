@@ -144,7 +144,7 @@ class SpeedrunConfig:
 
     def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
-        context_length = self.train_config.train_seq_length
+        context_length = self.train_config.train_seq_len
 
         if isinstance(self.train_config.train_batch_size, list) and len(self.train_config.train_batch_size) > 0:
             from levanter.schedule import BatchSchedule

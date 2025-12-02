@@ -8,7 +8,7 @@ model:
   num_heads: 32
   attn_backend: jax_flash
   flash_attention_block_size: 2048
-train_seq_length: 4096
+train_seq_len: 4096
 trainer:
   tracker:
     type: wandb

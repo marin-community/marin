@@ -9,7 +9,7 @@ model:
   scale_attn_by_inverse_layer_idx: true
   attn_pdrop: 0.0
   resid_pdrop: 0.0
-train_seq_length: 2048
+train_seq_len: 2048
 trainer:
   tracker:
     project: "levanter"

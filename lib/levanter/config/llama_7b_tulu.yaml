@@ -16,7 +16,7 @@ model:  # 7B class model
   flash_attention_block_size: 512
   use_bias: false
   use_layer_norm_weight: false
-train_seq_length: 2048
+train_seq_len: 2048
 trainer:
   tracker:
     type: wandb

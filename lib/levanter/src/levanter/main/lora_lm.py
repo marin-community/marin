@@ -46,7 +46,7 @@ class LoraLmConfig:
     merged_hf_upload: Optional[str] = None
 
     trust_remote_code: bool = False
-    max_train_seq_length: int = 4096
+    train_seq_len: int = 4096
 
 
 def main(config: LoraLmConfig):

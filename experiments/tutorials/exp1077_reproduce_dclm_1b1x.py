@@ -57,7 +57,7 @@ NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)  # 256 is the batch
 # Define training configuration with hyperparameters
 # https://github.com/mlfoundations/dclm/blob/main/training/configs/1b_1x_fast.json
 training_config = SimpleTrainConfig(
-    train_seq_length=SEQ_LEN,
+    train_seq_len=SEQ_LEN,
     resources=TpuPodConfig(tpu_type="v4-128"),  # Hardware configuration: 128 v4 TPU cores, can be swapped for GpuConfig
     train_batch_size=BATCH_SIZE,  # Number of sequences processed per step
     num_train_steps=NUM_TRAIN_STEPS,  # Total training steps

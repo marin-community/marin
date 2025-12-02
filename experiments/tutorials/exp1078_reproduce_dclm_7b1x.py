@@ -57,7 +57,7 @@ NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
 # Define training configuration with hyperparameters
 # https://github.com/mlfoundations/dclm/blob/main/training/configs/7b_1x_fast_2e-3_lr_5e-6_zloss.json
 training_config = SimpleTrainConfig(
-    train_seq_length=SEQ_LEN,
+    train_seq_len=SEQ_LEN,
     resources=TpuPodConfig(tpu_type="v4-128", slice_count=4),
     train_batch_size=BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,

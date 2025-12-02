@@ -31,7 +31,7 @@ model:  # 8B llama3 class model from sft_tootsie_mixture.yaml
   rope:
     type: "llama3"
 
-train_seq_length: 4096
+train_seq_len: 4096
 trainer:
   seed: 0
   tracker:
