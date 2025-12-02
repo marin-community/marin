@@ -20,11 +20,7 @@ import pytest
 from marin.utils import fsspec_exists
 from zephyr import load_jsonl, write_jsonl_file
 
-try:
-    import rbloom  # noqa: F401
-    from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
-except ImportError:
-    pytest.skip("Dedupe module not available", allow_module_level=True)
+from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 
 
 def load_dedup_outputs(output_dir: str) -> dict[str, dict]:
@@ -361,6 +357,31 @@ def test_exact_deduplication_paragraph(fox_corpus):
     assert any(span[2] > 0.5 for span in partial_spans)
 
 
+def test_exact_deduplication_document(fox_corpus):
+    """Test exact document-level deduplication (DedupMode.EXACT_DOC_DEDUPLICATE)."""
+    config = DedupeConfig(
+        input_path=fox_corpus["test_dir"],
+        output_path=fox_corpus["output_dir"],
+        attribute_name="is_duplicate",
+        mode=DedupMode.EXACT_DOC_DEDUPLICATE,
+        processes=1,
+    )
+
+    result = dedupe(config)
+    assert result["success"]
+    assert result["mode"] == "exact_doc_deduplication"
+
+    results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
+
+    assert results_by_id["test_unique_1"]["attributes"]["is_duplicate"] is False
+
+    dups = ["test_gray_dup_1", "test_gray_dup_2", "test_gray_dup_3"]
+    flags = [results_by_id[d]["attributes"]["is_duplicate"] for d in dups]
+
+    # NOTE: of the 3 exact dups, 2 are marked as duplicates (one is canonical)
+    assert sum(flags) == 2
+
+
 def test_dedupe_consolidate_integration(fox_corpus):
     """Integration test: dedupe generates attributes, consolidate filters based on them.
 
@@ -400,7 +421,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
         filters=[
             FilterConfig(
                 type=FilterType.REMOVE_SPANS,
-                attribute_path=dedupe_output_dir,
+                attribute_path=f"{dedupe_output_dir}/data",
                 name="duplicate_text",
             )
         ],
