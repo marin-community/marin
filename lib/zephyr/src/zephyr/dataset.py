@@ -611,7 +611,7 @@ class Dataset(Generic[T]):
             num_shards: Optional target number of shards, when None it's a no-op
 
         Returns:
-            New dataset with reshard operation appended
+            New dataset with reshard operation appended or self if num_shards is None
 
         Example:
             >>> backend = create_backend("ray", max_parallelism=20)

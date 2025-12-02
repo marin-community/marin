@@ -300,7 +300,7 @@ def test_reshard(backend):
 
 
 def test_reshard_noop(backend):
-    """Test reshard with non-positive num_shards is a noop."""
+    """Test reshard with None is a noop, and non-positive values raise ValueError"""
 
     def yield_1(it):
         yield from [1]
