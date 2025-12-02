@@ -209,6 +209,7 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
     count = 1
     with atomic_rename(output_path) as tmp_path:
         with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
+            print(exemplar)
             writer.write_batch([exemplar])
             for batch in batchify(records):
                 writer.write_batch(batch)
