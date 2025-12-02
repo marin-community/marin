@@ -268,7 +268,7 @@ class _LmEvalHarnessWorker:
     def _receive_payload(self):
         payload = broadcast_shard(
             self._dummy_batch,
-            hax.partitioning.infer_resource_partitions(self._dummy_batch, preserve_existing_shardings=False),
+            hax.partitioning.infer_resource_partitions(self._dummy_batch),
         )
         return payload
 
@@ -280,7 +280,7 @@ class _LmEvalHarnessWorker:
     def _send_payload(self, payload):
         assert jax.process_index() == 0
         out = broadcast_shard(
-            payload, hax.partitioning.infer_resource_partitions(payload, preserve_existing_shardings=False)
+            payload, hax.partitioning.infer_resource_partitions(payload)
         )
         return out
 
