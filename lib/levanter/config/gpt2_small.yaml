@@ -8,7 +8,7 @@ model:
   gradient_checkpointing: true
   scale_attn_by_inverse_layer_idx: true
   attn_backend: jax_flash
-train_length: 1024
+train_seq_length: 1024
 trainer:
   tracker:
     project: "levanter"

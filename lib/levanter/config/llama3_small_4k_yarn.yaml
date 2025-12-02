@@ -21,7 +21,7 @@ model:
     beta_slow: 1.0
     original_max_position_embeddings: 256 # this is unreasonable just for testing
     mscale: 1.0
-train_length: 4096
+train_seq_length: 4096
 trainer:
   tracker:
     - type: wandb

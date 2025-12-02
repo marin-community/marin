@@ -20,7 +20,7 @@ model:
   max_seq_len: 1024
   gradient_checkpointing: true
   scale_attn_by_inverse_layer_idx: true
-train_length: 1024
+train_seq_length: 1024
 trainer:
   tracker:
     project: "levanter"

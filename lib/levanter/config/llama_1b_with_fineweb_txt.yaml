@@ -8,7 +8,7 @@ model:  # 1B class model
   num_heads: 16
   num_kv_heads: 16
   flash_attention_block_size: 1024
-train_length: 2048
+train_seq_length: 2048
 trainer:
   tracker:
     type: wandb

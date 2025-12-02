@@ -7,7 +7,7 @@ model:  # 1B class model
   num_layers: 16
   num_heads: 16
   num_kv_heads: 16
-train_length: 2048
+train_seq_length: 2048
 trainer:
   tracker:
     type: wandb

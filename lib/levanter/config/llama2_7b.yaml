@@ -30,7 +30,7 @@ model:
   upcast_attn: false
   use_bias: false
   use_layer_norm_weight: true
-train_length: 4096
+train_seq_length: 4096
 optimizer:
   beta1: 0.9
   beta2: 0.95

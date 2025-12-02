@@ -367,7 +367,7 @@ def default_train(
         ),
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
         z_loss_weight=train_config.z_loss_weight,
-        train_length=train_length,
+        train_seq_length=train_length,
         model=model_config,
         optimizer=(
             train_config.optimizer_config
@@ -420,8 +420,8 @@ def default_train(
             f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
-            f"{train_length} (train_length) "
-            f"= {total_examples * train_length:,} tokens."
+            f"{train_length} (train_seq_length) "
+            f"= {total_examples * train_length} tokens."
         ),
         fn=run_levanter_train_lm,
         config=config,

@@ -35,7 +35,7 @@ class TrainASRConfig:
     model: ASRConfig = field(default_factory=WhisperConfig)
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     batch_size: int = 16
-    max_train_length: int = 448  # in tokens
+    max_train_seq_length: int = 448  # in tokens
 
     # config related to continued pretraining
     initialize_from_hf: Union[bool, str] = False

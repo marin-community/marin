@@ -22,7 +22,7 @@ model:  # 8B  llama3 class model
   initializer_range: 0.02
   rope:
     type: "llama3"
-train_length: 4096
+train_seq_length: 4096
 trainer:
   seed: 1
   tracker:
