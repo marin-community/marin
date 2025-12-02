@@ -197,7 +197,6 @@ class MathEnv(MarinEnv):
         temperature: float,
         prng_key,
         mode: str = "train",
-        step: int = 0,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample prompts, evaluate responses, and create rollouts."""
 
