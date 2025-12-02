@@ -20,11 +20,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 **1. Fork & Setup Marin**
 
-[Click here](https://github.com/marin-community/marin/fork) to fork Marin, then clone your fork, or let the setup script do it for you if GitHub CLI is installed and authenticated. Run the setup script:
+[Click here](https://github.com/marin-community/marin/fork) to fork Marin, then clone your fork. Run the Marin setup script:
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/marin-community/marin/refs/heads/main/scripts/speedrun/onboarding_setup.sh | bash
 ```
+
+You can skip manually creating the fork if you have GitHub CLI installed and authenticated.
 
 <details><summary>Manual Setup Steps (alternative)</summary>
 
@@ -102,7 +104,7 @@ Before you get started, you will need the following:
 1.  Create a new directory for your run:
 
     ```bash
-    mkdir -p experiments/speedrun/YOUR_RUN_NAME
+    mkdir -p experiments/speedrun/my_submission
     ```
 
 2.  Create your training script in this directory. You can start by copying the "[hackable transformer](https://github.com/marin-community/marin/tree/main/experiments/hackable_transformer_starter_template.py)" starter file, where a generic transformer language model is implemented for you to make changes easily, in addition to all other necessary code for you to make a submission. To see examples of other speedruns and configurations, check out the [speedrun directory](https://github.com/marin-community/marin/tree/main/experiments/speedrun). You can also [add new optimizers](https://github.com/marin-community/marin/blob/main/docs/tutorials/add-optimizer.md), change learning rate schedules, play with hyperparameters, etc.
