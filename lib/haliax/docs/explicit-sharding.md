@@ -22,7 +22,7 @@ We won't fully recapitulate JAX's explicit sharding docs; please refer to them f
 
 - Use `jax.set_mesh`/`hax.partitioning.set_mesh` with `AxisType.Explicit` to make sharding part of the type.
 - Provide an `axis_mapping` (e.g. `{batch: "data", mlp: "model"}`) to map logical axes to mesh axes. Helpers like `pspec_for_axis` and `hax.shard` use this mapping to build `PartitionSpec`s.
-  In general, it's a good idea to specify two axis mappings: one for the parameter sharding (typically something like `{"embed": "data", "embed": "model"}`) and one for the compute sharding (typically something like `{"batch": "data", "mlp": "model"}`).
+  In general, it's a good idea to specify two axis mappings: one for the parameter sharding (typically something like `{"embed": "data", "mlp": "model"}`) and one for the compute sharding (typically something like `{"batch": "data", "mlp": "model"}`).
 
 Note that you can of course still use `AxisType.Implicit` meshes (which are default) in which case everything behaves as before.
 
