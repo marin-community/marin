@@ -102,6 +102,20 @@ class _ImmediateFuture:
             self._iterator = iter(self._result)
         return next(self._iterator)
 
+    async def __anext__(self):
+        if self._iterator is None:
+            if not inspect.isgenerator(self._result):
+                raise StopAsyncIteration
+            self._iterator = iter(self._result)
+        try:
+            i = next(self._iterator)
+        except StopIteration as e:
+            raise StopAsyncIteration from e
+        return i
+
+    def __aiter__(self):
+        return self
+
 
 class GeneratorFuture:
     """Wrapper for a Future that yields items, making it iterable.
@@ -124,6 +138,18 @@ class GeneratorFuture:
         if self._iterator is None:
             self._iterator = iter(self.result())
         return next(self._iterator)
+
+    async def __anext__(self):
+        if self._iterator is None:
+            self._iterator = iter(self.result())
+        try:
+            i = next(self._iterator)
+        except StopIteration as e:
+            raise StopAsyncIteration from e
+        return i
+
+    def __aiter__(self):
+        return self
 
 
 class SyncContext:

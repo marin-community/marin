@@ -53,6 +53,7 @@ from zephyr.dataset import (
 )
 
 from .writers import write_binary_file, write_jsonl_file, write_levanter_cache, write_parquet_file
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -804,52 +805,72 @@ class Backend:
 
         total = len(shards)
 
-        # Build list of (shard_idx, shard, aux_shards) tuples to process
-        shard_tasks = [
-            (shard_idx, shard, aux_shards)
-            for shard_idx, (shard, aux_shards) in enumerate(zip(shards, aux_shards_per_shard, strict=True))
-        ]
-
         chunks_by_shard_idx = defaultdict(list)
 
-        if shard_tasks:
-            active_gens = []
-            queued_tasks = shard_tasks[:]
-            finished_gens = []
+        async def async_inner_execute_on_shards():
+            # NOTE: this semaphore controles how many concurrent shard tasks are run
+            semaphore = asyncio.Semaphore(self.config.max_parallelism)
 
-            while len(active_gens) < self.config.max_parallelism and queued_tasks:
-                shard_idx, shard, aux_shards = queued_tasks.pop(0)
-                ctx = ApplyShardCtx(
-                    shard=shard,
-                    shard_idx=shard_idx,
-                    total_shards=total,
-                    chunk_size=self.chunk_size,
-                    aux_shards=aux_shards,
-                )
-                active_gens.append(self.context.run(process_fn, ctx, *fn_args))
+            async def semaphore_wrapper(shard_idx, shard, aux_shards):
+                async with semaphore:
+                    ctx = ApplyShardCtx(
+                        shard=shard,
+                        shard_idx=shard_idx,
+                        total_shards=total,
+                        chunk_size=self.chunk_size,
+                        aux_shards=aux_shards,
+                    )
 
-            while active_gens or queued_tasks:
-                ready, _ = self.context.wait(active_gens, num_returns=1)
+                    gen = self.context.run(process_fn, ctx, *fn_args)
 
-                for ready_gen in ready:
-                    try:
-                        header = self.context.get(next(ready_gen))
-                        data = next(ready_gen)  # ref to header data
-                        chunks_by_shard_idx[header.shard_idx].append(Chunk(header.count, data))
+                    inner_chunks_by_shard_idx = defaultdict(list)
 
-                    except StopIteration:
-                        finished_gens.append(ready_gen)
-                        active_gens.remove(ready_gen)
-                        if queued_tasks:
-                            shard_idx, shard, aux_shards = queued_tasks.pop(0)
-                            ctx = ApplyShardCtx(
-                                shard=shard,
-                                shard_idx=shard_idx,
-                                total_shards=total,
-                                chunk_size=self.chunk_size,
-                                aux_shards=aux_shards,
-                            )
-                            active_gens.append(self.context.run(process_fn, ctx, *fn_args))
+                    # NOTE: we want to ensure that we consume headers and data in lockstep.
+                    # For example it's unacctable if we consume a header, but for some reason
+                    # (failure) the data inner async for loop never yields anything, these 2
+                    # counters help us ensure that we have a 1:1 mapping between headers and data.
+                    headers_consumed, data_consumed = 0, 0
+                    async for header_ref in gen:
+                        header = self.context.get(header_ref)
+                        headers_consumed += 1
+                        async for data_ref in gen:
+                            inner_chunks_by_shard_idx[header.shard_idx].append(Chunk(header.count, data_ref))
+                            data_consumed += 1
+                            break  # Break after getting data for this header
+
+                    if headers_consumed != data_consumed:
+                        raise RuntimeError(
+                            f"Inconsistent header/data streaming, aborting. "
+                            f"Headers seen: {headers_consumed}, data seen: {data_consumed}"
+                        )
+                    return inner_chunks_by_shard_idx
+
+            tasks = [
+                semaphore_wrapper(shard_idx, shard, aux_shards)
+                for shard_idx, (shard, aux_shards) in enumerate(zip(shards, aux_shards_per_shard, strict=True))
+            ]
+            return await asyncio.gather(*tasks)
+
+        # NOTE: we consume all the scheduled task generators concurrently in an async loop.
+        # This should be more efficient than using a potentially large number of threads.
+        try:
+            # Check if a loop is already running
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # NOTE: handle the case of nested async loops e.g. in Jupyter notebooks
+            import nest_asyncio
+
+            nest_asyncio.apply()
+            results = asyncio.run(async_inner_execute_on_shards())
+        else:
+            results = asyncio.run(async_inner_execute_on_shards())
+
+        for inner_chunks_by_shard_idx in results:
+            for shard_idx, chunks in inner_chunks_by_shard_idx.items():
+                chunks_by_shard_idx[shard_idx].extend(chunks)
 
         # Reconstruct shards from collected chunks
         if len(chunks_by_shard_idx) == 0:
