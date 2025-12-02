@@ -25,6 +25,10 @@ import tempfile
 
 logger = logging.getLogger(__name__)
 
+# Helper functions for terminating processes.
+# On unix, we use process groups to collect and terminate subprocess + all children.
+# On linux, we use PR_SET_PDEATHSIG to automatically terminate, on OSX + windows, best effort.
+
 
 def _set_pdeathsig_preexec():
     """Use prctl(PR_SET_PDEATHSIG, SIGKILL) to kill subprocess if parent dies."""
@@ -35,7 +39,7 @@ def _set_pdeathsig_preexec():
             errno = ctypes.get_errno()
             logger.warning(f"Failed to set parent death signal: errno {errno}")
     except Exception as e:
-        logger.debug(f"Could not set parent death signal: {e}")
+        logger.info(f"Could not set parent death signal: {e}")
 
 
 def _signal_process(process: subprocess.Popen, sig: int) -> None:
@@ -51,8 +55,8 @@ def _signal_process(process: subprocess.Popen, sig: int) -> None:
 def _terminate_process(process: subprocess.Popen) -> None:
     try:
         _signal_process(process, signal.SIGKILL)
-    except (ProcessLookupError, OSError):
-        pass
+    except Exception as e:
+        logger.info(f"Failed to terminate process {process.pid} -- already terminated? {e}")
 
 
 class TemporaryVenv:
@@ -157,12 +161,10 @@ class TemporaryVenv:
 
         for process in self._processes:
             if process.poll() is not None:
+                # process already terminated
                 continue
 
-            try:
-                _terminate_process(process)
-            except (ProcessLookupError, OSError):
-                logger.debug(f"Process {process.pid} already terminated")
+            _terminate_process(process)
 
     def get_env(self, base_env: dict[str, str] | None = None) -> dict[str, str]:
         """Get environment dict with venv activation."""

@@ -46,8 +46,13 @@ from fray.fn_thunk import create_thunk_entrypoint
 logger = logging.getLogger(__name__)
 
 
+# We can't launch TPU jobs directly via Ray, as it doesn't support gang-scheduling and jobs are always
+# started with a single task in Ray. Instead we use the ray_tpu helper/actor to stage TPU execution.
+# We store TPU "job" information separately here to report to the user.
+
+
 @dataclass
-class TpuJobInfo:
+class _TpuJobInfo:
     ref: ray.ObjectRef
     name: str
     start_time: float
@@ -84,7 +89,7 @@ class RayCluster(Cluster):
             logger.info(f"Using provided namespace: {self._namespace}")
 
         self._dashboard_address = dashboard_address or self._get_dashboard_address()
-        self._tpu_jobs: dict[str, TpuJobInfo] = {}  # Track TPU jobs: job_id -> {ref, name, start_time}
+        self._tpu_jobs: dict[str, _TpuJobInfo] = {}  # Track TPU jobs: job_id -> {ref, name, start_time}
 
     @classmethod
     def from_spec(cls, query_params: dict[str, list[str]]) -> "RayCluster":
@@ -352,7 +357,7 @@ class RayCluster(Cluster):
 
         # Track via ObjectRef
         job_id = f"tpu-{object_ref.hex()}"
-        self._tpu_jobs[job_id] = TpuJobInfo(
+        self._tpu_jobs[job_id] = _TpuJobInfo(
             ref=object_ref,
             name=request.name,
             start_time=time.time(),
@@ -405,12 +410,11 @@ class RayCluster(Cluster):
         """
         if ray.is_initialized():
             try:
-                # Try to get the GCS address, which we can use for job submission
                 ctx = ray.get_runtime_context()
                 if hasattr(ctx, "gcs_address"):
                     return ctx.gcs_address
             except Exception:
-                # Ignore errors getting GCS address; fall back to self._address
+                # Fall back to self._address
                 pass
         return self._address
 

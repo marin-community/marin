@@ -20,6 +20,7 @@ Implementation-specific tests are kept as separate manual tests.
 
 import json
 import os
+import sys
 
 import pytest
 from fray.cluster import (
@@ -146,9 +147,6 @@ def test_environment_integration(cluster, cluster_type, tmp_path):
     """Integration test to verify environment variable injection."""
 
     def _check_env_closure(output_path: str):
-        import json
-        import os
-
         with open(output_path, "w") as f:
             json.dump(dict(os.environ), f)
 
@@ -193,10 +191,6 @@ def test_local_cluster_replica_integration(local_cluster, tmp_path):
     """Integration test for replica functionality: env vars, logs, status aggregation."""
 
     def replica_worker(output_path: str):
-        import json
-        import os
-        import sys
-
         replica_id = int(os.environ.get("FRAY_REPLICA_ID", "0"))
         replica_count = os.environ.get("FRAY_REPLICA_COUNT", "MISSING")
 

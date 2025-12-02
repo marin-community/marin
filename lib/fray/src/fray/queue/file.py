@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""File-based distributed queue implementation using fsspec."""
+"""File-based distributed queue implementation, mostly for testing."""
 
 from __future__ import annotations
 
@@ -33,7 +33,12 @@ T = TypeVar("T")
 
 
 class FileQueue(Queue[T]):
-    """Queue implementation using fsspec for storage and coordination for testing or local development."""
+    """Tracks queue items using a set of lease directories and atomic mv operations.
+
+    New items are inserted into the `pending` directory. Workers scan this directory for
+    available items and move them to the `processing` directory. Items are then removed
+    from the `processing` directory when completed.
+    """
 
     def __init__(self, path: PathLike, fs_args: dict[str, Any] | None = None):
         """Initialize FileQueue.
@@ -71,17 +76,14 @@ class FileQueue(Queue[T]):
             pickle.dump(item, f)
 
     def peek(self) -> T | None:
-        try:
-            files = sorted(self.fs.ls(str(self.pending_dir), detail=False))
-            files = [f for f in files if f.rstrip("/") != str(self.pending_dir).rstrip("/")]
+        files = sorted(self.fs.ls(str(self.pending_dir), detail=False))
+        files = [f for f in files if f.rstrip("/") != str(self.pending_dir).rstrip("/")]
 
-            if not files:
-                return None
-
-            with self.fs.open(files[0], "rb") as f:
-                return pickle.load(f)
-        except Exception:
+        if not files:
             return None
+
+        with self.fs.open(files[0], "rb") as f:
+            return pickle.load(f)
 
     def pop(self, lease_timeout: float = 60.0) -> Lease[T] | None:
         self._recover_expired_leases()
@@ -106,9 +108,6 @@ class FileQueue(Queue[T]):
                 return Lease(item=item, lease_id=new_name, timestamp=time.time())
             except FileNotFoundError:
                 # Someone else took it
-                continue
-            except Exception as e:
-                logger.error(f"Error acquiring lease for {file_path}: {e}")
                 continue
 
         return None
@@ -142,11 +141,8 @@ class FileQueue(Queue[T]):
                     except FileNotFoundError:
                         # File was already moved or deleted by another process
                         pass
-
             except ValueError:
                 continue
-            except Exception as e:
-                logger.error(f"Error processing lease {filename}: {e}")
 
     def done(self, lease: Lease[T]) -> None:
         try:
