@@ -35,9 +35,10 @@ cache-keys = [
 
 [dependency-groups]
 test = [
+    "huggingface-hub",
+    "pyarrow>=11.0.0",
     "pytest>=8.3.2",
-    "pytest-timeout",
-
+    "pytest-timeout"
 ]
 dev = [
     { include-group = "test" },
