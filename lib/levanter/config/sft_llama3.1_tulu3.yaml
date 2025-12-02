@@ -22,7 +22,7 @@ model:  # 8B llama3 class model
   rope:
     type: "llama3"
 
-train_length: 4096
+train_seq_length: 4096
 trainer:
   seed: 0
   tracker:

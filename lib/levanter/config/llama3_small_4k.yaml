@@ -14,7 +14,7 @@ model:
   num_layers: 12
   max_seq_len: 4096
   gradient_checkpointing: true
-train_length: 4096
+train_seq_length: 4096
 trainer:
   tracker:
     - type: wandb

@@ -10,7 +10,7 @@ model:
   attn_pdrop: 0.0
   resid_pdrop: 0.0
   use_bias: false
-train_length: 2048
+train_seq_length: 2048
 trainer:
   tracker:
     project: "levanter"

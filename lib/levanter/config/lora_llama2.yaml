@@ -6,7 +6,7 @@ data:
   tokenizer: "NousResearch/Llama-2-7b-hf"
 initialize_from_hf: "NousResearch/Llama-2-7b-hf"
 peft_save_path: "lora_llama2"
-max_train_length: 2048  # train on sequences of this length to reduce memory usage
+max_train_seq_length: 2048  # train on sequences of this length to reduce memory usage
 trainer:
   mp: p=f32,c=bfloat16
   wandb:
