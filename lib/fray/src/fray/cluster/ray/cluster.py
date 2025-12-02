@@ -206,22 +206,7 @@ class RayCluster(Cluster):
             yield "Log streaming not supported for TPU jobs. Use Ray dashboard to view logs.\n"
             return
 
-        async def _tail_logs():
-            line_count = 0
-            async for line in self._job_client().tail_job_logs(job_id):
-                line_count += 1
-                yield line
-            logger.info("Finished tailing logs for job %s, got %d lines", job_id, line_count)
-
-        async def _consume():
-            results = []
-            async for line in _tail_logs():
-                results.append(line)
-            logger.debug("Collected %d log lines for job %s", len(results), job_id)
-            return results
-
-        logs = asyncio.run(_consume())
-        logger.info("Yielding %d log lines for job %s", len(logs), job_id)
+        logs = asyncio.run(self._job_client().tail_job_logs(job_id))
         yield from logs
 
     def poll(self, job_id: JobId) -> JobInfo:
