@@ -39,7 +39,7 @@ class VizLmConfig:
     data: SingleDatasetLMConfigBase | LMMixtureDatasetConfig = field(default_factory=SingleDatasetLMConfigBase)
     model: LmConfig = field(default_factory=LlamaConfig)
 
-    max_eval_length: int = 4095
+    max_eval_length: int = 4096
 
     num_docs: int = 32
 
