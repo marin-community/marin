@@ -26,7 +26,8 @@ import os
 import tempfile
 
 import numpy as np
-from transformers import AutoTokenizer, PreTrainedTokenizer
+from levanter.compat.hf_checkpoints import load_tokenizer
+from transformers import PreTrainedTokenizer
 
 from experiments.llama import llama3_tokenizer as llama3_tokenizer_hf_path
 from experiments.marin_models import MARIN_CHAT_TEMPLATE, MARIN_CUSTOM_SPECIAL_TOKENS
@@ -77,7 +78,7 @@ def _inject_special_tokens(
                 json.dump(tokenizer_json, f)
 
         # Load the modified tokenizer
-        return AutoTokenizer.from_pretrained(temp_path)
+        return load_tokenizer(temp_path, trust_remote_code=False)
 
 
 def create_marin_tokenizer(
@@ -94,10 +95,7 @@ def create_marin_tokenizer(
     """
     # Inject special tokens
     marin_tokenizer = _inject_special_tokens(tokenizer, MARIN_CUSTOM_SPECIAL_TOKENS)
-
-    # Assign marin template
     marin_tokenizer.chat_template = MARIN_CHAT_TEMPLATE
-
     return marin_tokenizer
 
 
@@ -111,7 +109,7 @@ def load_llama3_tokenizer() -> PreTrainedTokenizer:
     Raises:
         OSError, GatedRepoError, HTTPError: If access to the tokenizer is not available
     """
-    return AutoTokenizer.from_pretrained(llama3_tokenizer_hf_path)
+    return load_tokenizer(llama3_tokenizer_hf_path)
 
 
 # ============ Test data and functions ============
@@ -263,7 +261,7 @@ def main(dry_run: bool = False):
     # Roundtrip write-read
     with tempfile.TemporaryDirectory() as temp_path:
         marin_tokenizer.save_pretrained(temp_path)
-        marin_tokenizer = AutoTokenizer.from_pretrained(temp_path, local_files_only=True)
+        marin_tokenizer = load_tokenizer(temp_path, trust_remote_code=False)
 
     run_all_tests(marin_tokenizer)
 
