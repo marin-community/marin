@@ -170,9 +170,6 @@ class CacheLedger:
     field_counts: Dict[str, int] = dataclasses.field(default_factory=dict)
     metadata: "CacheMetadata" = dataclasses.field(default_factory=lambda: CacheMetadata({}))
 
-    def __post_init__(self):
-        assert self.metadata.preprocessor_metadata is not None
-
     @staticmethod
     def load_or_initialize(cache_dir: str, source: ShardedDataSource, processor: BatchProcessor):
         metadata = CacheMetadata(preprocessor_metadata=processor.metadata)
