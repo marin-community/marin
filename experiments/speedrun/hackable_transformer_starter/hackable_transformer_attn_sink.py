@@ -522,6 +522,7 @@ def build_run(
 
     train = SimpleTrainConfig(
         resources,
+        train_seq_len=max_seq_len,
         train_batch_size=batch,
         num_train_steps=steps,
         learning_rate=muon.learning_rate,

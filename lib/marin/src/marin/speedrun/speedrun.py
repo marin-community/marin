@@ -238,6 +238,9 @@ def speedrun_results(config: SpeedrunResultsConfig):
     else:
         context_length = config.speedrun_config.train_config.train_config.train_seq_len
 
+    if context_length is None:
+        context_length = config.speedrun_config.model_config.max_seq_len
+
     total_tokens = (
         config.speedrun_config.train_config.train_batch_size
         * context_length
