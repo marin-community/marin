@@ -14,13 +14,17 @@
 
 import fsspec
 import pytest
-
 from marin.classifiers.utils import create_dataset_shard, reservoir_sample
 from marin.utils import fsspec_rm
 
 pytestmark = pytest.mark.tpu_ci
 
 TEST_OUTPUT_PATH = "gs://marin-us-east5/documents/test-sampling.jsonl.gz"
+
+
+@pytest.fixture
+def test_crawl_file_path():
+    return "gs://marin-us-east5/documents/chris-test/test_50.jsonl.gz"
 
 
 def test_sample_document_matches_keeping_all_examples(test_crawl_file_path: str):

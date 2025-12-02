@@ -256,6 +256,7 @@ fork-strategy = "fewest"
 
 [manifest]
 members = [
+    "dupekit",
     "fray",
     "haliax",
     "levanter",
@@ -1421,6 +1422,24 @@ wheels = [
 ]
 
 [[package]]
+name = "dupekit"
+source = { editable = "lib/dupekit" }
+
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+]
+
+[[package]]
 name = "einops"
 version = "0.8.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1756,11 +1775,14 @@ source = { editable = "lib/fray" }
 dependencies = [
     { name = "click" },
     { name = "cloudpickle" },
+    { name = "fastapi" },
     { name = "fsspec" },
+    { name = "httpx" },
     { name = "humanfriendly" },
     { name = "mergedeep" },
     { name = "pyyaml" },
     { name = "typing-extensions" },
+    { name = "uvicorn" },
     { name = "zstandard" },
 ]
 
@@ -1797,13 +1819,16 @@ fray-tpu-test = [
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
+    { name = "fastapi" },
     { name = "fsspec", specifier = ">=2024.0.0" },
+    { name = "httpx" },
     { name = "humanfriendly", specifier = ">=10.0" },
     { name = "mergedeep" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ray", marker = "extra == 'ray'", specifier = ">=2.45" },
     { name = "typing-extensions", specifier = ">=4.0" },
-    { name = "zstandard", specifier = ">=0.22.0" },
+    { name = "uvicorn" },
+    { name = "zstandard", specifier = ">=0.18.0" },
 ]
 provides-extras = ["ray"]
 
@@ -3687,10 +3712,10 @@ quality-dedup-consolidate = [
     { name = "cattrs" },
     { name = "datasets" },
     { name = "ddsketch" },
+    { name = "dupekit" },
     { name = "fasttext" },
     { name = "huggingface-hub" },
     { name = "nltk" },
-    { name = "rbloom-gcs" },
     { name = "transformers" },
     { name = "zstandard" },
 ]
@@ -3822,6 +3847,7 @@ requires-dist = [
     { name = "ddsketch", marker = "extra == 'quality-dedup-consolidate'" },
     { name = "deepdiff" },
     { name = "draccus", specifier = ">=0.11.5" },
+    { name = "dupekit", marker = "extra == 'quality-dedup-consolidate'", editable = "lib/dupekit" },
     { name = "einops", marker = "extra == 'post-training'" },
     { name = "fasteners", specifier = ">=0.19" },
     { name = "fastparquet", marker = "extra == 'crawl'" },
@@ -3880,8 +3906,7 @@ requires-dist = [
     { name = "py7zr", marker = "extra == 'download-transform'" },
     { name = "pyarrow", specifier = ">=22" },
     { name = "pylatexenc", marker = "extra == 'post-training'" },
-    { name = "ray", specifier = "==2.45" },
-    { name = "rbloom-gcs", marker = "extra == 'quality-dedup-consolidate'" },
+    { name = "ray", specifier = ">=2.45" },
     { name = "readabilipy", marker = "extra == 'crawl'" },
     { name = "readabilipy", marker = "extra == 'download-transform'" },
     { name = "readability-lxml", marker = "extra == 'crawl'" },
@@ -3923,7 +3948,7 @@ requires-dist = [
     { name = "warcio", marker = "extra == 'download-transform'" },
     { name = "warcio", extras = ["all"], marker = "extra == 'crawl'", git = "https://github.com/marin-community/warcio?rev=077ea9359d5b439d152081a9a9c4aafb25046f79" },
     { name = "zephyr", editable = "lib/zephyr" },
-    { name = "zstandard", marker = "extra == 'quality-dedup-consolidate'", specifier = ">=0.23.0" },
+    { name = "zstandard", marker = "extra == 'quality-dedup-consolidate'", specifier = ">=0.18.0" },
 ]
 provides-extras = ["gcp", "cuda12", "tpu", "cpu", "crawl", "download-transform", "quality-dedup-consolidate", "tokenize-train", "rl", "post-training", "eval"]
 
@@ -4017,6 +4042,7 @@ name = "marin-root"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "dupekit" },
     { name = "fray" },
     { name = "haliax" },
     { name = "levanter" },
@@ -4026,6 +4052,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dupekit", editable = "lib/dupekit" },
     { name = "fray", editable = "lib/fray" },
     { name = "haliax", editable = "lib/haliax" },
     { name = "levanter", editable = "lib/levanter" },
@@ -6557,14 +6584,6 @@ default = [
     { name = "requests" },
     { name = "smart-open" },
     { name = "virtualenv" },
-]
-
-[[package]]
-name = "rbloom-gcs"
-version = "1.5.6"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/cc/a0/b07539f527c2dc15498f0a3ad87077785d942df47aefbec0468f270d3afd/rbloom_gcs-1.5.6-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b4d0d4d9193cb4ce7d6a95d500d1b1308c8eba7273fa0d68e1fadf1d00c3eeb7", size = 4558423, upload-time = "2025-02-05T02:40:42.774Z" },
 ]
 
 [[package]]
@@ -9168,13 +9187,11 @@ dev = [
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-timeout" },
-    { name = "zstandard" },
 ]
 test = [
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-timeout" },
-    { name = "zstandard" },
 ]
 
 [package.metadata]
@@ -9188,7 +9205,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "tqdm-loggable", specifier = ">=0.2" },
     { name = "typing-extensions", specifier = ">=4.0" },
-    { name = "zstandard", specifier = ">=0.22.0" },
+    { name = "zstandard", specifier = ">=0.18.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -9196,13 +9213,11 @@ dev = [
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
-    { name = "zstandard", specifier = ">=0.22.0" },
 ]
 test = [
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
-    { name = "zstandard", specifier = ">=0.22.0" },
 ]
 
 [[package]]

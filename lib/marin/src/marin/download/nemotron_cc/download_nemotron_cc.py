@@ -87,7 +87,7 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str, c
 @dataclass
 class NemotronIngressConfig:
     output_path: str = THIS_OUTPUT_PATH
-    chunk_size: int = 65536
+    chunk_size: int = 1048576
 
 
 @draccus.wrap()
