@@ -34,9 +34,8 @@ from haliax import Axis, AxisSelection, AxisSelector, NamedArray, axis_name
 from haliax.jax_utils import maybe_rng_split, named_call
 from haliax.nn.attention import causal_mask, combine_masks_and, combine_masks_or
 from haliax.nn.normalization import LayerNormBase
-from haliax.partitioning import pspec_for_axis
+from haliax.partitioning import pspec_for_axis, shard_map
 from haliax.types import PrecisionLike
-from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec
 from jaxtyping import PRNGKeyArray
 
@@ -1865,7 +1864,7 @@ def _do_tpu_ragged_paged_attention(
 
     o = shard_map(
         Partial(tpu_ragged_paged_attention, sm_scale=sm_scale, soft_cap=soft_cap),
-        jax.sharding.get_abstract_mesh(),
+        mesh=jax.sharding.get_abstract_mesh(),
         in_specs=(
             haliax.partitioning.pspec_for_axis(q_flat.axes),
             haliax.partitioning.pspec_for_axis(kv_pages_padded.axes),
