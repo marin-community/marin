@@ -109,6 +109,100 @@ worker_pool.py. The user code will typically listen on the queue for requests,
 take a lease, apply e.g. inference, then push the inference result on a result
 queue for retrieval.
 
+## Actors (Job API)
+
+Actors are stateful services that maintain state across multiple method calls.
+They belong to the **Job API** layer (managing state within a job), not the
+Cluster API layer.
+
+### Use Cases
+
+Actors enable coordination and state sharing patterns:
+
+- **Coordination**: StatusActor for task locks and dependency tracking
+- **Shared State**: Curriculum for lesson progression across workers
+- **Distributed Services**: WeightTransferCoordinator for weight synchronization
+
+### Creating Actors
+
+```python
+from fray import fray_job_ctx
+
+ctx = fray_job_ctx()
+
+# Create an actor
+actor = ctx.create_actor(
+    MyActorClass,
+    constructor_arg1,
+    name="my-actor",
+    get_if_exists=True,
+    lifetime="detached",
+    num_cpus=0
+)
+
+# Call methods (returns future compatible with ctx.get())
+future = actor.my_method.remote(arg1, arg2)
+result = ctx.get(future)
+
+# Or inline
+result = ctx.get(actor.my_method.remote(arg1, arg2))
+
+# ThreadContext also provides .call() convenience method
+result = actor.my_method.call(arg1, arg2)  # Only ThreadContext/SyncContext
+```
+
+### Named Actors for Discovery
+
+Named actors enable workers to share the same actor instance:
+
+```python
+# Worker 1: Create
+curriculum = ctx.create_actor(
+    Curriculum,
+    config,
+    name="curriculum",
+    get_if_exists=True
+)
+
+# Worker 2: Get same instance
+curriculum = ctx.create_actor(
+    Curriculum,
+    config,  # Ignored if actor exists
+    name="curriculum",
+    get_if_exists=True
+)
+```
+
+### Backend Behavior
+
+- **RayContext**: Native Ray actors (use `.remote()`, get results with `ctx.get()`)
+- **ThreadContext**: Thread-safe singletons with per-actor locks (supports both `.remote()` and `.call()`)
+- **SyncContext**: Reuses ThreadActorHandle (lock is no-op in single-threaded context)
+
+Detached lifetime (`lifetime="detached"`) is only supported by RayContext.
+ThreadContext and SyncContext will log a warning and use job lifetime.
+
+**API difference**: RayContext returns native Ray actors (only `.remote()` available), while ThreadContext/SyncContext return wrapped handles (both `.remote()` and `.call()` available).
+
+### Integration with Fray Primitives
+
+Actor method results are compatible with Fray's put/get/wait:
+
+```python
+# Actor futures work with get()
+future = actor.compute.remote(data)
+result = ctx.get(future)
+
+# Actor futures work with wait()
+futures = [actor.process.remote(i) for i in range(10)]
+ready, pending = ctx.wait(futures, num_returns=5)
+results = [ctx.get(f) for f in ready]
+
+# Actor handles can be stored
+actor_ref = ctx.put(actor)
+actor = ctx.get(actor_ref)
+```
+
 # Design
 
 

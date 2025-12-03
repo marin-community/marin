@@ -211,6 +211,7 @@ class ResourceConfig:
         disk: Disk space requirement (e.g., "10g", "100g")
         device: Device configuration (CPU, GPU, or TPU)
         replicas: Number of replicas (individual pods with these resources)
+        preemptible: Whether the job can be preempted
         regions: Preferred cloud regions for job placement
     """
 
@@ -219,6 +220,7 @@ class ResourceConfig:
     disk: str = "1g"
     device: DeviceConfig = field(default_factory=CpuConfig)
     replicas: int = 1
+    preemptible: bool = True
     regions: Sequence[str] | None = None
 
 
