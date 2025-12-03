@@ -147,7 +147,7 @@ def dot(
 
     with jax.named_scope(jax_str):
         raw_arrays = [a.array for a in arrays]
-        inferred_out_sharding = _infer_out_sharding(output_axes, raw_arrays)
+        inferred_out_sharding = _infer_out_sharding(output_axes)
 
         output = _jittable_dg_einsum(
             ", ".join(array_specs) + "-> " + output_spec,
