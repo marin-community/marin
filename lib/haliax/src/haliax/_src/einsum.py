@@ -90,7 +90,7 @@ def einsum(
         precision=precision,
         preferred_element_type=preferred_element_type,
         _dot_general=_dot_general,
-        out_sharding=out_sharding or _infer_out_sharding(out_axes, raw_arrays),
+        out_sharding=out_sharding or _infer_out_sharding(out_axes),
     )
 
     return haliax.named(out_raw, out_axes)
