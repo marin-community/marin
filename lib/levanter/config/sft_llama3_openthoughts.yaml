@@ -10,7 +10,7 @@ max_seq_len: 4096
 tokenizer: "meta-llama/Meta-Llama-3.1-8B"
 model:  # 8B  llama3 class model
   type: llama
-  seq_len: 4096
+  max_seq_len: 4096
   hidden_dim: 4096
   intermediate_dim: 14336
   num_layers: 32
@@ -22,6 +22,7 @@ model:  # 8B  llama3 class model
   initializer_range: 0.02
   rope:
     type: "llama3"
+train_seq_len: 4096
 trainer:
   seed: 1
   tracker:

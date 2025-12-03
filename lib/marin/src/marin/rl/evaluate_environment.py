@@ -170,7 +170,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
             # Use provided model config and ensure seq_len is set appropriately
             model_config = dataclasses.replace(
                 config.model_config,
-                seq_len=config.max_input_length + config.max_output_length,
+                max_seq_len=config.max_input_length + config.max_output_length,
             )
             logger.info(f"Model config: {model_config}")
 

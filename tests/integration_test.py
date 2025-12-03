@@ -220,7 +220,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 model=Gpt2Config(
                     num_layers=2,
                     num_heads=2,
-                    seq_len=64,
+                    max_seq_len=64,
                     hidden_dim=32,
                 ),
                 trainer=TrainerConfig(

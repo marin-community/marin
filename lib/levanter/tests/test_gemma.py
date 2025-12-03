@@ -138,11 +138,11 @@ def test_gemma1_decoder_layer(num_kv_heads):
     x, mask = _get_random_inputs(gemma_config)
     x_t = torch.from_numpy(np.array(x.array))
     batch = x_t.shape[0]
-    bias = torch.from_numpy(np.array(mask.materialize(gemma_config.Pos, gemma_config.KeyPos).array))
+    bias = torch.from_numpy(np.array(mask.materialize(gemma_config.max_Pos, gemma_config.KeyPos).array))
     bias = bias.broadcast_to((batch, 1, -1, -1))
     bias = (bias == 0).float() * -1e10
 
-    position_ids = torch.arange(gemma_config.Pos.size).unsqueeze(0)
+    position_ids = torch.arange(gemma_config.max_Pos.size).unsqueeze(0)
     rot = HFGemmaRotaryEmbedding(config=hf_config)
     cos, sin = rot(x_t, position_ids)
 
@@ -189,11 +189,11 @@ def test_gemma2_decoder_layer(num_kv_heads):
     x, mask = _get_random_inputs(gemma_config)
     x_t = torch.from_numpy(np.array(x.array))
     batch = x_t.shape[0]
-    bias = torch.from_numpy(np.array(mask.materialize(gemma_config.Pos, gemma_config.KeyPos).array))
+    bias = torch.from_numpy(np.array(mask.materialize(gemma_config.max_Pos, gemma_config.KeyPos).array))
     bias = bias.broadcast_to((batch, 1, -1, -1))
     bias = (bias == 0).float() * -1e10
 
-    position_ids = torch.arange(gemma_config.Pos.size).unsqueeze(0)
+    position_ids = torch.arange(gemma_config.max_Pos.size).unsqueeze(0)
     rot = HFGemmaRotaryEmbedding(config=hf_config)
     cos, sin = rot(x_t, position_ids)
 
@@ -212,7 +212,7 @@ def test_gemma2_decoder_layer(num_kv_heads):
 @pytest.mark.parametrize("num_kv_heads", [1, 2])
 def test_pass_different_length_seq(num_kv_heads):
     config = GemmaConfig(
-        seq_len=64,
+        max_seq_len=64,
         hidden_dim=64,
         intermediate_dim=32,
         num_heads=2,
@@ -254,14 +254,14 @@ def test_gemma_attention(use_flash, num_kv_heads, gemma_version):
     x, mask = _get_random_inputs(config)
     x_torch = torch.from_numpy(np.array(x.array))
     batch_size = x_torch.shape[0]
-    explicit_mask = torch.from_numpy(np.array(mask.materialize(config.Pos, config.KeyPos).array))
+    explicit_mask = torch.from_numpy(np.array(mask.materialize(config.max_Pos, config.KeyPos).array))
     mask_torch = explicit_mask.broadcast_to((batch_size, 1, -1, -1))
 
     # the torch mask is really a bias, so we need to invert it and make it a big negative number
     mask_torch = (mask_torch == 0).float() * -1e9
 
     out = attention(x, mask)
-    position_ids = torch.arange(config.Pos.size).unsqueeze(0)  # [1, seq_len]
+    position_ids = torch.arange(config.max_Pos.size).unsqueeze(0)  # [1, seq_len]
     cos, sin = hf_rotary_emb(x_torch, position_ids)
     hf_out = hf_attention(
         x_torch, position_ids=position_ids, attention_mask=mask_torch, position_embeddings=(cos, sin)
@@ -321,7 +321,7 @@ def test_gemma2_roundtrip():
     from transformers import AutoModelForCausalLM, Gemma2ForCausalLM
 
     config = Gemma2Config(
-        seq_len=128,
+        max_seq_len=128,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=4,
@@ -337,7 +337,7 @@ def test_gemma2_roundtrip():
     assert isinstance(hf_config, HFGemma2Config)
 
     # Make input and attn_mask
-    input = hax.random.randint(random.PRNGKey(0), config.Pos, 0, Vocab.size)
+    input = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
     attn_mask = AttentionMask.causal()
     input_torch = torch.from_numpy(np.array(input.array)).to(torch.int32).unsqueeze(0)
 
@@ -379,7 +379,7 @@ def test_gemma2_roundtrip():
 
 def _get_gemma_config(use_flash=False, num_kv_heads=4, seq_len=128) -> GemmaConfig:
     return GemmaConfig(
-        seq_len=seq_len,
+        max_seq_len=seq_len,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
@@ -394,7 +394,7 @@ def _get_gemma2_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma2Co
     from levanter.models.gemma import Gemma2Config
 
     return Gemma2Config(
-        seq_len=seq_len,
+        max_seq_len=seq_len,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
@@ -413,7 +413,7 @@ def _get_gemma3_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma3Co
     from levanter.models.gemma import Gemma3Config
 
     return Gemma3Config(
-        seq_len=seq_len,
+        max_seq_len=seq_len,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
@@ -428,7 +428,7 @@ def _get_gemma3_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Gemma3Co
 
 def _get_random_inputs(config: GemmaConfig):
     Embed = config.Embed
-    Pos = config.Pos
+    Pos = config.max_Pos
     Batch = hax.Axis("batch", 2)
     x = hax.random.normal(random.PRNGKey(0), (Batch, Pos, Embed))
     mask = AttentionMask.causal()
@@ -474,11 +474,11 @@ def test_gemma3_decoder_layer(num_kv_heads):
     x, mask = _get_random_inputs(gemma_config)
     x_t = torch.from_numpy(np.array(x.array))
     batch = x_t.shape[0]
-    bias = torch.from_numpy(np.array(mask.materialize(gemma_config.Pos, gemma_config.KeyPos).array))
+    bias = torch.from_numpy(np.array(mask.materialize(gemma_config.max_Pos, gemma_config.KeyPos).array))
     bias = bias.broadcast_to((batch, 1, -1, -1))
     bias = (bias == 0).float() * -1e10
 
-    position_ids = torch.arange(gemma_config.Pos.size).unsqueeze(0)
+    position_ids = torch.arange(gemma_config.max_Pos.size).unsqueeze(0)
     rot = HFGemmaRotaryEmbedding(config=hf_config)
     cos, sin = rot(x_t, position_ids)
 
@@ -509,7 +509,7 @@ def test_gemma3_roundtrip():
     from transformers import AutoModelForCausalLM, Gemma3ForCausalLM
 
     config = Gemma3Config(
-        seq_len=128,
+        max_seq_len=128,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=4,
@@ -526,7 +526,7 @@ def test_gemma3_roundtrip():
     assert isinstance(hf_config, HFGemma3Config)
 
     # Make input and attn_mask
-    input = hax.random.randint(random.PRNGKey(0), config.Pos, 0, Vocab.size)
+    input = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
     attn_mask = AttentionMask.causal()
     input_torch = torch.from_numpy(np.array(input.array)).to(torch.int32).unsqueeze(0)
 
@@ -590,14 +590,14 @@ def test_gemma3_attention(use_flash, num_kv_heads):
     x, mask = _get_random_inputs(gemma_config)
     x_torch = torch.from_numpy(np.array(x.array))
     batch_size = x_torch.shape[0]
-    explicit_mask = torch.from_numpy(np.array(mask.materialize(gemma_config.Pos, gemma_config.KeyPos).array))
+    explicit_mask = torch.from_numpy(np.array(mask.materialize(gemma_config.max_Pos, gemma_config.KeyPos).array))
     mask_torch = explicit_mask.broadcast_to((batch_size, 1, -1, -1))
 
     # the torch mask is really a bias, so we need to invert it and make it a big negative number
     mask_torch = (mask_torch == 0).float() * -1e9
 
     out = attention(x, mask)
-    position_ids = torch.arange(gemma_config.Pos.size).unsqueeze(0)  # [1, seq_len]
+    position_ids = torch.arange(gemma_config.max_Pos.size).unsqueeze(0)  # [1, seq_len]
     cos, sin = hf_rotary_emb(x_torch, position_ids)
     hf_out = hf_attention(
         x_torch, position_ids=position_ids, attention_mask=mask_torch, position_embeddings=(cos, sin)

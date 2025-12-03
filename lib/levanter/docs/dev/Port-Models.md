@@ -25,7 +25,7 @@ intermediate_dim: int = 11008
 **Model axes** are used for parallelization. An Axis is registered with its name and size. The size of an Axis is normally associated with a hyperparameter. For example:
 
 ```python
-Pos = property(lambda self: Axis(name="position", size=self.seq_len))
+Pos = property(lambda self: Axis(name="position", size=self.max_seq_len))
 Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
 Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
 ```
@@ -199,10 +199,10 @@ For example, below is the helper function for unit tests in Llama:
 ```python
 def _get_random_inputs(config: LlamaConfig):
     Embed = config.Embed
-    Pos = config.Pos
+    Pos = config.max_Pos.resize(128)
     Batch = hax.Axis("batch", 2)
     x = hax.random.normal(random.PRNGKey(0), (Batch, Pos, Embed))
-    mask = hax.nn.attention.causal_mask(config.Pos, config.KeyPos)
+    mask = hax.nn.attention.causal_mask(config.max_Pos, config.KeyPos)
     return x, mask
 ```
 
