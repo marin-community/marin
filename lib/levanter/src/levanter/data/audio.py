@@ -391,7 +391,6 @@ class AudioIODatasetConfig(AudioDatasetSourceConfig, AudioTaskConfig):
     def build_or_load_cache(
         self,
         split: str,
-        logger_name: Optional[str] = None,
         cache_options: CacheOptions = CacheOptions.default(),
     ) -> Optional[ProcessedAudioCache]:
         split_cache_dir = os.path.join(self.cache_dir, split)
@@ -576,14 +575,6 @@ class AudioMixtureDatasetConfig(AudioTaskConfig):
                 logger.warning(f"Skipping {name} for split {split} because no source was provided")
             else:
                 caches[name] = cache
-
-        # in practice it works best if we block on validation caches
-        if split == "validation":
-            for cache in caches.values():
-                cache.cache.await_finished()
-
-        else:
-            logger.info(f"Not waiting for {split} caches to finish building")
 
         return caches
 
