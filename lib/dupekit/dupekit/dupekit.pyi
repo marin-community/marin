@@ -24,11 +24,13 @@
 # SOFTWARE.
 
 import os
-from typing import Any, BinaryIO, Iterable, Union, final
+from enum import Enum
+from typing import Any, BinaryIO, Iterable, Optional, Union, final
+
+import pyarrow as pa
 
 @final
 class Bloom:
-
     # expected_items:  max number of items to be added to the filter
     # false_positive_rate:  max false positive rate of the filter
     # Note: This bloom filter expects pre-hashed integers (i128) for add() and __contains__()
@@ -102,6 +104,34 @@ class HashAlgorithm(Enum):
     Xxh3_128 = ...
     Xxh3_64 = ...
 
+def process_batch_paragraphs(
+    batch: pa.RecordBatch,
+    text_col: str,
+    id_col: str,
+    algorithm: Optional[HashAlgorithm] = None,
+) -> pa.RecordBatch: ...
+def mark_exact_dups_paragraphs(
+    batch: pa.RecordBatch,
+    text_col: str,
+    id_col: str,
+    dup_map: dict[str, dict[str, str]],
+    attribute_name: str,
+    algorithm: Optional[HashAlgorithm] = None,
+) -> pa.RecordBatch: ...
+def process_batch_documents(
+    batch: pa.RecordBatch,
+    text_col: str,
+    id_col: str,
+    algorithm: Optional[HashAlgorithm] = None,
+) -> pa.RecordBatch: ...
+def mark_exact_dups_documents(
+    batch: pa.RecordBatch,
+    text_col: str,
+    id_col: str,
+    dup_map: dict[str, dict[str, str]],
+    attribute_name: str,
+    algorithm: Optional[HashAlgorithm] = None,
+) -> pa.RecordBatch: ...
 def hash_blake2(text: bytes) -> list[int]: ...
 def hash_blake3(text: bytes) -> list[int]: ...
 def hash_xxh3_128(text: bytes) -> int: ...
@@ -115,8 +145,8 @@ class Document:
     text: str
     def __init__(self, id: str, text: str) -> None: ...
 
-def process_native(path: str) -> Any: ...
-def process_arrow_batch(batch: Any) -> Any: ...
+def process_native(path: str) -> pa.RecordBatch: ...
+def process_arrow_batch(batch: pa.RecordBatch) -> pa.RecordBatch: ...
 def process_rust_structs(docs: list[Document]) -> list[Document]: ...
 def process_dicts_batch(docs: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
 def process_dicts_loop(doc: dict[str, Any]) -> dict[str, Any]: ...

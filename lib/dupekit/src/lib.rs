@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 
 mod bloom;
+mod dedupe;
 mod hashing;
 mod marshaling;
 
@@ -11,6 +12,12 @@ use hashing::HashAlgorithm;
 fn dupekit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Bloom>()?;
     m.add_class::<HashAlgorithm>()?;
+
+    // Deduplication functions
+    m.add_function(wrap_pyfunction!(dedupe::process_batch_paragraphs, m)?)?;
+    m.add_function(wrap_pyfunction!(dedupe::mark_exact_dups_paragraphs, m)?)?;
+    m.add_function(wrap_pyfunction!(dedupe::process_batch_documents, m)?)?;
+    m.add_function(wrap_pyfunction!(dedupe::mark_exact_dups_documents, m)?)?;
 
     // Hashing functions
     m.add_function(wrap_pyfunction!(hashing::hash_blake2, m)?)?;
