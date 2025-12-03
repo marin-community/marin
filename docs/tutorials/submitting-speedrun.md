@@ -46,7 +46,7 @@ export HF_TOKEN='...' # or `uvx hf auth login`
 
 ```
 
-Create a subdirectory under `experiments/speedrun` and copy a starter file there (see details below).
+Create a subdirectory under experiments/speedrun and copy a starter file there (see details below).
 
 </details>
 
