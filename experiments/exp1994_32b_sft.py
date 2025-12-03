@@ -38,7 +38,7 @@ NUM_TRAIN_STEPS = 14_246
 LEARNING_RATE = 1e-5
 WARMSTART_STEP = 191_999
 
-qwen3_32b_remat_8k = dataclasses.replace(qwen3_32b_remat, seq_len=8192)
+qwen3_32b_remat_8k = dataclasses.replace(qwen3_32b_remat, max_seq_len=8192)
 mantis_checkpoint = tootsie_32b_cooldown_mantis.cd(f"checkpoints/step-{WARMSTART_STEP}/").nonblocking()
 
 mantis_sft_config = SimpleSFTConfig(
