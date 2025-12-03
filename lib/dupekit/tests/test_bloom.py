@@ -17,17 +17,18 @@ import io
 import os
 from hashlib import sha256
 from pickle import dumps
+from typing import Any
 
 from dupekit import Bloom
 
 
-def hash_func(obj):
+def hash_func(obj: Any) -> int:
     """Convert arbitrary objects to i128 integers for hashing."""
     h = sha256(dumps(obj)).digest()
     return int.from_bytes(h[:16], "big", signed=True)
 
 
-def _test_bloom(bloom: Bloom):
+def _test_bloom(bloom: Bloom) -> None:
     assert not bloom
     assert bloom.approx_items == 0.0
 
@@ -120,7 +121,7 @@ def _test_bloom(bloom: Bloom):
     assert bloom == bloom4
 
 
-def test_chunked_write():
+def test_chunked_write() -> None:
     """Test chunked writing with large bloom filters and custom file objects."""
 
     # Create a large bloom filter to ensure chunking happens
@@ -144,11 +145,11 @@ def test_chunked_write():
 
     # Test 2: Custom file object that tracks write calls
     class ChunkTracker(io.BytesIO):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
-            self.write_calls = []
+            self.write_calls: list[int] = []
 
-        def write(self, data):
+        def write(self, data: bytes) -> int:
             self.write_calls.append(len(data))
             return super().write(data)
 
@@ -194,7 +195,7 @@ def test_chunked_write():
     print("✓ Chunked write tests passed")
 
 
-def operations_with_self():
+def operations_with_self() -> None:
     bloom = Bloom(1000, 0.1)
     bloom.add(hash_func("foo"))
     assert hash_func("foo") in bloom
@@ -224,7 +225,7 @@ def operations_with_self():
     assert bloom.intersection(bloom, bloom) == bloom
 
 
-def test_api_suite():
+def test_api_suite() -> None:
     assert repr(Bloom(27_000, 0.0317)) == "<Bloom size_in_bits=193960 approx_items=0.0>"
 
     _test_bloom(Bloom(13242, 0.0000001))
