@@ -117,9 +117,13 @@ def evaluate_lm_evaluation_harness(
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
         generation_params (dict | None): Generation parameters for vLLM (temperature, max_tokens, etc.)
-    """
+    """    
+    if isinstance(evals, list):
+        suffix = {'_'.join([e.name for e in evals])}
+    else:
+        suffix = evals.name
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness/{model_name}",
+        name=f"evaluation/lm_evaluation_harness/{model_name}-{suffix}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",

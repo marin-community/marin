@@ -252,6 +252,10 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 "max_num_seqs=1",
                 "pipeline_parallel_size=1",
             ]
+            # Add distributed_executor_backend=ray for TPU tensor parallelism
+            # This is required when using tensor_parallel_size > 1 on TPU
+            if engine_kwargs.get("tensor_parallel_size", 1) > 1:
+                pretrained_args_parts.append("distributed_executor_backend=ray")
             for key, value in engine_kwargs.items():
                 # Skip None values to avoid passing "key=None" which might not be parsed correctly
                 if value is not None:
@@ -264,6 +268,69 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 logger.info(f"max_model_len from engine_kwargs: {engine_kwargs['max_model_len']}")
             else:
                 logger.warning("max_model_len not found in engine_kwargs! This may cause truncation issues.")
+
+            # === MONKEY PATCH resolve_hf_chat_template ===
+            # This MUST happen before any lm_eval imports that might load vllm_causallms.
+            # We patch the module early to ensure resolve_hf_chat_template is available
+            # when the vllm_causallms module code executes.
+            try:
+                # Try to import from vllm if available
+                try:
+                    from vllm.entrypoints.chat_utils import resolve_hf_chat_template as vllm_resolve_hf_chat_template
+                    logger.info("Found resolve_hf_chat_template in vllm.entrypoints.chat_utils")
+                except ImportError:
+                    vllm_resolve_hf_chat_template = None
+                    logger.info("resolve_hf_chat_template not found in vllm.entrypoints.chat_utils")
+                
+                # Define fallback implementation
+                def fallback_resolve_hf_chat_template(tokenizer, *args, **kwargs):
+                    """Fallback implementation if the function is missing."""
+                    if args:
+                        messages = args[0]
+                    else:
+                        messages = kwargs.get("messages")
+                    if messages is None:
+                        logger.warning("resolve_hf_chat_template called without messages; returning None")
+                        return None
+                    if hasattr(tokenizer, "apply_chat_template"):
+                        filtered_kwargs = {k: v for k, v in kwargs.items() if k != "tools"}
+                        return tokenizer.apply_chat_template(messages, **filtered_kwargs)
+                    return None
+                
+                # Import and patch the module NOW, before simple_evaluate imports it
+                import lm_eval.models.vllm_causallms as vllm_module
+                
+                # Determine which function to use
+                if vllm_resolve_hf_chat_template is not None:
+                    def wrapped_vllm_resolve(tokenizer, *args, **kwargs):
+                        try:
+                            if args:
+                                return vllm_resolve_hf_chat_template(tokenizer, *args, **kwargs)
+                            return vllm_resolve_hf_chat_template(tokenizer, **kwargs)
+                        except TypeError as e:
+                            if "unexpected keyword argument" in str(e):
+                                filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ["tools"]}
+                                if args:
+                                    return vllm_resolve_hf_chat_template(tokenizer, *args, **filtered_kwargs)
+                                return vllm_resolve_hf_chat_template(tokenizer, **filtered_kwargs)
+                            raise
+                    wrapped_vllm_resolve._marin_patched = True
+                    resolve_fn = wrapped_vllm_resolve
+                else:
+                    resolve_fn = fallback_resolve_hf_chat_template
+                    resolve_fn._marin_patched = True
+                
+                # Inject into module namespace - both as attribute and in __dict__
+                vllm_module.resolve_hf_chat_template = resolve_fn
+                vllm_module.__dict__["resolve_hf_chat_template"] = resolve_fn
+                # Also set it in globals() if the module has that
+                if hasattr(vllm_module, "__globals__"):
+                    vllm_module.__globals__["resolve_hf_chat_template"] = resolve_fn
+                logger.info("Patched lm_eval.models.vllm_causallms.resolve_hf_chat_template")
+            except Exception as e:
+                logger.warning(f"Failed to pre-patch resolve_hf_chat_template: {e}")
+                import traceback
+                logger.warning(f"Traceback: {traceback.format_exc()}")
 
             from lm_eval.evaluator import simple_evaluate
             from lm_eval.loggers import EvaluationTracker, WandbLogger
@@ -309,68 +376,6 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                             f.write(metadata_content)
                         logger.info(f"Created vllm package metadata at {vllm_dist_info}")
 
-                # Monkey-patch resolve_hf_chat_template if it's missing or has issues.
-                # The lm-eval vLLM backend has changed this helper a few times, so we
-                # wrap it defensively to handle different call signatures.
-                try:
-                    import lm_eval.models.vllm_causallms as vllm_module
-                    if not hasattr(vllm_module, "resolve_hf_chat_template"):
-                        def resolve_hf_chat_template(tokenizer, *args, **kwargs):
-                            """Fallback implementation if the function is missing.
-
-                            We accept flexible arguments to match whatever lm-eval expects:
-                            - resolve_hf_chat_template(tokenizer, messages, **kwargs)
-                            - resolve_hf_chat_template(tokenizer=..., messages=..., **kwargs)
-                            - resolve_hf_chat_template(tokenizer=..., **kwargs)  # messages in kwargs
-                            """
-                            # Extract messages from positional args or kwargs
-                            if args:
-                                messages = args[0]
-                            else:
-                                messages = kwargs.get("messages")
-
-                            if messages is None:
-                                logger.warning("resolve_hf_chat_template called without messages; returning None")
-                                return None
-
-                            if hasattr(tokenizer, "apply_chat_template"):
-                                # Drop unsupported kwargs like 'tools'
-                                filtered_kwargs = {k: v for k, v in kwargs.items() if k != "tools"}
-                                return tokenizer.apply_chat_template(messages, **filtered_kwargs)
-                            return None
-                        vllm_module.resolve_hf_chat_template = resolve_hf_chat_template
-                        logger.info("Monkey-patched resolve_hf_chat_template (missing)")
-                    else:
-                        # Patch to handle unexpected kwargs like 'tools'
-                        original_resolve = vllm_module.resolve_hf_chat_template
-                        def patched_resolve_hf_chat_template(tokenizer, *args, **kwargs):
-                            """Wrapper around the upstream helper that is tolerant to extra kwargs."""
-                            # Pull out messages from args/kwargs in the same flexible way
-                            messages = None
-                            if args:
-                                messages = args[0]
-                                remaining_args = args[1:]
-                            else:
-                                remaining_args = ()
-                                messages = kwargs.get("messages")
-
-                            try:
-                                if messages is not None:
-                                    return original_resolve(tokenizer, messages, *remaining_args, **kwargs)
-                                # Fall back to original signature if we couldn't infer messages cleanly
-                                return original_resolve(tokenizer, *args, **kwargs)
-                            except TypeError as e:
-                                if "unexpected keyword argument" in str(e):
-                                    # Filter out problematic kwargs
-                                    filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ["tools"]}
-                                    if messages is not None:
-                                        return original_resolve(tokenizer, messages, *remaining_args, **filtered_kwargs)
-                                    return original_resolve(tokenizer, *remaining_args, **filtered_kwargs)
-                                raise
-                        vllm_module.resolve_hf_chat_template = patched_resolve_hf_chat_template
-                        logger.info("Monkey-patched resolve_hf_chat_template (to handle unexpected kwargs)")
-                except Exception as e:
-                    logger.warning(f"Failed to monkey-patch resolve_hf_chat_template: {e}")
 
                 # Note: max_gen_toks is controlled by lm-eval's internal logic, not vLLM.
                 # There is no way to set max_gen_toks on the vLLM model instance.

@@ -191,23 +191,26 @@ if __name__ == "__main__":
     all_steps = []
 
     for model_config in MODELS:
-        for eval_task in EVAL_TASKS:
+        for task in EVAL_TASKS:
             # Use evaluate_lm_evaluation_harness which handles dataset loading from lm-evaluation-harness
+            engine_kwargs = {
+                "tensor_parallel_size": model_config.get("tensor_parallel_size", 4),
+            }
+            # Map max_length to max_model_len for vLLM
+            if "max_length" in model_config:
+                # Ensure that max_model_len > max_gen_toks + prompt len. 
+                engine_kwargs["max_model_len"] = int(8192*4+2048)
+                engine_kwargs["max_gen_toks"] = int(8192*4)
+            
             lm_eval_task_step = evaluate_lm_evaluation_harness(
                 model_config["name"],
                 model_config["path"],
-                evals=[eval_task],
+                evals=[task],
                 max_eval_instances=None,
-                engine_kwargs={
-                    "tensor_parallel_size": model_config.get("tensor_parallel_size", 4),
-                    # "max_model_len": model_config.get("max_length", 8192),
-                },
+                engine_kwargs=engine_kwargs,
                 resource_config=resource_config,
                 apply_chat_template=model_config.get("apply_chat_template", False),
                 generation_params={
-                    # "max_gen_toks": max(1, model_config.get("max_length", 8192) - 2048)
-                    # if model_config.get("max_length")
-                    # else 8192,
                     "temperature": 0.7,
                     "top_p": 1.0,
                     "do_sample": True,
