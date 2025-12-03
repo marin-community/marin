@@ -120,7 +120,7 @@ if ! command -v uv &> /dev/null; then
     log_warn "uv not found."
     echo -e "${CYAN}Press enter to install uv (https://docs.astral.sh/uv/)${NC}"
     read -r < /dev/tty
-    
+
     curl -LsSf https://astral.sh/uv/install.sh | sh
     source $HOME/.cargo/env 2>/dev/null || source $HOME/.local/bin/env 2>/dev/null
 fi
