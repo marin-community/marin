@@ -506,7 +506,7 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
         arr = jax.lax.with_sharding_constraint(arr[valid_device_for_process], pspec)
 
         if isinstance(x, hax.NamedArray):
-            return hax.named(arr, x.axes)
+            return hax.named(arr, x.axis_names)
         else:
             return arr
 

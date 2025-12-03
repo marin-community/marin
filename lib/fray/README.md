@@ -98,7 +98,7 @@ tpu_request = JobRequest(
         device=TpuConfig(type="v5e-16", count=8),
     ),
     environment=create_environment(
-        extra_dependency_groups=["tpu"],
+        extras=["tpu"],
         env_vars={"WANDB_API_KEY": "your-key"},
     ),
 )

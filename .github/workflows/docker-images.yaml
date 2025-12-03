@@ -155,7 +155,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push TPU CI image
         run: |
@@ -173,9 +173,6 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - name: Checkout code
@@ -201,13 +198,13 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push Levanter base image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.base \
-            --tag ghcr.io/${{ github.repository }}-base:latest \
-            --tag ghcr.io/${{ github.repository }}-base:${{ env.DATE }} \
+          docker buildx build --file lib/levanter/docker/tpu/Dockerfile.base \
+            --tag ghcr.io/marin-community/levanter-base:latest \
+            --tag ghcr.io/marin-community/levanter-base:${{ env.DATE }} \
             --push .
 
   # Levanter TPU Incremental Image - Optimized TPU runtime
@@ -218,9 +215,6 @@ jobs:
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     needs: levanter-base-image
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - name: Checkout code
@@ -246,13 +240,13 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push Levanter TPU image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.incremental \
-            --tag ghcr.io/${{ github.repository }}-tpu:latest \
-            --tag ghcr.io/${{ github.repository }}-tpu:${{ env.DATE }} \
+          docker buildx build --file lib/levanter/docker/tpu/Dockerfile.incremental \
+            --tag ghcr.io/marin-community/levanter-tpu:latest \
+            --tag ghcr.io/marin-community/levanter-tpu:${{ env.DATE }} \
             --push .
 
   # Levanter Cluster Image - For cluster deployments
@@ -263,9 +257,6 @@ jobs:
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     needs: levanter-tpu-image
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - name: Checkout code
@@ -291,11 +282,11 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push Levanter cluster image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.cluster \
-            --tag ghcr.io/${{ github.repository }}-cluster:latest \
-            --tag ghcr.io/${{ github.repository }}-cluster:${{ env.DATE }} \
+          docker buildx build --file lib/levanter/docker/tpu/Dockerfile.cluster \
+            --tag ghcr.io/levanter-cluster:latest \
+            --tag ghcr.io/levanter-cluster:${{ env.DATE }} \
             --push .
