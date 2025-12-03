@@ -672,7 +672,11 @@ class NamedArray(metaclass=NamedArrayMeta):
     # Deprecated overload
     @typing.overload
     def dot(
-        self, axis: AxisSelection | None, *b, precision: PrecisionLike = None, dot_general=jax.lax.dot_general
+        self,
+        axis: AxisSelection | None,
+        *b,
+        precision: PrecisionLike = None,
+        dot_general=jax.lax.dot_general,
     ) -> "NamedArray": ...
 
     @typing.overload
