@@ -94,8 +94,6 @@ class ExecutionContext(Protocol):
         name: str | None = None,
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
-        num_cpus: float = 0,
-        memory: int | None = None,
         **kwargs,
     ) -> Any:
         """Create an actor (stateful service) within the execution context.
@@ -106,8 +104,6 @@ class ExecutionContext(Protocol):
             name: Optional name for actor discovery/reuse across workers
             get_if_exists: If True and named actor exists, return existing instance
             lifetime: "job" (dies with context) or "detached" (survives job)
-            num_cpus: CPU allocation (0 = minimal resources)
-            memory: Memory allocation in bytes
             **kwargs: Keyword arguments for actor __init__
 
         Returns:
@@ -249,8 +245,6 @@ class SyncContext:
         name: str | None = None,
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
-        num_cpus: float = 0,
-        memory: int | None = None,
         **kwargs,
     ) -> ThreadActorHandle:
         if lifetime == "detached":
@@ -346,9 +340,7 @@ class ThreadContext:
         *args,
         name: str | None = None,
         get_if_exists: bool = False,
-        lifetime: Literal["job", "detached"] = "job",
-        num_cpus: float = 0,
-        memory: int | None = None,
+        lifetime: Literal["non_detached", "detached"] = "non_detached",
         **kwargs,
     ) -> ThreadActorHandle:
         """Create an actor (lock-protected singleton for thread safety)."""
@@ -415,14 +407,10 @@ class RayContext:
         name: str | None = None,
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
-        num_cpus: float = 0,
-        memory: int | None = None,
         **kwargs,
     ):
         """Create a Ray actor (returns native Ray actor handle)."""
-        options = {"num_cpus": num_cpus}
-        if memory is not None:
-            options["memory"] = memory
+        options = {}
         if name is not None:
             options["name"] = name
             options["get_if_exists"] = get_if_exists

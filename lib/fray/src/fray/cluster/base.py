@@ -20,7 +20,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal, NewType
@@ -300,6 +300,10 @@ class JobRequest:
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     environment: EnvironmentConfig | None = None
 
+    def __post_init__(self):
+        if " " in self.name:
+            raise ValueError("Job name must not contain spaces")
+
 
 JobId = NewType("JobId", str)
 
@@ -387,17 +391,17 @@ class Cluster(ABC):
         ...
 
     @abstractmethod
-    def monitor(self, job_id: JobId) -> Iterator[str]:
-        """Stream logs from a running job.
+    def monitor(self, job_id: JobId) -> JobInfo:
+        """Stream logs from a running job, blocking until completion.
 
-        Yields log lines as they become available. Blocks until the job
+        Logs are emitted directly via the logger. Blocks until the job
         completes or is terminated.
 
         Args:
             job_id: Job identifier returned by launch()
 
-        Yields:
-            Log lines as they become available
+        Returns:
+            JobInfo with final job status
 
         Raises:
             KeyError: If job_id is not found
@@ -450,7 +454,6 @@ class Cluster(ABC):
 
     def wait(self, job_id: JobId) -> JobInfo:
         """Block until the specified job completes, returning its final status."""
-        # default implementation polls until job is no longer running
         logger.info(f"Starting wait for job {job_id}")
 
         while True:
@@ -458,4 +461,4 @@ class Cluster(ABC):
             if info.status in ["succeeded", "failed", "stopped"]:
                 logger.info(f"Job {job_id} completed with status {info.status}")
                 return info
-            time.sleep(1.0)
+            time.sleep(10.0)

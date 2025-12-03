@@ -25,7 +25,6 @@ from queue import Empty, Queue
 from threading import Thread
 
 from fray.cluster.base import Cluster, CpuConfig, EnvironmentConfig, JobId, JobInfo, JobRequest, TaskStatus
-from fray.fn_thunk import create_thunk_entrypoint
 from fray.isolated_env import TemporaryVenv
 
 logger = logging.getLogger(__name__)
@@ -122,20 +121,20 @@ class LocalCluster(Cluster):
 
         return job_id
 
-    def monitor(self, job_id: JobId) -> Iterator[str]:
-        """Monitor job output from all replicas."""
+    def monitor(self, job_id: JobId) -> JobInfo:
+        """Monitor job output from all replicas, logging directly."""
         job = self._get_job(job_id)
         while True:
             try:
                 line = job.log_queue.get(timeout=1)
-                yield line
+                logger.info(line.rstrip())
             except Empty:
                 if all(process.poll() is not None for process in job.processes):
                     logger.info("All processes for job %s have finished.", job_id)
-                    # Drain remaining logs
                     while not job.log_queue.empty():
-                        yield job.log_queue.get_nowait()
+                        logger.info(job.log_queue.get_nowait().rstrip())
                     break
+        return self.poll(job_id)
 
     def poll(self, job_id: JobId) -> JobInfo:
         return self._get_job(job_id).get_info()
@@ -158,6 +157,8 @@ class LocalCluster(Cluster):
         return self._jobs[job_id]
 
     def _build_command(self, request: JobRequest, venv) -> list[str]:
+        from fray.fn_thunk import create_thunk_entrypoint
+
         entrypoint = request.entrypoint
 
         if entrypoint.callable is not None:

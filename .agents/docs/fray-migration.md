@@ -106,7 +106,7 @@ and slice size are specified in the TpuConfig section of the ResourceConfig. For
         cpu=1,
         ram="16",
         disk="10g",
-        device=TpuConfig(type="v5litepod-4", count=4),
+        device=TpuConfig(type="v5litepod-4"),
         replicas=1,
         regions=["eu-west4"],
     )

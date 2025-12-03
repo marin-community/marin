@@ -29,6 +29,7 @@ import jmp
 import levanter
 import numpy
 from fray.cluster import (
+    CpuConfig,
     Entrypoint,
     JobRequest,
     ResourceConfig,
@@ -36,11 +37,13 @@ from fray.cluster import (
     create_environment,
     current_cluster,
 )
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from marin.execution import ExecutorStep
+from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 from marin.rl.environments.base import EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
@@ -79,14 +82,20 @@ def rollout_group_to_dict(group: "RolloutGroup") -> dict[str, Any]:
 class EnvironmentEvalConfig:
     """Configuration for environment evaluation."""
 
-    model_config: LmConfig
+    checkpoint: str
+    """Path to model checkpoint (HuggingFace repo or local path)."""
+
     env_config: EnvConfig
+
+    model_config: LmConfig | None = None
+    """Model configuration. If None, auto-detected from checkpoint."""
+
     temperature: float = 0.0
     max_input_length: int = 2048
     max_output_length: int = 8192
     stop_tokens: list[str] | None = None
     seed: int = 42
-    tpu_type: str = "v5litepod-128"
+    tpu_type: str | None = None
     output_path: str | None = None
 
     n_examples: int = 100
@@ -103,9 +112,12 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
         raise ValueError("output_path is required for evaluation results")
 
     # Calculate TPU device count
-    num_devices = TpuPodConfig(tpu_type=config.tpu_type).total_device_count()
-    model_axis_size = min(4, num_devices)
-    logger.info(f"Using TPU type {config.tpu_type} with {num_devices} devices, model_axis_size={model_axis_size}")
+    if config.tpu_type is None:
+        model_axis_size = 1
+    else:
+        num_devices = TpuPodConfig(tpu_type=config.tpu_type).total_device_count()
+        model_axis_size = min(4, num_devices)
+        logger.info(f"Using TPU type {config.tpu_type} with {num_devices} devices, model_axis_size={model_axis_size}")
 
     # Initialize Levanter with minimal trainer config
     trainer_config = TrainerConfig(
@@ -121,30 +133,11 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     env_vars = _add_run_env_variables({})
     env_vars["EQX_ON_ERROR"] = "nan"
 
-    # Get tokenizer path from model config
-    tokenizer_path = config.model_config.tokenizer
-    if tokenizer_path is None:
-        raise ValueError("Model config must have tokenizer specified")
-
-    inference_server_config = InferenceServerConfig(
-        # Turn on tensor parallelism for inference
-        trainer=dataclasses.replace(
-            trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=model_axis_size
-        ),
-        tokenizer=tokenizer_path,
-        temperature=1.0,
-        service=InferenceEngineConfig(
-            max_seqs=16,
-            max_seq_len=config.max_input_length + config.max_output_length,
-            page_size=32,
-            max_seqs_in_prefill=16,
-            hbm_utilization=0.3,  # Reduced from default 0.9 to prevent OOM on v4-8
-        ),
-    )
+    checkpoint_path = config.checkpoint
 
     def _run_inference():
         logger.info("Loading tokenizer for evaluation")
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        tokenizer = AutoTokenizer.from_pretrained(checkpoint_path)
 
         with remove_tpu_lockfile_on_exit():
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
@@ -153,8 +146,17 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
             trainer_config.id = f"eval-rollout-{env_name}"
             levanter.initialize(trainer_config)
 
+            # Auto-detect model config from checkpoint if not provided
+            if config.model_config is None:
+                logger.info(f"Auto-detecting model config from checkpoint: {checkpoint_path}")
+                converter = HFCheckpointConverter.from_hf(checkpoint_path)
+                model_config = converter.default_config
+            else:
+                model_config = config.model_config
+
+            # Update seq_len for inference
             model_config = dataclasses.replace(
-                config.model_config,
+                model_config,
                 seq_len=config.max_input_length + config.max_output_length,
             )
             logger.info(f"Model config: {model_config}")
@@ -163,9 +165,6 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
             vocab_size = tokenizer.vocab_size
             Vocab = hax.Axis("vocab", vocab_size)
             logger.info(f"Vocab size: {vocab_size}")
-
-            # Get checkpoint path from model config's tokenizer field
-            checkpoint_path = model_config.tokenizer
 
             policy_model = load_model_from_checkpoint(
                 checkpoint=checkpoint_path,
@@ -180,22 +179,35 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
             )
             logger.info(f"Policy model: {policy_model}")
 
-            # Enter mesh context for sampling, like RolloutWorker does in _sample_batch
             with (
                 trainer_config.use_device_mesh(),
                 hax.axis_mapping(trainer_config.compute_axis_mapping),
             ):
+                inference_server_config = InferenceServerConfig(
+                    # Turn on tensor parallelism for inference
+                    trainer=dataclasses.replace(
+                        trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=model_axis_size
+                    ),
+                    tokenizer=checkpoint_path,
+                    temperature=1.0,
+                    service=InferenceEngineConfig(
+                        max_seqs=16,
+                        max_seq_len=config.max_input_length + config.max_output_length,
+                        page_size=32,
+                        max_seqs_in_prefill=16,
+                        hbm_utilization=0.3,  # Reduced from default 0.9 to prevent OOM on v4-8
+                    ),
+                )
+
                 inference_server = InferenceServer.create(
                     inference_server_config,
                     model=policy_model,
                     tokenizer=tokenizer,
                 )
 
-                # Start the server in a background thread
                 import threading
 
                 threading.Thread(target=inference_server.serve, daemon=True).start()
-
                 time.sleep(2)
 
                 env = load_environment_from_spec(config.env_config)
@@ -236,16 +248,21 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
                 json.dump(metrics, f, indent=2)
             logger.info(f"Saved metrics to {metrics_file}")
 
-    job_request = JobRequest(
-        name=f"evaluate-{config.env_config.env_class.split('.')}",
-        entrypoint=Entrypoint(
-            callable=_run_inference,
-        ),
-        resources=ResourceConfig(
+    if config.tpu_type is None:
+        resources = ResourceConfig(device=CpuConfig(), replicas=1)
+    else:
+        resources = ResourceConfig(
             device=TpuConfig(type=config.tpu_type),
             replicas=1,
             preemptible=True,
+        )
+
+    job_request = JobRequest(
+        name=f"evaluate-{config.env_config.env_class}",
+        entrypoint=Entrypoint(
+            callable=_run_inference,
         ),
+        resources=resources,
         environment=create_environment(
             extras=["post_training", "rl"],
             env_vars=env_vars,
@@ -255,7 +272,8 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     cluster = current_cluster()
     job_id = cluster.launch(job_request)
     logger.info(f"Launched evaluation job: {job_id}")
-    job_info = cluster.wait(job_id)
+    job_info = cluster.monitor(job_id)
+    logger.info(f"Evaluation job completed with status: {job_info.status}")
     if job_info.status != "succeeded":
         raise RuntimeError(f"Evaluation job failed with status: {job_info.status}")
 
@@ -264,19 +282,19 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
 
 
 def evaluate_environment(
-    model_config: LmConfig,
+    checkpoint: str,
     env_config: EnvConfig,
     output_path: str,
-    tpu_type: str = "v5litepod-128",
+    model_config: LmConfig | None = None,
+    tpu_type: str | None = None,  # "v5litepod-128"
 ) -> ExecutorStep:
     """Create an executor step for evaluating a model on an environment.
 
     Args:
-        model_config: Model configuration (must have tokenizer field set to checkpoint path)
-        env_config: Environment configuration (use this or env, not both)
-        env: MarinEnv instance for backward compatibility (will be converted to config)
-        name: Name of the evaluation
+        checkpoint: Path to model checkpoint (HuggingFace repo or local path)
+        env_config: Environment configuration
         output_path: Path to save evaluation results (local or GCS)
+        model_config: Model configuration. If None, auto-detected from checkpoint.
         tpu_type: TPU type to use for evaluation
 
     Returns:
@@ -285,14 +303,13 @@ def evaluate_environment(
     env_name = env_config.env_class.split(".")[-1]
     env_id = env_config.env_args.get("env_id", "unknown")
 
-    # Get model identifier from config for naming
-    model_identifier = model_config.tokenizer or "model"
-    if "/" in model_identifier:
-        model_identifier = model_identifier.split("/")[-1]
+    # Get model identifier from checkpoint path for naming
+    model_identifier = checkpoint.split("/")[-1] if "/" in checkpoint else checkpoint
 
     config = EnvironmentEvalConfig(
-        model_config=model_config,
+        checkpoint=checkpoint,
         env_config=env_config,
+        model_config=model_config,
         output_path=output_path,
         tpu_type=tpu_type,
     )
@@ -304,3 +321,15 @@ def evaluate_environment(
         description=f"Evaluate model on {env_name}",
         pip_dependency_groups=["post_training", "rl"],
     )
+
+
+if __name__ == "__main__":
+    step = evaluate_environment(
+        checkpoint="HuggingFaceTB/SmolLM2-135M",
+        env_config=EnvConfig(
+            env_class="marin.rl.environments.mock_env.MockEnv",
+            env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
+        ),
+        output_path="/tmp/evals",
+    )
+    executor_main([step])
