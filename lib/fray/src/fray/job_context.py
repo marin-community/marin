@@ -477,7 +477,8 @@ def fray_job_ctx(
     if context_type == "auto":
         if ray and ray.is_initialized():
             context_type = "ray"
-        context_type = "threadpool"
+        else:
+            context_type = "threadpool"
 
     if context_type == "sync":
         return SyncContext()
