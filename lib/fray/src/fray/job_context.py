@@ -475,19 +475,15 @@ def fray_job_ctx(
         >>> context = fray_job_ctx("auto")  # Auto-detect ray or threadpool
     """
     if context_type == "auto":
-        try:
-            if ray.is_initialized():
-                context_type = "ray"
-        except ImportError:
-            context_type = "threadpool"
+        if ray and ray.is_initialized():
+            context_type = "ray"
+        context_type = "threadpool"
 
     if context_type == "sync":
         return SyncContext()
-
     elif context_type == "threadpool":
         workers = min(max_workers, os.cpu_count() or 1)
         return ThreadContext(max_workers=workers)
-
     elif context_type == "ray":
         # Build ray_options dict from parameters
         options = {}

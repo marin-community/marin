@@ -21,6 +21,7 @@ import fsspec
 import ray
 from marin.generation.chunk_utils import ChunkStrategy
 from marin.generation.pipeline import vLLMTextGeneration
+from marin.generation.ray_utils import scheduling_strategy_fn
 from marin.utils import fsspec_glob
 from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
@@ -108,6 +109,13 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
     # We increase the default timeout since model loading
     # for large models can take awhile.
     ctx.wait_for_min_actors_s = 60 * 10 * config.tensor_parallel_size
+
+
+def get_ray_remote_args_scheduling_strategy_fn(tensor_parallel_size: int, strategy: str):
+    def scheduling_strategy_dict_fn():
+        return dict(scheduling_strategy=scheduling_strategy_fn(tensor_parallel_size, strategy))
+
+    return scheduling_strategy_dict_fn
 
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):

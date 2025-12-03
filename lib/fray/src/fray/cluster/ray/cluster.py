@@ -215,7 +215,6 @@ class RayCluster(Cluster):
         return params
 
     def monitor(self, job_id: JobId) -> JobInfo:
-        """Stream logs from job, logging directly."""
         logger.info("Starting log monitoring for job %s", job_id)
 
         if job_id.startswith("tpu-"):
@@ -230,7 +229,7 @@ class RayCluster(Cluster):
         return self.poll(job_id)
 
     def poll(self, job_id: JobId) -> JobInfo:
-        """Poll job status, returning the current job information or raising KeyError."""
+        """Poll job status, returning the current job information."""
         if job_id.startswith("tpu-"):
             return self._poll_tpu_job(job_id)
 
@@ -299,7 +298,6 @@ class RayCluster(Cluster):
         runtime_env = self._get_runtime_env(request)
 
         # For nested ray.remote() calls, filter out job-level keys that can only be set via ray.init().
-        # These include working_dir, excludes, and config which are already set at the job level.
         nested_runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
 
         if entrypoint.function_args:
