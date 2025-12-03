@@ -599,7 +599,7 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, MapShardOp(fn)])
 
-    def reshard(self, num_shards: int) -> Dataset[T]:
+    def reshard(self, num_shards: int | None) -> Dataset[T]:
         """Redistribute data across target number of shards (best-effort).
 
         Changes parallelism for subsequent operations.
@@ -608,10 +608,10 @@ class Dataset(Generic[T]):
         starting with a small number of input files.
 
         Args:
-            num_shards: Target number of shards
+            num_shards: Optional target number of shards, when None it's a no-op
 
         Returns:
-            New dataset with reshard operation appended
+            New dataset with reshard operation appended or self if num_shards is None
 
         Example:
             >>> backend = create_backend("ray", max_parallelism=20)
@@ -624,7 +624,9 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = list(backend.execute(ds))
         """
-        return Dataset(self.source, [*self.operations, ReshardOp(num_shards)])
+        if num_shards is not None and num_shards <= 0:
+            raise ValueError(f"num_shards must be positive, got {num_shards}")
+        return Dataset(self.source, [*self.operations, ReshardOp(num_shards)]) if num_shards else self
 
     def write_jsonl(self, output_pattern: str | Callable[[int, int], str], skip_existing: bool = False) -> Dataset[str]:
         """Write records as JSONL files.

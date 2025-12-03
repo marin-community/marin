@@ -200,7 +200,9 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
         array_np = np.concatenate(buffer_parts)
         array_np = array_np.view(dtype).reshape(shape)
         # Convert to JAX array directly
-        res = jax.numpy.asarray(array_np)
+        # If we place on the TPU then we OOM. Need the context manager or default device is TPU
+        with jax.default_device(jax.devices("cpu")[0]):
+            res = jax.numpy.asarray(array_np)
         ed = time.time()
         if ed - st > 0.1:
             logger.debug(f"Deserialized param {param_name} of shape {shape} and dtype {dtype} in {ed - st:.2f}s")

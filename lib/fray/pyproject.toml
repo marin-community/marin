@@ -10,11 +10,14 @@ dependencies = [
     "click>=8.0",
     "cloudpickle>=3.1.2",
     "fsspec>=2024.0.0",
+    "httpx",
+    "fastapi",
     "humanfriendly>=10.0",
     "mergedeep",
     "pyyaml>=6.0",
     "typing-extensions>=4.0",
-    "zstandard>=0.22.0",
+    "uvicorn",
+    "zstandard>=0.18.0",
 ]
 
 [project.scripts]
@@ -24,7 +27,7 @@ fray = "fray.cli:main"
 ray = ["ray>=2.45"]
 
 [dependency-groups]
-fray_test = ["pytest>=8.3.2", "pytest-timeout", "ray[default]", "numpy",]
+fray_test = ["pytest>=8.3.2", "pytest-timeout", "ray[default]", "numpy"]
 fray_tpu_test = ["jax[tpu]", { include-group = "fray_test" }]
 
 dev = [{ include-group = "fray_test" }]

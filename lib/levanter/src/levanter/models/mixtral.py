@@ -358,8 +358,8 @@ class MixtralSparseMoeBlock(eqx.Module):
         with jax.named_scope("route"):
             selected_weights_, selected_experts_ = sharded_route(router_probs.array)
 
-            selected_weights = NamedArray(selected_weights_, axes=(Token, TopExperts))
-            selected_experts = NamedArray(selected_experts_, axes=(Token, TopExperts))
+            selected_weights = NamedArray(selected_weights_, (Token, TopExperts))
+            selected_experts = NamedArray(selected_experts_, (Token, TopExperts))
 
         return selected_weights, selected_experts
 
@@ -389,9 +389,9 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         with jax.named_scope("permute"):
             x_repeat_sort_, group_sizes_, sort_idx_ = permute_sharded(x_flat.array, topk_idx_flat.array)
-            x_repeat_sort = NamedArray(x_repeat_sort_, axes=(TokenRepeat, self.config.Embed))
-            group_sizes = NamedArray(group_sizes_, axes=(Experts,))
-            sort_idx = NamedArray(sort_idx_, axes=(TokenRepeat,))
+            x_repeat_sort = NamedArray(x_repeat_sort_, (TokenRepeat, self.config.Embed))
+            group_sizes = NamedArray(group_sizes_, (Experts,))
+            sort_idx = NamedArray(sort_idx_, (TokenRepeat,))
 
         return x_repeat_sort, group_sizes, sort_idx
 
@@ -425,7 +425,7 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         with jax.named_scope("unpermute"):
             out_repeat_unflat_ = unpermute_sharded(out_repeat_sort.array, sort_idx.array)
-            out_repeat_unflat = NamedArray(out_repeat_unflat_, axes=(Token, TopExperts, self.config.Embed))
+            out_repeat_unflat = NamedArray(out_repeat_unflat_, (Token, TopExperts, self.config.Embed))
 
         return out_repeat_unflat
 

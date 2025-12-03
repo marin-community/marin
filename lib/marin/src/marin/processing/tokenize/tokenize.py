@@ -17,33 +17,16 @@ Tokenize datasets using zephyr pipeline and write to Levanter cache format.
 
 Supports both regular file paths and HuggingFace datasets. For HF datasets, downloads
 them first then tokenizes the downloaded files.
-
-Usage:
-    uv run zephyr --entry-point=main \
-        --backend=ray --cluster=us-central2 --max-parallelism=10 --memory=2GB \
-        lib/marin/src/marin/processing/tokenize/tokenize.py \
-        --train_paths '["gs://marin-us-central2/raw/dclm/a3b142c/huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_04_of_10/local-shard_0_of_10/*.zst"]' \
-        --cache_path gs://marin-us-central2/cache/test-tokenize \
-        --tokenizer meta-llama/Meta-Llama-3-8B \
-        --validation_paths '[]'
-
-The tokenized data will be written to:
-    {cache_path}/train/     - Training cache
-    {cache_path}/validation/ - Validation cache (if provided)
-"""  # noqa: E501
+"""
 
 import abc
-import asyncio
-import copy
 import dataclasses
 import logging
-import operator
 import os
 import re
 from collections.abc import Iterator, Sequence
 
 import draccus
-import fsspec
 import jax
 import transformers
 from datasets import load_dataset_builder
@@ -55,14 +38,7 @@ from levanter.data.text import (
     UrlDatasetSourceConfig,
     preprocessor_for_format,
 )
-from levanter.store.cache import (
-    CacheLedger,
-    expose_cache_rows,
-    extend_cache_metadata_with_other,
-    extend_cache_with_other_cache,
-    merge_ledgers,
-)
-from levanter.store.tree_store import TreeStore
+from levanter.store.cache import consolidate_shard_caches
 from zephyr import Dataset, create_backend, flow_backend
 from zephyr.readers import load_file
 
@@ -240,11 +216,7 @@ def _get_filepaths_to_tokenize(input_paths: list[str]) -> list[str]:
     elif any(isinstance(x, InputName | ExecutorStep) for x in input_paths):
         return input_paths
 
-    # we're only going to have one or the other, but might as well return both
     out = _get_files_by_extensions(input_paths, ["json.{gz,zst,zstd}", "jsonl.{gz,zst,zstd}", "parquet", "json"])
-
-    # NOTE(chris): When downloading the datasets from HF using default_download, we create a
-    # provenance.json file but we seek to exclude this since we shouldn't train on this.
     out = [x for x in out if "provenance.json" not in x]
 
     if not len(out):
@@ -279,7 +251,6 @@ def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterat
     jax_platforms = os.environ.get("JAX_PLATFORMS", "not set")
     jax_devices = jax.devices()
 
-    # Assert that JAX_PLATFORMS is set to cpu and that all devices are CPU devices
     assert jax_platforms == "cpu", f"JAX_PLATFORMS should be 'cpu' but is '{jax_platforms}'"
     assert all(d.platform == "cpu" for d in jax_devices), f"Expected all CPU devices, got: {jax_devices}"
 
@@ -288,116 +259,6 @@ def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterat
 
     for batch in batches:
         yield from batch_processor(batch)
-
-
-def consolidate_shard_caches(
-    shard_cache_paths: list[str],
-    output_path: str,
-    exemplar,
-) -> CacheLedger:
-    """
-    Consolidate multiple shard caches into a single cache.
-
-    Args:
-        shard_cache_paths: List of paths to individual shard cache directories
-        output_path: Path to the output unified cache directory
-        exemplar: Example data structure matching the cache format
-        processor_metadata: Metadata dictionary from the batch processor
-
-    Returns:
-        The final consolidated CacheLedger
-    """
-    logger.info(f"Consolidating {len(shard_cache_paths)} shard caches into {output_path}")
-
-    # Initialize data_offset_tree to zero
-    first_cache = TreeStore.open(exemplar, shard_cache_paths[0], mode="r", cache_metadata=True)
-    data_offset_tree = jax.tree.map(lambda x: 0, first_cache.tree)
-
-    # Compute data offsets for each shard
-    shard_info = []
-    total_rows = 0
-
-    logger.info("Computing data offsets for each shard")
-    for shard_path in shard_cache_paths:
-        logger.info(f"Processing shard: {shard_path}")
-        ledger = CacheLedger.load(shard_path)
-
-        # Store this shard's info with current offsets
-        shard_info.append(
-            {
-                "path": shard_path,
-                "row_offset": total_rows,
-                "data_offset_tree": copy.deepcopy(data_offset_tree),
-            }
-        )
-
-        total_rows += ledger.total_num_rows
-
-        # Update offsets for next shard
-        this_cache = TreeStore.open(exemplar, shard_path, mode="r", cache_metadata=True)
-        this_offsets = jax.tree.map(lambda x: x.data_size, this_cache.tree)
-        data_offset_tree = jax.tree.map(operator.add, data_offset_tree, this_offsets)
-
-    logger.info(f"Computed offsets for {len(shard_info)} shards, total rows: {total_rows}")
-
-    def copy_shard(info: dict):
-        asyncio.run(
-            extend_cache_with_other_cache(
-                output_path, info["path"], exemplar, info["data_offset_tree"], info["row_offset"]
-            )
-        )
-        asyncio.run(
-            extend_cache_metadata_with_other(
-                output_path, info["path"], exemplar, info["data_offset_tree"], info["row_offset"]
-            )
-        )
-
-    logger.info("Copying shard data and metadata to final cache.")
-    list(
-        cpu_only_backend().execute(
-            Dataset.from_list(shard_info)
-            .map(copy_shard)
-            .write_jsonl(f"{output_path}/.copy/copy-shard-{{shard:05d}}.jsonl", skip_existing=True)
-        )
-    )
-
-    logger.info("Merging ledgers into final ledger.")
-    ledgers = []
-    for shard_path in shard_cache_paths:
-        ledgers.append(CacheLedger.load(shard_path))
-
-    final_ledger = ledgers[0]
-    final_ledger.is_finished = False
-    for ledger in ledgers[1:]:
-        merge_ledgers(final_ledger, ledger)
-
-    final_ledger.is_finished = True
-    final_ledger._serialize_and_commit(output_path)
-
-    logger.info(f"Exposing {total_rows} rows in final cache")
-    expose_cache_rows(output_path, exemplar, total_rows)
-
-    logger.info(f"Consolidation complete: {total_rows} total rows across {len(shard_info)} shards")
-
-    # I should probably stick this somewhere at the end, it's computed by levanter somewhere,
-    # but the shard writers don't give me a place to put it.
-    # metadata = {
-    #     "append_bos": False,
-    #     "append_eos": True,
-    #     "max_length": 131072,
-    #     "padding": False,
-    #     "return_attention_mask": False,
-    #     "tokenizer": "marin-community/marin-tokenizer",
-    #     "vocab_size": 128256,
-    # }
-
-    # now we can delete our temporary shards
-    _ = list(
-        create_backend("threadpool").execute(
-            Dataset.from_list(shard_cache_paths).map(lambda path: fsspec.url_to_fs(path)[0].rm(path, recursive=True))
-        )
-    )
-    return final_ledger
 
 
 def cpu_only_backend():
@@ -416,13 +277,9 @@ def tokenize(config: TokenizeConfigBase):
         train_paths = _get_filepaths_to_tokenize(config.train_paths) if config.train_paths else []
         validation_paths = _get_filepaths_to_tokenize(config.validation_paths) if config.validation_paths else []
     elif isinstance(config, HfTokenizeConfig):
-        # Use datasets library to get the actual file list for each split
         logger.info(f"Loading dataset metadata for {config.id}" + (f" (config: {config.name})" if config.name else ""))
 
         builder = load_dataset_builder(config.id, name=config.name, revision=config.revision)
-
-        # Get the data files for each split from the builder config
-        # This returns a dict like {'train': ['hf://...'], 'validation': ['hf://...']}
         data_files = builder.config.data_files
 
         if data_files is None:
@@ -431,8 +288,6 @@ def tokenize(config: TokenizeConfigBase):
                 "This might be a dataset that requires custom loading logic."
             )
 
-        # Map common split names to our train/validation convention
-        # Some datasets use 'test' instead of 'validation'
         train_paths = data_files.get("train", [])
         validation_paths = data_files.get("validation", data_files.get("test", []))
 
@@ -447,7 +302,6 @@ def tokenize(config: TokenizeConfigBase):
         raise ValueError("No input files specified. Nothing to do.")
 
     def run_pipeline(paths: list[str], split_name: str) -> None:
-        # Compute the file groups we should process per shard.
         cluster_backend = cpu_only_backend()
 
         thread_backend = create_backend("threadpool")
@@ -467,7 +321,6 @@ def tokenize(config: TokenizeConfigBase):
             logger.info(f"Sampling {config.sample_count} examples from {split_name} set for tokenization")
             ds = ds.take_per_shard(config.sample_count)
 
-        # tokenization runs a bit faster with batching
         temp_shards = (
             ds.batch(64)
             .map_shard(lambda batches: _tokenize_batches(config, batches))
@@ -489,6 +342,7 @@ def tokenize(config: TokenizeConfigBase):
             shard_cache_paths=shard_paths,
             output_path=prefix,
             exemplar=exemplar,
+            backend=cpu_only_backend(),
         )
 
     if train_paths:

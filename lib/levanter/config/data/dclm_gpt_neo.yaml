@@ -2,7 +2,7 @@ cache_dir: "gs://marin-us-central2/tokenized/gpt_neox/"
 tokenizer: "EleutherAI/gpt-neox-20b"
 cache_options:
   batch_size: 256
-  num_shard_groups: 1024
+
 stop_strategy: restart
 shuffle: 100000
 configs:

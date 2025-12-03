@@ -147,13 +147,13 @@ def _rpa_tol() -> float:
 
 
 def test_ragged_paged_attention_single_seq():
-    with jax.make_mesh((len(jax.devices()),), ("dp",)):
+    with use_test_mesh():
         rng = jr.PRNGKey(0)
         seq_lens = [1]  # one sequence
         q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs = _build_random_case(rng, seq_lens)
 
-    ragged = ragged_paged_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, sm_scale=SM_SCALE)
-    ref = _reference_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, seq_lens)
+        ragged = ragged_paged_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, num_seqs, sm_scale=SM_SCALE)
+        ref = _reference_attention(q, kv_pages, kv_lens, page_indices, cu_q_lens, seq_lens)
 
     assert ragged.axes == ref.axes
     tol = _rpa_tol()
