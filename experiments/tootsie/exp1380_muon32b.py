@@ -22,8 +22,8 @@ from levanter.optim import MuonConfig
 
 from experiments.defaults import default_train
 from experiments.tootsie.exp1295_32b import llama_32b_remat, llama_32b_tootsie, llama_32b_train_config, nemotron_mix
+from fray.cluster import ResourceConfig
 from marin.execution import executor_main
-from marin.resources import TpuPodConfig
 
 warmstart_checkpoint = llama_32b_tootsie.cd("checkpoints/step-77096/").nonblocking()
 
@@ -43,7 +43,7 @@ llama_32b_warmstart_train = dataclasses.replace(
     llama_32b_train_config,
     initialize_from_checkpoint_path=warmstart_checkpoint,
     optimizer_config=muon_config,
-    resources=TpuPodConfig("v4-2048", 1),
+    resources=ResourceConfig.with_tpu("v4-2048", slice_count=1),
     reset_data_loader_on_init=False,
 )
 

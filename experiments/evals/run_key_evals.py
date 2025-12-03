@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from experiments.evals.evals import default_key_evals
-from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 
 # Insert your model path here
@@ -22,7 +22,7 @@ from marin.execution.executor import executor_main
 model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
 key_evals = default_key_evals(
     step=model_path,
-    resource_config=SINGLE_TPU_V6E_8,
+    resource_config=ResourceConfig.with_tpu("v6e-8"),
     # model_name="llama-8b-control-00f31b",
     model_name="small_model",
 )

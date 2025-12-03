@@ -40,39 +40,37 @@ SUBMISSION_AUTHOR_URL = "__SUBMISSION_AUTHOR_URL__"
 
 # ruff: noqa: E402
 # nodryrun
-import sys
-import os
 import dataclasses
 import logging
-from dataclasses import dataclass
+import os
+import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import equinox as eqx
-import jax.random as jrandom
-from jaxtyping import PRNGKeyArray
-
 import haliax as hax
 import haliax.nn as hnn
+import jax.random as jrandom
+from fray.cluster import ResourceConfig
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.scan import ScanCheckpointPolicy, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
-from levanter.utils.types import BlockFoldable
-
-from levanter.layers import RmsNormConfig, LayerNormConfigBase
-from levanter.layers.attention import Attention, AttentionWithSink, AttentionConfig, AttentionMask, AttentionBackend
+from jaxtyping import PRNGKeyArray
+from levanter.layers import LayerNormConfigBase, RmsNormConfig
+from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask, AttentionWithSink
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.optim import MuonConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
-
+from levanter.utils.types import BlockFoldable
+from marin.execution.executor import executor_main
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
-from marin.execution.executor import executor_main, versioned
-from marin.resources import TpuPodConfig, GpuConfig
-from experiments.simple_train_config import SimpleTrainConfig
-from levanter.optim import MuonConfig
+
 from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger("ray")
 
@@ -493,17 +491,17 @@ def _muon_presets() -> dict[str, MuonConfig]:
 
 def _resource_presets(use_tpu: bool = False):
     if use_tpu:
-        return {
-            "130m": TpuPodConfig(tpu_type="v5p-32"),
-            "300m": TpuPodConfig(tpu_type="v5p-32"),
-            "520m": TpuPodConfig(tpu_type="v5p-32"),
-            "1_2b": TpuPodConfig(tpu_type="v5p-32"),
-        }
+      return {
+          "130m": ResourceConfig.with_tpu("v5p-32"),
+          "300m": ResourceConfig.with_tpu("v5p-32"),
+          "520m": ResourceConfig.with_tpu("v5p-32"),
+          "1_2b": ResourceConfig.with_tpu("v5p-32"),
+      }
     return {
-        "130m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
-        "300m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
-        "520m": GpuConfig(gpu_count=2, accelerator_type="A100-80G"),
-        "1_2b": GpuConfig(gpu_count=4, accelerator_type="A100-80G"),
+        "130m": ResourceConfig.with_gpu("A100-80G", count=1),
+        "300m": ResourceConfig.with_gpu("A100-80G", count=1),
+        "520m": ResourceConfig.with_gpu("A100-80G", count=2),
+        "1_2b": ResourceConfig.with_gpu("A100-80G", count=4),
     }
 
 
@@ -532,7 +530,7 @@ def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]
     resources = _resource_presets(use_tpu=use_tpu)[size]
 
     train = SimpleTrainConfig(
-        resources=versioned(resources),
+        resources=resources,
         train_batch_size=batch,
         num_train_steps=steps,
         learning_rate=muon.learning_rate,

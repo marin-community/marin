@@ -67,10 +67,7 @@ default_quality_filter_train_config_kwargs = {
 
 default_inference_config_kwargs = {
     "model_type": "gte",
-    "runtime": RuntimeConfig(
-        memory_limit_gb=12,
-        resources={"TPU": 1},
-    ),
+    "runtime": RuntimeConfig(memory_limit_gb=12),
     "task": TaskConfig(max_in_flight=500),
     "filetype": "jsonl.zst",
     "classifier_kwargs": {"max_length": 512},

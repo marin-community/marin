@@ -46,7 +46,7 @@ from ray.exceptions import (
 from ray.remote_function import RemoteFunction
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-from fray.cluster.tpu_config import get_tpu_config
+from fray.cluster.base import get_tpu_topology
 
 logger = logging.getLogger(__name__)
 
@@ -630,7 +630,7 @@ class SliceActor(ResourcePoolManager):
         pod_name = ray.util.accelerators.tpu.get_current_pod_name()
         tpe = _get_current_tpu_pod_type()
 
-        config = get_tpu_config(tpe)
+        config = get_tpu_topology(tpe)
 
         ip_address = socket.gethostbyname(socket.gethostname())
 

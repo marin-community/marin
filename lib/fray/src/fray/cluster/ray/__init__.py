@@ -20,10 +20,14 @@ from fray.cluster.ray.dashboard import (
     DashboardConnection,
     ray_dashboard,
 )
+from fray.cluster.ray.resources import accelerator_descriptor, as_remote_kwargs, get_scheduling_strategy
 
 __all__ = [
     "DashboardConfig",
     "DashboardConnection",
     "RayCluster",
+    "accelerator_descriptor",
+    "as_remote_kwargs",
+    "get_scheduling_strategy",
     "ray_dashboard",
 ]

@@ -37,7 +37,6 @@ dependencies = [
     "regex",
     "requests",
     "s3fs>=2024",
-    "sentencepiece",
     "toml",
     "torch>=2.7.0",
     "tqdm",
@@ -230,8 +229,6 @@ tokenize_train = [
     "haliax>=1.4.dev443",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
     "tblib",
-    "sentencepiece",
-    "tiktoken",
 ]
 
 rl = [

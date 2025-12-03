@@ -44,10 +44,9 @@ from experiments.midtraining_datasets import (
     stackv2_edu_filtered_python_tokenized,
 )
 from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_components
+from fray.cluster import ResourceConfig
 from marin.execution import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
-
-from experiments.evals.resource_configs import SINGLE_TPU_V5p_8
 
 PHASE_3_START = 160_000
 PHASE_3_END = 192_000  # 20% of Training for Cooldown
@@ -196,7 +195,7 @@ for model, revision in baselines:
     baseline_evals.extend(
         default_base_eval(
             output_path_of(model_instance),
-            resource_config=SINGLE_TPU_V5p_8,
+            resource_config=ResourceConfig.with_tpu("v5p-8"),
             run_generation_evals=False,
             discover_latest_checkpoint=False,
         )
@@ -208,7 +207,7 @@ if __name__ == "__main__":
             tootsie_32b_cooldown_mantis,
             *default_base_eval(
                 tootsie_32b_cooldown_mantis,
-                resource_config=SINGLE_TPU_V5p_8,
+                resource_config=ResourceConfig.with_tpu("v5p-8"),
                 run_generation_evals=False,
             ),
             *baseline_evals,

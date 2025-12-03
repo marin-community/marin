@@ -56,7 +56,6 @@ def _tokenize_simple(
         name=os.path.join("tokenized", name),
         fn=tokenize,
         config=config,
-        pip_dependency_groups=["sentencepiece"],
     )
 
     if override_path is not None:
@@ -118,7 +117,7 @@ downloads = {
                 wait_for_completion=True,
             ),
             override_output_path="raw/SlimPajama-6B-be35b7",
-        ).cd("b5f90f4/huggingface.co/datasets/DKYoon/SlimPajama-6B/resolve/b5f90f4")
+        ).cd("data")
     ),
     "dolma3_mix_150b_1025": (
         ExecutorStep(

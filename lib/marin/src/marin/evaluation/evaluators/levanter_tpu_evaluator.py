@@ -18,9 +18,9 @@ from abc import ABC
 from urllib.parse import urlparse
 
 import ray
+from fray.cluster import ResourceConfig
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 
-from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import is_remote_path
@@ -95,11 +95,15 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
         Launches the evaluation run with Ray.
         """
+        from fray.cluster.base import TpuConfig
+
+        assert resource_config is not None, "resource_config is required for LevanterTpuEvaluator"
+        assert isinstance(resource_config.device, TpuConfig), "LevanterTpuEvaluator requires TPU resource config"
 
         @ray.remote(
             resources={
-                "TPU": resource_config.num_tpu,
-                f"{resource_config.tpu_type}-head": 1,
+                "TPU": resource_config.chip_count(),
+                f"TPU-{resource_config.device.type}-head": 1,
             },
             runtime_env=self.get_runtime_env(),
             max_calls=1,
