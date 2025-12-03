@@ -23,8 +23,9 @@ When migrating, consider options in priority order:
 ### Remove the Ray dependency entirely.
 
 Some Ray dependencies are _unused_ in the codebase, or the code doesn't actually
-_need_ to use Ray.  For example, if a function is decorated with `@ray.remote`
-but all of it's callers are _also_ marked `ray.remote`, then you can simply remove the annotation.
+need to use Ray.  For example, if a function is decorated with a plain `@ray.remote`
+but all of it's callers are _also_ marked `ray.remote`, then this call is typically
+a no-op, and can be removed.
 
 If a section of code is entirely unused, you may remove it entirely.
 
@@ -58,7 +59,7 @@ If a runtime_environment is specified in order to install packages or set enviro
 launch a new Job with the appropriate JobRequest:
 
 ```python
-ray.remote(runtime_env=build_runtime_env_for_packages(...))
+@ray.remote(runtime_env=build_runtime_env_for_packages(...))
 def foo():
 
 ```
@@ -92,7 +93,7 @@ Fray breaks up job and task scheduling into separate concerns. We have 2 places 
 
 Scheduling on "head" node. This is typically used to place a controller process
 which should not be preempted. In Fray, this is expressed by putting a
-requirement for: "non-premptible" in the ResourceConfig for a JobRequest.
+requirement for: "non-preemptible" in the ResourceConfig for a JobRequest.
 
 #### TPU scheduling
 
@@ -150,7 +151,7 @@ Text generation inference using Ray Data pipelines for vLLM inference on TPUs.
 
 #### `lib/marin/src/marin/datashop/pipeline.py`
 MEDU data generation pipeline using Ray Data for concurrent vLLM inference with placement group scheduling.
-**Approach:** Convert Ray Data operations to Zephyr pipeline.
+**Approach:** Delete MEDU related files, they are not used.
 
 ### Replace ray.remote with Fray Job Context
 
