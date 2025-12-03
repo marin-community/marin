@@ -155,7 +155,7 @@ REASONING_DATASETS = [
 reasoning_tokenized = {
     ds.split("/")[-1]: default_tokenize(
         name=ds.replace("/", "_") + "_llama3",
-        dataset=get_instruction_dataset(ds, splits=["train"]) / "**/*.jsonl.gz",
+        dataset=get_instruction_dataset(ds) / "**/*.jsonl.gz",
         tokenizer=marin_tokenizer,
         format=ChatLmDatasetFormat(),
     )

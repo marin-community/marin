@@ -541,12 +541,14 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
     return transform_step
 
 
-def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> ExecutorStep:
+def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> ExecutorStep:
     # Check that config exists
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
 
     # Create a new configuration instance with the desired split.
     original_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[hf_dataset_id]
+    if splits is None:
+        splits = original_config.splits
     config = InstructionDatasetConfig(
         **{k: v for k, v in original_config.__dict__.items() if k != "splits"}, splits=splits
     )
