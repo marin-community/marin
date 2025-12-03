@@ -915,7 +915,7 @@ def build_lm_dataset_cache(
     tokenizer: HfTokenizer,
     options: CacheOptions = CacheOptions.default(),
     enforce_eos=True,
-):
+) -> TreeCache[dict]:
     """
     Creates a cache for a dataset. If the cache already exists, it will be loaded. Otherwise, it will be built.
 
@@ -942,10 +942,6 @@ def build_lm_dataset_cache(
         )
     except FileNotFoundError:
         pass
-
-    if source is None:
-        logger.info(f"No data for {name}")
-        return None
 
     logger.info(f"Building cache for {name}...")
     return build_or_load_cache(
@@ -1339,7 +1335,7 @@ class LMMixtureDatasetConfig(LMTaskConfig):
         return validation_datasets
 
     def build_caches(self, split: str) -> Dict[str, TreeCache[dict]]:
-        caches = {}
+        caches: dict[str, TreeCache[dict]] = {}
         for name, source_config in self.configs.items():
             # Skip datasets with zero weight in all stages
             if isinstance(self.train_weights, dict):
@@ -1386,13 +1382,6 @@ class LMMixtureDatasetConfig(LMTaskConfig):
                     self.cache_options,
                     self.enforce_eos,
                 )
-
-        # In practice, it works best if we block on validation caches
-        if split == "validation":
-            for cache in caches.values():
-                cache.await_finished()
-        else:
-            logger.info(f"Not waiting for {split} caches to finish building")
 
         return caches
 
