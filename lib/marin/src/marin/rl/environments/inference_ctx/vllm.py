@@ -304,10 +304,8 @@ class vLLMInferenceContext(BaseInferenceContext):
             ]
 
         # .generate prepends a BOS token, so we just remove it here
-        prompts_with_templates = [
-            prompt.replace(bos_token, "") for prompt in prompts_with_templates
-        ]
-            
+        prompts_with_templates = [prompt.replace(bos_token, "") for prompt in prompts_with_templates]
+
         outputs = self.llm.generate(prompts_with_templates, sampling_params)
 
         # Convert vLLM outputs to OpenAI ChatCompletion format

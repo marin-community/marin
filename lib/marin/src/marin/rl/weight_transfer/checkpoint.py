@@ -137,7 +137,11 @@ class GCSCheckpointClient(WeightTransferClient):
         latest_checkpoint, weight_step = result
 
         if old_model is None:
-            raise ValueError("For GCSCheckpoint server, old_model must be provided. TODO to implement state dict only mode. If you want state dict transfer, please use Arrow Flight.")
+            raise ValueError(
+                "For GCSCheckpoint server, old_model must be provided. \
+                TODO to implement state dict only mode. \
+                If you want state dict transfer, please use Arrow Flight."
+            )
 
         try:
             if weight_step == self.weight_step:

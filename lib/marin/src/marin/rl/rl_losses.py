@@ -163,6 +163,7 @@ def compute_ppo_loss_objective(
     }
     return loss, metadata
 
+
 def importance_sampling_ratio(
     current_logprobs: jax.Array,
     policy_logprobs_array: jax.Array,
@@ -296,11 +297,15 @@ def rloo_loss_with_importance_sampling(
 
     return loss, {
         "ratio_mean": Metric.from_value(ratio_mean_over_responses_only.astype(jnp.float32), ReductionType.MEAN),
-        "clipped_ratio_mean": Metric.from_value(clipped_ratio_mean_over_responses_only.astype(jnp.float32), ReductionType.MEAN),
+        "clipped_ratio_mean": Metric.from_value(
+            clipped_ratio_mean_over_responses_only.astype(jnp.float32), ReductionType.MEAN
+        ),
         "clip_fraction": Metric.from_value(clip_fraction.astype(jnp.float32), ReductionType.MEAN),
         "reinforce_loss": Metric.from_value(reinforce_loss.astype(jnp.float32), ReductionType.MEAN),
         "kl_loss": Metric.from_value(jnp.asarray(kl_loss, dtype=jnp.float32), ReductionType.MEAN),
-        "kl_penalty": Metric.from_value(jnp.asarray(kl_penalty_over_responses_only, dtype=jnp.float32), ReductionType.MEAN),
+        "kl_penalty": Metric.from_value(
+            jnp.asarray(kl_penalty_over_responses_only, dtype=jnp.float32), ReductionType.MEAN
+        ),
         "trainer_inference_importance_sampling_ratio_mean": Metric.from_value(
             trainer_inference_importance_sampling_ratio_mean.astype(jnp.float32), ReductionType.MEAN
         ),
@@ -321,6 +326,7 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     leave_one_out_baselines = (total - rewards) / (n - 1)
     advantages = rewards - leave_one_out_baselines
     return advantages
+
 
 @dataclass
 class RLOOLoss(RLLossModule):

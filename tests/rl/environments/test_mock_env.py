@@ -116,8 +116,15 @@ def create_test_inference_context():
             return np.full(len(choice.message.content), -1.0, dtype=np.float32)
 
         def create_rollout_from_choice(
-            self, prompt, choice, env_name, env_example_id, reward, temperature,
-            system_prompt=None, correctness_reward=None,
+            self,
+            prompt,
+            choice,
+            env_name,
+            env_example_id,
+            reward,
+            temperature,
+            system_prompt=None,
+            correctness_reward=None,
         ):
             prompt_tokens = self.tokenize_prompt(prompt)
             response_tokens = self.get_choice_tokens(choice)
@@ -143,7 +150,12 @@ def create_test_inference_context():
                 response_text = choice.message.content
                 reward = reward_fn(response_text)
                 rollout = self.create_rollout_from_choice(
-                    prompt, choice, env_name, env_example_id, reward, temperature=1.0,
+                    prompt,
+                    choice,
+                    env_name,
+                    env_example_id,
+                    reward,
+                    temperature=1.0,
                 )
                 rollouts.append(rollout)
 

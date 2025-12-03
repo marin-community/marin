@@ -493,7 +493,11 @@ class JAXTransferClient(WeightTransferClient):
         self.metrics.total_polls += 1
 
         if old_model is None:
-            raise ValueError("For JAXTransfer server, old_model must be provided. TODO to implement state dict only mode. If you want state dict transfer, please use Arrow Flight.")
+            raise ValueError(
+                "For JAXTransfer server, old_model must be provided. \
+                TODO to implement state dict only mode. \
+                If you want state dict transfer, please use Arrow Flight."
+            )
 
         # First check if new weights are available without blocking
         try:

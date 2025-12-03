@@ -722,7 +722,7 @@ def main():
         max_rollout_step_delay=1,
     )
 
-    llama_8b_length_penalty_async_clip_higher_dapo = ExperimentConfig(
+    _llama_8b_length_penalty_async_clip_higher_dapo = ExperimentConfig(
         model_config=llama_3_1_8b,
         rl_loss=RLOOLoss(
             kl_coef=0.0,
@@ -747,7 +747,7 @@ def main():
         max_rollout_step_delay=1,
     )
 
-    marin_8b_length_penalty_async_clip_higher_dapo = ExperimentConfig(
+    _marin_8b_length_penalty_async_clip_higher_dapo = ExperimentConfig(
         model_config=marin_8b_instruct,
         rl_loss=RLOOLoss(
             kl_coef=0.0,
@@ -772,7 +772,7 @@ def main():
         max_rollout_step_delay=1,
     )
 
-    llama_8b_length_penalty_async_clip_higher_dapo_chat = ExperimentConfig(
+    _llama_8b_length_penalty_async_clip_higher_dapo_chat = ExperimentConfig(
         model_config=llama_3_1_8b,
         rl_loss=RLOOLoss(
             kl_coef=0.0,
@@ -797,7 +797,7 @@ def main():
         max_rollout_step_delay=1,
     )
 
-    llama_8b_length_penalty_async_clip_higher_dapo_chat_1024 = ExperimentConfig(
+    _llama_8b_length_penalty_async_clip_higher_dapo_chat_1024 = ExperimentConfig(
         model_config=llama_3_1_8b,
         rl_loss=RLOOLoss(
             kl_coef=0.0,
