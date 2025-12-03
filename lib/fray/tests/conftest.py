@@ -54,7 +54,7 @@ def cluster(cluster_type, local_cluster, ray_cluster):
         return ray_cluster
 
 
-@pytest.fixture(params=["sync", "thread", "ray"])
+@pytest.fixture(params=["sync", "threadpool", "ray"])
 def context_type(request):
     """Parameterized context type fixture.
 

@@ -14,7 +14,7 @@
 
 """Ray TPU orchestration for gang scheduling and multislice coordination."""
 
-from fray.cluster.ray.tpu.config import (
+from fray.cluster.tpu_config import (
     TPU_CONFIGS,
     TPUConfig,
     get_tpu_config,

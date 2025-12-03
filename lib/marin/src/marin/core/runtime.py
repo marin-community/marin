@@ -15,14 +15,11 @@
 import functools
 import json
 import logging
-from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import fsspec
-import ray
 from marin.utils import fsspec_exists
-from ray import ObjectRef
 
 logger = logging.getLogger("ray")
 
@@ -138,39 +135,3 @@ class TaskConfig:
 
     max_in_flight: int | None = 1000
     task_options: dict | None = None
-
-
-def simple_backpressure(
-    remote_func, task_generator: Iterator, max_in_flight: int | None, fetch_local: bool, *args, **kwargs
-) -> Iterator[ObjectRef]:
-    """
-    Simple backpressure implementation for ray.remote functions.
-
-    This function will return a list of refs *in order* of the tasks that are being executed.
-    (The usual ray.wait returns the refs in the order of completion, or at least when they're
-    determined to be completed.)
-
-    Parameters:
-    - remote_func: The Ray remote function to execute.
-    - task_generator: An iterator that generates the tasks to be executed.
-    - max_in_flight: The maximum number of tasks to run concurrently.
-    - fetch_local: Whether to fetch the results locally before returning.
-
-    Returns:
-    - An iterator of refs in the order of the tasks that are being executed.
-    """
-    refs = []
-    in_flight = []
-
-    for task in task_generator:
-        if max_in_flight is not None:
-            while len(in_flight) >= max_in_flight:
-                _, in_flight = ray.wait(in_flight, fetch_local=fetch_local, num_returns=1)
-
-        ref = remote_func.remote(*task, *args, **kwargs)
-        refs.append(ref)
-
-        if max_in_flight is not None:
-            in_flight.append(ref)
-
-    yield from refs

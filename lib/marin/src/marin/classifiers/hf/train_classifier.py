@@ -26,10 +26,9 @@ import datasets
 import fsspec
 import numpy as np
 import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments, set_seed
-
 from marin.evaluation.utils import upload_to_gcs
 from marin.utils import fsspec_glob
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trainer, TrainingArguments, set_seed
 
 
 @dataclass

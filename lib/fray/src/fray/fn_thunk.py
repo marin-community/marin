@@ -60,6 +60,9 @@ def create_thunk_entrypoint(
     Returns:
         Entrypoint configured to execute the callable via fray.fn_thunk
     """
+    if " " in prefix:
+        raise ValueError("prefix must not contain spaces")
+
     with tempfile.NamedTemporaryFile(mode="wb", suffix=".pkl", prefix=prefix + "_", delete=False) as f:
         cloudpickle.dump((callable_fn, function_args), f, protocol=cloudpickle.DEFAULT_PROTOCOL)
         pickle_path = f.name
@@ -94,8 +97,6 @@ def main(path: str):
     try:
         logger.info("Calling user entrypoint %s", callable_fn)
         logger.info("About to execute callable_fn()")
-        sys.stdout.flush()
-        sys.stderr.flush()
         if function_args:
             result = callable_fn(**function_args)
         else:
