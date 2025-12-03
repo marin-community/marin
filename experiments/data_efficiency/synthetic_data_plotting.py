@@ -93,6 +93,7 @@ def parse_run(run):
     if "train/loss" in history_loss.columns:
         run_dict["final_train_loss"] = history_loss["train/loss"].iloc[-1]
 
+
     return run_dict
 
 def plot_baselines(run_list):
@@ -145,7 +146,7 @@ def plot_baselines(run_list):
 
     return unregularized_runs, regularized_runs
 
-def plot_synth_data_loss_vs_real_epochs(run_list, synth_data_names):
+def plot_synth_data_loss_vs_real_epochs(run_list, synth_data_names, extra_info=False):
     plt.figure(figsize=WIDE_RECTANGLE_FIGSIZE, dpi=300)
     epoch_counts = [1, 2, 4, 8, 16]
     for synth_data_name in synth_data_names:
@@ -168,6 +169,13 @@ def plot_synth_data_loss_vs_real_epochs(run_list, synth_data_names):
         min_loss = min(losses)
         min_epoch = epochs[losses.index(min_loss)]
         plt.scatter(min_epoch, min_loss, color="red", s=50, marker="o", edgecolor="red", linewidth=4)
+        if extra_info:
+            extra_epochs = [run["epochs"] for run in synth_data_runs]
+            extra_losses = [run["final_eval_loss"] for run in synth_data_runs]
+            plt.scatter(extra_epochs, extra_losses, color=SYNTH_DATA_COLOR_DICT[synth_data_name], s=50, alpha=0.2)
+            plt.plot([0, 16], [3.76518, 3.76518], "--", color=PARAM_STR_COLOR_DICT["300m4k"], alpha=0.5, label="Regularized 300M (Loss: 3.76)")
+            plt.plot([0, 16], [3.62, 3.62], "--", color=REGULARIZED_COLOR, alpha=0.5, label="Regularized Asymptote (Loss: 3.62)")
+
         plt.scatter(epochs, losses, color=SYNTH_DATA_COLOR_DICT[synth_data_name], s=50)
         plt.plot(epochs, losses, "--", color=SYNTH_DATA_COLOR_DICT[synth_data_name], label=f"{SYNTH_DATA_NAME_DICT[synth_data_name]} (Loss: {min_loss:.3f})")
     
@@ -181,6 +189,8 @@ def plot_synth_data_loss_vs_real_epochs(run_list, synth_data_names):
     plt.tight_layout()
     plt.title("Synthetic data loss vs real epochs")
     synth_data_name_str = "_".join(synth_data_names)
+    if extra_info:
+        synth_data_name_str += "_extra_info"
     plt.savefig(f"experiments/data_efficiency/plots/synthetic_data/synth_data_loss_vs_real_epochs_{synth_data_name_str}.png", bbox_inches="tight")
     plt.close()
 
@@ -196,7 +206,7 @@ def plot_ensemble_scaling(run_list, regularized_runs, ensembles_types, title="En
     for (ensemble_type, member_size) in ensembles_types:
         data_name = "dclm_200m" if not ensemble_type else "dclm_200m+" + ensemble_type
         ensemble_color = PARAM_STR_COLOR_DICT[member_size] if not ensemble_type else SYNTH_DATA_COLOR_DICT[ensemble_type]
-        label = "300M " + PRETTY_NAME_DICT[ensemble_type] if ensemble_type else PRETTY_NAME_DICT[member_size]
+        label = PRETTY_NAME_DICT[member_size] + ((" " + PRETTY_NAME_DICT[ensemble_type]) if ensemble_type else "")
 
         ensemble_runs = sorted([
             run for run in run_list if run["data_name"].startswith(data_name)
@@ -213,7 +223,7 @@ def plot_ensemble_scaling(run_list, regularized_runs, ensembles_types, title="En
         losses = [run["final_eval_loss"] for run in ensemble_runs]
 
         plt.scatter(total_params, losses, color=ensemble_color, s=50)
-        x_max = 7.6 if member_size == "300m4k" else None
+        x_max = 7.6 if member_size == "300m4k" or ensemble_type else None
         x_fit, y_fit, power_law = get_power_law_fit(total_params, losses, x_max)
         plt.plot(x_fit, y_fit, "--", color=ensemble_color, label=f"{label} (Fit: {power_law})")
         
@@ -232,6 +242,7 @@ def plot_synth_data_all(run_list):
     _, regularized_runs = plot_baselines(run_list)
 
     # synthetic data comparisons
+    plot_synth_data_loss_vs_real_epochs(run_list, ["hq_cpr16"], extra_info=True)
     plot_synth_data_loss_vs_real_epochs(run_list, ["hq_cpr16"])
     plot_synth_data_loss_vs_real_epochs(run_list, ["hq_cpr16", "sd_cpr16"])
     plot_synth_data_loss_vs_real_epochs(run_list, ["sd_cpr16", "sd_cpr200"])
@@ -249,6 +260,7 @@ def plot_synth_data_all(run_list):
     plot_ensemble_scaling(run_list, regularized_runs, base_ensembles + [("hq_cpr16", "300m4k"), ("sd_cpr16", "300m4k")], title="WRAP vs. Self-Distill Ensemble")
     plot_ensemble_scaling(run_list, regularized_runs, base_ensembles + [("sd_cpr16", "300m4k"), ("sdn_c200", "300m4k")], title="Self-Distill vs. Self-Distill (Ens Teacher) Ensemble")
     plot_ensemble_scaling(run_list, regularized_runs, base_ensembles + [("hq_cpr16", "300m4k"), ("sd_cpr16", "300m4k"), ("symx_c16", "300m4k")], title="Synthetic Data Ensembles")
+    plot_ensemble_scaling(run_list, regularized_runs, base_ensembles + [("hq_cpr16", "300m4k"), ("sd_cpr16", "300m4k"), ("symx_c16", "300m4k"), ("hq_cpr16", "600m4k")], title="WRAP Ensembles (600M) vs Mixed Ensembles (300M)")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
