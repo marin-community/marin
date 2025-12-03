@@ -208,15 +208,15 @@ def test_large_vocab():
 
     pred_embeddings = NamedArray(
         jnp.ones((Batch.size, Seq.size, Embed.size)),
-        axis_names=(Batch, Seq, Embed),
+        (Batch, Seq, Embed),
     )
     pred_lm_head = NamedArray(
         jnp.ones((Embed.size, Vocab.size)),
-        axis_names=(Embed, Vocab),
+        (Embed, Vocab),
     )
     true_ids = NamedArray(
         jnp.zeros((Batch.size, Seq.size), dtype=jnp.int32),
-        axis_names=(Batch, Seq),
+        (Batch, Seq),
     )
 
     # Compute full loss
