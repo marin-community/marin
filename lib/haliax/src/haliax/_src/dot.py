@@ -176,14 +176,9 @@ def _ensure_no_mismatched_axes(*arrays: NamedArray):
                 known_sizes[ax.name] = ax.size
 
 
-def _infer_out_sharding(out_axes: tuple[Axis, ...], operands: list[jax.Array]):
+def _infer_out_sharding(out_axes: tuple[Axis, ...]):
     mapping = current_thread_local_mapping()
     mesh = _resolve_mesh()
-
-    if mesh is None:
-        for op in operands:
-            sh = op.sharding
-            mesh = getattr(sh, "mesh", None)
 
     if mesh is None:
         return None
