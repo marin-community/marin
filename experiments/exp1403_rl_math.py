@@ -96,7 +96,7 @@ def run_rl_training_on_pod(config: RlTrainOnPodConfig):
         rl_training_main(config.training_config)
 
     if isinstance(hw_config, TpuPodConfig):
-        from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
+        from fray.cluster.ray.tpu.execution import run_on_pod_multislice_resumable, run_on_pod_resumable
 
         if hw_config.slice_count == 1:
             return run_on_pod_resumable(rl_train_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
