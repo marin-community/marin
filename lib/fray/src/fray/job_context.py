@@ -248,7 +248,9 @@ class RayContext:
 
     def wait(self, futures: list, num_returns: int = 1) -> tuple[list, list]:
         """Wait for Ray futures to complete."""
-        ready, pending = ray.wait(futures, num_returns=num_returns)
+        # NOTE: fetch_local=False is paramount to avoid copying the data to the Zephyr
+        # driver node, especially for the data futures.
+        ready, pending = ray.wait(futures, num_returns=num_returns, fetch_local=False)
         return list(ready), list(pending)
 
 
