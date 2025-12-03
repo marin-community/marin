@@ -21,7 +21,6 @@ import numpy as np
 import haliax
 import haliax.axis
 from haliax.jax_utils import ensure_scalar, is_jax_array_like, is_pallas_dslice
-from haliax.util import ensure_tuple
 
 from ._src.util import index_where, py_slice, slice_t
 from .axis import (
@@ -243,7 +242,9 @@ class NamedArray(metaclass=NamedArrayMeta):
     def axes(self) -> tuple[Axis, ...]:
         shape = jnp.shape(self.array)
         if len(shape) != len(self.axis_names):
-            raise ValueError(f"Shape of underlying array {shape} does not match number of axes {self.axis_names}. {self.array}")
+            raise ValueError(
+                f"Shape of underlying array {shape} does not match number of axes {self.axis_names}. {self.array}"
+            )
 
         return tuple(Axis(name, size) for name, size in zip(self.axis_names, shape))
 
@@ -279,7 +280,9 @@ class NamedArray(metaclass=NamedArrayMeta):
     @ft.cached_property
     def shape(self) -> dict[str, int]:
         if not len(self.axis_names) == jnp.ndim(self.array):
-            raise ValueError(f"Number of axes {len(self.axes)} does not match number of dimensions {jnp.ndim(self.array)} of array")
+            raise ValueError(
+                f"Number of axes {len(self.axes)} does not match number of dimensions {jnp.ndim(self.array)} of array"
+            )
         return {axis.name: axis.size for axis in self.axes}
 
     dtype = property(lambda self: self.array.dtype)

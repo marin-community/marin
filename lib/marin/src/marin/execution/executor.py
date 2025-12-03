@@ -156,6 +156,7 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
 
     d = recurse(obj)
     d.pop("description", None)
+    assert isinstance(d, dict)
     return d
 
 
