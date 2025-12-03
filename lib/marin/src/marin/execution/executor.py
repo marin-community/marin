@@ -98,9 +98,11 @@ import subprocess
 import time
 import traceback
 import copy
+import copy
 import urllib.parse
 from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import dataclass, fields, is_dataclass, replace
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from functools import cached_property
@@ -158,6 +160,7 @@ def asdict_without_description(obj: dataclass) -> dict[str, Any]:
     d = recurse(obj)
     assert isinstance(d, dict)
     d.pop("description", None)
+    assert isinstance(d, dict)
     return d
 
 
