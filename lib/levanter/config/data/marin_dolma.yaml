@@ -2,7 +2,7 @@ tokenizer: meta-llama/Meta-Llama-3.1-8B
 cache_dir: null
 cache_options:
   batch_size: 128
-  num_shard_groups: 128
+
   target_size_per_flush: 512MB
 configs:
   dolma/algebraic-stack:
