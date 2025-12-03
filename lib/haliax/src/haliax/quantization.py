@@ -108,6 +108,7 @@ class DotGeneralOp(Protocol):
         dimension_numbers,
         precision: PrecisionLike = None,
         preferred_element_type: DTypeLike | None = None,
+        **kwargs,
     ) -> jnp.ndarray: ...
 
     @staticmethod
@@ -132,8 +133,9 @@ class DefaultDotGeneralOp(eqx.Module):
         dimension_numbers,
         precision: PrecisionLike = None,
         preferred_element_type: DTypeLike | None = None,
+        **kwargs,
     ) -> jnp.ndarray:
-        return jax.lax.dot_general(lhs, rhs, dimension_numbers, precision, preferred_element_type)
+        return jax.lax.dot_general(lhs, rhs, dimension_numbers, precision, preferred_element_type, **kwargs)
 
     # not really necessary, but it's nice to have a singleton
     @staticmethod
@@ -173,6 +175,7 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
         dimension_numbers,
         precision: PrecisionLike = None,
         preferred_element_type: DTypeLike | None = None,
+        **kwargs,
     ):
         # Use the `k.dtype` since it aligns with the `dtype` of its layers,
         # namely, the computation data type.
@@ -184,7 +187,9 @@ class Fp8DotGeneralOp(OverwriteWithGradient):
 
         x_qdq = in_qdq(comp_dtype, lhs, self.input_scale, self.input_amax_history)
         k_qdq = in_qdq(comp_dtype, rhs, self.kernel_scale, self.kernel_amax_history)
-        y_qdq = dot_general_with_precision(x_qdq, k_qdq, dimension_numbers, precision, preferred_element_type)
+        y_qdq = dot_general_with_precision(
+            x_qdq, k_qdq, dimension_numbers, precision, preferred_element_type, **kwargs
+        )
         y = out_qdq(comp_dtype, y_qdq, self.output_grad_scale, self.output_grad_amax_history)
 
         return y
@@ -206,6 +211,7 @@ class Int8DotGeneralOp(OverwriteWithGradient):
         dimension_numbers,
         precision,
         preferred_element_type=None,
+        **kwargs,
     ):
         cfg = aqt_config.set_context(self.cfg, jrandom.PRNGKey(42), train_step=None)
         return cfg(lhs, rhs, dimension_numbers, precision, preferred_element_type)

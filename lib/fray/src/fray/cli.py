@@ -115,7 +115,7 @@ def submit(ctx, extra, cpus, memory, disk, tpu, gpu, gpu_count, env, auto_stop, 
 
     env_config = EnvironmentConfig(
         workspace=os.getcwd(),
-        extra_dependency_groups=extra_groups,
+        extras=extra_groups,
         env_vars=env_dict,
     )
 

@@ -36,6 +36,7 @@ def init_logging(log_dir: Union[str, Path], run_id: str, level: int = pylogging.
     # Create Root Logger w/ Base Formatting
     pylogging.basicConfig(format=log_format, datefmt=date_format, handlers=handlers, force=True)
     pylogging.getLogger("levanter").setLevel(level)
+    pylogging.getLogger("tqdm_loggable").setLevel(level)
 
     # Silence Transformers' "None of PyTorch, TensorFlow 2.0 or Flax have been found..." thing
     silence_transformer_nag()
