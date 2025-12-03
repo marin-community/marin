@@ -381,9 +381,9 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         with jax.named_scope("permute"):
             x_repeat_sort_, group_sizes_, sort_idx_ = permute_sharded(x_flat.array, topk_idx_flat.array)
-            x_repeat_sort = NamedArray(x_repeat_sort_, axes=(TokenRepeat, self.config.Embed))
-            group_sizes = NamedArray(group_sizes_, axes=(Experts,))
-            sort_idx = NamedArray(sort_idx_, axes=(TokenRepeat,))
+            x_repeat_sort = NamedArray(x_repeat_sort_, (TokenRepeat, self.config.Embed))
+            group_sizes = NamedArray(group_sizes_, (Experts,))
+            sort_idx = NamedArray(sort_idx_, (TokenRepeat,))
 
         return x_repeat_sort, group_sizes, sort_idx
 
