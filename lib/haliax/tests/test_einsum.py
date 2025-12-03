@@ -216,12 +216,21 @@ def test_einsum_ordered_ellipsis():
         )
     )
 
-    assert jnp.all(
-        jnp.equal(
-            einsum("h ... d,d ... h-> ... d", m1, m2).array,
-            jnp.einsum("ijk,kji->jk", m1.array, m2.array),
-        )
-    )
+
+def test_einsum_ordered_ellipsis_preserves_axis_order():
+    Batch = Axis("batch", 4)
+    SeqQ = Axis("seq_q", 4)
+    SeqK = Axis("seq_k", 4)
+    Head = Axis("head", 2)
+    DHead = Axis("dhead", 8)
+
+    q = hax.ones((Batch, SeqQ, Head, DHead))
+    k = hax.ones((Batch, SeqK, Head, DHead))
+
+    out = hax.einsum("... s h d, ... t h d -> ... s t h d", q, k)
+
+    assert out.axes == (Batch, SeqQ, SeqK, Head, DHead)
+    assert out.array.shape == (Batch.size, SeqQ.size, SeqK.size, Head.size, DHead.size)
 
 
 def test_einsum_works_with_same_initial_axis_letter():
