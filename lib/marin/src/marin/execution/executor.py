@@ -127,7 +127,7 @@ from marin.execution.executor_step_status import (
     get_status_path,
 )
 from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
-from marin.run.ray_deps import build_runtime_env_for_packages
+from fray.cluster.ray.deps import build_runtime_env_for_packages
 from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utilities.ray_utils import is_local_ray_cluster, schedule_on_head_node_strategy
 

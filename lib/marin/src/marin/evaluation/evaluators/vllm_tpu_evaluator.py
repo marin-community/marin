@@ -24,7 +24,7 @@ from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
-from marin.run.ray_deps import build_runtime_env_for_packages
+from fray.cluster.ray.deps import build_runtime_env_for_packages
 from marin.utils import remove_tpu_lockfile_on_exit
 
 

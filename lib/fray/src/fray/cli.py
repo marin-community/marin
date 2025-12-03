@@ -19,7 +19,6 @@ import datetime
 import getpass
 import logging
 import os
-import re
 import subprocess
 import sys
 import time
@@ -103,8 +102,7 @@ def submit(ctx, extra, cpus, memory, disk, tpu, gpu, gpu_count, env, auto_stop, 
         sys.exit(1)
 
     if tpu:
-        tpu_chips = parse_tpu_count(tpu)
-        device = TpuConfig(type=tpu, count=tpu_chips)
+        device = TpuConfig(type=tpu)
     elif gpu:
         device = GpuConfig(type=gpu, count=gpu_count)
 
@@ -168,16 +166,14 @@ def submit_and_monitor(cluster, job_req, is_tpu, should_stop, no_wait):
     with auto_stop(cluster, job_id, should_stop and not no_wait):
         click.echo(f"Job submitted: {job_id}")
 
-        # TPU jobs: print and exit
         if is_tpu:
             click.echo("Note: TPU jobs don't support log streaming. Check dashboard.")
             return
 
-        # Stream logs unless --no-wait
         if not no_wait:
             try:
-                for line in cluster.monitor(job_id):
-                    print(line, end="")
+                job_info = cluster.monitor(job_id)
+                click.echo(f"Job completed with status: {job_info.status}")
             except KeyboardInterrupt:
                 click.echo("\nInterrupted. Job still running.")
 
@@ -246,8 +242,8 @@ def logs(ctx, job_id):
 
     with cluster.connect():
         try:
-            for line in cluster.monitor(job_id):
-                print(line, end="")
+            job_info = cluster.monitor(job_id)
+            click.echo(f"Job status: {job_info.status}")
         except KeyboardInterrupt:
             click.echo("\nInterrupted.")
 
@@ -300,19 +296,6 @@ def parse_cluster_config(cluster_spec: str) -> str:
 
         return find_config_by_region(region)
     raise ValueError(f"Invalid cluster spec: {cluster_spec}")
-
-
-def parse_tpu_count(tpu_type: str) -> int:
-    """Parse TPU chip count from type."""
-    if tpu_type in {"v4-8", "v5p-8"}:
-        return 4
-    match = re.search(r"-(\d+)$", tpu_type)
-    if not match:
-        raise ValueError(f"Cannot parse TPU type: {tpu_type}")
-    chips = int(match.group(1))
-    if chips > 8:
-        raise ValueError("Only single TPU nodes supported")
-    return chips
 
 
 def generate_job_name(command: str) -> str:
