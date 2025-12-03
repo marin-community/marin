@@ -26,10 +26,8 @@ import sys
 import pytest
 from fray.cluster import (
     Entrypoint,
-    GpuConfig,
     JobRequest,
     ResourceConfig,
-    TpuConfig,
     create_environment,
 )
 
@@ -89,28 +87,6 @@ def test_cluster_job_success(cluster, cluster_type):
 
     assert info.status == "succeeded"
     assert info.error_message is None
-
-
-def test_ray_cluster_get_ray_resources_gpu(ray_cluster):
-    request = JobRequest(
-        name="gpu-resource-test",
-        entrypoint=Entrypoint(binary="python", args=["-m", "my_module"]),
-        resources=ResourceConfig(device=GpuConfig(type="A100", count=4)),
-    )
-
-    resources = ray_cluster.get_ray_resources(request)
-    assert resources == {"GPU": 4.0}
-
-
-def test_ray_cluster_get_ray_resources_tpu(ray_cluster):
-    request = JobRequest(
-        name="tpu-resource-test",
-        entrypoint=Entrypoint(binary="python", args=["-m", "my_module"]),
-        resources=ResourceConfig(device=TpuConfig(type="v5e-16")),
-    )
-
-    resources = ray_cluster.get_ray_resources(request)
-    assert resources == {"TPU": 8.0, "v5e-16-head": 1.0}
 
 
 def test_environment_integration(cluster, cluster_type, tmp_path):

@@ -29,7 +29,6 @@ import ray
 from ray.job_submission import JobStatus as RayJobStatus
 from ray.job_submission import JobSubmissionClient
 
-from fray.cluster import tpu_config
 from fray.cluster.base import (
     Cluster,
     GpuConfig,
@@ -291,32 +290,6 @@ class RayCluster(Cluster):
         for tpu_job_info in self._tpu_jobs.values():
             result.append(self._poll_tpu_job(tpu_job_info.job_id))
         return result
-
-    def get_ray_resources(self, request: JobRequest) -> dict[str, float]:
-        """Convert ResourceConfig to Ray resource specification.
-
-        Maps structured device configs to Ray's resource format:
-        - TpuConfig(type="v5e-16") -> {"TPU": 8, "v5e-16-head": 1}
-        - GpuConfig(type="A100", count=4) -> {"GPU": 4}
-        - CpuConfig() -> {}
-        """
-
-        resources: dict[str, float] = {}
-
-        device = request.resources.device
-
-        if isinstance(device, TpuConfig):
-            # TPU resources include:
-            # 1. Generic "TPU" resource for chip count
-            # 2. Specific type-head resource for exclusive access to a TPU pod
-            resources["TPU"] = float(tpu_config.get_tpu_config(device.type).chips_per_vm)
-            resources[f"{device.type}-head"] = 1.0
-        elif isinstance(device, GpuConfig):
-            # GPU resources just specify the count
-            resources["GPU"] = float(device.count)
-        # CpuConfig requires no special resources
-
-        return resources
 
     def _launch_tpu_job(self, request: JobRequest) -> JobId:
         entrypoint = request.entrypoint

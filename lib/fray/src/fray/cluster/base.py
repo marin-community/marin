@@ -46,14 +46,6 @@ TpuType = Literal[
     "v5litepod-64",
     "v5litepod-128",
     "v5litepod-256",
-    "v5e-1",
-    "v5e-4",
-    "v5e-8",
-    "v5e-16",
-    "v5e-32",
-    "v5e-64",
-    "v5e-128",
-    "v5e-256",
     "v5p-8",
     "v5p-16",
     "v5p-32",
@@ -188,7 +180,7 @@ class TpuConfig:
     """TPU device configuration.
 
     Args:
-        type: TPU accelerator type (e.g., "v5e-16", "v4-8")
+        type: TPU accelerator type (e.g., "v5litepod-16", "v4-8")
         topology: Optional topology specification (e.g., "2x2x1")
     """
 
