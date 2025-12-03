@@ -217,7 +217,6 @@ class SyncContext:
     def __init__(self):
         self._actors: dict[str, Any] = {}
         self._actor_locks: dict[str, threading.Lock] = {}
-        self._actors_lock = threading.Lock()
 
     def put(self, obj: Any) -> Any:
         """Identity operation - no serialization needed."""
