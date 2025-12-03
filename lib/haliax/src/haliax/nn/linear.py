@@ -300,7 +300,7 @@ class MoELinear(eqx.Module):
 def _gmm(lhs, rhs, group_sizes, out_axes, sharded=False, ar=False):
     def gmm_impl(lhs, rhs, group_sizes):
         out = gmm_sharded(lhs.array, rhs.array, group_sizes.array, ar=ar)
-        return hax.NamedArray(out, axes=out_axes)
+        return hax.NamedArray(out, out_axes)
 
     if sharded:
         return gmm_impl(lhs, rhs, group_sizes)
