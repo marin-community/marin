@@ -113,13 +113,14 @@ def test_merge_lora():
 
     # tpu matmuls are very imprecise, so we force higher precision
     class PreciseDotGeneralOp(DotGeneralOp):
-        def __call__(self, lhs, rhs, dimension_numbers, precision=None, preferred_element_type=None):
+        def __call__(self, lhs, rhs, dimension_numbers, precision=None, preferred_element_type=None, **kwargs):
             return jax.lax.dot_general(
                 lhs,
                 rhs,
                 dimension_numbers,
                 precision=jax.lax.Precision.HIGHEST,
                 preferred_element_type=preferred_element_type,
+                **kwargs,
             )
 
     k0 = jax.random.PRNGKey(0)

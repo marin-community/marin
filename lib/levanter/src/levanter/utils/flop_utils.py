@@ -182,6 +182,11 @@ DEVICE_AVAILABLE_FLOPS = {
         "bf16": 918e12,
         "int8": 1836e12,
     },
+    # NVIDIA GB10
+    "gb10": {
+        "bf16": 100e12,
+        "amp_bf16": 100e12,
+    },
 }
 
 
@@ -229,6 +234,8 @@ def _simplify_device_kind(kind: str) -> str:
         return "t4"
     if "a6000" in kind:
         return "a6000"
+    if "gb10" in kind:
+        return "gb10"
 
     return kind
 

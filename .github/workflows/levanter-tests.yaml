@@ -5,11 +5,13 @@ on:
     branches:
       - main
     paths:
+      - lib/haliax/**
       - lib/levanter/**
       - uv.lock
       - .github/workflows/levanter-tests.yaml
   pull_request:
     paths:
+      - lib/haliax/**
       - lib/levanter/**
       - uv.lock
       - .github/workflows/levanter-tests.yaml
