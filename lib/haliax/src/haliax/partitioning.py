@@ -10,12 +10,13 @@ import threading
 import typing
 import warnings
 from math import prod
-from typing import Callable, ContextManager, Mapping, Optional, ParamSpec, Sequence, TypeAlias, TypeVar, cast
+from typing import Any, Callable, ContextManager, Mapping, Optional, ParamSpec, Sequence, TypeAlias, TypeVar, cast
 
 import equinox as eqx
 import jax
 from equinox import is_array, module_update_wrapper
 from jax._src.pjit import reshard
+from jax.experimental.shard_map import shard_map as jax_shard_map
 from jax.lax import with_sharding_constraint
 from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, get_abstract_mesh, AxisType
 
@@ -730,16 +731,127 @@ def round_axis_for_partitioning(axis: Axis, mapping: ResourceMapping | None = No
 
 
 def _get_mesh() -> Mesh | None:
-    """Deprecated helper that simply proxies to :func:`get_abstract_mesh`."""
+    # Backward-compatible helper for callers that expect a concrete or abstract mesh.
+    return _resolve_mesh()
 
-    warnings.warn(
-        "`_get_mesh` is deprecated; use `jax's get_abstract_mesh or get_concrete_mesh` instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
 
-    mesh = _resolve_mesh()
-    return mesh
+@typing.overload
+def shard_map(
+    f: Callable[Args, R],
+    *,
+    in_specs: Any = None,
+    out_specs: Any = None,
+    mesh: Mesh | None = None,
+    axis_mapping: ResourceMapping | None = None,
+    check_rep: bool = False,
+    **kwargs,
+) -> Callable[Args, R]: ...
+
+
+@typing.overload
+def shard_map(
+    *,
+    in_specs: Any = None,
+    out_specs: Any = None,
+    mesh: Mesh | None = None,
+    axis_mapping: ResourceMapping | None = None,
+    check_rep: bool = False,
+    **kwargs,
+) -> typing.Callable[[Callable[Args, R]], Callable[Args, R]]: ...
+
+
+def shard_map(
+    f: Optional[Callable] = None,
+    *,
+    in_specs: PyTree = None,
+    out_specs: PyTree = None,
+    mesh: Optional[Mesh] = None,
+    axis_mapping: Optional[ResourceMapping] = None,
+    check_rep: bool = False,
+    **shmap_kwargs: dict,
+) -> Callable:
+    """A NamedArray-friendly wrapper around :func:`jax.experimental.shard_map.shard_map`.
+
+    This function can be used either as ``haliax.shard_map(fn, ...)`` or as a
+    decorator::
+
+        @haliax.shard_map
+        def fn(x):
+            ...
+
+    Note that, unlike the JAX version, you don't need to provide in_specs or out_specs if all arguments and the return value
+    are ``NamedArray`` objects. The mesh can be inferred from the context mesh (which JAX could do, but doesn't).
+    Axis mapping can be inferred from the context axis mapping or provided explicitly.
+
+    Also note that this function will call ``f`` twice at trace time unless out_specs is provided: once to infer the output
+    pspec, and once to actually run the computation.
+
+    Args:
+        f: The function to apply with ``shard_map``.
+        in_specs: Optional PyTree prefix describing the input sharding. If None, the input
+            specifications are inferred from the input NamedArray arguments and the
+            provided `axis_mapping`.
+        out_specs: Like `in_specs` but for the output. If `None` the output
+            specifications are inferred by evaluating `f` on placeholder inputs
+            and using the returned axis names.
+        mesh: The mesh to run the computation on. Defaults to the current mesh
+            returned by [jax.sharding.get_abstract_mesh][].
+        axis_mapping: Optional mapping from logical axis names to mesh axis names
+            used when converting `Axis` objects to `PartitionSpec`.
+        check_rep: Passed through to `jax.shard_map`.
+        **shmap_kwargs: Additional arguments forwarded to `jax.shard_map`.
+
+    Returns:
+        A wrapped function that accepts and returns `NamedArray` objects
+        according to the provided specifications.
+    """
+
+    if f is None:
+        return lambda fn: shard_map(
+            fn,
+            in_specs=in_specs,
+            out_specs=out_specs,
+            mesh=mesh,
+            axis_mapping=axis_mapping,
+            check_rep=check_rep,
+            **shmap_kwargs,
+        )
+
+    def wrapper(*args, **kwargs):
+        if mesh is not None:
+            this_mesh = mesh
+        else:
+            this_mesh = _resolve_mesh()
+
+        def inner(args, kwargs):
+            return f(*args, **kwargs)
+
+        if in_specs is None:
+            this_in_specs = pspec_for((args, kwargs), axis_mapping)
+        else:
+            this_in_specs = (in_specs, {})
+
+        # for output, we need to evaluate the function on placeholder inputs to get the output shape
+        # we have to do this under shard_map so that psum etc. work
+        almost_shmap = functools.partial(
+            jax_shard_map,
+            inner,
+            mesh=this_mesh,
+            in_specs=this_in_specs,
+            check_rep=check_rep,
+            **shmap_kwargs,
+        )
+
+        if out_specs is not None:
+            this_out_specs = out_specs
+        else:
+            out_shape = eqx.filter_eval_shape(almost_shmap(out_specs=PartitionSpec()), args, kwargs)
+            this_out_specs = pspec_for(out_shape, axis_mapping)
+
+        out = almost_shmap(out_specs=this_out_specs)(args, kwargs)
+        return out
+
+    return functools.update_wrapper(wrapper, f)
 
 
 def _is_jit_tracer(x) -> bool:
@@ -756,6 +868,7 @@ __all__ = [
     "auto_sharded",
     "shard",
     "shard_with_axis_mapping",
+    "shard_map",
     "pspec_for",
     "infer_resource_partitions",
     "named_jit",

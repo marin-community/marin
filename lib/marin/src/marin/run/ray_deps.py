@@ -31,8 +31,14 @@ logger = logging.getLogger(__name__)
 IGNORE_DEPS = [
     "ray",
     "marin",
-    "torch",
 ]
+
+
+TORCH_GPU_PACKAGE_PREFIXES = (
+    "torch",
+    "torchvision",
+    "torchaudio",
+)
 
 
 class AcceleratorType(enum.Enum):
@@ -49,7 +55,7 @@ def accelerator_type_from_extra(extra: list[str] | None = None) -> AcceleratorTy
     extra = set(extra)
     if "tpu" in extra:
         return AcceleratorType.TPU
-    elif "gpu" in extra or "cuda12" in extra:
+    elif "gpu" in extra or "cuda12" in extra or "vllm" in extra:
         return AcceleratorType.GPU
     elif "cpu" in extra:
         return AcceleratorType.CPU
@@ -178,15 +184,18 @@ def build_runtime_env_for_packages(
     # N.B. we're currently ignoring torch due to install time.
     torch_pkgs = []
     for pkg in package_spec.package_specs + pip_packages:
-        # defer torch installs to the end, so that the --find-links only applies to them
-        if "torch" in pkg:
+        # Defer torch-family installs to the end so that the --find-links only applies to them
+        if pkg.startswith(TORCH_GPU_PACKAGE_PREFIXES):
             torch_pkgs.append(pkg)
+            continue
         requirements_txt.append(pkg)
 
-    # Force the PyTorch CPU version if not using a GPU
+    # Force the correct PyTorch wheel index for the requested accelerator type
     accel_type = accelerator_type_from_extra(extra)
-    if accel_type == AcceleratorType.CPU or accel_type == AcceleratorType.TPU or accel_type == AcceleratorType.NONE:
-        requirements_txt.append("--find-links https://download.pytorch.org/whl/cpu")
+    if accel_type in {AcceleratorType.CPU, AcceleratorType.TPU, AcceleratorType.NONE}:
+        requirements_txt.append("--extra-index-url https://download.pytorch.org/whl/cpu")
+    elif accel_type == AcceleratorType.GPU:
+        requirements_txt.append("--extra-index-url https://download.pytorch.org/whl/cu128")
 
     requirements_txt.extend(torch_pkgs)
     requirements_txt = "\n".join(requirements_txt)
@@ -199,4 +208,5 @@ def build_runtime_env_for_packages(
     return dict(
         env_vars=env_vars | {"PYTHONPATH": ":".join(python_path)},
         pip={"packages": req_path},
+        pip_check=False,
     )

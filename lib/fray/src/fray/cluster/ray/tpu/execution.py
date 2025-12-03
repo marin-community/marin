@@ -758,7 +758,7 @@ def run_on_pod(
     return ray.get(run_on_pod_ray.remote(remote_fn, tpu_type, num_slices, max_retries_preemption, max_retries_failure))
 
 
-@ray.remote(num_cpus=0.01)
+@ray.remote(num_cpus=0.0, resources={"head_node": 0.001})
 def run_on_pod_ray(
     remote_fn: RemoteFunction,
     tpu_type: str,

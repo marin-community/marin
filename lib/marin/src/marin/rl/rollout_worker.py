@@ -34,16 +34,23 @@ import jax
 import jax.random as jrandom
 import levanter
 from jax.experimental import multihost_utils
-from levanter.inference.openai import InferenceServer, InferenceServerConfig
+from levanter.inference.openai import InferenceServer
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
 from transformers import PreTrainedTokenizer
+from typing import Literal
 
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.environments.inference_ctx import (
+    LevanterInferenceContext,
+    LevanterInferenceContextConfig,
+    vLLMInferenceContextConfig,
+    vLLMInferenceContext,
+    BaseInferenceContext,
+)
 from marin.rl.model_utils import load_model_from_checkpoint
 
 from .rollout_storage import RolloutStorageConfig, RolloutWriter
@@ -62,25 +69,28 @@ logger = logging.getLogger(__name__)
 class RolloutWorkerConfig:
     """Configuration for RolloutWorker."""
 
-    inference_server_config: InferenceServerConfig
-    trainer: TrainerConfig
-    model: LmConfig
     curriculum_config: CurriculumConfig
     rollout_storage: RolloutStorageConfig
     weight_transfer: WeightTransferConfig
     tokenizer: PreTrainedTokenizer
     run_id: str
+    trainer: TrainerConfig
+    model: LmConfig
+    inference_type: Literal["levanter", "vllm"]
+    """Type of inference to use."""
+
+    inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig
+    """Configuration for inference context."""
 
     seed: int = 0
     """Random seed to use for sampling."""
-
     max_rollouts: int | None = None
     """Maximum number of rollouts to generate before stopping. Defaults to running forever."""
 
+    log_freq: int = 10
+
     initial_checkpoint: str | None = None
     """Initial checkpoint for the reference model (auto-detects HF repo vs local path)."""
-
-    log_freq: int = 10
 
 
 def find_open_port() -> int:
@@ -127,6 +137,32 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
     )
 
 
+def create_inference_context(
+    inference_type: str,
+    inference_config: LevanterInferenceContextConfig | vLLMInferenceContextConfig,
+) -> BaseInferenceContext:
+    """Create an inference context based on the configuration."""
+    if inference_type == "levanter":
+        # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
+        # For inference servers, we shard across all local devices on a single host.
+        inference_config.inference_server_config = dataclasses.replace(
+            inference_config.inference_server_config,
+            trainer=dataclasses.replace(
+                inference_config.inference_server_config.trainer,
+                model_axis_size=jax.local_device_count(),
+            ),
+        )
+        return LevanterInferenceContext(
+            inference_config=inference_config,
+        )
+    elif inference_type == "vllm":
+        return vLLMInferenceContext(
+            inference_config=inference_config,
+        )
+    else:
+        raise ValueError(f"Invalid inference type: {inference_type}")
+
+
 class RolloutWorker:
     """Asynchronous inference & rollout worker for RL training.
 
@@ -147,16 +183,6 @@ class RolloutWorker:
         config.trainer.id = f"{config.run_id}-rollout"
         levanter.initialize(config.trainer)
 
-        # Infer model_axis_size from the actual TPU configuration now that JAX is initialized.
-        # For inference servers, we shard across all local devices on a single host.
-        config.inference_server_config = dataclasses.replace(
-            config.inference_server_config,
-            trainer=dataclasses.replace(
-                config.inference_server_config.trainer,
-                model_axis_size=jax.local_device_count(),
-            ),
-        )
-
         self.tracker = levanter.current_tracker()
         self.config = config
         self._running = True
@@ -167,22 +193,19 @@ class RolloutWorker:
         self._tokenizer = config.tokenizer
 
         logger.info("Starting weight transfer client with config %s", self.config.weight_transfer)
-        self._transfer_client = create_weight_transfer_client(
-            config.weight_transfer,
-            mesh=self.config.trainer.device_mesh,
-            axis_mapping=self.config.trainer.compute_axis_mapping,
-        )
 
         self._rollout_writer = config.rollout_storage.create_writer()
+        self._policy_ctx = create_inference_context(self.config.inference_type, self.config.inference_config)
+
+        # Need to build the policy model and then use that to start the inference server
         self._build_models()
-        with self.config.trainer.use_device_mesh(), hax.axis_mapping(self.config.trainer.compute_axis_mapping):
-            self._inference_server = InferenceServer.create(
-                config.inference_server_config,
-                model=self._policy_model,
-                tokenizer=self._tokenizer,
-            )
-        self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
-        self._inference_thread.start()
+        self._policy_ctx.start_server(self._policy_model)
+
+        self._transfer_client = create_weight_transfer_client(
+            config.weight_transfer,
+            mesh=self._policy_ctx.mesh,
+            axis_mapping=self._policy_ctx.axis_mapping,
+        )
 
         # TODO(power) -- replace this with a wait_until_ready() on the levanter inference server
         time.sleep(1.0)
@@ -214,26 +237,16 @@ class RolloutWorker:
         stop_tokens = lesson_config.sampling_params.stop_tokens
         max_tokens = lesson_config.sampling_params.max_tokens
 
-        policy_ctx = InferenceContext(
-            tokenizer=self._tokenizer,
-            inference_server=self._inference_server,
+        rollout_groups, metrics = env.sample(
+            inference_ctx=self._policy_ctx,
+            n_examples=n_examples,
+            n_generations=n_generations,
+            temperature=temperature,
+            prng_key=rng,
+            mode=mode,
             max_tokens=max_tokens,
-            stop_tokens=stop_tokens,
+            stop=stop_tokens,
         )
-
-        with (
-            self.config.trainer.device_mesh,
-            hax.axis_mapping(self.config.trainer.compute_axis_mapping),
-        ):
-            # Sample examples, generate responses, and create rollouts from selected lesson
-            rollout_groups, metrics = env.sample(
-                inference_ctx=policy_ctx,
-                n_examples=n_examples,
-                n_generations=n_generations,
-                temperature=temperature,
-                prng_key=rng,
-                mode=mode,
-            )
 
         if len(rollout_groups) == 0:
             logger.warning("No valid rollouts generated in this batch...")
@@ -284,10 +297,10 @@ class RolloutWorker:
             checkpoint=self.config.initial_checkpoint,
             model_config=self.config.model,
             trainer_config=self.config.trainer,
-            mesh=self.config.trainer.device_mesh,
-            # use the compute axis mapping for inference
-            axis_mapping=self.config.trainer.compute_axis_mapping,
             vocab_axis=Vocab,
+            mesh=self._policy_ctx.mesh,
+            # use the compute axis mapping for inference
+            axis_mapping=self._policy_ctx.axis_mapping,
             tokenizer=self._tokenizer,
             key=key,
         )
@@ -330,7 +343,7 @@ class RolloutWorker:
             self._current_weight_step = update.weight_id
             logger.info(f"Received new weights from step {update.weight_id}")
             self._policy_model = update.model
-            self._inference_server.reload(lambda model: self._policy_model)
+            self._policy_ctx.reload_model(self._policy_model)
             return update.model
         else:
             logger.info("No new weights available")
@@ -453,7 +466,8 @@ class RolloutWorker:
                 )
 
             # Full eval: comprehensive check on all lessons
-            if step > 0 and step % self.config.curriculum_config.eval_frequency == 0:
+            # Evaluate based on the train worker step
+            if step % self.config.curriculum_config.eval_frequency == 0:
                 rng, eval_rng = jrandom.split(rng)
                 self._evaluate_curriculum(eval_rng, step)
 

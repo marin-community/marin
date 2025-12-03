@@ -71,6 +71,14 @@ def _normalize_output_pattern(output_pattern: str | Callable[[int, int], str]) -
     return output_pattern
 
 
+def _get_fn_name(fn: Any) -> str:
+    """Safely get a function name, handling partials and callables."""
+    # Unwrap partials to find the underlying function name
+    while hasattr(fn, "func"):
+        fn = fn.func
+    return getattr(fn, "__qualname__", getattr(fn, "__name__", str(fn)))
+
+
 @dataclass
 class MapOp:
     """Map operation - applies function to each element."""
@@ -78,7 +86,7 @@ class MapOp:
     fn: Callable
 
     def __repr__(self):
-        return f"MapOp(fn={self.fn.__name__})"
+        return f"MapOp(fn={_get_fn_name(self.fn)})"
 
 
 @dataclass
@@ -88,7 +96,7 @@ class FilterOp:
     predicate: Callable
 
     def __repr__(self):
-        return f"FilterOp(predicate={self.predicate.__name__})"
+        return f"FilterOp(predicate={_get_fn_name(self.predicate)})"
 
 
 @dataclass
@@ -157,7 +165,7 @@ class FlatMapOp:
     fn: Callable
 
     def __repr__(self):
-        return f"FlatMapOp(fn={self.fn.__name__})"
+        return f"FlatMapOp(fn={_get_fn_name(self.fn)})"
 
 
 @dataclass
@@ -175,7 +183,7 @@ class MapShardOp:
     fn: Callable
 
     def __repr__(self):
-        return f"MapShardOp(fn={self.fn.__name__})"
+        return f"MapShardOp(fn={_get_fn_name(self.fn)})"
 
 
 @dataclass
@@ -220,7 +228,7 @@ class GroupByLocalOp:
     num_output_shards: int  # Number of output shards
 
     def __repr__(self):
-        return f"GroupByLocalOp(key={self.key_fn.__name__}"
+        return f"GroupByLocalOp(key={_get_fn_name(self.key_fn)}"
 
 
 @dataclass
@@ -235,7 +243,7 @@ class GroupByShuffleReduceOp:
     reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
 
     def __repr__(self) -> str:
-        return f"GroupByShuffleReduceOp(key={self.key_fn.__name__})"
+        return f"GroupByShuffleReduceOp(key={_get_fn_name(self.key_fn)})"
 
 
 @dataclass
@@ -245,7 +253,7 @@ class ReduceLocalOp:
     local_reducer: Callable
 
     def __repr__(self):
-        return f"ReduceLocalOp(local_reducer={self.local_reducer.__name__})"
+        return f"ReduceLocalOp(local_reducer={_get_fn_name(self.local_reducer.__name__)}"
 
 
 @dataclass
@@ -255,7 +263,7 @@ class ReduceGlobalOp:
     global_reducer: Callable
 
     def __repr__(self):
-        return f"ReduceGlobalOp(global_reducer={self.global_reducer.__name__})"
+        return f"ReduceGlobalOp(global_reducer={_get_fn_name(self.global_reducer)})"
 
 
 @dataclass
@@ -591,7 +599,7 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, MapShardOp(fn)])
 
-    def reshard(self, num_shards: int) -> Dataset[T]:
+    def reshard(self, num_shards: int | None) -> Dataset[T]:
         """Redistribute data across target number of shards (best-effort).
 
         Changes parallelism for subsequent operations.
@@ -600,10 +608,10 @@ class Dataset(Generic[T]):
         starting with a small number of input files.
 
         Args:
-            num_shards: Target number of shards
+            num_shards: Optional target number of shards, when None it's a no-op
 
         Returns:
-            New dataset with reshard operation appended
+            New dataset with reshard operation appended or self if num_shards is None
 
         Example:
             >>> backend = create_backend("ray", max_parallelism=20)
@@ -616,7 +624,9 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = list(backend.execute(ds))
         """
-        return Dataset(self.source, [*self.operations, ReshardOp(num_shards)])
+        if num_shards is not None and num_shards <= 0:
+            raise ValueError(f"num_shards must be positive, got {num_shards}")
+        return Dataset(self.source, [*self.operations, ReshardOp(num_shards)]) if num_shards else self
 
     def write_jsonl(self, output_pattern: str | Callable[[int, int], str], skip_existing: bool = False) -> Dataset[str]:
         """Write records as JSONL files.
