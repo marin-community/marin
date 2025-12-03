@@ -34,7 +34,6 @@ import requests
 import yaml
 
 from .config import RayClusterConfig
-from .dashboard_proxy import DashboardProxy
 
 logger = logging.getLogger(__name__)
 
@@ -81,18 +80,6 @@ class DashboardConnection:
     clusters: dict[str, ClusterInfo]  # cluster_name -> info
     port_mappings: dict[str, RayPortMapping]  # cluster_name -> port mapping
     ssh_process: subprocess.Popen
-    proxy: "DashboardProxy | None" = None
-
-    def get_dashboard_url(self, cluster_name: str | None = None) -> str:
-        """Get dashboard URL for a specific cluster or the proxy URL."""
-        if self.proxy and len(self.clusters) > 1:
-            proxy_url = f"http://localhost:{self.proxy.proxy_port}"
-            return f"{proxy_url}/{cluster_name}" if cluster_name else proxy_url
-
-        # Single cluster or specific cluster requested
-        name = cluster_name or next(iter(self.clusters.keys()))
-        dashboard_port = self.port_mappings[name].dashboard_port
-        return f"http://localhost:{dashboard_port}"
 
 
 def find_free_port(start_port: int = 9000, max_attempts: int = 1000) -> int:
@@ -242,8 +229,8 @@ def allocate_ports(clusters: dict[str, ClusterInfo]) -> dict[str, RayPortMapping
     next_gcs_port = 6379
     next_api_port = 10001
 
+    # search from the previous port to avoid accidental reusing a port
     for cluster_name in sorted(clusters.keys()):
-        # search from the previous port to avoid accidental reusing a port
         dashboard_port = find_free_port(next_dashboard_port)
         gcs_port = find_free_port(next_gcs_port)
         api_port = find_free_port(next_api_port)
@@ -448,8 +435,8 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
         except (requests.ConnectionError, requests.Timeout):
             return (cluster_name, False)
 
-    max_retries = 3
-    retry_delay = 1
+    max_retries = 5
+    retry_delay = 3
 
     results = {}
     for attempt in range(max_retries):
@@ -535,11 +522,6 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
         os.environ["RAY_API_SERVER_ADDRESS"] = f"ray://localhost:{ports.api_port}"
         os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
         os.environ["RAY_GCS_ADDRESS"] = f"localhost:{ports.gcs_port}"
-    else:
-        # Multiple clusters - start Flask proxy
-        proxy = DashboardProxy(clusters, port_mappings, config.proxy_port)
-        proxy.start()
-        connection.proxy = proxy
 
     try:
         # Initialize Ray if requested (single cluster only)
@@ -551,7 +533,9 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
             ray.init(address=f"ray://localhost:{api_port}", runtime_env={"working_dir": "."})
 
         yield connection
-
+    except Exception:
+        logger.info("Exception during Ray proxy connection, tearing down.", exc_info=1)
+        raise
     finally:
         # Cleanup
         if connection.proxy:

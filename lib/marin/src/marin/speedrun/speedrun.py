@@ -25,18 +25,19 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
 
 import fsspec
 import wandb
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
-from levanter.infra.ray_tpu import TPU_CONFIGS
+from fray.cluster.ray.tpu import TPU_CONFIGS
 
 from experiments.defaults import _get_tokenizer_for_train, default_train
 from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
-from marin.execution.executor import ExecutorStep, InputName, output_path_of
+from marin.execution.executor import ExecutorStep, InputName, output_path_of, unwrap_versioned_value
 from marin.processing.tokenize import add_validation_sets_to_mixture, lm_data_config
 from marin.resources import TpuPodConfig
 from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
@@ -103,14 +104,26 @@ class SpeedrunConfig:
     def as_json_dict(self) -> dict:
         """Convert SpeedrunConfig to a JSON-serializable dictionary."""
 
-        # runtimeenv is not serializable, so we exclude it by calling `asdict_excluding()`
+        def _make_serializable(obj):
+            """Recursively convert non-serializable objects (like Enums) to serializable forms."""
+            if isinstance(obj, Enum):
+                return obj.name
+            elif isinstance(obj, dict):
+                return {k: _make_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [_make_serializable(v) for v in obj]
+            return obj
+
+        # runtimeenv is not serializable
+        train_config_dict = asdict_excluding(self.train_config, exclude={"resources", "runtime_env"})
+        resources_dict = asdict_excluding(unwrap_versioned_value(self.train_config.resources), exclude={"runtime_env"})
         return {
             "author": {"name": self.author.name, "affiliation": self.author.affiliation, "url": self.author.url},
             "description": self.description,
-            "model_config": dataclasses.asdict(self.model_config),
-            "train_config": asdict_excluding(self.train_config, exclude={"resources", "runtime_env"}),
+            "model_config": _make_serializable(dataclasses.asdict(self.model_config)),
+            "train_config": _make_serializable(train_config_dict),
             "tokenized_dataset": str(self.tokenized_dataset),
-            "resources": asdict_excluding(self.train_config.resources, exclude={"runtime_env"}),
+            "resources": _make_serializable(resources_dict),
         }
 
     def print_run_info(self) -> None:
@@ -137,7 +150,10 @@ class SpeedrunConfig:
 
         # model size
         model_size = self.model_config.total_trainable_params(self.vocab_size)
-        logger.info(f"Model size: {model_size/1e6:.2f} million parameters")
+        if model_size is None:
+            logger.info("Model size: unknown (model did not report total_trainable_params).")
+        else:
+            logger.info(f"Model size: {model_size/1e6:.2f} million parameters")
 
     def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
@@ -155,6 +171,8 @@ class SpeedrunConfig:
             )
 
         flops_per_token = self.model_config.flops_per_token(self.vocab_size)
+        if flops_per_token is None:
+            raise ValueError("Model config must provide flops_per_token to compute model FLOPs.")
 
         flops_per_token *= 3  # fwd + bwd
 
@@ -175,18 +193,21 @@ This is calculated based on assumed MFU values and can be used as a rough estima
     @property
     def device_flops(self) -> float:
         """Get the peak FLOPs/s for the device type."""
-        return self.train_config.resources.device_flops()
+        device_flops = unwrap_versioned_value(self.train_config.resources).device_flops()
+        if device_flops is None:
+            raise ValueError("Resources must provide device_flops() for speedrun calculations.")
+        return device_flops
 
     @property
     def num_devices(self) -> int:
         """Get the number of devices."""
-        return self.train_config.resources.total_device_count()
+        return unwrap_versioned_value(self.train_config.resources).total_device_count()
 
     @property
     def num_chips(self) -> int:
         """Get the number of accelerator chips."""
 
-        return _num_accelerator_chips(self.train_config.resources)
+        return _num_accelerator_chips(unwrap_versioned_value(self.train_config.resources))
 
 
 @dataclass

@@ -30,6 +30,7 @@ import draccus
 import fsspec
 import requests
 from marin.download.nemotron_cc.utils import decompress_zstd_stream
+from marin.execution import THIS_OUTPUT_PATH
 from marin.utils import fsspec_exists
 from zephyr import Dataset, flow_backend
 from zephyr.writers import atomic_rename
@@ -85,8 +86,8 @@ def download_single_nemotron_path(input_file_path: str, output_file_path: str, c
 
 @dataclass
 class NemotronIngressConfig:
-    output_path: str
-    chunk_size: int = 65536
+    output_path: str = THIS_OUTPUT_PATH
+    chunk_size: int = 1048576
 
 
 @draccus.wrap()

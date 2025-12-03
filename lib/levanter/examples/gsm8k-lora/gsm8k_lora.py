@@ -96,7 +96,7 @@ def mk_dataset(config: TrainArgs, tokenizer: transformers.PreTrainedTokenizerBas
         }
 
     dataset = dataset.map_batches(preprocess, batch_size=128, num_cpus=num_cpus_used_by_tokenizer(tokenizer))  # type: ignore
-    dataset = dataset.build_or_load_cache(config.data_cache_dir, await_finished=True)  # type: ignore
+    dataset = dataset.build_or_load_cache(config.data_cache_dir)  # type: ignore
 
     def _prepare_example(ex: dict) -> LmExample:
         """
@@ -115,14 +115,15 @@ def mk_dataset(config: TrainArgs, tokenizer: transformers.PreTrainedTokenizerBas
         # mask out padding and anything before the start of the target
         Pos = input_ids.resolve_axis("position")
         if config.mask_inputs:
-            loss_mask = hax.arange(Pos) >= ex["source_lens"]
+            loss_weight = (hax.arange(Pos) >= ex["source_lens"]).astype(jax.numpy.float32)
 
             # don't predict the padding
             targets = hax.roll(input_ids, -1, Pos)
-            loss_mask = loss_mask & (targets != tokenizer.pad_token_id)
+            pad_mask = (targets != tokenizer.pad_token_id).astype(loss_weight.dtype)
+            loss_weight = loss_weight * pad_mask
         else:
-            loss_mask = 1 - hax.nn.one_hot(-1, Pos, dtype=jax.numpy.float32)
-        lm_ex = LmExample.causal(input_ids, loss_mask=loss_mask, eos_id=tokenizer.eos_token_id)
+            loss_weight = 1 - hax.nn.one_hot(-1, Pos, dtype=jax.numpy.float32)
+        lm_ex = LmExample.causal(input_ids, loss_weight=loss_weight, eos_id=tokenizer.eos_token_id)
         return lm_ex
 
     return dataset.map(_prepare_example)

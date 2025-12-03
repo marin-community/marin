@@ -23,7 +23,7 @@ How to run:
   1) Set env vars (WANDB_API_KEY, HF_TOKEN, etc.) as in the tutorial:
      https://marin.readthedocs.io/en/latest/tutorials/submitting-speedrun/
   2) From repo root:
-       python marin/run/ray_run.py -- python -m __SUBMISSION_IMPORT_PATH__
+       python marin/run/ray_run.py -- python -m __SUBMISSION_IMPORT_PATH__ --force_run_failed true
   3) Optional: SR_USE_GPU=1 to use GPU resource presets.
 """
 
@@ -56,7 +56,7 @@ from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
-from marin.execution.executor import executor_main
+from marin.execution.executor import executor_main, versioned
 from marin.resources import TpuPodConfig, GpuConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from levanter.optim import MuonConfig
@@ -369,9 +369,10 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
     base = dict(
         seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
-        attn_backend=None,
+        attn_backend=AttentionBackend.JAX_FLASH,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
         tie_word_embeddings=False,
+        cross_entropy_block_size=4096,  # avoid materializing full logits (batch*seq*vocab)
     )
     return {
         "130m": HackableTransformerConfig(
@@ -489,7 +490,7 @@ def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]
     resources = _resource_presets(use_gpu=use_gpu)[size]
 
     train = SimpleTrainConfig(
-        resources,
+        resources=versioned(resources),
         train_batch_size=batch,
         num_train_steps=steps,
         learning_rate=muon.learning_rate,
@@ -520,9 +521,10 @@ if __name__ == "__main__":
     ###
 
     sizes = ["130m", "300m", "520m", "1_2b"]
-    use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
+    use_gpu = bool(int(os.environ.get("SR_USE_GPU", "1")))
     steps = []
     for s in sizes:
         name, cfg = build_run(s, use_gpu=use_gpu)
+        cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
     executor_main(steps=steps, description=SUBMISSION_DESCRIPTION)

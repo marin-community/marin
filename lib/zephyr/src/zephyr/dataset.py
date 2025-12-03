@@ -28,6 +28,57 @@ from braceexpand import braceexpand
 logger = logging.getLogger(__name__)
 
 
+def format_shard_path(pattern: str, shard_idx: int, total: int) -> str:
+    """Format output path with shard information.
+
+    Args:
+        pattern: Path pattern with {shard}, {total}, {basename} placeholders
+        shard_idx: Index of this shard
+        total: Total number of shards
+
+    Returns:
+        Formatted path with double slashes normalized
+
+    Raises:
+        ValueError: If multiple shards will write to the same file (pattern missing {shard})
+    """
+    if total > 1 and "{shard" not in pattern:
+        raise ValueError(
+            f"Output pattern must contain '{{shard}}' placeholder when writing {total} shards. Got pattern: {pattern}"
+        )
+
+    basename = f"shard_{shard_idx}"
+    formatted = pattern.format(shard=shard_idx, total=total, basename=basename)
+
+    # Normalize double slashes while preserving protocol (e.g., gs://, s3://, http://)
+    normalized = re.sub(r"(?<!:)//+", "/", formatted)
+
+    return normalized
+
+
+def _normalize_output_pattern(output_pattern: str | Callable[[int, int], str]) -> Callable[[int, int], str]:
+    """Normalize output pattern to a callable.
+
+    Args:
+        output_pattern: Either a string pattern with placeholders or a callable
+
+    Returns:
+        Callable that takes (shard_idx, total_shards) and returns the output path
+    """
+    if isinstance(output_pattern, str):
+        pattern_str = output_pattern
+        return lambda shard_idx, total: format_shard_path(pattern_str, shard_idx, total)
+    return output_pattern
+
+
+def _get_fn_name(fn: Any) -> str:
+    """Safely get a function name, handling partials and callables."""
+    # Unwrap partials to find the underlying function name
+    while hasattr(fn, "func"):
+        fn = fn.func
+    return getattr(fn, "__qualname__", getattr(fn, "__name__", str(fn)))
+
+
 @dataclass
 class MapOp:
     """Map operation - applies function to each element."""
@@ -35,7 +86,7 @@ class MapOp:
     fn: Callable
 
     def __repr__(self):
-        return f"MapOp(fn={self.fn.__name__})"
+        return f"MapOp(fn={_get_fn_name(self.fn)})"
 
 
 @dataclass
@@ -45,7 +96,7 @@ class FilterOp:
     predicate: Callable
 
     def __repr__(self):
-        return f"FilterOp(predicate={self.predicate.__name__})"
+        return f"FilterOp(predicate={_get_fn_name(self.predicate)})"
 
 
 @dataclass
@@ -82,13 +133,14 @@ class WindowOp:
 class WriteDataOp:
     """Unified write operation for all output formats.
 
-    Supports writing to JSONL, Parquet, or Levanter cache formats.
+    Supports writing to JSONL, Parquet, Levanter cache, or binary formats.
     The writer_type determines which writer function is used.
-    Supports path patterns with {shard}, {total}, {basename} substitutions.
+    Supports path patterns with {shard}, {total}, {basename} substitutions,
+    or a callable that takes (shard_idx, total_shards) and returns the output path.
     """
 
-    output_pattern: str
-    writer_type: Literal["jsonl", "parquet", "levanter_cache"]
+    output_pattern: Callable[[int, int], str]
+    writer_type: Literal["jsonl", "parquet", "levanter_cache", "binary"]
 
     # Format-specific parameters (only used by relevant writer)
     levanter_metadata: dict[str, Any] | None = None
@@ -113,7 +165,7 @@ class FlatMapOp:
     fn: Callable
 
     def __repr__(self):
-        return f"FlatMapOp(fn={self.fn.__name__})"
+        return f"FlatMapOp(fn={_get_fn_name(self.fn)})"
 
 
 @dataclass
@@ -131,7 +183,7 @@ class MapShardOp:
     fn: Callable
 
     def __repr__(self):
-        return f"MapShardOp(fn={self.fn.__name__})"
+        return f"MapShardOp(fn={_get_fn_name(self.fn)})"
 
 
 @dataclass
@@ -176,7 +228,7 @@ class GroupByLocalOp:
     num_output_shards: int  # Number of output shards
 
     def __repr__(self):
-        return f"GroupByLocalOp(key={self.key_fn.__name__}"
+        return f"GroupByLocalOp(key={_get_fn_name(self.key_fn)}"
 
 
 @dataclass
@@ -191,7 +243,7 @@ class GroupByShuffleReduceOp:
     reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
 
     def __repr__(self) -> str:
-        return f"GroupByShuffleReduceOp(key={self.key_fn.__name__})"
+        return f"GroupByShuffleReduceOp(key={_get_fn_name(self.key_fn)})"
 
 
 @dataclass
@@ -201,7 +253,7 @@ class ReduceLocalOp:
     local_reducer: Callable
 
     def __repr__(self):
-        return f"ReduceLocalOp(local_reducer={self.local_reducer.__name__})"
+        return f"ReduceLocalOp(local_reducer={_get_fn_name(self.local_reducer.__name__)}"
 
 
 @dataclass
@@ -211,7 +263,7 @@ class ReduceGlobalOp:
     global_reducer: Callable
 
     def __repr__(self):
-        return f"ReduceGlobalOp(global_reducer={self.global_reducer.__name__})"
+        return f"ReduceGlobalOp(global_reducer={_get_fn_name(self.global_reducer)})"
 
 
 @dataclass
@@ -547,7 +599,7 @@ class Dataset(Generic[T]):
         """
         return Dataset(self.source, [*self.operations, MapShardOp(fn)])
 
-    def reshard(self, num_shards: int) -> Dataset[T]:
+    def reshard(self, num_shards: int | None) -> Dataset[T]:
         """Redistribute data across target number of shards (best-effort).
 
         Changes parallelism for subsequent operations.
@@ -556,10 +608,10 @@ class Dataset(Generic[T]):
         starting with a small number of input files.
 
         Args:
-            num_shards: Target number of shards
+            num_shards: Optional target number of shards, when None it's a no-op
 
         Returns:
-            New dataset with reshard operation appended
+            New dataset with reshard operation appended or self if num_shards is None
 
         Example:
             >>> backend = create_backend("ray", max_parallelism=20)
@@ -572,25 +624,56 @@ class Dataset(Generic[T]):
             ... )
             >>> output_files = list(backend.execute(ds))
         """
-        return Dataset(self.source, [*self.operations, ReshardOp(num_shards)])
+        if num_shards is not None and num_shards <= 0:
+            raise ValueError(f"num_shards must be positive, got {num_shards}")
+        return Dataset(self.source, [*self.operations, ReshardOp(num_shards)]) if num_shards else self
 
-    def write_jsonl(self, output_pattern: str, skip_existing: bool = False) -> Dataset[str]:
+    def write_jsonl(self, output_pattern: str | Callable[[int, int], str], skip_existing: bool = False) -> Dataset[str]:
         """Write records as JSONL files.
-
-        Compression is automatically inferred from the file extension.
 
         Args:
             output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}.jsonl.gz")
+                           or a callable that takes (shard_idx, total_shards) and returns the output path
             skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
         """
         return Dataset(
             self.source,
-            [*self.operations, WriteDataOp(output_pattern, writer_type="jsonl", skip_existing=skip_existing)],
+            [
+                *self.operations,
+                WriteDataOp(
+                    _normalize_output_pattern(output_pattern),
+                    writer_type="jsonl",
+                    skip_existing=skip_existing,
+                ),
+            ],
+        )
+
+    def write_binary(self, output_pattern: str | Callable[[int, int], str], skip_existing: bool = False) -> Dataset[str]:
+        """Write records directly as uninterpreted binary files.
+
+        No delimitation or framing is applied - records are written back-to-back.
+        This is typically most useful for writing single large binary blobs.
+
+        Args:
+            output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}.bin")
+                           or a callable that takes (shard_idx, total_shards) and returns the output path
+            skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
+        """
+        return Dataset(
+            self.source,
+            [
+                *self.operations,
+                WriteDataOp(
+                    _normalize_output_pattern(output_pattern),
+                    writer_type="binary",
+                    skip_existing=skip_existing,
+                ),
+            ],
         )
 
     def write_parquet(
         self,
-        output_pattern: str,
+        output_pattern: str | Callable[[int, int], str],
         schema: object | None = None,
         batch_size: int = 1000,
         skip_existing: bool = False,
@@ -601,6 +684,7 @@ class Dataset(Generic[T]):
 
         Args:
             output_pattern: Output path pattern (e.g., "dir/data-{shard:05d}.parquet")
+                           or a callable that takes (shard_idx, total_shards) and returns the output path
             schema: PyArrow schema (optional, will be inferred if not provided)
             batch_size: Number of records to batch before writing (default: 1000)
             skip_existing: If True, skip writing if output file already exists (for resuming pipelines)
@@ -610,7 +694,7 @@ class Dataset(Generic[T]):
             [
                 *self.operations,
                 WriteDataOp(
-                    output_pattern,
+                    _normalize_output_pattern(output_pattern),
                     writer_type="parquet",
                     schema=schema,
                     batch_size=batch_size,
@@ -621,7 +705,7 @@ class Dataset(Generic[T]):
 
     def write_levanter_cache(
         self,
-        output_pattern: str,
+        output_pattern: str | Callable[[int, int], str],
         metadata: dict[str, Any],
         skip_existing: bool = False,
     ) -> Dataset[str]:
@@ -629,14 +713,18 @@ class Dataset(Generic[T]):
 
         Writes records to Levanter's TreeStore/JaggedArrayStore format for use
         in training. Each shard creates a separate cache directory.
-        The output pattern supports substitutions: {shard:05d}, {total:05d}, {basename}.
+        The output pattern supports substitutions: {shard:05d}, {total:05d}, {basename}
+        or can be a callable that takes (shard_idx, total_shards) and returns the output path.
         """
         return Dataset(
             self.source,
             [
                 *self.operations,
                 WriteDataOp(
-                    output_pattern, writer_type="levanter_cache", levanter_metadata=metadata, skip_existing=skip_existing
+                    _normalize_output_pattern(output_pattern),
+                    writer_type="levanter_cache",
+                    levanter_metadata=metadata,
+                    skip_existing=skip_existing,
                 ),
             ],
         )

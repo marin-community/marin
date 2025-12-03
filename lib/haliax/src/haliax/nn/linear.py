@@ -5,14 +5,12 @@
 
 import dataclasses
 import math
-from functools import partial
 from typing import Optional
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax.experimental.pallas.ops.tpu.megablox import gmm
-from jax.experimental.shard_map import shard_map
 from jax.random import PRNGKey
 from jaxtyping import PRNGKeyArray
 
@@ -31,7 +29,7 @@ from .._src.state_dict import (
 from ..axis import Axis, AxisSpec
 from ..core import NamedArray
 from ..jax_utils import named_call
-from ..partitioning import ResourceAxis
+from ..partitioning import ResourceAxis, shard_map
 from ..quantization import DotGeneralOp
 from ..util import ensure_tuple
 
@@ -300,24 +298,15 @@ class MoELinear(eqx.Module):
 
 
 def _gmm(lhs, rhs, group_sizes, out_axes, sharded=False, ar=False):
+    def gmm_impl(lhs, rhs, group_sizes):
+        out = gmm_sharded(lhs.array, rhs.array, group_sizes.array, ar=ar)
+        return hax.NamedArray(out, out_axes)
+
     if sharded:
-        gmm_fn = gmm_sharded
-    else:
-        gmm_fn = shard_map(
-            partial(gmm_sharded, ar=ar),
-            mesh=jax.sharding.get_abstract_mesh(),
-            in_specs=(
-                hax.partitioning.pspec_for_axis(lhs.axes),
-                hax.partitioning.pspec_for_axis(rhs.axes),
-                hax.partitioning.pspec_for_axis(group_sizes.axes),
-            ),
-            out_specs=hax.partitioning.pspec_for_axis(out_axes),
-            check_rep=False,
-        )
+        return gmm_impl(lhs, rhs, group_sizes)
 
-    out = gmm_fn(lhs.array, rhs.array, group_sizes.array)
-
-    return hax.NamedArray(out, axes=out_axes)
+    gmm_fn = shard_map(gmm_impl, check_rep=False)
+    return gmm_fn(lhs, rhs, group_sizes)
 
 
 def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray, ar: bool = False) -> jnp.ndarray:

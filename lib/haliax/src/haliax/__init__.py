@@ -124,7 +124,16 @@ from .fft import (
     rfft,
     rfftfreq,
 )
-from .partitioning import auto_sharded, axis_mapping, fsdp, named_jit, set_mesh, shard, shard_with_axis_mapping
+from .partitioning import (
+    auto_sharded,
+    axis_mapping,
+    fsdp,
+    named_jit,
+    set_mesh,
+    shard,
+    shard_map,
+    shard_with_axis_mapping,
+)
 from .specialized_fns import top_k
 from .types import Scalar
 from .util import is_named_array
@@ -1318,6 +1327,7 @@ __all__ = [
     "axis_mapping",
     "named_jit",
     "fsdp",
+    "shard_map",
     "shard_with_axis_mapping",
     "shard",
     "enable_shape_checks",

@@ -48,6 +48,8 @@ class VizLmConfig:
     comparison_model_path: str | None = None
     comparison_is_hf: bool = False
 
+    local_model_dir: str = "/opt/gcsfuse_mount/models"
+
 
 def main(config: VizLmConfig):
     levanter.initialize(config)
@@ -91,7 +93,7 @@ def main(config: VizLmConfig):
                     model.Vocab,
                     logits=logits,
                     true_ids=example.tokens,
-                    loss_mask=example.loss_mask,
+                    loss_weight=example.loss_weight,
                     reduction=None,
                 )
                 logprobs = -loss

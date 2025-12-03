@@ -21,7 +21,6 @@ import numpy as np
 import haliax
 import haliax.axis
 from haliax.jax_utils import ensure_scalar, is_jax_array_like, is_pallas_dslice
-from haliax.util import ensure_tuple
 
 from ._src.util import index_where, py_slice, slice_t
 from .axis import (
@@ -198,34 +197,56 @@ class NamedArrayMeta(type):
 @dataclass(frozen=True)
 class NamedArray(metaclass=NamedArrayMeta):
     array: jnp.ndarray
-    axes: tuple[Axis, ...]
+    axis_names: tuple[str, ...]
 
-    def __init__(self, array: jnp.ndarray, axes: AxisSpec):
+    def __init__(self, array: jnp.ndarray, axis_names: AxisSpec | Sequence[str | Axis]):
+        # we leave axis_names as a parameter mostly for dataclass shenaningans
+        axes = axis_spec_to_shape_dict(axis_names)
+        axis_names = tuple(axes.keys())
+        provided_sizes = tuple(axes.values())
+
         object.__setattr__(self, "array", array)
-        if isinstance(axes, Mapping):
-            axes = tuple(Axis(name, size) for name, size in axes.items())
-        object.__setattr__(self, "axes", ensure_tuple(axes))
-
-        # ensure axes are all Axis objects
-        # TODO: anonymous positional axes?
-        for axis in self.axes:
-            if not isinstance(axis, Axis):
-                raise TypeError(f"Expected Axis, got {type(axis)}")
+        object.__setattr__(self, "axis_names", axis_names)
 
         # ensure unique axes for now
-        if len(set(a.name for a in self.axes)) != len(self.axes):
-            raise ValueError(f"Axes must be unique, but {self.axes} are not")
+        if len(set(axis_names)) != len(axis_names):
+            raise ValueError(f"Axes must be unique, but {axis_names} are not")
 
         if are_shape_checks_enabled():
-            self._ensure_shape_matches_axes()
+            # jax does all kinds of weird things in unflatten, so we disable shape checks for those
+            self._validate_axes_against_shape(self.axis_names, provided_sizes)
 
-    def _ensure_shape_matches_axes(self):
-        """This is typically called automatically, but sometimes we need to call it manually if
-        are_shape_checks_enabled() is False"""
-        if is_jax_array_like(self.array):
-            s = jnp.shape(self.array)
-            if s != tuple(a.size for a in self.axes):
-                raise ValueError(f"Shape of underlying array {s} does not match shape of axes {self.axes}")
+    def _validate_axes_against_shape(
+        self, axis_names: Sequence[str], provided_sizes: Sequence[int | None] | None
+    ) -> None:
+        if not is_jax_array_like(self.array):
+            return
+
+        shape = jnp.shape(self.array)
+        if len(shape) != len(axis_names):
+            raise ValueError(f"Shape of underlying array {shape} does not match number of axes {axis_names}")
+
+        if provided_sizes is None:
+            return
+
+        if len(provided_sizes) != len(axis_names):
+            raise ValueError(
+                f"Axis size hints {provided_sizes} do not match number of axes {axis_names}; "
+                "this usually indicates inconsistent pytree metadata"
+            )
+
+        for name, expected_size, actual_size in zip(axis_names, provided_sizes, shape):
+            _check_size_consistency(axis_names, shape, name, expected_size, actual_size)
+
+    @ft.cached_property
+    def axes(self) -> tuple[Axis, ...]:
+        shape = jnp.shape(self.array)
+        if len(shape) != len(self.axis_names):
+            raise ValueError(
+                f"Shape of underlying array {shape} does not match number of axes {self.axis_names}. {self.array}"
+            )
+
+        return tuple(Axis(name, size) for name, size in zip(self.axis_names, shape))
 
     def item(self):  # pragma: no cover
         """Returns the value of this NamedArray as a python scalar."""
@@ -242,8 +263,8 @@ class NamedArray(metaclass=NamedArrayMeta):
 
         You could just call array, but that's not as clear and doesn't assert.
         """
-        if self.array.ndim != 0:
-            raise ValueError(f"Expected scalar, got {self.array.ndim}-dimensional array")
+        if jnp.ndim(self.array) != 0:
+            raise ValueError(f"Expected scalar, got {jnp.ndim(self.array)}-dimensional array")
         return self.array
 
     # def __jax_array__(self):
@@ -258,11 +279,15 @@ class NamedArray(metaclass=NamedArrayMeta):
 
     @ft.cached_property
     def shape(self) -> dict[str, int]:
+        if not len(self.axis_names) == jnp.ndim(self.array):
+            raise ValueError(
+                f"Number of axes {len(self.axes)} does not match number of dimensions {jnp.ndim(self.array)} of array"
+            )
         return {axis.name: axis.size for axis in self.axes}
 
     dtype = property(lambda self: self.array.dtype)
     """The dtype of the underlying array"""
-    ndim = property(lambda self: self.array.ndim)
+    ndim = property(lambda self: jnp.ndim(self.array))
     """The number of dimensions of the underlying array"""
     size = property(lambda self: self.array.size)
     """The number of elements in the underlying array"""
@@ -270,7 +295,7 @@ class NamedArray(metaclass=NamedArrayMeta):
     """The number of bytes in the underlying array"""
 
     def tree_flatten(self) -> Any:
-        return ((self.array,), self.axes)
+        return ((self.array,), self.axis_names)
 
     @classmethod
     def tree_unflatten(cls, aux, tree: Any) -> Any:
@@ -278,7 +303,7 @@ class NamedArray(metaclass=NamedArrayMeta):
         # We don't want check shapes b/c there are intermediate states where the shape is wrong
         # e.g. in eqxi.while_loop
         with enable_shape_checks(False):
-            return cls(tree[0], axes=aux)
+            return cls(tree[0], axis_names=aux)
 
     def has_axis(self, axis: AxisSelection) -> bool:
         """Returns true if the given axis is present in this NamedArray."""
@@ -401,7 +426,7 @@ class NamedArray(metaclass=NamedArrayMeta):
             else:
                 return f"NamedArray({self.dtype}{self.shape},\n{self.array})"
         else:
-            return f"NamedArray(???{self.shape}, {self.array})"
+            return f"NamedArray(???{self.axis_names}, {self.array})"
 
     def __tree_pp__(self, **kwargs):
         # For Equinox's tree pretty printer
@@ -647,7 +672,11 @@ class NamedArray(metaclass=NamedArrayMeta):
     # Deprecated overload
     @typing.overload
     def dot(
-        self, axis: AxisSelection | None, *b, precision: PrecisionLike = None, dot_general=jax.lax.dot_general
+        self,
+        axis: AxisSelection | None,
+        *b,
+        precision: PrecisionLike = None,
+        dot_general=jax.lax.dot_general,
     ) -> "NamedArray": ...
 
     @typing.overload

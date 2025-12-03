@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Dict, Optional, Type
+from typing import Dict, Optional, Type, cast
 
 import equinox as eqx
 import jax.random as jrandom
@@ -170,10 +170,11 @@ class QwenDecoderLayer(eqx.Module):
         k_attn, k_mlp = maybe_rng_split(key, 2)
 
         # Apply sliding window attention if configured and past max_window_layers
-        if (self.config.use_sliding_window and self.config.sliding_window is not None) and x.resolve_axis(
-            "position"
-        ) > self.config.sliding_window:
-            raise NotImplementedError("Sliding window attention is not implemented in Qwen yet.")
+        if self.config.use_sliding_window and self.config.sliding_window is not None:
+            pos_axis = x.resolve_axis("position")
+            pos_size = getattr(pos_axis, "size", None)
+            if pos_size is not None and pos_size > self.config.sliding_window:
+                raise NotImplementedError("Sliding window attention is not implemented in Qwen yet.")
 
         residual = x
         x = self.input_layernorm(x)
@@ -215,7 +216,7 @@ class QwenTransformer(LlamaTransformer):
         self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
+        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
 

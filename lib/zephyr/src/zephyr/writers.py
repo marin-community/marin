@@ -199,6 +199,7 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
     from levanter.store.cache import SerialCacheWriter
 
     ensure_parent_dir(output_path)
+    from levanter.store.cache import CacheMetadata
 
     try:
         exemplar = next(iter(records))
@@ -207,7 +208,8 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
 
     count = 1
     with atomic_rename(output_path) as tmp_path:
-        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=metadata) as writer:
+        with SerialCacheWriter(tmp_path, exemplar, shard_name=output_path, metadata=CacheMetadata(metadata)) as writer:
+            print(exemplar)
             writer.write_batch([exemplar])
             for batch in batchify(records):
                 writer.write_batch(batch)
@@ -216,5 +218,19 @@ def write_levanter_cache(records: Iterable[dict[str, Any]], output_path: str, me
     # write success sentinel
     with fsspec.open(f"{output_path}/.success", "w") as f:
         f.write("")
+
+    return {"path": output_path, "count": count}
+
+
+def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
+    """Write binary records to a file."""
+    ensure_parent_dir(output_path)
+
+    count = 0
+    with atomic_rename(output_path) as temp_path:
+        with fsspec.open(temp_path, "wb", block_size=64 * 1024 * 1024) as f:
+            for record in records:
+                f.write(record)
+                count += 1
 
     return {"path": output_path, "count": count}
