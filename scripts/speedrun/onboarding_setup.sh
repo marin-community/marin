@@ -37,7 +37,7 @@ else
     # Check if a 'marin' directory exists in the current path
     if [[ -d "marin" ]]; then
         log_warn "Directory 'marin' found. Attempting to enter..."
-        cd marin
+        cd marin || { log_error "Failed to enter directory 'marin'. Check permissions."; exit 1; }
 
         if is_marin_root; then
             log_success "Entered directory 'marin'."
@@ -57,7 +57,7 @@ else
                 gh repo fork marin-community/marin --clone --remote
 
                 if [[ -d "marin" ]]; then
-                    cd marin
+                    cd marin || { log_error "Failed to enter directory 'marin'."; exit 1; }
                     log_success "Entered directory 'marin'."
                 else
                     log_error "Failed to clone directory. Exiting."
@@ -117,7 +117,10 @@ read -r < /dev/tty
 
 # Check if uv is installed
 if ! command -v uv &> /dev/null; then
-    log_warn "uv not found. Installing uv..."
+    log_warn "uv not found."
+    echo -e "${CYAN}Press enter to install uv (https://docs.astral.sh/uv/)${NC}"
+    read -r < /dev/tty
+    
     curl -LsSf https://astral.sh/uv/install.sh | sh
     source $HOME/.cargo/env 2>/dev/null || source $HOME/.local/bin/env 2>/dev/null
 fi
@@ -219,7 +222,7 @@ fi
 # ==========================================
 
 # Move user to the target directory inside the script context to get absolute path
-cd "$TARGET_DIR"
+cd "$TARGET_DIR" || { log_error "Failed to enter directory '$TARGET_DIR'."; exit 1; }
 FINAL_PATH="$PWD"
 REPO_ROOT=$(git rev-parse --show-toplevel)
 
