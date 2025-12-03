@@ -69,16 +69,6 @@ def compute_metadata_metrics(
     policy_entropy = -jnp.sum(flattened_policy_logprobs * flattened_loss_masks) / jnp.sum(flattened_loss_masks)
     current_entropy = -jnp.sum(flattened_current_logprobs * flattened_loss_masks) / jnp.sum(flattened_loss_masks)
 
-    # policy_entropy = -jnp.sum(
-    #    policy_logprobs_array * loss_masks_array, axis=1
-    # ) / jnp.sum(loss_masks_array, axis=1)
-    # policy_entropy = jnp.mean(policy_entropy)
-
-    # current_entropy = -jnp.sum(
-    #     current_logprobs * loss_masks_array, axis=1
-    # ) / jnp.sum(loss_masks_array, axis=1)
-    # current_entropy = jnp.mean(current_entropy)
-
     mean_advantages = jnp.sum(loss_weights_array * loss_masks_array, axis=1) / jnp.sum(loss_masks_array, axis=1)
     mean_advantages = jnp.mean(mean_advantages)
 
@@ -172,56 +162,6 @@ def compute_ppo_loss_objective(
         "loss_std_over_batch": Metric.from_value(jnp.std(per_batch_loss).astype(jnp.float32), ReductionType.MEAN),
     }
     return loss, metadata
-
-
-def cispo_loss_with_importance_sampling(
-    model: LmHeadModel,
-    reference_model: LmHeadModel,
-    batch: TrainingBatch,
-    *,
-    key: jax.Array | None,
-    epsilon_low: float,
-    epsilon_high: float,
-):
-    policy_logprobs_array = batch.policy_logprobs.array
-    loss_weights_array = batch.loss_weights.array
-    loss_masks_array = batch.loss_masks.array
-
-    current_logprobs = compute_logprobs(model, batch.input_ids, batch.position_ids, key)
-    reference_logprobs = compute_logprobs(reference_model, batch.input_ids, batch.position_ids, key)
-
-    # importance sampling since we're using off-policy data
-    # ratio = π_current(a|s) / π_old(a|s) = log(π_current) - log(π_old)
-    # mask the input tokens to ignore them in the loss
-    current_logprobs = current_logprobs * loss_masks_array
-    reference_logprobs = reference_logprobs * loss_masks_array
-
-    log_ratio = jnp.subtract(current_logprobs, policy_logprobs_array)
-    ratio = jnp.exp(log_ratio)
-
-    # N.B. This should be enabled, but we seem to be training far enough
-    # off of policy that we're not learning anything when we clip.
-    clipped_ratio = jnp.clip(ratio, min=1.0 - epsilon_low, max=1.0 + epsilon_high)
-
-    # Compute fraction of ratios that were clipped
-    is_clipped = jnp.logical_or(ratio > 1.0 + epsilon_high, ratio < 1.0 - epsilon_low)
-    clip_fraction = jnp.sum(is_clipped * loss_masks_array) / jnp.sum(loss_masks_array)
-
-    # RLOO loss with importance sampling
-    # batch["loss_weights"] contains RLOO advantages: r_i - mean(r_j for j≠i)
-    weighted_loss = -clipped_ratio * loss_weights_array * loss_masks_array
-    reinforce_loss = jnp.sum(weighted_loss) / jnp.sum(loss_masks_array)  # sum of all tokens
-
-    loss = reinforce_loss
-
-    return loss, {
-        "ratio_mean": jnp.mean(ratio),
-        "clipped_ratio_mean": jnp.mean(clipped_ratio),
-        "clip_fraction": clip_fraction,
-        "reinforce_loss": reinforce_loss,
-        **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
-    }
-
 
 def importance_sampling_ratio(
     current_logprobs: jax.Array,
@@ -382,24 +322,6 @@ def compute_rloo_advantages(rollouts: list[Rollout]) -> np.ndarray:
     advantages = rewards - leave_one_out_baselines
     return advantages
 
-
-def compute_grpo_advantages(rollouts: list[Rollout], divide_by_std: bool = True) -> np.ndarray:
-    """Compute GRPO (Gradient Reinforcement) advantages for a group of rollouts."""
-    rewards = np.array([r.episode_reward for r in rollouts])
-
-    n = len(rewards)
-    if n <= 1:
-        return np.zeros_like(rewards)
-
-    advantages = rewards - rewards.mean()
-
-    # clamp the advantages to avoid numerical instability
-    if divide_by_std:
-        advantages *= 1 / max(rewards.std(), 1e-4)
-
-    return advantages
-
-
 @dataclass
 class RLOOLoss(RLLossModule):
     """RLOO loss with importance sampling."""
@@ -436,69 +358,6 @@ class RLOOLoss(RLLossModule):
                 synchronous=self.synchronous,
                 do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
                 do_overlong_filtering=self.do_overlong_filtering,
-            )
-
-        return loss_fn
-
-
-@dataclass
-class GRPOLoss(RLOOLoss):
-    """GRPO loss."""
-
-    divide_by_entire_length: bool = False
-    divide_by_std: bool = True
-
-    def compute_advantages(self, rollout_group: list[Rollout]) -> list[float]:
-        """Compute advantages for a group of rollouts."""
-        return compute_grpo_advantages(rollout_group, divide_by_std=self.divide_by_std)
-
-    def create_loss_fn(self, reference_model: eqx.Module, train_model: eqx.Module) -> Callable:
-        """Create the loss function for training."""
-
-        def loss_fn(model, batch, key):
-            return rloo_loss_with_importance_sampling(
-                model,
-                reference_model,
-                batch,
-                key=key,
-                kl_coef=self.kl_coef,
-                clip_epsilon_low=self.clip_epsilon_low,
-                clip_epsilon_high=self.clip_epsilon_high,
-                tis_importance_sampling_ratio_max=self.tis_importance_sampling_ratio_max,
-                synchronous=self.synchronous,
-                do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
-                do_overlong_filtering=self.do_overlong_filtering,
-            )
-
-        return loss_fn
-
-
-@dataclass
-class CISPOLoss(RLLossModule):
-    """CISPO loss."""
-
-    epsilon_low: float = 0.2
-    epsilon_high: float = 0.2
-
-    def build(self, reference_model: eqx.Module) -> eqx.Module:
-        """Initialize any learned components (e.g., value heads)."""
-        return self  # No learned parameters
-
-    def compute_advantages(self, rollout_group: list[Rollout]) -> list[float]:
-        """Compute advantages for a group of rollouts."""
-        return compute_grpo_advantages(rollout_group, divide_by_std=True)
-
-    def create_loss_fn(self, reference_model: eqx.Module, train_model: eqx.Module) -> Callable:
-        """Create the loss function for training."""
-
-        def loss_fn(model, batch, key):
-            return cispo_loss_with_importance_sampling(
-                model,
-                reference_model,
-                batch,
-                key=key,
-                epsilon_low=self.epsilon_low,
-                epsilon_high=self.epsilon_high,
             )
 
         return loss_fn

@@ -75,8 +75,11 @@ class LevanterInferenceContext(BaseInferenceContext):
         return f"http://{self._inference_server.address()}/v1"
 
     def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
-        with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
-            model = update_model(model, state_dict)
+        assert model is not None or state_dict is not None, "Either model or state_dict must be provided"
+        if model is None and state_dict is not None:
+            with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
+                model = update_model(model, state_dict)
+
         self._inference_server.reload(lambda _: model)
         return model
 

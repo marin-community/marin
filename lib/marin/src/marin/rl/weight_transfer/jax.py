@@ -488,9 +488,12 @@ class JAXTransferClient(WeightTransferClient):
             # Use default device placement
             return jax.device_put(model, jax.devices()[0])
 
-    def receive_weights(self, old_model: PyTree) -> WeightUpdate | None:
+    def receive_weights(self, old_model: PyTree | None) -> WeightUpdate | None:
         """Receive weights with CPU transfer."""
         self.metrics.total_polls += 1
+
+        if old_model is None:
+            raise ValueError("For JAXTransfer server, old_model must be provided. TODO to implement state dict only mode. If you want state dict transfer, please use Arrow Flight.")
 
         # First check if new weights are available without blocking
         try:
@@ -536,7 +539,7 @@ class JAXTransferClient(WeightTransferClient):
                 # Update metrics and track received weight ID
                 self.metrics.successful_receives += 1
                 self._last_received_weight_id = metadata.weight_id
-                return WeightUpdate(model=params, weight_id=metadata.weight_id)
+                return WeightUpdate(model=params, state_dict=None, weight_id=metadata.weight_id)
 
             return None
 

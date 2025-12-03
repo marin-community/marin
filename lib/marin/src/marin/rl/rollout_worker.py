@@ -449,7 +449,7 @@ class RolloutWorker:
         """Apply a newly received weight update to the inference context."""
         self._current_weight_step = update.weight_id
         logger.info("Received new weights from step %d", update.weight_id)
-        self._policy_model = self._policy_ctx.reload_model(self._policy_model, update.state_dict)
+        self._policy_model = self._policy_ctx.reload_model(update.model, update.state_dict)
 
         # Signal that we've received the first weights
         if not self._first_weights_received.is_set():

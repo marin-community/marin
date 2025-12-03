@@ -125,7 +125,7 @@ class GCSCheckpointClient(WeightTransferClient):
         self.weight_step = -1
         self.metrics = WeightTransferClientMetrics()
 
-    def receive_weights(self, old_model: PyTree) -> WeightUpdate | None:
+    def receive_weights(self, old_model: PyTree | None) -> WeightUpdate | None:
         """Load latest checkpoint using Levanter's checkpoint system."""
         self.metrics.total_polls += 1
         result = self._find_latest_checkpoint()
@@ -135,6 +135,9 @@ class GCSCheckpointClient(WeightTransferClient):
             return None
 
         latest_checkpoint, weight_step = result
+
+        if old_model is None:
+            raise ValueError("For GCSCheckpoint server, old_model must be provided. TODO to implement state dict only mode. If you want state dict transfer, please use Arrow Flight.")
 
         try:
             if weight_step == self.weight_step:
@@ -157,7 +160,7 @@ class GCSCheckpointClient(WeightTransferClient):
 
         self.metrics.successful_receives += 1
 
-        return WeightUpdate(model=params, weight_id=weight_step)
+        return WeightUpdate(model=params, state_dict=None, weight_id=weight_step)
 
     def _find_latest_checkpoint(self) -> tuple[str, int] | None:
         """Find the latest checkpoint in the checkpoint directory."""

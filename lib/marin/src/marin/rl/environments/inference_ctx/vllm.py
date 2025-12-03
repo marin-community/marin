@@ -293,10 +293,6 @@ class vLLMInferenceContext(BaseInferenceContext):
                 )
                 for prompt in prompts
             ]
-            # prompts_with_templates = [
-            #     [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
-            #     for prompt in prompts
-            # ]
         else:
             prompts_with_templates = [
                 self.tokenizer.apply_chat_template(
@@ -312,11 +308,6 @@ class vLLMInferenceContext(BaseInferenceContext):
             prompt.replace(bos_token, "") for prompt in prompts_with_templates
         ]
             
-            # prompts_with_templates = [
-            #     [{"role": "user", "content": prompt}]
-            #     for prompt in prompts
-            # ]
-
         outputs = self.llm.generate(prompts_with_templates, sampling_params)
 
         # Convert vLLM outputs to OpenAI ChatCompletion format

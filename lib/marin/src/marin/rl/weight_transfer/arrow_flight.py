@@ -38,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import partial
 
+import haliax as hax
 import haliax.state_dict as hsd
 import jax
 import numpy as np
@@ -564,8 +565,11 @@ class ArrowFlightClient(WeightTransferClient):
             fetch_time = time.time()
 
             # Convert back to model using state_dict and move to target device
-            # with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
-            #     model = update_model(old_model, state_dict)
+            if old_model is not None:
+                with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
+                    model = update_model(old_model, state_dict)
+            else:
+                model = None
 
             decode_time = time.time()
 
@@ -581,7 +585,7 @@ class ArrowFlightClient(WeightTransferClient):
                 f"decode={decode_time - fetch_time:.2f}s)"
             )
 
-            return WeightUpdate(state_dict=state_dict, weight_id=server_info.weight_id)
+            return WeightUpdate(model=model, state_dict=state_dict, weight_id=server_info.weight_id)
 
         except Exception:
             self.metrics.failed_receives += 1
