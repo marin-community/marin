@@ -293,7 +293,7 @@ class RayCluster(Cluster):
         """Convert ResourceConfig to Ray resource specification.
 
         Maps structured device configs to Ray's resource format:
-        - TpuConfig(type="v5e-16", count=8) -> {"TPU": 8, "v5e-16-head": 1}
+        - TpuConfig(type="v5e-16") -> {"TPU": 8, "v5e-16-head": 1}
         - GpuConfig(type="A100", count=4) -> {"GPU": 4}
         - CpuConfig() -> {}
         """

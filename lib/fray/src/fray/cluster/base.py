@@ -189,12 +189,10 @@ class TpuConfig:
 
     Args:
         type: TPU accelerator type (e.g., "v5e-16", "v4-8")
-        count: Number of TPU chips to request
         topology: Optional topology specification (e.g., "2x2x1")
     """
 
     type: TpuType
-    count: int
     topology: str | None = None
 
 
