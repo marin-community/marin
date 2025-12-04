@@ -35,7 +35,6 @@ def create_backend(
     max_parallelism: int = 1024,
     memory: str | None = None,
     num_cpus: float | None = None,
-    chunk_size: int = 1000,
     dry_run: bool = False,
     **ray_options,
 ) -> Backend:
@@ -46,7 +45,6 @@ def create_backend(
         max_parallelism: Maximum number of concurrent tasks
         memory: Memory requirement per task (e.g., "2GB", "512MB")
         num_cpus: Number of CPUs per task for Ray backend
-        chunk_size: Items per chunk within a shard (default: 1000)
         dry_run: If True, show optimization plan without executing
         **ray_options: Additional Ray remote options (e.g., max_retries=3)
 
@@ -70,7 +68,6 @@ def create_backend(
 
     config = BackendConfig(
         max_parallelism=max_parallelism,
-        chunk_size=chunk_size,
         dry_run=dry_run,
     )
     return Backend(context, config)
@@ -92,7 +89,6 @@ def flow_backend(
     memory: str | None = None,
     num_cpus: float | None = None,
     num_gpus: float | None = None,
-    chunk_size: int | None = None,
     dry_run: bool | None = None,
     **backend_options,
 ) -> Backend:
@@ -108,7 +104,6 @@ def flow_backend(
         memory: Memory requirement per task (e.g., "2GB", "512MB")
         num_cpus: Number of CPUs per task for Ray backend
         num_gpus: Number of GPUs per task for Ray backend
-        chunk_size: Items per chunk within a shard
         dry_run: If True, show optimization plan without executing
         **backend_options: Additional backend options (e.g., max_retries=3 for Ray)
 
@@ -128,9 +123,7 @@ def flow_backend(
     current = _backend_context.get()
 
     # No parameters provided: return current backend or create default
-    has_params = (
-        any(v is not None for v in [max_parallelism, memory, num_cpus, num_gpus, chunk_size, dry_run]) or backend_options
-    )
+    has_params = any(v is not None for v in [max_parallelism, memory, num_cpus, num_gpus, dry_run]) or backend_options
     if not has_params:
         if current is None:
             logger.info("No backend configured in context, auto-detecting backend type.")
@@ -147,13 +140,10 @@ def flow_backend(
     }
     if current is not None:
         params["max_parallelism"] = current.config.max_parallelism
-        params["chunk_size"] = current.config.chunk_size
         params["dry_run"] = current.config.dry_run
 
     if max_parallelism is not None:
         params["max_parallelism"] = max_parallelism
-    if chunk_size is not None:
-        params["chunk_size"] = chunk_size
     if dry_run is not None:
         params["dry_run"] = dry_run
 
