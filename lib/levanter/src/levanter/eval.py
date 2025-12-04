@@ -14,6 +14,7 @@ import jmp
 import numpy as np
 from jax.sharding import Mesh
 from tqdm_loggable.auto import tqdm
+import jax
 
 import haliax as hax
 from haliax.partitioning import ResourceMapping

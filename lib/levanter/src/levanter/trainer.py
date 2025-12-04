@@ -483,17 +483,22 @@ class Trainer:
 
             loss = result.loss.item()
 
+            jax.debug.print("LOSS")
+            print_len=80
+            jnp.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
+            jax.debug.print(f"tokens={batch[0].tokens.array[:print_len].astype(dtype=jnp.int32)}")
+            jax.debug.print(f"loss_mask={batch[0].loss_mask.array[:print_len].astype(dtype=jnp.int32)}")
+            # print(f"batch={batch}")
+            # jax.debug.print("{result}", result=result)
+            # jax.debug.print(f"attn_mask={batch[0].attn_mask}")
+            # jax.debug.print("prefix_lm_mask={x}", x=batch[0].attn_mask.prefix_lm_mask.array[:print_len])
+            jax.debug.print("segment_ids={x}", x=batch[0].attn_mask.segment_ids[0].array[:print_len])
+            materialized = batch[0].attn_mask.materialize(hax.Axis(name='position', size=1024), hax.Axis(name='key_position', size=1024))
+            jax.debug.print(f"attn_mask={materialized.array[:print_len, :print_len].astype(dtype=jnp.int32)}")
+            jax.debug.print(f"loss={loss.array[0, :print_len]}")
+            jax.debug.print("LOSS END")
+
             if self.config.crash_on_nan and jnp.isnan(loss):
-                jnp.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
-                # jax.debug.print(f"tokens={batch[0].tokens.array.astype(dtype=jnp.int32)}")
-                # jax.debug.print(f"loss_mask={batch[0].loss_mask.array.astype(dtype=jnp.int32)}")
-                # print(f"batch={batch}")
-                # jax.debug.print("{result}", result=result)
-                # jax.debug.print(f"attn_mask={batch[0].attn_mask}")
-                # jax.debug.print("prefix_lm_mask={x}", x=batch[0].attn_mask.prefix_lm_mask.array)
-                # jax.debug.print("segment_ids={x}", x=batch[0].attn_mask.segment_ids[0].array)
-                # materialized = batch[0].attn_mask.materialize(hax.Axis(name='position', size=1024), hax.Axis(name='key_position', size=1024))
-                # jax.debug.print(f"attn_mask={materialized.array}")
                 raise RuntimeError("Loss is NaN")
 
             if self.config.crash_on_inf and jnp.isinf(loss):
@@ -652,6 +657,22 @@ class Trainer:
     def _train_step(self, state: S, batch, batch_kwargs, _no_hooks=False) -> TrainStepResult[S]:
         key, new_key = jax.random.split(state.training_key)
         model = inference_mode(state.model, False)
+
+        jax.debug.print("TRAIN")
+        batch_ = batch[0]
+        example_length = 80
+        tokens_sample = batch_.tokens.array[0, :example_length]
+        loss_mask_sample = batch_.loss_mask.array[0, :example_length]
+        (Batch, Pos) = batch_.tokens.axes
+        KPos = Pos.alias("KPos")
+        materialized = batch_.attn_mask.materialize(Pos, KPos).rearrange((Batch, Pos, KPos))
+        jnp.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
+        jax.debug.print("{}", tokens_sample)
+        # jax.debug.print(self.tokenizer.decode(tokens_sample))
+        jax.debug.print("{}", loss_mask_sample)
+        jax.debug.print("{}", batch_.attn_mask)
+        jax.debug.print("{}", materialized.astype(jnp.int32)[Batch, 0, Pos, :example_length, KPos, :example_length])
+        jax.debug.print("TRAIN END")
 
         # Returns (loss, grads, wrapped_metrics) where wrapped_metrics is Dict[str, Metric]
         loss, grads, wrapped_metrics = self._compute_gradients_microbatched(

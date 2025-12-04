@@ -366,7 +366,7 @@ def simple_attention_with_dropout(
     QPos = query.resolve_axis(QPos)
     KPos = key.resolve_axis(KPos)
     m = materialize_mask(mask, QPos, KPos)
-    # jax.debug.print("mask={} QPos={} KPos={}", mask, QPos, KPos)
+    jax.debug.print("mask={} QPos={} KPos={}", mask, QPos, KPos)
     orig_dtype = query.dtype
 
     if scaling_factor is None:

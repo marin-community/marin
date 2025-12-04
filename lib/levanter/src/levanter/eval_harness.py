@@ -28,6 +28,7 @@ import typing
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Iterator, List, Optional, Tuple, Union
+import sys
 
 import equinox as eqx
 import haliax
@@ -577,13 +578,31 @@ class LevanterHarnessLM(TemplateLM):
             # >._eval_loglikelihood with shape int32[32,1024] and device ids [0] on platform CPU and jit's context mesh with device ids [0] on platform GPU
             batch = hax.shard(batch, self.axis_resources)
 
+            example_length = 80
+            tokens_sample = jax.device_get(batch.tokens.array[0, :example_length])
+            loss_mask_sample = jax.device_get(batch.loss_mask.array[0, :example_length])
+
+            print("EVAL")
+            (Batch, Pos) = batch.tokens.axes
+            KPos = Pos.alias("KPos")
+            materialized = batch.attn_mask.materialize(Pos, KPos).rearrange((Batch, Pos, KPos))
+            jnp.set_printoptions(threshold=sys.maxsize, linewidth=sys.maxsize)
+            print(tokens_sample)
+            print(self.tokenizer.decode(tokens_sample))
+            print(loss_mask_sample)
+            print(batch.attn_mask)
+            print(materialized.astype(jnp.int32)[Batch, 0, Pos, :example_length, KPos, :example_length])
             segments_this_batch = get_segment_ids_from_batch(
                 batch, self.leader.max_packed_segments * self.EvalBatch.size
             )
+            print(segments_this_batch)
+            print("EVAL END")
 
             padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
 
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
+
+            sys.exit(0)
 
             # Increment step after processing batch
             self._current_step += 1

@@ -213,7 +213,7 @@ def main(config: TrainLmConfig):
             if config.initialize_from_hf:
                 # initialize from an hf pretrained model
                 assert converter is not None
-                logger.info(
+                print(
                     "No training checkpoint found. Initializing model from HF checkpoint"
                     f" '{converter.reference_checkpoint}'"
                 )
@@ -230,7 +230,8 @@ def main(config: TrainLmConfig):
                 model = named_jit(trainer.mp.cast_to_param, parameter_axis_mapping)(model)
                 state = dataclasses.replace(state, model=model)
             else:
-                logger.info("No checkpoint found. Starting from scratch.")
+                # TODO are we seeing either of these?!
+                print("No checkpoint found. Starting from scratch.")
 
         print("after check")
         levanter.tracker.log_summary({"parameter_count": parameter_count(state.model)})

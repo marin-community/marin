@@ -6,8 +6,8 @@ model:
   num_heads: 4
   num_layers: 2
 
-# initialize_from_hf: openai-community/gpt2
-# use_hf_model_config: true
+initialize_from_hf: openai-community/gpt2
+use_hf_model_config: true
 
 trainer:
   # checkpointer:
