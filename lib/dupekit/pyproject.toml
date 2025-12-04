@@ -30,7 +30,7 @@ cache-keys = [
     "Cargo.lock",
     "pyproject.toml",
     "src/**/*.rs",
-    "*.pyi"
+    "dupekit/*.pyi"
 ]
 
 [dependency-groups]
