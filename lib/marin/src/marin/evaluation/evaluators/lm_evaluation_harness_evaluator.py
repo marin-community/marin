@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import logging
 import json
 import os
@@ -160,50 +161,234 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
 
     def _patch_max_position_embeddings_if_needed(self, model_local_dir: str, max_model_len: int) -> None:
         """
-        Update max_position_embeddings and related fields in config.json to match max_model_len if needed.
-        This ensures vLLM uses the correct max length.
-        vLLM reads max_model_len from config.json fields like max_position_embeddings, n_positions, or max_seq_len.
+        Update max_position_embeddings and related fields in config.json and tokenizer_config.json to match max_model_len if needed.
+        This ensures vLLM and lm-eval use the correct max length.
         """
-        logger.info(f"Patching config.json in {model_local_dir} with max_model_len={max_model_len}")
         if not os.path.isdir(model_local_dir):
-            logger.warning(f"Model directory does not exist: {model_local_dir}")
             return
+        
+        # Patch model config.json
         config_json_path = os.path.join(model_local_dir, "config.json")
-        if not os.path.exists(config_json_path):
-            logger.warning(f"config.json does not exist at: {config_json_path}")
-            return
-        logger.info(f"Found config.json at: {config_json_path}")
-
+        if os.path.exists(config_json_path):
+            self._patch_config_file(config_json_path, max_model_len)
+        
+        # Also patch tokenizer_config.json if it exists
+        tokenizer_config_json_path = os.path.join(model_local_dir, "tokenizer_config.json")
+        if os.path.exists(tokenizer_config_json_path):
+            self._patch_config_file(tokenizer_config_json_path, max_model_len)
+    
+    def _patch_config_file(self, config_json_path: str, max_model_len: int) -> None:
+        """Helper method to patch a config.json or tokenizer_config.json file."""
         with open(config_json_path, "r") as f:
             cfg = json.load(f)
 
         updated = False
-        # Update all relevant fields that vLLM might read
-        for key in ["max_position_embeddings", "n_positions", "max_seq_len"]:
-            if key in cfg and cfg[key] != max_model_len:
-                old_value = cfg[key]
+        for key in ["max_position_embeddings", "n_positions", "max_seq_len", "model_max_length"]:
+            if key not in cfg:
+                if key == "max_position_embeddings" or key == "model_max_length":
+                    cfg[key] = max_model_len
+                    updated = True
+            elif cfg[key] != max_model_len:
                 cfg[key] = max_model_len
-                logger.info(f"Updating {key} from {old_value} to {max_model_len}")
                 updated = True
         
         if updated:
-            try:
-                with open(config_json_path, "w") as f:
-                    json.dump(cfg, f, indent=2)
-                logger.info(f"Updated config.json with max_model_len={max_model_len}")
-                # Verify the patch was applied correctly
-                with open(config_json_path, "r") as f:
-                    verify_cfg = json.load(f)
-                    for key in ["max_position_embeddings", "n_positions", "max_seq_len"]:
-                        if key in verify_cfg:
-                            logger.info(f"Verified {key} in config.json: {verify_cfg[key]}")
-                            if verify_cfg[key] != max_model_len:
-                                logger.warning(f"WARNING: {key} verification failed! Expected {max_model_len}, got {verify_cfg[key]}")
-            except Exception as e:
-                logger.error(f"Failed to write updated config.json: {e}")
-                raise
-        else:
-            logger.info(f"No config updates needed - all values already match max_model_len={max_model_len}")
+            with open(config_json_path, "w") as f:
+                json.dump(cfg, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+
+    def _patch_tokenizer_loading(self, max_model_len: int) -> None:
+        """
+        Monkey patch tokenizer loading to override model_max_length before lm-eval's vLLM wrapper uses it.
+        This intercepts AutoTokenizer.from_pretrained to set model_max_length after loading.
+        Also patches PreTrainedTokenizerBase.__getattribute__ to intercept model_max_length access.
+        """
+        try:
+            from transformers import AutoTokenizer, PreTrainedTokenizerBase
+            
+            # Patch __getattribute__ to intercept model_max_length access
+            original_getattribute = PreTrainedTokenizerBase.__getattribute__
+            max_model_len_to_use = max_model_len
+            
+            def patched_getattribute(self, name):
+                if name == 'model_max_length':
+                    # Always return our max_model_len value
+                    return max_model_len_to_use
+                return original_getattribute(self, name)
+            
+            PreTrainedTokenizerBase.__getattribute__ = patched_getattribute
+            
+            # Also patch from_pretrained to set the value directly
+            original_from_pretrained = AutoTokenizer.from_pretrained.__func__ if hasattr(AutoTokenizer.from_pretrained, '__func__') else AutoTokenizer.from_pretrained
+            
+            def patched_from_pretrained(cls, *args, **kwargs):
+                tokenizer = original_from_pretrained(cls, *args, **kwargs)
+                # Set model_max_length directly
+                object.__setattr__(tokenizer, 'model_max_length', max_model_len_to_use)
+                return tokenizer
+            
+            AutoTokenizer.from_pretrained = classmethod(patched_from_pretrained)
+        except Exception as e:
+            logger.warning(f"Failed to patch tokenizer loading: {e}")
+
+    def _patch_lm_eval_vllm_wrapper(self, max_model_len: int) -> None:
+        """
+        Monkey patch lm-eval's vLLM wrapper class to override how it determines max_length.
+        This patches the wrapper's __init__ to ensure tokenizer and any max_length attributes use our value.
+        """
+        try:
+            # Import lm-eval's vLLM wrapper module before it's used
+            import lm_eval.models.vllm_causallms as vllm_module
+            
+            # Find the vLLM wrapper class
+            vllm_wrapper_class = None
+            for attr_name in dir(vllm_module):
+                if not attr_name.startswith('_'):
+                    attr = getattr(vllm_module, attr_name)
+                    if isinstance(attr, type) and hasattr(attr, '__init__'):
+                        if (hasattr(attr, 'generate_until') or 
+                            hasattr(attr, 'tok_encode') or
+                            'VLLM' in attr_name):
+                            vllm_wrapper_class = attr
+                            break
+            
+            if vllm_wrapper_class is not None:
+                original_init = vllm_wrapper_class.__init__
+                max_model_len_to_use = max_model_len
+                
+                def patched_init(self, *args, **kwargs):
+                    original_init(self, *args, **kwargs)
+                    # Override tokenizer's model_max_length
+                    if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+                        if hasattr(self.tokenizer, 'model_max_length'):
+                            self.tokenizer.model_max_length = max_model_len_to_use
+                    # Override vLLM model's max_model_len if it exists
+                    if hasattr(self, 'model') and self.model is not None:
+                        try:
+                            if hasattr(self.model, 'llm_engine') and hasattr(self.model.llm_engine, 'model_config'):
+                                self.model.llm_engine.model_config.max_model_len = max_model_len_to_use
+                        except Exception:
+                            pass
+                    # Store max_model_len as an instance attribute for property patching
+                    self._marin_max_model_len = max_model_len_to_use
+                
+                vllm_wrapper_class.__init__ = patched_init
+                
+                # Patch properties/methods that might return max_length or EvalPos.size
+                # Patch EvalPos property if it exists
+                if hasattr(vllm_wrapper_class, 'EvalPos'):
+                    original_eval_pos = vllm_wrapper_class.EvalPos
+                    if isinstance(original_eval_pos, property):
+                        def patched_eval_pos_getter(self):
+                            original = original_eval_pos.fget(self) if original_eval_pos.fget else None
+                            if hasattr(self, '_marin_max_model_len'):
+                                # Try to create a replacement with the correct size
+                                try:
+                                    if hasattr(original, 'size'):
+                                        class EvalPosReplacement:
+                                            def __init__(self, original_obj, new_size):
+                                                self._original = original_obj
+                                                self.size = new_size
+                                                # Copy other attributes if needed
+                                                for attr in ['name']:
+                                                    if hasattr(original_obj, attr):
+                                                        setattr(self, attr, getattr(original_obj, attr))
+                                        return EvalPosReplacement(original, self._marin_max_model_len)
+                                except Exception:
+                                    pass
+                            return original
+                        vllm_wrapper_class.EvalPos = property(patched_eval_pos_getter)
+                
+                # Patch max_length property if it exists
+                if hasattr(vllm_wrapper_class, 'max_length'):
+                    original_max_length = vllm_wrapper_class.max_length
+                    if isinstance(original_max_length, property):
+                        def patched_max_length_getter(self):
+                            if hasattr(self, '_marin_max_model_len'):
+                                return self._marin_max_model_len
+                            if original_max_length.fget:
+                                return original_max_length.fget(self)
+                            return getattr(self, '_max_length', None)
+                        vllm_wrapper_class.max_length = property(patched_max_length_getter)
+                    else:
+                        # If it's not a property, try to override it as an attribute
+                        # We'll set it in __init__ which we already patched
+                        pass
+                
+                # Patch generate_until method to use our max_length
+                if hasattr(vllm_wrapper_class, 'generate_until'):
+                    original_generate_until = vllm_wrapper_class.generate_until
+                    max_model_len_to_use_for_gen = max_model_len
+                    
+                    def patched_generate_until(self, requests):
+                        # Force override max_length/EvalPos before calling original
+                        if hasattr(self, '_marin_max_model_len'):
+                            max_len = self._marin_max_model_len
+                        else:
+                            max_len = max_model_len_to_use_for_gen
+                            self._marin_max_model_len = max_len
+                        
+                        # Override tokenizer's model_max_length
+                        if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+                            if hasattr(self.tokenizer, 'model_max_length'):
+                                object.__setattr__(self.tokenizer, 'model_max_length', max_len)
+                        
+                        # Override EvalPos if it exists - this is what lm-eval uses for max_length
+                        if hasattr(self, 'EvalPos'):
+                            try:
+                                # Create a replacement that returns our max_length
+                                class EvalPosWrapper:
+                                    def __init__(self, original, max_size):
+                                        self._original = original
+                                        self.size = max_size
+                                        # Copy other attributes
+                                        for attr in ['name']:
+                                            if hasattr(original, attr):
+                                                setattr(self, attr, getattr(original, attr))
+                                    
+                                    def __getattr__(self, name):
+                                        return getattr(self._original, name)
+                                
+                                if hasattr(self.EvalPos, 'size') and self.EvalPos.size != max_len:
+                                    self.EvalPos = EvalPosWrapper(self.EvalPos, max_len)
+                            except Exception:
+                                pass
+                        
+                        # Override max_length attribute
+                        if hasattr(self, 'max_length'):
+                            object.__setattr__(self, 'max_length', max_len)
+                        
+                        return original_generate_until(self, requests)
+                    
+                    vllm_wrapper_class.generate_until = patched_generate_until
+        except Exception as e:
+            logger.warning(f"Failed to patch lm-eval vLLM wrapper: {e}")
+
+    def _get_valid_vllm_llm_parameters(self) -> set[str]:
+        """
+        Dynamically get the valid parameters for vLLM's LLM class.
+        Returns a set of parameter names that are accepted by LLM.__init__.
+        """
+        # Always include max_model_len as it's a critical parameter
+        critical_params = {"max_model_len"}
+        try:
+            from vllm import LLM
+            sig = inspect.signature(LLM.__init__)
+            # Get all parameter names, excluding 'self'
+            valid_params = set(sig.parameters.keys()) - {"self"}
+            # Always include critical params even if inspection fails to find them
+            valid_params.update(critical_params)
+            return valid_params
+        except (ImportError, AttributeError) as e:
+            logger.warning(f"Could not inspect vLLM LLM parameters: {e}. Using fallback set.")
+            # Fallback: return a set of known valid parameters
+            # This is a conservative set based on common vLLM parameters
+            return {
+                "model", "tensor_parallel_size", "pipeline_parallel_size", "max_model_len",
+                "max_num_seqs", "max_num_batched_tokens", "dtype", "device", "enforce_eager",
+                "trust_remote_code", "download_dir", "distributed_executor_backend",
+            }
 
     def evaluate(
         self,
@@ -235,14 +420,26 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             # Build model args string first to get engine_kwargs
             engine_kwargs = dict(model.engine_kwargs) if model.engine_kwargs else {}
             
+            # Extract max_gen_toks from engine_kwargs if present, or use the function parameter
+            # max_gen_toks should be passed to lm-eval via model_args, but NOT to vLLM's engine initialization
+            max_gen_toks_value = engine_kwargs.pop("max_gen_toks", None) or max_gen_toks
+            
             # Patch config.json BEFORE vLLM initializes to ensure it reads the correct values
             # Ensure model config is compatible with vLLM rope scaling on TPU
             self._patch_rope_scaling_config_if_needed(model_name_or_path)
             
-            # Patch max_position_embeddings if max_model_len is specified and different
-            # This must happen BEFORE vLLM initializes, as vLLM reads from config.json
+            # Patch max_position_embeddings if max_model_len is specified
+            # This must happen BEFORE vLLM and lm-eval initialize
+            max_model_len_value = None
             if "max_model_len" in engine_kwargs and engine_kwargs["max_model_len"] is not None:
-                self._patch_max_position_embeddings_if_needed(model_name_or_path, engine_kwargs["max_model_len"])
+                max_model_len_value = engine_kwargs["max_model_len"]
+                self._patch_max_position_embeddings_if_needed(model_name_or_path, max_model_len_value)
+            
+            # Monkey patch tokenizer loading and lm-eval's vLLM wrapper BEFORE any lm_eval imports
+            # This must happen before any lm_eval imports
+            if max_model_len_value is not None:
+                self._patch_tokenizer_loading(max_model_len_value)
+                self._patch_lm_eval_vllm_wrapper(max_model_len_value)
             
             pretrained_args_parts = [
                 f"pretrained={model_name_or_path}",
@@ -256,18 +453,22 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             # This is required when using tensor_parallel_size > 1 on TPU
             if engine_kwargs.get("tensor_parallel_size", 1) > 1:
                 pretrained_args_parts.append("distributed_executor_backend=ray")
+            # Get valid vLLM LLM parameters to filter engine_kwargs
+            valid_vllm_params = self._get_valid_vllm_llm_parameters()
+            # Add vLLM engine arguments, only including keys that are valid vLLM parameters
             for key, value in engine_kwargs.items():
                 # Skip None values to avoid passing "key=None" which might not be parsed correctly
-                if value is not None:
+                # Only include keys that are valid vLLM LLM parameters
+                if value is not None and key in valid_vllm_params:
                     pretrained_args_parts.append(f"{key}={value}")
+                elif value is not None and key not in valid_vllm_params:
+                    logger.warning(f"Skipping invalid vLLM engine argument: {key}={value}")
+            # Add max_gen_toks to model_args for lm-eval (the vLLM wrapper should extract it before initializing vLLM)
+            if max_gen_toks_value is not None:
+                pretrained_args_parts.append(f"max_gen_toks={max_gen_toks_value}")
+                logger.info(f"Setting max_gen_toks={max_gen_toks_value} in model_args for lm-eval")
             pretrained_args = ",".join(pretrained_args_parts)
-            
-            # Log the model args to debug max_model_len
-            logger.info(f"Model args string: {pretrained_args}")
-            if "max_model_len" in engine_kwargs:
-                logger.info(f"max_model_len from engine_kwargs: {engine_kwargs['max_model_len']}")
-            else:
-                logger.warning("max_model_len not found in engine_kwargs! This may cause truncation issues.")
+            logger.info(f"Final model_args string: {pretrained_args}")
 
             # === MONKEY PATCH resolve_hf_chat_template ===
             # This MUST happen before any lm_eval imports that might load vllm_causallms.
@@ -277,10 +478,8 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 # Try to import from vllm if available
                 try:
                     from vllm.entrypoints.chat_utils import resolve_hf_chat_template as vllm_resolve_hf_chat_template
-                    logger.info("Found resolve_hf_chat_template in vllm.entrypoints.chat_utils")
                 except ImportError:
                     vllm_resolve_hf_chat_template = None
-                    logger.info("resolve_hf_chat_template not found in vllm.entrypoints.chat_utils")
                 
                 # Define fallback implementation
                 def fallback_resolve_hf_chat_template(tokenizer, *args, **kwargs):
@@ -326,10 +525,8 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 # Also set it in globals() if the module has that
                 if hasattr(vllm_module, "__globals__"):
                     vllm_module.__globals__["resolve_hf_chat_template"] = resolve_fn
-                logger.info("Patched lm_eval.models.vllm_causallms.resolve_hf_chat_template")
             except Exception as e:
                 logger.warning(f"Failed to pre-patch resolve_hf_chat_template: {e}")
-                import traceback
                 logger.warning(f"Traceback: {traceback.format_exc()}")
 
             from lm_eval.evaluator import simple_evaluate
@@ -377,9 +574,9 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                         logger.info(f"Created vllm package metadata at {vllm_dist_info}")
 
 
-                # Note: max_gen_toks is controlled by lm-eval's internal logic, not vLLM.
-                # There is no way to set max_gen_toks on the vLLM model instance.
-
+                # Note: max_gen_toks is passed to lm-eval via model_args.
+                # The vLLM wrapper in lm-eval should extract it from model_args before initializing vLLM.
+                # If max_gen_toks is passed to vLLM's engine initialization, it will cause an error.
                 results = simple_evaluate(
                     model="vllm",
                     tasks=[eval_task.name],
@@ -423,7 +620,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 assert os.path.exists(result_filepath), f"Results file {result_filepath} does not exist."
 
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("lm-eval failed")
             raise RuntimeError("lm-eval failed. Please check the logs for more information.") from e
 
         finally:

@@ -31,7 +31,7 @@ Note for people trying to do evals:
 """
 EVAL_TASKS = [
     EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
-    EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime25_0shot"),
+    # EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime25_0shot"),
 ]
 
 MODELS = [
@@ -39,7 +39,6 @@ MODELS = [
         "name": "qwen2.5-7b-instruct",
         "path": "gs://marin-us-central2/models/qwen2.5-7b-instruct",
         "apply_chat_template": True,
-        "max_length": int(8094*4), # Do not limit
         "tensor_parallel_size": 4,
     }
 ]
@@ -196,11 +195,10 @@ if __name__ == "__main__":
             engine_kwargs = {
                 "tensor_parallel_size": model_config.get("tensor_parallel_size", 4),
             }
-            # Map max_length to max_model_len for vLLM
-            if "max_length" in model_config:
-                # Ensure that max_model_len > max_gen_toks + prompt len. 
-                engine_kwargs["max_model_len"] = int(8192*4+2048)
-                engine_kwargs["max_gen_toks"] = int(8192*4)
+            # Ensure that max_model_len > max_gen_toks + prompt len.
+            # Note that max_gen_toks is controlled by lm-eval 
+            engine_kwargs["max_model_len"] = int(32768+2048)
+            engine_kwargs["max_gen_toks"] = int(32768) # No point. It will be overwritten by lm-eval task's yaml config
             
             lm_eval_task_step = evaluate_lm_evaluation_harness(
                 model_config["name"],
@@ -214,7 +212,7 @@ if __name__ == "__main__":
                     "temperature": 0.7,
                     "top_p": 1.0,
                     "do_sample": True,
-                    "n": 10,  # Generate 1 sample per prompt
+                    "n": 1,  # Generate 1 sample per prompt
                     "seed": 42,
                 },
             )
