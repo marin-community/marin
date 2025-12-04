@@ -104,32 +104,55 @@ class HashAlgorithm(Enum):
     Xxh3_128 = ...
     Xxh3_64 = ...
 
-def process_batch_paragraphs(
+DEFAULT_HASH_ALGORITHM: HashAlgorithm
+
+@final
+class Transformation:
+    """Transformation steps for the deduplication pipeline.
+
+    Use these steps to build a list of operations that `transform` will apply
+    sequentially to a PyArrow RecordBatch.
+    """
+
+    @staticmethod
+    def ResolveIds(text_col: str, id_col: str, output_col: str) -> "Transformation":
+        """Creates a new column `output_col` containing resolved document IDs.
+
+        If `id_col` exists and is not null, it is used. Otherwise, a stable hash
+        of `text_col` is generated (using the default hash algorithm) and used as the ID.
+        """
+        ...
+
+    @staticmethod
+    def SplitParagraphs(text_col: str, id_col: str) -> "Transformation":
+        """Explodes the batch by splitting `text_col` into paragraphs (by newline).
+
+        The resulting batch will have columns: `doc_id`, `paragraph_text`, and `paragraph_span`.
+        """
+        ...
+
+    @staticmethod
+    def Hash(input_col: str, output_col: str, algo: HashAlgorithm) -> "Transformation":
+        """Computes the hash of `input_col` using the specified `algo` and stores it in `output_col`."""
+        ...
+
+    @staticmethod
+    def SelectColumns(columns: list[str]) -> "Transformation":
+        """Projects the batch to keep only the specified columns."""
+        ...
+
+def transform(batch: pa.RecordBatch, steps: list[Transformation]) -> pa.RecordBatch: ...
+def mark_paragraph_duplicates(
     batch: pa.RecordBatch,
-    text_col: str,
-    id_col: str,
-    algorithm: Optional[HashAlgorithm] = None,
-) -> pa.RecordBatch: ...
-def mark_exact_dups_paragraphs(
-    batch: pa.RecordBatch,
-    text_col: str,
-    id_col: str,
     dup_map: dict[str, dict[str, str]],
     attribute_name: str,
     algorithm: Optional[HashAlgorithm] = None,
 ) -> pa.RecordBatch: ...
-def process_batch_documents(
+def mark_document_duplicates(
     batch: pa.RecordBatch,
-    text_col: str,
-    id_col: str,
-    algorithm: Optional[HashAlgorithm] = None,
-) -> pa.RecordBatch: ...
-def mark_exact_dups_documents(
-    batch: pa.RecordBatch,
-    text_col: str,
-    id_col: str,
     dup_map: dict[str, dict[str, str]],
     attribute_name: str,
+    hash_col: Optional[str] = None,
     algorithm: Optional[HashAlgorithm] = None,
 ) -> pa.RecordBatch: ...
 def hash_blake2(text: bytes) -> list[int]: ...

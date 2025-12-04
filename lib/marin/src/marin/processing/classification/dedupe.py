@@ -39,7 +39,7 @@ import draccus
 import fsspec
 from marin.utilities.time_logger import log_time
 import msgspec
-from dupekit import Bloom
+from dupekit import Bloom, Transformation
 import dupekit
 
 from marin.utils import fsspec_glob, rebase_file_path
@@ -400,8 +400,14 @@ def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kw
 def _run_deduplication(config: DedupeConfig):
     input_files = collect_input_files(config.input_path)
 
-    def process_batch_paragraphs(batch: pa.RecordBatch) -> pa.RecordBatch:
-        return dupekit.process_batch_paragraphs(batch, config.text_field, "id")
+    def compute_paragraph_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
+        pipeline = [
+            Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
+            Transformation.SplitParagraphs(text_col=config.text_field, id_col="resolved_id"),
+            Transformation.Hash(input_col="paragraph_text", output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128),
+            Transformation.SelectColumns(columns=["hash", "doc_id"]),
+        ]
+        return dupekit.transform(batch, pipeline)
 
     def _count_reduce(key: str, items: Iterator[pa.StructScalar]) -> dict[str, str] | None:
         try:
@@ -412,7 +418,7 @@ def _run_deduplication(config: DedupeConfig):
         # A dupe exists
         return {
             "hash": key,
-            "canonical": head["id"],
+            "canonical": head["doc_id"],
         }
 
     # first compute the full set of duplicate keys.
@@ -421,7 +427,7 @@ def _run_deduplication(config: DedupeConfig):
             Dataset.from_list(input_files)
             .flat_map(_load_batches)
             .reshard(num_shards=config.processes)
-            .map(process_batch_paragraphs)
+            .map(compute_paragraph_hashes)
             .flat_map(lambda batch: batch.to_pylist())
             .group_by(
                 lambda key_fn: key_fn["hash"],
@@ -449,12 +455,11 @@ def _run_deduplication(config: DedupeConfig):
 
         logger.info(f"There are {len(dup_map)} duplicate paragraphs.")
         for batch in batches:
-            yield dupekit.mark_exact_dups_paragraphs(
+            yield dupekit.mark_paragraph_duplicates(
                 batch,
-                config.text_field,
-                "id",
                 dup_map,
                 config.attribute_name,
+                algorithm=dupekit.HashAlgorithm.Xxh3_128,
             )
 
     # Use write_jsonl with callable output pattern
@@ -487,8 +492,13 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
     """
     input_files = collect_input_files(config.input_path)
 
-    def process_batch_documents(batch: pa.RecordBatch) -> pa.RecordBatch:
-        return dupekit.process_batch_documents(batch, config.text_field, "id")
+    def compute_document_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
+        pipeline = [
+            Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
+            Transformation.Hash(input_col=config.text_field, output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128),
+            Transformation.SelectColumns(columns=["hash", "resolved_id"]),
+        ]
+        return dupekit.transform(batch, pipeline)
 
     def _count_reduce(key: str, items: Iterator[pa.StructScalar]) -> dict[str, str] | None:
         try:
@@ -499,7 +509,7 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
         # A dupe exists
         return {
             "hash": key,
-            "canonical": head["id"],
+            "canonical": head["resolved_id"],
         }
 
     # first compute the full set of duplicate keys.
@@ -509,7 +519,7 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
             Dataset.from_list(input_files)
             .flat_map(_load_batches)
             .reshard(num_shards=config.processes)
-            .map(process_batch_documents)
+            .map(compute_document_hashes)
             .flat_map(lambda batch: batch.to_pylist())
             .group_by(
                 lambda key_fn: key_fn["hash"],
@@ -541,13 +551,16 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
         logger.info(f"There are {len(dup_map)} duplicate documents.")
 
         for batch in batches:
-            yield dupekit.mark_exact_dups_documents(
+            prepared_batch = dupekit.transform(
                 batch,
-                config.text_field,
-                "id",
-                dup_map,
-                config.attribute_name,
+                [
+                    Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="id"),
+                    Transformation.Hash(
+                        input_col=config.text_field, output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128
+                    ),
+                ],
             )
+            yield dupekit.mark_document_duplicates(prepared_batch, dup_map, config.attribute_name, hash_col="hash")
 
     # Use write_jsonl with callable output pattern
     backend.execute(

@@ -1,4 +1,3 @@
-# --- START OF FILE lib/dupekit/tests/bench/test_dedupe.py ---
 # Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,9 +18,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from typing import Any
 import dupekit
-
-##
-# Fixtures & Helpers
 
 
 @pytest.fixture(scope="module")
@@ -45,11 +41,11 @@ def build_map(hashes: list[str], ids: list[str]) -> dict[str, Any]:
 
 def extract_results(result: Any) -> tuple[list[str], list[str]]:
     if isinstance(result, (pa.RecordBatch, pa.Table)):
-        return result["hash"].to_pylist(), result["id"].to_pylist()
+        id_col = "doc_id" if "doc_id" in result.schema.names else "id"
+        return result["hash"].to_pylist(), result[id_col].to_pylist()
     return [x["hash"] for x in result], [x["id"] for x in result]
 
 
-##
 # Legacy Python Implementations for baseline
 
 
@@ -57,7 +53,7 @@ def _str_hash_legacy(s: str) -> str:
     return hashlib.blake2b(s.encode(), digest_size=8).hexdigest()
 
 
-def python_process_batch_paragraphs(batch: pa.RecordBatch, text_col: str, id_col: str) -> list[dict[str, str]]:
+def python_compute_paragraph_hashes(batch: pa.RecordBatch, text_col: str, id_col: str) -> list[dict[str, str]]:
     results = []
     for record in batch.to_pylist():
         text, record_id = record[text_col], record[id_col]
@@ -87,7 +83,7 @@ def python_mark_exact_dups_paragraphs(
     return results
 
 
-def python_process_batch_documents(batch: pa.RecordBatch, text_col: str, id_col: str) -> list[dict[str, str]]:
+def python_compute_document_hashes(batch: pa.RecordBatch, text_col: str, id_col: str) -> list[dict[str, str]]:
     results = []
     for record in batch.to_pylist():
         text, record_id = record[text_col], record[id_col]
@@ -111,27 +107,52 @@ def python_mark_exact_dups_documents(
     return results
 
 
-##
-# Configuration Maps
+def rust_compute_paragraph_hashes(batch: pa.RecordBatch, text_col: str, id_col: str) -> pa.RecordBatch:
+    pipeline = [
+        dupekit.Transformation.SplitParagraphs(text_col=text_col, id_col=id_col),
+        dupekit.Transformation.Hash(input_col="paragraph_text", output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128),
+    ]
+    return dupekit.transform(batch, pipeline)
 
+
+def rust_compute_document_hashes(batch: pa.RecordBatch, text_col: str, id_col: str) -> pa.RecordBatch:
+    pipeline = [
+        dupekit.Transformation.Hash(input_col=text_col, output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128),
+    ]
+    return dupekit.transform(batch, pipeline)
+
+
+def rust_mark_paragraph_duplicates(
+    batch: pa.RecordBatch, text_col: str, id_col: str, dup_map: dict, attribute_name: str
+) -> pa.RecordBatch:
+    # The mark function only needs the batch, map, and attr name.
+    # text_col and id_col are ignored but kept for signature compatibility with the benchmark.
+    return dupekit.mark_paragraph_duplicates(batch, dup_map, attribute_name)
+
+
+def rust_mark_document_duplicates(
+    batch: pa.RecordBatch, text_col: str, id_col: str, dup_map: dict, attribute_name: str
+) -> pa.RecordBatch:
+    # The mark function only needs the batch, map, and attr name.
+    # text_col and id_col are ignored but kept for signature compatibility with the benchmark.
+    return dupekit.mark_document_duplicates(batch, dup_map, attribute_name)
+
+
+# Benchmarks
 
 PROCESS_FUNCS = {
-    ("paragraphs", "python"): python_process_batch_paragraphs,
-    ("paragraphs", "rust"): dupekit.process_batch_paragraphs,
-    ("documents", "python"): python_process_batch_documents,
-    ("documents", "rust"): dupekit.process_batch_documents,
+    ("paragraphs", "python"): python_compute_paragraph_hashes,
+    ("paragraphs", "rust"): rust_compute_paragraph_hashes,
+    ("documents", "python"): python_compute_document_hashes,
+    ("documents", "rust"): rust_compute_document_hashes,
 }
 
 MARK_FUNCS = {
     ("paragraphs", "python"): python_mark_exact_dups_paragraphs,
-    ("paragraphs", "rust"): dupekit.mark_exact_dups_paragraphs,
+    ("paragraphs", "rust"): rust_mark_paragraph_duplicates,
     ("documents", "python"): python_mark_exact_dups_documents,
-    ("documents", "rust"): dupekit.mark_exact_dups_documents,
+    ("documents", "rust"): rust_mark_document_duplicates,
 }
-
-
-##
-# Benchmarks
 
 
 @pytest.mark.parametrize("granularity", ["paragraphs", "documents"])
@@ -147,7 +168,7 @@ def test_hashing(benchmark: Any, sample_data: pa.RecordBatch, granularity: str, 
 @pytest.mark.parametrize("backend", ["python", "rust"])
 def test_deduplication(benchmark: Any, sample_data: pa.RecordBatch, granularity: str, backend: str) -> None:
     """Benchmark the duplicate marking step (requires pre-calculated map)."""
-    process_func = PROCESS_FUNCS[(granularity, backend)]
+    process_func = PROCESS_FUNCS[(granularity, "rust")]  # Always use fast Rust version to build map
     processed = process_func(sample_data, "text", "id")
     hashes, ids = extract_results(processed)
     dup_map = build_map(hashes, ids)
