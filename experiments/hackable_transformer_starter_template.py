@@ -24,7 +24,7 @@ How to run:
      https://marin.readthedocs.io/en/latest/tutorials/submitting-speedrun/
   2) From repo root:
        python marin/run/ray_run.py -- python -m __SUBMISSION_IMPORT_PATH__ --force_run_failed true
-  3) Optional: SR_USE_GPU=1 to use GPU resource presets.
+  3) Optional: SR_USE_TPU=1 to use TPU resource presets (default is GPU).
 """
 
 # nodryrun
@@ -453,19 +453,19 @@ def _muon_presets() -> dict[str, MuonConfig]:
     }
 
 
-def _resource_presets(use_gpu: bool = False):
-    if use_gpu:
+def _resource_presets(use_tpu: bool = False):
+    if use_tpu:
         return {
-            "130m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
-            "300m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
-            "520m": GpuConfig(gpu_count=2, accelerator_type="A100-80G"),
-            "1_2b": GpuConfig(gpu_count=4, accelerator_type="A100-80G"),
+            "130m": TpuPodConfig(tpu_type="v5p-32"),
+            "300m": TpuPodConfig(tpu_type="v5p-32"),
+            "520m": TpuPodConfig(tpu_type="v5p-32"),
+            "1_2b": TpuPodConfig(tpu_type="v5p-32"),
         }
     return {
-        "130m": TpuPodConfig(tpu_type="v5p-32"),
-        "300m": TpuPodConfig(tpu_type="v5p-32"),
-        "520m": TpuPodConfig(tpu_type="v5p-32"),
-        "1_2b": TpuPodConfig(tpu_type="v5p-32"),
+        "130m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
+        "300m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
+        "520m": GpuConfig(gpu_count=2, accelerator_type="A100-80G"),
+        "1_2b": GpuConfig(gpu_count=4, accelerator_type="A100-80G"),
     }
 
 
@@ -473,7 +473,7 @@ def _batch_sizes() -> dict[str, int]:
     return {"130m": 128, "300m": 128, "520m": 128, "1_2b": 256}
 
 
-def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]:
+def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]:
     sizes = _size_presets()
     if size not in sizes:
         raise ValueError(f"Unknown size: {size}")
@@ -485,7 +485,7 @@ def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]
     steps = _get_num_train_steps(params, batch, seq_len, tpp=20)
 
     muon = _muon_presets()[size]
-    resources = _resource_presets(use_gpu=use_gpu)[size]
+    resources = _resource_presets(use_tpu=use_tpu)[size]
 
     train = SimpleTrainConfig(
         resources=versioned(resources),
@@ -520,10 +520,10 @@ if __name__ == "__main__":
     ###
 
     sizes = ["130m", "300m", "520m", "1_2b"]
-    use_gpu = bool(int(os.environ.get("SR_USE_GPU", "1")))
+    use_tpu = bool(int(os.environ.get("SR_USE_TPU", "0")))
     steps = []
     for s in sizes:
-        name, cfg = build_run(s, use_gpu=use_gpu)
+        name, cfg = build_run(s, use_tpu=use_tpu)
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
     executor_main(steps=steps, description=SUBMISSION_DESCRIPTION)

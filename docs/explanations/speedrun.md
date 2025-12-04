@@ -21,6 +21,11 @@ outperformed in both metrics by any other submission. In other words, a
 submission is Pareto-optimal if no other model achieves better BPB and uses
 fewer FLOPs. This allows us examine the tradeoff between compute and model quality.
 
+## Scaling
+Typically, we perform multiple training runs with different FLOP budgets to obtain a scaling law that allows us to extrapolate performance at 1e22 FLOPs. The Marin team can help scale up promising speedrun submissions on TPU clusters.
+
+## Submission
+
 Submitting to the Speedrun Leaderboard consists of the following steps:
 
 1. Define a configuration for training a model.

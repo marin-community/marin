@@ -18,10 +18,12 @@ import ctypes
 import ctypes.util
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -77,19 +79,29 @@ class TemporaryVenv:
     def __init__(
         self,
         *,
+        workspace: str | None = None,
         pip_install_args: list[str] | None = None,
+        extras: list[str] | None = None,
         venv_args: list[str] | None = None,
         prefix: str = "temp_venv_",
     ):
         """Initialize temporary venv context manager.
 
         Args:
+            workspace: Path to workspace to copy (git-tracked files). If provided,
+                workspace files are copied to the temp directory root, and a venv
+                is created in .venv/ subdirectory.
             pip_install_args: Arguments to pass to `uv pip install` (e.g.,
                 ["--prerelease=allow", "vllm-tpu", "package==1.0.0"]).
                 These are passed directly to `uv pip install --python <venv_python> <args...>`
+            extras: Workspace extras to install (e.g., ['tpu', 'eval']). Only used
+                when workspace has a pyproject.toml.
+            venv_args: Additional arguments to pass to `uv venv`
             prefix: Prefix for temporary directory name
         """
+        self._workspace = workspace
         self._pip_install_args = pip_install_args
+        self._extras = extras or []
         self._prefix = prefix
         self._venv_args = venv_args
 
@@ -97,11 +109,21 @@ class TemporaryVenv:
         self._processes: list[subprocess.Popen] = []
 
     @property
+    def workspace_path(self) -> str:
+        """Path to the workspace root directory (temp dir root)."""
+        if not self._temp_dir:
+            raise RuntimeError("TemporaryVenv must be entered before accessing workspace_path")
+        return self._temp_dir.name
+
+    @property
     def venv_path(self) -> str:
-        """Path to the virtual environment directory."""
+        """Path to the virtual environment directory (.venv/ if workspace, else temp root)."""
         if not self._temp_dir:
             raise RuntimeError("TemporaryVenv must be entered before accessing venv_path")
-        return self._temp_dir.name
+        if self._workspace:
+            return os.path.join(self.workspace_path, ".venv")
+        else:
+            return self.workspace_path
 
     @property
     def python_path(self) -> str:
@@ -113,22 +135,74 @@ class TemporaryVenv:
         """Path to the bin directory (e.g., venv/bin)."""
         return os.path.join(self.venv_path, "bin")
 
+    def _copy_workspace_files(self) -> None:
+        """Copy git-tracked files from workspace to temp directory root."""
+        workspace = Path(self._workspace)
+        dest = Path(self.workspace_path)
+
+        logger.info(f"Copying workspace {workspace} to {dest}")
+
+        try:
+            # Use git ls-files (respects .gitignore)
+            git_files = subprocess.check_output(
+                ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+                cwd=workspace,
+                text=True,
+            ).splitlines()
+
+            for rel_path in git_files:
+                src = workspace / rel_path
+                dst = dest / rel_path
+
+                if src.is_file():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"Git failed, falling back to copytree: {e}")
+            shutil.copytree(workspace, dest, dirs_exist_ok=True)
+
+    def _install_packages(self) -> None:
+        """Install workspace (editable + extras) and pip packages."""
+        install_args = []
+
+        pyproject = Path(self.workspace_path) / "pyproject.toml"
+        if self._workspace and pyproject.exists():
+            # Install workspace as editable with extras
+            if self._extras:
+                extras_str = ",".join(self._extras)
+                install_args.append(f"-e .[{extras_str}]")
+            else:
+                install_args.append("-e .")
+
+        # Add explicit packages
+        if self._pip_install_args:
+            install_args.extend(self._pip_install_args)
+
+        if install_args:
+            logger.info(f"Installing packages: {' '.join(install_args)}")
+            venv_env = self.get_env()
+            subprocess.check_call(
+                ["uv", "pip", "install", "--python", self.python_path, *install_args],
+                cwd=self.workspace_path,
+                env=venv_env,
+            )
+
     def __enter__(self) -> "TemporaryVenv":
-        """Create venv, install packages, return self."""
         if self._temp_dir:
             raise RuntimeError("TemporaryVenv cannot be entered twice")
 
         self._temp_dir = tempfile.TemporaryDirectory(prefix=self._prefix)
+
+        if self._workspace:
+            self._copy_workspace_files()
 
         py_version = sys.version_info
         python_spec = f"{py_version.major}.{py_version.minor}"
 
         logger.info(f"Creating temporary venv at {self.venv_path} with Python {python_spec}")
 
-        venv_args = []
-        if self._venv_args:
-            venv_args = self._venv_args
-
+        venv_args = self._venv_args or []
         subprocess.check_call(
             [
                 "uv",
@@ -142,13 +216,9 @@ class TemporaryVenv:
             ]
         )
 
-        if self._pip_install_args:
-            logger.info(f"Installing packages: {' '.join(self._pip_install_args)}")
-            venv_env = self.get_env()
-            subprocess.check_call(
-                ["uv", "pip", "install", "--python", self.python_path, *self._pip_install_args],
-                env=venv_env,
-            )
+        # Install packages (workspace + explicit packages)
+        if self._workspace or self._pip_install_args:
+            self._install_packages()
 
         return self
 
@@ -209,6 +279,10 @@ class TemporaryVenv:
         if env is None:
             env = self.get_env()
 
+        # Default cwd to workspace_path if not specified
+        if "cwd" not in kwargs:
+            kwargs["cwd"] = self.workspace_path
+
         logger.info("Running %s", " ".join(cmd))
         return subprocess.run(cmd, env=env, check=check, **kwargs)
 
@@ -225,6 +299,10 @@ class TemporaryVenv:
 
         if env is None:
             env = self.get_env()
+
+        # Default cwd to workspace_path if not specified
+        if "cwd" not in kwargs:
+            kwargs["cwd"] = self.workspace_path
 
         # Unix: use process groups + parent death signal for cleanup
         if sys.platform != "win32":

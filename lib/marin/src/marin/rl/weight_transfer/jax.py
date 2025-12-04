@@ -32,15 +32,11 @@ import haliax as hax
 import jax
 import jax.experimental.transfer as jax_transfer
 import numpy as np
-import ray
-import ray.runtime_context
 from haliax.jax_utils import is_jax_array_like
 from jax.sharding import Mesh
 from jaxtyping import PyTree
-from ray.actor import ActorHandle
-from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
-
 from marin.rl.robust_actor import RobustActor
+from ray.actor import ActorHandle
 
 from .base import (
     WeightTransferClient,
@@ -340,13 +336,6 @@ def get_local_ip_from_hostname():
     hostname = socket.gethostname()
     ip_address = socket.gethostbyname(hostname)
     return ip_address
-
-
-def this_node_affinity_strategy(soft: bool = False) -> NodeAffinitySchedulingStrategy:
-    """
-    Returns a NodeAffinitySchedulingStrategy that will only schedule weight transfers to the current node.
-    """
-    return NodeAffinitySchedulingStrategy(node_id=ray.runtime_context.get_runtime_context().get_node_id(), soft=soft)
 
 
 def num_bytes(model: PyTree):
