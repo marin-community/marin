@@ -27,6 +27,17 @@ How to run:
   3) Optional: SR_USE_TPU=1 to use TPU resource presets (default is GPU).
 """
 
+# =========================
+# Submission metadata
+# =========================
+# TODO: fill out these values before you submit your speedrun
+SUBMISSION_BRANCH = "__SUBMISSION_BRANCH__"
+SUBMISSION_DESCRIPTION = "__SUBMISSION_DESCRIPTION__"
+SUBMISSION_AUTHOR_NAME = "__SUBMISSION_AUTHOR_NAME__"
+SUBMISSION_AUTHOR_AFFILIATION = "__SUBMISSION_AUTHOR_AFFILIATION__"
+SUBMISSION_AUTHOR_URL = "__SUBMISSION_AUTHOR_URL__"
+
+# ruff: noqa: E402
 # nodryrun
 import sys
 import os
@@ -67,16 +78,6 @@ logger = logging.getLogger("ray")
 _IMPORT_PATH = getattr(__spec__, "name", __name__)
 
 silence_transformer_nag()
-
-# =========================
-# Submission metadata (filled by onboarding)
-# =========================
-# The onboarding workflow replaces these placeholders before committing the file.
-SUBMISSION_BRANCH = "__SUBMISSION_BRANCH__"
-SUBMISSION_DESCRIPTION = "__SUBMISSION_DESCRIPTION__"
-SUBMISSION_AUTHOR_NAME = "__SUBMISSION_AUTHOR_NAME__"
-SUBMISSION_AUTHOR_AFFILIATION = "__SUBMISSION_AUTHOR_AFFILIATION__"
-SUBMISSION_AUTHOR_URL = "__SUBMISSION_AUTHOR_URL__"
 
 
 # =========================
