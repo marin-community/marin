@@ -247,11 +247,7 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    # Verify JAX is configured for CPU-only mode
-    jax_platforms = os.environ.get("JAX_PLATFORMS", "not set")
     jax_devices = jax.devices()
-
-    assert jax_platforms == "cpu", f"JAX_PLATFORMS should be 'cpu' but is '{jax_platforms}'"
     assert all(d.platform == "cpu" for d in jax_devices), f"Expected all CPU devices, got: {jax_devices}"
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
