@@ -74,7 +74,7 @@ finepdfs_eng_raw = default_download(
     name="finepdfs_eng_Latn",
     hf_dataset_id="HuggingFaceFW/finepdfs",
     revision="d8e8544",
-    hf_urls_glob=["data/eng_Latn/train/*.parquet"],
+    hf_urls_glob=["data/eng_Latn/*/*.parquet"],
     override_output_path="finepdfs_eng_Latn",
 )
 

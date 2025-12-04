@@ -178,7 +178,7 @@ reasoning_mixture = lm_mixture_data_config(reasoning_tokenized, reasoning_weight
 
 # Validation: finepdfs (original) eng_Latn test split
 finepdfs_validation_tokenized = {
-    "finepdfs_eng_val": default_tokenize(
+    "finepdfs/eng": default_tokenize(
         name="finepdfs_eng_Latn_val_llama3",
         dataset=finepdfs_validation_by_language["eng_Latn"],
         tokenizer=marin_tokenizer,
@@ -196,8 +196,16 @@ long_context_combined_weights = interpolate_mixture_weights(
 # for the first phase of "long context extension", we're not really extending context at all, but
 # shifting the data distribution toward long-context data. To do that, we slot the mixture weights into the
 
+giraffe_components = {
+    **starling_components,
+    **long_context_tokenized,
+    **finepdfs_edu_tokenized,
+    **reasoning_tokenized,
+    **finepdfs_validation_tokenized,
+}
+
 giraffe_4K_mixture = lm_varying_mixture_data_config(
-    components={**starling_components, **long_context_tokenized, **finepdfs_edu_tokenized, **reasoning_tokenized},
+    components=giraffe_components,
     weights_list=[
         (0, DCLM_MIXTURE_WEIGHTS),
         (PHASE_3_START, cooldown_mixture_weights_v1),
@@ -210,9 +218,13 @@ giraffe_4K_mixture = lm_varying_mixture_data_config(
 
 
 giraffe_long_mixture = lm_mixture_data_config(
-    {**starling_components, **long_context_tokenized, **finepdfs_edu_tokenized, **reasoning_tokenized},
+    giraffe_components,
     long_context_combined_weights,
 )
+
+# ensure we use the marin_tokenizer in the data config
+giraffe_4K_mixture = dataclasses.replace(giraffe_4K_mixture, tokenizer=marin_tokenizer)
+giraffe_long_mixture = dataclasses.replace(giraffe_long_mixture, tokenizer=marin_tokenizer)
 
 
 # --------------------------
@@ -238,7 +250,7 @@ def _train_config(
     *, num_steps: int, batch_size: int, train_seq_len: int, initialize_from, seed: int
 ) -> SimpleTrainConfig:
     return SimpleTrainConfig(
-        resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
+        resources=TpuPodConfig(tpu_type="v4-512", slice_count=1),
         train_batch_size=batch_size,
         num_train_steps=num_steps,
         train_seq_len=train_seq_len,
@@ -261,6 +273,9 @@ def _train_config(
     )
 
 
+# ensure we're using marin_tokenizer in the tokenized_config
+
+
 STARLING_WARMSTART_STEP = "1399923"
 starling_checkpoint = tootsie_8b_sensible_starling.cd(f"checkpoints/step-{STARLING_WARMSTART_STEP}").nonblocking()
 
@@ -269,9 +284,10 @@ PHASE1_STEPS = GIRAFFE_4K_STEPS
 
 giraffe_4k_config = dataclasses.replace(
     cooldown_train_config,
+    resources=TpuPodConfig(tpu_type="v4-512", slice_count=1),
     train_seq_len=4_096,
     # similar to phoenix, we abuse WSD-S api to rewarmup
-    cycle_length=[STARLING_END, GIRAFFE_4K_END],
+    cycle_length=[STARLING_END, GIRAFFE_4K_END - STARLING_END],
     num_train_steps=GIRAFFE_4K_END,
     rewarmup=200,
     learning_rate=1e-4,
@@ -283,7 +299,7 @@ giraffe_4k_config = dataclasses.replace(
 
 tootsie_8b_giraffe_phase1 = default_train(
     name="tootsie-8b-giraffe-4k",
-    tokenized=giraffe_long_mixture,
+    tokenized=giraffe_4K_mixture,
     model_config=llama_8b_4k,
     train_config=giraffe_4k_config,
     tags=["llama", "8b", "giraffe", "phase1", "exp2062"],
@@ -292,7 +308,7 @@ tootsie_8b_giraffe_phase1 = default_train(
 
 # Phase 2: 32k with RoPE theta 1.5M for ~50B tokens
 PHASE2_STEPS = GIRAFFE_16K_STEPS  # 3000 * 512 * 32768 ≈ 50B tokens
-phase2_checkpoint = tootsie_8b_giraffe_phase1.cd(f"checkpoints/step-{PHASE1_STEPS}").nonblocking()
+phase2_checkpoint = tootsie_8b_giraffe_phase1.cd(f"checkpoints/step-{PHASE1_STEPS}")
 phase2_train_config = _train_config(
     num_steps=PHASE2_STEPS, batch_size=512, train_seq_len=32_768, initialize_from=phase2_checkpoint, seed=2
 )
@@ -308,7 +324,7 @@ tootsie_8b_giraffe_phase2 = default_train(
 
 # Phase 3: 64k with RoPE theta 5M for ~50B tokens
 PHASE3_STEPS = GIRAFFE_32K_STEPS  # 3000 * 256 * 65536 ≈ 50B tokens
-phase3_checkpoint = tootsie_8b_giraffe_phase2.cd(f"checkpoints/step-{PHASE2_STEPS}").nonblocking()
+phase3_checkpoint = tootsie_8b_giraffe_phase2.cd(f"checkpoints/step-{PHASE2_STEPS}")
 phase3_train_config = _train_config(
     num_steps=PHASE3_STEPS,
     batch_size=256,
@@ -333,7 +349,6 @@ if __name__ == "__main__":
             *long_context_tokenized.values(),
             *finepdfs_edu_tokenized.values(),
             *reasoning_tokenized.values(),
-            *finepdfs_validation_tokenized.values(),
             tootsie_8b_giraffe_phase1,
             tootsie_8b_giraffe_phase2,
             tootsie_8b_giraffe_phase3,
