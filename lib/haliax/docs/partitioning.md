@@ -125,6 +125,7 @@ This is an older function that is being deprecated in favor of `shard`. It is fu
 
 ::: haliax.named_jit
 ::: haliax.fsdp
+::: haliax.shard_map
 
 
 ### Querying the Mesh and Axis Mapping

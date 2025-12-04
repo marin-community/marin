@@ -21,7 +21,7 @@ from contextvars import ContextVar
 from typing import Literal
 
 import humanfriendly
-from fray import create_context
+from fray import fray_job_ctx
 
 from zephyr.backends import Backend, BackendConfig
 
@@ -60,7 +60,7 @@ def create_backend(
         >>> backend = create_backend("ray", max_parallelism=10, max_retries=3)
     """
     memory_bytes = humanfriendly.parse_size(memory, binary=True) if memory else None
-    context = create_context(
+    context = fray_job_ctx(
         context_type=backend_type,
         max_workers=max_parallelism,
         memory=memory_bytes,
