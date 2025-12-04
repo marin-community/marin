@@ -1,8 +1,11 @@
 use pyo3::prelude::*;
 
 mod bloom;
+mod dedupe;
 mod hashing;
 mod marshaling;
+mod ops;
+mod pipeline;
 
 use bloom::Bloom;
 use hashing::HashAlgorithm;
@@ -11,6 +14,15 @@ use hashing::HashAlgorithm;
 fn dupekit(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Bloom>()?;
     m.add_class::<HashAlgorithm>()?;
+    m.add("DEFAULT_HASH_ALGORITHM", hashing::DEFAULT_HASH_ALGO)?;
+
+    // New Composable Pipeline
+    m.add_class::<pipeline::Transformation>()?;
+    m.add_function(wrap_pyfunction!(pipeline::transform, m)?)?;
+
+    // Stateful Deduplication Functions
+    m.add_function(wrap_pyfunction!(dedupe::mark_paragraph_duplicates, m)?)?;
+    m.add_function(wrap_pyfunction!(dedupe::mark_document_duplicates, m)?)?;
 
     // Hashing functions
     m.add_function(wrap_pyfunction!(hashing::hash_blake2, m)?)?;
