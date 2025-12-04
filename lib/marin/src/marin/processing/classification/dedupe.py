@@ -35,7 +35,7 @@ from marin.execution.executor import THIS_OUTPUT_PATH
 
 import draccus
 import fsspec
-from marin.utilities.logging_utils import log_time
+from marin.utilities.time_logger import log_time
 import msgspec
 from dupekit import Bloom
 
