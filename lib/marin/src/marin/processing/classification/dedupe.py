@@ -35,6 +35,7 @@ from marin.execution.executor import THIS_OUTPUT_PATH
 
 import draccus
 import fsspec
+from marin.utilities.time_logger import log_time
 import msgspec
 from dupekit import Bloom
 
@@ -423,9 +424,10 @@ def _run_deduplication(config: DedupeConfig):
     def mark_exact_dups(records: Iterator[dict]) -> Iterator[dict]:
         """Mark duplicate paragraphs in a single record using exact hash matching."""
 
-        dup_map = {}
-        for record in load_parquet(duplicate_key_shards[0]):
-            dup_map[record["hash"]] = record["canonical"]
+        with log_time("Load duplicate map"):
+            dup_map = {}
+            for record in load_parquet(duplicate_key_shards[0]):
+                dup_map[record["hash"]] = record["canonical"]
 
         logger.info(f"There are {len(dup_map)} duplicate paragraphs.")
 
@@ -520,13 +522,13 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
 
     def mark_exact_dups(records: Iterator[dict]) -> Iterator[dict]:
         """Mark exact duplicate documents using exact hash matching."""
-        dup_map = {}
-        num_duplicates = 0
-        for record in load_parquet(duplicate_key_shards[0]):
-            dup_map[record["hash"]] = record["canonical"]
-            num_duplicates += 1
 
-        logger.info(f"There are {num_duplicates} duplicate documents.")
+        with log_time("Load duplicate map"):
+            dup_map = {}
+            for record in load_parquet(duplicate_key_shards[0]):
+                dup_map[record["hash"]] = record["canonical"]
+
+        logger.info(f"There are {len(dup_map)} duplicate documents.")
 
         for record in records:
             record_id = _record_id(record)
