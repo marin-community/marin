@@ -20,7 +20,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Literal, NewType
@@ -46,14 +46,6 @@ TpuType = Literal[
     "v5litepod-64",
     "v5litepod-128",
     "v5litepod-256",
-    "v5e-1",
-    "v5e-4",
-    "v5e-8",
-    "v5e-16",
-    "v5e-32",
-    "v5e-64",
-    "v5e-128",
-    "v5e-256",
     "v5p-8",
     "v5p-16",
     "v5p-32",
@@ -188,13 +180,11 @@ class TpuConfig:
     """TPU device configuration.
 
     Args:
-        type: TPU accelerator type (e.g., "v5e-16", "v4-8")
-        count: Number of TPU chips to request
+        type: TPU accelerator type (e.g., "v5litepod-16", "v4-8")
         topology: Optional topology specification (e.g., "2x2x1")
     """
 
     type: TpuType
-    count: int
     topology: str | None = None
 
 
@@ -211,6 +201,7 @@ class ResourceConfig:
         disk: Disk space requirement (e.g., "10g", "100g")
         device: Device configuration (CPU, GPU, or TPU)
         replicas: Number of replicas (individual pods with these resources)
+        preemptible: Whether the job can be preempted
         regions: Preferred cloud regions for job placement
     """
 
@@ -219,6 +210,7 @@ class ResourceConfig:
     disk: str = "1g"
     device: DeviceConfig = field(default_factory=CpuConfig)
     replicas: int = 1
+    preemptible: bool = True
     regions: Sequence[str] | None = None
 
 
@@ -299,6 +291,10 @@ class JobRequest:
     entrypoint: Entrypoint
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     environment: EnvironmentConfig | None = None
+
+    def __post_init__(self):
+        if " " in self.name:
+            raise ValueError("Job name must not contain spaces")
 
 
 JobId = NewType("JobId", str)
@@ -387,17 +383,17 @@ class Cluster(ABC):
         ...
 
     @abstractmethod
-    def monitor(self, job_id: JobId) -> Iterator[str]:
-        """Stream logs from a running job.
+    def monitor(self, job_id: JobId) -> JobInfo:
+        """Stream logs from a running job, blocking until completion.
 
-        Yields log lines as they become available. Blocks until the job
+        Logs are emitted directly via the logger. Blocks until the job
         completes or is terminated.
 
         Args:
             job_id: Job identifier returned by launch()
 
-        Yields:
-            Log lines as they become available
+        Returns:
+            JobInfo with final job status
 
         Raises:
             KeyError: If job_id is not found
@@ -450,7 +446,6 @@ class Cluster(ABC):
 
     def wait(self, job_id: JobId) -> JobInfo:
         """Block until the specified job completes, returning its final status."""
-        # default implementation polls until job is no longer running
         logger.info(f"Starting wait for job {job_id}")
 
         while True:
@@ -458,4 +453,4 @@ class Cluster(ABC):
             if info.status in ["succeeded", "failed", "stopped"]:
                 logger.info(f"Job {job_id} completed with status {info.status}")
                 return info
-            time.sleep(1.0)
+            time.sleep(10.0)
