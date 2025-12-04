@@ -17,9 +17,10 @@
 This provides object storage and task management functions for use within a job.
 """
 
-from __future__ import annotations
-
 import inspect
+import logging
+import os
+import threading
 from collections.abc import Callable, Generator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
@@ -29,6 +30,8 @@ try:
     import ray
 except ImportError:
     ray = None
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionContext(Protocol):
@@ -84,6 +87,88 @@ class ExecutionContext(Protocol):
         """
         ...
 
+    def create_actor(
+        self,
+        actor_class: type,
+        *args,
+        name: str | None = None,
+        get_if_exists: bool = False,
+        lifetime: Literal["non_detached", "detached"] = "non_detached",
+        **kwargs,
+    ) -> Any:
+        """Create an actor (stateful service) within the execution context.
+
+        Args:
+            actor_class: The class to instantiate as an actor (not decorated)
+            *args: Positional arguments for actor __init__
+            name: Optional name for actor discovery/reuse across workers
+            get_if_exists: If True and named actor exists, return existing instance
+            lifetime: "job" (dies with context) or "detached" (survives job)
+            **kwargs: Keyword arguments for actor __init__
+
+        Returns:
+            Actor handle (type depends on context)
+        """
+        ...
+
+
+class ActorHandle:
+    """Base class for actor handles (used by ThreadContext and SyncContext).
+
+    Provides a unified interface for calling actor methods with .remote() and .call().
+    """
+
+    def __getattr__(self, method_name: str):
+        """Get a callable method wrapper for the actor."""
+        raise NotImplementedError
+
+
+class ActorMethod:
+    """Base class for actor method wrappers (used by ThreadContext and SyncContext).
+
+    Provides both async (.remote()) and sync (.call()) invocation patterns.
+    """
+
+    def remote(self, *args, **kwargs) -> Any:
+        """Call method asynchronously, returning a future compatible with ctx.get()."""
+        raise NotImplementedError
+
+
+class ThreadActorHandle(ActorHandle):
+    """Actor handle for ThreadContext - serializes all method calls with a lock."""
+
+    def __init__(self, instance: Any, lock: threading.Lock, context):
+        self._instance = instance
+        self._lock = lock  # Serializes all method calls
+        self._context = context
+
+    def __getattr__(self, method_name: str):
+        method = getattr(self._instance, method_name)
+        return ThreadActorMethod(method, self._lock, self._context)
+
+
+class ThreadActorMethod(ActorMethod):
+    """Method wrapper for ThreadContext actors - uses lock for thread safety."""
+
+    def __init__(self, method: Callable, lock: threading.Lock, context):
+        self._method = method
+        self._lock = lock
+        self._context = context
+
+    def remote(self, *args, **kwargs):
+        # Check if context has executor (ThreadContext) or not (SyncContext)
+        if hasattr(self._context, "executor"):
+
+            def locked_call():
+                with self._lock:
+                    return self._method(*args, **kwargs)
+
+            return self._context.executor.submit(locked_call)
+        else:
+            with self._lock:
+                result = self._method(*args, **kwargs)
+            return _ImmediateFuture(result)
+
 
 class _ImmediateFuture:
     """Wrapper for immediately available results to match Future interface."""
@@ -129,6 +214,10 @@ class GeneratorFuture:
 class SyncContext:
     """Execution context for synchronous (single-threaded) execution."""
 
+    def __init__(self):
+        self._actors: dict[str, Any] = {}
+        self._actor_locks: dict[str, threading.Lock] = {}
+
     def put(self, obj: Any) -> Any:
         """Identity operation - no serialization needed."""
         return obj
@@ -148,6 +237,33 @@ class SyncContext:
         """All futures are immediately ready."""
         return futures[:num_returns], futures[num_returns:]
 
+    def create_actor(
+        self,
+        actor_class: type,
+        *args,
+        name: str | None = None,
+        get_if_exists: bool = False,
+        lifetime: Literal["non_detached", "detached"] = "non_detached",
+        **kwargs,
+    ) -> ThreadActorHandle:
+        if lifetime == "detached":
+            raise ValueError("ThreadContext does not support detached lifetime")
+
+        if name is not None and name in self._actors:
+            if get_if_exists:
+                return ThreadActorHandle(self._actors[name], self._actor_locks[name], self)
+            else:
+                raise ValueError(f"Actor {name} already exists")
+
+        instance = actor_class(*args, **kwargs)
+        actor_lock = threading.Lock()
+
+        if name is not None:
+            self._actors[name] = instance
+            self._actor_locks[name] = actor_lock
+
+        return ThreadActorHandle(instance, actor_lock, self)
+
 
 class ThreadContext:
     """Execution context using ThreadPoolExecutor for parallel execution."""
@@ -159,6 +275,9 @@ class ThreadContext:
             max_workers: Maximum number of worker threads
         """
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._actors: dict[str, Any] = {}  # name -> instance
+        self._actor_locks: dict[str, threading.Lock] = {}  # per-actor locks
+        self._actors_lock = threading.Lock()  # protects _actors dict
 
     def put(self, obj: Any) -> Any:
         """Identity operation - in-process, no serialization needed."""
@@ -214,6 +333,35 @@ class ThreadContext:
         # Map back to wrapped futures
         return [raw_to_wrapped[f] for f in done_list], [raw_to_wrapped[f] for f in pending_list]
 
+    def create_actor(
+        self,
+        actor_class: type,
+        *args,
+        name: str | None = None,
+        get_if_exists: bool = False,
+        lifetime: Literal["non_detached", "detached"] = "non_detached",
+        **kwargs,
+    ) -> ThreadActorHandle:
+        """Create an actor (lock-protected singleton for thread safety)."""
+        with self._actors_lock:
+            if lifetime == "detached":
+                raise ValueError("ThreadContext does not support detached lifetime")
+
+            if name is not None and name in self._actors:
+                if get_if_exists:
+                    return ThreadActorHandle(self._actors[name], self._actor_locks[name], self)
+                else:
+                    raise ValueError(f"Actor {name} already exists")
+
+            instance = actor_class(*args, **kwargs)
+            actor_lock = threading.Lock()
+
+            if name is not None:
+                self._actors[name] = instance
+                self._actor_locks[name] = actor_lock
+
+            return ThreadActorHandle(instance, actor_lock, self)
+
 
 class RayContext:
     """Execution context using Ray for distributed execution."""
@@ -248,8 +396,31 @@ class RayContext:
 
     def wait(self, futures: list, num_returns: int = 1) -> tuple[list, list]:
         """Wait for Ray futures to complete."""
-        ready, pending = ray.wait(futures, num_returns=num_returns)
+        # NOTE: fetch_local=False is paramount to avoid copying the data to the Zephyr
+        # driver node, especially for the data futures.
+        ready, pending = ray.wait(futures, num_returns=num_returns, fetch_local=False)
         return list(ready), list(pending)
+
+    def create_actor(
+        self,
+        actor_class: type,
+        *args,
+        name: str | None = None,
+        get_if_exists: bool = False,
+        lifetime: Literal["non_detached", "detached"] = "non_detached",
+        **kwargs,
+    ):
+        """Create a Ray actor (returns native Ray actor handle)."""
+        options = {}
+        if name is not None:
+            options["name"] = name
+            options["get_if_exists"] = get_if_exists
+            options["lifetime"] = lifetime
+
+        remote_class = ray.remote(actor_class)
+        ray_actor = remote_class.options(**options).remote(*args, **kwargs)
+
+        return ray_actor
 
 
 @dataclass
@@ -273,22 +444,7 @@ class ContextConfig:
     ray_options: dict = field(default_factory=dict)
 
 
-def auto_detect_context_type() -> Literal["ray", "threadpool"]:
-    """Automatically detect the best available context type.
-
-    Returns:
-        "ray" if Ray is installed and initialized, "threadpool" otherwise
-    """
-    try:
-        if ray.is_initialized():
-            return "ray"
-    except ImportError:
-        pass
-
-    return "threadpool"
-
-
-def create_context(
+def fray_job_ctx(
     context_type: Literal["ray", "threadpool", "sync", "auto"] = "auto",
     max_workers: int = 1,
     memory: int | None = None,
@@ -315,23 +471,22 @@ def create_context(
         ValueError: If context_type is invalid
 
     Examples:
-        >>> context = create_context("sync")
-        >>> context = create_context("threadpool", max_workers=4)
-        >>> context = create_context("ray", memory=2*1024**3, num_cpus=2)
-        >>> context = create_context("auto")  # Auto-detect ray or threadpool
+        >>> context = fray_job_ctx("sync")
+        >>> context = fray_job_ctx("threadpool", max_workers=4)
+        >>> context = fray_job_ctx("ray", memory=2*1024**3, num_cpus=2)
+        >>> context = fray_job_ctx("auto")  # Auto-detect ray or threadpool
     """
     if context_type == "auto":
-        context_type = auto_detect_context_type()
+        if ray and ray.is_initialized():
+            context_type = "ray"
+        else:
+            context_type = "threadpool"
 
     if context_type == "sync":
         return SyncContext()
-
     elif context_type == "threadpool":
-        import os
-
         workers = min(max_workers, os.cpu_count() or 1)
         return ThreadContext(max_workers=workers)
-
     elif context_type == "ray":
         # Build ray_options dict from parameters
         options = {}
@@ -347,3 +502,22 @@ def create_context(
 
     else:
         raise ValueError(f"Unknown context type: {context_type}. Supported: 'ray', 'threadpool', 'sync'")
+
+
+class SimpleActor:
+    """Test actor for basic actor functionality.
+
+    Ray cannot import test modules so we define this here for reference.
+    """
+
+    def __init__(self, value: int):
+        self.value = value
+        self.call_count = 0
+
+    def increment(self, amount: int = 1) -> int:
+        self.call_count += 1
+        self.value += amount
+        return self.value
+
+    def get_value(self) -> int:
+        return self.value
