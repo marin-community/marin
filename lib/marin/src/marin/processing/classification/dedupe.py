@@ -429,12 +429,15 @@ def _run_deduplication(config: DedupeConfig):
             "canonical": head["doc_id"],
         }
 
+    backend = flow_backend(max_parallelism=config.processes)
     # first compute the full set of duplicate keys.
     duplicate_key_shards = list(
-        flow_backend(max_parallelism=config.processes).execute(
-            Dataset.from_list(input_files)
-            .flat_map(_load_batches)
-            .reshard(num_shards=config.processes)
+        backend.execute(
+            Dataset.from_list(input_files).flat_map(_load_batches)
+            # NOTE: when do we want to trigger reshard. Keep in mind that reshard will materialize the
+            #   text field!
+            # TODO: the resharding logic should be improved, based on size and/or max_parallelism
+            .reshard(num_shards=config.processes if len(input_files) > 3 and len(input_files) < 42 else None)
             .map(compute_paragraph_hashes)
             .flat_map(lambda batch: batch.to_pylist())
             .group_by(
@@ -471,7 +474,7 @@ def _run_deduplication(config: DedupeConfig):
             )
 
     # Use write_jsonl with callable output pattern
-    flow_backend().execute(
+    backend.execute(
         Dataset.from_list(input_files)
         .flat_map(_load_batches)
         .map_shard(mark_exact_dups_paragraphs)
@@ -524,12 +527,14 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
         }
 
     # first compute the full set of duplicate keys.
-    backend = flow_backend()
+    backend = flow_backend(max_parallelism=config.processes)
     duplicate_key_shards = list(
         backend.execute(
-            Dataset.from_list(input_files)
-            .flat_map(_load_batches)
-            .reshard(num_shards=config.processes)
+            Dataset.from_list(input_files).flat_map(_load_batches)
+            # NOTE: when do we want to trigger reshard. Keep in mind that reshard will materialize the
+            #   text field!
+            # TODO: the resharding logic should be improved, based on size and/or max_parallelism
+            .reshard(num_shards=config.processes if len(input_files) > 3 and len(input_files) < 42 else None)
             .map(compute_document_hashes)
             .flat_map(lambda batch: batch.to_pylist())
             .group_by(
