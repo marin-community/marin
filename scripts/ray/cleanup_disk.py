@@ -170,7 +170,7 @@ def list_cluster_workers(cluster_name: str, zone: str, project: str) -> list[str
     )
 
     all_tpus = result.stdout.strip().split("\n")
-    return all_tpus
+    return [name for name in all_tpus if name]
 
 
 def get_worker_disk_info(
