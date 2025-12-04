@@ -521,16 +521,14 @@ def _mk_shard_name_mapping(urls):
 
     missing_urls: List[str] = []
 
-    old_urls = urls
-    urls = [globbed for url in urls for globbed in expand_glob(url)]
+    def _expand_or_placeholder(url):
+        expanded = list(expand_glob(url))
+        return expanded if expanded else [url]
 
-    if old_urls and not urls:
-        raise ValueError(f"Could not expand any of the urls: {old_urls}")
+    urls = [globbed for url in urls for globbed in _expand_or_placeholder(url)]
 
     for url in urls:
-        if not fsspec_utils.exists(url):
-            missing_urls.append(url)
-            continue
+        exists = fsspec_utils.exists(url)
         # escape the url for the shard name
         shard_name = url
         if common_prefix:
@@ -543,10 +541,12 @@ def _mk_shard_name_mapping(urls):
             raise ValueError(f"Duplicate shard name {shard_name}")
         _shard_name_to_url_mapping[shard_name] = url
 
+        if not exists:
+            missing_urls.append(url)
+
     if missing_urls:
-        # format nicely
         missing_urls_str = "\n  - ".join(missing_urls)
-        raise FileNotFoundError(f"Could not find the following urls:\n  - {missing_urls_str}")
+        warnings.warn("Some shard URLs do not exist yet; they will fail when accessed:\n  - " + missing_urls_str)
 
     return _shard_name_to_url_mapping
 
