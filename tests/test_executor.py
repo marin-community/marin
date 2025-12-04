@@ -19,11 +19,10 @@ import re
 import tempfile
 import time
 from dataclasses import asdict, dataclass
+from threading import Thread
 
 import pytest
-import ray
 from draccus.utils import Dataclass
-
 from marin.execution import THIS_OUTPUT_PATH
 from marin.execution.executor import (
     Executor,
@@ -37,16 +36,8 @@ from marin.execution.executor import (
 )
 from marin.execution.executor_step_status import (
     STATUS_SUCCESS,
-    get_current_status,
-    get_status_path,
-    read_events,
+    StatusFile,
 )
-
-
-# Re-use the shared Ray TPU cluster for tests
-@pytest.fixture(scope="module", autouse=True)
-def ray_start(ray_tpu_cluster):
-    yield
 
 
 @dataclass(frozen=True)
@@ -140,9 +131,8 @@ def test_executor():
                 check_info(step_info, step)
 
         for step in executor.steps:
-            status_path = get_status_path(executor.output_paths[step])
-            events = read_events(status_path)
-            assert get_current_status(events) == STATUS_SUCCESS
+            status_file = StatusFile(executor.output_paths[step], worker_id="check")
+            assert status_file.status == STATUS_SUCCESS
             info_path = _get_info_path(executor.output_paths[step])
             with open(info_path) as f:
                 step_info = json.load(f)
@@ -224,10 +214,6 @@ def test_force_run_failed():
     cleanup_log(log)
 
 
-@pytest.mark.skipif(
-    lambda: int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "0")) > 1,
-    reason="Ray can't handle multiple clusters.",
-)
 def test_status_actor_one_executor_waiting_for_another():
     # Test when 2 experiments have a step in common and one waits for another to finish
     with tempfile.NamedTemporaryFile() as file:
@@ -251,27 +237,23 @@ def test_status_actor_one_executor_waiting_for_another():
         a = ExecutorStep(name="a", fn=fn, config=Config(versioned(1), file.name, 2, ""))
         b = ExecutorStep(name="b", fn=fn, config=Config(versioned(2), file.name, 0, output_path_of(a)))
 
-        @ray.remote
-        def run_fn(executor, steps):
-            executor.run(steps=steps)
-
         with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
             executor1 = create_executor(temp_dir)
             executor2 = create_executor(temp_dir)
 
-            run1 = run_fn.remote(executor1, [a])
-            run2 = run_fn.remote(executor2, [a, b])
+            run1 = Thread(target=executor1.run, args=([a],))
+            run2 = Thread(target=executor2.run, args=([a, b],))
 
-            ray.get([run1, run2])
+            run1.start()
+            run2.start()
+
+            run1.join()
+            run2.join()
 
             with open(file.name, "r") as f:
                 assert int(f.read()) == 3
 
 
-@pytest.mark.skipif(
-    lambda: int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "0")) > 1,
-    reason="Ray can't handle multiple clusters.",
-)
 def test_status_actor_multiple_steps_race_condition():
     # Test when there are many steps trying to run simultaneously.
     # Open a temp dir, make a step that write a random file in that temp dir. Make 10 of these steps and run them
@@ -288,19 +270,18 @@ def test_status_actor_multiple_steps_race_condition():
             with open(os.path.join(config.path, random_str), "w") as f:
                 f.write("1")
 
-        @ray.remote
-        def run_fn(executor, steps):
-            executor.run(steps=steps)
-
         with tempfile.TemporaryDirectory(prefix="executor-") as temp_dir:
             executor_refs = []
             for _ in range(10):
                 executor = create_executor(temp_dir)
-                executor_refs.append(
-                    run_fn.remote(executor, [ExecutorStep(name="step", fn=fn, config=Config(output_path))])
+                thread = Thread(
+                    target=executor.run, args=([ExecutorStep(name="step", fn=fn, config=Config(output_path))],)
                 )
+                thread.start()
+                executor_refs.append(thread)
 
-            ray.get(executor_refs)
+            for executor_ref in executor_refs:
+                executor_ref.join()
 
             files = os.listdir(output_path)
             print(files)

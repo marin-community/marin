@@ -35,7 +35,7 @@ Example:
 import logging
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import click
@@ -48,14 +48,18 @@ logger = logging.getLogger(__name__)
 
 
 def create_thunk_entrypoint(
-    callable_fn: Callable[..., Any], prefix: str, function_args: dict[str, Any] | None = None
+    callable_fn: Callable[..., Any],
+    prefix: str,
+    args: Sequence[Any] = (),
+    kwargs: dict[str, Any] | None = None,
 ) -> Entrypoint:
     """Serialize a callable and its arguments to a temporary file and return an Entrypoint.
 
     Args:
         callable_fn: Callable to serialize
         prefix: File prefix for the pickled callable
-        function_args: Keyword arguments to pass to callable
+        args: Positional arguments to pass to callable
+        kwargs: Keyword arguments to pass to callable
 
     Returns:
         Entrypoint configured to execute the callable via fray.fn_thunk
@@ -64,10 +68,10 @@ def create_thunk_entrypoint(
         raise ValueError("prefix must not contain spaces")
 
     with tempfile.NamedTemporaryFile(mode="wb", suffix=".pkl", prefix=prefix + "_", delete=False) as f:
-        cloudpickle.dump((callable_fn, function_args), f, protocol=cloudpickle.DEFAULT_PROTOCOL)
+        cloudpickle.dump((callable_fn, args, kwargs or {}), f, protocol=cloudpickle.DEFAULT_PROTOCOL)
         pickle_path = f.name
 
-    return Entrypoint(binary="python", args=["-m", "fray.fn_thunk", pickle_path])
+    return Entrypoint.from_binary("python", ["-m", "fray.fn_thunk", pickle_path])
 
 
 @click.command()
@@ -85,22 +89,23 @@ def main(path: str):
         logger.info("Loading callable from %s", path)
         with fsspec.open(path, "rb") as f:
             payload = cloudpickle.load(f)
-            if isinstance(payload, tuple):
-                callable_fn, function_args = payload
+            if isinstance(payload, tuple) and len(payload) == 3:
+                callable_fn, args, kwargs = payload
+            elif isinstance(payload, tuple) and len(payload) == 2:
+                # Legacy format: (callable, function_args_dict)
+                callable_fn, kwargs = payload
+                args = ()
             else:
                 callable_fn = payload
-                function_args = None
+                args = ()
+                kwargs = {}
     except Exception as e:
         logger.error("Failed to load callable from %s: %s", path, e)
         raise
 
     try:
-        logger.info("Calling user entrypoint %s", callable_fn)
-        logger.info("About to execute callable_fn()")
-        if function_args:
-            result = callable_fn(**function_args)
-        else:
-            result = callable_fn()
+        logger.info("Calling user entrypoint %s with args=%s, kwargs=%s", callable_fn, args, kwargs)
+        result = callable_fn(*args, **(kwargs or {}))
         logger.info("Callable executed successfully. Result: %s", result)
         return 0
     except Exception as e:

@@ -26,7 +26,6 @@ import logging
 import os
 from dataclasses import dataclass
 
-import draccus
 import fsspec
 import requests
 from marin.download.nemotron_cc.utils import decompress_zstd_stream
@@ -90,7 +89,6 @@ class NemotronIngressConfig:
     chunk_size: int = 1048576
 
 
-@draccus.wrap()
 def download_nemotron_cc(cfg: NemotronIngressConfig):
     paths_file_path = os.path.join(cfg.output_path, "data-jsonl.paths")
     logger.info(f"Downloading Nemotron CC path file {paths_file_path}")

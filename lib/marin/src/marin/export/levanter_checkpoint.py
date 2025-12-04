@@ -18,10 +18,15 @@ from dataclasses import dataclass
 from typing import Any
 
 import levanter.infra.cli_helpers
-import ray
-from fray.cluster import CpuConfig, ResourceConfig, TpuConfig
-from fray.cluster.ray import as_remote_kwargs
-from fray.cluster.ray.tpu import run_on_pod
+from fray.cluster import (
+    CpuConfig,
+    Entrypoint,
+    EnvironmentConfig,
+    JobRequest,
+    ResourceConfig,
+    TpuConfig,
+    current_cluster,
+)
 from levanter.checkpoint import discover_latest_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.main import export_lm_to_hf
@@ -37,6 +42,7 @@ from marin.execution.executor import (
     this_output_path,
 )
 from marin.training.training import _add_default_env_variables, _add_run_env_variables
+from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
@@ -96,20 +102,26 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
     )
     env = _add_run_env_variables(env)
 
-    @ray.remote(**as_remote_kwargs(config.resources, env_vars=env), max_calls=1)
     def convert_task():
         export_lm_to_hf.main(convert_config)
 
+    def _run_with_lockfile():
+        with remove_tpu_lockfile_on_exit():
+            convert_task()
+
     if isinstance(config.resources.device, TpuConfig):
         assert config.resources.replicas == 1, "Export currently works on single slices at present."
-        return run_on_pod(
-            convert_task,
-            config.resources.device.type,
-            num_slices=1,
-            max_retries_failure=10,
-        )
 
-    return ray.get(convert_task.remote())
+    job_request = JobRequest(
+        name="convert-checkpoint-to-hf",
+        entrypoint=Entrypoint.from_callable(_run_with_lockfile),
+        resources=config.resources,
+        environment=EnvironmentConfig.create(env_vars=env),
+    )
+
+    cluster = current_cluster()
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)
 
 
 def convert_checkpoint_to_hf_step(
