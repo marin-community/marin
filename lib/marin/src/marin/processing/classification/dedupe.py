@@ -30,6 +30,7 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum, auto
+import typing
 
 from marin.execution.executor import THIS_OUTPUT_PATH
 
@@ -39,14 +40,15 @@ import draccus
 import fsspec
 from marin.utilities.time_logger import log_time
 import msgspec
-from dupekit import Bloom, Transformation
-import dupekit
 
 from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import Dataset, flow_backend, load_parquet
 from zephyr.readers import load_file, open_file, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
+
+if typing.TYPE_CHECKING:
+    from dupekit import Bloom
 
 
 def _bloom_hash(x: str) -> int:
@@ -210,6 +212,7 @@ def build_filter(
     Returns:
         Path to saved bloom filter
     """
+    from dupekit import Bloom
 
     def build_shard_bloom(records: Iterator[dict]) -> Iterator[bytes]:
         """Build bloom filter from a shard of records and yield serialized bytes."""
@@ -259,7 +262,7 @@ def build_filter(
     return merged_bloom[0]
 
 
-def calculate_paragraph_overlap(paragraph: str, bloom_filter: Bloom, ngram_config: NGramConfig | None) -> float:
+def calculate_paragraph_overlap(paragraph: str, bloom_filter: "Bloom", ngram_config: NGramConfig | None) -> float:
     """
     Calculate overlap score for a paragraph against a bloom filter.
 
@@ -325,6 +328,8 @@ def mark_duplicates_bloom(
     Returns:
         List of output file paths
     """
+    from dupekit import Bloom
+
     # Determine base path for rebasing
     base_path = input_path[0] if isinstance(input_path, list) else input_path
     all_files = collect_input_files(input_path)
@@ -398,6 +403,9 @@ def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kw
 
 
 def _run_deduplication(config: DedupeConfig):
+    import dupekit
+    from dupekit import Transformation
+
     input_files = collect_input_files(config.input_path)
 
     def compute_paragraph_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -490,6 +498,9 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
     Exact document deduplication: identify duplicate documents based on full text hash.
     This is a temporary implementation, primarily to compare directly with the Ai2 duplodocus.
     """
+    import dupekit
+    from dupekit import Transformation
+
     input_files = collect_input_files(config.input_path)
 
     def compute_document_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
