@@ -32,7 +32,6 @@ import os
 import re
 from dataclasses import dataclass
 
-import draccus
 import fsspec
 import requests
 import warcio
@@ -183,8 +182,6 @@ def process_file(task: FileTask) -> None:
         raise
 
 
-# TODO: add executor step for this in the experiments
-@draccus.wrap()
 def extract_dclm_hq_dump(cfg: DCLMHQDownloadConfig) -> None:
     """Process the DCLM HQ dump in the input path and save the results to the output path.
 

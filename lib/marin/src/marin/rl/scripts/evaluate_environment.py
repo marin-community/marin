@@ -33,7 +33,6 @@ from fray.cluster import (
     Entrypoint,
     JobRequest,
     ResourceConfig,
-    TpuConfig,
     create_environment,
     current_cluster,
 )
@@ -250,11 +249,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     if config.tpu_type is None:
         resources = ResourceConfig(device=CpuConfig(), replicas=1)
     else:
-        resources = ResourceConfig(
-            device=TpuConfig(type=config.tpu_type),
-            replicas=1,
-            preemptible=True,
-        )
+        resources = ResourceConfig.with_tpu(config.tpu_type)
 
     job_request = JobRequest(
         name=f"evaluate-{config.env_config.env_class}",

@@ -246,9 +246,6 @@ class SyncContext:
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         **kwargs,
     ) -> ThreadActorHandle:
-        if lifetime == "detached":
-            raise ValueError("ThreadContext does not support detached lifetime")
-
         if name is not None and name in self._actors:
             if get_if_exists:
                 return ThreadActorHandle(self._actors[name], self._actor_locks[name], self)
@@ -342,11 +339,7 @@ class ThreadContext:
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         **kwargs,
     ) -> ThreadActorHandle:
-        """Create an actor (lock-protected singleton for thread safety)."""
         with self._actors_lock:
-            if lifetime == "detached":
-                raise ValueError("ThreadContext does not support detached lifetime")
-
             if name is not None and name in self._actors:
                 if get_if_exists:
                     return ThreadActorHandle(self._actors[name], self._actor_locks[name], self)
@@ -410,12 +403,13 @@ class RayContext:
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         **kwargs,
     ):
-        """Create a Ray actor (returns native Ray actor handle)."""
         options = {}
         if name is not None:
             options["name"] = name
-            options["get_if_exists"] = get_if_exists
-            options["lifetime"] = lifetime
+        options["get_if_exists"] = get_if_exists
+        options["lifetime"] = lifetime
+        # always run Ray actors on the head node for persistence
+        options["resources"] = {"head_node": 0.0001}
 
         remote_class = ray.remote(actor_class)
         ray_actor = remote_class.options(**options).remote(*args, **kwargs)

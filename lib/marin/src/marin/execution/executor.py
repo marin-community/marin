@@ -99,21 +99,28 @@ import subprocess
 import time
 import traceback
 import urllib.parse
-from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
 import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
-import ray
-import ray.remote_function
-from fray.cluster.ray.deps import build_runtime_env_for_packages
-from ray.util import state  # noqa
+from fray import (
+    Cluster,
+    Entrypoint,
+    EnvironmentConfig,
+    ExecutionContext,
+    JobId,
+    JobInfo,
+    JobRequest,
+    JobStatus,
+    ResourceConfig,
+    current_cluster,
+    fray_job_ctx,
+)
 
 from marin.execution.executor_step_status import (
     STATUS_CANCELLED,
@@ -129,14 +136,19 @@ from marin.execution.executor_step_status import (
 )
 from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
 from marin.utilities.json_encoder import CustomJsonEncoder
-from marin.utilities.ray_utils import is_local_ray_cluster, schedule_on_head_node_strategy
 
 logger = logging.getLogger("ray")
 
 ConfigT = TypeVar("ConfigT", covariant=True, bound=dataclass)
 T_co = TypeVar("T_co", covariant=True)
 
-ExecutorFunction = Callable | ray.remote_function.RemoteFunction | None
+ExecutorFunction = Callable | None
+
+
+def task_id() -> str:
+    import threading
+
+    return f"{os.uname()[1]}-{threading.get_ident()}"
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
@@ -168,7 +180,7 @@ class ExecutorStep(Generic[ConfigT]):
     An `ExecutorStep` represents a single step of a larger pipeline (e.g.,
     transforming HTML to text).  It is specified by:
      - a name (str), which is used to determine the `output_path`.
-     - a function `fn` (Ray remote), and
+     - a function `fn` (Callable), and
      - a configuration `config` which gets passed into `fn`.
      - a pip dependencies list (Optional[list[str]]) which are the pip dependencies required for the step.
      These can be keys of project.optional-dependencies in the project's pyproject.toml file or any other pip package.
@@ -404,7 +416,7 @@ class ExecutorInfo:
     """Contains information about an execution."""
 
     # Metadata related to the launch
-    ray_job_id: str
+    job_id: str
     git_commit: str | None
     caller_path: str
     created_date: str
@@ -570,6 +582,8 @@ class Executor:
         executor_info_base_path: str,
         description: str | None = None,
     ):
+        self.cluster = current_cluster()
+        self.job_ctx = fray_job_ctx()
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
@@ -584,22 +598,16 @@ class Executor:
         self.version_str_to_step: dict[str, ExecutorStep] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
-        self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
+        self.refs: dict[ExecutorStep, JobId] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
-        if not is_local_ray_cluster():
-            strategy = schedule_on_head_node_strategy()
-        else:
-            strategy = None
 
-        self.status_actor: StatusActor = StatusActor.options(
+        self.status_actor: StatusActor = self.job_ctx.create_actor(
+            StatusActor,
             name="status_actor",
             get_if_exists=True,
             lifetime="detached",
-            # This is to ensure that the status actor is only schduled on the headnode
-            scheduling_strategy=strategy,
-        ).remote()
-        # TODO: Add a design docstring of how status_actor works
+        )
 
     def run(
         self,
@@ -645,7 +653,8 @@ class Executor:
         self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
 
         logger.info("### Waiting for all steps to finish ###")
-        ray.get(list(self.refs.values()))
+        for job_id in self.refs.values():
+            self.cluster.wait(job_id)
 
     def _run_steps(
         self,
@@ -663,26 +672,36 @@ class Executor:
                 dependents[dep].append(step)
 
         ready = [step for step, deps in remaining_deps.items() if not deps]
-        running: dict[ExecutorStep, tuple[ray.ObjectRef, bool]] = {}
+        running: dict[ExecutorStep, tuple[JobId, bool]] = {}
 
         while ready or running:
             while ready:
                 step = ready.pop()
-                ref, ran = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
-                self.refs[step] = ref
-                running[step] = (ref, ran)
+                job_id, ran = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
+                self.refs[step] = job_id
+                running[step] = (job_id, ran)
 
             if not running:
                 break
 
-            done_refs = self._filter_unique_waitables(running)
-            for ref in done_refs:
-                finished_step = next(step for step, r in running.items() if r[0] == ref)
+            finished_jobs = []
+            for step, (job_id, real_run) in running.items():
+                if not real_run:
+                    finished_jobs.append((step, job_id))
+                else:
+                    if JobStatus.finished(self.cluster.poll(job_id).status):
+                        finished_jobs.append((step, job_id))
+
+            if not finished_jobs:
+                # No jobs finished, sleep for a bit
+                time.sleep(1)
+
+            for finished_step, job_id in finished_jobs:
                 status_path = get_status_path(self.output_paths[finished_step])
                 ran = running[finished_step][1]
                 try:
-                    logger.info("Waiting for %s to finish for step %s", ref, finished_step.name)
-                    ray.get(ref)
+                    logger.info("Waiting for %s to finish for step %s", job_id, finished_step.name)
+                    self.cluster.wait(job_id)
                 except Exception:
                     message = traceback.format_exc()
                     append_status(status_path, STATUS_FAILED, message=message)
@@ -697,18 +716,7 @@ class Executor:
                     if not remaining_deps[child]:
                         ready.append(child)
 
-    def _filter_unique_waitables(self, running):
-        # Ray now requires the waitables be unique, so we filter them out.
-        unique_refs = set()
-        out = []
-        for ref, _ in running.values():
-            if ref not in unique_refs:
-                unique_refs.add(ref)
-                out.append(ref)
-        done_refs, _ = ray.wait(out, num_returns=1)
-        return done_refs
-
-    def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> tuple[ray.ObjectRef, bool]:
+    def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> tuple[JobId, bool]:
         config = self.configs[step]
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
@@ -722,47 +730,48 @@ class Executor:
         if not dry_run:
             step_name = f"{step.name}: {get_fn_name(step.fn)}"
 
-            ray_task_id = ray.get_runtime_context().get_task_id()
-            should_execute = should_run(output_path, step_name, self.status_actor, ray_task_id, force_run_failed)
+            should_execute = should_run(
+                cluster=self.cluster,
+                ctx=self.job_ctx,
+                output_path=output_path,
+                step_name=step_name,
+                status_actor=self.status_actor,
+                task_id=task_id(),
+                force_run_failed=force_run_failed,
+            )
             status_path = get_status_path(output_path)
             if not should_execute:
                 append_status(
                     status_path,
                     STATUS_SUCCESS,
-                    ray_task_id=ray_task_id,
+                    task_id=task_id(),
                     message="Step was already successful",
                 )
-                return self._dry_run_result, False
+                return JobId("fake-job"), False
 
-            append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
+            append_status(status_path, STATUS_RUNNING, task_id=task_id())
 
-            # Skip runtime_env for local clusters since packages are already available
-            if is_local_ray_cluster():
-                runtime_env = {"env_vars": {"MARIN_PREFIX": self.prefix}}
-            else:
-                runtime_env = build_runtime_env_for_packages(extra=step.pip_dependency_groups)
-                # Inject the marin prefix into the runtime environment for each step.
-                runtime_env["env_vars"] = runtime_env.get("env_vars", {}) | {"MARIN_PREFIX": self.prefix}
+            # need this hack for now to make ray remote functions work
+            import ray
 
-            # uv doesn't reuse dependencies and ends up installing CUDA-enabled
-            # torch, which is huge and causes OOMs, so disable it for now.
-            # if os.system("which uv >/dev/null 2>&1") == 0:
-            #     runtime_env["py_executable"] = "uv run --active"
-
+            step_fn = step.fn
             if isinstance(step.fn, ray.remote_function.RemoteFunction):
-                ref = step.fn.options(
-                    name=f"{get_fn_name(step.fn, short=True)}:{step.name}", runtime_env=runtime_env
-                ).remote(config)
-            else:
-                remote_fn = ray.remote(step.fn)
-                ref = remote_fn.options(
-                    name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
-                    runtime_env=runtime_env,
-                ).remote(config)
 
-            return ref, True
+                def _call_remote(*args, **kw):
+                    return ray.get(step.fn.remote(*args, **kw))
 
-        return self._dry_run_result, False
+                step_fn = _call_remote
+
+            fray_job = JobRequest(
+                name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
+                entrypoint=Entrypoint(callable=step_fn, function_args=(config,)),
+                resources=ResourceConfig.with_cpu(),
+                environment=EnvironmentConfig.create(),
+            )
+            job_id = self.cluster.launch(fray_job)
+            return job_id, True
+
+        return JobId("fake-job"), False
 
     def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
         """
@@ -922,7 +931,7 @@ class Executor:
             caller_path=path,
             created_date=datetime.now().isoformat(),
             user=get_user(),
-            ray_job_id=ray.get_runtime_context().get_job_id(),
+            job_id=task_id(),
             prefix=self.prefix,
             description=self.description,
             steps=self.step_infos,
@@ -976,46 +985,38 @@ class Executor:
         with fsspec.open(self.executor_info_path, "w") as f:
             print(json.dumps(executor_info_dict, indent=2, cls=CustomJsonEncoder), file=f)
 
-    # caching saves ~10% off some tests
-    @cached_property
-    def _dry_run_result(self):
-        return ray.put(None)
 
+def _get_task_status(cluster: Cluster, current_owner_task_id: str | None) -> str | None:
+    """Get the status of a Executor task."""
 
-def _get_ray_status(current_owner_task_id: str | None) -> str | None:
-    """Get the status of a Ray task."""
+    if current_owner_task_id is None:
+        return None
 
     current_owner_ray_status = None
-    if current_owner_task_id is None:
-        return current_owner_ray_status
+    cluster_ctx = current_cluster()
+    current_owner: JobInfo = cluster_ctx.poll(current_owner_task_id)
 
-    try:
-        current_owner = ray.util.state.get_task(current_owner_task_id)
-        if type(current_owner) is list:  # Due to retries in ray, task_state can be a list of states
-            current_owner = current_owner[-1]
-    except ray.util.state.exception.RayStateApiException:
-        current_owner = None
-
-    if current_owner is None:  # We need to retry. Ray still does not have the status of the task
+    if current_owner is None:  # We need to retry, task might be lost
         current_owner_ray_status = STATUS_UNKNOWN
-    elif current_owner.state == "FINISHED":
+    elif current_owner.status == "succeeded":
         current_owner_ray_status = STATUS_SUCCESS
-    elif current_owner.state == "FAILED":
+    elif current_owner.status == "failed" or current_owner.status == "stopped":
         current_owner_ray_status = STATUS_FAILED
-    else:  # We give status as Running to task that are even waiting for dependencies
+    else:  # pending or running
         current_owner_ray_status = STATUS_RUNNING
 
     return current_owner_ray_status
 
 
-def get_status(output_path: str, current_owner_task_id: str | None, states: dict) -> str | None:
-    """Get the status of an output Path. This retruns the status of the output path
-    there is no status anywhere (i.e. brand-new step) -> return None
-    a task is currently running a step -> return WAITING
-    no task is currently running it, but there is a status on disk -> return disk status
+def get_status(cluster: Cluster, output_path: str, current_owner_task_id: str | None, states: dict) -> str | None:
+    """Get the status of an output Path. This returns the status of the output path
+
+    * there is no status anywhere (i.e. brand-new step) -> return None
+    * a task is currently running a step -> return WAITING
+    * no task is currently running it, but there is a status on disk -> return disk status
     """
 
-    current_owner_ray_status = _get_ray_status(current_owner_task_id)
+    current_owner_ray_status = _get_task_status(cluster, current_owner_task_id)
 
     num_unknown = states.get("num_unknown", 0)  # Number of times the status was unknown
     # We check how many times has times ray has returned status Unknown in a row. If it returns more than 20 times,
@@ -1048,7 +1049,13 @@ def get_status(output_path: str, current_owner_task_id: str | None, states: dict
 
 
 def should_run(
-    output_path: str, step_name: str, status_actor: StatusActor, ray_task_id: str, force_run_failed: bool = False
+    cluster: Cluster,
+    ctx: ExecutionContext,
+    output_path: str,
+    step_name: str,
+    status_actor: StatusActor,
+    task_id: str,
+    force_run_failed: bool = False,
 ):
     """Check if the step should run or not based on the status of the step."""
     """Logic for should run:
@@ -1061,10 +1068,10 @@ def should_run(
     log_once = True
     get_status_states = {}  # States used by get_status, since get_status is stateless we keep them here
     while True:
-        current_owner_task_id = ray.get(status_actor.get_task_id_with_lock.remote(output_path=output_path))
+        current_owner_task_id = ctx.get(status_actor.get_task_id_with_lock.remote(output_path=output_path))
 
         # get_status also updates get_status_states via internal mutation
-        status = get_status(output_path, current_owner_task_id, get_status_states)
+        status = get_status(cluster, output_path, current_owner_task_id, get_status_states)
 
         if log_once:
             logger.info(f"Status {step_name} : {status}.")
@@ -1076,7 +1083,7 @@ def should_run(
 
         # If the current owner is finished or is None, try to become the owner.
         # If we can't become the owner, then loop again
-        if ray.get(status_actor.get_lock_by_replacing_task_id.remote(output_path, ray_task_id, current_owner_task_id)):
+        if ctx.get(status_actor.get_lock_by_replacing_task_id.remote(output_path, task_id, current_owner_task_id)):
             break
 
     if status is None:
@@ -1095,20 +1102,18 @@ def should_run(
         return False
 
 
-def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):
+def get_fn_name(fn: ExecutorFunction, short: bool = False):
     """Just for debugging: get the name of the function."""
     if fn is None:
         return "None"
+    import ray
+
     if isinstance(fn, ray.remote_function.RemoteFunction):
-        if short:
-            return f"{fn._function.__name__}"
-        else:
-            return f"{fn._function.__module__}.{fn._function.__qualname__}"
+        return fn._function.__name__
+    if short:
+        return f"{fn.__name__}"
     else:
-        if short:
-            return f"{fn.__name__}"
-        else:
-            return f"{fn.__module__}.{fn.__qualname__}"
+        return str(fn)
 
 
 def get_git_commit() -> str | None:
@@ -1145,53 +1150,10 @@ class ExecutorMainConfig:
     """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
 
 
-def _setup_logging():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-
-def _detect_local_resources() -> dict[str, float]:
-
-    from fray.cluster.ray.resources import jax_device_kind_to_ray_accel_type
-
-    resources: dict[str, float] = {"head_node": 1.0}
-    try:
-        import jax
-
-        # Group devices by their device_kind
-        devices_by_kind: defaultdict[str, list] = defaultdict(list)
-        for d in jax.devices():
-            if d.platform != "cpu":
-                devices_by_kind[d.device_kind].append(d)
-
-        for device_kind, devices in devices_by_kind.items():
-            accel_type = jax_device_kind_to_ray_accel_type(device_kind)
-            if accel_type:
-                logger.info(f"Auto-detected {len(devices)} device(s): '{device_kind}' -> accelerator_type:{accel_type}")
-                resources[f"accelerator_type:{accel_type}"] = len(devices)
-            else:
-                logger.warning(f"Could not map '{device_kind}' to a known Ray accelerator type.")
-
-    except ImportError:
-        logger.warning("jax is not installed. Accelerator detection skipped.")
-    return resources
-
-
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-    time_in = time.time()
-
-    ray.init(
-        namespace="marin",
-        ignore_reinit_error=True,
-        resources=_detect_local_resources() if is_local_ray_cluster() else None,
-        runtime_env={"worker_process_setup_hook": _setup_logging},
-    )  # We need to init ray here to make sure we have the correct namespace for actors
-    # (status_actor in particular)
-    time_out = time.time()
-    logger.info(f"Ray init took {time_out - time_in:.2f}s")
     time_in = time.time()
 
     prefix = config.prefix

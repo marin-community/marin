@@ -23,7 +23,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Literal, NewType
+from enum import StrEnum
+from typing import Any, Literal, NewType, Self
 
 logger = logging.getLogger(__name__)
 
@@ -395,6 +396,10 @@ class EnvironmentConfig:
         if not self.workspace and not self.docker_image:
             raise ValueError("Must specify either workspace or docker_image")
 
+    @staticmethod
+    def create(*args, **kw):
+        return create_environment(*args, **kw)
+
 
 @dataclass(frozen=True)
 class Entrypoint:
@@ -415,7 +420,7 @@ class Entrypoint:
     binary: str | None = None
     args: Sequence[str] = field(default_factory=list)
     callable: Callable[..., Any] | None = None
-    function_args: dict[str, Any] | None = None
+    function_args: Sequence[Any] | None = None
 
     def __post_init__(self):
         if self.binary is None and self.callable is None:
@@ -426,8 +431,8 @@ class Entrypoint:
             raise ValueError("args only valid with binary, not callable")
         if self.function_args is not None and self.callable is None:
             raise ValueError("function_args only valid with callable, not binary")
-        if self.function_args is not None and not isinstance(self.function_args, dict):
-            raise ValueError("function_args must be a dictionary")
+        if self.function_args is not None and not isinstance(self.function_args, Sequence):
+            raise ValueError("function_args must be a sequence")
 
 
 @dataclass
@@ -454,16 +459,28 @@ class JobRequest:
 JobId = NewType("JobId", str)
 
 
+class JobStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    STOPPED = "stopped"
+
+    @staticmethod
+    def finished(status: Self) -> bool:
+        return status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED)
+
+
 @dataclass
 class TaskStatus:
-    status: Literal["pending", "running", "succeeded", "failed", "stopped"]
+    status: JobStatus
     error_message: str | None = None
 
 
 @dataclass
 class JobInfo:
     job_id: JobId
-    status: Literal["pending", "running", "succeeded", "failed", "stopped"]
+    status: JobStatus
     tasks: list[TaskStatus]
     name: str
     error_message: str | None = None

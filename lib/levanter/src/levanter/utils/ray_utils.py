@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import dataclasses
 import logging
 import logging as pylogging
 import sys
@@ -11,7 +10,6 @@ from typing import Optional
 
 import ray
 import tblib
-from ray.runtime_env import RuntimeEnv
 
 
 @dataclass
@@ -31,61 +29,6 @@ class ExceptionInfo:
             raise self.ex.with_traceback(self.tb.as_traceback())
         else:
             raise Exception("Process failed with no exception").with_traceback(self.tb.as_traceback())
-
-
-@dataclass
-class RayResources:
-    """
-    A dataclass that represents the resources for a ray task or actor. It's main use is to be
-    fed to ray.remote() to specify the resources for a task.
-    """
-
-    num_cpus: int = 1
-    num_gpus: int = 0
-    resources: dict = dataclasses.field(default_factory=dict)
-    runtime_env: RuntimeEnv = dataclasses.field(default_factory=RuntimeEnv)
-    accelerator_type: Optional[str] = None
-
-    def to_kwargs(self):
-        """
-        Returns a dictionary of kwargs that can be passed to ray.remote() to specify the resources for a task.
-        """
-        out = dict(
-            num_cpus=self.num_cpus, num_gpus=self.num_gpus, resources=self.resources, runtime_env=self.runtime_env
-        )
-
-        if self.accelerator_type is not None:
-            out["accelerator_type"] = self.accelerator_type
-
-        return out
-
-    def to_resource_dict(self):
-        """
-        Returns a dictionary of resources that describe the resources.
-
-        Note that Ray for some reason doesn't like passing resources={"GPU": 1} to a remote so you can't use this
-        for that purpose. Instead, use @ray.remote(**ray_resources.to_kwargs())
-        """
-        out = dict(CPU=self.num_cpus, GPU=self.num_gpus, **self.resources)
-        # https://docs.ray.io/en/latest/ray-core/scheduling/accelerators.html#accelerator-types
-        if self.accelerator_type is not None:
-            out[f"accelerator_type:{self.accelerator_type}"] = 0.001
-        return out
-
-    @staticmethod
-    def from_resource_dict(resources: dict):
-        return RayResources(num_cpus=resources.get("CPU", 0), num_gpus=resources.get("GPU", 0), resources=resources)
-
-
-@dataclass
-class RefBox:
-    """Ray doesn't dereference ObjectRefs if they're nested in another object. So we use this to take advantage of that.
-    https://docs.ray.io/en/latest/ray-core/objects.html#passing-object-arguments"""
-
-    ref: ray.ObjectRef
-
-    def get(self):
-        return ray.get(self.ref)
 
 
 class DoneSentinel:
