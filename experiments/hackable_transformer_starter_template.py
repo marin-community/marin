@@ -480,16 +480,17 @@ def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]
     model_cfg = sizes[size]
 
     batch = _batch_sizes()[size]
-    seq_len = model_cfg.max_seq_len
+    # train on same seq_len as model max seq len
+    train_seq_len = model_cfg.max_seq_len
     params = int(model_cfg.total_trainable_params(llama3_tokenizer_vocab_size))
-    steps = _get_num_train_steps(params, batch, seq_len, tpp=20)
+    steps = _get_num_train_steps(params, batch, train_seq_len, tpp=20)
 
     muon = _muon_presets()[size]
     resources = _resource_presets(use_tpu=use_tpu)[size]
 
     train = SimpleTrainConfig(
         resources=versioned(resources),
-        train_seq_len=seq_len,
+        train_seq_len=train_seq_len,
         train_batch_size=batch,
         num_train_steps=steps,
         learning_rate=muon.learning_rate,

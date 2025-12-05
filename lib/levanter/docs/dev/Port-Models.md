@@ -199,6 +199,7 @@ For example, below is the helper function for unit tests in Llama:
 ```python
 def _get_random_inputs(config: LlamaConfig):
     Embed = config.Embed
+    # keep it small for tests
     Pos = config.max_Pos.resize(128)
     Batch = hax.Axis("batch", 2)
     x = hax.random.normal(random.PRNGKey(0), (Batch, Pos, Embed))
