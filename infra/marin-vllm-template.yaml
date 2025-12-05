@@ -21,16 +21,22 @@ docker:
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
-        - --privileged
-        - --ulimit memlock=-1:-1  #
-        - --shm-size=200gb
-        - -v
-        - "/tmp:/tmp"
-        # this lets the worker run docker commands and have them run as sibling containers
-        - -v "/var/run/docker.sock:/var/run/docker.sock"
+      # always restart the worker if it happens to crash
+      - --restart=on-failure
+      - --rm=0  # Ray likes to add --rm which doesn't work with --restart=on-failure
+      - --privileged
+      - --ulimit memlock=-1:-1  #
+      - --ulimit nofile=1048576:1048576
+      - --shm-size=200gb
+      - -v
+      - "/tmp:/tmp"
+      # this lets the worker run docker commands and have them run as sibling containers
+      - -v "/var/run/docker.sock:/var/run/docker.sock"
     head_run_options:
       - --privileged
       - -v "/tmp:/tmp"
+      - --ulimit nofile=1048576:1048576
+      - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
 
 
 initialization_commands:
@@ -43,22 +49,32 @@ initialization_commands:
   - sudo chmod 666 /var/run/docker.sock
 
 setup_commands:
-  # set the GCP project because it's not injected by default
-  # NOTE(Chris): Have to include /root/gcloud/google-cloud-sdk/bin prefix because
-  # there is some bug with the PATH not propagating from the Dockerfile to Ray.
-  - /root/gcloud/google-cloud-sdk/bin/gcloud config set project hai-gcp-models
-  - /root/gcloud/google-cloud-sdk/bin/gcloud config set compute/region {{REGION}}
-  - /root/gcloud/google-cloud-sdk/bin/gcloud config set compute/zone {{ZONE}}
   - mkdir $HOME/.cache/huggingface -p
-  - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
   - mkdir $HOME/.cache/openai -p
-  - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
+  # set the GCP project because it's not injected by default
+  - gcloud config set project hai-gcp-models
+  - gcloud config set compute/region {{REGION}}
+  - gcloud config set compute/zone {{ZONE}}
+  - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
+  - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - echo 'export MARIN_PREFIX="gs://{{BUCKET}}"' >> $HOME/.bashrc
   - echo 'export BUCKET="{{BUCKET}}"' >> $HOME/.bashrc
-  - gcsfuse --implicit-dirs --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
+  # cf https://github.com/ray-project/ray/blob/0bc6ec86ffd0fc0d4e43fb339ffe0ac03ee5531b/python/ray/autoscaler/_private/constants.py#L66
+  # this is set to 30s by default, which is much too short for our use case
+  - echo 'export AUTOSCALER_HEARTBEAT_TIMEOUT_S=600' >> $HOME/.bashrc
+  - echo 'export TPU_MIN_LOG_LEVEL=3' >> $HOME/.bashrc
+  - echo 'export TPU_STDERR_LOG_LEVEL=3' >> $HOME/.bashrc
+  - echo 'export TPU_LOG_DIR=disabled' >> $HOME/.bashrc
+  - gcsfuse --implicit-dirs --client-protocol grpc --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
   - mkdir -p ~/.ssh && /root/gcloud/google-cloud-sdk/bin/gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
   # Using /home/ray/.ssh/ since auth.ssh_user is set to 'ray' and we need to ensure the key is in the correct user's home directory else we get an error
   - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
+
+worker_setup_commands:
+  # delete any old ray session data
+  # We keep the /tmp/ray directory in case we are running on the head node.
+  # This shouldn't be a concern on new clusters where driver jobs are disabled on the head node.
+  - rm -rf /tmp/ray/session_*/runtime_resources/
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
