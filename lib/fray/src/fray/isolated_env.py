@@ -44,19 +44,12 @@ def _set_pdeathsig_preexec():
         logger.info(f"Could not set parent death signal: {e}")
 
 
-def _signal_process(process: subprocess.Popen, sig: int) -> None:
-    if sys.platform == "win32":
-        if sig == signal.SIGKILL:
-            process.kill()
-        else:
-            process.terminate()
-    else:
-        os.killpg(process.pid, sig)
-
-
 def _terminate_process(process: subprocess.Popen) -> None:
     try:
-        _signal_process(process, signal.SIGKILL)
+        if sys.platform == "win32":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
     except Exception as e:
         logger.info(f"Failed to terminate process {process.pid} -- already terminated? {e}")
 

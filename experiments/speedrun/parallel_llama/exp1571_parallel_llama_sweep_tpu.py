@@ -24,7 +24,7 @@ from experiments.llama import llama_75m, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.parallel_llama.exp1571_parallel_llama import ParallelLlamaConfig
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
+from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 import time
 
@@ -87,10 +87,10 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     }
 
     resource_cfgs = {
-        "75m": TpuPodConfig(tpu_type="v5p-32"),
-        "150m": TpuPodConfig(tpu_type="v5p-32"),
-        "300m": TpuPodConfig(tpu_type="v5p-32"),
-        "520m": TpuPodConfig(tpu_type="v5p-32"),
+        "75m": ResourceConfig.with_tpu("v5p-32"),
+        "150m": ResourceConfig.with_tpu("v5p-32"),
+        "300m": ResourceConfig.with_tpu("v5p-32"),
+        "520m": ResourceConfig.with_tpu("v5p-32"),
     }
 
     # Cautious optimizer configs for each size

@@ -18,16 +18,17 @@ on a 30M parameter DCLM model using TPU hardware.
 """
 import dataclasses
 
-from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
+from fray.cluster import ResourceConfig
+
 from experiments.evals.task_configs import CORE_TASKS
+from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from marin.execution.executor import executor_main, versioned
-from marin.resources import TpuPodConfig
 
 from experiments.defaults import default_train
 from experiments.llama import llama_30m
 from experiments.simple_train_config import SimpleTrainConfig
 
-RESOURCES = TpuPodConfig(tpu_type="v4-8")
+RESOURCES = ResourceConfig.with_tpu("v4-8")
 EVALS = CORE_TASKS
 
 small_train_config = SimpleTrainConfig(
