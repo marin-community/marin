@@ -491,12 +491,12 @@ def _muon_presets() -> dict[str, MuonConfig]:
 
 def _resource_presets(use_tpu: bool = False):
     if use_tpu:
-      return {
-          "130m": ResourceConfig.with_tpu("v5p-32"),
-          "300m": ResourceConfig.with_tpu("v5p-32"),
-          "520m": ResourceConfig.with_tpu("v5p-32"),
-          "1_2b": ResourceConfig.with_tpu("v5p-32"),
-      }
+        return {
+            "130m": ResourceConfig.with_tpu("v5p-32"),
+            "300m": ResourceConfig.with_tpu("v5p-32"),
+            "520m": ResourceConfig.with_tpu("v5p-32"),
+            "1_2b": ResourceConfig.with_tpu("v5p-32"),
+        }
     return {
         "130m": ResourceConfig.with_gpu("A100-80G", count=1),
         "300m": ResourceConfig.with_gpu("A100-80G", count=1),
