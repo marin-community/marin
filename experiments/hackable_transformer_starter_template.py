@@ -521,7 +521,8 @@ if __name__ == "__main__":
         _cls.__module__ = _IMPORT_PATH
     ###
 
-    sizes = ["130m", "300m", "520m", "1_2b"]
+    sizes = ["130m",]
+    # sizes = ["130m", "300m", "520m", "1_2b"]
     use_tpu = bool(int(os.environ.get("SR_USE_TPU", "0")))
     steps = []
     for s in sizes:

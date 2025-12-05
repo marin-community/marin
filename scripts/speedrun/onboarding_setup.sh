@@ -249,15 +249,13 @@ echo ""
 echo -e "${BLUE}Next Steps:${NC}"
 echo "1. Activate the venv and load your WANDB_API_KEY and HF_TOKEN (if your setup does not automatically):"
 echo -e "   ${CYAN}cd $REPO_ROOT && . .venv/bin/activate && export \$(grep -v '^#' .env | xargs)${NC}"
-echo "2. Enter your experiment directory:"
-echo -e "   ${CYAN}cd $FINAL_PATH${NC}"
-echo "3. Open 'main.py', fill in your author details, and start hacking."
-echo "4. Launch your training run with:"
+echo "2. Find your starter file at ${CYAN}$TARGET_FILE${NC}, fill in your author details, and start hacking."
+echo "3. Launch your training run with:"
 echo -e "   ${CYAN}python -m experiments.speedrun.${RUN_NAME}.main --force_run_failed true --prefix $REPO_ROOT/local_store${NC}"
 
 # Check if origin points to the main community repo (indicating it's not a personal fork)
 if [[ "$ORIGIN_URL" == *"marin-community/marin"* ]]; then
-    echo -e "5. ${ORANGE}[Note] You are currently working on a clone of marin-community/marin${NC}"
+    echo -e "4. ${ORANGE}[Note] You are currently working on a clone of marin-community/marin${NC}"
     echo "   To submit your changes via a PR to Marin, you need to create your fork."
     echo "   Please install the GitHub CLI (https://github.com/cli/cli#installation)"
     echo -e "   and run: ${CYAN}gh repo fork${NC}"
