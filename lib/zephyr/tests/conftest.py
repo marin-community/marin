@@ -12,22 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Pytest fixtures for zephyr tests."""
-
 import pytest
-import ray
 
 
 @pytest.fixture(scope="module")
 def ray_cluster():
-    """Start Ray cluster for tests."""
+    import ray
+
     if not ray.is_initialized():
-        ray.init(ignore_reinit_error=True)
+        ray.init(ignore_reinit_error=True, resources={"CPU": 4, "head_node": 1})
     yield
     # Don't shutdown - let pytest handle cleanup
-
-
-@pytest.fixture
-def sample_data():
-    """Sample data for testing."""
-    return list(range(1, 11))  # [1, 2, 3, ..., 10]

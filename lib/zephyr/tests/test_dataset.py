@@ -20,7 +20,6 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-
 from zephyr import Dataset, create_backend, load_file, load_parquet
 from zephyr._test_helpers import SampleDataclass
 from zephyr.dataset import FilterOp, MapOp, WindowOp
@@ -36,6 +35,12 @@ from zephyr.dataset import FilterOp, MapOp, WindowOp
 def backend(request):
     """Parametrized fixture providing all backend types."""
     return request.param
+
+
+@pytest.fixture
+def sample_data():
+    """Sample data for testing."""
+    return list(range(1, 11))  # [1, 2, 3, ..., 10]
 
 
 def test_from_list(sample_data, backend):
