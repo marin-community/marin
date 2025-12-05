@@ -191,6 +191,8 @@ if [[ -z "$RUN_NAME" ]]; then
     RUN_NAME="default_run"
 fi
 
+echo "NAME_OF_YOUR_SUBMISSION=$RUN_NAME" >> .env
+
 log_start "Setting up branch '$RUN_NAME'"
 # Check if branch exists, if not create it
 if git show-ref --verify --quiet "refs/heads/$RUN_NAME"; then

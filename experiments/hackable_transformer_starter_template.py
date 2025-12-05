@@ -29,8 +29,9 @@ How to run:
 
 # =========================
 # Submission metadata
+# TODO: fill out your information when you start
 # =========================
-# TODO: fill out these values before you submit your speedrun
+
 SUBMISSION_BRANCH = "__SUBMISSION_BRANCH__"
 SUBMISSION_DESCRIPTION = "__SUBMISSION_DESCRIPTION__"
 SUBMISSION_AUTHOR_NAME = "__SUBMISSION_AUTHOR_NAME__"
@@ -82,6 +83,7 @@ silence_transformer_nag()
 
 # =========================
 # Hackable config & modules
+# TODO: make any model architecture changes
 # =========================
 
 
@@ -366,6 +368,12 @@ def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: i
     return max(1, total_tokens // (batch_size * seq_len))
 
 
+# =========================
+# Model configuration presets
+# TODO: make any model configuration changes
+# =========================
+
+
 def _size_presets() -> dict[str, HackableTransformerConfig]:
     base = dict(
         seq_len=4096,
@@ -389,6 +397,25 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
             hidden_dim=2048, intermediate_dim=7168, num_layers=16, num_heads=16, num_kv_heads=8, **base
         ),
     }
+
+
+# =========================
+# Muon optimizer presets
+# See https://wandb.ai/marin-community/marin/reports/Fantastic-Optimizers-and-Where-to-Find-Them--VmlldzoxMjgzMzQ2NQ
+# TODO: make any optimizer changes. You can use different optimizers: e.g.,
+# "130m": AdamHConfig(
+#             learning_rate=0.02,
+#             adam_lr=0.008,
+#             min_lr_ratio=0,
+#             warmup=1000,
+#             beta1=0.9,
+#             beta2=0.98,
+#             epsilon=1e-20,
+#             max_grad_norm=1,
+#             nesterov=False,
+#         ),
+# see available optimizers in lib/levanter/src/levanter/optim
+# =========================
 
 
 def _muon_presets() -> dict[str, MuonConfig]:
@@ -456,6 +483,14 @@ def _muon_presets() -> dict[str, MuonConfig]:
     }
 
 
+# =========================
+# Resource presets (IMPORTANT!)
+# TODO: edit the type_type or accelerator_type to match what you have available on your hardware
+# e.g., GpuConfig(gpu_count=8, accelerator_type="H100"),
+# If you ignore this and there is a mismatch, training cannot start if an unavailable resource is requested!
+# =========================
+
+
 def _resource_presets(use_tpu: bool = False):
     if use_tpu:
         return {
@@ -470,6 +505,12 @@ def _resource_presets(use_tpu: bool = False):
         "520m": GpuConfig(gpu_count=2, accelerator_type="A100-80G"),
         "1_2b": GpuConfig(gpu_count=4, accelerator_type="A100-80G"),
     }
+
+
+# =========================
+# Batch size presets
+# TODO: edit to adjust for your hardware
+# =========================
 
 
 def _batch_sizes() -> dict[str, int]:
@@ -521,7 +562,10 @@ if __name__ == "__main__":
         _cls.__module__ = _IMPORT_PATH
     ###
 
-    sizes = ["130m",]
+    sizes = [
+        "130m",
+    ]
+    # TODO: uncomment to run all sizes
     # sizes = ["130m", "300m", "520m", "1_2b"]
     use_tpu = bool(int(os.environ.get("SR_USE_TPU", "0")))
     steps = []
