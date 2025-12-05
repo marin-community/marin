@@ -253,7 +253,7 @@ class ReduceLocalOp:
     local_reducer: Callable
 
     def __repr__(self):
-        return f"ReduceLocalOp(local_reducer={_get_fn_name(self.local_reducer.__name__)}"
+        return f"ReduceLocalOp(local_reducer={_get_fn_name(self.local_reducer)}"
 
 
 @dataclass
