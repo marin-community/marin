@@ -188,6 +188,46 @@ def write_parquet_file(
     return {"path": output_path, "count": count}
 
 
+def write_vortex_file(records: Iterable, output_path: str) -> dict:
+    """Write records to a Vortex file.
+
+    Args:
+        records: Records to write (iterable of dicts)
+        output_path: Path to output .vortex file
+
+    Returns:
+        Dict with metadata: {"path": output_path, "count": num_records}
+    """
+    import pyarrow as pa
+    import vortex
+
+    ensure_parent_dir(output_path)
+
+    record_iter = iter(records)
+
+    try:
+        first_record = next(record_iter)
+    except StopIteration:
+        # Empty case - write empty vortex file
+        empty_table = pa.Table.from_pylist([])
+        with atomic_rename(output_path) as temp_path:
+            vortex.io.write(empty_table, temp_path)
+        return {"path": output_path, "count": 0}
+
+    # Accumulate all records and write
+    all_records = [first_record]
+    for record in record_iter:
+        all_records.append(record)
+
+    count = len(all_records)
+    table = pa.Table.from_pylist(all_records)
+
+    with atomic_rename(output_path) as temp_path:
+        vortex.io.write(table, temp_path)
+
+    return {"path": output_path, "count": count}
+
+
 def batchify(batch: Iterable, n: int = 1024) -> Iterable:
     iterator = iter(batch)
     while batch := tuple(itertools.islice(iterator, n)):
@@ -234,3 +274,45 @@ def write_binary_file(records: Iterable[bytes], output_path: str) -> dict:
                 count += 1
 
     return {"path": output_path, "count": count}
+
+
+def concatenate_files(chunk_paths: list[str], output_path: str) -> None:
+    """Concatenate multiple files into one (for JSONL, binary).
+
+    Streams data in 64MB blocks to avoid loading entire files into memory.
+
+    Args:
+        chunk_paths: List of paths to chunk files in order
+        output_path: Path for the final concatenated file
+    """
+    ensure_parent_dir(output_path)
+    with atomic_rename(output_path) as temp_path:
+        with fsspec.open(temp_path, "wb") as out_f:
+            for chunk_path in chunk_paths:
+                with fsspec.open(chunk_path, "rb") as in_f:
+                    while data := in_f.read(64 * 1024 * 1024):
+                        out_f.write(data)
+
+
+def merge_parquet_row_groups(chunk_paths: list[str], output_path: str) -> None:
+    """Merge parquet files by reading and concatenating tables.
+
+    Args:
+        chunk_paths: List of paths to chunk parquet files in order
+        output_path: Path for the final merged parquet file
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    ensure_parent_dir(output_path)
+
+    if not chunk_paths:
+        # Empty case - write empty parquet
+        table = pa.Table.from_pylist([], schema=pa.schema([]))
+        pq.write_table(table, output_path)
+        return
+
+    with atomic_rename(output_path) as temp_path:
+        tables = [pq.read_table(p) for p in chunk_paths]
+        merged = pa.concat_tables(tables)
+        pq.write_table(merged, temp_path)

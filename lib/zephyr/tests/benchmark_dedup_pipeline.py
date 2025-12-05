@@ -18,8 +18,7 @@
 Usage: uv run python tests/benchmark_dedup_pipeline.py --backends ray threadpool [--profile]
 """
 
-import gzip
-import io
+import logging
 import os
 import random
 import shutil
@@ -33,10 +32,11 @@ from pathlib import Path
 from typing import Any
 
 import click
-import msgspec
 import psutil
-import zstandard as zstd
-from zephyr import Dataset, create_backend, load_jsonl
+import pyarrow as pa
+import vortex
+from tqdm import tqdm
+from zephyr import Dataset, ExecutionHint, create_backend
 
 WORDS = """
 the be to of and a in that have I it for not on with he as you do at this but his by from
@@ -78,37 +78,29 @@ def generate_doc(doc_id: int, num_words: int = 1000) -> dict[str, Any]:
 
 
 def write_input_files(docs: Iterator[dict[str, Any]], input_dir: str, num_files: int = 10) -> list[str]:
-    """Write documents to num_files zstd-compressed JSONL files, returning file paths."""
+    """Write documents to num_files Vortex files, returning file paths."""
     os.makedirs(input_dir, exist_ok=True)
     file_paths = []
     file_buffers = [[] for _ in range(num_files)]
 
-    # Collect documents for each file
-    for idx, doc in enumerate(docs):
+    for idx, doc in tqdm(enumerate(docs)):
         file_idx = idx % num_files
         file_buffers[file_idx].append(doc)
 
-    # Write each buffer to a zstd-compressed file
-    cctx = zstd.ZstdCompressor(level=1)
     for i in range(num_files):
-        file_path = os.path.join(input_dir, f"input-{i:05d}.jsonl.zst")
+        file_path = os.path.join(input_dir, f"input-{i:05d}.vortex")
         file_paths.append(file_path)
-
-        # Serialize all docs for this file
-        data = b"".join(msgspec.json.encode(doc) + b"\n" for doc in file_buffers[i])
-
-        # Compress and write
-        with open(file_path, "wb") as f:
-            f.write(cctx.compress(data))
+        table = pa.Table.from_pylist(file_buffers[i])
+        vortex.io.write(table, file_path)
 
     return file_paths
 
 
 def create_pipeline(input_dir: str, output_dir: str) -> Dataset:
-    """Create benchmark pipeline: load JSONL → map → deduplicate by simhash → write."""
+    """Create benchmark pipeline: load Vortex → map → deduplicate by simhash → write Vortex."""
     return (
-        Dataset.from_files(f"{input_dir}/*.jsonl.zst")
-        .flat_map(load_jsonl)
+        Dataset.from_files(f"{input_dir}/*.vortex")
+        .load_vortex()
         .map(
             lambda doc: {
                 **doc,
@@ -120,24 +112,14 @@ def create_pipeline(input_dir: str, output_dir: str) -> Dataset:
             key=lambda x: x["simhash"],
             reducer=lambda key, items: next(iter(items)),  # Take first (deduplication)
         )
-        .write_jsonl(f"{output_dir}/output-{{shard:05d}}-of-{{total:05d}}.jsonl.zst")
+        .write_vortex(f"{output_dir}/output-{{shard:05d}}-of-{{total:05d}}.vortex")
     )
 
 
-def count_jsonl_docs(file_path: str) -> int:
-    """Count lines in JSONL file (supports .gz and .zst compression)."""
-    if file_path.endswith(".gz"):
-        with gzip.open(file_path, "rt") as f:
-            return sum(1 for line in f if line.strip())
-    elif file_path.endswith(".zst"):
-        dctx = zstd.ZstdDecompressor()
-        with open(file_path, "rb") as raw_f:
-            with dctx.stream_reader(raw_f) as reader:
-                text_f = io.TextIOWrapper(reader, encoding="utf-8")
-                return sum(1 for line in text_f if line.strip())
-    else:
-        with open(file_path) as f:
-            return sum(1 for line in f if line.strip())
+def count_vortex_docs(file_path: str) -> int:
+    """Count records in a Vortex file."""
+    vf = vortex.open(file_path)
+    return len(vf)
 
 
 def run_benchmark(
@@ -160,9 +142,9 @@ def run_benchmark(
         if backend_type == "sync":
             backend = create_backend("sync")
         elif backend_type == "threadpool":
-            backend = create_backend("threadpool", max_parallelism=10)
+            backend = create_backend("threadpool", max_parallelism=16)
         elif backend_type == "ray":
-            backend = create_backend("ray", max_parallelism=10, memory="2GB")
+            backend = create_backend("ray", max_parallelism=16, memory="2GB")
         else:
             raise ValueError(f"Unknown backend: {backend_type}")
 
@@ -174,7 +156,7 @@ def run_benchmark(
         print("Executing pipeline...")
         mem_before = process.memory_info().rss
         exec_start = time.time()
-        results = list(backend.execute(pipeline))
+        results = list(backend.execute(pipeline, ExecutionHint(intra_shard_parallelism=8)))
         exec_time = time.time() - exec_start
         mem_after = process.memory_info().rss
 
@@ -184,7 +166,7 @@ def run_benchmark(
 
         # Count output documents
         print("Counting output documents...")
-        output_docs = sum(count_jsonl_docs(f) for f in results)
+        output_docs = sum(count_vortex_docs(f) for f in results)
         dedup_ratio = (1 - output_docs / num_docs) * 100
 
         # Report results
@@ -393,4 +375,5 @@ def main(
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     main()
