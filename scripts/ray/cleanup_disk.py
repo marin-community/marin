@@ -30,6 +30,7 @@ import argparse
 import json
 import logging
 import subprocess
+from tqdm import tqdm
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -152,7 +153,6 @@ def get_cluster_config(config_file: str) -> dict:
 
 
 def list_cluster_workers(cluster_name: str, zone: str, project: str) -> list[str]:
-    """List all manual workers for a cluster."""
     result = subprocess.run(
         [
             "gcloud",
@@ -170,9 +170,7 @@ def list_cluster_workers(cluster_name: str, zone: str, project: str) -> list[str
     )
 
     all_tpus = result.stdout.strip().split("\n")
-    cluster_workers = [name for name in all_tpus if "worker-manual" in name]
-
-    return cluster_workers
+    return [name for name in all_tpus if name]
 
 
 def get_worker_disk_info(
@@ -224,6 +222,8 @@ def get_tpu_workers(tpu_name: str, zone: str, project: str) -> list[dict]:
 
     workers = []
     for idx, endpoint in enumerate(tpu_info.get("networkEndpoints", [])):
+        if "ipAddress" not in endpoint:
+            continue
         workers.append({"tpu_name": tpu_name, "worker_id": idx, "worker_ip": endpoint["ipAddress"]})
     return workers
 
@@ -308,10 +308,13 @@ def main():
 
     logger.info("\nCollecting worker information...")
     all_workers = []
-    for tpu_name in tpu_names:
-        workers = get_tpu_workers(tpu_name, zone, project)
-        all_workers.extend(workers)
-        logger.info(f"  {tpu_name}: {len(workers)} workers")
+    with ThreadPoolExecutor(max_workers=args.parallel) as executor:
+        futures = {executor.submit(get_tpu_workers, tpu_name, zone, project): tpu_name for tpu_name in tpu_names}
+        for future in tqdm(as_completed(futures), total=len(futures)):
+            tpu_name = futures[future]
+            result = future.result()
+            all_workers.extend(result)
+            logger.info(f"  {tpu_name}: {len(result)} workers")
 
     logger.info(f"\nChecking disk space on {len(all_workers)} workers...")
     disk_info: list[WorkerDiskInfo] = []
@@ -322,7 +325,7 @@ def main():
             for w in all_workers
         }
 
-        for future in as_completed(futures):
+        for future in tqdm(as_completed(futures), total=len(futures)):
             result = future.result()
             if result:
                 disk_info.append(result)

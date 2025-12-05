@@ -13,6 +13,8 @@ pub enum HashAlgorithm {
     Xxh3_64,
 }
 
+pub const DEFAULT_HASH_ALGO: HashAlgorithm = HashAlgorithm::Xxh3_128;
+
 impl HashAlgorithm {
     pub fn hash_to_hex(&self, input: &[u8]) -> String {
         match self {
