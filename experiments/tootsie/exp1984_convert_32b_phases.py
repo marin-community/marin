@@ -30,12 +30,12 @@ from experiments.tootsie.exp1295_32b import llama_32b_remat, llama_32b_tootsie
 from experiments.tootsie.exp1380_muon32b import llama_32b_muon
 from experiments.tootsie.exp1390_32b_necro import marin_32b_necro
 from experiments.tootsie.exp1395_qwen3_32b import marin_32b_qwen, qwen3_32b_remat
-from marin.export import convert_checkpoint_to_hf_step
+from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main
-from marin.resources import TpuPodConfig
+from marin.export import convert_checkpoint_to_hf_step
 
 BASE_CHECKPOINT_PREFIX = "gs://marin-us-central2/checkpoints"
-CONVERSION_RESOURCES = TpuPodConfig(tpu_type="v4-8")
+CONVERSION_RESOURCES = ResourceConfig.with_tpu("v4-8")
 
 
 def _trainer_from_training_step(step: ExecutorStep) -> TrainerConfig:

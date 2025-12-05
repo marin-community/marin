@@ -43,9 +43,12 @@ from fray.cluster.base import (
     JobRequest,
     ResourceConfig,
     TpuConfig,
+    TpuTopologyInfo,
     TpuType,
     create_environment,
+    get_tpu_topology,
 )
+from fray.cluster.device_flops import FlopDtype
 from fray.cluster.local_cluster import LocalCluster
 
 logger = logging.getLogger(__name__)
@@ -140,18 +143,20 @@ __all__ = [
     "DeviceConfig",
     "Entrypoint",
     "EnvironmentConfig",
+    "FlopDtype",
     "GpuConfig",
     "GpuType",
     "JobId",
     "JobInfo",
     "JobRequest",
-    "JobStatus",
     "LocalCluster",
     "ResourceConfig",
+    "TPUConfig",
     "TpuConfig",
     "TpuType",
     "create_cluster",
     "create_environment",
     "current_cluster",
+    "get_tpu_topology",
     "set_current_cluster",
 ]

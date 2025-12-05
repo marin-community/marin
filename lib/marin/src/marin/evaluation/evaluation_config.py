@@ -14,7 +14,7 @@
 
 from dataclasses import dataclass, field
 
-from experiments.evals.resource_configs import ResourceConfig
+from fray.cluster import ResourceConfig
 
 
 @dataclass(frozen=True)

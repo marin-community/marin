@@ -19,16 +19,16 @@ For CPU training, see train_tiny_model_cpu.py
 For GPU training, see train_tiny_model_gpu.py
 """
 
+from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import executor_main, versioned
-from marin.resources import TpuPodConfig
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_30m
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 
-RESOURCES = TpuPodConfig(tpu_type="v4-8")
+RESOURCES = ResourceConfig.with_tpu("v4-8")
 
 # 1. Choose a dataset
 tinystories_hf_id = "roneneldan/TinyStories"

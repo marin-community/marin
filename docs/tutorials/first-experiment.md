@@ -78,16 +78,16 @@ For this tutorial, we will use the `SimpleTrainConfig` class from `experiments.s
 This class defines basic training configuration that is sufficient for most experiments.
 
 !!! info "Training Configuration for Different Accelerators"
-    You need to provide the appropriate resource configuration based on your hardware setup. Marin supports different accelerator types through various [resource configurations](../references/resource-config.md). The `CpuOnlyConfig` is one such resource configuration that requests a certain number of CPUs. Other resource configurations include `GpuConfig` for requesting GPUs and `TpuPodConfig` for requesting TPUs.
+    You need to provide the appropriate resource configuration based on your hardware setup. Marin supports different accelerator types through [`ResourceConfig`](../references/resource-config.md) factory methods.
 
     === "CPU"
         ```python
-        from marin.resources import CpuOnlyConfig
+        from fray.cluster import ResourceConfig
         from experiments.simple_train_config import SimpleTrainConfig
 
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
-            resources=CpuOnlyConfig(num_cpus=1),
+            resources=ResourceConfig.with_cpu(),
             train_batch_size=4,
             num_train_steps=100,
             # set hyperparameters
@@ -100,12 +100,12 @@ This class defines basic training configuration that is sufficient for most expe
 
     === "GPU"
         ```python
-        from marin.resources import GpuConfig
+        from fray.cluster import ResourceConfig
         from experiments.simple_train_config import SimpleTrainConfig
 
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
-            resources=GpuConfig(gpu_count=1),
+            resources=ResourceConfig.with_gpu(count=1),
             train_batch_size=32,
             num_train_steps=100,
             # set hyperparameters
@@ -116,12 +116,12 @@ This class defines basic training configuration that is sufficient for most expe
 
     === "TPU"
         ```python
-        from marin.resources import TpuPodConfig
+        from fray.cluster import ResourceConfig
         from experiments.simple_train_config import SimpleTrainConfig
 
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
-            resources=TpuPodConfig(tpu_type="v4-8"),
+            resources=ResourceConfig.with_tpu("v4-8"),
             train_batch_size=4,
             num_train_steps=100,
             # set hyperparameters

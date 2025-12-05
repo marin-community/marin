@@ -30,13 +30,13 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from fray.cluster import ResourceConfig
 from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import lm_data_config
-from marin.resources import CpuOnlyConfig, TpuPodConfig
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
@@ -190,23 +190,17 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     # ############################################################
     # Training
+    train_env_vars = {
+        "WANDB_API_KEY": "",
+        "WANDB_MODE": "disabled",
+        "JAX_TRACEBACK_FILTERING": "off",
+    }
+
     if not is_in_ci() and not is_local_ray_cluster():
-        pod_config = TpuPodConfig(tpu_type="v4-8").with_env_vars(
-            {
-                "WANDB_API_KEY": "",
-                "WANDB_MODE": "disabled",
-                "JAX_TRACEBACK_FILTERING": "off",
-            }
-        )
+        pod_config = ResourceConfig.with_tpu("v4-8")
     else:
-        pod_config = CpuOnlyConfig().with_env_vars(
-            {
-                "WANDB_API_KEY": "",
-                "WANDB_MODE": "disabled",
-                "JAX_PLATFORMS": "cpu",
-                "JAX_TRACEBACK_FILTERING": "off",
-            }
-        )
+        train_env_vars["JAX_PLATFORMS"] = "cpu"
+        pod_config = ResourceConfig.with_cpu()
 
     train_step = ExecutorStep(
         name=os.path.join(prefix, "train"),
@@ -214,6 +208,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             resources=pod_config,
+            env_vars=train_env_vars,
             train_config=TrainLmConfig(
                 data=lm_data_config(tokenize_step, permutation_type="linear"),
                 hf_save_steps=1,

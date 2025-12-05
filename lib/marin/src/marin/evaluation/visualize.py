@@ -36,8 +36,7 @@ from levanter.utils.ray_utils import ExceptionInfo
 from marin.execution.executor import this_output_path
 from marin.utils import remove_tpu_lockfile_on_exit
 
-from marin.resources import ResourceConfig
-from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
+from fray.cluster import ResourceConfig
 
 from marin.evaluation.utils import download_from_gcs, is_remote_path, discover_levanter_checkpoints
 from marin.utilities.executor_utils import ckpt_path_to_step_name
@@ -97,9 +96,7 @@ class VizLmConfig:
     comparison_model_path: str | None = None
     comparison_is_hf: bool = False
 
-    resource_config: ResourceConfig = dataclasses.field(
-        default_factory=lambda: SINGLE_TPU_V5p_8_FULL
-    )  # pretty arbitrary
+    resource_config: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig.with_tpu("v5p-8"))
 
 
 @ray.remote(
@@ -164,8 +161,15 @@ def visualize_lm_log_probs(config: VizLmConfig) -> None:
         comparison_model_path=config.comparison_model_path,
         comparison_is_hf=config.comparison_is_hf,
     )
+    from fray.cluster.base import TpuConfig
+
+    assert isinstance(config.resource_config.device, TpuConfig), "visualize_lm_log_probs requires TPU resource config"
+
     ray.get(
         do_viz_lm.options(
-            resources={"TPU": config.resource_config.num_tpu, f"{config.resource_config.tpu_type}-head": 1}
+            resources={
+                "TPU": config.resource_config.chip_count(),
+                f"TPU-{config.resource_config.device.type}-head": 1,
+            }
         ).remote(levanter_config)
     )

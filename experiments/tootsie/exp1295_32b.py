@@ -29,9 +29,9 @@ from experiments.defaults import default_train
 from experiments.llama import llama_32b
 from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
+from fray.cluster import ResourceConfig
 from marin.execution import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
-from marin.resources import TpuPodConfig
 
 ## 32b experiments
 
@@ -41,7 +41,7 @@ llama_32b_remat = dataclasses.replace(
 )
 
 llama_32b_train_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
+    resources=ResourceConfig.with_tpu("v4-2048", slice_count=1),
     # decreasing so we don't have padding at slice count 3
     # but we moved to v4 once we lost the v5 compute so we moved back to 8192 again
     train_batch_size=[

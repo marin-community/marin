@@ -20,8 +20,8 @@ you can change the `model_name` or `huggingface_dataset_id` variables, respectiv
 """
 
 from experiments.datashop.defaults import default_synthetic_data_generation
-from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK
 from experiments.models import get_model_local_path, llama_3_1_8b_instruct
+from fray.cluster import ResourceConfig
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.utils import get_directory_friendly_name
@@ -49,7 +49,7 @@ generations = default_synthetic_data_generation(
         and put your final answer within \boxed{{}}:\n{example}",
     input_filetype="jsonl",
     prompt_column="problem",
-    resource_config=TPU_V6E_8_STRICT_PACK,
+    resource_config=ResourceConfig.with_tpu("v6e-8"),
     output_path="documents/synthetic_data_llama_8b",
 )
 

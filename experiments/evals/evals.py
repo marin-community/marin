@@ -19,7 +19,7 @@ Canonical set of evals.
 import logging
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
-from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V6E_8, ResourceConfig
+from fray.cluster import ResourceConfig
 from experiments.evals.task_configs import (
     BASE_GENERATION_TASKS,
     CORE_TASKS,
@@ -267,7 +267,7 @@ def evaluate_levanter_lm_evaluation_harness(
 
 def default_eval(
     step: ExecutorStep | InputName | str,
-    resource_config: ResourceConfig = SINGLE_TPU_V4_8,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v4-8"),
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
@@ -306,7 +306,7 @@ def default_eval(
 
 def default_base_eval(
     step: ExecutorStep | InputName | str,
-    resource_config: ResourceConfig = SINGLE_TPU_V6E_8,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
     run_generation_evals: bool = True,
@@ -366,7 +366,7 @@ def default_base_eval(
 
 def default_sft_eval(
     step: ExecutorStep | InputName | str,
-    resource_config: ResourceConfig = SINGLE_TPU_V6E_8,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
     run_generation_evals: bool = True,

@@ -35,9 +35,9 @@ from experiments.midtraining_datasets import (
     pile_pubmed_central_validation_tokenized,
 )
 from experiments.tootsie.exp600_tootsie import phoenix_phase4_checkpoint_for_phase5
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
-from marin.resources import TpuPodConfig
 
 pubmed_qa_tokens = 78_993_593
 
@@ -71,7 +71,7 @@ anneal_config = AnnealConfig(
         },
         permutation_type="linear",
     ),
-    resources=TpuPodConfig(tpu_type="v6e-128", slice_count=2),
+    resources=ResourceConfig.with_tpu("v6e-128", slice_count=2),
     num_anneal_training_tokens=num_anneal_tokens,
 )
 medical_tootsie_anneal = default_anneal(

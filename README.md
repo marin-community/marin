@@ -53,11 +53,12 @@ You can check out the [full script](https://github.com/marin-community/marin/blo
 <!--marin-example-start-->
 
 ```python
+from fray.cluster import ResourceConfig
+
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama3_tokenizer, llama_nano
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.resources import CpuOnlyConfig
 
 # 1. Choose a dataset
 tinystories_hf_id = "roneneldan/TinyStories"
@@ -72,7 +73,7 @@ tinystories_tokenized = default_tokenize(
 # 3. Define training configuration
 nano_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
-    resources=CpuOnlyConfig(num_cpus=1),
+    resources=ResourceConfig.with_cpu(),
     train_batch_size=4,
     num_train_steps=100,
     # set hyperparameters

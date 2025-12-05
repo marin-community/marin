@@ -22,20 +22,18 @@ import logging
 import os
 from functools import lru_cache
 
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
-
+from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
+from experiments.evals.task_configs import EvalTaskConfig
+from experiments.isoflop_sweep import generate_isoflop_sweep
 from experiments.llama import llama3_tokenizer
+from experiments.models import ModelConfig as HFModelConfig, download_model_step
+from experiments.paloma import paloma_tokenized
+from experiments.tootsie.exp1295_32b import nemotron_mix
+from fray.cluster import ResourceConfig
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
-from experiments.paloma import paloma_tokenized
-
-from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
-from experiments.evals.task_configs import EvalTaskConfig
-from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
-from experiments.isoflop_sweep import generate_isoflop_sweep
-from experiments.models import ModelConfig as HFModelConfig, download_model_step
-from experiments.tootsie.exp1295_32b import nemotron_mix
 
 # Import shared components from exp1600_uncheatable_evals
 from experiments.evals.exp1600_uncheatable_evals import (
@@ -82,7 +80,7 @@ def build_steps():
                 checkpoint=checkpoint_path,
                 model=model_config,
                 data=eval_data,
-                resource_config=SINGLE_TPU_V5p_8_FULL,
+                resource_config=ResourceConfig.with_tpu("v5p-8"),
                 checkpoint_is_hf=False,
                 per_device_batch_size=4,
                 name=f"{experiment_name}-paloma-uncheatable-eval-logprobs-v2",
@@ -94,7 +92,7 @@ def build_steps():
                 model_name=experiment_name,
                 model_path=checkpoint_path,
                 evals=EVAL_TASKS,
-                resource_config=SINGLE_TPU_V5p_8_FULL,
+                resource_config=ResourceConfig.with_tpu("v5p-8"),
                 # wandb_tags=wandb_tags,
             )
         )
@@ -121,7 +119,7 @@ def build_steps():
                 checkpoint=output_path_of(model_instance),
                 model=hf_model_config,
                 data=eval_data,
-                resource_config=SINGLE_TPU_V5p_8_FULL,
+                resource_config=ResourceConfig.with_tpu("v5p-8"),
                 checkpoint_is_hf=True,
                 per_device_batch_size=4,
                 name=f"{directory_friendly_name}-paloma-uncheatable-eval-logprobs-v2",
@@ -134,7 +132,7 @@ def build_steps():
                 model_name=f"{directory_friendly_name}-mmlu-5shot-sl",
                 model_path=output_path_of(model_instance),
                 evals=EVAL_TASKS,
-                resource_config=SINGLE_TPU_V5p_8_FULL,
+                resource_config=ResourceConfig.with_tpu("v5p-8"),
                 # wandb_tags=[f"M={model_config.model_name}", "eval=mmlu-5shot-sl"],
             )
         )

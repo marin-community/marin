@@ -20,7 +20,7 @@ from abc import ABC
 import ray
 import requests
 
-from experiments.evals.resource_configs import ResourceConfig
+from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port

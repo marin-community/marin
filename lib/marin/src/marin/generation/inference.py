@@ -19,14 +19,13 @@ from typing import Any
 
 import fsspec
 import ray
+from fray.cluster import ResourceConfig
+from fray.cluster.ray import get_scheduling_strategy
 from marin.generation.chunk_utils import ChunkStrategy
 from marin.generation.pipeline import vLLMTextGeneration
-from marin.generation.ray_utils import scheduling_strategy_fn
 from marin.utils import fsspec_glob
 from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
-
-from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 
 
 @dataclass
@@ -63,7 +62,7 @@ class TextGenerationInferenceConfig:
     prompt_column: str = "text"
 
     # Hardware specific
-    resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
+    resource_config: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_tpu("v6e-8"))
     generated_text_column_name: str = "text"
 
     # Checkpoint specific
@@ -111,22 +110,15 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
     ctx.wait_for_min_actors_s = 60 * 10 * config.tensor_parallel_size
 
 
-def get_ray_remote_args_scheduling_strategy_fn(tensor_parallel_size: int, strategy: str):
-    def scheduling_strategy_dict_fn():
-        return dict(scheduling_strategy=scheduling_strategy_fn(tensor_parallel_size, strategy))
-
-    return scheduling_strategy_dict_fn
-
-
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     if config.tensor_parallel_size == 1:
         return {"resources": {"TPU": 1}, "max_restarts": -1}
     else:
-        return {
-            "ray_remote_args_fn": get_ray_remote_args_scheduling_strategy_fn(
-                config.resource_config.num_tpu, config.resource_config.strategy
-            )
-        }
+
+        def scheduling_strategy_dict_fn():
+            return dict(scheduling_strategy=get_scheduling_strategy(config.resource_config))
+
+        return {"ray_remote_args_fn": scheduling_strategy_dict_fn}
 
 
 def get_ray_data_read_kwargs(config: TextGenerationInferenceConfig):

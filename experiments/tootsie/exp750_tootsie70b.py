@@ -32,8 +32,8 @@ from experiments.llama import llama_70b
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp600_tootsie import dclm_mixture_config_llama3_old
 from experiments.tootsie.exp859_big_tootsies import dclm_mixture_config_llama3_zoned
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
 
 llama_70b_train_config_mk6 = SimpleTrainConfig(
     num_train_steps=1_000_000,  # we won't actually go this long. will adjust as needed
@@ -41,7 +41,7 @@ llama_70b_train_config_mk6 = SimpleTrainConfig(
     # so it's safer.
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=96001, value=1536)],
     weight_decay=0.05,
-    resources=TpuPodConfig(tpu_type="v6e-128", slice_count=6),
+    resources=ResourceConfig.with_tpu("v6e-128", slice_count=6),
     # LR doesn't support schedule yet
     # until 93_621, was 2e-4
     # learning_rate=2e-4,
@@ -63,7 +63,7 @@ llama_70b_train_config_mk6 = SimpleTrainConfig(
 llama_70b_train_config_1536 = dataclasses.replace(
     llama_70b_train_config_mk6,
     train_batch_size=1536,  # 2 * 6 * 128
-    resources=TpuPodConfig(tpu_type="v6e-128", slice_count=6),
+    resources=ResourceConfig.with_tpu("v6e-128", slice_count=6),
     learning_rate=2e-4,
     decay=0.4,
     ema_beta=0.995,

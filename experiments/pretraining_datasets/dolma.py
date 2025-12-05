@@ -21,7 +21,6 @@ logic for all 15 splits.
 
 import os.path
 
-
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 from marin.execution.executor import ExecutorStep, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
@@ -128,7 +127,6 @@ def tokenize_dolma(*, tokenizer: str | None = None) -> dict[str, TokenizerStep]:
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
             ),
-            pip_dependency_groups=["sentencepiece"],
         )
 
         # Check if we need to use override path for llama3

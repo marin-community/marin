@@ -3689,7 +3689,6 @@ dependencies = [
     { name = "regex" },
     { name = "requests" },
     { name = "s3fs" },
-    { name = "sentencepiece" },
     { name = "toml" },
     { name = "torch", version = "2.9.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-5-marin-cpu') or (sys_platform == 'darwin' and extra == 'extra-5-marin-tpu') or (sys_platform != 'darwin' and extra == 'extra-5-marin-crawl' and extra == 'group-5-marin-dev') or (sys_platform != 'darwin' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-crawl' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-crawl' and extra == 'extra-5-marin-cuda12' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-crawl' and extra != 'extra-5-marin-tpu' and extra == 'group-5-marin-dev') or (extra != 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
     { name = "torch", version = "2.9.1", source = { registry = "https://pypi.org/simple" }, marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-crawl' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-crawl' and extra == 'extra-5-marin-cuda12' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-crawl' and extra == 'extra-5-marin-tpu' and extra == 'group-5-marin-dev') or (extra == 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra == 'extra-5-marin-tpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cpu' and extra != 'extra-5-marin-cuda12' and extra != 'extra-5-marin-tpu')" },
@@ -3807,9 +3806,7 @@ tokenize-train = [
     { name = "haliax" },
     { name = "lm-eval" },
     { name = "multiprocess" },
-    { name = "sentencepiece" },
     { name = "tblib" },
-    { name = "tiktoken" },
 ]
 tpu = [
     { name = "jax", extra = ["tpu"], marker = "(extra == 'extra-5-marin-cpu' and extra == 'extra-5-marin-cuda12') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-5-marin-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-tpu') or (extra == 'extra-5-marin-crawl' and extra != 'extra-5-marin-cuda12' and extra == 'group-5-marin-dev') or (extra != 'extra-5-marin-cuda12' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu') or (extra != 'extra-5-marin-cpu' and extra == 'extra-5-marin-crawl' and extra == 'group-5-marin-dev') or (extra != 'extra-5-marin-cpu' and extra == 'extra-8-levanter-gpu' and extra == 'extra-8-levanter-tpu')" },
@@ -4001,14 +3998,11 @@ requires-dist = [
     { name = "s3fs", specifier = ">=2024" },
     { name = "scalax", marker = "extra == 'post-training'", git = "https://github.com/Sea-Snell/scalax?rev=8cf9ceabe30d4c4274df3c09aae2f66b59fbce3c" },
     { name = "scipy", marker = "extra == 'crawl'", specifier = "==1.13.1" },
-    { name = "sentencepiece" },
-    { name = "sentencepiece", marker = "extra == 'tokenize-train'" },
     { name = "spacy", marker = "extra == 'crawl'" },
     { name = "swebench", marker = "sys_platform != 'darwin' and extra == 'post-training'" },
     { name = "sympy", marker = "extra == 'post-training'" },
     { name = "sympy", marker = "extra == 'rl'" },
     { name = "tblib", marker = "extra == 'tokenize-train'" },
-    { name = "tiktoken", marker = "extra == 'tokenize-train'" },
     { name = "toml" },
     { name = "torch", specifier = ">=2.7.0" },
     { name = "torch", marker = "extra == 'cpu'", specifier = ">=2.7.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "marin", extra = "cpu" } },
@@ -7457,30 +7451,6 @@ wheels = [
 ]
 
 [[package]]
-name = "sentencepiece"
-version = "0.2.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/15/15/2e7a025fc62d764b151ae6d0f2a92f8081755ebe8d4a64099accc6f77ba6/sentencepiece-0.2.1.tar.gz", hash = "sha256:8138cec27c2f2282f4a34d9a016e3374cd40e5c6e9cb335063db66a0a3b71fad", size = 3228515, upload-time = "2025-08-12T07:00:51.718Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/15/46afbab00733d81788b64be430ca1b93011bb9388527958e26cc31832de5/sentencepiece-0.2.1-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:6356d0986b8b8dc351b943150fcd81a1c6e6e4d439772e8584c64230e58ca987", size = 1942560, upload-time = "2025-08-12T06:59:25.82Z" },
-    { url = "https://files.pythonhosted.org/packages/fa/79/7c01b8ef98a0567e9d84a4e7a910f8e7074fcbf398a5cd76f93f4b9316f9/sentencepiece-0.2.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:8f8ba89a3acb3dc1ae90f65ec1894b0b9596fdb98ab003ff38e058f898b39bc7", size = 1325385, upload-time = "2025-08-12T06:59:27.722Z" },
-    { url = "https://files.pythonhosted.org/packages/bb/88/2b41e07bd24f33dcf2f18ec3b74247aa4af3526bad8907b8727ea3caba03/sentencepiece-0.2.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:02593eca45440ef39247cee8c47322a34bdcc1d8ae83ad28ba5a899a2cf8d79a", size = 1253319, upload-time = "2025-08-12T06:59:29.306Z" },
-    { url = "https://files.pythonhosted.org/packages/a0/54/38a1af0c6210a3c6f95aa46d23d6640636d020fba7135cd0d9a84ada05a7/sentencepiece-0.2.1-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0a0d15781a171d188b661ae4bde1d998c303f6bd8621498c50c671bd45a4798e", size = 1316162, upload-time = "2025-08-12T06:59:30.914Z" },
-    { url = "https://files.pythonhosted.org/packages/ef/66/fb191403ade791ad2c3c1e72fe8413e63781b08cfa3aa4c9dfc536d6e795/sentencepiece-0.2.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4f5a3e0d9f445ed9d66c0fec47d4b23d12cfc858b407a03c194c1b26c2ac2a63", size = 1387785, upload-time = "2025-08-12T06:59:32.491Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/2d/3bd9b08e70067b2124518b308db6a84a4f8901cc8a4317e2e4288cdd9b4d/sentencepiece-0.2.1-cp311-cp311-win32.whl", hash = "sha256:6d297a1748d429ba8534eebe5535448d78b8acc32d00a29b49acf28102eeb094", size = 999555, upload-time = "2025-08-12T06:59:34.475Z" },
-    { url = "https://files.pythonhosted.org/packages/32/b8/f709977f5fda195ae1ea24f24e7c581163b6f142b1005bc3d0bbfe4d7082/sentencepiece-0.2.1-cp311-cp311-win_amd64.whl", hash = "sha256:82d9ead6591015f009cb1be1cb1c015d5e6f04046dbb8c9588b931e869a29728", size = 1054617, upload-time = "2025-08-12T06:59:36.461Z" },
-    { url = "https://files.pythonhosted.org/packages/7a/40/a1fc23be23067da0f703709797b464e8a30a1c78cc8a687120cd58d4d509/sentencepiece-0.2.1-cp311-cp311-win_arm64.whl", hash = "sha256:39f8651bd10974eafb9834ce30d9bcf5b73e1fc798a7f7d2528f9820ca86e119", size = 1033877, upload-time = "2025-08-12T06:59:38.391Z" },
-    { url = "https://files.pythonhosted.org/packages/4a/be/32ce495aa1d0e0c323dcb1ba87096037358edee539cac5baf8755a6bd396/sentencepiece-0.2.1-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:57cae326c8727de58c85977b175af132a7138d84c764635d7e71bbee7e774133", size = 1943152, upload-time = "2025-08-12T06:59:40.048Z" },
-    { url = "https://files.pythonhosted.org/packages/88/7e/ff23008899a58678e98c6ff592bf4d368eee5a71af96d0df6b38a039dd4f/sentencepiece-0.2.1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:56dd39a3c4d6493db3cdca7e8cc68c6b633f0d4195495cbadfcf5af8a22d05a6", size = 1325651, upload-time = "2025-08-12T06:59:41.536Z" },
-    { url = "https://files.pythonhosted.org/packages/19/84/42eb3ce4796777a1b5d3699dfd4dca85113e68b637f194a6c8d786f16a04/sentencepiece-0.2.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:d9381351182ff9888cc80e41c632e7e274b106f450de33d67a9e8f6043da6f76", size = 1253645, upload-time = "2025-08-12T06:59:42.903Z" },
-    { url = "https://files.pythonhosted.org/packages/89/fa/d3d5ebcba3cb9e6d3775a096251860c41a6bc53a1b9461151df83fe93255/sentencepiece-0.2.1-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:99f955df238021bf11f0fc37cdb54fd5e5b5f7fd30ecc3d93fb48b6815437167", size = 1316273, upload-time = "2025-08-12T06:59:44.476Z" },
-    { url = "https://files.pythonhosted.org/packages/04/88/14f2f4a2b922d8b39be45bf63d79e6cd3a9b2f248b2fcb98a69b12af12f5/sentencepiece-0.2.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0cdfecef430d985f1c2bcbfff3defd1d95dae876fbd0173376012d2d7d24044b", size = 1387881, upload-time = "2025-08-12T06:59:46.09Z" },
-    { url = "https://files.pythonhosted.org/packages/fd/b8/903e5ccb77b4ef140605d5d71b4f9e0ad95d456d6184688073ed11712809/sentencepiece-0.2.1-cp312-cp312-win32.whl", hash = "sha256:a483fd29a34c3e34c39ac5556b0a90942bec253d260235729e50976f5dba1068", size = 999540, upload-time = "2025-08-12T06:59:48.023Z" },
-    { url = "https://files.pythonhosted.org/packages/2d/81/92df5673c067148c2545b1bfe49adfd775bcc3a169a047f5a0e6575ddaca/sentencepiece-0.2.1-cp312-cp312-win_amd64.whl", hash = "sha256:4cdc7c36234fda305e85c32949c5211faaf8dd886096c7cea289ddc12a2d02de", size = 1054671, upload-time = "2025-08-12T06:59:49.895Z" },
-    { url = "https://files.pythonhosted.org/packages/fe/02/c5e3bc518655d714622bec87d83db9cdba1cd0619a4a04e2109751c4f47f/sentencepiece-0.2.1-cp312-cp312-win_arm64.whl", hash = "sha256:daeb5e9e9fcad012324807856113708614d534f596d5008638eb9b40112cd9e4", size = 1033923, upload-time = "2025-08-12T06:59:51.952Z" },
-]
-
-[[package]]
 name = "sentry-sdk"
 version = "2.46.0"
 source = { registry = "https://pypi.org/simple" }
@@ -8036,32 +8006,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b7/4d/08c89e34946fce2aec4fbb45c9016efd5f4d7f24af8e5d93296e935631d8/threadpoolctl-3.6.0.tar.gz", hash = "sha256:8ab8b4aa3491d812b623328249fab5302a68d2d71745c8a4c719a2fcaba9f44e", size = 21274, upload-time = "2025-03-13T13:49:23.031Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/32/d5/f9a850d79b0851d1d4ef6456097579a9005b31fea68726a4ae5f2d82ddd9/threadpoolctl-3.6.0-py3-none-any.whl", hash = "sha256:43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb", size = 18638, upload-time = "2025-03-13T13:49:21.846Z" },
-]
-
-[[package]]
-name = "tiktoken"
-version = "0.12.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "regex" },
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/7d/ab/4d017d0f76ec3171d469d80fc03dfbb4e48a4bcaddaa831b31d526f05edc/tiktoken-0.12.0.tar.gz", hash = "sha256:b18ba7ee2b093863978fcb14f74b3707cdc8d4d4d3836853ce7ec60772139931", size = 37806, upload-time = "2025-10-06T20:22:45.419Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/46/21ea696b21f1d6d1efec8639c204bdf20fde8bafb351e1355c72c5d7de52/tiktoken-0.12.0-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:6e227c7f96925003487c33b1b32265fad2fbcec2b7cf4817afb76d416f40f6bb", size = 1051565, upload-time = "2025-10-06T20:21:44.566Z" },
-    { url = "https://files.pythonhosted.org/packages/c9/d9/35c5d2d9e22bb2a5f74ba48266fb56c63d76ae6f66e02feb628671c0283e/tiktoken-0.12.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:c06cf0fcc24c2cb2adb5e185c7082a82cba29c17575e828518c2f11a01f445aa", size = 995284, upload-time = "2025-10-06T20:21:45.622Z" },
-    { url = "https://files.pythonhosted.org/packages/01/84/961106c37b8e49b9fdcf33fe007bb3a8fdcc380c528b20cc7fbba80578b8/tiktoken-0.12.0-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:f18f249b041851954217e9fd8e5c00b024ab2315ffda5ed77665a05fa91f42dc", size = 1129201, upload-time = "2025-10-06T20:21:47.074Z" },
-    { url = "https://files.pythonhosted.org/packages/6a/d0/3d9275198e067f8b65076a68894bb52fd253875f3644f0a321a720277b8a/tiktoken-0.12.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:47a5bc270b8c3db00bb46ece01ef34ad050e364b51d406b6f9730b64ac28eded", size = 1152444, upload-time = "2025-10-06T20:21:48.139Z" },
-    { url = "https://files.pythonhosted.org/packages/78/db/a58e09687c1698a7c592e1038e01c206569b86a0377828d51635561f8ebf/tiktoken-0.12.0-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:508fa71810c0efdcd1b898fda574889ee62852989f7c1667414736bcb2b9a4bd", size = 1195080, upload-time = "2025-10-06T20:21:49.246Z" },
-    { url = "https://files.pythonhosted.org/packages/9e/1b/a9e4d2bf91d515c0f74afc526fd773a812232dd6cda33ebea7f531202325/tiktoken-0.12.0-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:a1af81a6c44f008cba48494089dd98cccb8b313f55e961a52f5b222d1e507967", size = 1255240, upload-time = "2025-10-06T20:21:50.274Z" },
-    { url = "https://files.pythonhosted.org/packages/9d/15/963819345f1b1fb0809070a79e9dd96938d4ca41297367d471733e79c76c/tiktoken-0.12.0-cp311-cp311-win_amd64.whl", hash = "sha256:3e68e3e593637b53e56f7237be560f7a394451cb8c11079755e80ae64b9e6def", size = 879422, upload-time = "2025-10-06T20:21:51.734Z" },
-    { url = "https://files.pythonhosted.org/packages/a4/85/be65d39d6b647c79800fd9d29241d081d4eeb06271f383bb87200d74cf76/tiktoken-0.12.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:b97f74aca0d78a1ff21b8cd9e9925714c15a9236d6ceacf5c7327c117e6e21e8", size = 1050728, upload-time = "2025-10-06T20:21:52.756Z" },
-    { url = "https://files.pythonhosted.org/packages/4a/42/6573e9129bc55c9bf7300b3a35bef2c6b9117018acca0dc760ac2d93dffe/tiktoken-0.12.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:2b90f5ad190a4bb7c3eb30c5fa32e1e182ca1ca79f05e49b448438c3e225a49b", size = 994049, upload-time = "2025-10-06T20:21:53.782Z" },
-    { url = "https://files.pythonhosted.org/packages/66/c5/ed88504d2f4a5fd6856990b230b56d85a777feab84e6129af0822f5d0f70/tiktoken-0.12.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:65b26c7a780e2139e73acc193e5c63ac754021f160df919add909c1492c0fb37", size = 1129008, upload-time = "2025-10-06T20:21:54.832Z" },
-    { url = "https://files.pythonhosted.org/packages/f4/90/3dae6cc5436137ebd38944d396b5849e167896fc2073da643a49f372dc4f/tiktoken-0.12.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:edde1ec917dfd21c1f2f8046b86348b0f54a2c0547f68149d8600859598769ad", size = 1152665, upload-time = "2025-10-06T20:21:56.129Z" },
-    { url = "https://files.pythonhosted.org/packages/a3/fe/26df24ce53ffde419a42f5f53d755b995c9318908288c17ec3f3448313a3/tiktoken-0.12.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:35a2f8ddd3824608b3d650a000c1ef71f730d0c56486845705a8248da00f9fe5", size = 1194230, upload-time = "2025-10-06T20:21:57.546Z" },
-    { url = "https://files.pythonhosted.org/packages/20/cc/b064cae1a0e9fac84b0d2c46b89f4e57051a5f41324e385d10225a984c24/tiktoken-0.12.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:83d16643edb7fa2c99eff2ab7733508aae1eebb03d5dfc46f5565862810f24e3", size = 1254688, upload-time = "2025-10-06T20:21:58.619Z" },
-    { url = "https://files.pythonhosted.org/packages/81/10/b8523105c590c5b8349f2587e2fdfe51a69544bd5a76295fc20f2374f470/tiktoken-0.12.0-cp312-cp312-win_amd64.whl", hash = "sha256:ffc5288f34a8bc02e1ea7047b8d041104791d2ddbf42d1e5fa07822cbffe16bd", size = 878694, upload-time = "2025-10-06T20:21:59.876Z" },
 ]
 
 [[package]]

@@ -20,9 +20,9 @@ import dataclasses
 from levanter.optim import MuonHConfig
 
 from experiments.defaults import SimpleTrainConfig, default_train
-from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
 from experiments.qwen3 import qwen3_1_7b, qwen3_8b
+from fray.cluster import ResourceConfig
+from marin.execution.executor import executor_main
 
 from experiments.ferries.initial_ferry import (
     BATCH_SIZE_1B,
@@ -62,7 +62,7 @@ muonh_cfg_8b = MuonHConfig(
 
 
 train_config_1b = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v5p-32"),
+    resources=ResourceConfig.with_tpu("v5p-32"),
     train_batch_size=BATCH_SIZE_1B,
     num_train_steps=NUM_1B_TRAIN_STEPS,
     learning_rate=muonh_cfg_1b.learning_rate,
@@ -71,7 +71,7 @@ train_config_1b = SimpleTrainConfig(
 )
 
 train_config_8b = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v5p-128"),
+    resources=ResourceConfig.with_tpu("v5p-128"),
     train_batch_size=BATCH_SIZE_8B,
     num_train_steps=NUM_8B_TRAIN_STEPS,
     learning_rate=muonh_cfg_8b.learning_rate,

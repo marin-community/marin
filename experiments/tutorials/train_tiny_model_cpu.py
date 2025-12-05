@@ -23,9 +23,9 @@ This script demonstrates how to:
 For GPU training, see train_tiny_model_gpu.py
 """
 
+from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import executor_main, versioned
-from marin.resources import CpuOnlyConfig
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_nano
@@ -49,7 +49,7 @@ tinystories_tokenized = default_tokenize(
 # 3. Define training configuration
 nano_train_config = SimpleTrainConfig(
     # Here we define the hardware resources we need.
-    resources=CpuOnlyConfig(num_cpus=1),
+    resources=ResourceConfig.with_cpu(),
     train_batch_size=4,
     num_train_steps=100,
     # set hyperparameters

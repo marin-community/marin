@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from fray.cluster import ResourceConfig
+
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
-from experiments.evals.resource_configs import SINGLE_TPU_V5p_8
 from experiments.evals.task_configs import EvalTaskConfig
 
 from experiments.llama import llama3_tokenizer
@@ -43,7 +44,7 @@ def create_eval_steps() -> list:
             model_name=name,
             model_path=output_path_of(model),
             evals=tasks,
-            resource_config=SINGLE_TPU_V5p_8,
+            resource_config=ResourceConfig.with_tpu("v5p-8"),
         )
         steps.append(step)
 
@@ -51,7 +52,7 @@ def create_eval_steps() -> list:
             output_path_of(model).cd("checkpoints"),
             metadata[-1],
             dist_eval,
-            resource_config=SINGLE_TPU_V5p_8,
+            resource_config=ResourceConfig.with_tpu("v5p-8"),
             checkpoint_is_hf=False,
             name=versioned(f"{name}-DistRobust-ICE-logprobs"),
         )
@@ -65,7 +66,7 @@ def create_eval_steps() -> list:
             model_name=name,
             model_path=output_path_of(model),
             evals=tasks,
-            resource_config=SINGLE_TPU_V5p_8,
+            resource_config=ResourceConfig.with_tpu("v5p-8"),
         )
         steps.append(step)
 
@@ -73,7 +74,7 @@ def create_eval_steps() -> list:
             output_path_of(model).cd("checkpoints"),
             metadata[-1],
             dist_eval,
-            resource_config=SINGLE_TPU_V5p_8,
+            resource_config=ResourceConfig.with_tpu("v5p-8"),
             checkpoint_is_hf=False,
             name=versioned(f"{name}-DistRobust-ICE-logprobs"),
         )
@@ -87,7 +88,7 @@ def create_eval_steps() -> list:
             model_name=name,
             model_path=output_path_of(model),
             evals=tasks,
-            resource_config=SINGLE_TPU_V5p_8,
+            resource_config=ResourceConfig.with_tpu("v5p-8"),
         )
         steps.append(step)
 
@@ -95,7 +96,7 @@ def create_eval_steps() -> list:
         output_path_of(model).cd("checkpoints"),
         metadata[-1],
         dist_eval,
-        resource_config=SINGLE_TPU_V5p_8,
+        resource_config=ResourceConfig.with_tpu("v5p-8"),
         checkpoint_is_hf=False,
         name=versioned(f"{name}-DistRobust-ICE-logprobs"),
     )
@@ -124,7 +125,7 @@ def create_eval_steps() -> list:
             model_name=f"{model}@{revision}",
             model_path=output_path_of(model_instance),
             evals=tasks,
-            resource_config=SINGLE_TPU_V5p_8,
+            resource_config=ResourceConfig.with_tpu("v5p-8"),
         )
         steps.append(step)
     return steps

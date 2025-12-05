@@ -35,9 +35,9 @@ from experiments.tootsie.exp600_tootsie import (
     llama_8b_train_config_phase3,
     phase_3_data_mixture,
 )
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize import add_validation_sets_to_mixture
-from marin.resources import TpuPodConfig
 
 # 3072 * 4096 * 10000 is 125B tokens
 COOLDOWN_LEN = 10000
@@ -45,7 +45,7 @@ COOLDOWN_END = PHASE_3_END + COOLDOWN_LEN
 
 tootsie_8b_soft_raccoon_train = dataclasses.replace(
     llama_8b_train_config_phase3,
-    resources=TpuPodConfig(tpu_type="v4-128", slice_count=4),
+    resources=ResourceConfig.with_tpu("v4-128", slice_count=4),
     learning_rate=1.7e-4,  # only does what we want b/c we're warmstarting from the ckpt below
     num_train_steps=COOLDOWN_END,
     min_lr_ratio=0.1,  # 1.7e-5
@@ -82,7 +82,7 @@ COOLER_DOWN_END = COOLDOWN_END + COOLER_DOWN_LEN
 
 tootsie_8b_softer_raccoon_train = dataclasses.replace(
     llama_8b_train_config_phase3,
-    resources=TpuPodConfig(tpu_type="v4-128", slice_count=4),
+    resources=ResourceConfig.with_tpu("v4-128", slice_count=4),
     learning_rate=1.7e-5,  # only does what we want b/c we're warmstarting from soft-raccoon
     num_train_steps=COOLER_DOWN_END,
     min_lr_ratio=1e-6 / 1.7e-5,  # 1e-6
@@ -112,7 +112,7 @@ tootsie_8b_softer_raccoon = dataclasses.replace(
 
 tootsie_8b_softer_raccoon_train_no_decay = dataclasses.replace(
     llama_8b_train_config_phase3,
-    resources=TpuPodConfig(tpu_type="v4-128", slice_count=4),
+    resources=ResourceConfig.with_tpu("v4-128", slice_count=4),
     learning_rate=1.7e-5,  # only does what we want b/c we're warmstarting from soft-raccoon
     num_train_steps=COOLER_DOWN_END,
     min_lr_ratio=1e-6 / 1.7e-5,  # 1e-6

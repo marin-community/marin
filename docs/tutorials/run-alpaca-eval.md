@@ -12,8 +12,8 @@ This tutorial shows how to configure and launch the Alpaca evaluation pipeline i
 The default evaluation script for alpaca is `experiments/evals/run_alpaca_eval.py`), if for some reason you want to make your own script import:
 
 ```python
+from fray.cluster import ResourceConfig
 from experiments.evals.engine_configs import DEFAULT_VLLM_ENGINE_KWARGS
-from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from experiments.evals.evals          import evaluate_alpaca_eval
 from marin.execution.executor         import ExecutorMainConfig, executor_main
 ```
@@ -22,9 +22,9 @@ from marin.execution.executor         import ExecutorMainConfig, executor_main
 
 ```python
 # nodryrun
+from fray.cluster import ResourceConfig
 from experiments.evals.engine_configs import DEFAULT_VLLM_ENGINE_KWARGS
 from experiments.evals.evals          import evaluate_alpaca_eval
-from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from marin.execution.executor         import ExecutorMainConfig, executor_main
 
 # Retry any failed steps by default
@@ -34,7 +34,7 @@ steps = [
     evaluate_alpaca_eval(
         model_name="my_alpaca_model_eval",              # Name for logging / W&B
         model_path="path/to/your/model/checkpoint/hf/",  # HF checkpoint directory
-        resource_config=SINGLE_TPU_V6E_8,                 # E.g., TPU v6e-8; choose GPU/TPU config
+        resource_config=ResourceConfig.with_tpu("v6e-8"),   # E.g., TPU v6e-8; choose GPU/TPU config
         engine_kwargs=DEFAULT_VLLM_ENGINE_KWARGS,         # vLLM backend parameters
 
         # IMPORTANT: stop_token_ids must include the eos_token_id of your HF model.
@@ -65,7 +65,7 @@ if __name__ == "__main__":
 |----------------------|----------------------|-------------|
 | model_name           | `str`                | Name for experiment tracking through executor framework. |
 | model_path           | `str`                | Path on GCP or URL to HF-format model checkpoint. |
-| resource_config      | `ResourceConfig`     | Hardware spec (e.g. `SINGLE_TPU_V6E_8`). |
+| resource_config      | `ResourceConfig`  | Hardware spec (e.g. `ResourceConfig.with_tpu("v6e-8")`). |
 | engine_kwargs        | `dict  None`   | vLLM engine settings (e.g. batch size, sequence length). |
 | max_eval_instances   | `int  None`    | Limits the number of examples to evaluate; `None` = all. |
 | temperature          | `float`              | Sampling temperature. |

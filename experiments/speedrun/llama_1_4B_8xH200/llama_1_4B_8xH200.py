@@ -22,7 +22,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
 from experiments.tutorials.exp1077_reproduce_dclm_1b1x import BATCH_SIZE, SEQ_LEN, llama_1_4b_dclm
 from marin.execution.executor import executor_main, versioned
-from marin.resources import GpuConfig
+from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
@@ -40,7 +40,7 @@ speedrun_config = SpeedrunConfig(
     description="1.4B param model based on Llama architecture.",
     model_config=llama_1_4b_dclm,
     train_config=SimpleTrainConfig(
-        GpuConfig(gpu_count=8, accelerator_type="H200"),
+        ResourceConfig.with_gpu("H200", count=8),
         train_batch_size=BATCH_SIZE,
         num_train_steps=NUM_TRAIN_STEPS,
         learning_rate=3e-3,

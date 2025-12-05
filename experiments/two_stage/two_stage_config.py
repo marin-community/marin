@@ -32,7 +32,8 @@ from experiments.two_stage.models import model_dict
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, this_output_path
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig, lm_varying_mixture_data_config
-from marin.training.training import TpuPodConfig, TrainLmOnPodConfig, run_levanter_train_lm
+from fray.cluster import ResourceConfig
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 
 @dataclass
@@ -331,11 +332,8 @@ class TwoStageConfig:
             return None
         return LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(self.eval_harness_tasks))
 
-    def build_pod_config(self) -> TpuPodConfig:
-        return TpuPodConfig(
-            tpu_type=self.tpu_type,
-            slice_count=self.slice_count,
-        )
+    def build_pod_config(self) -> ResourceConfig:
+        return ResourceConfig.with_tpu(self.tpu_type, slice_count=self.slice_count)
 
     def build_train_lm_config(self) -> TrainLmConfig:
         return TrainLmConfig(

@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from fray.cluster import ResourceConfig
 from marin.execution import InputName
 from marin.processing.tokenize.data_configs import LMMixtureDatasetConfig
-from marin.resources import ResourceConfig, TpuPodConfig
 
 
 @dataclass(frozen=True)
@@ -54,7 +54,7 @@ class AnnealConfig:
 
     # Hardware related
     # The number of TPUs to use, type of TPU, and the number of pods to use.
-    resources: ResourceConfig = TpuPodConfig(tpu_type="v4-128", slice_count=2)  # noqa: RUF009
+    resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_tpu("v4-128", slice_count=2))
 
     # Checkpoint related
     # The number of steps between saving checkpoints. Larger values will save checkpoints more frequently.
@@ -64,17 +64,3 @@ class AnnealConfig:
     # This argument is used in the default_train. If set to True, the validation set is Paloma.
     # If set to False, we will not calculate validation loss.
     use_default_validation: bool = True
-
-    @property
-    def tpu_type(self) -> str | None:
-        """For backward compatibility."""
-        if isinstance(self.resources, TpuPodConfig):
-            return self.resources.tpu_type
-        return None
-
-    @property
-    def node_count(self) -> int:
-        """For backward compatibility."""
-        if isinstance(self.resources, TpuPodConfig):
-            return self.resources.slice_count
-        return 1

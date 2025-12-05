@@ -102,7 +102,6 @@ def tokenize_dolmino(*, tokenizer: str | None = None) -> dict[str, TokenizerStep
                 cache_path=this_output_path(),
                 tokenizer=versioned(tokenizer),
             ),
-            pip_dependency_groups=["sentencepiece"],
         )
 
         # Check if we need to use override path for llama3
@@ -143,5 +142,4 @@ def tokenize_dolmino_math(tokenizer: str | None = None):
             cache_path=this_output_path(),
             tokenizer=versioned(tokenizer),
         ),
-        pip_dependency_groups=["sentencepiece"],
     ).with_output_path("tokenized/dolmino/all_math-9d507c")

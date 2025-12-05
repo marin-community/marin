@@ -34,6 +34,8 @@ import fsspec
 import fsspec.generic
 import ray
 from datasets import DatasetDict, load_from_disk
+from fray.cluster.base import ResourceConfig
+from fray.cluster.ray.resources import get_scheduling_strategy
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -289,10 +291,7 @@ def train_model(
     datetime_start = datetime.utcnow()
 
     # run training on remote worker, not head node
-    @ray.remote(
-        memory=memory_req * 1024 * 1024 * 1024,
-        resources={"TPU": 4, "TPU-v4-8-head": 1},
-    )
+    @ray.remote(memory=memory_req * 1024 * 1024 * 1024)
     @remove_tpu_lockfile_on_exit
     def run():
         if fsspec_exists(f"{output_path}/model"):
@@ -339,7 +338,9 @@ def train_model(
             fsspec_rm(merge_path)
             fsspec_cpdir(tmp_dir, output_path)
 
-    response = run.remote()
+    resource_config = ResourceConfig.with_tpu("v4-8")
+    scheduling_strategy = get_scheduling_strategy(resource_config)
+    response = run.options(scheduling_strategy=scheduling_strategy).remote()
     try:
         ray.get(response)
     except Exception as e:

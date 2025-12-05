@@ -17,9 +17,9 @@ from experiments.exp964_custom_chat_tokenizer import llama3_instruct_chat_format
 from experiments.llama import llama3_instruct_tokenizer, llama_8b
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_data_config
-from marin.resources import TpuPodConfig
 
 # Get instruction dataset
 tulu_3_dataset = get_instruction_dataset("allenai/tulu-3-sft-mixture")
@@ -47,7 +47,7 @@ tulu_sft_config = SimpleSFTConfig(
     train_batch_size=128,
     num_train_steps=NUM_TRAIN_STEPS,  # Adjust as needed.
     learning_rate=5e-6,
-    resources=TpuPodConfig(tpu_type="v4-128", slice_count=1),
+    resources=ResourceConfig.with_tpu("v4-128", slice_count=1),
     tokenizer=llama3_instruct_tokenizer,
     model_name_or_path="meta-llama/Llama-3.1-8B",
     max_seq_len=4096,

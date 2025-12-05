@@ -26,7 +26,7 @@ from experiments.defaults import default_train
 from experiments.qwen3 import qwen3_32b
 from experiments.tootsie.exp1295_32b import llama_32b_tootsie, llama_32b_train_config, nemotron_mix
 from marin.execution import executor_main
-from marin.resources import TpuPodConfig
+from fray.cluster import ResourceConfig
 
 # We have doctored the opt state to include update history from
 # gs://marin-us-central2/checkpoints/llama-32b-tootsie-2/checkpoints/step-77096 for clipping
@@ -40,7 +40,7 @@ qwen3_32b_remat = dataclasses.replace(
 qwen_32b_warmstart_train = dataclasses.replace(
     llama_32b_train_config,
     initialize_from_checkpoint_path=warmstart_checkpoint,
-    resources=TpuPodConfig("v4-2048", 1),
+    resources=ResourceConfig.with_tpu("v4-2048", 1),
     reset_data_loader_on_init=False,
     allow_partial_checkpoint=True,
     optimizer_config=AdamConfig(
@@ -82,7 +82,7 @@ marin_32b_qwen = default_train(
 qwen_32b_warmstart_train_v5p = dataclasses.replace(
     qwen_32b_warmstart_train,
     initialize_from_checkpoint_path=None,
-    resources=TpuPodConfig("v5p-2048", 1),
+    resources=ResourceConfig.with_tpu("v5p-2048", 1),
     reset_data_loader_on_init=False,
     allow_partial_checkpoint=False,
 )
