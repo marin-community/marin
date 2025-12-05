@@ -12,22 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Ray-based cluster implementation."""
+from marin.processing.classification.deduplication.text_cleaning import clean_text
 
-from fray.cluster.ray.cluster import RayCluster
-from fray.cluster.ray.dashboard import (
-    DashboardConfig,
-    DashboardConnection,
-    ray_dashboard,
-)
-from fray.cluster.ray.resources import accelerator_descriptor, as_remote_kwargs, get_scheduling_strategy
 
-__all__ = [
-    "DashboardConfig",
-    "DashboardConnection",
-    "RayCluster",
-    "accelerator_descriptor",
-    "as_remote_kwargs",
-    "get_scheduling_strategy",
-    "ray_dashboard",
-]
+def test_clean_text():
+    assert clean_text("") == ""
+    assert clean_text("Hello, World!") == "hello world"
+    assert clean_text("  Multiple   spaces\tand\nnewlines. ") == "multiple spaces and newlines"
+    assert clean_text("Punctuation!!! Should be removed...") == "punctuation should be removed"

@@ -24,7 +24,7 @@ from experiments.llama import llama_75m, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.parallel_llama.exp1571_parallel_llama import ParallelLlamaConfig
 from marin.execution.executor import executor_main
-from marin.resources import GpuConfig
+from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 import time
 
@@ -88,10 +88,10 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     # Resource configurations - using GPUs for smaller models, TPUs for larger
     resource_cfgs = {
-        "75m": GpuConfig(gpu_count=1, accelerator_type="H100"),
-        "150m": GpuConfig(gpu_count=1, accelerator_type="H100"),
-        "300m": GpuConfig(gpu_count=1, accelerator_type="H100"),
-        "520m": GpuConfig(gpu_count=1, accelerator_type="H100"),
+        "75m": ResourceConfig.with_gpu("H100", count=1),
+        "150m": ResourceConfig.with_gpu("H100", count=1),
+        "300m": ResourceConfig.with_gpu("H100", count=1),
+        "520m": ResourceConfig.with_gpu("H100", count=1),
     }
 
     # Cautious optimizer configs for each size
