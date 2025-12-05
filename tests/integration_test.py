@@ -194,7 +194,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         "JAX_TRACEBACK_FILTERING": "off",
     }
 
-    pod_config = ResourceConfig.with_tpu("v4-8")
+    pod_config = ResourceConfig.with_cpu()
 
     train_step = ExecutorStep(
         name=os.path.join(prefix, "train"),
