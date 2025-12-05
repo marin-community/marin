@@ -182,7 +182,7 @@ fi
 
 echo ""
 echo -e "${CYAN}Let's set up your specific run directory and branch.${NC}"
-read -p "Enter a name for your run (press enter for "default_run"): " RUN_NAME < /dev/tty
+read -p 'Enter a name for your run (press enter for "default_run"): ' RUN_NAME < /dev/tty
 
 # Sanitize run name (remove spaces)
 RUN_NAME=${RUN_NAME// /_}
