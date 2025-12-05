@@ -13,6 +13,8 @@ NC='\033[0m' # No Color
 log_start() { echo -n -e "${BLUE}[INFO]${NC} $1... "; }
 # log_end prints [SUCCESS] and a newline
 log_end() { echo -e "${GREEN}[SUCCESS]${NC}"; }
+# log_success prints a specific success message
+log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 
 # For verbose commands that output text, we print a header first
 log_header() { echo -e "${BLUE}[INFO]${NC} $1..."; }
@@ -48,7 +50,7 @@ else
         cd marin || { log_error "Failed to enter directory 'marin'. Check permissions."; exit 1; }
 
         if is_marin_root; then
-            echo -e "${GREEN}[SUCCESS]${NC} Entered directory 'marin'."
+            log_success "Entered directory 'marin'."
         else
             log_error "Directory 'marin' exists but does not appear to be the valid project root (missing pyproject.toml configuration)."
             exit 1
@@ -84,7 +86,7 @@ else
         # Verify directory entry
         if [[ -d "marin" ]]; then
             cd marin || { log_error "Failed to enter directory 'marin'."; exit 1; }
-            log_end
+            log_success "Entered directory 'marin'."
         else
             log_error "Failed to find 'marin' directory after clone operation. Exiting."
             exit 1
