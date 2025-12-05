@@ -44,8 +44,8 @@ docker:
 
 
 initialization_commands:
-  - yes | gcloud auth configure-docker europe-west4-docker.pkg.dev
   - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
+  - yes | gcloud auth configure-docker europe-west4-docker.pkg.dev
   # always run this because ray doesn't run with sudo
   - sudo usermod -aG docker $USER
   # we want to launch docker containers from inside docker, which means we need to loosen the permissions on the docker
@@ -53,12 +53,14 @@ initialization_commands:
   - sudo chmod 666 /var/run/docker.sock
 
 setup_commands:
-  - mkdir $HOME/.cache/huggingface -p
-  - mkdir $HOME/.cache/openai -p
   # set the GCP project because it's not injected by default
   - gcloud config set project hai-gcp-models
   - gcloud config set compute/region europe-west4
   - gcloud config set compute/zone europe-west4-b
+  - mkdir $HOME/.cache/huggingface -p
+  - mkdir $HOME/.cache/openai -p
+  - mkdir -p $HOME/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > $HOME/.ssh/authorized_keys && chmod 600 $HOME/.ssh/authorized_keys
+  - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > $HOME/.ssh/marin_ray_cluster.pub
   - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - echo 'export MARIN_PREFIX="gs://marin-eu-west4"' >> $HOME/.bashrc
@@ -70,9 +72,6 @@ setup_commands:
   - echo 'export TPU_STDERR_LOG_LEVEL=3' >> $HOME/.bashrc
   - echo 'export TPU_LOG_DIR=disabled' >> $HOME/.bashrc
   - gcsfuse --implicit-dirs --client-protocol grpc --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
-  - mkdir -p ~/.ssh && /root/gcloud/google-cloud-sdk/bin/gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
-  # Using /home/ray/.ssh/ since auth.ssh_user is set to 'ray' and we need to ensure the key is in the correct user's home directory else we get an error
-  - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
 worker_setup_commands:
   # delete any old ray session data
