@@ -11,12 +11,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-from dupekit.text_cleaning import clean_text
-
-
-def test_clean_text():
-    assert clean_text("") == ""
-    assert clean_text("Hello, World!") == "hello world"
-    assert clean_text("  Multiple   spaces\tand\nnewlines. ") == "multiple spaces and newlines"
-    assert clean_text("Punctuation!!! Should be removed...") == "punctuation should be removed"
