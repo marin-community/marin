@@ -39,7 +39,9 @@ logger = logging.getLogger(__name__)
 def main(ctx: click.Context, cluster: str):
     """Fray cluster job management."""
     ctx.ensure_object(dict)
-    ctx.obj["cluster_spec"] = cluster
+    cluster_obj = create_cluster(cluster)
+    ctx.with_resource(cluster_obj.connect())
+    ctx.obj["cluster"] = cluster_obj
 
 
 @main.command()
@@ -124,10 +126,7 @@ def submit(ctx, extra, cpus, memory, disk, tpu, gpu, gpu_count, env, auto_stop, 
         device=device,
     )
 
-    entrypoint = Entrypoint(
-        binary=full_cmd[0],
-        args=full_cmd[1:],
-    )
+    entrypoint = Entrypoint.from_binary(full_cmd[0], full_cmd[1:])
 
     job_req = JobRequest(
         name=generate_job_name(" ".join(full_cmd)),
@@ -136,11 +135,8 @@ def submit(ctx, extra, cpus, memory, disk, tpu, gpu, gpu_count, env, auto_stop, 
         environment=env_config,
     )
 
-    cluster_spec = ctx.obj["cluster_spec"]
-    cluster = create_cluster(cluster_spec)
-
-    with cluster.connect():
-        submit_and_monitor(cluster, job_req, tpu, auto_stop, no_wait)
+    cluster = ctx.obj["cluster"]
+    submit_and_monitor(cluster, job_req, tpu, auto_stop, no_wait)
 
 
 @contextlib.contextmanager
@@ -182,25 +178,21 @@ def submit_and_monitor(cluster, job_req, is_tpu, should_stop, no_wait):
 @click.pass_context
 def list_jobs(ctx):
     """List all jobs."""
-    cluster_spec = ctx.obj["cluster_spec"]
-    cluster = create_cluster(cluster_spec)
+    cluster = ctx.obj["cluster"]
+    jobs = cluster.list_jobs()
 
-    with cluster.connect():
-        jobs = cluster.list_jobs()
+    if not jobs:
+        click.echo("No jobs found.")
+        return
 
-        if not jobs:
-            click.echo("No jobs found.")
-            return
-
-        # Table header
-        click.echo(f"{'JOB_ID':<40} {'NAME':<30} {'STATUS':<12} {'START':<20}")
-        click.echo("-" * 102)
-        for job in jobs:
-            if job.start_time:
-                start = datetime.datetime.fromtimestamp(job.start_time).strftime("%Y-%m-%d %H:%M:%S")
-            else:
-                start = "N/A"
-            click.echo(f"{job.job_id:<40} {job.name:<30} {job.status:<12} {start:<20}")
+    click.echo(f"{'JOB_ID':<40} {'NAME':<30} {'STATUS':<12} {'START':<20}")
+    click.echo("-" * 102)
+    for job in jobs:
+        if job.start_time:
+            start = datetime.datetime.fromtimestamp(job.start_time).strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            start = "N/A"
+        click.echo(f"{job.job_id:<40} {job.name:<30} {job.status:<12} {start:<20}")
 
 
 @main.command()
@@ -208,15 +200,12 @@ def list_jobs(ctx):
 @click.pass_context
 def wait(ctx, job_id):
     """Wait for job completion."""
-    cluster_spec = ctx.obj["cluster_spec"]
-    cluster = create_cluster(cluster_spec)
-
-    with cluster.connect():
-        click.echo(f"Waiting for {job_id}...")
-        info = cluster.wait(job_id)
-        click.echo(f"Job finished: {info.status}")
-        if info.error_message:
-            click.echo(f"Error: {info.error_message}", err=True)
+    cluster = ctx.obj["cluster"]
+    click.echo(f"Waiting for {job_id}...")
+    info = cluster.wait(job_id)
+    click.echo(f"Job finished: {info.status}")
+    if info.error_message:
+        click.echo(f"Error: {info.error_message}", err=True)
 
 
 @main.command()
@@ -224,12 +213,9 @@ def wait(ctx, job_id):
 @click.pass_context
 def terminate(ctx, job_id):
     """Terminate a job."""
-    cluster_spec = ctx.obj["cluster_spec"]
-    cluster = create_cluster(cluster_spec)
-
-    with cluster.connect():
-        cluster.terminate(job_id)
-        click.echo(f"Terminated: {job_id}")
+    cluster = ctx.obj["cluster"]
+    cluster.terminate(job_id)
+    click.echo(f"Terminated: {job_id}")
 
 
 @main.command()
@@ -237,65 +223,12 @@ def terminate(ctx, job_id):
 @click.pass_context
 def logs(ctx, job_id):
     """Stream logs from a job."""
-    cluster_spec = ctx.obj["cluster_spec"]
-    cluster = create_cluster(cluster_spec)
-
-    with cluster.connect():
-        try:
-            job_info = cluster.monitor(job_id)
-            click.echo(f"Job status: {job_info.status}")
-        except KeyboardInterrupt:
-            click.echo("\nInterrupted.")
-
-
-@main.command()
-@click.option("--clusters", type=str, help="Comma-separated regions/configs")
-def dashboard(clusters):
-    """Start dashboard SSH tunnels for Ray clusters.
-
-    Examples:
-        fray dashboard --clusters=us-west2,us-east1
-        fray dashboard  # Auto-discover all active clusters
-    """
-    from fray.cluster.ray import DashboardConfig, ray_dashboard
-
-    cluster_configs = []
-    if clusters:
-        for c in clusters.split(","):
-            cluster_configs.append(parse_cluster_config(f"ray:{c}"))
-
-    cfg = DashboardConfig(cluster_configs=cluster_configs)
-    click.echo("Starting dashboard SSH tunnels...")
-    click.echo("Press Ctrl+C to stop.")
-
+    cluster = ctx.obj["cluster"]
     try:
-        with ray_dashboard(cfg) as conn:
-            click.echo("\nActive dashboard tunnels:")
-            for name, info in conn.clusters.items():
-                ports = conn.port_mappings[name]
-                click.echo(f"  {name} ({info.head_ip}):")
-                click.echo(f"    Dashboard: http://localhost:{ports.dashboard_port}")
-                click.echo(f"    GCS: localhost:{ports.gcs_port}")
-                click.echo(f"    API: localhost:{ports.api_port}")
-
-            import time
-
-            while True:
-                time.sleep(1)
+        job_info = cluster.monitor(job_id)
+        click.echo(f"Job status: {job_info.status}")
     except KeyboardInterrupt:
-        click.echo("\nShutting down.")
-
-
-def parse_cluster_config(cluster_spec: str) -> str:
-    """Parse 'ray:region' or 'ray:/path' to config path."""
-    if cluster_spec.startswith("ray:/"):
-        return cluster_spec[4:]  # Strip 'ray:' prefix
-    elif cluster_spec.startswith("ray:"):
-        region = cluster_spec[4:]
-        from fray.cluster.ray.config import find_config_by_region
-
-        return find_config_by_region(region)
-    raise ValueError(f"Invalid cluster spec: {cluster_spec}")
+        click.echo("\nInterrupted.")
 
 
 def generate_job_name(command: str) -> str:

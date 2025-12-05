@@ -14,13 +14,10 @@
 
 """Local subprocess-based cluster implementation for development and testing."""
 
-import io
 import logging
 import subprocess
 import time
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
@@ -41,14 +38,6 @@ class LocalClusterConfig:
 class FakeProcess(Thread):
     def poll(self):
         return None if self.is_alive() else 0
-
-    @property
-    def stdout(self):
-        return io.StringIo("")
-
-    @property
-    def stderr(self):
-        return io.StringIo("")
 
 
 class LocalCluster(Cluster):
@@ -95,13 +84,21 @@ class LocalCluster(Cluster):
 
         processes = []
         process_env = None
-        if not self.config.use_isolated_env:
-            # only run callables, launch them as a thread
+        # Non-isolated mode only works with callable entrypoints (run as thread in parent process)
+        # Binary entrypoints always require isolated mode (subprocess)
+        # Also use isolated mode if custom env_vars are specified (threads can't have custom env)
+        has_custom_env = request.environment and request.environment.env_vars
+        use_isolated = self.config.use_isolated_env or request.entrypoint.callable_entrypoint is None or has_custom_env
+        if not use_isolated:
+            # Run callable in parent process as a thread
+            callable_ep = request.entrypoint.callable_entrypoint
             processes = []
             for _ in range(replica_count):
-                logger.info(f"Running callable in parent process with args {request.entrypoint.function_args}")
+                logger.info(
+                    f"Running callable in parent process with args={callable_ep.args}, kwargs={callable_ep.kwargs}"
+                )
                 process = FakeProcess(
-                    target=request.entrypoint.callable, args=request.entrypoint.function_args, daemon=True
+                    target=callable_ep.callable, args=callable_ep.args, kwargs=callable_ep.kwargs, daemon=True
                 )
                 process.start()
                 processes.append(process)
@@ -173,11 +170,6 @@ class LocalCluster(Cluster):
     def list_jobs(self) -> list[JobInfo]:
         return [job.get_info() for job in self._jobs.values()]
 
-    @contextmanager
-    def connect(self) -> Iterator[None]:
-        """No-op connection for local cluster."""
-        yield
-
     def _get_job(self, job_id: JobId) -> "_LocalJob":
         if job_id not in self._jobs:
             raise KeyError(f"Job {job_id} not found")
@@ -188,19 +180,21 @@ class LocalCluster(Cluster):
 
         entrypoint = request.entrypoint
 
-        if entrypoint.callable is not None:
+        if entrypoint.callable_entrypoint is not None:
             # Ensure tmp directory exists for thunk files
             tmp_dir = Path(process_env.workspace_path) / "tmp"
             tmp_dir.mkdir(parents=True, exist_ok=True)
 
+            callable_ep = entrypoint.callable_entrypoint
             entrypoint = create_thunk_entrypoint(
-                entrypoint.callable,
+                callable_ep.callable,
                 prefix=f"{process_env.workspace_path}/tmp/",
-                function_args=entrypoint.function_args,
+                args=callable_ep.args,
+                kwargs=callable_ep.kwargs,
             )
 
-        assert entrypoint.binary is not None, "Entrypoint requires binary"
-        return [entrypoint.binary, *entrypoint.args]
+        assert entrypoint.binary_entrypoint is not None, "Entrypoint requires binary"
+        return [entrypoint.binary_entrypoint.command, *entrypoint.binary_entrypoint.args]
 
     def _build_replica_env(
         self, process_env: TemporaryVenv, env_config: EnvironmentConfig, replica_id: int, replica_count: int

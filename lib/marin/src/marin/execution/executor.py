@@ -112,15 +112,14 @@ from fray import (
     Cluster,
     Entrypoint,
     EnvironmentConfig,
-    ExecutionContext,
     JobId,
     JobInfo,
     JobRequest,
     JobStatus,
     ResourceConfig,
     current_cluster,
-    fray_job_ctx,
 )
+from fray.job import JobContext, fray_job_ctx
 
 from marin.execution.executor_step_status import (
     STATUS_CANCELLED,
@@ -764,7 +763,7 @@ class Executor:
 
             fray_job = JobRequest(
                 name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
-                entrypoint=Entrypoint(callable=step_fn, function_args=(config,)),
+                entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
                 resources=ResourceConfig.with_cpu(),
                 environment=EnvironmentConfig.create(),
             )
@@ -1050,7 +1049,7 @@ def get_status(cluster: Cluster, output_path: str, current_owner_task_id: str | 
 
 def should_run(
     cluster: Cluster,
-    ctx: ExecutionContext,
+    ctx: JobContext,
     output_path: str,
     step_name: str,
     status_actor: StatusActor,

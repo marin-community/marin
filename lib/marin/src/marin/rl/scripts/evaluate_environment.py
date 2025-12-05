@@ -253,9 +253,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
 
     job_request = JobRequest(
         name=f"evaluate-{config.env_config.env_class}",
-        entrypoint=Entrypoint(
-            callable=_run_inference,
-        ),
+        entrypoint=Entrypoint.from_callable(_run_inference),
         resources=resources,
         environment=create_environment(
             extras=["post_training", "rl"],

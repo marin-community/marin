@@ -21,7 +21,6 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Literal, NewType, Self
@@ -402,37 +401,34 @@ class EnvironmentConfig:
 
 
 @dataclass(frozen=True)
+class BinaryEntrypoint:
+    command: str
+    args: Sequence[str]
+
+
+@dataclass(frozen=True)
+class CallableEntrypoint:
+    callable: Callable[..., Any]
+    args: Sequence[Any] = field(default_factory=tuple)
+    kwargs: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Entrypoint:
-    """Job entrypoint specification.
+    callable_entrypoint: CallableEntrypoint | None = None
+    binary_entrypoint: BinaryEntrypoint | None = None
 
-    Args:
-        binary: Binary to execute (e.g., "python", "uv", "bash")
-        args: Command-line arguments for the binary
-        callable: Callable for direct execution
-        function_args: Keyword arguments to pass to callable
+    @staticmethod
+    def from_callable(
+        c: Callable[..., Any],
+        args: Sequence[Any] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> Self:
+        return Entrypoint(callable_entrypoint=CallableEntrypoint(callable=c, args=args, kwargs=kwargs or {}))
 
-    Examples:
-        Entrypoint(binary="python", args=["train.py", "--config", "config.yaml"])
-        Entrypoint(callable=train_fn, function_args={"config": config, "epochs": 100})
-        Entrypoint(callable=lambda: train_fn(config))
-    """
-
-    binary: str | None = None
-    args: Sequence[str] = field(default_factory=list)
-    callable: Callable[..., Any] | None = None
-    function_args: Sequence[Any] | None = None
-
-    def __post_init__(self):
-        if self.binary is None and self.callable is None:
-            raise ValueError("Must specify either binary or callable")
-        if self.binary is not None and self.callable is not None:
-            raise ValueError("Cannot specify both binary and callable")
-        if self.args and self.callable is not None:
-            raise ValueError("args only valid with binary, not callable")
-        if self.function_args is not None and self.callable is None:
-            raise ValueError("function_args only valid with callable, not binary")
-        if self.function_args is not None and not isinstance(self.function_args, Sequence):
-            raise ValueError("function_args must be a sequence")
+    @staticmethod
+    def from_binary(command: str, args: Sequence[str]) -> Self:
+        return Entrypoint(binary_entrypoint=BinaryEntrypoint(command=command, args=args))
 
 
 @dataclass
@@ -450,6 +446,9 @@ class JobRequest:
     entrypoint: Entrypoint
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     environment: EnvironmentConfig | None = None
+
+    max_retries_failure: int = 0
+    max_retries_preemption: int = 100
 
     def __post_init__(self):
         if " " in self.name:
@@ -607,12 +606,6 @@ class Cluster(ABC):
         Returns:
             List of job information for all jobs (running, completed, and failed)
         """
-        ...
-
-    @abstractmethod
-    @contextmanager
-    def connect(self):
-        """Establish connection to cluster."""
         ...
 
     def wait(self, job_id: JobId) -> JobInfo:

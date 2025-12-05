@@ -21,7 +21,7 @@ from contextvars import ContextVar
 from typing import Literal
 
 import humanfriendly
-from fray import fray_job_ctx
+from fray.job import fray_job_ctx
 
 from zephyr.backends import Backend, BackendConfig
 

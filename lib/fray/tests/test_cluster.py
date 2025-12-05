@@ -31,12 +31,13 @@ from fray.cluster import (
     ResourceConfig,
     create_environment,
 )
+from fray.cluster.ray import RayCluster
 
 
 def test_cluster_launch(cluster):
     request = JobRequest(
         name="test-simple-job",
-        entrypoint=Entrypoint(binary="python", args=["-m", "json.tool", "--help"]),
+        entrypoint=Entrypoint.from_binary("python", ["-m", "json.tool", "--help"]),
         environment=create_environment(),
     )
 
@@ -52,7 +53,7 @@ def test_cluster_launch(cluster):
 def test_cluster_list_jobs(cluster):
     request = JobRequest(
         name="list-test-job",
-        entrypoint=Entrypoint(binary="python", args=["-m", "json.tool"]),
+        entrypoint=Entrypoint.from_binary("python", ["-m", "json.tool"]),
         environment=create_environment(),
     )
 
@@ -63,10 +64,10 @@ def test_cluster_list_jobs(cluster):
     assert any(job.job_id == job_id for job in jobs)
 
 
-def test_cluster_terminate(cluster, cluster_type):
+def test_cluster_terminate(cluster):
     request = JobRequest(
         name="terminate-test-job",
-        entrypoint=Entrypoint(binary="python", args=["-m", "time", "sleep", "10"]),
+        entrypoint=Entrypoint.from_binary("python", ["-m", "time", "sleep", "10"]),
         environment=create_environment(),
     )
 
@@ -76,14 +77,14 @@ def test_cluster_terminate(cluster, cluster_type):
     info = cluster.poll(job_id)
 
     # ray... doesn't necessarily terminate jobs promptly
-    if cluster_type != "ray":
+    if not isinstance(cluster, RayCluster):
         assert info.status in ["stopped", "failed", "succeeded"]
 
 
-def test_cluster_job_success(cluster, cluster_type):
+def test_cluster_job_success(cluster):
     request = JobRequest(
         name="success-test-job",
-        entrypoint=Entrypoint(binary="python", args=["-m", "json.tool", "--help"]),
+        entrypoint=Entrypoint.from_binary("python", ["-m", "json.tool", "--help"]),
         environment=create_environment(),
     )
 
@@ -94,7 +95,7 @@ def test_cluster_job_success(cluster, cluster_type):
     assert info.error_message is None
 
 
-def test_environment_integration(cluster, cluster_type, tmp_path):
+def test_environment_integration(cluster, tmp_path):
     """Validate that environment variables are propogated into the job as expected."""
 
     def _check_env_closure(output_path: str):
@@ -105,10 +106,7 @@ def test_environment_integration(cluster, cluster_type, tmp_path):
 
     request = JobRequest(
         name="env-integration-test",
-        entrypoint=Entrypoint(
-            callable=_check_env_closure,
-            function_args={"output_path": output_path},
-        ),
+        entrypoint=Entrypoint.from_callable(_check_env_closure, kwargs={"output_path": output_path}),
         environment=create_environment(
             env_vars={"TEST_INTEGRATION_VAR": "test_value_123"},
         ),
@@ -155,7 +153,7 @@ def test_local_cluster_replica_integration(local_cluster, tmp_path, caplog):
 
     request = JobRequest(
         name="replica-integration-test",
-        entrypoint=Entrypoint(callable=replica_worker, function_args={"output_path": output_path}),
+        entrypoint=Entrypoint.from_callable(replica_worker, kwargs={"output_path": output_path}),
         resources=ResourceConfig(replicas=3),
         environment=create_environment(),
     )

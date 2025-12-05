@@ -34,7 +34,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-class ExecutionContext(Protocol):
+class JobContext(Protocol):
     """Protocol for execution contexts that abstract put/get/run/wait primitives.
 
     This allows different backends (Ray, ThreadPool, Sync) to share the same
@@ -441,24 +441,18 @@ class ContextConfig:
 def fray_job_ctx(
     context_type: Literal["ray", "threadpool", "sync", "auto"] = "auto",
     max_workers: int = 1,
-    memory: int | None = None,
-    num_cpus: float | None = None,
-    num_gpus: float | None = None,
     **ray_options,
-) -> ExecutionContext:
+) -> JobContext:
     """Create execution context from configuration.
 
     Args:
         context_type: Type of context (ray, threadpool, sync, or auto).
             Use "auto" to auto-detect based on environment (default).
         max_workers: Maximum number of worker threads (threadpool only)
-        memory: Memory requirement per task in bytes (ray only)
-        num_cpus: Number of CPUs per task (ray only)
-        num_gpus: Number of GPUs per task (ray only)
         **ray_options: Additional Ray remote options
 
     Returns:
-        ExecutionContext instance
+        JobContext instance
 
     Raises:
         ImportError: If ray context requested but ray not installed
@@ -467,7 +461,7 @@ def fray_job_ctx(
     Examples:
         >>> context = fray_job_ctx("sync")
         >>> context = fray_job_ctx("threadpool", max_workers=4)
-        >>> context = fray_job_ctx("ray", memory=2*1024**3, num_cpus=2)
+        >>> context = fray_job_ctx("ray")
         >>> context = fray_job_ctx("auto")  # Auto-detect ray or threadpool
     """
     if context_type == "auto":
@@ -482,17 +476,7 @@ def fray_job_ctx(
         workers = min(max_workers, os.cpu_count() or 1)
         return ThreadContext(max_workers=workers)
     elif context_type == "ray":
-        # Build ray_options dict from parameters
-        options = {}
-        if memory is not None:
-            options["memory"] = memory
-        if num_cpus is not None:
-            options["num_cpus"] = num_cpus
-        if num_gpus is not None:
-            options["num_gpus"] = num_gpus
-        options.update(ray_options)
-
-        return RayContext(ray_options=options)
+        return RayContext(ray_options=ray_options)
 
     else:
         raise ValueError(f"Unknown context type: {context_type}. Supported: 'ray', 'threadpool', 'sync'")

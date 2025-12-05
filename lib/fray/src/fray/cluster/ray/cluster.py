@@ -19,8 +19,6 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Literal
 
@@ -140,17 +138,20 @@ class RayCluster(Cluster):
         if isinstance(request.resources.device, TpuConfig):
             return self._launch_tpu_job(request)
 
-        if request.entrypoint.callable is not None:
+        if request.entrypoint.callable_entrypoint is not None:
+            callable_ep = request.entrypoint.callable_entrypoint
             entrypoint = create_thunk_entrypoint(
-                request.entrypoint.callable,
+                callable_ep.callable,
                 prefix=f"/tmp/{request.name}",
-                function_args=request.entrypoint.function_args,
+                args=callable_ep.args,
+                kwargs=callable_ep.kwargs,
             )
         else:
             entrypoint = request.entrypoint
 
+        assert entrypoint.binary_entrypoint is not None, "Entrypoint requires binary"
         runtime_env = self._get_runtime_env(request)
-        entrypoint_cmd = f"{entrypoint.binary} {' '.join(entrypoint.args)}"
+        entrypoint_cmd = f"{entrypoint.binary_entrypoint.command} {' '.join(entrypoint.binary_entrypoint.args)}"
         logger.info("Submitting job with entrypoint: %s", entrypoint_cmd)
         logger.debug("Runtime env: %s", runtime_env)
 
@@ -291,8 +292,8 @@ class RayCluster(Cluster):
         return result
 
     def _launch_tpu_job(self, request: JobRequest) -> JobId:
-        entrypoint = request.entrypoint
-        assert entrypoint.callable is not None, "TPU jobs require callable entrypoint"
+        callable_ep = request.entrypoint.callable_entrypoint
+        assert callable_ep is not None, "TPU jobs require callable entrypoint"
 
         device = request.resources.device
         runtime_env = self._get_runtime_env(request)
@@ -300,12 +301,12 @@ class RayCluster(Cluster):
         # For nested ray.remote() calls, filter out job-level keys that can only be set via ray.init().
         nested_runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
 
-        if entrypoint.function_args:
+        if callable_ep.args or callable_ep.kwargs:
             remote_fn = ray.remote(max_calls=1, runtime_env=nested_runtime_env)(
-                lambda: entrypoint.callable(**entrypoint.function_args)
+                lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
             )
         else:
-            remote_fn = ray.remote(max_calls=1, runtime_env=nested_runtime_env)(entrypoint.callable)
+            remote_fn = ray.remote(max_calls=1, runtime_env=nested_runtime_env)(callable_ep.callable)
 
         object_ref = run_on_pod_ray.remote(
             remote_fn,
@@ -375,19 +376,3 @@ class RayCluster(Cluster):
                 # Fall back to self._address
                 pass
         return self._address
-
-    @contextmanager
-    def connect(self) -> Iterator[None]:
-        """Establish SSH tunnel and dashboard connection to Ray cluster.
-
-        For remote Ray clusters with a config_path, this creates an SSH tunnel
-        via the ray_dashboard context manager. Otherwise this is a no-op.
-        """
-        if self._config_path:
-            from fray.cluster.ray.dashboard import DashboardConfig, ray_dashboard
-
-            dashboard_cfg = DashboardConfig.from_cluster(self._config_path)
-            with ray_dashboard(dashboard_cfg):
-                yield
-        else:
-            yield
