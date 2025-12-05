@@ -605,15 +605,6 @@ class Curriculum:
 
 
 def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
-    """Get or create curriculum actor with automatic recovery on failure.
-
-    Args:
-        config: Curriculum configuration.
-        checkpoint_path: Optional path to checkpoint directory for auto-restore.
-
-    Returns:
-        Robust actor handle that automatically retries on actor death.
-    """
     job_ctx = fray_job_ctx()
     actor = job_ctx.create_actor(Curriculum, actor_name=config.actor_name, actor_args=(config,))
 
