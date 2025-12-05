@@ -102,6 +102,7 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
+from threading import Event, Thread
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
 
@@ -113,27 +114,22 @@ from fray import (
     Entrypoint,
     EnvironmentConfig,
     JobId,
-    JobInfo,
     JobRequest,
     JobStatus,
     ResourceConfig,
     current_cluster,
 )
-from fray.job import JobContext, fray_job_ctx
 
 from marin.execution.executor_step_status import (
-    STATUS_CANCELLED,
+    HEARTBEAT_INTERVAL,
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_RUNNING,
     STATUS_SUCCESS,
-    STATUS_UNKNOWN,
-    STATUS_WAITING,
-    append_status,
-    get_latest_status_from_gcs,
+    StatusFile,
     get_status_path,
+    read_events,
 )
-from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
@@ -142,6 +138,69 @@ ConfigT = TypeVar("ConfigT", covariant=True, bound=dataclass)
 T_co = TypeVar("T_co", covariant=True)
 
 ExecutorFunction = Callable | None
+
+
+class StepRunner:
+    """Wraps Fray job execution with automatic heartbeat.
+
+    The heartbeat thread periodically writes RUNNING events to the status file,
+    allowing other executors to detect if this runner is still alive.
+    """
+
+    def __init__(self, cluster: Cluster, status_file: StatusFile):
+        self.cluster = cluster
+        self._status_file = status_file
+        self._job_id: JobId | None = None
+        self._heartbeat_thread: Thread | None = None
+        self._stop_event = Event()
+
+    @property
+    def job_id(self) -> JobId | None:
+        return self._job_id
+
+    def launch(self, job_request: JobRequest) -> None:
+        """Launch job and start heartbeat thread."""
+        self._status_file.write(STATUS_RUNNING)
+        self._job_id = self.cluster.launch(job_request)
+        self._start_heartbeat()
+
+    def wait(self) -> None:
+        """Wait for job to complete, stop heartbeat, write final status."""
+        try:
+            result = self.cluster.wait(self._job_id)
+            if result.status == JobStatus.FAILED:
+                self._status_file.write(STATUS_FAILED, message=result.error_message)
+                raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
+            self._status_file.write(STATUS_SUCCESS)
+        except Exception:
+            # If we haven't written FAILED yet, do so now
+            if self._status_file.status != STATUS_FAILED:
+                self._status_file.write(STATUS_FAILED, message=traceback.format_exc())
+            raise
+        finally:
+            self._stop_heartbeat()
+
+    def poll(self) -> bool:
+        """Return True if job is finished."""
+        if self._job_id is None:
+            return True
+        return JobStatus.finished(self.cluster.poll(self._job_id).status)
+
+    def _start_heartbeat(self) -> None:
+        """Start background thread that periodically updates the status file."""
+
+        def heartbeat_loop():
+            while not self._stop_event.wait(HEARTBEAT_INTERVAL):
+                self._status_file.ping()
+
+        self._heartbeat_thread = Thread(target=heartbeat_loop, daemon=True)
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self) -> None:
+        """Stop the heartbeat thread."""
+        self._stop_event.set()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join(timeout=5)
 
 
 def task_id() -> str:
@@ -582,7 +641,6 @@ class Executor:
         description: str | None = None,
     ):
         self.cluster = current_cluster()
-        self.job_ctx = fray_job_ctx()
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
@@ -597,16 +655,9 @@ class Executor:
         self.version_str_to_step: dict[str, ExecutorStep] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
-        self.jobs: dict[ExecutorStep, JobId] = {}
+        self.step_runners: dict[ExecutorStep, StepRunner] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
-
-        self.status_actor: StatusActor = self.job_ctx.create_actor(
-            StatusActor,
-            name="status_actor",
-            get_if_exists=True,
-            lifetime="detached",
-        )
 
     def run(
         self,
@@ -652,8 +703,8 @@ class Executor:
         self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
 
         logger.info("### Waiting for all steps to finish ###")
-        for job_id in self.jobs.values():
-            self.cluster.wait(job_id)
+        for runner in self.step_runners.values():
+            runner.wait()
 
     def _run_steps(
         self,
@@ -671,43 +722,36 @@ class Executor:
                 dependents[dep].append(step)
 
         ready = [step for step, deps in remaining_deps.items() if not deps]
-        running: dict[ExecutorStep, tuple[JobId, bool]] = {}
+        running: dict[ExecutorStep, StepRunner | None] = {}
 
         while ready or running:
             while ready:
                 step = ready.pop()
-                job_id, ran = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
-                if ran:
-                    self.jobs[step] = job_id
-                running[step] = (job_id, ran)
+                runner = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
+                if runner is not None:
+                    self.step_runners[step] = runner
+                running[step] = runner
 
             if not running:
                 break
 
-            finished_jobs = []
-            for step, (job_id, real_run) in running.items():
-                if not real_run:
-                    finished_jobs.append((step, job_id))
-                else:
-                    if JobStatus.finished(self.cluster.poll(job_id).status):
-                        finished_jobs.append((step, job_id))
+            finished_steps = []
+            for step, runner in running.items():
+                if runner is None:
+                    # Dry run or already completed - immediately finished
+                    finished_steps.append(step)
+                elif runner.poll():
+                    finished_steps.append(step)
 
-            if not finished_jobs:
-                # No jobs finished, sleep for a bit
+            if not finished_steps:
                 time.sleep(1)
+                continue
 
-            for finished_step, job_id in finished_jobs:
-                status_path = get_status_path(self.output_paths[finished_step])
-                ran = running[finished_step][1]
-                if ran:
-                    try:
-                        logger.info("Waiting for %s to finish for step %s", job_id, finished_step.name)
-                        self.cluster.wait(job_id)
-                        append_status(status_path, STATUS_SUCCESS)
-                    except Exception:
-                        message = traceback.format_exc()
-                        append_status(status_path, STATUS_FAILED, message=message)
-                        raise
+            for finished_step in finished_steps:
+                runner = running[finished_step]
+                if runner is not None:
+                    logger.info("Waiting for %s to finish for step %s", runner.job_id, finished_step.name)
+                    runner.wait()
 
                 running.pop(finished_step)
                 for child in dependents.get(finished_step, []):
@@ -715,7 +759,7 @@ class Executor:
                     if not remaining_deps[child]:
                         ready.append(child)
 
-    def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> tuple[JobId, bool]:
+    def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> StepRunner | None:
         config = self.configs[step]
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
@@ -726,51 +770,37 @@ class Executor:
         for i, dep in enumerate(self.dependencies[step]):
             logger.info("  %s = %s", dependency_index_str(i), self.output_paths[dep])
 
-        if not dry_run:
-            step_name = f"{step.name}: {get_fn_name(step.fn)}"
+        if dry_run:
+            return None
 
-            should_execute = should_run(
-                cluster=self.cluster,
-                ctx=self.job_ctx,
-                output_path=output_path,
-                step_name=step_name,
-                status_actor=self.status_actor,
-                task_id=task_id(),
-                force_run_failed=force_run_failed,
-            )
-            status_path = get_status_path(output_path)
-            if not should_execute:
-                append_status(
-                    status_path,
-                    STATUS_SUCCESS,
-                    task_id=task_id(),
-                    message="Step was already successful",
-                )
-                return JobId("fake-job"), False
+        step_name = f"{step.name}: {get_fn_name(step.fn)}"
+        worker_id = task_id()
+        status_file = StatusFile(output_path, worker_id)
 
-            append_status(status_path, STATUS_RUNNING, task_id=task_id())
+        if not should_run(status_file, step_name, force_run_failed):
+            return None
 
-            # need this hack for now to make ray remote functions work
-            import ray
+        # need this hack for now to make ray remote functions work
+        import ray
 
-            step_fn = step.fn
-            if isinstance(step.fn, ray.remote_function.RemoteFunction):
+        step_fn = step.fn
+        if isinstance(step.fn, ray.remote_function.RemoteFunction):
 
-                def _call_remote(*args, **kw):
-                    return ray.get(step.fn.remote(*args, **kw))
+            def _call_remote(*args, **kw):
+                return ray.get(step.fn.remote(*args, **kw))
 
-                step_fn = _call_remote
+            step_fn = _call_remote
 
-            fray_job = JobRequest(
-                name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
-                entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
-                resources=ResourceConfig.with_cpu(),
-                environment=EnvironmentConfig.create(),
-            )
-            job_id = self.cluster.launch(fray_job)
-            return job_id, True
+        fray_job = JobRequest(
+            name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
+            entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
+            resources=ResourceConfig.with_cpu(),
+            environment=EnvironmentConfig.create(),
+        )
 
-        return JobId("fake-job"), False
+        runner = StepRunner(self.cluster, status_file)
+        runner.launch(fray_job)
+        return runner
 
     def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
         """
@@ -812,7 +842,9 @@ class Executor:
             info = self.step_infos[self.steps.index(step)]
 
             # only run if the step hasn't already been run
-            if get_status(info.output_path, None, {}) not in [STATUS_SUCCESS]:
+            events = read_events(get_status_path(info.output_path))
+            current_status = events[-1].status if events else None
+            if current_status != STATUS_SUCCESS:
                 for dep in self.dependencies[step]:
                     dfs(dep)
                 to_run.append(step)
@@ -985,120 +1017,55 @@ class Executor:
             print(json.dumps(executor_info_dict, indent=2, cls=CustomJsonEncoder), file=f)
 
 
-def _get_task_status(cluster: Cluster, current_owner_task_id: str | None) -> str | None:
-    """Get the status of a Executor task."""
+class PreviousTaskFailedError(Exception):
+    """Raised when a step failed previously and force_run_failed is False."""
 
-    if current_owner_task_id is None:
-        return None
-
-    current_owner_ray_status = None
-    cluster_ctx = current_cluster()
-    current_owner: JobInfo = cluster_ctx.poll(current_owner_task_id)
-
-    if current_owner is None:  # We need to retry, task might be lost
-        current_owner_ray_status = STATUS_UNKNOWN
-    elif current_owner.status == "succeeded":
-        current_owner_ray_status = STATUS_SUCCESS
-    elif current_owner.status == "failed" or current_owner.status == "stopped":
-        current_owner_ray_status = STATUS_FAILED
-    else:  # pending or running
-        current_owner_ray_status = STATUS_RUNNING
-
-    return current_owner_ray_status
+    pass
 
 
-def get_status(cluster: Cluster, output_path: str, current_owner_task_id: str | None, states: dict) -> str | None:
-    """Get the status of an output Path. This returns the status of the output path
+def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = False) -> bool:
+    """Check if the step should run based on filesystem-based heartbeat locking.
 
-    * there is no status anywhere (i.e. brand-new step) -> return None
-    * a task is currently running a step -> return WAITING
-    * no task is currently running it, but there is a status on disk -> return disk status
+    Uses the .executor_status file for both status tracking and heartbeat-based locking.
+    If another worker is actively running (recent heartbeat), we wait. If the heartbeat
+    is stale, we assume the worker died and can take over.
     """
-
-    current_owner_ray_status = _get_task_status(cluster, current_owner_task_id)
-
-    num_unknown = states.get("num_unknown", 0)  # Number of times the status was unknown
-    # We check how many times has times ray has returned status Unknown in a row. If it returns more than 20 times,
-    # We assume ray has lost that task and we use GCP status instead.
-    if current_owner_ray_status == STATUS_UNKNOWN:
-        num_unknown += 1
-        states["num_unknown"] = num_unknown
-        if num_unknown > 20:
-            current_owner_ray_status = None
-            states["num_unknown"] = 0
-    else:
-        states["num_unknown"] = 0  # Reset the counter
-
-    # Immediately return if the ray status is unknown or running, we don't need to check GCS
-    if current_owner_ray_status in [STATUS_UNKNOWN, STATUS_RUNNING]:
-        return current_owner_ray_status
-
-    # If the ray status is terminal [Failed, Success], we check the status on GCS and trust it
-
-    current_owner_gcs_status = get_latest_status_from_gcs(output_path)
-
-    if current_owner_gcs_status in [STATUS_RUNNING, STATUS_WAITING]:
-        logger.info(
-            f"Status of {output_path = } is {current_owner_gcs_status} as per GCP. "
-            "But as per Ray, the task has terminated, it's likely that this task was cancelled previously"
-        )
-        current_owner_gcs_status = STATUS_CANCELLED
-
-    return current_owner_gcs_status
-
-
-def should_run(
-    cluster: Cluster,
-    ctx: JobContext,
-    output_path: str,
-    step_name: str,
-    status_actor: StatusActor,
-    task_id: str,
-    force_run_failed: bool = False,
-):
-    """Check if the step should run or not based on the status of the step."""
-    """Logic for should run:
-    1. Check which task is currently the owner of this step (current_owner_task_id).
-    2. If ray_status(current_owner_task_id) is Running , we wait.
-    3. if ray_status(current_owner_task_id) is Terminated (Failed, Successful), we trust the status on GCP
-    4. A special case where ray_status(current_owner_task_id) is Terminated, but GCP status is Running, We return
-    CANCELLED"""
-
     log_once = True
-    get_status_states = {}  # States used by get_status, since get_status is stateless we keep them here
-    while True:
-        current_owner_task_id = ctx.get(status_actor.get_task_id_with_lock.remote(output_path=output_path))
 
-        # get_status also updates get_status_states via internal mutation
-        status = get_status(cluster, output_path, current_owner_task_id, get_status_states)
+    while True:
+        status = status_file.status
 
         if log_once:
-            logger.info(f"Status {step_name} : {status}.")
+            logger.info(f"Status {step_name}: {status}")
             log_once = False
 
-        if status in [STATUS_RUNNING, STATUS_WAITING, STATUS_UNKNOWN]:
+        if status == STATUS_SUCCESS:
+            logger.info(f"Step {step_name} has already succeeded.")
+            return False
+
+        if status in [STATUS_FAILED, STATUS_DEP_FAILED]:
+            if force_run_failed:
+                logger.info(f"Force running {step_name}, previous status: {status}")
+                # Fall through to acquire lock
+            else:
+                raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
+        elif status == STATUS_RUNNING and not status_file.is_stale():
+            # Another worker is actively running
             time.sleep(5)
             continue
+        elif status == STATUS_RUNNING:
+            logger.info(f"Step {step_name} has stale heartbeat, taking over.")
 
-        # If the current owner is finished or is None, try to become the owner.
-        # If we can't become the owner, then loop again
-        if ctx.get(status_actor.get_lock_by_replacing_task_id.remote(output_path, task_id, current_owner_task_id)):
-            break
+        # Try to acquire lock by writing our worker_id
+        status_file.write(STATUS_RUNNING)
 
-    if status is None:
-        return True
-    elif status == STATUS_CANCELLED:
-        logger.info(f"Step {step_name} was cancelled previously. Retrying.")
-        return True
-    elif status in [STATUS_FAILED, STATUS_DEP_FAILED]:
-        if force_run_failed:
-            logger.info(f"Force running {step_name}, previous status: {status}")
+        # Verify we won the race by checking if our write is the last one
+        last_event = status_file.last_event
+        if last_event and last_event.task_id == status_file.worker_id:
             return True
-        else:
-            raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
-    else:
-        logger.info(f"Step {step_name} has already succeeded. Status: {status}")
-        return False
+
+        # Someone else won, retry
+        time.sleep(1)
 
 
 def get_fn_name(fn: ExecutorFunction, short: bool = False):
