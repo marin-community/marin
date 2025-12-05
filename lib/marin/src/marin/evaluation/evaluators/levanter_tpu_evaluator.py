@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 import ray
 from fray.cluster import ResourceConfig
 from fray.cluster.ray.deps import build_runtime_env_for_packages
+from fray.cluster.ray.resources import get_scheduling_strategy
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
@@ -95,18 +96,12 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         """
         Launches the evaluation run with Ray.
         """
-        from fray.cluster.base import TpuConfig
-
-        assert resource_config is not None, "resource_config is required for LevanterTpuEvaluator"
-        assert isinstance(resource_config.device, TpuConfig), "LevanterTpuEvaluator requires TPU resource config"
+        scheduling_strategy = get_scheduling_strategy(resource_config)
 
         @ray.remote(
-            resources={
-                "TPU": resource_config.chip_count(),
-                f"TPU-{resource_config.device.type}-head": 1,
-            },
             runtime_env=self.get_runtime_env(),
             max_calls=1,
+            scheduling_strategy=scheduling_strategy,
         )
         @remove_tpu_lockfile_on_exit
         def launch(

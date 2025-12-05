@@ -78,7 +78,7 @@ For this tutorial, we will use the `SimpleTrainConfig` class from `experiments.s
 This class defines basic training configuration that is sufficient for most experiments.
 
 !!! info "Training Configuration for Different Accelerators"
-    You need to provide the appropriate resource configuration based on your hardware setup. Marin supports different accelerator types through `ResourceConfig` factory methods.
+    You need to provide the appropriate resource configuration based on your hardware setup. Marin supports different accelerator types through [`ResourceConfig`](../references/resource-config.md) factory methods.
 
     === "CPU"
         ```python
