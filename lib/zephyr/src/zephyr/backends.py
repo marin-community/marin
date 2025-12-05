@@ -43,6 +43,7 @@ from zephyr.dataset import (
     GroupByShuffleReduceOp,
     MapOp,
     MapShardOp,
+    Operation,
     ReduceGlobalOp,
     ReduceLocalOp,
     ReshardOp,
@@ -51,6 +52,7 @@ from zephyr.dataset import (
     WindowOp,
     WriteDataOp,
 )
+from zephyr.plan import ExecutionHint, PhysicalPlan, ShardSpec, compute_plan
 
 from .writers import write_binary_file, write_jsonl_file, write_levanter_cache, write_parquet_file
 
@@ -127,17 +129,6 @@ class BackendConfig:
     dry_run: bool = False
 
 
-@dataclass(frozen=True)
-class ExecutionHint:
-    """Hints for pipeline execution.
-
-    Attributes:
-        chunk_size: Number of items per chunk. Use -1 for 1 chunk per shard.
-    """
-
-    chunk_size: int = 100_000
-
-
 @dataclass
 class ChunkHeader:
     """Metadata for a chunk being streamed from a worker."""
@@ -200,6 +191,8 @@ class ApplyShardCtx:
     """Context for applying operations to a shard.
 
     Encapsulates all the metadata and auxiliary data needed to process a shard.
+    When chunk_idx and intermediate_dir are set, operates in chunk-parallel mode
+    where each chunk writes to an intermediate file for later aggregation.
     """
 
     shard: Shard
@@ -207,6 +200,10 @@ class ApplyShardCtx:
     total_shards: int
     chunk_size: int
     aux_shards: dict[int, list[Shard]] = field(default_factory=dict)
+    # For chunk parallel mode (all None = normal mode)
+    chunk_idx: int | None = None  # Which chunk we're processing
+    total_chunks: int | None = None  # Total chunks in this shard
+    intermediate_dir: str | None = None  # Write intermediate files here
 
 
 def make_windows(
@@ -405,22 +402,34 @@ def process_shard_fused(
         elif isinstance(op, WindowOp):
             yield from build_stream(make_windows(stream_input, op.folder_fn, op.initial_state), rest, op_index + 1)
         elif isinstance(op, WriteDataOp):
-            output_path = op.output_pattern(ctx.shard_idx, ctx.total_shards)
-
-            # Check if we should skip writing because file already exists
-            if op.skip_existing:
-                fs = fsspec.core.url_to_fs(output_path)[0]
-                # levanter writes directories, so use a sentinel file to check for existence
+            # Determine output path based on mode
+            if ctx.intermediate_dir is not None and ctx.chunk_idx is not None:
+                # Chunk parallel mode - write to intermediate file
                 if op.writer_type == "levanter_cache":
-                    test_path = os.path.join(output_path, ".success")
-                else:
-                    test_path = output_path
+                    raise ValueError("Levanter cache does not support intra-shard parallelism")
 
-                if fs.exists(test_path):
-                    logger.info(f"Skipping write, output exists: {output_path}")
-                    # Don't consume stream - lazy evaluation means upstream processing is skipped
-                    yield from build_stream(iter([output_path]), rest, op_index + 1)
-                    return
+                sample_final_path = op.output_pattern(ctx.shard_idx, ctx.total_shards)
+                ext = _infer_extension(sample_final_path)
+                output_path = f"{ctx.intermediate_dir}/chunk_{ctx.chunk_idx}{ext}"
+                # skip_existing is handled at shard level in chunk parallel mode
+            else:
+                # Normal mode - write to final file
+                output_path = op.output_pattern(ctx.shard_idx, ctx.total_shards)
+
+                # Check if we should skip writing because file already exists
+                if op.skip_existing:
+                    fs = fsspec.core.url_to_fs(output_path)[0]
+                    # levanter writes directories, so use a sentinel file to check for existence
+                    if op.writer_type == "levanter_cache":
+                        test_path = os.path.join(output_path, ".success")
+                    else:
+                        test_path = output_path
+
+                    if fs.exists(test_path):
+                        logger.info(f"Skipping write, output exists: {output_path}")
+                        # Don't consume stream - lazy evaluation means upstream processing is skipped
+                        yield from build_stream(iter([output_path]), rest, op_index + 1)
+                        return
 
             # Write the file
             if op.writer_type == "jsonl":
@@ -623,6 +632,115 @@ def reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
     ]
 
 
+def _is_parallelizable_pipeline(operations: list) -> bool:
+    """Check if pipeline can use intra-shard parallelism.
+
+    Returns False if any operation requires full-shard context (groupby, reduce, map_shard).
+    """
+    for op in operations:
+        if isinstance(op, (GroupByLocalOp, ReduceLocalOp, MapShardOp)):
+            return False
+        if isinstance(op, FusedMapOp):
+            if not _is_parallelizable_pipeline(op.operations):
+                return False
+    return True
+
+
+def _find_write_op(operations: list) -> WriteDataOp | None:
+    """Find WriteDataOp in operations list, including inside FusedMapOp."""
+    for op in operations:
+        if isinstance(op, WriteDataOp):
+            return op
+        if isinstance(op, FusedMapOp):
+            result = _find_write_op(op.operations)
+            if result is not None:
+                return result
+    return None
+
+
+def _infer_extension(output_path: str) -> str:
+    """Infer file extension from output path, handling compression."""
+    # Handle compound extensions like .jsonl.gz
+    if output_path.endswith(".jsonl.gz"):
+        return ".jsonl.gz"
+    if output_path.endswith(".jsonl.zst"):
+        return ".jsonl.zst"
+    if output_path.endswith(".parquet"):
+        return ".parquet"
+    # Fall back to last extension
+    parts = output_path.rsplit(".", 1)
+    return f".{parts[-1]}" if len(parts) > 1 else ""
+
+
+def _compute_intermediate_dir(final_path: str, shard_idx: int) -> str:
+    """Compute intermediate directory for chunk files.
+
+    Creates path: {output_dir}/.chunks/shard_{shard_idx}/
+    """
+    # Get directory from final path
+    if "/" in final_path:
+        output_dir = final_path.rsplit("/", 1)[0]
+    else:
+        output_dir = "."
+    return f"{output_dir}/.chunks/shard_{shard_idx}"
+
+
+def aggregate_shard_chunks(
+    shard_idx: int,
+    chunk_paths: list[str],
+    final_path: str,
+    writer_type: str,
+) -> str:
+    """Aggregate chunk files into final shard output.
+
+    Args:
+        shard_idx: Index of the shard being aggregated
+        chunk_paths: Paths to intermediate chunk files in order
+        final_path: Path for the final output file
+        writer_type: Type of output ("jsonl", "parquet", "binary")
+
+    Returns:
+        Path to the final aggregated file
+    """
+    from .writers import concatenate_files, merge_parquet_row_groups
+
+    logger.info(f"aggregate_shard_chunks: shard {shard_idx}, {len(chunk_paths)} chunks -> {final_path}")
+
+    if not chunk_paths:
+        # Handle empty case
+        if writer_type == "parquet":
+            merge_parquet_row_groups([], final_path)
+        else:
+            concatenate_files([], final_path)
+        return final_path
+
+    if writer_type in ("jsonl", "binary"):
+        concatenate_files(chunk_paths, final_path)
+    elif writer_type == "parquet":
+        merge_parquet_row_groups(chunk_paths, final_path)
+    else:
+        raise ValueError(f"Unsupported writer_type for aggregation: {writer_type}")
+
+    # Cleanup intermediate files
+    fs = fsspec.core.url_to_fs(chunk_paths[0])[0]
+    for path in chunk_paths:
+        try:
+            fs.rm(path)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup intermediate file {path}: {e}")
+
+    # Cleanup intermediate directory
+    if chunk_paths:
+        intermediate_dir = chunk_paths[0].rsplit("/", 1)[0]
+        try:
+            if fs.exists(intermediate_dir):
+                fs.rm(intermediate_dir, recursive=True)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup intermediate directory {intermediate_dir}: {e}")
+
+    return final_path
+
+
 class Backend:
     def __init__(self, context: ExecutionContext, config: BackendConfig):
         """Initialize backend with execution context and configuration.
@@ -640,158 +758,262 @@ class Backend:
 
         Args:
             dataset: Dataset to execute
-            hints: Execution hints (chunk_size, etc.)
+            hints: Execution hints (chunk_size, source_chunk_bytes, etc.)
             verbose: Print additional logging and optimization stats
 
         Returns:
-            Iterator over dataset results
+            Sequence of results
         """
-        optimized_ops = self._optimize_operations(dataset.operations)
+        plan = compute_plan(dataset, hints)
 
         if verbose:
-            self._print_optimization_plan(dataset.operations, optimized_ops)
+            self._print_plan(dataset.operations, plan)
 
         if self.dry_run:
-            return
+            return []
 
-        return list(self._execute_optimized(dataset.source, optimized_ops, hints))
+        return self.execute_plan(plan, hints)
 
-    def _optimize_operations(self, operations: list) -> list:
-        if not operations:
-            return operations
+    def execute_plan(self, plan: PhysicalPlan, hints: ExecutionHint = ExecutionHint()) -> Sequence:
+        """Execute a pre-computed physical plan.
 
-        optimized = []
-        fusible_buffer = []
+        Args:
+            plan: Physical plan to execute
+            hints: Execution hints
 
-        def is_fusible(op):
-            return not isinstance(op, (ReshardOp, GroupByShuffleReduceOp, ReduceGlobalOp))
+        Returns:
+            Sequence of results
+        """
+        return list(self._execute_plan_impl(plan, hints))
 
-        def flush_buffer():
-            if not fusible_buffer:
-                return
-
-            # Always create a FusedMapOp, even for single operations, this simplifies downstream logic
-            optimized.append(FusedMapOp(operations=fusible_buffer[:]))
-            fusible_buffer.clear()
-
-        for op in operations:
-            if is_fusible(op):
-                fusible_buffer.append(op)
-            else:
-                flush_buffer()
-                optimized.append(op)
-
-        flush_buffer()
-        return optimized
-
-    def _print_optimization_plan(self, original_ops: list, optimized_ops: list) -> None:
-        """Print the optimization plan showing how operations are fused.
+    def _print_plan(self, original_ops: list, plan: PhysicalPlan) -> None:
+        """Print the physical plan showing shard count and operation fusion.
 
         Args:
             original_ops: Original operation chain
-            optimized_ops: Optimized operation chain with fused operations
+            plan: Computed physical plan
         """
-        logger.info("\n=== ML-Flow Optimization Plan ===\n")
+        total_stage_ops = sum(
+            (
+                len(stage.operations[0].operations)
+                if stage.operations and isinstance(stage.operations[0], FusedMapOp)
+                else len(stage.operations)
+            )
+            for stage in plan.stages
+        )
+
+        logger.info("\n=== Physical Execution Plan ===\n")
+        logger.info(f"Shards: {plan.num_shards}")
         logger.info(f"Original operations: {len(original_ops)}")
-        logger.info(f"Optimized operations: {len(optimized_ops)}")
-        logger.info(f"Fusion savings: {len(original_ops) - len(optimized_ops)} operations fused\n")
+        logger.info(f"Stages: {len(plan.stages)}")
+        logger.info(f"Fusion savings: {len(original_ops) - total_stage_ops} operations fused\n")
 
         logger.info("Original pipeline:")
         for i, op in enumerate(original_ops, 1):
             logger.info(f"  {i}. {op}")
 
-        logger.info("\nOptimized pipeline:")
-        for i, op in enumerate(optimized_ops, 1):
-            if isinstance(op, FusedMapOp):
-                fused_names = [str(op) for op in op.operations]
-                logger.info(f"  {i}. FusedMap[{' → '.join(fused_names)}] ({len(op.operations)} operations)")
+        logger.info("\nPhysical stages:")
+        for i, stage in enumerate(plan.stages, 1):
+            if stage.operations and isinstance(stage.operations[0], FusedMapOp):
+                fused_op = stage.operations[0]
+                fused_names = [str(op) for op in fused_op.operations]
+                logger.info(f"  {i}. FusedMap[{' → '.join(fused_names)}] ({len(fused_op.operations)} operations)")
             else:
-                logger.info(f"  {i}. {op}")
+                for op in stage.operations:
+                    logger.info(f"  {i}. {op}")
+            if stage.is_shuffle_boundary:
+                logger.info("     [SHUFFLE BOUNDARY]")
 
-        logger.info("\n=== End Optimization Plan ===\n")
+        logger.info("\n=== End Plan ===\n")
 
-    def _run_operations_on_shards(self, source: Iterable, optimized_ops: list, hints: ExecutionHint) -> list[Shard]:
-        """Core execution logic - executes already-optimized operations on shards.
+    def _shards_from_specs(self, shard_specs: list[ShardSpec]) -> list[Shard]:
+        """Create Shards from ShardSpecs, grouping by shard_idx.
+
+        For chunked specs (row_start is set), stores the ShardSpec as the shard item.
+        For non-chunked specs, stores the raw source_item for backward compatibility.
+        Multiple ShardSpecs with the same shard_idx are grouped into a single Shard
+        with multiple chunks (for intra-shard parallelism).
 
         Args:
-            source: Source data iterable
-            optimized_ops: Already-optimized operation chain
-            hints: Execution hints
+            shard_specs: List of ShardSpecs from the plan
 
         Returns:
-            List of Shards after applying all operations
+            List of Shards ready for processing, one per unique shard_idx
         """
-        # Convert source items to Shards
-        shards = [
-            Shard.from_single_ref(self.context.put([item]), self.context, idx=idx, count=1)
-            for idx, item in enumerate(source)
-        ]
+        # Group specs by shard_idx
+        specs_by_shard: dict[int, list[ShardSpec]] = defaultdict(list)
+        for spec in shard_specs:
+            specs_by_shard[spec.shard_idx].append(spec)
 
-        for op in optimized_ops:
-            if isinstance(op, FusedMapOp):
-                all_right_shards = {}
-                # If we find any joins, we compute the intermediate right shards first
-                # and then pass them as aux_shards to the processing function. This
-                # currently materializes the right side fully before processing the left side,
-                # we can probably be improved.
-                for i, join_op in enumerate(op.operations):
-                    if not isinstance(join_op, SortedMergeJoinOp):
-                        continue
-                    right_ops = self._optimize_operations(join_op.right_dataset.operations)
-                    right_shards = self._run_operations_on_shards(join_op.right_dataset.source, right_ops, hints)
+        # Create Shards, grouping chunks by shard_idx
+        shards = []
+        for shard_idx in sorted(specs_by_shard.keys()):
+            specs = specs_by_shard[shard_idx]
+            # Sort by chunk_index to maintain order
+            specs.sort(key=lambda s: s.chunk_index)
 
-                    if len(shards) != len(right_shards):
-                        raise ValueError(
-                            f"Sorted merge join requires equal shard counts. "
-                            f"Left has {len(shards)} shards, right has {len(right_shards)} shards."
-                        )
+            chunks = []
+            for spec in specs:
+                # If chunked (has row range), pass ShardSpec to operations
+                # Otherwise, pass raw source_item for backward compatibility
+                if spec.row_start is not None:
+                    item = spec
+                else:
+                    item = spec.source_item
+                chunks.append(Chunk(count=1, data=self.context.put([item])))
 
-                    all_right_shards[i] = right_shards
-
-                aux_shards_per_left = []
-                for shard_idx in range(len(shards)):
-                    shard_aux = {}
-                    for join_idx, right_shards in all_right_shards.items():
-                        shard_aux[join_idx] = [right_shards[shard_idx]]
-                    aux_shards_per_left.append(shard_aux)
-
-                shards = self._execute_on_shards(
-                    process_shard_fused, (op.operations,), shards, aux_shards_per_left, hints
-                )
-            elif isinstance(op, GroupByShuffleReduceOp):
-                shards = self._execute_on_shards(
-                    process_shard_group_by_reduce, (op.key_fn, op.reducer_fn), shards, None, hints
-                )
-            elif isinstance(op, ReshardOp):
-                shards = reshard_refs(shards, op.num_shards)
-            elif isinstance(op, ReduceGlobalOp):
-                shards = process_shard_reduce_global(shards, op.global_reducer, self.context, hints.chunk_size)
+            shards.append(Shard(idx=shard_idx, chunks=chunks, context=self.context))
 
         return shards
 
-    def _execute_optimized(self, source: Iterable, optimized_ops: list, hints: ExecutionHint) -> Iterator:
-        """Execute already-optimized operations and materialize results.
+    def _execute_plan_stages(self, shards: list[Shard], plan: PhysicalPlan, hints: ExecutionHint) -> list[Shard]:
+        """Execute plan stages on shards.
 
         Args:
-            source: Source data iterable
-            optimized_ops: Already-optimized operation chain
+            shards: Input shards
+            plan: Physical plan containing stages
+            hints: Execution hints
+
+        Returns:
+            List of Shards after applying all stages
+        """
+        for stage in plan.stages:
+            for op in stage.operations:
+                if isinstance(op, FusedMapOp):
+                    # Check if we should use chunk parallelism
+                    use_chunk_parallel = (
+                        hints.intra_shard_parallelism != 0
+                        and _is_parallelizable_pipeline(op.operations)
+                        and _find_write_op(op.operations) is not None
+                        and any(len(shard.chunks) > 1 for shard in shards)
+                    )
+
+                    if use_chunk_parallel:
+                        shards = self._execute_with_chunk_parallelism(op.operations, shards, hints)
+                    else:
+                        all_right_shards = {}
+                        # Handle joins by computing right side first
+                        for i, join_op in enumerate(op.operations):
+                            if not isinstance(join_op, SortedMergeJoinOp):
+                                continue
+                            right_plan = compute_plan(join_op.right_dataset, hints)
+                            right_shards = self._shards_from_specs(right_plan.shard_specs)
+                            right_shards = self._execute_plan_stages(right_shards, right_plan, hints)
+
+                            if len(shards) != len(right_shards):
+                                raise ValueError(
+                                    f"Sorted merge join requires equal shard counts. "
+                                    f"Left has {len(shards)} shards, right has {len(right_shards)} shards."
+                                )
+
+                            all_right_shards[i] = right_shards
+
+                        aux_shards_per_left = []
+                        for shard_idx in range(len(shards)):
+                            shard_aux = {}
+                            for join_idx, right_shards in all_right_shards.items():
+                                shard_aux[join_idx] = [right_shards[shard_idx]]
+                            aux_shards_per_left.append(shard_aux)
+
+                        shards = self._execute_on_shards(
+                            process_shard_fused, (op.operations,), shards, aux_shards_per_left, hints
+                        )
+                elif isinstance(op, GroupByShuffleReduceOp):
+                    shards = self._execute_on_shards(
+                        process_shard_group_by_reduce, (op.key_fn, op.reducer_fn), shards, None, hints
+                    )
+                elif isinstance(op, ReshardOp):
+                    shards = reshard_refs(shards, op.num_shards)
+                elif isinstance(op, ReduceGlobalOp):
+                    shards = process_shard_reduce_global(shards, op.global_reducer, self.context, hints.chunk_size)
+
+        return shards
+
+    def _execute_plan_impl(self, plan: PhysicalPlan, hints: ExecutionHint) -> Iterator:
+        """Execute a physical plan and materialize results.
+
+        Args:
+            plan: Physical plan to execute
             hints: Execution hints
 
         Yields:
             Results after applying all operations
         """
-        # Execute operations to get shards
-        shards = self._run_operations_on_shards(source, optimized_ops, hints)
+        # Create shards from specs
+        shards = self._shards_from_specs(plan.shard_specs)
+
+        # Execute all stages
+        shards = self._execute_plan_stages(shards, plan, hints)
 
         # Materialize results
-        op_names = [op.__class__.__name__.replace("Op", "") for op in optimized_ops]
-        desc = f"Materialize [{' → '.join(op_names)}]"
+        stage_names = []
+        for stage in plan.stages:
+            if stage.operations and isinstance(stage.operations[0], FusedMapOp):
+                stage_names.append("Fused")
+            else:
+                stage_names.extend(op.__class__.__name__.replace("Op", "") for op in stage.operations)
+        desc = f"Materialize [{' → '.join(stage_names)}]"
 
         def materialize_all():
             for shard in shards:
                 yield from shard
 
         yield from tqdm(materialize_all(), desc=desc, unit="shards", total=len(shards))
+
+    def _run_shard_tasks(
+        self,
+        process_fn: Callable,
+        fn_args: tuple,
+        contexts: list[ApplyShardCtx],
+    ) -> dict[int, list[tuple[int, ChunkHeader, Any]]]:
+        """Run tasks for contexts, return results grouped by output shard_idx.
+
+        Common execution loop shared by _execute_on_shards and _execute_with_chunk_parallelism.
+
+        Args:
+            process_fn: Function that takes (ApplyShardCtx, *fn_args) and yields (ChunkHeader, data) pairs
+            fn_args: Additional arguments to pass to process_fn
+            contexts: List of ApplyShardCtx to process
+
+        Returns:
+            Dict mapping shard_idx -> list of (chunk_idx, header, data_ref) tuples.
+            chunk_idx is ctx.chunk_idx if set, else 0.
+        """
+        results_by_shard: dict[int, list[tuple[int, ChunkHeader, Any]]] = defaultdict(list)
+
+        if not contexts:
+            return results_by_shard
+
+        active_gens: list[tuple[Any, ApplyShardCtx]] = []
+        queued = list(contexts)
+
+        # Start initial batch
+        while len(active_gens) < self.config.max_parallelism and queued:
+            ctx = queued.pop(0)
+            active_gens.append((self.context.run(process_fn, ctx, *fn_args), ctx))
+
+        # Process results
+        while active_gens or queued:
+            gen_objs = [g for g, _ in active_gens]
+            ready, _ = self.context.wait(gen_objs, num_returns=1)
+
+            for ready_gen in ready:
+                # Find matching entry
+                for g, ctx in active_gens:
+                    if g is ready_gen:
+                        try:
+                            header = self.context.get(next(ready_gen))
+                            data_ref = next(ready_gen)
+                            chunk_idx = ctx.chunk_idx if ctx.chunk_idx is not None else 0
+                            results_by_shard[header.shard_idx].append((chunk_idx, header, data_ref))
+                        except StopIteration:
+                            active_gens.remove((g, ctx))
+                            if queued:
+                                next_ctx = queued.pop(0)
+                                active_gens.append((self.context.run(process_fn, next_ctx, *fn_args), next_ctx))
+                        break
+
+        return results_by_shard
 
     def _execute_on_shards(
         self,
@@ -814,7 +1036,6 @@ class Backend:
         Returns:
             List of output Shards assembled from streamed chunks
         """
-        # If no aux_shards provided, create a list of empty dicts
         if aux_shards_per_shard is None:
             aux_shards_per_shard = [{} for _ in range(len(shards))]
         elif len(shards) != len(aux_shards_per_shard):
@@ -822,59 +1043,140 @@ class Backend:
 
         total = len(shards)
 
-        # Build list of (shard_idx, shard, aux_shards) tuples to process
-        shard_tasks = [
-            (shard_idx, shard, aux_shards)
+        # Build contexts (one per shard)
+        contexts = [
+            ApplyShardCtx(
+                shard=shard,
+                shard_idx=shard_idx,
+                total_shards=total,
+                chunk_size=hints.chunk_size,
+                aux_shards=aux_shards,
+            )
             for shard_idx, (shard, aux_shards) in enumerate(zip(shards, aux_shards_per_shard, strict=True))
         ]
 
-        chunks_by_shard_idx = defaultdict(list)
+        # Run tasks
+        results = self._run_shard_tasks(process_fn, fn_args, contexts)
 
-        if shard_tasks:
-            active_gens = []
-            queued_tasks = shard_tasks[:]
-            finished_gens = []
-
-            while len(active_gens) < self.config.max_parallelism and queued_tasks:
-                shard_idx, shard, aux_shards = queued_tasks.pop(0)
-                ctx = ApplyShardCtx(
-                    shard=shard,
-                    shard_idx=shard_idx,
-                    total_shards=total,
-                    chunk_size=hints.chunk_size,
-                    aux_shards=aux_shards,
-                )
-                active_gens.append(self.context.run(process_fn, ctx, *fn_args))
-
-            while active_gens or queued_tasks:
-                ready, _ = self.context.wait(active_gens, num_returns=1)
-
-                for ready_gen in ready:
-                    try:
-                        header = self.context.get(next(ready_gen))
-                        data = next(ready_gen)  # ref to header data
-                        chunks_by_shard_idx[header.shard_idx].append(Chunk(header.count, data))
-
-                    except StopIteration:
-                        finished_gens.append(ready_gen)
-                        active_gens.remove(ready_gen)
-                        if queued_tasks:
-                            shard_idx, shard, aux_shards = queued_tasks.pop(0)
-                            ctx = ApplyShardCtx(
-                                shard=shard,
-                                shard_idx=shard_idx,
-                                total_shards=total,
-                                chunk_size=hints.chunk_size,
-                                aux_shards=aux_shards,
-                            )
-                            active_gens.append(self.context.run(process_fn, ctx, *fn_args))
-
-        # Reconstruct shards from collected chunks
-        if len(chunks_by_shard_idx) == 0:
+        # Build Shards from results
+        if not results:
             return []
 
-        max_shard_idx = max(chunks_by_shard_idx.keys())
+        max_shard_idx = max(results.keys())
         return [
-            Shard(idx=idx, chunks=chunks_by_shard_idx.get(idx, []), context=self.context)
+            Shard(
+                idx=idx,
+                chunks=[Chunk(header.count, data_ref) for _, header, data_ref in results.get(idx, [])],
+                context=self.context,
+            )
             for idx in range(max_shard_idx + 1)
         ]
+
+    def _execute_with_chunk_parallelism(
+        self,
+        operations: list[Operation],
+        shards: list[Shard],
+        hints: ExecutionHint,
+    ) -> list[Shard]:
+        """Execute with chunk-level parallelism and file aggregation.
+
+        Each chunk of each shard is processed as a separate task, writing to an
+        intermediate file. After all chunks complete, intermediate files are
+        aggregated into the final output file per shard.
+
+        Args:
+            operations: List of operations to apply
+            shards: List of input Shards (may have multiple chunks each)
+            hints: Execution hints
+
+        Returns:
+            List of Shards containing final aggregated output paths
+        """
+        write_op = _find_write_op(operations)
+        if write_op is None:
+            raise ValueError("_execute_with_chunk_parallelism requires a WriteDataOp")
+
+        total_shards = len(shards)
+        logger.info(f"Executing with chunk parallelism: {total_shards} shards")
+
+        # Build contexts (one per chunk) and track skipped shards
+        contexts: list[ApplyShardCtx] = []
+        skipped_shards: dict[int, str] = {}
+
+        for shard in shards:
+            final_path = write_op.output_pattern(shard.idx, total_shards)
+
+            # Check skip_existing at shard level
+            if write_op.skip_existing:
+                fs = fsspec.core.url_to_fs(final_path)[0]
+                if fs.exists(final_path):
+                    logger.info(f"Skipping shard {shard.idx}, output exists: {final_path}")
+                    skipped_shards[shard.idx] = final_path
+                    continue
+
+            intermediate_dir = _compute_intermediate_dir(final_path, shard.idx)
+            total_chunks = len(shard.chunks)
+
+            for chunk_idx, chunk in enumerate(shard.chunks):
+                single_chunk_shard = Shard(idx=shard.idx, chunks=[chunk], context=self.context)
+                ctx = ApplyShardCtx(
+                    shard=single_chunk_shard,
+                    shard_idx=shard.idx,
+                    total_shards=total_shards,
+                    chunk_size=hints.chunk_size,
+                    chunk_idx=chunk_idx,
+                    total_chunks=total_chunks,
+                    intermediate_dir=intermediate_dir,
+                )
+                contexts.append(ctx)
+
+        # Run tasks using shared execution loop
+        results = self._run_shard_tasks(process_shard_fused, (operations,), contexts)
+
+        # Extract intermediate file paths from results
+        chunk_results_by_shard: dict[int, list[tuple[int, str]]] = defaultdict(list)
+        for shard_idx, result_list in results.items():
+            for chunk_idx, _header, data_ref in result_list:
+                data = self.context.get(data_ref)
+                if data:
+                    chunk_results_by_shard[shard_idx].append((chunk_idx, data[0]))
+
+        # Aggregate each shard's intermediate files (run on workers in parallel)
+        all_shard_indices = sorted(set(shard.idx for shard in shards))
+        aggregation_tasks = []
+
+        for shard_idx in all_shard_indices:
+            if shard_idx in skipped_shards:
+                final_path = skipped_shards[shard_idx]
+                aggregation_tasks.append((shard_idx, None, final_path))
+            else:
+                chunk_results = chunk_results_by_shard.get(shard_idx, [])
+                chunk_results.sort(key=lambda x: x[0])  # Sort by chunk_idx
+                chunk_paths = [path for _, path in chunk_results]
+                final_path = write_op.output_pattern(shard_idx, total_shards)
+
+                if chunk_paths:
+                    task = self.context.run(
+                        aggregate_shard_chunks,
+                        shard_idx,
+                        chunk_paths,
+                        final_path,
+                        write_op.writer_type,
+                    )
+                    aggregation_tasks.append((shard_idx, task, None))
+                else:
+                    aggregation_tasks.append((shard_idx, None, final_path))
+
+        # Wait for all aggregation tasks and build final shards
+        final_shards = []
+        for shard_idx, task, skip_path in aggregation_tasks:
+            if task is not None:
+                final_path = self.context.get(task)
+            else:
+                final_path = skip_path
+
+            final_shards.append(
+                Shard.from_single_ref(self.context.put([final_path]), self.context, idx=shard_idx, count=1)
+            )
+
+        return final_shards
