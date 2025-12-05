@@ -102,6 +102,9 @@ async def submit_and_track_job(
     # Inject GIT_COMMIT into the environment for logging
     env_vars["GIT_COMMIT"] = subprocess.getoutput("git rev-parse HEAD")
 
+    # Tell Fray to use Ray cluster for job execution
+    env_vars["FRAY_CLUSTER_SPEC"] = "ray"
+
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
     logger.info(f"Extras: {extra}")
     logger.info(f"env_vars: {json.dumps(env_vars, indent=4)}")

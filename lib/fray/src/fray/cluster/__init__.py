@@ -61,48 +61,43 @@ def set_current_cluster(cluster: Cluster) -> None:
     _cluster_context.set(cluster)
 
 
+def _is_running_in_ray_context() -> bool:
+    """Detect Ray context via runtime context (works in Ray Job submissions)."""
+    try:
+        import ray
+
+        ray.get_runtime_context().get_job_id()
+        return True
+    except (ImportError, RuntimeError):
+        return False
+
+
 def current_cluster() -> Cluster:
-    """Get the current cluster from context.
-
-    Auto-detection priority:
-    1. Context variable (set via set_current_cluster())
-    2. Ray cluster (if ray.is_initialized())
-    3. FRAY_CLUSTER_SPEC environment variable
-    4. LocalCluster (default fallback)
-
-    Returns:
-        The cluster instance
-
-    Raises:
-        RuntimeError: If cluster creation fails
-    """
+    """Get cluster: context var > FRAY_CLUSTER_SPEC > Ray detection > LocalCluster."""
     cluster = _cluster_context.get()
     if cluster is not None:
+        return cluster
+
+    cluster_spec = os.environ.get("FRAY_CLUSTER_SPEC")
+    if cluster_spec is not None:
+        cluster = create_cluster(cluster_spec)
+        set_current_cluster(cluster)
+        logger.info(f"Using cluster from FRAY_CLUSTER_SPEC={cluster_spec}")
         return cluster
 
     try:
         import ray
 
-        if ray.is_initialized():
+        if ray.is_initialized() or _is_running_in_ray_context():
             from fray.cluster.ray.cluster import RayCluster
 
             cluster = RayCluster()
             set_current_cluster(cluster)
-            logger.info("Auto-detected Ray cluster from ray.is_initialized()")
+            logger.info("Auto-detected Ray cluster")
             return cluster
     except ImportError:
-        # Ray is not installed; fall back to other cluster types
         pass
 
-    # Check for FRAY_CLUSTER_SPEC
-    cluster_spec = os.environ.get("FRAY_CLUSTER_SPEC")
-    if cluster_spec is not None:
-        cluster = create_cluster(cluster_spec)
-        set_current_cluster(cluster)
-        logger.info(f"Auto-created cluster from FRAY_CLUSTER_SPEC={cluster_spec}")
-        return cluster
-
-    # Default to LocalCluster
     cluster = LocalCluster()
     set_current_cluster(cluster)
     logger.info("Using default LocalCluster")
