@@ -555,9 +555,10 @@ def _run_deduplication(config: DedupeConfig):
     return {
         "success": True,
         "mode": "deduplication",
-        "total_paragraphs": cnts.total,
-        "unique_paragraphs": cnts.unique,
-        "duplicate_paragraphs": cnts.unique_dups,
+        "level": "paragraph",
+        "total": cnts.total,
+        "unique": cnts.unique,
+        "unique_dups": cnts.unique_dups,
     }
 
 
@@ -643,9 +644,10 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
     return {
         "success": True,
         "mode": "exact_doc_deduplication",
-        "total_documents": cnts.total,
-        "unique_documents": cnts.unique,
-        "duplicate_documents": cnts.unique_dups,
+        "level": "document",
+        "total": cnts.total,
+        "unique": cnts.unique,
+        "unique_dups": cnts.unique_dups,
     }
 
 
