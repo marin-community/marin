@@ -24,7 +24,7 @@ This module provides three deduplication workflows:
 All workflows use rbloom bloom filters for efficient duplicate detection.
 """
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 import hashlib
 import logging
 import os
@@ -35,15 +35,16 @@ import typing
 
 from marin.execution.executor import THIS_OUTPUT_PATH
 
+from marin.utilities.time_logger import log_time
 import pyarrow as pa
 import pyarrow.json as pa_json
 import draccus
 import fsspec
-from marin.utilities.time_logger import log_time
 import msgspec
 
 from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import Dataset, flow_backend, load_parquet
+from zephyr.backend_factory import create_backend
 from zephyr.readers import load_file, open_file, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
@@ -176,7 +177,7 @@ def extract_features(text: str, ngram_config: NGramConfig | None) -> Iterator[st
             yield para
 
 
-def collect_input_files(input_path: str | list[str]) -> list[str]:
+def _collect_input_files(input_path: str | list[str]) -> list[str]:
     """
     Given an input path or list of paths, collect all matching files (jsonl, parquet, etc).
     """
@@ -191,6 +192,7 @@ def collect_input_files(input_path: str | list[str]) -> list[str]:
             if not path.endswith(("jsonl", "jsonl.gz", "jsonl.zst", "parquet")):
                 raise FileNotFoundError(f"No files found in path: {path}")
             all_files.append(path)  # Assume it's a single file
+    assert len(all_files) > 0, "No input files found for deduplication."
     return all_files
 
 
@@ -226,7 +228,7 @@ def build_filter(
 
         yield bf.save_bytes()
 
-    all_files = collect_input_files(input_path)
+    all_files = _collect_input_files(input_path)
     logger.info(f"Building bloom filter from {all_files} into {bloom_path}")
 
     # Build bloom filters for all shards in parallel
@@ -333,7 +335,7 @@ def mark_duplicates_bloom(
 
     # Determine base path for rebasing
     base_path = input_path[0] if isinstance(input_path, list) else input_path
-    all_files = collect_input_files(input_path)
+    all_files = _collect_input_files(input_path)
 
     def process_shard_with_bloom(records: Iterator[dict]) -> Iterator[dict]:
         """Load bloom filter once per shard and mark duplicates."""
@@ -382,6 +384,11 @@ def mark_duplicates_bloom(
     return result
 
 
+#
+# TODO (rav): move the deduplication specific logic/functions to dupekit
+#
+
+
 def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kwargs) -> Iterator[pa.RecordBatch]:
     # Private function for now to isolate the `pa.RecordBatch` experiment
     if not file_path.endswith(SUPPORTED_EXTENSIONS):
@@ -400,26 +407,88 @@ def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kw
 
 
 def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
-    def _read_dup_map_shard(shard_path: str) -> dict[str, dict[str, str]]:
-        shard_dup_map = {}
-        for record in load_parquet(shard_path):
-            shard_dup_map[record["hash"]] = {"canonical": record["canonical"]}
-        return shard_dup_map
+    shard_dup_map = {}
 
-    with log_time("Load duplicate map"):
-        dup_map = {}
-        with ThreadPoolExecutor() as executor:
-            futures = [executor.submit(_read_dup_map_shard, s) for s in shards]
-            for future in as_completed(futures):
-                dup_map.update(future.result())
-    return dup_map
+    def add_to_dup_map(record: dict):
+        shard_dup_map[record["hash"]] = {"canonical": record["canonical"]}
+
+    with log_time(f"Load duplicate map from {len(shards)} shards"):
+        create_backend("threadpool").execute(
+            Dataset.from_list(shards)
+            .flat_map(lambda p: load_parquet(p, columns=["hash", "canonical"]))
+            # NOTE: would be nice if Zephyr could optimize the predicate pushdown for Parquet
+            .filter(lambda record: record["hash"] is not None)
+            .map(add_to_dup_map)
+        )
+
+    return shard_dup_map
+
+
+@dataclass
+class Counters:
+    total: int = 0
+    unique: int = 0
+    unique_dups: int = 0
+
+    def __add__(self, other: "Counters") -> "Counters":
+        assert isinstance(other, Counters)
+
+        return Counters(
+            total=self.total + other.total,
+            unique=self.unique + other.unique,
+            unique_dups=self.unique_dups + other.unique_dups,
+        )
+
+
+def _compute_dedup_stats(shards: list[str]) -> Counters:
+    with log_time(f"Compute deduplication stats from {len(shards)} shards"):
+        return create_backend("threadpool").execute(
+            Dataset.from_list(shards)
+            .flat_map(lambda p: load_parquet(p, columns=["cnt"]))
+            .map(lambda c: Counters(total=c["cnt"], unique=int(c["cnt"] == 1), unique_dups=int(c["cnt"] > 1)))
+            .reduce(partial(sum, start=Counters()))
+        )[0]
+
+
+class DupeReduceResult(typing.TypedDict):
+    hash: str | None
+    cnt: int
+    canonical: str | None
+
+
+def _count_reduce(key: str, items: Iterator[pa.StructScalar], *, canonical_id: str) -> DupeReduceResult:
+    head = next(items)
+    doc_cnt = sum(map(lambda _: 1, items)) + 1
+    if doc_cnt == 1:
+        return {
+            "hash": None,
+            "cnt": 1,
+            "canonical": None,
+        }
+
+    return {
+        "hash": key,
+        "cnt": doc_cnt,
+        "canonical": head[canonical_id],
+    }
+
+
+def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
+    # Determine base path for rebasing
+    base_path = input_path[0] if isinstance(input_path, list) else input_path
+    if base_path in input_files:
+        # NOTE: if the base_path is in the input_files, means it's a specific file, so rebase to its directory
+        base_path = os.path.dirname(base_path)
+    return base_path
 
 
 def _run_deduplication(config: DedupeConfig):
     import dupekit
     from dupekit import Transformation
 
-    input_files = collect_input_files(config.input_path)
+    input_files = _collect_input_files(config.input_path)
+
+    backend = flow_backend(max_parallelism=config.processes)
 
     def compute_paragraph_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
         pipeline = [
@@ -430,19 +499,6 @@ def _run_deduplication(config: DedupeConfig):
         ]
         return dupekit.transform(batch, pipeline)
 
-    def _count_reduce(key: str, items: Iterator[pa.StructScalar]) -> dict[str, str] | None:
-        try:
-            head = next(items)
-            _ = next(items)
-        except StopIteration:
-            return None
-        # A dupe exists
-        return {
-            "hash": key,
-            "canonical": head["doc_id"],
-        }
-
-    backend = flow_backend(max_parallelism=config.processes)
     # first compute the full set of duplicate keys.
     duplicate_key_shards = list(
         backend.execute(
@@ -455,23 +511,21 @@ def _run_deduplication(config: DedupeConfig):
             .flat_map(lambda batch: batch.to_pylist())
             .group_by(
                 lambda key_fn: key_fn["hash"],
-                _count_reduce,
+                partial(_count_reduce, canonical_id="doc_id"),
+                num_output_shards=42,
             )
-            .filter(lambda record: record)
-            .reshard(42)
             .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
             verbose=True,
         )
     )
 
-    # Determine base path for rebasing
-    base_path = config.input_path[0] if isinstance(config.input_path, list) else config.input_path
+    cnts = _compute_dedup_stats(duplicate_key_shards)
+    logger.info(f"Stats: {cnts.total=:,} paragraphs, {cnts.unique=:,} unique, {cnts.unique_dups=:,} dups.")
 
     def mark_exact_dups_paragraphs(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         """Mark duplicate paragraphs in a single record using exact hash matching."""
 
         dup_map = _load_dupe_map_shard(duplicate_key_shards)
-        logger.info(f"There are {len(dup_map)} duplicate paragraphs.")
 
         for batch in batches:
             yield dupekit.mark_paragraph_duplicates(
@@ -481,7 +535,7 @@ def _run_deduplication(config: DedupeConfig):
                 algorithm=dupekit.HashAlgorithm.Xxh3_128,
             )
 
-    # Use write_jsonl with callable output pattern
+    base_path = _find_base_path(config.input_path, input_files)
     backend.execute(
         Dataset.from_list(input_files)
         .flat_map(_load_batches)
@@ -501,6 +555,9 @@ def _run_deduplication(config: DedupeConfig):
     return {
         "success": True,
         "mode": "deduplication",
+        "total_paragraphs": cnts.total,
+        "unique_paragraphs": cnts.unique,
+        "duplicate_paragraphs": cnts.unique_dups,
     }
 
 
@@ -512,7 +569,9 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
     import dupekit
     from dupekit import Transformation
 
-    input_files = collect_input_files(config.input_path)
+    input_files = _collect_input_files(config.input_path)
+
+    backend = flow_backend(max_parallelism=config.processes)
 
     def compute_document_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
         pipeline = [
@@ -522,20 +581,7 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
         ]
         return dupekit.transform(batch, pipeline)
 
-    def _count_reduce(key: str, items: Iterator[pa.StructScalar]) -> dict[str, str] | None:
-        try:
-            head = next(items)
-            _ = next(items)
-        except StopIteration:
-            return None
-        # A dupe exists
-        return {
-            "hash": key,
-            "canonical": head["resolved_id"],
-        }
-
     # first compute the full set of duplicate keys.
-    backend = flow_backend(max_parallelism=config.processes)
     duplicate_key_shards = list(
         backend.execute(
             Dataset.from_list(input_files).flat_map(_load_batches)
@@ -547,26 +593,21 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
             .flat_map(lambda batch: batch.to_pylist())
             .group_by(
                 lambda key_fn: key_fn["hash"],
-                _count_reduce,
+                partial(_count_reduce, canonical_id="resolved_id"),
+                num_output_shards=42,
             )
-            .filter(lambda record: record)
-            .reshard(42)
             .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
             verbose=True,
         )
     )
 
-    # Determine base path for rebasing
-    base_path = config.input_path[0] if isinstance(config.input_path, list) else config.input_path
-    if base_path in input_files:
-        # NOTE: if the base_path is in the input_files, means it's a specific file, so rebase to its directory
-        base_path = os.path.dirname(base_path)
+    cnts = _compute_dedup_stats(duplicate_key_shards)
+    logger.info(f"Stats: {cnts.total=:,} documents, {cnts.unique=:,} unique, {cnts.unique_dups=:,} dups.")
 
     def mark_exact_dups_documents(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         """Mark exact duplicate documents using exact hash matching."""
 
         dup_map = _load_dupe_map_shard(duplicate_key_shards)
-        logger.info(f"There are {len(dup_map)} duplicate documents.")
 
         for batch in batches:
             prepared_batch = dupekit.transform(
@@ -580,7 +621,7 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
             )
             yield dupekit.mark_document_duplicates(prepared_batch, dup_map, config.attribute_name, hash_col="hash")
 
-    # Use write_jsonl with callable output pattern
+    base_path = _find_base_path(config.input_path, input_files)
     backend.execute(
         Dataset.from_list(input_files).flat_map(_load_batches)
         # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
@@ -602,6 +643,9 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
     return {
         "success": True,
         "mode": "exact_doc_deduplication",
+        "total_documents": cnts.total,
+        "unique_documents": cnts.unique,
+        "duplicate_documents": cnts.unique_dups,
     }
 
 
