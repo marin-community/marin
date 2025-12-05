@@ -24,6 +24,7 @@ This module provides three deduplication workflows:
 All workflows use rbloom bloom filters for efficient duplicate detection.
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import logging
 import os
@@ -398,6 +399,22 @@ def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kw
             yield from pa_json.read_json(f).to_batches()
 
 
+def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
+    def _read_dup_map_shard(shard_path: str) -> dict[str, dict[str, str]]:
+        shard_dup_map = {}
+        for record in load_parquet(shard_path):
+            shard_dup_map[record["hash"]] = {"canonical": record["canonical"]}
+        return shard_dup_map
+
+    with log_time("Load duplicate map"):
+        dup_map = {}
+        with ThreadPoolExecutor() as executor:
+            futures = [executor.submit(_read_dup_map_shard, s) for s in shards]
+            for future in as_completed(futures):
+                dup_map.update(future.result())
+    return dup_map
+
+
 def _run_deduplication(config: DedupeConfig):
     import dupekit
     from dupekit import Transformation
@@ -441,7 +458,7 @@ def _run_deduplication(config: DedupeConfig):
                 _count_reduce,
             )
             .filter(lambda record: record)
-            .reshard(1)
+            .reshard(42)
             .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
             verbose=True,
         )
@@ -453,14 +470,9 @@ def _run_deduplication(config: DedupeConfig):
     def mark_exact_dups_paragraphs(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         """Mark duplicate paragraphs in a single record using exact hash matching."""
 
-        with log_time("Load duplicate map"):
-            dup_map = {}
-            for record in load_parquet(duplicate_key_shards[0]):
-                dup_map[record["hash"]] = {
-                    "canonical": record["canonical"],
-                }
-
+        dup_map = _load_dupe_map_shard(duplicate_key_shards)
         logger.info(f"There are {len(dup_map)} duplicate paragraphs.")
+
         for batch in batches:
             yield dupekit.mark_paragraph_duplicates(
                 batch,
@@ -538,7 +550,7 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
                 _count_reduce,
             )
             .filter(lambda record: record)
-            .reshard(1)
+            .reshard(42)
             .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
             verbose=True,
         )
@@ -553,13 +565,7 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
     def mark_exact_dups_documents(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         """Mark exact duplicate documents using exact hash matching."""
 
-        with log_time("Load duplicate map"):
-            dup_map = {}
-            for record in load_parquet(duplicate_key_shards[0]):
-                dup_map[record["hash"]] = {
-                    "canonical": record["canonical"],
-                }
-
+        dup_map = _load_dupe_map_shard(duplicate_key_shards)
         logger.info(f"There are {len(dup_map)} duplicate documents.")
 
         for batch in batches:
