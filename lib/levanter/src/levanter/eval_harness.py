@@ -1307,11 +1307,18 @@ def _compute_averages(outputs):
     for metric in metric_keys:
         # Collect valid tasks for this metric
         # We iterate over the n-samples because real tasks (as opposed to aggregates like "mmlu") have counts
-        valid_tasks = [
-            (outputs["results"][task_name].get(metric), outputs["n-samples"][task_name]["effective"])
-            for task_name in outputs["n-samples"]
-            if outputs["results"][task_name].get(metric, None) is not None
-        ]
+        valid_tasks = []
+        for task_name, sample_counts in outputs["n-samples"].items():
+            task_results = outputs["results"].get(task_name)
+            if task_results is None:
+                logger.debug("Skipping %s because no results were produced.", task_name)
+                continue
+
+            metric_value = task_results.get(metric)
+            if metric_value is None:
+                continue
+
+            valid_tasks.append((metric_value, sample_counts["effective"]))
 
         if not valid_tasks:
             continue  # Skip metrics with no valid tasks
