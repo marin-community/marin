@@ -394,7 +394,6 @@ def aggregate_total(cfg: AggregateConfig):
 
 
 def run_aggregate_total(config: AggregateConfig) -> str:
-    """Launch train-test overlap aggregation via Fray with CPU-only environment."""
     logger.info(f"Starting train-test overlap aggregation with config: {config}")
     aggregate_total(config)
     logger.info(f"Aggregation completed! Results written to {config.output_path}")

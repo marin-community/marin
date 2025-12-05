@@ -62,7 +62,6 @@ def set_current_cluster(cluster: Cluster) -> None:
 
 
 def _is_running_in_ray_context() -> bool:
-    """Detect Ray context via runtime context (works in Ray Job submissions)."""
     try:
         import ray
 
@@ -73,7 +72,13 @@ def _is_running_in_ray_context() -> bool:
 
 
 def current_cluster() -> Cluster:
-    """Get cluster: context var > FRAY_CLUSTER_SPEC > Ray detection > LocalCluster."""
+    """Return a cluster context.
+
+    If a cluster is already set in context, return it.
+    If a FRAY_CLUSTER_SPEC is set, create a cluster from it.
+    If running inside of Ray, use a Ray cluster.
+    If no cluster is specified, use a LocalCluster.
+    """
     cluster = _cluster_context.get()
     if cluster is not None:
         return cluster
