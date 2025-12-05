@@ -21,9 +21,6 @@ trainer:
   num_train_steps: 250000  # 3,000,000,000,000 / 4096 / 1024
   steps_per_eval: 1000
   max_eval_batches: 50
-  tensor_parallel_axes: ["mlp", "heads"]
-  fsdp_axis: "embed"
-  batch_axis: "batch"
 optimizer:
   learning_rate: 3E-4  # same as Llama2-7B
   weight_decay: 0.1

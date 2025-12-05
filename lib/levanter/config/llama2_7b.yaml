@@ -1,10 +1,10 @@
 data:
   train_urls:
-    - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz"
+  - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz
   validation_urls:
-    - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz"
-  cache_dir: "gs://levanter-data/tokenized/openwebtext_llama/"
-  tokenizer: "NousResearch/Llama-2-7b-hf"
+  - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz
+  cache_dir: gs://levanter-data/tokenized/openwebtext_llama/
+  tokenizer: NousResearch/Llama-2-7b-hf
 model:
   activation_function: silu
   attn_backend: null
@@ -51,7 +51,6 @@ optimizer:
   weight_decay_modules: null
 trainer:
   axis_resources: {}
-  batch_axis: batch
   checkpointer:
     append_run_id_to_base_path: false
     base_path: gs://levanter-checkpoints/checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints
@@ -59,7 +58,6 @@ trainer:
     - every: 20000
     save_interval: 10m
   quantization: null
-  fsdp_axis: embed
   id: llama-8b-tootsie-0.001-19ad63
   initialize_from: null
   jax_config:
@@ -69,7 +67,6 @@ trainer:
   load_checkpoint_path: null
   log_dir: logs
   max_eval_batches: null
-  model_axis_size: 1
   mp: compute=bfloat16,params=float32,output=bfloat16
   num_train_steps: 10000
   parameter_axis_resources: {}
@@ -83,13 +80,10 @@ trainer:
     address: null
     auto_start_cluster: false
     start_workers: false
-#  replica_dcn_axis_size: 2
-#  replica_ici_axis_size: 1
   require_accelerator: true
   seed: 0
   shutdown_at_exit: false
   steps_per_eval: 10000
-  tensor_parallel_axes: null
   tracker:
     entity: null
     group: null

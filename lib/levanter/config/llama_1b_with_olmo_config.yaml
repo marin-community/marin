@@ -17,9 +17,6 @@ trainer:
   train_batch_size: 1024
   num_train_steps: 750000  # 3,000,000,000,000 / 4,000,000 = 750,000
   steps_per_eval: 1000
-  tensor_parallel_axes: ["mlp", "heads"]
-  fsdp_axis: "embed"
-  batch_axis: "batch"
 optimizer:
   learning_rate: 4E-4
   weight_decay: 0.1

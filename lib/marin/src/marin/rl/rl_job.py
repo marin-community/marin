@@ -291,10 +291,7 @@ class RLJob:
         # Create inference server config if not provided
         if self.config.inference_config is None and self.config.inference_type == "levanter":
             inference_server_config = InferenceServerConfig(
-                trainer=dataclasses.replace(
-                    self.config.trainer,
-                    tensor_parallel_axes=["mlp", "kv_head"],
-                ),
+                trainer=self.config.trainer,
                 tokenizer=tokenizer,
                 temperature=1.0,
                 service=InferenceEngineConfig(

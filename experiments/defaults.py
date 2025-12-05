@@ -38,6 +38,7 @@ from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from levanter.utils import fsspec_utils
 
 from experiments.anneal_config import AnnealConfig
@@ -337,7 +338,14 @@ def default_train(
                 keep=[dict(every=steps_per_export)],
             ),
             model_averaging=model_averaging,
-            replica_dcn_axis_size=-1,
+            mesh=MeshConfig(
+                # Special axes for MoEs
+                # TODO: this is actually bad and we should remove, but keeping for now
+                compute_mapping={
+                    "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                    "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                }
+            ),
             allow_partial_checkpoint=train_config.allow_partial_checkpoint,
             per_device_eval_parallelism=per_device_eval_parallelism,
             max_eval_batches=train_config.max_eval_batches,
@@ -348,11 +356,6 @@ def default_train(
             profiler=train_config.profiler,
             profiler_start_step=train_config.profiler_start_step,
             profiler_num_steps=train_config.profiler_num_steps,
-            axis_resources={
-                # Special axes for MoEs
-                "token": (ResourceAxis.REPLICA, ResourceAxis.DATA),
-                "token_repeat": (ResourceAxis.REPLICA, ResourceAxis.DATA),
-            },
         ),
         initialize_from_checkpoint_path=(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None

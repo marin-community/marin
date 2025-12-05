@@ -36,6 +36,7 @@ from transformers import AutoTokenizer
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.inference.engine import InferenceEngineConfig
 from fray.cluster.ray.tpu import run_on_pod_ray
+from levanter.utils.mesh import MeshConfig
 
 from marin.resources import TpuPodConfig
 from marin.training.training import _add_run_env_variables
@@ -104,11 +105,8 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     # Initialize Levanter with minimal trainer config
     trainer_config = TrainerConfig(
         mp=jmp.get_policy("p=f32,c=bfloat16"),
-        tensor_parallel_axes=["mlp", "heads"],
-        fsdp_axis="embed",
-        batch_axis="batch",
         ray=levanter.distributed.RayConfig(auto_start_cluster=False),
-        model_axis_size=model_axis_size_config,
+        mesh=MeshConfig(axes={"model": model_axis_size_config}, shared_mapping={"mlp": "model", "heads": "model"}),
     )
 
     env = {}
@@ -140,7 +138,8 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> dict[str, Any]:
     inference_server_config = InferenceServerConfig(
         # Turn on tensor parallelism for inference
         trainer=dataclasses.replace(
-            trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=model_axis_size
+            trainer_config,
+            mesh=MeshConfig(axes={"model": model_axis_size}, shared_mapping={"mlp": "model", "heads": "model"}),
         ),
         tokenizer=tokenizer_path,
         temperature=1.0,

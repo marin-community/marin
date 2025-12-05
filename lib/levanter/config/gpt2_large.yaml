@@ -13,7 +13,6 @@ trainer:
     tags: [ "openwebtext", "gpt2"]
 
   mp: p=f32,c=bfloat16
-  model_axis_size: 1
   per_device_parallelism: -1
 optimizer:
   learning_rate: 2E-4

@@ -142,11 +142,11 @@ class InferenceReplConfig:
 
     trainer: TrainerConfig = field(
         default_factory=lambda: TrainerConfig(
-            model_axis_size=1,
-            tensor_parallel_axes=["mlp", "kv_head"],
-            fsdp_axis="embed",
-            batch_axis="batch",
             mp=jmp.get_policy("p=f32,c=f32"),
+            mesh=MeshConfig(
+                axes={"model": 1},
+                shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
+            ),
         )
     )
     # bad

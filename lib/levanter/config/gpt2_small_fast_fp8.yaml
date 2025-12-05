@@ -16,7 +16,6 @@ trainer:
   mp: p=f32,c=bfloat16
   quantization:
     fp8: true
-  model_axis_size: 1
   per_device_parallelism: -1
 
   train_batch_size: 256
