@@ -48,13 +48,11 @@ logger = logging.getLogger(__name__)
 # in Ray. Instead we use the ray_tpu helper/actor to stage TPU execution.  We
 # store "job" information separately here to report to the user.
 @dataclass
-class _RefJobInfo:
+class RayJobInfo:
     ref: ray.ObjectRef | None
     submission_id: str | None
     name: str
 
-
-class RayJobInfo:
     @staticmethod
     def from_ref(ref: ray.ObjectRef, name: str) -> "RayJobInfo":
         return RayJobInfo(ref=ref, submission_id=None, name=name)
@@ -106,7 +104,7 @@ class RayCluster(Cluster):
             logger.info(f"Using provided namespace: {self._namespace}")
 
         self._dashboard_address = dashboard_address or self._get_dashboard_address()
-        self._jobs: dict[str, RayJobInfo] = {}  # Track jobs: job_id -> {ref, name, start_time}
+        self._jobs: dict[JobId, RayJobInfo] = {}
 
     @classmethod
     def from_spec(cls, query_params: dict[str, list[str]]) -> "RayCluster":
@@ -169,8 +167,9 @@ class RayCluster(Cluster):
             **entrypoint_params,
         )
         logger.info("Job submitted with ID: %s", submission_id)
-        self._jobs[request.name] = RayJobInfo.from_submission_id(submission_id, request.name)
-        return JobId(submission_id)
+        job_id = JobId(submission_id)
+        self._jobs[job_id] = RayJobInfo.from_submission_id(submission_id, request.name)
+        return job_id
 
     def _launch_callable_job(self, request: JobRequest) -> JobId:
         """Launch a callable job on Ray cluster.
@@ -184,7 +183,9 @@ class RayCluster(Cluster):
         runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
         remote_fn = ray.remote(entrypoint.callable)
         ref = remote_fn.options(runtime_env=runtime_env).remote(*entrypoint.args, **entrypoint.kwargs)
-        self._jobs[request.name] = RayJobInfo.from_ref(ref, request.name)
+        job_id = JobId(str(id(ref)))
+        self._jobs[job_id] = RayJobInfo.from_ref(ref, request.name)
+        return job_id
 
     def _launch_tpu_job(self, request: JobRequest) -> JobId:
         # We only launch TPU jobs from an existing Ray cluster. The TPU slice actor
@@ -213,8 +214,9 @@ class RayCluster(Cluster):
             max_retries_failure=1,
         )
 
-        self._jobs[request.name] = RayJobInfo.from_ref(object_ref, name=request.name)
-        return self._jobs[request.name].job_id
+        job_id = JobId(str(id(object_ref)))
+        self._jobs[job_id] = RayJobInfo.from_ref(object_ref, name=request.name)
+        return job_id
 
     def _get_runtime_env(self, request: JobRequest) -> dict | None:
         """Build Ray runtime environment for the given job request."""
@@ -270,9 +272,10 @@ class RayCluster(Cluster):
     def monitor(self, job_id: JobId) -> JobInfo:
         logger.info("Starting log monitoring for job %s", job_id)
 
-        if job_id.startswith("tpu-"):
-            logger.warning("Log streaming not supported for TPU jobs. Use Ray dashboard to view logs.")
-            return self.poll(job_id)
+        job = self._jobs[job_id]
+        if job.submission_id is None:
+            logger.info("Job is a remote ref, monitoring is automatic, waiting.")
+            return self.wait(job_id)
 
         async def stream_logs():
             async for line in self._job_client().tail_job_logs(job_id):
@@ -281,10 +284,41 @@ class RayCluster(Cluster):
         asyncio.run(stream_logs())
         return self.poll(job_id)
 
+    def _poll_ref_job(self, job_id: JobId, job: RayJobInfo) -> JobInfo:
+        """Poll a ref-based job (callable/TPU) for status."""
+        ready, _ = ray.wait([job.ref], timeout=0)
+        if not ready:
+            return JobInfo(
+                job_id=job_id,
+                status="pending",
+                tasks=[],
+                name=job.name,
+                error_message=None,
+            )
+        try:
+            ray.get(job.ref)
+        except Exception as e:
+            logger.warning("Job %s failed with message: %s", job_id, e)
+            return JobInfo(
+                job_id=job_id,
+                status="failed",
+                tasks=[],
+                name=job.name,
+                error_message=str(e),
+            )
+        return JobInfo(
+            job_id=job_id,
+            status="succeeded",
+            tasks=[],
+            name=job.name,
+            error_message=None,
+        )
+
     def poll(self, job_id: JobId) -> JobInfo:
         """Poll job status, returning the current job information."""
-        if job_id.startswith("tpu-"):
-            return self._poll_tpu_job(job_id)
+        job = self._jobs[job_id]
+        if job.submission_id is None:
+            return self._poll_ref_job(job_id, job)
 
         info = self._job_client().get_job_info(job_id)
         status = _convert_ray_status(info.status)
@@ -303,12 +337,13 @@ class RayCluster(Cluster):
 
     def terminate(self, job_id: JobId) -> None:
         """Stop a job with the given job identifier."""
-        if job_id.startswith("tpu-"):
-            self._terminate_tpu_job(job_id)
+        job = self._jobs[job_id]
+        if job.submission_id is None:
+            ray.cancel(job.ref)
             return
 
         try:
-            self._job_client().stop_job(job_id)
+            self._job_client().stop_job(job.submission_id)
         except Exception as e:
             logger.warning("Failed to stop job %s: %s", job_id, e)
             return
@@ -326,57 +361,30 @@ class RayCluster(Cluster):
             time.sleep(1.0)
 
     def list_jobs(self) -> list[JobInfo]:
-        jobs = self._job_client().list_jobs()
+        """List all jobs tracked by this cluster."""
         result = []
-        for job_info in jobs:
-            result.append(
-                JobInfo(
-                    job_id=JobId(job_info.submission_id),
-                    status=_convert_ray_status(job_info.status),
-                    tasks=[],
-                    name=job_info.metadata.get("name", "") if job_info.metadata else "",
-                    error_message=job_info.message if _convert_ray_status(job_info.status) == "failed" else None,
+
+        # Get submitted jobs from Ray's job client
+        try:
+            for job_info in self._job_client().list_jobs():
+                result.append(
+                    JobInfo(
+                        job_id=JobId(job_info.submission_id),
+                        status=_convert_ray_status(job_info.status),
+                        tasks=[],
+                        name=job_info.metadata.get("name", "") if job_info.metadata else "",
+                        error_message=job_info.message if _convert_ray_status(job_info.status) == "failed" else None,
+                    )
                 )
-            )
+        except Exception as e:
+            logger.warning("Failed to list jobs from job client: %s", e)
 
-        for tpu_job_info in self._tpu_jobs.values():
-            result.append(self._poll_tpu_job(tpu_job_info.job_id))
+        # Add ref-based jobs (callable/TPU jobs not tracked by submission client)
+        for job_id, job in self._jobs.items():
+            if job.submission_id is None:
+                result.append(self.poll(job_id))
+
         return result
-
-    def _poll_tpu_job(self, job_id: JobId) -> JobInfo:
-        """Poll TPU job status via ObjectRef."""
-        info = self._tpu_jobs.get(job_id)
-        if not info:
-            raise KeyError(f"TPU job {job_id} not found")
-
-        ready, _ = ray.wait([info.ref], timeout=0)
-
-        if ready:
-            try:
-                ray.get(info.ref)
-                status = "succeeded"
-                error_msg = None
-            except Exception as e:
-                status = "failed"
-                error_msg = str(e)
-        else:
-            status = "running"
-            error_msg = None
-
-        return JobInfo(
-            job_id=job_id,
-            status=status,
-            name=info.name,
-            tasks=[],
-            error_message=error_msg,
-        )
-
-    def _terminate_tpu_job(self, job_id: JobId) -> None:
-        """Cancel TPU job by canceling the ObjectRef."""
-        info = self._tpu_jobs.get(job_id)
-        if info:
-            ray.cancel(info.ref)
-            del self._tpu_jobs[job_id]
 
     def _get_dashboard_address(self) -> str:
         """Get Ray dashboard address for job submission.

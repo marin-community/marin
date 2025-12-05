@@ -597,7 +597,7 @@ class Executor:
         self.version_str_to_step: dict[str, ExecutorStep] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
-        self.refs: dict[ExecutorStep, JobId] = {}
+        self.jobs: dict[ExecutorStep, JobId] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
 
@@ -652,7 +652,7 @@ class Executor:
         self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
 
         logger.info("### Waiting for all steps to finish ###")
-        for job_id in self.refs.values():
+        for job_id in self.jobs.values():
             self.cluster.wait(job_id)
 
     def _run_steps(
@@ -677,7 +677,8 @@ class Executor:
             while ready:
                 step = ready.pop()
                 job_id, ran = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
-                self.refs[step] = job_id
+                if ran:
+                    self.jobs[step] = job_id
                 running[step] = (job_id, ran)
 
             if not running:
@@ -698,16 +699,15 @@ class Executor:
             for finished_step, job_id in finished_jobs:
                 status_path = get_status_path(self.output_paths[finished_step])
                 ran = running[finished_step][1]
-                try:
-                    logger.info("Waiting for %s to finish for step %s", job_id, finished_step.name)
-                    self.cluster.wait(job_id)
-                except Exception:
-                    message = traceback.format_exc()
-                    append_status(status_path, STATUS_FAILED, message=message)
-                    raise
-                else:
-                    if ran:
+                if ran:
+                    try:
+                        logger.info("Waiting for %s to finish for step %s", job_id, finished_step.name)
+                        self.cluster.wait(job_id)
                         append_status(status_path, STATUS_SUCCESS)
+                    except Exception:
+                        message = traceback.format_exc()
+                        append_status(status_path, STATUS_FAILED, message=message)
+                        raise
 
                 running.pop(finished_step)
                 for child in dependents.get(finished_step, []):
