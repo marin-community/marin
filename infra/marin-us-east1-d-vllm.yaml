@@ -8,12 +8,10 @@ cluster_name: marin-us-east1-d-vllm
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
 
-
 auth:
   ssh_private_key:  ~/.ssh/marin_ray_cluster.pem
   ssh_public_key:  ~/.ssh/marin_ray_cluster.pub
   ssh_user: ray
-
 
 # Configure GCP
 provider:
@@ -21,7 +19,6 @@ provider:
   region: us-east1
   availability_zone: us-east1-d
   project_id: hai-gcp-models
-
 
 docker:
     image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:1bc975e12"
@@ -47,8 +44,8 @@ docker:
 
 
 initialization_commands:
-  - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
   - yes | gcloud auth configure-docker us-east1-docker.pkg.dev
+  - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
   # always run this because ray doesn't run with sudo
   - sudo usermod -aG docker $USER
   # we want to launch docker containers from inside docker, which means we need to loosen the permissions on the docker
@@ -56,13 +53,13 @@ initialization_commands:
   - sudo chmod 666 /var/run/docker.sock
 
 setup_commands:
+  - mkdir $HOME/.cache/huggingface -p
+  - mkdir $HOME/.cache/openai -p
   # set the GCP project because it's not injected by default
   - gcloud config set project hai-gcp-models
   - gcloud config set compute/region us-east1
   - gcloud config set compute/zone us-east1-d
-  - mkdir $HOME/.cache/huggingface -p
   - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
-  - mkdir $HOME/.cache/openai -p
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - echo 'export MARIN_PREFIX="gs://marin-us-east1"' >> $HOME/.bashrc
   - echo 'export BUCKET="marin-us-east1"' >> $HOME/.bashrc
@@ -71,9 +68,11 @@ setup_commands:
   - echo 'export AUTOSCALER_HEARTBEAT_TIMEOUT_S=600' >> $HOME/.bashrc
   - echo 'export TPU_MIN_LOG_LEVEL=3' >> $HOME/.bashrc
   - echo 'export TPU_STDERR_LOG_LEVEL=3' >> $HOME/.bashrc
-  - gcsfuse --implicit-dirs --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
-  - mkdir -p /home/ray/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > /home/ray/.ssh/authorized_keys && chmod 600 /home/ray/.ssh/authorized_keys
-  - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
+  - echo 'export TPU_LOG_DIR=disabled' >> $HOME/.bashrc
+  - gcsfuse --implicit-dirs --client-protocol grpc --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
+  - mkdir -p ~/.ssh && /root/gcloud/google-cloud-sdk/bin/gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+  # Using /home/ray/.ssh/ since auth.ssh_user is set to 'ray' and we need to ensure the key is in the correct user's home directory else we get an error
+  - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
 worker_setup_commands:
   # delete any old ray session data
@@ -83,6 +82,7 @@ worker_setup_commands:
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
+
 
 # List of Available Node Types
 available_node_types:

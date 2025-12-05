@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20250923"
+    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:5b9b77c"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -34,7 +34,7 @@ docker:
       - --privileged
       - --ulimit memlock=-1:-1  #
       - --ulimit nofile=1048576:1048576
-      - --shm-size=32gb
+      - --shm-size=200gb
       - -v
       - "/tmp:/tmp"
       # this lets the worker run docker commands and have them run as sibling containers
@@ -56,13 +56,13 @@ initialization_commands:
   - sudo chmod 666 /var/run/docker.sock
 
 setup_commands:
+  - mkdir $HOME/.cache/huggingface -p
+  - mkdir $HOME/.cache/openai -p
   # set the GCP project because it's not injected by default
   - gcloud config set project hai-gcp-models
   - gcloud config set compute/region us-central2
   - gcloud config set compute/zone us-central2-b
-  - mkdir $HOME/.cache/huggingface -p
   - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
-  - mkdir $HOME/.cache/openai -p
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - echo 'export MARIN_PREFIX="gs://marin-us-central2"' >> $HOME/.bashrc
   - echo 'export BUCKET="marin-us-central2"' >> $HOME/.bashrc
@@ -72,7 +72,7 @@ setup_commands:
   - echo 'export TPU_MIN_LOG_LEVEL=3' >> $HOME/.bashrc
   - echo 'export TPU_STDERR_LOG_LEVEL=3' >> $HOME/.bashrc
   - echo 'export TPU_LOG_DIR=disabled' >> $HOME/.bashrc
-  - gcsfuse --implicit-dirs --client-protocol grpc --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
+  - gcsfuse --implicit-dirs --client-protocol grpc --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
   - mkdir -p /home/ray/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > /home/ray/.ssh/authorized_keys && chmod 600 /home/ray/.ssh/authorized_keys
   - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
