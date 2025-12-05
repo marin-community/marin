@@ -29,7 +29,6 @@ from ray.job_submission import JobSubmissionClient
 
 from fray.cluster.base import (
     Cluster,
-    DeviceType,
     GpuConfig,
     JobId,
     JobInfo,
@@ -154,9 +153,8 @@ class RayCluster(Cluster):
 
     def _launch_binary_job(self, request: JobRequest) -> JobId:
         entrypoint = request.entrypoint.binary_entrypoint
-        assert entrypoint.binary_entrypoint is not None, "Entrypoint requires binary"
         runtime_env = self._get_runtime_env(request)
-        entrypoint_cmd = f"{entrypoint.binary_entrypoint.command} {' '.join(entrypoint.binary_entrypoint.args)}"
+        entrypoint_cmd = f"{entrypoint.command} {' '.join(entrypoint.args)}"
         logger.info("Submitting job with entrypoint: %s", entrypoint_cmd)
         logger.debug("Runtime env: %s", runtime_env)
 
@@ -182,10 +180,41 @@ class RayCluster(Cluster):
         """
         entrypoint = request.entrypoint.callable_entrypoint
         runtime_env = self._get_runtime_env(request)
+        # strip out keys that can only be set at the Job level
+        runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
         remote_fn = ray.remote(entrypoint.callable)
         ref = remote_fn.options(runtime_env=runtime_env).remote(*entrypoint.args, **entrypoint.kwargs)
         self._jobs[request.name] = RayJobInfo.from_ref(ref, request.name)
-        return JobId(request.name)
+
+    def _launch_tpu_job(self, request: JobRequest) -> JobId:
+        # We only launch TPU jobs from an existing Ray cluster. The TPU slice actor
+        # bouncing prevents us from using a traditional job submission for TPU workloads.
+        callable_ep = request.entrypoint.callable_entrypoint
+        assert callable_ep is not None, "TPU jobs require callable entrypoint"
+
+        device = request.resources.device
+        runtime_env = self._get_runtime_env(request)
+
+        # strip out keys that can only be set at the Job level
+        runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
+
+        if callable_ep.args or callable_ep.kwargs:
+            remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(
+                lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+            )
+        else:
+            remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(callable_ep.callable)
+
+        object_ref = run_on_pod_ray.remote(
+            remote_fn,
+            tpu_type=device.type,
+            num_slices=request.resources.replicas,
+            max_retries_preemption=10000,
+            max_retries_failure=1,
+        )
+
+        self._jobs[request.name] = RayJobInfo.from_ref(object_ref, name=request.name)
+        return self._jobs[request.name].job_id
 
     def _get_runtime_env(self, request: JobRequest) -> dict | None:
         """Build Ray runtime environment for the given job request."""
@@ -194,12 +223,11 @@ class RayCluster(Cluster):
         env_vars = dict(environment.env_vars)
 
         # disable access to the TPU if we're not a TPU job.
-        if request.resources.device.type != DeviceType.TPU:
+        if request.resources.device.type != "tpu":
             env_vars["JAX_PLATFORMS"] = "cpu"
             env_vars["PJRT_DEVICE"] = "cpu"
 
-        if "FRAY_CLUSTER_SPEC" not in env_vars:
-            env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
+        env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
 
         # skip building the package environment for local clusters
         if self._address == "auto" or self._address == "local":
@@ -314,35 +342,6 @@ class RayCluster(Cluster):
         for tpu_job_info in self._tpu_jobs.values():
             result.append(self._poll_tpu_job(tpu_job_info.job_id))
         return result
-
-    def _launch_tpu_job(self, request: JobRequest) -> JobId:
-        # We only launch TPU jobs from an existing Ray cluster. The TPU slice actor
-        # bouncing prevents us from using a traditional job submission for TPU workloads.
-        callable_ep = request.entrypoint.callable_entrypoint
-        assert callable_ep is not None, "TPU jobs require callable entrypoint"
-
-        device = request.resources.device
-        runtime_env = self._get_runtime_env(request)
-
-        # Filter out keys that can only be set at the Job level
-        nested_runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
-
-        if callable_ep.args or callable_ep.kwargs:
-            remote_fn = ray.remote(max_calls=1, runtime_env=nested_runtime_env)(
-                lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-            )
-        else:
-            remote_fn = ray.remote(max_calls=1, runtime_env=nested_runtime_env)(callable_ep.callable)
-
-        object_ref = run_on_pod_ray.remote(
-            remote_fn,
-            tpu_type=device.type,
-            num_slices=request.resources.replicas,
-            max_retries_preemption=10000,
-            max_retries_failure=1,
-        )
-
-        return JobId.from_ref(object_ref, name=request.name)
 
     def _poll_tpu_job(self, job_id: JobId) -> JobInfo:
         """Poll TPU job status via ObjectRef."""

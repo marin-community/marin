@@ -242,11 +242,14 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
+DeviceType = Literal["cpu", "gpu", "tpu"]
+
+
 @dataclass(frozen=True)
 class CpuConfig:
     """CPU-only device configuration."""
 
-    type: str = "cpu"
+    type: DeviceType = "cpu"
 
     def chip_count(self) -> int:
         """CPU has no accelerator chips."""
@@ -261,7 +264,7 @@ class CpuConfig:
 class GpuConfig:
     """GPU device configuration."""
 
-    type: GpuType
+    type: DeviceType = "gpu"
     count: int = 1
 
     def chip_count(self) -> int:
@@ -288,7 +291,7 @@ class TpuConfig:
         topology: Optional topology specification (e.g., "2x2x1")
     """
 
-    type: TpuType
+    type: DeviceType = "tpu"
     topology: str | None = None
 
     def chip_count(self) -> int:
