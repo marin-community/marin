@@ -68,9 +68,7 @@ DEFAULT_NGRAM_CONFIG = NGramConfig(
 )
 
 
-# TODO: here we request that the zephyr driver has full node via num_cpus, which is rather
-# sloppy - what's the best way to do this in Ray?
-@ray.remote(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "cpu"}}, num_cpus=120)
+@ray.remote(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "cpu"}})
 def run_dedup(config: DedupeConfig) -> str:
     logger.info(f"Starting dedupe with config: {config}")
 
@@ -80,11 +78,18 @@ def run_dedup(config: DedupeConfig) -> str:
     return config.output_path
 
 
-def build_dedup_step(dataset: InputName) -> ExecutorStep:
+def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
+    """
+    Builds a deduplication step for the given dataset.
+
+    Args:
+        dataset: The input dataset to deduplicate.
+        max_parallelism: Maximum parallelism for Zephyr tasks.
+    """
     input_path = dataset.cd("sample/10BT")
 
     config = DedupeConfig(
-        input_path=input_path, attribute_name="is_duplicate", mode=DedupMode.DEDUPLICATE, processes=1024
+        input_path=input_path, attribute_name="is_duplicate", mode=DedupMode.DEDUPLICATE, processes=max_parallelism
     )
 
     return ExecutorStep(
@@ -97,9 +102,9 @@ def build_dedup_step(dataset: InputName) -> ExecutorStep:
 
 
 STEPS = [
-    build_dedup_step(fineweb_edu_small_1),
-    build_dedup_step(fineweb_edu_small_2),
-    build_dedup_step(fineweb_edu_small_10bt),
+    build_dedup_step(fineweb_edu_small_1, max_parallelism=7),
+    build_dedup_step(fineweb_edu_small_2, max_parallelism=7),
+    build_dedup_step(fineweb_edu_small_10bt, max_parallelism=1024),
 ]
 
 if __name__ == "__main__":
