@@ -23,8 +23,8 @@ import sys
 from dataclasses import dataclass
 from queue import Empty
 
-import ray
 import tblib
+from fray.cluster import Entrypoint, JobRequest, ResourceConfig, create_environment, current_cluster
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
 from levanter.main.viz_logprobs import VizLmConfig as LevanterVizLmConfig
@@ -35,8 +35,6 @@ from levanter.utils.ray_utils import ExceptionInfo
 
 from marin.execution.executor import this_output_path
 from marin.utils import remove_tpu_lockfile_on_exit
-
-from fray.cluster import ResourceConfig
 
 from marin.evaluation.utils import download_from_gcs, is_remote_path, discover_levanter_checkpoints
 from marin.utilities.executor_utils import ckpt_path_to_step_name
@@ -99,12 +97,6 @@ class VizLmConfig:
     resource_config: ResourceConfig = dataclasses.field(default_factory=lambda: ResourceConfig.with_tpu("v5p-8"))
 
 
-@ray.remote(
-    memory=64 * 1024 * 1024 * 1024,
-    max_calls=1,
-    runtime_env={"env_vars": {"HF_HOME": HUGGINGFACE_CACHE_PATH}},
-)
-@remove_tpu_lockfile_on_exit
 def do_viz_lm(config: LevanterVizLmConfig) -> None:
     """
     Visualizes log probabilities of a language model.
@@ -161,15 +153,18 @@ def visualize_lm_log_probs(config: VizLmConfig) -> None:
         comparison_model_path=config.comparison_model_path,
         comparison_is_hf=config.comparison_is_hf,
     )
-    from fray.cluster.base import TpuConfig
 
-    assert isinstance(config.resource_config.device, TpuConfig), "visualize_lm_log_probs requires TPU resource config"
+    def _run_viz():
+        with remove_tpu_lockfile_on_exit():
+            do_viz_lm(levanter_config)
 
-    ray.get(
-        do_viz_lm.options(
-            resources={
-                "TPU": config.resource_config.chip_count(),
-                f"TPU-{config.resource_config.device.type}-head": 1,
-            }
-        ).remote(levanter_config)
+    job_request = JobRequest(
+        name="viz-lm-log-probs",
+        entrypoint=Entrypoint.from_callable(_run_viz),
+        resources=config.resource_config,
+        environment=create_environment(env_vars={"HF_HOME": HUGGINGFACE_CACHE_PATH}),
     )
+
+    cluster = current_cluster()
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id)
