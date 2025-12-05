@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20250923"
+    image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:5b9b77c"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -34,7 +34,7 @@ docker:
       - --privileged
       - --ulimit memlock=-1:-1  #
       - --ulimit nofile=1048576:1048576
-      - --shm-size=32gb
+      - --shm-size=200gb
       - -v
       - "/tmp:/tmp"
       # this lets the worker run docker commands and have them run as sibling containers
@@ -71,8 +71,8 @@ setup_commands:
   - echo 'export AUTOSCALER_HEARTBEAT_TIMEOUT_S=600' >> $HOME/.bashrc
   - echo 'export TPU_MIN_LOG_LEVEL=3' >> $HOME/.bashrc
   - echo 'export TPU_STDERR_LOG_LEVEL=3' >> $HOME/.bashrc
+  - gcsfuse --implicit-dirs --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
   - echo 'export TPU_LOG_DIR=disabled' >> $HOME/.bashrc
-  - gcsfuse --implicit-dirs --client-protocol grpc --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
   - mkdir -p /home/ray/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > /home/ray/.ssh/authorized_keys && chmod 600 /home/ray/.ssh/authorized_keys
   - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
