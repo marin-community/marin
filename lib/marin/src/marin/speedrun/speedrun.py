@@ -136,6 +136,7 @@ class SpeedrunConfig:
         total_peak_flops = device_flops * num_chips
 
         # Print simplified config info
+        logger.info("----- START OF PRINT RUN INFO -----")
         logger.info("Speedrun Configuration:")
         logger.info(json.dumps(self.as_json_dict(), indent=4))
 
@@ -154,6 +155,7 @@ class SpeedrunConfig:
             logger.info("Model size: unknown (model did not report total_trainable_params).")
         else:
             logger.info(f"Model size: {model_size/1e6:.2f} million parameters")
+        logger.info("----- END OF PRINT RUN INFO -----")
 
     def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
