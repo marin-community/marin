@@ -22,8 +22,8 @@ Example:
     ...     environment=create_environment(),
     ... )
     >>> job_id = cluster.launch(request)
-    >>> for line in cluster.monitor(job_id):
-    ...     print(line)
+    >>> job_info = cluster.monitor(job_id)  # Logs stream to logger
+    >>> print(job_info.status)
 """
 
 import logging

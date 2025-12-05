@@ -25,6 +25,7 @@ How to run:
   2) From repo root:
        python marin/run/ray_run.py -- python -m __SUBMISSION_IMPORT_PATH__ --force_run_failed true
   3) Optional: SR_USE_TPU=1 to use TPU resource presets (default is GPU).
+  3) Optional: SR_USE_TPU=1 to use TPU resource presets (default is GPU).
 """
 
 # =========================
@@ -530,6 +531,7 @@ def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]
 
     muon = _muon_presets()[size]
     resources = _resource_presets(use_tpu=use_tpu)[size]
+    resources = _resource_presets(use_tpu=use_tpu)[size]
 
     train = SimpleTrainConfig(
         resources=versioned(resources),
@@ -570,6 +572,7 @@ if __name__ == "__main__":
     use_tpu = bool(int(os.environ.get("SR_USE_TPU", "0")))
     steps = []
     for s in sizes:
+        name, cfg = build_run(s, use_tpu=use_tpu)
         name, cfg = build_run(s, use_tpu=use_tpu)
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))

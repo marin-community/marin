@@ -211,6 +211,7 @@ If you did not create a fork of Marin on GitHub previously, you need to do it no
 
 1. Install the GitHub CLI (see [https://github.com/cli/cli#installation](https://github.com/cli/cli#installation)) and log in to your GitHub account with `gh auth login`.
 2. Inside the Marin repo, run `gh repo fork`, and press `y` to add a remote. You should see the following:
+
 ```
 $ gh repo fork
 ✓ Created fork {YOUR_GITHUB_USER_NAME}/marin
@@ -229,6 +230,10 @@ Once the PR is merged, your submission will appear on the [public leaderboard](h
 
 ### How do I create my speedrun submission?
 
+## FAQ
+
+### How do I create my speedrun submission?
+
 1. Create a new directory for your run:
 
    ```bash
@@ -236,6 +241,19 @@ Once the PR is merged, your submission will appear on the [public leaderboard](h
    ```
 
 2. Create your training script in this directory. You can start by copying the "[hackable transformer](https://github.com/marin-community/marin/tree/main/experiments/hackable_transformer_starter_template.py)" starter file, where a generic transformer language model is implemented for you to make changes easily. To see examples of other speedruns and configurations, check out the [speedrun directory](https://github.com/marin-community/marin/tree/main/experiments/speedrun). You can also [add new optimizers](https://github.com/marin-community/marin/blob/main/docs/tutorials/add-optimizer.md), change learning rate schedules, play with hyperparameters, etc.
+3. Create your training script in this directory. You can start by copying the "[hackable transformer](https://github.com/marin-community/marin/tree/main/experiments/hackable_transformer_starter_template.py)" starter file, where a generic transformer language model is implemented for you to make changes easily. To see examples of other speedruns and configurations, check out the [speedrun directory](https://github.com/marin-community/marin/tree/main/experiments/speedrun). You can also [add new optimizers](https://github.com/marin-community/marin/blob/main/docs/tutorials/add-optimizer.md), change learning rate schedules, play with hyperparameters, etc.
+
+4. Before running your speedrun, you may find it helpful to call [speedrun_config.print_run_info()](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/speedrun/speedrun.py#L76) to see the estimated training HW FLOPs, model FLOPs, model size, and your speedrun configs displayed.
+
+### What environment variables do I need to set?
+
+```bash
+export WANDB_API_KEY=...
+export HF_TOKEN=...
+export MARIN_PREFIX=...
+export WANDB_ENTITY=...
+export WANDB_PROJECT=...
+```
 
 3. Before running your speedrun, you may find it helpful to call [speedrun_config.print_run_info()](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/speedrun/speedrun.py#L76) to see the estimated training HW FLOPs, model FLOPs, model size, and your speedrun configs displayed.
 
@@ -272,7 +290,7 @@ python marin/run/ray_run.py -- python -m experiments.speedrun.${NAME_OF_YOUR_SUB
 1. Add the resulting `speedrun_results.json` file to your run directory:
 
    ```bash
-   cp ${MARIN_PREFIX}/checkpoints/speedrun/speedrun_results.json experiments/speedrun/${YOUR_RUN_NAME}$/
+   cp ${MARIN_PREFIX}/checkpoints/speedrun/speedrun_results.json experiments/speedrun/${NAME_OF_YOUR_SUBMISSION}$/
    ```
 
 2. Create a pull request including:
@@ -280,14 +298,25 @@ python marin/run/ray_run.py -- python -m experiments.speedrun.${NAME_OF_YOUR_SUB
    - Your run directory (training script and results file)
    - A brief explanation of your approach (model architecture, training strategy, optimizations)
 
+   - Your run directory (training script and results file)
+   - A brief explanation of your approach (model architecture, training strategy, optimizations)
+
 3. Once reviewed and merged, the leaderboard gets updated and your run will appear on the [public leaderboard](https://marin.community/speedrun/).
+4. Once reviewed and merged, the leaderboard gets updated and your run will appear on the [public leaderboard](https://marin.community/speedrun/).
+
+### How long does training take?
 
 ### How long does training take?
 
 A 50M parameter model trained on 4× A100 GPUs (80GB) takes about 33 minutes to complete 7600 steps, processing approximately 1 billion tokens. This should help you estimate the resources needed for your own speedrun experiments.
+A 50M parameter model trained on 4× A100 GPUs (80GB) takes about 33 minutes to complete 7600 steps, processing approximately 1 billion tokens. This should help you estimate the resources needed for your own speedrun experiments.
 
 ## Helpful Resources
 
+- [Hello world submission](https://github.com/marin-community/marin/blob/main/experiments/speedrun/hello_world_gpu_speedrun/hello_world_gpu_speedrun.py) – a minimal example to get started
+- [Speedrun directory](https://github.com/marin-community/marin/tree/main/experiments/speedrun) – see other submissions for inspiration
+- [Leaderboard](https://marin.community/speedrun) – view current results
+- [Speedrun explanation](../explanations/speedrun.md) – understand how metrics are calculated
 - [Hello world submission](https://github.com/marin-community/marin/blob/main/experiments/speedrun/hello_world_gpu_speedrun/hello_world_gpu_speedrun.py) – a minimal example to get started
 - [Speedrun directory](https://github.com/marin-community/marin/tree/main/experiments/speedrun) – see other submissions for inspiration
 - [Leaderboard](https://marin.community/speedrun) – view current results

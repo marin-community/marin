@@ -56,6 +56,17 @@ class _TpuJobInfo:
     start_time: float
 
 
+def _convert_ray_status(ray_status: RayJobStatus) -> Literal["pending", "running", "succeeded", "failed", "stopped"]:
+    mapping = {
+        RayJobStatus.PENDING: "pending",
+        RayJobStatus.RUNNING: "running",
+        RayJobStatus.SUCCEEDED: "succeeded",
+        RayJobStatus.FAILED: "failed",
+        RayJobStatus.STOPPED: "stopped",
+    }
+    return mapping.get(ray_status, "failed")
+
+
 class RayCluster(Cluster):
     def __init__(
         self,
@@ -149,6 +160,7 @@ class RayCluster(Cluster):
         submission_id = self._job_client().submit_job(
             entrypoint=entrypoint_cmd,
             runtime_env=runtime_env,
+            submission_id=f"{request.name}-{uuid.uuid4()}",
             metadata={"name": request.name},
             **entrypoint_params,
         )
@@ -202,39 +214,28 @@ class RayCluster(Cluster):
 
         return params
 
-    def monitor(self, job_id: JobId) -> Iterator[str]:
-        """Stream logs from job, returning an iterator over log lines."""
+    def monitor(self, job_id: JobId) -> JobInfo:
         logger.info("Starting log monitoring for job %s", job_id)
 
         if job_id.startswith("tpu-"):
-            logger.warning("Log streaming not supported for TPU jobs")
-            yield "Log streaming not supported for TPU jobs. Use Ray dashboard to view logs.\n"
-            return
+            logger.warning("Log streaming not supported for TPU jobs. Use Ray dashboard to view logs.")
+            return self.poll(job_id)
 
-        def synchronize():
-            async def get_next_item() -> str:
-                try:
-                    return await self._job_client().tail_job_logs(job_id).__anext__()
-                except StopAsyncIteration:
-                    raise StopIteration from None
+        async def stream_logs():
+            async for line in self._job_client().tail_job_logs(job_id):
+                logger.info(line.rstrip())
 
-            yield from asyncio.run(get_next_item())
-
-        yield from synchronize()
+        asyncio.run(stream_logs())
+        return self.poll(job_id)
 
     def poll(self, job_id: JobId) -> JobInfo:
-        """Poll job status, returning the current job information or raising KeyError."""
+        """Poll job status, returning the current job information."""
         if job_id.startswith("tpu-"):
             return self._poll_tpu_job(job_id)
 
-        try:
-            info = self._job_client().get_job_info(job_id)
-        except Exception as e:
-            logger.error("Failed to get job info for %s: %s", job_id, e)
-            raise KeyError(f"Job {job_id} not found") from e
-
-        status = self._convert_ray_status(info.status)
-        logger.debug("Job %s status: %s (raw: %s)", job_id, status, info.status)
+        info = self._job_client().get_job_info(job_id)
+        status = _convert_ray_status(info.status)
+        logger.info("Job %s status: %s (raw: %s)", job_id, status, info.status)
 
         if status == "failed":
             logger.warning("Job %s failed with message: %s", job_id, info.message)
@@ -263,7 +264,7 @@ class RayCluster(Cluster):
         for _ in range(100):
             try:
                 info = self._job_client().get_job_info(job_id)
-                status = self._convert_ray_status(info.status)
+                status = _convert_ray_status(info.status)
                 if status in ["stopped", "failed", "succeeded"]:
                     break
             except Exception:
@@ -278,54 +279,16 @@ class RayCluster(Cluster):
             result.append(
                 JobInfo(
                     job_id=JobId(job_info.submission_id),
-                    status=self._convert_ray_status(job_info.status),
+                    status=_convert_ray_status(job_info.status),
                     tasks=[],
                     name=job_info.metadata.get("name", "") if job_info.metadata else "",
-                    error_message=job_info.message if self._convert_ray_status(job_info.status) == "failed" else None,
+                    error_message=job_info.message if _convert_ray_status(job_info.status) == "failed" else None,
                 )
             )
 
         for tpu_job_info in self._tpu_jobs.values():
             result.append(self._poll_tpu_job(tpu_job_info.job_id))
         return result
-
-    def get_ray_resources(self, request: JobRequest) -> dict[str, float]:
-        """Convert ResourceConfig to Ray resource specification.
-
-        Maps structured device configs to Ray's resource format:
-        - TpuConfig(type="v5e-16", count=8) -> {"TPU": 8, "v5e-16-head": 1}
-        - GpuConfig(type="A100", count=4) -> {"GPU": 4}
-        - CpuConfig() -> {}
-        """
-
-        resources: dict[str, float] = {}
-
-        device = request.resources.device
-
-        if isinstance(device, TpuConfig):
-            # TPU resources include:
-            # 1. Generic "TPU" resource for chip count
-            # 2. Specific type-head resource for exclusive access to a TPU pod
-            resources["TPU"] = float(device.count)
-            resources[f"{device.type}-head"] = 1.0
-        elif isinstance(device, GpuConfig):
-            # GPU resources just specify the count
-            resources["GPU"] = float(device.count)
-        # CpuConfig requires no special resources
-
-        return resources
-
-    def _convert_ray_status(
-        self, ray_status: RayJobStatus
-    ) -> Literal["pending", "running", "succeeded", "failed", "stopped"]:
-        mapping = {
-            RayJobStatus.PENDING: "pending",
-            RayJobStatus.RUNNING: "running",
-            RayJobStatus.SUCCEEDED: "succeeded",
-            RayJobStatus.FAILED: "failed",
-            RayJobStatus.STOPPED: "stopped",
-        }
-        return mapping.get(ray_status, "failed")
 
     def _launch_tpu_job(self, request: JobRequest) -> JobId:
         entrypoint = request.entrypoint
@@ -335,7 +298,6 @@ class RayCluster(Cluster):
         runtime_env = self._get_runtime_env(request)
 
         # For nested ray.remote() calls, filter out job-level keys that can only be set via ray.init().
-        # These include working_dir, excludes, and config which are already set at the job level.
         nested_runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
 
         if entrypoint.function_args:
@@ -363,10 +325,7 @@ class RayCluster(Cluster):
         return JobId(job_id)
 
     def _poll_tpu_job(self, job_id: JobId) -> JobInfo:
-        """Poll TPU job status via ObjectRef.
-
-        Helper function to check TPU job status by inspecting the Ray ObjectRef.
-        """
+        """Poll TPU job status via ObjectRef."""
         info = self._tpu_jobs.get(job_id)
         if not info:
             raise KeyError(f"TPU job {job_id} not found")
@@ -389,6 +348,7 @@ class RayCluster(Cluster):
             job_id=job_id,
             status=status,
             name=info.name,
+            tasks=[],
             error_message=error_msg,
         )
 
