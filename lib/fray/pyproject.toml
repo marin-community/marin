@@ -37,7 +37,7 @@ packages = ["src/fray"]
 
 [tool.pytest.ini_options]
 timeout=300
-addopts = "--session-timeout=500 -m 'not tpu_ci'"
+addopts = "--session-timeout=500 -m 'not tpu_ci' --durations=5"
 markers = [
     "tpu_ci: mark tests that require a TPU",
 ]
