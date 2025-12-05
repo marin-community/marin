@@ -192,7 +192,7 @@ def _collect_input_files(input_path: str | list[str]) -> list[str]:
             if not path.endswith(("jsonl", "jsonl.gz", "jsonl.zst", "parquet")):
                 raise FileNotFoundError(f"No files found in path: {path}")
             all_files.append(path)  # Assume it's a single file
-    assert len(all_files) > 0, "No input files found for deduplication."
+    assert all_files, "No input files found for deduplication."
     return all_files
 
 
