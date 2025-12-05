@@ -442,12 +442,13 @@ class Counters:
 
 def _compute_dedup_stats(shards: list[str]) -> Counters:
     with log_time(f"Compute deduplication stats from {len(shards)} shards"):
-        return create_backend("threadpool").execute(
+        result: Counters = create_backend("threadpool").execute(  # type: ignore[bad-assignment]
             Dataset.from_list(shards)
             .flat_map(lambda p: load_parquet(p, columns=["cnt"]))
             .map(lambda c: Counters(total=c["cnt"], unique=int(c["cnt"] == 1), unique_dups=int(c["cnt"] > 1)))
             .reduce(partial(sum, start=Counters()))
         )[0]
+    return result
 
 
 class DupeReduceResult(typing.TypedDict):
