@@ -381,10 +381,6 @@ def mark_duplicates_bloom(
     return result
 
 
-def _str_hash(s: str) -> str:
-    return hashlib.blake2b(s.encode(), digest_size=8).hexdigest()
-
-
 def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kwargs) -> Iterator[pa.RecordBatch]:
     # Private function for now to isolate the `pa.RecordBatch` experiment
     if not file_path.endswith(SUPPORTED_EXTENSIONS):
