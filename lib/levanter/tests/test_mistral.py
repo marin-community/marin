@@ -54,7 +54,7 @@ def test_mistral_lm_head_model(num_kv_heads):
     mistral_config = _get_mistral_config(num_kv_heads=num_kv_heads)
     Batch = hax.Axis("batch", 2)
     Vocab = hax.Axis("vocab", 1000)
-    Pos = mistral_config.Pos
+    Pos = mistral_config.max_Pos
     input_ids = hax.random.randint(random.PRNGKey(0), (Batch, Pos), 0, Vocab.size)
     mask = AttentionMask.causal()
 
@@ -71,7 +71,7 @@ def test_mistral_lm_head_model_bwd(use_flash, num_kv_heads):
     llama_config = _get_mistral_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
     Batch = hax.Axis("batch", 2)
     Vocab = hax.Axis("vocab", 1000)
-    Pos = llama_config.Pos
+    Pos = llama_config.max_Pos
     input_ids = hax.random.randint(random.PRNGKey(0), (Batch, Pos), 0, Vocab.size)
     mask = AttentionMask.causal()
 
@@ -91,7 +91,7 @@ def test_mistral_roundtrip(num_kv_heads):
     from transformers import AutoModelForCausalLM, MistralForCausalLM
 
     config = MistralConfig(
-        seq_len=128,
+        max_seq_len=128,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
@@ -103,7 +103,7 @@ def test_mistral_roundtrip(num_kv_heads):
     hf_config = config.to_hf_config(Vocab.size)
 
     # Make input and attn_mask
-    input = hax.random.randint(random.PRNGKey(0), config.Pos, 0, Vocab.size)
+    input = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
     attn_mask = AttentionMask.causal()
     input_torch = torch.from_numpy(np.array(input.array)).to(torch.int32).unsqueeze(0)
 
@@ -147,7 +147,7 @@ def test_mistral_roundtrip(num_kv_heads):
 def _get_mistral_config(use_flash=False, num_kv_heads=4) -> MistralConfig:
     return MistralConfig(
         num_layers=2,
-        seq_len=128,
+        max_seq_len=128,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
@@ -169,7 +169,7 @@ def test_mistral_configs(config_file):
 @pytest.mark.parametrize("num_kv_heads", [1, 2])
 def test_pass_different_length_seq(num_kv_heads):
     config = MistralConfig(
-        seq_len=64,
+        max_seq_len=64,
         hidden_dim=32,
         intermediate_dim=32,
         num_heads=2,

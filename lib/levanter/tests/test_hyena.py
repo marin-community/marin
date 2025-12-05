@@ -17,7 +17,7 @@ def test_causality():
     """
     # Create a test config that matches the PyTorch example
     config = HyenaConfig(
-        seq_len=1024,
+        max_seq_len=1024,
         hidden_dim=512,
         order=2,
         filter_order=64,

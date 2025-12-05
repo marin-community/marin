@@ -27,7 +27,7 @@ def test_export_lm_to_hf():
     model_config = Gpt2Config(
         num_layers=2,
         num_heads=2,
-        seq_len=32,
+        max_seq_len=32,
         use_flash_attention=True,
         hidden_dim=32,
     )
