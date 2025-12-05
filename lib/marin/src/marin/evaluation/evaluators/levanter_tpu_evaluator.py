@@ -17,10 +17,7 @@ import os
 from abc import ABC
 from urllib.parse import urlparse
 
-import ray
-from fray.cluster import ResourceConfig
-from fray.cluster.ray.deps import build_runtime_env_for_packages
-from fray.cluster.ray.resources import get_scheduling_strategy
+from fray.cluster import Entrypoint, JobRequest, ResourceConfig, create_environment, current_cluster
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
@@ -72,18 +69,6 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         # Delete the checkpoint
         model.destroy()
 
-    def get_runtime_env(self) -> dict:
-        """
-        Returns the runtime environment to run the evaluator on the Ray cluster.
-        """
-        return build_runtime_env_for_packages(
-            extra=["eval", "tpu"],
-            env_vars={
-                "HF_DATASETS_TRUST_REMOTE_CODE": "1",
-                "TOKENIZERS_PARALLELISM": "false",
-            },
-        )
-
     def launch_evaluate_with_ray(
         self,
         model: ModelConfig,
@@ -94,23 +79,20 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         wandb_tags: list[str] | None = None,
     ) -> None:
         """
-        Launches the evaluation run with Ray.
+        Launches the evaluation run with Fray.
         """
-        scheduling_strategy = get_scheduling_strategy(resource_config)
 
-        @ray.remote(
-            runtime_env=self.get_runtime_env(),
-            max_calls=1,
-            scheduling_strategy=scheduling_strategy,
+        def _run():
+            with remove_tpu_lockfile_on_exit():
+                self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
+
+        job_request = JobRequest(
+            name="levanter-tpu-eval",
+            entrypoint=Entrypoint.from_callable(_run),
+            resources=resource_config or ResourceConfig.with_tpu("v5p-8"),
+            environment=create_environment(extras=["eval", "tpu"]),
         )
-        @remove_tpu_lockfile_on_exit
-        def launch(
-            model: ModelConfig,
-            evals: list[EvalTaskConfig],
-            output_path: str,
-            max_eval_instances: int | None = None,
-            wandb_tags: list[str] | None = None,
-        ) -> None:
-            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
 
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances, wandb_tags))
+        cluster = current_cluster()
+        job_id = cluster.launch(job_request)
+        cluster.wait(job_id)

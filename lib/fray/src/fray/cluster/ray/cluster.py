@@ -29,6 +29,7 @@ from ray.job_submission import JobSubmissionClient
 
 from fray.cluster.base import (
     Cluster,
+    DeviceType,
     GpuConfig,
     JobId,
     JobInfo,
@@ -39,19 +40,29 @@ from fray.cluster.base import (
 from fray.cluster.ray.config import find_config_by_region
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
-from fray.fn_thunk import create_thunk_entrypoint
 
 logger = logging.getLogger(__name__)
 
 
-# We can't launch TPU jobs directly via Ray, as it doesn't support gang-scheduling and jobs are always
-# started with a single task in Ray. Instead we use the ray_tpu helper/actor to stage TPU execution.
-# We store TPU "job" information separately here to report to the user.
+# We can't launch TPU or callable entrypoint jobs directly via Ray, as it
+# doesn't support gang-scheduling and jobs are always started with a single task
+# in Ray. Instead we use the ray_tpu helper/actor to stage TPU execution.  We
+# store "job" information separately here to report to the user.
 @dataclass
-class _TpuJobInfo:
-    ref: ray.ObjectRef
+class _RefJobInfo:
+    ref: ray.ObjectRef | None
+    submission_id: str | None
     name: str
-    start_time: float
+
+
+class RayJobInfo:
+    @staticmethod
+    def from_ref(ref: ray.ObjectRef, name: str) -> "RayJobInfo":
+        return RayJobInfo(ref=ref, submission_id=None, name=name)
+
+    @staticmethod
+    def from_submission_id(ray_job_id: str, name: str) -> "RayJobInfo":
+        return RayJobInfo(ref=None, submission_id=ray_job_id, name=name)
 
 
 def _convert_ray_status(ray_status: RayJobStatus) -> Literal["pending", "running", "succeeded", "failed", "stopped"]:
@@ -96,7 +107,7 @@ class RayCluster(Cluster):
             logger.info(f"Using provided namespace: {self._namespace}")
 
         self._dashboard_address = dashboard_address or self._get_dashboard_address()
-        self._tpu_jobs: dict[str, _TpuJobInfo] = {}  # Track TPU jobs: job_id -> {ref, name, start_time}
+        self._jobs: dict[str, RayJobInfo] = {}  # Track jobs: job_id -> {ref, name, start_time}
 
     @classmethod
     def from_spec(cls, query_params: dict[str, list[str]]) -> "RayCluster":
@@ -133,22 +144,16 @@ class RayCluster(Cluster):
         """Launch job on Ray cluster, returning job identifier."""
         logger.info("Launching job: %s", request.name)
 
-        # We currently only launch TPU jobs from an existing Ray cluster. The TPU slice actor
-        # bouncing prevents us from using a traditional job submission for TPU workloads.
         if isinstance(request.resources.device, TpuConfig):
             return self._launch_tpu_job(request)
 
-        if request.entrypoint.callable_entrypoint is not None:
-            callable_ep = request.entrypoint.callable_entrypoint
-            entrypoint = create_thunk_entrypoint(
-                callable_ep.callable,
-                prefix=f"/tmp/{request.name}",
-                args=callable_ep.args,
-                kwargs=callable_ep.kwargs,
-            )
-        else:
-            entrypoint = request.entrypoint
+        if request.entrypoint.binary_entrypoint is not None:
+            return self._launch_binary_job(request)
 
+        return self._launch_callable_job(request)
+
+    def _launch_binary_job(self, request: JobRequest) -> JobId:
+        entrypoint = request.entrypoint.binary_entrypoint
         assert entrypoint.binary_entrypoint is not None, "Entrypoint requires binary"
         runtime_env = self._get_runtime_env(request)
         entrypoint_cmd = f"{entrypoint.binary_entrypoint.command} {' '.join(entrypoint.binary_entrypoint.args)}"
@@ -166,13 +171,32 @@ class RayCluster(Cluster):
             **entrypoint_params,
         )
         logger.info("Job submitted with ID: %s", submission_id)
+        self._jobs[request.name] = RayJobInfo.from_submission_id(submission_id, request.name)
         return JobId(submission_id)
+
+    def _launch_callable_job(self, request: JobRequest) -> JobId:
+        """Launch a callable job on Ray cluster.
+
+        For backwards compatibility with existing Marin usage, we do _not_ start a new job
+        in this case, but instead spawn the callable as a ray.remote task.
+        """
+        entrypoint = request.entrypoint.callable_entrypoint
+        runtime_env = self._get_runtime_env(request)
+        remote_fn = ray.remote(entrypoint.callable)
+        ref = remote_fn.options(runtime_env=runtime_env).remote(*entrypoint.args, **entrypoint.kwargs)
+        self._jobs[request.name] = RayJobInfo.from_ref(ref, request.name)
+        return JobId(request.name)
 
     def _get_runtime_env(self, request: JobRequest) -> dict | None:
         """Build Ray runtime environment for the given job request."""
         environment = request.environment if request.environment else create_environment()
 
         env_vars = dict(environment.env_vars)
+
+        # disable access to the TPU if we're not a TPU job.
+        if request.resources.device.type != DeviceType.TPU:
+            env_vars["JAX_PLATFORMS"] = "cpu"
+            env_vars["PJRT_DEVICE"] = "cpu"
 
         if "FRAY_CLUSTER_SPEC" not in env_vars:
             env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
@@ -292,13 +316,15 @@ class RayCluster(Cluster):
         return result
 
     def _launch_tpu_job(self, request: JobRequest) -> JobId:
+        # We only launch TPU jobs from an existing Ray cluster. The TPU slice actor
+        # bouncing prevents us from using a traditional job submission for TPU workloads.
         callable_ep = request.entrypoint.callable_entrypoint
         assert callable_ep is not None, "TPU jobs require callable entrypoint"
 
         device = request.resources.device
         runtime_env = self._get_runtime_env(request)
 
-        # For nested ray.remote() calls, filter out job-level keys that can only be set via ray.init().
+        # Filter out keys that can only be set at the Job level
         nested_runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
 
         if callable_ep.args or callable_ep.kwargs:
@@ -316,14 +342,7 @@ class RayCluster(Cluster):
             max_retries_failure=1,
         )
 
-        # Track via ObjectRef
-        job_id = f"tpu-{object_ref.hex()}"
-        self._tpu_jobs[job_id] = _TpuJobInfo(
-            ref=object_ref,
-            name=request.name,
-            start_time=time.time(),
-        )
-        return JobId(job_id)
+        return JobId.from_ref(object_ref, name=request.name)
 
     def _poll_tpu_job(self, job_id: JobId) -> JobInfo:
         """Poll TPU job status via ObjectRef."""

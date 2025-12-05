@@ -33,7 +33,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import fsspec
-import ray
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob
 from zephyr import Dataset, create_backend, flow_backend, load_file, load_jsonl
@@ -394,8 +393,8 @@ def aggregate_total(cfg: AggregateConfig):
     )
 
 
-@ray.remote(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "cpu"}})
 def run_aggregate_total(config: AggregateConfig) -> str:
+    """Launch train-test overlap aggregation via Fray with CPU-only environment."""
     logger.info(f"Starting train-test overlap aggregation with config: {config}")
     aggregate_total(config)
     logger.info(f"Aggregation completed! Results written to {config.output_path}")
