@@ -55,18 +55,38 @@ else
         fi
     else
         log_warn "Current directory is not the root of the 'marin' repository."
-        log_header "Cloning marin-community/marin"
 
-        if git clone https://github.com/marin-community/marin/; then
-            if [[ -d "marin" ]]; then
-                cd marin || { log_error "Failed to enter directory 'marin'."; exit 1; }
-                log_end
+        REPO_SETUP_DONE=false
+
+        # Check for GitHub CLI and fork automatically
+        if command -v gh &> /dev/null && gh auth status &> /dev/null; then
+            echo -e "GitHub CLI detected and logged in."
+            log_header "Forking and cloning marin"
+            # Attempt to fork and clone directly without confirmation
+            if gh repo fork marin-community/marin --clone --remote; then
+                REPO_SETUP_DONE=true
             else
-                log_error "Failed to clone directory. Exiting."
+                log_warn "GitHub fork failed. Falling back to direct clone."
+            fi
+        fi
+
+        # Fallback to direct clone if fork wasn't performed
+        if [ "$REPO_SETUP_DONE" = false ]; then
+            log_header "Cloning marin-community/marin (upstream)"
+            if git clone https://github.com/marin-community/marin/; then
+                REPO_SETUP_DONE=true
+            else
+                log_error "Failed to clone repository."
                 exit 1
             fi
+        fi
+
+        # Verify directory entry
+        if [[ -d "marin" ]]; then
+            cd marin || { log_error "Failed to enter directory 'marin'."; exit 1; }
+            log_end
         else
-            log_error "Failed to clone repository."
+            log_error "Failed to find 'marin' directory after clone operation. Exiting."
             exit 1
         fi
     fi
