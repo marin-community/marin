@@ -20,7 +20,6 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Literal
 
 import humanfriendly
 import ray
@@ -33,6 +32,7 @@ from fray.cluster.base import (
     JobId,
     JobInfo,
     JobRequest,
+    JobStatus,
     TpuConfig,
     create_environment,
 )
@@ -62,15 +62,15 @@ class RayJobInfo:
         return RayJobInfo(ref=None, submission_id=ray_job_id, name=name)
 
 
-def _convert_ray_status(ray_status: RayJobStatus) -> Literal["pending", "running", "succeeded", "failed", "stopped"]:
+def _convert_ray_status(ray_status: RayJobStatus) -> JobStatus:
     mapping = {
-        RayJobStatus.PENDING: "pending",
-        RayJobStatus.RUNNING: "running",
-        RayJobStatus.SUCCEEDED: "succeeded",
-        RayJobStatus.FAILED: "failed",
-        RayJobStatus.STOPPED: "stopped",
+        RayJobStatus.PENDING: JobStatus.PENDING,
+        RayJobStatus.RUNNING: JobStatus.RUNNING,
+        RayJobStatus.SUCCEEDED: JobStatus.SUCCEEDED,
+        RayJobStatus.FAILED: JobStatus.FAILED,
+        RayJobStatus.STOPPED: JobStatus.STOPPED,
     }
-    return mapping.get(ray_status, "failed")
+    return mapping.get(ray_status, JobStatus.FAILED)
 
 
 class RayCluster(Cluster):
@@ -290,7 +290,7 @@ class RayCluster(Cluster):
         if not ready:
             return JobInfo(
                 job_id=job_id,
-                status="pending",
+                status=JobStatus.PENDING,
                 tasks=[],
                 name=job.name,
                 error_message=None,
@@ -301,14 +301,14 @@ class RayCluster(Cluster):
             logger.warning("Job %s failed with message: %s", job_id, e)
             return JobInfo(
                 job_id=job_id,
-                status="failed",
+                status=JobStatus.FAILED,
                 tasks=[],
                 name=job.name,
                 error_message=str(e),
             )
         return JobInfo(
             job_id=job_id,
-            status="succeeded",
+            status=JobStatus.SUCCEEDED,
             tasks=[],
             name=job.name,
             error_message=None,
@@ -373,7 +373,9 @@ class RayCluster(Cluster):
                         status=_convert_ray_status(job_info.status),
                         tasks=[],
                         name=job_info.metadata.get("name", "") if job_info.metadata else "",
-                        error_message=job_info.message if _convert_ray_status(job_info.status) == "failed" else None,
+                        error_message=(
+                            job_info.message if _convert_ray_status(job_info.status) == JobStatus.FAILED else None
+                        ),
                     )
                 )
         except Exception as e:
