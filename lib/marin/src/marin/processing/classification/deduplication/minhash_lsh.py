@@ -37,7 +37,7 @@ class MinHashLshOutputRecord(TypedDict):
 # > We then apply a MinHash localitysensitive hashing scheme with 26 bands of size 11,
 # > configured to target a Jaccard similarity threshold of 0.80.
 def minhash_lsh(
-    ds: Dataset[MinHashLshInputRecord], *, vector_length: int = 286, num_bands: int = 26
+    ds: Dataset[MinHashLshInputRecord], *, vector_length: int = 286, num_bands: int = 26, shingle_size: int = 5
 ) -> Dataset[MinHashLshOutputRecord]:
     """
     Vanilla MinHashLSH implementation using zephyr Dataset API
@@ -46,6 +46,7 @@ def minhash_lsh(
         ds: Input dataset with records containing 'text' and 'id' fields
         vector_length: Length of the MinHash signature vector
         num_bands: Number of bands to split the MinHash signature into for LSH
+        shingle_size: Size of character shingles to extract from text (default: 5)
 
     Returns:
         A dataset of MinHash LSH output records containing 'bucket' and 'ids' fields
@@ -55,17 +56,41 @@ def minhash_lsh(
         vector_length % num_bands == 0
     ), f"vector_length must be divisible by num_bands, got {vector_length} and {num_bands}"
 
-    return ds.flat_map(lambda record: _minhash_lsh(record, vector_length, num_bands))
+    return ds.flat_map(lambda record: _minhash_lsh(record, vector_length, num_bands, shingle_size))
 
 
-def _minhash_lsh(record: MinHashLshInputRecord, vector_length: int, num_bands: int) -> Iterator[MinHashLshOutputRecord]:
+def _extract_char_shingles(text: str, shingle_size: int) -> set[str]:
+    """
+    Extract character shingles from text.
+
+    Args:
+        text: Input text to extract shingles from
+        shingle_size: Size of each character shingle
+
+    Returns:
+        Set of character shingles
+    """
+    if len(text) < shingle_size:
+        # For very short text, return the text itself as a single shingle
+        return {text} if text else set()
+
+    return {text[i : i + shingle_size] for i in range(len(text) - shingle_size + 1)}
+
+
+def _minhash_lsh(
+    record: MinHashLshInputRecord, vector_length: int, num_bands: int, shingle_size: int
+) -> Iterator[MinHashLshOutputRecord]:
     text = record["text"]
-    # TODO: for now assume `id` exists!
-    record_id = record["id"]
+    record_id = record.get("id")
+    if record_id is None:
+        raise ValueError(f"Record missing required 'id' field: {record}")
 
     text = clean_text(text)
 
-    sig = minhash(set(text.split()), vector_length=vector_length)
+    # Extract character shingles instead of word unigrams
+    shingles = _extract_char_shingles(text, shingle_size)
+
+    sig = minhash(shingles, vector_length=vector_length)
 
     rows_per_band = len(sig) // num_bands
 
