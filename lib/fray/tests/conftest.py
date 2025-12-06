@@ -17,7 +17,7 @@
 
 import pytest
 import ray
-from fray.cluster import LocalCluster
+from fray.cluster.local_cluster import LocalCluster, LocalClusterConfig
 
 
 @pytest.fixture(scope="module")
@@ -38,7 +38,7 @@ def ray_cluster():
 
 @pytest.fixture(scope="module")
 def local_cluster():
-    yield LocalCluster()
+    yield LocalCluster(LocalClusterConfig(use_isolated_env=True))
 
 
 @pytest.fixture(scope="module", params=["local", "ray"])

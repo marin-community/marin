@@ -23,6 +23,7 @@ import os
 import threading
 from collections.abc import Callable, Generator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
@@ -32,6 +33,9 @@ except ImportError:
     ray = None
 
 logger = logging.getLogger(__name__)
+
+# Context variable for the current job context, shared across all calls to fray_job_ctx().
+_job_context: ContextVar[Any | None] = ContextVar("fray_job_context", default=None)
 
 
 class JobContext(Protocol):
@@ -443,7 +447,9 @@ def fray_job_ctx(
     max_workers: int = 1,
     **ray_options,
 ) -> JobContext:
-    """Create execution context from configuration.
+    """Get or create execution context from configuration.
+
+    If an existing context is already set, return it. Otherwise, create a new context.
 
     Args:
         context_type: Type of context (ray, threadpool, sync, or auto).
@@ -464,6 +470,10 @@ def fray_job_ctx(
         >>> context = fray_job_ctx("ray")
         >>> context = fray_job_ctx("auto")  # Auto-detect ray or threadpool
     """
+    existing = _job_context.get()
+    if existing is not None:
+        return existing
+
     if context_type == "auto":
         if ray and ray.is_initialized():
             context_type = "ray"
@@ -471,15 +481,25 @@ def fray_job_ctx(
             context_type = "threadpool"
 
     if context_type == "sync":
-        return SyncContext()
+        ctx = SyncContext()
     elif context_type == "threadpool":
         workers = min(max_workers, os.cpu_count() or 1)
-        return ThreadContext(max_workers=workers)
+        ctx = ThreadContext(max_workers=workers)
     elif context_type == "ray":
-        return RayContext(ray_options=ray_options)
-
+        ctx = RayContext(ray_options=ray_options)
     else:
         raise ValueError(f"Unknown context type: {context_type}. Supported: 'ray', 'threadpool', 'sync'")
+
+    _job_context.set(ctx)
+    return ctx
+
+
+def set_job_ctx(ctx: JobContext | None) -> None:
+    """Set or clear the current job context.
+
+    Primarily for testing, to reset state between tests.
+    """
+    _job_context.set(ctx)
 
 
 class SimpleActor:

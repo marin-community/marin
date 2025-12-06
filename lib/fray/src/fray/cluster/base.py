@@ -633,6 +633,8 @@ class Cluster(ABC):
     def _wait_single(self, job_id: JobId, raise_on_failure: bool = False) -> JobInfo:
         """Wait for a single job to complete."""
         logger.info(f"Starting wait for job {job_id}")
+        sleep_secs = 0.1
+        max_sleep_secs = 10.0
 
         while True:
             info = self.poll(job_id)
@@ -641,4 +643,5 @@ class Cluster(ABC):
                 if raise_on_failure and info.status in (JobStatus.FAILED, JobStatus.STOPPED):
                     raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
                 return info
-            time.sleep(10.0)
+            time.sleep(sleep_secs)
+            sleep_secs = min(sleep_secs * 2, max_sleep_secs)

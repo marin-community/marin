@@ -27,6 +27,7 @@ from fray.job.context import (
     ThreadActorMethod,
     ThreadContext,
     fray_job_ctx,
+    set_job_ctx,
 )
 
 __all__ = [
@@ -42,4 +43,5 @@ __all__ = [
     "ThreadActorMethod",
     "ThreadContext",
     "fray_job_ctx",
+    "set_job_ctx",
 ]
