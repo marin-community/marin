@@ -140,7 +140,7 @@ def weight_transfer_config(transfer_mode):
         yield config
 
 
-def test_multiple_weight_updates(ray_tpu_cluster, weight_transfer_config, sample_params):
+def test_multiple_weight_updates(weight_transfer_config, sample_params):
     """Test multiple sequential weight updates."""
     server, client = create_test_weight_transfer_pair(weight_transfer_config)
 
@@ -171,7 +171,7 @@ def test_multiple_weight_updates(ray_tpu_cluster, weight_transfer_config, sample
     client.cleanup()
 
 
-def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_params):
+def test_concurrent_clients(weight_transfer_config, sample_params):
     server, client_1 = create_test_weight_transfer_pair(weight_transfer_config)
 
     client_2 = create_weight_transfer_client(
@@ -289,7 +289,7 @@ def benchmark_arrow_flight_with_llama():
 
 @pytest.mark.skip("Manual benchmark test")
 @pytest.mark.slow("Uses real Llama model, requires HuggingFace access.")
-def test_arrow_flight_transfer_to_vllm(ray_tpu_cluster):
+def test_arrow_flight_transfer_to_vllm():
     """Test Arrow Flight weight transfer to vLLM."""
     from vllm import LLM
 

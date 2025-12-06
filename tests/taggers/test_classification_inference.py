@@ -128,7 +128,7 @@ class TestMultipleFileProcessing:
             ("parquet", create_parquet_file, read_parquet_file),
         ],
     )
-    def test_process_multiple_files(self, ray_tpu_cluster, sample_data, tmpdir, num_files, ext, create_fn, read_fn):
+    def test_process_multiple_files(self, sample_data, tmpdir, num_files, ext, create_fn, read_fn):
         """Test processing multiple files with Ray for both JSONL.GZ and Parquet"""
         # Create input directory structure
         input_dir = os.path.join(tmpdir, f"tagger-{ext}-input")

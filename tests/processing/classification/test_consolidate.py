@@ -33,7 +33,7 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
             handle.write(json.dumps(row) + "\n")
 
 
-def test_calculate_percentile_threshold(tmp_path, ray_tpu_cluster):
+def test_calculate_percentile_threshold(tmp_path):
     documents_dir = tmp_path / "documents"
     attributes_dir = tmp_path / "attributes"
     documents_dir.mkdir()

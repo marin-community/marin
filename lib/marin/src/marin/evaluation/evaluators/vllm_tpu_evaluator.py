@@ -18,8 +18,8 @@ import time
 from abc import ABC
 
 import requests
-
 from fray.cluster import Entrypoint, JobRequest, ResourceConfig, create_environment, current_cluster
+
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
@@ -121,8 +121,8 @@ class VllmTpuEvaluator(Evaluator, ABC):
         model: ModelConfig,
         evals: list[EvalTaskConfig],
         output_path: str,
+        resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
-        resource_config: ResourceConfig | None = None,
         wandb_tags: list[str] | None = None,
     ) -> None:
         """

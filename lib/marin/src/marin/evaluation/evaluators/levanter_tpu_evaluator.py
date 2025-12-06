@@ -17,7 +17,7 @@ import os
 from abc import ABC
 from urllib.parse import urlparse
 
-from fray.cluster import Entrypoint, JobRequest, ResourceConfig, create_environment, current_cluster
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
@@ -74,8 +74,8 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         model: ModelConfig,
         evals: list[EvalTaskConfig],
         output_path: str,
+        resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
-        resource_config: ResourceConfig | None = None,
         wandb_tags: list[str] | None = None,
     ) -> None:
         """
@@ -89,8 +89,10 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         job_request = JobRequest(
             name="levanter-tpu-eval",
             entrypoint=Entrypoint.from_callable(_run),
-            resources=resource_config or ResourceConfig.with_tpu("v5p-8"),
-            environment=create_environment(extras=["eval", "tpu"]),
+            resources=resource_config,
+            environment=EnvironmentConfig.create(
+                extras=["eval", "tpu"],
+            ),
         )
 
         cluster = current_cluster()
