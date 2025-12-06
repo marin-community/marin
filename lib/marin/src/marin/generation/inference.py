@@ -25,6 +25,7 @@ from ray.data.datasource import FilenameProvider
 
 from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
 from marin.generation.pipeline import vLLMTextGeneration
+from marin.generation.ray_utils import get_ray_remote_args_scheduling_strategy_fn
 from marin.generation.chunk_utils import ChunkStrategy
 from marin.utils import fsspec_glob
 
@@ -50,7 +51,7 @@ class TextGenerationInferenceConfig:
     chunk_size: int | None = None
 
     # Ray data specific
-    num_instances: tuple[int, int] = (1, 128)
+    num_instances: tuple[int, int] = (1, 4)
     batch_size: int = 32
     tensor_parallel_size: int = 1
     preserve_order: bool = False
@@ -112,14 +113,14 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
-    # if config.tensor_parallel_size == 1:
-    return {"resources": {"TPU": config.tensor_parallel_size}, "max_restarts": -1}
-    # else:
-    #     return {
-    #         "ray_remote_args_fn": get_ray_remote_args_scheduling_strategy_fn(
-    #             config.resource_config.num_tpu, config.resource_config.strategy
-    #         )
-    #     }
+    if config.tensor_parallel_size == 1:
+        return {"resources": {"TPU": 1}, "max_restarts": -1}
+    else:
+        return {
+            "ray_remote_args_fn": get_ray_remote_args_scheduling_strategy_fn(
+                config.resource_config.num_tpu, config.resource_config.strategy
+            )
+        }
 
 
 def get_ray_data_read_kwargs(config: TextGenerationInferenceConfig):
@@ -206,11 +207,7 @@ def run_inference(config: TextGenerationInferenceConfig):
     set_ray_data_config(config)
 
     ray_data_read_kwargs = get_ray_data_read_kwargs(config)
-
-    if config.filetype == "parquet":
-        ds = ray.data.read_parquet(config.input_path, **ray_data_read_kwargs)
-    else:
-        ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
+    ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
 
     assert (config.template_path or config.template) and not (
         config.template_path and config.template
