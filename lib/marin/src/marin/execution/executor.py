@@ -14,7 +14,7 @@
 
 """
 The `Executor` framework provides a way to specify a DAG of `ExecutorStep`s that
-are executed in a topological order using Ray.  Beyond that:
+are executed in a topological order using Fray.  Beyond that:
 
 1. The key distinguishing feature of the framework is allowing the user to
    flexibly control what steps are "new".
@@ -97,7 +97,6 @@ import os
 import re
 import subprocess
 import time
-import traceback
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
@@ -127,8 +126,6 @@ from marin.execution.executor_step_status import (
     STATUS_RUNNING,
     STATUS_SUCCESS,
     StatusFile,
-    get_status_path,
-    read_events,
 )
 from marin.utilities.json_encoder import CustomJsonEncoder
 
@@ -141,9 +138,9 @@ ExecutorFunction = Callable | None
 
 
 class StepRunner:
-    """Wraps Fray job execution with automatic heartbeat.
+    """Wraps Fray job execution with automatic lease refresh.
 
-    The heartbeat thread periodically writes RUNNING events to the status file,
+    The heartbeat thread periodically refreshes the lease file,
     allowing other executors to detect if this runner is still alive.
     """
 
@@ -160,7 +157,7 @@ class StepRunner:
 
     def launch(self, job_request: JobRequest) -> None:
         """Launch job and start heartbeat thread."""
-        self._status_file.write(STATUS_RUNNING)
+        self._status_file.write_status(STATUS_RUNNING)
         self._job_id = self.cluster.launch(job_request)
         self._start_heartbeat()
 
@@ -169,16 +166,16 @@ class StepRunner:
         try:
             result = self.cluster.wait(self._job_id)
             if result.status == JobStatus.FAILED:
-                self._status_file.write(STATUS_FAILED, message=result.error_message)
+                self._status_file.write_status(STATUS_FAILED)
                 raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
-            self._status_file.write(STATUS_SUCCESS)
+            self._status_file.write_status(STATUS_SUCCESS)
         except Exception:
-            # If we haven't written FAILED yet, do so now
             if self._status_file.status != STATUS_FAILED:
-                self._status_file.write(STATUS_FAILED, message=traceback.format_exc())
+                self._status_file.write_status(STATUS_FAILED)
             raise
         finally:
             self._stop_heartbeat()
+            self._status_file.release_lease()
 
     def poll(self) -> bool:
         """Return True if job is finished."""
@@ -187,11 +184,11 @@ class StepRunner:
         return JobStatus.finished(self.cluster.poll(self._job_id).status)
 
     def _start_heartbeat(self) -> None:
-        """Start background thread that periodically updates the status file."""
+        """Start background thread that periodically refreshes the lease."""
 
         def heartbeat_loop():
             while not self._stop_event.wait(HEARTBEAT_INTERVAL):
-                self._status_file.ping()
+                self._status_file.write_lease()
 
         self._heartbeat_thread = Thread(target=heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
@@ -780,7 +777,7 @@ class Executor:
         if not should_run(status_file, step_name, force_run_failed):
             return None
 
-        # need this hack for now to make ray remote functions work
+        # need this hack for now to make ray remote functions work, as they aren't directly callable.
         import ray
 
         step_fn = step.fn
@@ -791,10 +788,12 @@ class Executor:
 
             step_fn = _call_remote
 
+        # always run driver functions on a non-preemptible node
+        non_preemptible_cpu = ResourceConfig.with_cpu(preemptible=False)
         fray_job = JobRequest(
             name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
             entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
-            resources=ResourceConfig.with_cpu(),
+            resources=non_preemptible_cpu,
             environment=EnvironmentConfig.create(),
         )
 
@@ -842,9 +841,8 @@ class Executor:
             info = self.step_infos[self.steps.index(step)]
 
             # only run if the step hasn't already been run
-            events = read_events(get_status_path(info.output_path))
-            current_status = events[-1].status if events else None
-            if current_status != STATUS_SUCCESS:
+            status_file = StatusFile(info.output_path, worker_id="check")
+            if status_file.status != STATUS_SUCCESS:
                 for dep in self.dependencies[step]:
                     dfs(dep)
                 to_run.append(step)
@@ -1024,47 +1022,49 @@ class PreviousTaskFailedError(Exception):
 
 
 def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = False) -> bool:
-    """Check if the step should run based on filesystem-based heartbeat locking.
+    """Check if the step should run based on lease-based distributed locking.
 
-    Uses the .executor_status file for both status tracking and heartbeat-based locking.
-    If another worker is actively running (recent heartbeat), we wait. If the heartbeat
-    is stale, we assume the worker died and can take over.
+    Uses lease files for distributed locking and status file for final state.
     """
+    worker_id = status_file.worker_id
     log_once = True
 
     while True:
         status = status_file.status
 
         if log_once:
-            logger.info(f"Status {step_name}: {status}")
+            logger.info(f"[{worker_id}] Status {step_name}: {status}")
             log_once = False
 
         if status == STATUS_SUCCESS:
-            logger.info(f"Step {step_name} has already succeeded.")
+            logger.info(f"[{worker_id}] Step {step_name} has already succeeded.")
             return False
 
         if status in [STATUS_FAILED, STATUS_DEP_FAILED]:
             if force_run_failed:
-                logger.info(f"Force running {step_name}, previous status: {status}")
+                logger.info(f"[{worker_id}] Force running {step_name}, previous status: {status}")
                 # Fall through to acquire lock
             else:
                 raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
-        elif status == STATUS_RUNNING and not status_file.is_stale():
-            # Another worker is actively running
+        elif status == STATUS_RUNNING and status_file.has_active_lease():
+            # Another worker is actively running with fresh lease
+            logger.debug(f"[{worker_id}] Step {step_name} has active lease, waiting...")
             time.sleep(5)
             continue
         elif status == STATUS_RUNNING:
-            logger.info(f"Step {step_name} has stale heartbeat, taking over.")
+            logger.info(f"[{worker_id}] Step {step_name} has no active lease, taking over.")
 
-        # Try to acquire lock by writing our worker_id
-        status_file.write(STATUS_RUNNING)
-
-        # Verify we won the race by checking if our write is the last one
-        last_event = status_file.last_event
-        if last_event and last_event.task_id == status_file.worker_id:
+        # Try to acquire lock using lease algorithm
+        logger.debug(f"[{worker_id}] Attempting to acquire lock for {step_name}")
+        if status_file.try_acquire_lock():
+            # We won! Write status and proceed
+            status_file.write_status(STATUS_RUNNING)
+            logger.info(f"[{worker_id}] Acquired lock for {step_name}")
             return True
 
-        # Someone else won, retry
+        # We lost - clean up our lease and retry
+        status_file.release_lease()
+        logger.debug(f"[{worker_id}] Lost lock race for {step_name}, retrying...")
         time.sleep(1)
 
 

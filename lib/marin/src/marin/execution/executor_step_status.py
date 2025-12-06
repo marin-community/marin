@@ -14,181 +14,151 @@
 
 """
 Each `ExecutorStep` produces an `output_path`.
-We associate each `output_path` with a `output_path/executor_status` file that contains a
-list of events corresponding to that step.  For example:
-
-    {"date": "2024-09-28T13:29:20.780705", "status": "WAITING", "message": null}
-    {"date": "2024-09-28T13:29:21.091470", "status": "RUNNING", "message": null}
-    {"date": "2024-09-28T13:29:47.559614", "status": "SUCCESS", "message": null}
-
-This allows us to track both the status of each step as well as the time spent
-on each step.
+We associate each `output_path` with:
+- A status file (`output_path/.executor_status`) containing simple text: SUCCESS, FAILURE, or RUNNING
+- Lease files (`output_path/.executor_status.leases/*.json`) for distributed locking
 """
 
 import json
+import logging
 import os
+import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 
 import fsspec
 
 from marin.utils import fsspec_exists
 
-# Old plain-text status values that may exist in legacy files
-OLD_STATUS_VALUES = {"RUNNING", "FAILED", "SUCCESS", "WAITING", "DEP_FAILED", "UNKNOWN", "CANCELLED"}
+logger = logging.getLogger("marin.executor.status")
 
-# Heartbeat configuration for distributed locking
-HEARTBEAT_INTERVAL = 30  # seconds between heartbeat updates
-HEARTBEAT_TIMEOUT = 90  # seconds before considering a heartbeat stale
+# Lease configuration for distributed locking
+HEARTBEAT_INTERVAL = 30  # seconds between lease refreshes
+HEARTBEAT_TIMEOUT = 90  # seconds before considering a lease stale
 
-STATUS_WAITING = "WAITING"  # Waiting for dependencies to finish
 STATUS_RUNNING = "RUNNING"
 STATUS_FAILED = "FAILED"
 STATUS_SUCCESS = "SUCCESS"
 STATUS_DEP_FAILED = "DEP_FAILED"  # Dependency failed
-STATUS_UNKNOWN = "UNKNOWN"  # Unknown status, Ray failed to return the status
-STATUS_CANCELLED = "CANCELLED"  # Job was cancelled by user
-
-
-@dataclass(frozen=True)
-class ExecutorStepEvent:
-    """Represents a change in the status of an `ExecutorStep`."""
-
-    date: str
-    """When the `status` changed."""
-
-    status: str
-    """Represents the `status` of the job."""
-
-    message: str | None = None
-    """An optional message to provide more context (especially for errors)."""
-
-    task_id: str | None = None
-    """The task ID associated with executing this step."""
 
 
 def get_status_path(output_path: str) -> str:
-    """Return the `path` of the status file associated with `output_path`, which contains a list of events."""
+    """Return the path of the status file associated with `output_path`."""
     return os.path.join(output_path, ".executor_status")
 
 
-def read_events(path: str) -> list[ExecutorStepEvent]:
-    """Reads the status events from `path`.
+@dataclass
+class Lease:
+    """A lease held by a worker for a step."""
 
-    Handles both old plain-text status files (e.g., just "RUNNING") and new JSON-lines format.
-    """
-    events = []
-    if fsspec_exists(path):
-        with fsspec.open(path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
+    worker_id: str
+    timestamp: float  # time.time() when lease was written/refreshed
 
-                if line.startswith("{"):
-                    # New JSON format
-                    data = json.loads(line)
-                    # Handle old ray_task_id field
-                    if "ray_task_id" in data and "task_id" not in data:
-                        data["task_id"] = data.pop("ray_task_id")
-                    events.append(ExecutorStepEvent(**data))
-                elif line in OLD_STATUS_VALUES:
-                    # Old plain-text format - treat as stale (epoch timestamp)
-                    events.append(
-                        ExecutorStepEvent(
-                            date="1970-01-01T00:00:00+00:00",
-                            status=line,
-                        )
-                    )
-    return events
-
-
-def get_current_status(events: list[ExecutorStepEvent]) -> str | None:
-    """Get the most recent status (last event)."""
-    return events[-1].status if len(events) > 0 else None
-
-
-def is_failure(status: str):
-    return status in [STATUS_FAILED, STATUS_DEP_FAILED]
-
-
-def is_running_or_waiting(status: str):
-    return status in [STATUS_WAITING, STATUS_RUNNING]
-
-
-def _is_timestamp_stale(date_str: str) -> bool:
-    """Check if timestamp is older than HEARTBEAT_TIMEOUT seconds.
-
-    Always uses UTC. Treats naive timestamps as UTC.
-    """
-    try:
-        event_time = datetime.fromisoformat(date_str)
-        if event_time.tzinfo is None:
-            event_time = event_time.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        return (now - event_time).total_seconds() > HEARTBEAT_TIMEOUT
-    except (ValueError, TypeError):
-        return True
+    def is_stale(self) -> bool:
+        return (time.time() - self.timestamp) > HEARTBEAT_TIMEOUT
 
 
 class StatusFile:
-    """Manages an executor step status file with atomic updates and heartbeat support.
+    """Manages executor step status with lease-based distributed locking.
 
-    Handles both old plain-text status files (e.g., just "RUNNING") and new JSON-lines format.
-    All timestamps are written in UTC.
+    Two types of files:
+    - Lease files (JSON): Workers write these to compete for/hold the lock.
+      Contains {worker_id, timestamp}. Must be refreshed periodically.
+    - Status file (simple text): Final state - SUCCESS, FAILURE, or RUNNING.
     """
 
     def __init__(self, output_path: str, worker_id: str):
+        self.output_path = output_path
         self.path = get_status_path(output_path)
         self.worker_id = worker_id
-
-    def read(self) -> list[ExecutorStepEvent]:
-        """Read events, handling both old plain-text and new JSON formats."""
-        return read_events(self.path)
+        self._lease_dir = self.path + ".leases"
+        self._lease_path = os.path.join(self._lease_dir, f"{self.worker_id}.json")
 
     @property
     def status(self) -> str | None:
-        """Get the current status (last event's status)."""
-        events = self.read()
-        return events[-1].status if events else None
+        """Read current status from status file (simple text: SUCCESS/FAILURE/RUNNING)."""
+        if not fsspec_exists(self.path):
+            return None
+        with fsspec.open(self.path, "r") as f:
+            content = f.read().strip()
+            return content or None
 
-    @property
-    def last_event(self) -> ExecutorStepEvent | None:
-        """Get the last event."""
-        events = self.read()
-        return events[-1] if events else None
+    def write_status(self, status: str) -> None:
+        """Write final status (SUCCESS/FAILURE/RUNNING)."""
+        fs, _ = fsspec.core.url_to_fs(self.path)
+        parent = os.path.dirname(self.path)
+        if not fs.exists(parent):
+            fs.makedirs(parent, exist_ok=True)
+        with fsspec.open(self.path, "w") as f:
+            f.write(status)
+        logger.debug("[%s] Wrote status %s to %s", self.worker_id, status, self.path)
 
-    def is_stale(self) -> bool:
-        """Check if last event's heartbeat is stale (>HEARTBEAT_TIMEOUT seconds old)."""
-        last = self.last_event
-        if last is None:
-            return True
-        return _is_timestamp_stale(last.date)
+    def write_lease(self) -> None:
+        """Write/refresh our lease file."""
+        fs, _ = fsspec.core.url_to_fs(self.path)
+        if not fs.exists(self._lease_dir):
+            fs.makedirs(self._lease_dir, exist_ok=True)
 
-    def write(self, status: str, message: str | None = None) -> None:
-        """Atomically write a new status event."""
-        events = self.read()
-        events.append(
-            ExecutorStepEvent(
-                date=datetime.now(timezone.utc).isoformat(),
-                status=status,
-                message=message,
-                task_id=self.worker_id,
-            )
+        lease = Lease(worker_id=self.worker_id, timestamp=time.time())
+        with fsspec.open(self._lease_path, "w") as f:
+            json.dump(asdict(lease), f)
+        logger.debug("[%s] Wrote lease at %s", self.worker_id, self._lease_path)
+
+    def release_lease(self) -> None:
+        """Remove our lease file."""
+        fs, _ = fsspec.core.url_to_fs(self.path)
+        try:
+            fs.rm(self._lease_path)
+            logger.debug("[%s] Released lease", self.worker_id)
+        except FileNotFoundError:
+            pass
+
+    def read_leases(self) -> list[Lease]:
+        """Read all lease files."""
+        fs, _ = fsspec.core.url_to_fs(self.path)
+        try:
+            lease_files = fs.ls(self._lease_dir, detail=False)
+        except FileNotFoundError:
+            return []
+
+        leases = []
+        for lease_path in lease_files:
+            if not lease_path.endswith(".json"):
+                continue
+            try:
+                with fsspec.open(lease_path, "r") as f:
+                    data = json.load(f)
+                    leases.append(Lease(**data))
+            except (FileNotFoundError, json.JSONDecodeError, TypeError) as e:
+                logger.debug("[%s] Skipping malformed lease %s: %s", self.worker_id, lease_path, e)
+                continue
+        return leases
+
+    def try_acquire_lock(self) -> bool:
+        """Try to acquire the lock using lease-based algorithm.
+
+        Write our lease, then check all leases. Earliest non-stale timestamp wins.
+        """
+        self.write_lease()
+        time.sleep(0.05)  # Brief delay for visibility
+
+        leases = self.read_leases()
+        # Filter out stale leases, sort by (timestamp, worker_id)
+        active = [lease for lease in leases if not lease.is_stale()]
+        if not active:
+            logger.debug("[%s] No active leases found", self.worker_id)
+            return False
+
+        active.sort(key=lambda lease: (lease.timestamp, lease.worker_id))
+        winner = active[0]
+
+        logger.debug(
+            "[%s] Leases: %s, winner: %s",
+            self.worker_id,
+            [(lease.worker_id, lease.timestamp) for lease in active],
+            winner.worker_id,
         )
-        self._atomic_write(events)
+        return winner.worker_id == self.worker_id
 
-    def ping(self, message: str = "heartbeat") -> None:
-        """Write a heartbeat RUNNING event."""
-        self.write(STATUS_RUNNING, message=message)
-
-    def _atomic_write(self, events: list[ExecutorStepEvent]) -> None:
-        """Write events atomically using temp file + rename."""
-        temp_path = f"{self.path}.tmp.{self.worker_id}"
-        fs = fsspec.core.url_to_fs(self.path)[0]
-
-        with fsspec.open(temp_path, "w") as f:
-            for event in events:
-                print(json.dumps(asdict(event)), file=f)
-
-        fs.mv(temp_path, self.path)
+    def has_active_lease(self) -> bool:
+        """Check if any worker has an active (non-stale) lease."""
+        return any(not lease.is_stale() for lease in self.read_leases())
