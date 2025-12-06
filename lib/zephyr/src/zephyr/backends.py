@@ -635,7 +635,7 @@ class Backend:
         self.config = config
         self.dry_run = config.dry_run
 
-    def execute(self, dataset: Dataset, hints: ExecutionHint = ExecutionHint(), verbose: bool = False) -> Sequence:
+    def execute(self, dataset: Dataset[T], hints: ExecutionHint = ExecutionHint(), verbose: bool = False) -> Sequence[T]:
         """Execute a dataset, returning a sequence of results.
 
         Args:
