@@ -46,8 +46,7 @@ import pyarrow.flight as flight
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
-import ray
-from fray.job.context import fray_job_ctx
+from fray.job.context import JobContext, fray_job_ctx
 from levanter.utils.jax_utils import barrier_sync
 
 from .base import (
@@ -372,7 +371,8 @@ class ArrowFlightServer(WeightTransferServer):
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
         self.metrics = WeightTransferServerMetrics()
-        self._coordinator = fray_job_ctx().create_actor(
+        self._ctx: JobContext = fray_job_ctx()
+        self._coordinator = self._ctx.create_actor(
             ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True
         )
         logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
@@ -408,7 +408,7 @@ class ArrowFlightServer(WeightTransferServer):
                 param_names = list(params_dict.keys())
                 actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
-                ray.get(self._coordinator.update_server.remote(weight_id, param_names, server_locations))
+                self._ctx.get(self._coordinator.update_server.remote(weight_id, param_names, server_locations))
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
@@ -467,7 +467,8 @@ class ArrowFlightClient(WeightTransferClient):
 
         self.metrics = WeightTransferClientMetrics()
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
-        self._coordinator = fray_job_ctx().create_actor(
+        self._ctx: JobContext = fray_job_ctx()
+        self._coordinator = self._ctx.create_actor(
             ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True
         )
 
@@ -526,7 +527,7 @@ class ArrowFlightClient(WeightTransferClient):
             start_time = time.time()
 
             # Fetch server info from coordinator
-            server_info = ray.get(self._coordinator.fetch_server.remote())
+            server_info = self._ctx.get(self._coordinator.fetch_server.remote())
 
             if not server_info:
                 logger.info("No Arrow Flight server info available from coordinator.")
