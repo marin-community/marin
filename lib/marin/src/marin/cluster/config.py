@@ -22,7 +22,7 @@ import jinja2
 import yaml
 
 # Cluster configuration constants and templates
-LATEST = "20251023"  # The latest docker tag used for the clusters
+LATEST = "5a4a77d"  # The latest docker tag used for the clusters
 
 
 @dataclass
