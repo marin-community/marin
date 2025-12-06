@@ -363,7 +363,7 @@ def test_exact_deduplication_document(fox_corpus):
         input_path=fox_corpus["test_dir"],
         output_path=fox_corpus["output_dir"],
         attribute_name="is_duplicate",
-        mode=DedupMode.EXACT_DOC_DEDUPLICATE,
+        mode=DedupMode.DOC_DEDUPLICATE,
         processes=1,
     )
 
