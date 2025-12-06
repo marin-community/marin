@@ -268,7 +268,7 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
 
             batch_size = round_to_power_of_two(batch_exact)
 
-            # Scale LR with sqrt(batch) and hidden size (uTransfer style)
+            # Scale LR with sqrt(batch) and hidden size
             # Reference: https://arxiv.org/pdf/2203.03466 (Section 10 Related Works)
             lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
 
@@ -282,7 +282,10 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
             b2 = 0.98 ** (batch_size / 128)
 
             if batch_size < 8:
-                logger.warning(f"Skipping config with batch size {batch_size} (less than 8)")
+                logger.warning(
+                    f"Skipping config for ({architecture=}, {hidden_size=}) "
+                    f"with batch size {batch_size} (less than 8)"
+                )
                 continue
 
             # Recompute exact steps based on adjusted batch size
@@ -313,7 +316,8 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
             )
             if abs(achieved_flops - budget) / budget > cfg.flop_tolerance:
                 logger.warning(
-                    f"Skipping config with achieved flops {achieved_flops} (not within {cfg.flop_tolerance} of budget {budget})"  # noqa: E501
+                    f"Skipping config for ({architecture=}, {hidden_size=}) with achieved flops {achieved_flops} "
+                    f"(not within {cfg.flop_tolerance} of budget {budget})"
                 )
                 continue
 
@@ -413,7 +417,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
 
     if all_configs:
         # Validate that train_tokens are never too high
-        logger.info("Validating that train_tokens doesn't exceed available tokens")
+        logger.info("Validating that number of training tokens doesn't exceed available tokens")
         effective_token_count = config.total_token_count * (config.output_seq_len / config.input_seq_len)
         max_allowed_tokens = effective_token_count * config.max_train_token_multiplier
         max_train_tokens = max(c.train_tokens for c in all_configs)

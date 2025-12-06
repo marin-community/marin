@@ -96,12 +96,7 @@ def pick_v5p_type(
     seq_len: int,
     vocab: int,
 ) -> str:
-    """
-    Select the smallest TPU v5p slice that fits the model in float32.
-
-    Returns:
-    - TPU slice name, e.g., "v5p-8" or "v5p-32"
-    """
+    """Select the smallest TPU v5p slice that fits the model in float32."""
     param_count = compute_num_parameters(config, vocab)
     need_bytes = estimate_bytes(param_count, hidden, layers, batch, seq_len, vocab)
     chip_bytes = HBM_PER_CHIP_GIB * 1024**3
