@@ -1,0 +1,72 @@
+Finding Near-Duplicate Web Pages: A Large-Scale
+Evaluation of Algorithms
+Monika Henzinger
+Google Inc. & Ecole Fed´ er´ ale de Lausanne (EPFL)
+monika@google.com
+
+ABSTRACT
+Broder et al.’s [3] shingling algorithm and Charikar’s [4] random projection based approach are considered “state-of-theart” algorithms for finding near-duplicate web pages. Both
+algorithms were either developed at or used by popular web
+search engines. We compare the two algorithms on a very
+large scale, namely on a set of 1.6B distinct web pages. The
+results show that neither of the algorithms works well for
+finding near-duplicate pairs on the same site, while both
+achieve high precision for near-duplicate pairs on different
+sites. Since Charikar’s algorithm finds more near-duplicate
+pairs on different sites, it achieves a better precision overall,
+namely 0.50 versus 0.38 for Broder et al. ’s algorithm. We
+present a combined algorithm which achieves precision 0.79
+with 79% of the recall of the other algorithms.
+
+1. INTRODUCTION
+Duplicate and near-duplicate web pages are creating large
+problems for web search engines: They increase the space
+needed to store the index, either slow down or increase the
+cost of serving results, and annoy the users. Thus, algorithms for detecting these pages are needed.
+A naive solution is to compare all pairs to documents.
+Since this is prohibitively expensive on large datasets, Manber [11] and Heintze [9] proposed first algorithms for detecting near-duplicate documents with a reduced number
+of comparisons. Both algorithms work on sequences of adjacent characters. Brin et al. [1] started to use word sequences to detect copyright violations. Shivakumar and
+Garcia-Molina [13, 14] continued this research and focused
+on scaling it up to multi-gigabyte databases [15]. Broder
+et al. [3] also used word sequences to efficiently find nearduplicate web pages. Later, Charikar [4] developed an approach based on random projections of the words in a document. Recently Hoad and Zobel [10] developed and compared methods for identifying versioned and plagiarised documents.
+Both Broder et al. ’s and Charikar’s algorithm have elegant theoretical justifications, but neither has been experimentally evaluated and it is not known which algorithm
+performs better in practice. In this paper we evaluate both
+algorithms on a very large real-world data set, namely on
+1.6B distinct web pages. We chose these two algorithms as
+both were developed at or used by successful web search engines and are considered “state-of-the-art” in finding nearduplicate web pages. We call them Algorithm B and C.
+We set all parameters in Alg. B as suggested in the literature. Then we chose the parameters in Alg. C so that it
+uses the same amount of space per document and returns
+about the same number of correct near-duplicate pairs, i.e.,
+has about the same recall. We compared the algorithms according to three criteria: (1) precision on a random subset,
+(2) the distribution of the number of term differences per
+near-duplicate pair, and (3) the distribution of the number
+of near-duplicates per page The results are: (1) Alg. C has precision 0.50 and Alg. B
+0.38. Both algorithms perform about the same for pairs
+on the same site (low precision) and for pairs on different
+sites (high precision.) However, 92% of the near-duplicate
+pairs found by Alg. B belong to the same site, but only 74%
+of Alg. C. Thus, Alg. C finds more of the pairs for which
+precision is high and hence has an overall higher precision.
+(2) The number of term differences per near-duplicate pair
+are very similar for the two algorithms, but Alg. B returns
+fewer pairs with extremely large term differences. (3) The
+distribution of the number of near-duplicates per page follows a power-law for both algorithms. However, Alg. B has
+a higher “spread” around the power-law curve. A possible
+reason for that “noise” is that the bit string representing
+a page in Alg. B is based on a randomly selected subset
+of terms in the page. Thus, there might be “lucky” and
+“unlucky” choices, leading to pages with an artificially high
+or low number of near-duplicates. Alg. C does not select a
+subset of terms but is based on all terms in the page.
+Finally, we present a combined algorithm that allows for
+different precision-recall tradeoffs. The precision of one tradeoff is 0.79 with 79% of the recall of Alg. B.
+It is notoriously hard to determine which pages belong
+to the same site. Thus we use the following simplified approach. The site of a page is (1) the domain name of the
+page if the domain name has at most one dot, i.e., at most
+two levels; and (2) it is the domain name minus the string
+before the first dot, if the domain name has two or more
+dots, i.e., three or more levels. For example, the site of
+www.cs.berkeley.edu/index.html is cs.berkeley.edu.
+The paper is organized as follows: Section 2 describes the
+algorithms in detail. Section 3 presents the experiments and
+the evaluation results. We conclude in Section 4.
