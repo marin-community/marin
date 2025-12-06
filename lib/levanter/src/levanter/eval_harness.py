@@ -515,15 +515,15 @@ class LevanterHarnessLM(TemplateLM):
         # HACK: Prepend UL2R task token to all requests
         # Shouldn't be necessary? Ul2R paper mentions passing input w/ default
         # prompting/no mode.
-        INPUT_PREFIX = "<|s|>"
-        INPUT_SUFFIX = "<|mask_0|>"
+        # <|bos|> for wikitext
+        INPUT_PREFIX = "<|reserved_special_token_5|><|begin_of_text|>"
 
         # HACK
         modified_requests = []
         for request in requests:
             prompt = request.args[0]
             continuation = request.args[1]
-            modified_prompt = INPUT_PREFIX + prompt + INPUT_SUFFIX
+            modified_prompt = INPUT_PREFIX + prompt
             modified_request = dataclasses.replace(request, arguments=(modified_prompt, continuation))
             modified_requests.append(modified_request)
 
@@ -602,7 +602,7 @@ class LevanterHarnessLM(TemplateLM):
 
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
 
-            sys.exit(0)
+            # sys.exit(0)
 
             # Increment step after processing batch
             self._current_step += 1

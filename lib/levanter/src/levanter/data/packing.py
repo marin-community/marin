@@ -307,7 +307,7 @@ def greedy_pack_prompt_completions(
 
             if use_prefix_lm:
                 # True for prompt tokens, False for completion tokens
-                prefix_lm_mask.extend([True] * prompt_len + [False] * (len(seq.ids) - prompt_len))
+                prefix_lm_mask.extend([True] * (prompt_len-1) + [False] * (len(seq.ids) - prompt_len + 1))
 
         # Pad to max length
         pad_length = Pos.size - len(concat_ids)
@@ -400,15 +400,21 @@ def pack_documents(
     if n_docs is None:
         raise ValueError("Could not determine the number of documents from lengths.")
 
-    # Validate document lengths
-    for lens, allowed, leaf_name in zip(lengths_leaves, max_length_leaves, leaf_names):
-        for i in range(n_docs):
-            if lens[i] > allowed and not slice_too_long_examples:
+    if not slice_too_long_examples:
+        # Validate document lengths
+        for lens, allowed, leaf_name in zip(lengths_leaves, max_length_leaves, leaf_names):
+            too_long = lens > allowed
+            too_long_indices = jnp.where(too_long)[0].tolist()
+
+            if too_long_indices:
                 raise ValueError(
-                    f"Document {i} in leaf '{leaf_name}' has length {lens[i]} which exceeds "
+                    f"Documents {too_long_indices} in leaf '{leaf_name}' have lengths that exceed "
                     f"maximum allowed length {allowed}. Consider setting slice_too_long_examples=True "
                     "or increasing max_length."
                 )
+
+    cumsums = jax.tree.map(lambda lens: jnp.cumsum(lens), lengths)
+    cumsums_leaves = jax.tree.leaves(cumsums)
 
     pack_doc_ranges = []
     i = 0
@@ -422,9 +428,9 @@ def pack_documents(
                 break
             # For each leaf, check if adding document i would keep the token count within allowed capacity.
             valid = True
-            for lens, allowed, leaf_name in zip(lengths_leaves, max_length_leaves, leaf_names, strict=True):
+            for lens, allowed, leaf_name, csums in zip(lengths_leaves, max_length_leaves, leaf_names, cumsums_leaves, strict=True):
                 # Compute token count from document start to document i+1.
-                token_sum = sum(lens[start : i + 1])
+                token_sum = csums[i] - (0 if start == 0 else csums[start - 1])
                 if token_sum > allowed:
                     valid = False
                     if not slice_too_long_examples and i == start:

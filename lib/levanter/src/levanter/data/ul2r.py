@@ -484,6 +484,7 @@ def to_ul2r_s_tokens(
     """
 
     # TODO support parameters?
+    # TODO no longe rincluding <|mask_0|>; doing opposite of below
 
     # I'm not sure whether S-denoising examples look like
     #   [S] <prefix> <sentinel_0> <continuation>
@@ -503,11 +504,12 @@ def to_ul2r_s_tokens(
     pivot = jax.random.randint(key, (), 1, length - 1)
     n_tokens = tokens.shape[0]
     tokens = jnp.where(jnp.arange(n_tokens) < length, tokens, 0)
-    targets = jnp.roll(tokens, 1)
-    indices = jnp.arange(n_tokens)
-    result = jnp.where(indices < pivot, tokens, targets)
-    result = result.at[pivot].set(sentinel_token_id)
-    return pivot, result
+    return pivot, tokens
+    #targets = jnp.roll(tokens, 1)
+    #indices = jnp.arange(n_tokens)
+    #result = jnp.where(indices < pivot, tokens, targets)
+    #result = result.at[pivot].set(sentinel_token_id)
+    #return pivot, result
 
 
 @jax.jit

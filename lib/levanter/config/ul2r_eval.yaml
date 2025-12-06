@@ -1,12 +1,13 @@
 # uv run --extra lm_eval --extra gpu python -m levanter.main.train_lm --config config/gpt2_eval_ul2r.yaml
 
 model:
-  type: gpt2
+  type: llama
+  seq_len: 1024  # 128K was OOM; default from Llama 3.2 1B
   # hidden_dim: 32
   # num_heads: 4
   # num_layers: 2
 
-initialize_from_hf: openai-community/gpt2
+initialize_from_hf: meta-llama/Llama-3.2-1B
 use_hf_model_config: true
 
 trainer:
@@ -16,37 +17,40 @@ trainer:
   #     - every: 50
   #   save_interval: 5m
 
-  # per_device_parallelism: -1
   batch_axis: "batch"
   fsdp_axis: "embed"
-  mp: f32
-  num_train_steps: 100000
   tensor_parallel_axes: ["mlp", "heads"]
-  train_batch_size: 32 # TODO determine
+
+  mp: p=f32,c=bfloat16
+  per_device_eval_parallelism: 8
+  per_device_parallelism: -1
+  train_batch_size: 32  # was 128 hanging?
+
+  num_train_steps: 100000  # TODO
 
 optimizer:
   learning_rate: 1e-5
   weight_decay: 0.1
 
 eval_harness:
-  task_spec: ["hellaswag", "piqa"]
+  task_spec: ["hellaswag"]
   max_examples: 2048
 eval_harness_steps: 1000
 
 data:
-  tokenizer: ./gpt2_ul2r_DEV
+  tokenizer: meta-llama/Llama-3.2-1B
   # tokenizer: openai-community/gpt2
   configs:
     wikitext:
       # id: dlwh/wikitext_103_detokenized
       id: Salesforce/wikitext
       name: wikitext-103-raw-v1
-      cache_dir: /tmp/marin_cache_wikitext
+      cache_dir: /tmp/marin_cache/wikitext
     ul2r:
       #id: dlwh/wikitext_103_detokenized
       id: Salesforce/wikitext
       name: wikitext-103-raw-v1
-      cache_dir: /tmp/marin_cache_ul2r
+      cache_dir: /tmp/marin_cache/ul2r
       format:
         type: ul2r
         #text_key: text # only for gsm8k
@@ -57,30 +61,34 @@ data:
             mask_prob: 0.15
             mean_span_length: 3.0
             random_roll: true
-            task_token_id: 50257
+            # task_token_id: 50257
+            task_token_id: 128011 # <|reserved_special_token_3|>
           x1:
             type: rx
             mask_prob: 0.15
             mean_span_length: 32.0
             random_roll: true
-            task_token_id: 50258
+            # task_token_id: 50258
+            task_token_id: 128012 # <|reserved_special_token_4|>
           x2:
             type: rx
             mask_prob: 0.5
             mean_span_length: 3.0
             random_roll: true
-            task_token_id: 50258
+            # task_token_id: 50258
+            task_token_id: 128012 # <|reserved_special_token_4|>
           s:
             type: s
-            task_token_id: 50259
+            # task_token_id: 50259
+            task_token_id: 128013 # <|reserved_special_token_5|>
         task_probs:
           r: 0.5
           x1: 0.125
           x2: 0.125
           s: 0.25
         rng_seed: 42
-        sentinel_token_id_start: 50260
-        sentinel_token_id_count: 100
+        sentinel_token_id_start: 128014 # <|reserved_special_token_6|>
+        sentinel_token_id_count: 128
   train_weights:
     wikitext: 0.5
     ul2r: 0.5
