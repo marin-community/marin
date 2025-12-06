@@ -33,8 +33,7 @@ import haliax as hax
 import jax
 import jax.experimental.transfer as jax_transfer
 import numpy as np
-import ray
-from fray.job.context import fray_job_ctx
+from fray.job.context import JobContext, fray_job_ctx
 from haliax.jax_utils import is_jax_array_like
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -354,13 +353,14 @@ class JAXTransferServer(WeightTransferServer):
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
 
-        self.coordinator = fray_job_ctx().create_actor(
+        self._ctx: JobContext = fray_job_ctx()
+        self.coordinator = self._ctx.create_actor(
             WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True
         )
 
         # Start transfer server and register its address with coordinator
         self.transfer_server = start_transfer_server()
-        ray.get(self.coordinator.register_transfer_server.remote(self.transfer_server.address()))
+        self._ctx.get(self.coordinator.register_transfer_server.remote(self.transfer_server.address()))
         self._setup_cpu_transfer()
 
         # Single-item queue for polling
@@ -445,7 +445,8 @@ class JAXTransferClient(WeightTransferClient):
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
 
-        self.coordinator = fray_job_ctx().create_actor(
+        self._ctx: JobContext = fray_job_ctx()
+        self.coordinator = self._ctx.create_actor(
             WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True
         )
 
@@ -486,7 +487,7 @@ class JAXTransferClient(WeightTransferClient):
 
         # First check if new weights are available without blocking
         try:
-            latest_weight_id, server_address = ray.get(self.coordinator.get_transfer_info.remote())
+            latest_weight_id, server_address = self._ctx.get(self.coordinator.get_transfer_info.remote())
             logger.info(
                 "Current weight id %s, Latest weight ID: %s, Server address: %s",
                 self._last_received_weight_id,
