@@ -37,7 +37,6 @@ from marin.execution.executor import (
 )
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
-from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V6E_8
 from experiments.evals.task_configs import (
     BASE_GENERATION_TASKS,
     CORE_TASKS,

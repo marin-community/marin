@@ -18,7 +18,6 @@ import tempfile
 import traceback
 from pathlib import Path
 
-from fray.cluster.base import CpuConfig, Entrypoint, JobRequest, ResourceConfig, create_environment
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 from fray.isolated_env import TemporaryVenv
 

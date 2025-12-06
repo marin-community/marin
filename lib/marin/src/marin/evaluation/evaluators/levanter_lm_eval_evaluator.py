@@ -22,6 +22,7 @@ import fsspec
 import jmp
 import levanter
 import levanter.eval_harness as eval_harness
+from fray.cluster.ray.deps import build_runtime_env_for_packages
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.distributed import RayConfig
 from levanter.tracker.wandb import WandbConfig
@@ -30,7 +31,6 @@ from levanter.trainer import TrainerConfig
 from experiments.evals.task_configs import convert_to_levanter_task_config
 from marin.evaluation.evaluation_config import EvalTaskConfig, ModelConfig
 from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvaluator
-from fray.cluster.ray.deps import build_runtime_env_for_packages
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         self,
         model: ModelConfig,
         evals: list[EvalTaskConfig],
+        openai_base_url: str,
         output_path: str,
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
