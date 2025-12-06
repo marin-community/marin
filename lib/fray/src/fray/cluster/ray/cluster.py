@@ -224,8 +224,9 @@ class RayCluster(Cluster):
 
         env_vars = dict(environment.env_vars)
 
-        # disable access to the TPU if we're not a TPU job.
-        if request.resources.device.type != "tpu":
+        # disable access to the TPU if we're not a TPU job, otherwise
+        # any import of JAX will claim the TPU and block other users.
+        if request.resources.device.type == "cpu":
             env_vars["JAX_PLATFORMS"] = "cpu"
             env_vars["PJRT_DEVICE"] = "cpu"
 
