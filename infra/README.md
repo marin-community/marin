@@ -75,7 +75,6 @@ from marin.toxicity import toxicity_classifier
 from marin.utils import fsspec_exists
 
 import fsspec
-import ray
 
 
 def get_sentinel_path(gcs_file_path: str) -> str:
@@ -88,7 +87,6 @@ def finalize_sentinel(sentinel_gcs_path: str, content: str = "Task Completed") -
 
 
 # Task Function --> this actually will be parallelized across cluster workers
-@ray.remote
 def classify_reddit_toxicity(gcs_reddit_input: str, gcs_toxicity_output: str) -> bool:
     """Read from input, perform toxicity classification, write to output -- return success/failure."""
 

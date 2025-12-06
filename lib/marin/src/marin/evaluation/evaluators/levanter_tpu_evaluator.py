@@ -95,4 +95,4 @@ class LevanterTpuEvaluator(Evaluator, ABC):
 
         cluster = current_cluster()
         job_id = cluster.launch(job_request)
-        cluster.wait(job_id)
+        cluster.wait(job_id, raise_on_failure=True)

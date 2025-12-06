@@ -241,7 +241,7 @@ class RLJob:
                 )
             )
 
-        return cluster.wait(jobs)
+        return cluster.wait(jobs, raise_on_failure=True)
 
     def to_worker_configs(self) -> tuple[TrainWorkerConfig, RolloutWorkerConfig]:
         """Export worker configurations for inspection/testing.

@@ -348,11 +348,7 @@ def train_model(
 
     cluster = current_cluster()
     job_id = cluster.launch(job_request)
-    try:
-        cluster.wait(job_id)
-    except Exception as e:
-        logger.exception(f"Error processing: {e}")
-        raise
+    cluster.wait(job_id, raise_on_failure=True)
 
     datetime_end = datetime.utcnow()
     logger.info(f"Training BERT for experiment {output_path} completed in {datetime_end - datetime_start}.")

@@ -193,4 +193,4 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
         environment=EnvironmentConfig.create(env_vars=env_vars),
     )
     job_id = cluster.launch(job_request)
-    cluster.wait(job_id)
+    cluster.wait(job_id, raise_on_failure=True)

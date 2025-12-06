@@ -24,20 +24,18 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 import pytest
-import ray
 from jax.sharding import Mesh
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.models.llama import LlamaConfig
-from transformers import AutoConfig, AutoTokenizer
-from levanter.compat.hf_checkpoints import RepoRef, HFCheckpointConverter
-
+from marin.rl.environments.inference_ctx import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 from marin.rl.weight_transfer import (
     WeightTransferConfig,
     WeightTransferMode,
     create_weight_transfer_client,
     create_weight_transfer_server,
 )
-from marin.rl.environments.inference_ctx import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 from marin.rl.weight_utils import levanter_to_nnx_state
+from transformers import AutoConfig, AutoTokenizer
 
 TRANSFER_TYPES = [
     WeightTransferMode.GCS_CHECKPOINT,
@@ -206,7 +204,7 @@ def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_para
 
 
 @pytest.mark.skip("Manual benchmark test")
-def benchmark_arrow_flight_with_llama(ray_tpu_cluster):
+def benchmark_arrow_flight_with_llama():
     """Test Arrow Flight weight transfer with a LLama 1B model."""
     MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 
@@ -383,11 +381,8 @@ def test_arrow_flight_transfer_to_vllm(ray_tpu_cluster):
 
 
 if __name__ == "__main__":
-    # log to stderr
     import logging
     import sys
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
-    cluster = ray.init("local")
-    benchmark_arrow_flight_with_llama(ray_tpu_cluster=cluster)
+    benchmark_arrow_flight_with_llama()

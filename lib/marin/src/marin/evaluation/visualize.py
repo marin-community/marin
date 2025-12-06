@@ -19,6 +19,8 @@ Uses Levanter's viz_lm functionality to visualize log probabilities of a languag
 import dataclasses
 import logging
 import multiprocessing
+import os
+import shutil
 import sys
 from dataclasses import dataclass
 from queue import Empty
@@ -31,19 +33,34 @@ from levanter.main.viz_logprobs import VizLmConfig as LevanterVizLmConfig
 from levanter.main.viz_logprobs import main as viz_lm_main
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.ray_utils import ExceptionInfo
 
+from marin.evaluation.utils import discover_levanter_checkpoints, download_from_gcs, is_remote_path
 from marin.execution.executor import this_output_path
-from marin.utils import remove_tpu_lockfile_on_exit
-
-from marin.evaluation.utils import download_from_gcs, is_remote_path, discover_levanter_checkpoints
 from marin.utilities.executor_utils import ckpt_path_to_step_name
-import os
-import shutil
+from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
 GCSFUSE_MOUNT_POINT = "/opt/gcsfuse_mount"
+
+
+@dataclass
+class ExceptionInfo:
+    ex: BaseException | None
+    tb: tblib.Traceback
+
+    def restore(self):
+        if self.ex is not None:
+            exc_value = self.ex.with_traceback(self.tb.as_traceback())
+            return (self.ex.__class__, exc_value, self.tb.as_traceback())
+        else:
+            return (Exception, Exception("Process failed with no exception"), self.tb.as_traceback())
+
+    def reraise(self):
+        if self.ex is not None:
+            raise self.ex.with_traceback(self.tb.as_traceback())
+        else:
+            raise Exception("Process failed with no exception").with_traceback(self.tb.as_traceback())
 
 
 def execute_in_subprocess(underlying_function, args, kwargs):
@@ -167,4 +184,4 @@ def visualize_lm_log_probs(config: VizLmConfig) -> None:
 
     cluster = current_cluster()
     job_id = cluster.launch(job_request)
-    cluster.wait(job_id)
+    cluster.wait(job_id, raise_on_failure=True)

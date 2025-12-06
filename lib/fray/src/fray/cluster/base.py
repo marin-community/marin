@@ -354,21 +354,18 @@ class ResourceConfig:
         return self.device_flops(dtype) * self.chip_count()
 
     @staticmethod
-    def with_tpu(tpu_type: str, slice_count: int = 1) -> ResourceConfig:
-        """Create a TPU resource config with sensible defaults."""
-        device = TpuConfig(type=tpu_type)  # type: ignore[arg-type]
-        return ResourceConfig(device=device, replicas=slice_count)
+    def with_tpu(tpu_type: str, slice_count: int = 1, **kwargs) -> ResourceConfig:
+        device = TpuConfig(type=tpu_type)
+        return ResourceConfig(device=device, replicas=slice_count, **kwargs)
 
     @staticmethod
-    def with_gpu(gpu_type: str = "auto", count: int = 1) -> ResourceConfig:
-        """Create a GPU resource config with sensible defaults."""
-        device = GpuConfig(type=gpu_type, count=count)  # type: ignore[arg-type]
-        return ResourceConfig(device=device)
+    def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs) -> ResourceConfig:
+        device = GpuConfig(type=gpu_type, count=count)
+        return ResourceConfig(device=device, **kwargs)
 
     @staticmethod
-    def with_cpu() -> ResourceConfig:
-        """Create a CPU-only resource config."""
-        return ResourceConfig(device=CpuConfig())
+    def with_cpu(**kwargs) -> ResourceConfig:
+        return ResourceConfig(device=CpuConfig(), **kwargs)
 
 
 @dataclass
@@ -611,13 +608,37 @@ class Cluster(ABC):
         """
         ...
 
-    def wait(self, job_id: JobId) -> JobInfo:
-        """Block until the specified job completes, returning its final status."""
+    def wait(self, job_id: JobId | Sequence[JobId], raise_on_failure: bool = False) -> JobInfo | list[JobInfo]:
+        """Block until the specified job(s) complete, returning final status.
+
+        Args:
+            job_id: Single job ID or sequence of job IDs to wait for
+            raise_on_failure: If True, raises RuntimeError when any job fails
+
+        Returns:
+            JobInfo for single job, or list of JobInfo for multiple jobs
+        """
+        if isinstance(job_id, str):
+            return self._wait_single(job_id, raise_on_failure)
+
+        # Multiple jobs: wait for all, then check for failures
+        results = [self._wait_single(jid, raise_on_failure=False) for jid in job_id]
+        if raise_on_failure:
+            failed = [r for r in results if r.status in (JobStatus.FAILED, JobStatus.STOPPED)]
+            if failed:
+                msg = "; ".join(f"{r.job_id}: {r.error_message}" for r in failed)
+                raise RuntimeError(f"{len(failed)} job(s) failed: {msg}")
+        return results
+
+    def _wait_single(self, job_id: JobId, raise_on_failure: bool = False) -> JobInfo:
+        """Wait for a single job to complete."""
         logger.info(f"Starting wait for job {job_id}")
 
         while True:
             info = self.poll(job_id)
-            if info.status in ["succeeded", "failed", "stopped"]:
+            if JobStatus.finished(info.status):
                 logger.info(f"Job {job_id} completed with status {info.status}")
+                if raise_on_failure and info.status in (JobStatus.FAILED, JobStatus.STOPPED):
+                    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
                 return info
             time.sleep(10.0)
