@@ -338,6 +338,19 @@ class TaggedEvaluator:
                 if axis_mapping is not None:
                     context.enter_context(hax.axis_mapping(axis_mapping))
                 losses = compute_next_token_loss(m, batch, reduction=None, reduction_axis=())
+
+                # print_len = 80
+                # jax.debug.print("ACCUM_FOR_BATCH")
+                # jax.debug.print("batch[0].tokens={}", batch[0].tokens.array[:print_len])
+                # jax.debug.print("batch[0].loss_mask={}", batch[0].loss_mask.array[:print_len])
+                # jax.debug.print("batch[0].attn_mask={}", batch[0].attn_mask)
+                # (Batch, Pos) = batch.tokens.axes
+                # KPos = Pos.alias("KPos")
+                # materialized = batch.attn_mask.materialize(Pos, KPos).rearrange((Batch, Pos, KPos))
+                # jax.debug.print("materialized[0]={}", materialized.astype(jnp.int32)[Batch, 0, Pos, :print_len, KPos, :print_len])
+                # jax.debug.print("losses[0]={}", losses[0].array[:print_len])
+                # jax.debug.print("ACCUM_FOR_BATCH END")
+
                 mask = batch.loss_mask  # [Batch, Pos]
                 this_tokens = hax.sum(mask)
                 this_loss = hax.einsum("->", losses, mask)  # to scalar

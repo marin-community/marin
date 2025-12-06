@@ -280,6 +280,10 @@ def compute_next_token_loss(
     if isinstance(activations, tuple):
         activations, aux_loss = activations
 
+    logits = hax.dot(activations, model.get_lm_head(), axis=model.Embed)
+    predicted_token_ids = hax.argmax(logits, axis=model.Vocab)
+    print(f"predicted_ids[:80]: {predicted_token_ids.array[:80]}")
+
     loss = maybe_fused_next_token_loss(
         model.Pos,
         model.Embed,
