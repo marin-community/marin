@@ -127,7 +127,7 @@ def create_cluster(cluster_spec: str) -> Cluster:
     query_params = parse_qs(parsed.query)
 
     if cluster_spec.startswith("local"):
-        return LocalCluster()
+        return LocalCluster.from_spec(query_params)
 
     if cluster_spec.startswith("ray"):
         from fray.cluster.ray.cluster import RayCluster

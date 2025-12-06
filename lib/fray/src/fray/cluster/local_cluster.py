@@ -36,8 +36,28 @@ class LocalClusterConfig:
 
 
 class FakeProcess(Thread):
-    def poll(self):
-        return None if self.is_alive() else 0
+    """Thread wrapper that mimics subprocess.Popen for non-isolated execution."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._exception: BaseException | None = None
+
+    def run(self):
+        try:
+            super().run()
+        except BaseException as e:
+            self._exception = e
+            raise
+
+    def poll(self) -> int | None:
+        if self.is_alive():
+            return None
+        # Return non-zero exit code if thread raised an exception
+        return 1 if self._exception is not None else 0
+
+    @property
+    def exception(self) -> BaseException | None:
+        return self._exception
 
 
 class LocalCluster(Cluster):
@@ -53,8 +73,16 @@ class LocalCluster(Cluster):
         self._jobs: dict[JobId, _LocalJob] = {}
         self.config = config
 
+    @staticmethod
+    def from_spec(spec: dict[str, list[str]]) -> Cluster:
+        logger.info(f"Creating local cluster with spec: {spec}")
+        use_isolated_env = spec.get("use_isolated_env", ["false"])[0].lower() == "true"
+        config = LocalClusterConfig(use_isolated_env=use_isolated_env)
+        logger.info(f"Local cluster config: {config}")
+        return LocalCluster(config=config)
+
     def _get_cluster_spec(self) -> str:
-        return "local"
+        return f"local?use_isolated_env={self.config.use_isolated_env}"
 
     def __enter__(self):
         return self
@@ -84,12 +112,12 @@ class LocalCluster(Cluster):
 
         processes = []
         process_env = None
-        # Non-isolated mode only works with callable entrypoints (run as thread in parent process)
-        # Binary entrypoints always require isolated mode (subprocess)
-        # Also use isolated mode if custom env_vars are specified (threads can't have custom env)
-        has_custom_env = request.environment and request.environment.env_vars
-        use_isolated = self.config.use_isolated_env or request.entrypoint.callable_entrypoint is None or has_custom_env
-        if not use_isolated:
+        if not self.config.use_isolated_env:
+            if request.environment.env_vars:
+                logger.warning(
+                    "LocalCluster does not support custom environment variables in non-isolated mode, ignored."
+                )
+
             # Run callable in parent process as a thread
             callable_ep = request.entrypoint.callable_entrypoint
             processes = []
@@ -275,11 +303,17 @@ class _LocalJob:
         returncodes = [process.poll() for process in self.processes]
 
         task_status = []
-        for rc in returncodes:
+        for i, rc in enumerate(returncodes):
             if rc is None:
                 task_status.append(TaskStatus(status="running", error_message=""))
             elif rc != 0:
-                task_status.append(TaskStatus(status="failed", error_message=f"Replica failed with exit code {rc}"))
+                # Try to get exception message from FakeProcess
+                process = self.processes[i]
+                if isinstance(process, FakeProcess) and process.exception is not None:
+                    error_msg = f"Replica failed: {process.exception}"
+                else:
+                    error_msg = f"Replica failed with exit code {rc}"
+                task_status.append(TaskStatus(status="failed", error_message=error_msg))
             else:
                 task_status.append(TaskStatus(status="succeeded", error_message=""))
 
@@ -290,7 +324,9 @@ class _LocalJob:
         elif any(ts.status == "failed" for ts in task_status):
             # At least one replica failed
             status = "failed"
-            error_message = "One or more replicas failed"
+            # Collect error messages from failed tasks
+            failed_msgs = [ts.error_message for ts in task_status if ts.status == "failed" and ts.error_message]
+            error_message = "; ".join(failed_msgs) if failed_msgs else "One or more replicas failed"
         else:
             status = "succeeded"
             error_message = None

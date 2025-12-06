@@ -22,4 +22,4 @@ DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 
 @pytest.fixture(scope="session", autouse=True)
 def fray_cluster():
-    set_current_cluster(create_cluster("local"))
+    set_current_cluster(create_cluster("local?use_isolated_env=False"))
