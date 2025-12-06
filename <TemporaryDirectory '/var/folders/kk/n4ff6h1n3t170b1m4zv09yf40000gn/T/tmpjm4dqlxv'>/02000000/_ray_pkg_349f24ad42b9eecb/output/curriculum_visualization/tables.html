@@ -1,0 +1,161 @@
+<html><head><style>
+
+        table { border-collapse: collapse; margin: 20px 0; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #4CAF50; color: white; }
+        tr:nth-child(even) { background-color: #f2f2f2; }
+        h2 { color: #333; margin-top: 30px; }
+    
+</style></head><body>
+<h1>Curriculum Learning Visualization - Summary Tables</h1>
+<h2>1. Lesson Configuration</h2>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Lesson ID</th>
+      <th>Dependencies</th>
+      <th>Initial Weight</th>
+      <th>Start Threshold</th>
+      <th>Stop Threshold</th>
+      <th>Plateau Window</th>
+      <th>Plateau Threshold</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>easy</td>
+      <td>None</td>
+      <td>1.00</td>
+      <td>0.00</td>
+      <td>0.90</td>
+      <td>50</td>
+      <td>0.010</td>
+    </tr>
+    <tr>
+      <td>medium</td>
+      <td>easy(0.5)</td>
+      <td>1.00</td>
+      <td>0.00</td>
+      <td>0.85</td>
+      <td>50</td>
+      <td>0.010</td>
+    </tr>
+    <tr>
+      <td>hard</td>
+      <td>medium(0.6)</td>
+      <td>1.00</td>
+      <td>0.00</td>
+      <td>0.75</td>
+      <td>50</td>
+      <td>0.010</td>
+    </tr>
+    <tr>
+      <td>intermediate</td>
+      <td>easy(0.6)</td>
+      <td>1.00</td>
+      <td>0.00</td>
+      <td>0.80</td>
+      <td>50</td>
+      <td>0.010</td>
+    </tr>
+    <tr>
+      <td>advanced</td>
+      <td>medium(0.7), intermediate(0.65)</td>
+      <td>1.00</td>
+      <td>0.00</td>
+      <td>0.70</td>
+      <td>50</td>
+      <td>0.010</td>
+    </tr>
+  </tbody>
+</table>
+<h2>2. Final State Snapshot</h2>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Lesson ID</th>
+      <th>State</th>
+      <th>Success Rate</th>
+      <th>Eval Success</th>
+      <th>Sample Count</th>
+      <th>Sampling Weight</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>easy</td>
+      <td>active</td>
+      <td>1.000</td>
+      <td>1.000</td>
+      <td>50</td>
+      <td>nan</td>
+    </tr>
+    <tr>
+      <td>medium</td>
+      <td>active</td>
+      <td>1.000</td>
+      <td>1.000</td>
+      <td>1</td>
+      <td>nan</td>
+    </tr>
+    <tr>
+      <td>hard</td>
+      <td>active</td>
+      <td>1.000</td>
+      <td>1.000</td>
+      <td>798</td>
+      <td>nan</td>
+    </tr>
+    <tr>
+      <td>intermediate</td>
+      <td>active</td>
+      <td>1.000</td>
+      <td>1.000</td>
+      <td>150</td>
+      <td>nan</td>
+    </tr>
+    <tr>
+      <td>advanced</td>
+      <td>active</td>
+      <td>1.000</td>
+      <td>1.000</td>
+      <td>1</td>
+      <td>nan</td>
+    </tr>
+  </tbody>
+</table>
+<h2>3. Unlock Events</h2>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Step</th>
+      <th>Lesson ID</th>
+      <th>Details</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>50</td>
+      <td>intermediate</td>
+      <td>Dependencies satisfied</td>
+    </tr>
+    <tr>
+      <td>50</td>
+      <td>medium</td>
+      <td>Dependencies satisfied</td>
+    </tr>
+    <tr>
+      <td>201</td>
+      <td>hard</td>
+      <td>Dependencies satisfied</td>
+    </tr>
+    <tr>
+      <td>201</td>
+      <td>advanced</td>
+      <td>Dependencies satisfied</td>
+    </tr>
+  </tbody>
+</table>
+<h2>4. Graduation Events</h2>
+<p>No graduation events recorded.</p>
+</body></html>
