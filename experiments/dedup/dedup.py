@@ -25,7 +25,7 @@ import logging
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
 import ray
 from marin.execution.executor import ExecutorStep, InputName, executor_main
-from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
+from marin.processing.classification.deduplication.pipeline import DedupeConfig, DedupMode, deduplicate
 
 logger = logging.getLogger(__name__)
 
@@ -60,19 +60,12 @@ fineweb_edu_small_10bt = ExecutorStep(
     ),
 )
 
-# N-gram configuration for train-test overlap detection
-DEFAULT_NGRAM_CONFIG = NGramConfig(
-    ngram_length=[5, 10, 15],
-    overlap_threshold=1e-6,
-    stride=0,
-)
-
 
 @ray.remote(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "cpu"}})
 def run_dedup(config: DedupeConfig) -> str:
     logger.info(f"Starting dedupe with config: {config}")
 
-    dedupe(config)
+    deduplicate(config)
 
     logger.info(f"Dedupe completed! Results written to {config.output_path}")
     return config.output_path
