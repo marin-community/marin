@@ -23,7 +23,6 @@ Usage:
 import logging
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-import ray
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
 
@@ -68,7 +67,6 @@ DEFAULT_NGRAM_CONFIG = NGramConfig(
 )
 
 
-@ray.remote(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "cpu"}})
 def run_dedup(config: DedupeConfig) -> str:
     logger.info(f"Starting dedupe with config: {config}")
 

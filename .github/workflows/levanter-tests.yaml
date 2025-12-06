@@ -178,7 +178,6 @@ jobs:
             --ulimit memlock=68719476736:68719476736 \
             -e TPU_CI=true \
             -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
-            -e START_RAY_TPU_CLUSTER=true \
             -e TPU_STDERR_LOG_LEVEL=3 \
             -e TPU_MIN_LOG_LEVEL=3 \
             -e PYTHONPATH=/workspace \

@@ -30,10 +30,8 @@ from .executor import (
     versioned,
 )
 from .executor_step_status import (
-    STATUS_CANCELLED,
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_RUNNING,
     STATUS_SUCCESS,
-    STATUS_WAITING,
 )

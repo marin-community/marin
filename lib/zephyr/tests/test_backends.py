@@ -113,7 +113,7 @@ def test_write_jsonl_no_compression_without_gz_extension(tmp_path):
 
 def test_flow_backend_defaults_to_ray_when_initialized():
     """Test that flow_backend returns ray backend when Ray is initialized."""
-    from fray import RayContext
+    from fray.job import RayContext
 
     if ray.is_initialized():
         ray.shutdown()

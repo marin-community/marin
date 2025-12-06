@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.slow("Integration test with training loop")
-def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path):
+def test_train_worker_with_manual_cats_rollout(tmp_path):
     """Test training worker with manually constructed cat-themed rollout batches.
 
     This test validates that the training worker can process rollout batches
@@ -112,7 +112,7 @@ def test_train_worker_with_manual_cats_rollout(ray_tpu_cluster, tmp_path):
 
 
 @pytest.mark.slow("Long-running integration test.")
-def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
+def test_full_integration_moar_cats(tmp_path):
     """Long-running test to validate environment objective improves over time."""
     rollout_storage_config = create_test_rollout_storage_config()
     target_steps = 20
@@ -168,7 +168,7 @@ def test_full_integration_moar_cats(ray_tpu_cluster, tmp_path):
 
 
 @pytest.mark.slow("Long-running integration test.")
-def test_full_integration_moar_cats_vllm(ray_tpu_cluster, tmp_path):
+def test_full_integration_moar_cats_vllm(tmp_path):
     """Long-running test to validate environment objective improves over time."""
     rollout_storage_config = create_test_rollout_storage_config()
     target_steps = 20

@@ -17,7 +17,7 @@
 
 import pytest
 import ray
-from fray.cluster import LocalCluster
+from fray.cluster.local_cluster import LocalCluster, LocalClusterConfig
 
 
 @pytest.fixture(scope="module")
@@ -31,38 +31,19 @@ def ray_cluster():
             ignore_reinit_error=True,
             logging_level="info",
             log_to_driver=True,
+            resources={"head_node": 1},
         )
     yield RayCluster()
-    # Don't shutdown - let pytest handle cleanup
 
 
 @pytest.fixture(scope="module")
 def local_cluster():
-    yield LocalCluster()
+    yield LocalCluster(LocalClusterConfig(use_isolated_env=True))
 
 
 @pytest.fixture(scope="module", params=["local", "ray"])
-def cluster_type(request):
-    return request.param
-
-
-@pytest.fixture
-def cluster(cluster_type, local_cluster, ray_cluster):
-    if cluster_type == "local":
+def cluster(request, local_cluster, ray_cluster):
+    if request.param == "local":
         return local_cluster
-    elif cluster_type == "ray":
+    elif request.param == "ray":
         return ray_cluster
-
-
-@pytest.fixture(params=["sync", "threadpool", "ray"])
-def context_type(request):
-    """Parameterized context type fixture.
-
-    This fixture will run tests with SyncContext, ThreadContext, and RayContext.
-    """
-    if request.param == "ray":
-        import ray
-
-        if not ray.is_initialized():
-            ray.init(ignore_reinit_error=True)
-    return request.param
