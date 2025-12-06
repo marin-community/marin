@@ -30,6 +30,8 @@ from enum import StrEnum, auto
 import typing
 
 from marin.execution.executor import THIS_OUTPUT_PATH
+from marin.processing.classification.deduplication.connected_components import connected_components
+from marin.processing.classification.deduplication.minhash_lsh import minhash_lsh
 from marin.utilities.time_logger import log_time
 import pyarrow as pa
 import pyarrow.json as pa_json
@@ -48,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 class DedupMode(StrEnum):
     DEDUPLICATE = auto()
-    EXACT_DOC_DEDUPLICATE = auto()
+    DOC_DEDUPLICATE = auto()
 
 
 @dataclass(frozen=True)
@@ -169,29 +171,62 @@ def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
 
 
 @dataclass
-class Counters:
+class DupCounters:
+    # TODO (rav): make both method and level Enums
+    method: str
+    level: str
     total: int = 0
+    dups: int = 0
     unique: int = 0
-    unique_dups: int = 0
+    dup_clusters: int = 0
 
-    def __add__(self, other: "Counters") -> "Counters":
-        assert isinstance(other, Counters)
+    def __add__(self, other: "DupCounters") -> "DupCounters":
+        assert isinstance(other, DupCounters)
 
-        return Counters(
+        return DupCounters(
+            method=self.method,
+            level=self.level,
             total=self.total + other.total,
+            dups=self.dups + other.dups,
             unique=self.unique + other.unique,
-            unique_dups=self.unique_dups + other.unique_dups,
+            dup_clusters=self.dup_clusters + other.dup_clusters,
         )
 
+    def __str__(self) -> str:
+        if self.total == 0:
+            return f"{self.level} total: 0"
+        return (
+            f"{self.method.capitalize()} {self.level.lower()} total: {self.total:,}, "
+            f"dups: {self.dups:,} ({self.dups/self.total:.2%}), unique: {self.unique:,}, "
+            f"dup_clusters: {self.dup_clusters:,}"
+        )
 
-def _compute_dedup_stats(shards: list[str]) -> Counters:
+    def to_dict(self):
+        return {
+            f"dedup/{self.method}/{self.level}/total": self.total,
+            f"dedup/{self.method}/{self.level}/dups": self.dups,
+            f"dedup/{self.method}/{self.level}/unique": self.unique,
+            f"dedup/{self.method}/{self.level}/dup_clusters": self.dup_clusters,
+        }
+
+
+def _compute_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
     with log_time(f"Compute deduplication stats from {len(shards)} shards"):
-        result: Counters = create_backend("threadpool").execute(  # type: ignore[bad-assignment]
+        result: DupCounters = create_backend("threadpool").execute(  # type: ignore[bad-assignment]
             Dataset.from_list(shards)
             .load_parquet()
             .select("cnt")
-            .map(lambda c: Counters(total=c["cnt"], unique=int(c["cnt"] == 1), unique_dups=int(c["cnt"] > 1)))
-            .reduce(partial(sum, start=Counters()))
+            .map(
+                lambda c: DupCounters(
+                    method=method,
+                    level=level,
+                    total=c["cnt"],
+                    dups=c["cnt"] if c["cnt"] > 1 else 0,
+                    unique=int(c["cnt"] == 1),
+                    dup_clusters=int(c["cnt"] > 1),
+                )
+            )
+            .reduce(partial(sum, start=DupCounters(method=method, level=level)))
         )[0]
     return result
 
@@ -266,17 +301,11 @@ def _run_deduplication(config: DedupeConfig):
         )
     )
 
-    cnts = _compute_dedup_stats(duplicate_key_shards)
-    logger.info(f"Stats: {cnts.total=:,} paragraphs, {cnts.unique=:,} unique, {cnts.unique_dups=:,} dups.")
+    exact_cnts = _compute_dedup_stats(duplicate_key_shards, method="exact", level="paragraph")
+    logger.info(str(exact_cnts))
 
     if wandb.run:
-        wandb.log(
-            {
-                "dedup/total": cnts.total,
-                "dedup/unique": cnts.unique,
-                "dedup/unique_dups": cnts.unique_dups,
-            }
-        )
+        wandb.log(exact_cnts.to_dict())
 
     def mark_exact_dups_paragraphs(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         """Mark duplicate paragraphs in a single record using exact hash matching."""
@@ -311,17 +340,48 @@ def _run_deduplication(config: DedupeConfig):
     if wandb.run:
         wandb.finish()
 
-    return {
-        "success": True,
-        "mode": "deduplication",
-        "level": "paragraph",
-        "total": cnts.total,
-        "unique": cnts.unique,
-        "unique_dups": cnts.unique_dups,
-    }
+    return {"success": True, "mode": "deduplication"} | exact_cnts.to_dict()
 
 
-def _run_exact_doc_deduplication(config: DedupeConfig):
+def _compute_fuzzy_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
+    with log_time(f"Compute fuzzy deduplication stats from {len(shards)} shards"):
+        result: DupCounters = create_backend("threadpool").execute(  # type: ignore[bad-assignment]
+            Dataset.from_list(shards)
+            .flat_map(load_parquet)
+            .group_by(
+                key=lambda r: r["component_id"],
+                reducer=lambda _, items: DupCounters(
+                    method=method,
+                    level=level,
+                    total=(total := sum(1 for _ in items)),
+                    dups=total if total > 1 else 0,
+                    unique=1,
+                    dup_clusters=int(total > 1),
+                ),
+            )
+            .reduce(partial(sum, start=DupCounters(method=method, level=level)))
+        )[0]
+    return result
+
+
+def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
+    if not shards:
+        logger.warning("No fuzzy duplicate documents found.")
+        return {}
+
+    # Map record ID -> is duplicate (bool)
+    shard_dup_map = {}
+
+    def add_to_dup_map(record: dict):
+        shard_dup_map[record["id"]] = record["fuzzy_duplicate"]
+
+    with log_time(f"Load fuzzy duplicate map from {len(shards)} shards"):
+        create_backend("threadpool").execute(Dataset.from_list(shards).flat_map(load_parquet).map(add_to_dup_map))
+
+    return shard_dup_map
+
+
+def _run_doc_deduplication(config: DedupeConfig):
     """
     Exact document deduplication: identify duplicate documents based on full text hash.
     This is a temporary implementation, primarily to compare directly with the Ai2 duplodocus.
@@ -362,22 +422,46 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
         )
     )
 
-    cnts = _compute_dedup_stats(duplicate_key_shards)
-    logger.info(f"Stats: {cnts.total=:,} documents, {cnts.unique=:,} unique, {cnts.unique_dups=:,} dups.")
+    exact_cnts = _compute_dedup_stats(duplicate_key_shards, method="exact", level="document")
+    logger.info(str(exact_cnts))
 
-    if wandb.run:
-        wandb.log(
-            {
-                "dedup/total": cnts.total,
-                "dedup/unique": cnts.unique,
-                "dedup/unique_dups": cnts.unique_dups,
+    doc_minhash_lsh = minhash_lsh(
+        Dataset.from_list(input_files)
+        .flat_map(load_file)
+        .reshard(num_shards=config.processes if len(input_files) < 42 else None)
+    )
+    converged, cc_files = connected_components(
+        doc_minhash_lsh, backend=backend, output_dir=f"{config.output_path}/metadata/cc"
+    )
+    # NOTE: it's probably fine if this doesn't converge in general, but for now we assert
+    assert converged, "Connected components did not converge!"
+    fuzzy_dup_shards = backend.execute(
+        Dataset.from_list(cc_files)
+        .flat_map(load_file)
+        .map(
+            lambda r: {
+                "id": r["node_id"]["record_id"],
+                "fuzzy_duplicate": r["component_id"] != r["node_id"]["record_id_norm"],
             }
         )
+        .reshard(num_shards=42)
+        .write_parquet(f"{config.output_path}/metadata/fuzzy-dup-key-{{shard:05d}}-of-{{total:05d}}.parquet")
+    )
+
+    fuzzy_cnt = _compute_fuzzy_dedup_stats(cc_files, method="fuzzy", level="document")
+    logger.info(str(fuzzy_cnt))
+
+    assert (
+        exact_cnts.total == fuzzy_cnt.total
+    ), f"Exact ({exact_cnts.total}) and fuzzy ({fuzzy_cnt.total}) dedup counts do not match!"
+
+    if wandb.run:
+        wandb.log(exact_cnts.to_dict() | fuzzy_cnt.to_dict())
 
     def mark_exact_dups_documents(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         """Mark exact duplicate documents using exact hash matching."""
-
         dup_map = _load_dupe_map_shard(duplicate_key_shards)
+        fuzzy_dup_map = _load_fuzzy_dupe_map_shard(fuzzy_dup_shards)
 
         for batch in batches:
             prepared_batch = dupekit.transform(
@@ -389,16 +473,19 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
                     ),
                 ],
             )
-            yield dupekit.mark_document_duplicates(prepared_batch, dup_map, config.attribute_name, hash_col="hash")
+            b = dupekit.mark_document_duplicates(prepared_batch, dup_map, config.attribute_name, hash_col="hash")
+            for r in b.to_pylist():
+                is_fuzzy_dup = fuzzy_dup_map.get(r["id"], False)
+                # TODO: accept fuzzy_duplicate as config option?
+                r["attributes"]["fuzzy_duplicate"] = is_fuzzy_dup
+                yield r
 
     base_path = _find_base_path(config.input_path, input_files)
     backend.execute(
         Dataset.from_list(input_files).flat_map(_load_batches)
         # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
         # the shards of the input files for rebase_file_path to work correctly.
-        .map_shard(mark_exact_dups_documents)
-        .flat_map(lambda batch: batch.to_pylist())
-        .write_jsonl(
+        .map_shard(mark_exact_dups_documents).write_jsonl(
             output_pattern=lambda shard_idx, total: rebase_file_path(
                 base_path,
                 input_files[shard_idx],
@@ -413,22 +500,15 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
     if wandb.run:
         wandb.finish()
 
-    return {
-        "success": True,
-        "mode": "exact_doc_deduplication",
-        "level": "document",
-        "total": cnts.total,
-        "unique": cnts.unique,
-        "unique_dups": cnts.unique_dups,
-    }
+    return {"success": True, "mode": "exact_doc_deduplication"} | exact_cnts.to_dict() | fuzzy_cnt.to_dict()
 
 
 def deduplicate(config: DedupeConfig):
     """Main entry point for deduplication workflows."""
     if config.mode == DedupMode.DEDUPLICATE:
         return _run_deduplication(config)
-    elif config.mode == DedupMode.EXACT_DOC_DEDUPLICATE:
-        return _run_exact_doc_deduplication(config)
+    elif config.mode == DedupMode.DOC_DEDUPLICATE:
+        return _run_doc_deduplication(config)
     else:
         raise ValueError(f"Unknown mode {config.mode}")
 
