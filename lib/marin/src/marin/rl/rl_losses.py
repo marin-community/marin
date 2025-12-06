@@ -74,8 +74,8 @@ def compute_metadata_metrics(
 
     max_ratio_diff = jnp.max(jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array)) * loss_masks_array)
     return {
-        "max_ratio_difference": Metric.from_value(max_ratio_diff.astype(jnp.float32), ReductionType.MAX),
-        "mean_ratio_difference": Metric.from_value(mean_ratio_difference.astype(jnp.float32), ReductionType.MEAN),
+        "trainer_sampler_prob_diff_max": Metric.from_value(max_ratio_diff.astype(jnp.float32), ReductionType.MAX),
+        "trainer_sampler_prob_diff_mean": Metric.from_value(mean_ratio_difference.astype(jnp.float32), ReductionType.MEAN),
         "current_entropy": Metric.from_value(current_entropy.astype(jnp.float32), ReductionType.MEAN),
         "max_advantages": Metric.from_value(jnp.max(loss_weights_array).astype(jnp.float32), ReductionType.MAX),
         "mean_advantages": Metric.from_value(mean_advantages.astype(jnp.float32), ReductionType.MEAN),
