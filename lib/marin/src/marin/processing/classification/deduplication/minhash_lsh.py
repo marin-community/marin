@@ -16,8 +16,8 @@ from collections.abc import Iterator
 import struct
 from typing import Any, TypeVar, TypedDict
 from dupekit import hash_xxh3_128
-from marin.processing.classification.deduplication.minhash import minhash
 from marin.processing.classification.deduplication.text_cleaning import clean_text
+from marin.processing.classification.deduplication.vendor.datasketch.minhash import MinHash
 from zephyr.dataset import Dataset
 
 T = TypeVar("T")
@@ -56,10 +56,10 @@ def minhash_lsh(
         vector_length % num_bands == 0
     ), f"vector_length must be divisible by num_bands, got {vector_length} and {num_bands}"
 
-    return ds.flat_map(lambda record: _minhash_lsh(record, vector_length, num_bands, shingle_size))
+    return ds.map_shard(lambda records: _minhash_lsh(records, vector_length, num_bands, shingle_size))
 
 
-def _extract_char_shingles(text: str, shingle_size: int) -> set[str]:
+def _extract_char_shingles(text: str, shingle_size: int) -> set[bytes]:
     """
     Extract character shingles from text.
 
@@ -72,34 +72,45 @@ def _extract_char_shingles(text: str, shingle_size: int) -> set[str]:
     """
     if len(text) < shingle_size:
         # For very short text, return the text itself as a single shingle
-        return {text} if text else set()
+        return {text.encode()} if text else set()
 
-    return {text[i : i + shingle_size] for i in range(len(text) - shingle_size + 1)}
+    return {(text[i : i + shingle_size]).encode() for i in range(len(text) - shingle_size + 1)}
 
 
 def _minhash_lsh(
-    record: MinHashLshInputRecord, vector_length: int, num_bands: int, shingle_size: int
+    records: Iterator[MinHashLshInputRecord], vector_length: int, num_bands: int, shingle_size: int
 ) -> Iterator[MinHashLshOutputRecord]:
-    text = record["text"]
-    record_id = record.get("id")
-    if record_id is None:
-        raise ValueError(f"Record missing required 'id' field: {record}")
 
-    text = clean_text(text)
+    min_hash = MinHash(num_perm=vector_length)
 
-    # Extract character shingles instead of word unigrams
-    shingles = _extract_char_shingles(text, shingle_size)
+    def _get_shingles(records: Iterator[MinHashLshInputRecord]) -> Iterator[tuple[set[bytes], Any]]:
+        for record in records:
+            text = record["text"]
+            record_id = record.get("id")
+            if record_id is None:
+                raise ValueError(f"Record missing required 'id' field: {record}")
 
-    sig = minhash(shingles, vector_length=vector_length)
+            text = clean_text(text)
 
-    rows_per_band = len(sig) // num_bands
+            shingles = _extract_char_shingles(text, shingle_size)
 
-    for band in range(num_bands):
-        start = band * rows_per_band
-        end = start + rows_per_band
+            yield shingles, record_id
 
-        bucket = sig[start:end]
-        bucket_bytes = struct.pack(f"{len(bucket)}d", *bucket)
-        bucket_hash = str(hash_xxh3_128(bucket_bytes))
+    for shingles, record_id in _get_shingles(records):
+        # NOTE: this is the method used in datasketch MinHash.generator
+        _m = min_hash.copy()
+        _m.update_batch(shingles)
+        sig = _m.digest().tolist()
 
-        yield {"bucket": bucket_hash, "id": record_id}
+        rows_per_band = len(sig) // num_bands
+
+        for band in range(num_bands):
+            start = band * rows_per_band
+            end = start + rows_per_band
+
+            bucket = sig[start:end]
+            # TODO: is hashing the bucket necessary here?
+            bucket_bytes = struct.pack(f"{len(bucket)}d", *bucket)
+            bucket_hash = str(hash_xxh3_128(bucket_bytes))
+
+            yield {"bucket": bucket_hash, "id": record_id}
