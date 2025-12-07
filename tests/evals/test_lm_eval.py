@@ -13,12 +13,22 @@
 # limitations under the License.
 
 
-import pytest
+import time
 
-from experiments.evals.task_configs import EvalTaskConfig
+import pytest
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.run import evaluate
+
+from experiments.evals.task_configs import EvalTaskConfig
+
+
+@pytest.fixture
+def current_date_time():
+    # Get the current local time and format as MM-DD-YYYY-HH-MM-SS
+    formatted_time = time.strftime("%m-%d-%Y-%H-%M-%S", time.localtime())
+
+    return formatted_time
 
 
 @pytest.fixture

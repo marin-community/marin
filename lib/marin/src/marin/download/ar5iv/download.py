@@ -40,7 +40,6 @@ logger = logging.getLogger(__name__)
 class DownloadConfig:
     input_path: str
     output_path: str
-    chunk_size: int = 20 * 1024 * 1024  # 20MB - not heavily used now, but left for compatibility
     max_files: int | None = None  # Maximum number of shards to process
 
 

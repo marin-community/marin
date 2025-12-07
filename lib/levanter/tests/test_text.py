@@ -256,7 +256,6 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
 
         # test the caching
         ds = build_lm_dataset_cache(cache_dir, source, config.format, tokenizer)
-        ds.await_finished()
         ds_sync = ds.as_sync_dataset()
         assert len(ds_sync) == 2
         sample = next(iter(ds))
@@ -337,7 +336,6 @@ def test_supervised_processor_and_cache(dummy_supervised_file, hf_tokenizer):
 
         source = cfg.get_shard_source("train")
         ds_cache = build_lm_dataset_cache(tmpdir, source, cfg.format, hf_tokenizer)
-        ds_cache.await_finished()
 
         # there are two separate items, one per line
         sync_ds = ds_cache.as_sync_dataset()

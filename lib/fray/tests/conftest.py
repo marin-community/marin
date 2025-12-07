@@ -17,11 +17,13 @@
 
 import pytest
 import ray
-from fray.cluster import LocalCluster, RayCluster
+from fray.cluster import LocalCluster
 
 
 @pytest.fixture(scope="module")
 def ray_cluster():
+    from fray.cluster.ray import RayCluster
+
     if not ray.is_initialized():
         ray.init(
             address="local",
@@ -52,7 +54,7 @@ def cluster(cluster_type, local_cluster, ray_cluster):
         return ray_cluster
 
 
-@pytest.fixture(params=["sync", "thread", "ray"])
+@pytest.fixture(params=["sync", "threadpool", "ray"])
 def context_type(request):
     """Parameterized context type fixture.
 

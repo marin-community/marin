@@ -37,8 +37,8 @@ import draccus
 import fsspec
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
-from marin.utils import fsspec_mkdirs
-from zephyr import Dataset, atomic_rename, flow_backend, load_jsonl, write_jsonl_file
+from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
+from zephyr import Dataset, flow_backend, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
 
@@ -189,7 +189,6 @@ def create_shard_output_directory(output_filename: str) -> str:
     """
     _, path = fsspec.core.url_to_fs(output_filename)
     protocol = fsspec.core.split_protocol(output_filename)[0]
-
     path_without_suffix = Path(path)
     while path_without_suffix.suffix:
         path_without_suffix = path_without_suffix.with_suffix("")
@@ -275,6 +274,10 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
 
         # 3. For each split, enumerate shards
         for split in splits:
+            subset_name = subset or "default"
+            subset_output_path = get_shard_dir(cfg.output_path, subset_name, split)
+            output_path = create_shard_output_directory(subset_output_path)
+
             dataset_kwargs: dict[str, object] = {
                 "path": source,
                 "split": split,
@@ -284,14 +287,14 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
             if subset not in (None, "default"):
                 dataset_kwargs["name"] = subset
 
-            dataset = datasets.load_dataset(**dataset_kwargs)
+            dataset = load_dataset_with_backoff(
+                context=f"{source} subset={subset_name} split={split}",
+                logger=logger,
+                **dataset_kwargs,
+            )
             num_shards = dataset.num_shards
             if not num_shards:
                 raise ValueError(f"Streaming dataset {source} subset={subset} split={split} does not expose num_shards.")
-
-            subset_name = subset or "default"
-            subset_output_path = get_shard_dir(cfg.output_path, subset_name, split)
-            output_path = create_shard_output_directory(subset_output_path)
 
             # Yield a task for each shard
             for shard_idx in range(num_shards):
@@ -316,7 +319,24 @@ def process_shard_task(task: ShardTask) -> dict:
     if adapter is None:
         raise ValueError("Transform configuration requires an adapter.")
 
+    subset_name = task.subset or "default"
     output_filename = _shard_filename(task.output_path, task.shard_idx)
+
+    # If output already exists, skip the work to let Zephyr resume cleanly without sentinels.
+    fs, _ = fsspec.core.url_to_fs(output_filename)
+    if fs.exists(output_filename):
+        logging.info(
+            f"Skipping subset={subset_name} split={task.split} shard={task.shard_idx} "
+            f"because output exists: {output_filename}"
+        )
+        return {
+            "subset": subset_name,
+            "split": task.split,
+            "shard_idx": task.shard_idx,
+            "path": output_filename,
+            "count": 0,
+            "skipped": True,
+        }
 
     dataset_kwargs: dict[str, object] = {
         "path": task.source,
@@ -327,7 +347,11 @@ def process_shard_task(task: ShardTask) -> dict:
     if task.subset not in (None, "default"):
         dataset_kwargs["name"] = task.subset
 
-    dataset = datasets.load_dataset(**dataset_kwargs)
+    dataset = load_dataset_with_backoff(
+        context=f"{task.source} subset={subset_name} split={task.split} shard={task.shard_idx}",
+        logger=logger,
+        **dataset_kwargs,
+    )
     shard_dataset = dataset.shard(num_shards=task.num_shards, index=task.shard_idx)
 
     def transform_records():
@@ -337,10 +361,8 @@ def process_shard_task(task: ShardTask) -> dict:
             if transformed_row is not None:
                 yield transformed_row.model_dump()
 
-    with atomic_rename(output_filename) as tmp_filename:
-        result = write_jsonl_file(transform_records(), tmp_filename)
+    result = write_jsonl_file(transform_records(), output_filename)
 
-    subset_name = task.subset or "default"
     logging.info(
         f"Wrote {result['count']} rows to {result['path']} "
         f"for subset={subset_name} split={task.split} shard={task.shard_idx}"
@@ -389,7 +411,8 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
         total_count = sum(r["count"] for r in shard_results)
         logger.info(f"Wrote {total_count} records to {len(shard_results)} shards ({subset}/{split})")
         for shard in sorted(shard_results, key=lambda x: x["shard_idx"]):
-            logger.info(f"  - {shard['path']}: {shard['count']} records (shard {shard['shard_idx']})")
+            skipped_suffix = " (skipped)" if shard.get("skipped") else ""
+            logger.info(f"  - {shard['path']}: {shard['count']} records (shard {shard['shard_idx']}){skipped_suffix}")
 
     return cfg.output_path
 

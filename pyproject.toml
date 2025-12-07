@@ -14,6 +14,7 @@ dependencies = [
     "zephyr",
     "haliax",
     "fray",
+    "dupekit"
 ]
 
 [tool.uv]
@@ -29,7 +30,8 @@ members = [
     "lib/levanter",
     "lib/zephyr",
     "lib/haliax",
-    "lib/fray"
+    "lib/fray",
+    "lib/dupekit"
 ]
 
 [tool.uv.sources]
@@ -38,6 +40,7 @@ haliax.workspace = true
 levanter.workspace = true
 marin.workspace = true
 zephyr.workspace = true
+dupekit.workspace = true
 
 [tool.black]
 line-length = 121
@@ -177,5 +180,5 @@ markers = [
 ]
 testpaths = ["tests", "experiments"]
 
-# Make sure we timeout before CI kills us, and don't run TPU tests by default
-addopts = "--session-timeout=500 -m 'not tpu_ci'"
+# Make sure we timeout before CI kills us, and don't run TPU or slow tests by default
+addopts = "--session-timeout=500 -m 'not tpu_ci' -m 'not slow'"

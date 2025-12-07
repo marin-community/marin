@@ -17,37 +17,40 @@ Deduplication using rbloom bloom filters and zephyr streaming.
 
 This module provides three deduplication workflows:
 1. DEDUPLICATE: Remove duplicate paragraphs within a dataset
-2. DECONTAMINATE: Mark paragraphs that appear in a contamination source
-3. TRAIN_TEST_OVERLAP: Detect train-test overlap using n-gram matching
+2. EXACT_DOC_DEDUPLICATE: Remove duplicate documents based on full text hash
+3. DECONTAMINATE: Mark paragraphs that appear in a contamination source
+4. TRAIN_TEST_OVERLAP: Detect train-test overlap using n-gram matching
 
 All workflows use rbloom bloom filters for efficient duplicate detection.
 """
 
+from functools import partial
 import hashlib
 import logging
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum, auto
+import typing
 
+from marin.execution.executor import THIS_OUTPUT_PATH
+
+from marin.utilities.time_logger import log_time
+import pyarrow as pa
+import pyarrow.json as pa_json
 import draccus
 import fsspec
 import msgspec
+
 from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import Dataset, flow_backend, load_parquet
-from zephyr.readers import load_file
-
-# handle optional rbloom dependency for dry runs.
-try:
-    from rbloom import Bloom
-except ImportError:
-
-    class Bloom:
-        def __init__(self, *args, **kwargs):
-            raise ImportError("rbloom is required for deduplication. Please install rbloom.")
-
+from zephyr.backend_factory import create_backend
+from zephyr.readers import load_file, open_file, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
+
+if typing.TYPE_CHECKING:
+    from dupekit import Bloom
 
 
 def _bloom_hash(x: str) -> int:
@@ -56,10 +59,11 @@ def _bloom_hash(x: str) -> int:
     return int.from_bytes(hashlib.blake2b(x.encode(), digest_size=8).digest(), "big")
 
 
-class DedupMode(str, Enum):
-    DECONTAMINATE = "decontaminate"
-    DEDUPLICATE = "deduplicate"
-    TRAIN_TEST_OVERLAP = "train_test_overlap"
+class DedupMode(StrEnum):
+    DECONTAMINATE = auto()
+    DEDUPLICATE = auto()
+    EXACT_DOC_DEDUPLICATE = auto()
+    TRAIN_TEST_OVERLAP = auto()
 
 
 @dataclass
@@ -88,7 +92,7 @@ class NGramConfig:
     overlap_threshold: float = 0.7
 
 
-@dataclass
+@dataclass(frozen=True)
 class DedupeConfig:
     """
     Configuration class for running deduplication on docs using Zephyr.
@@ -112,8 +116,10 @@ class DedupeConfig:
         text_field (str): field to use for text content in Parquet files
     """
 
+    # TODO (rav): had to make this optional to avoid default argument issues in dataclass, what is the
+    #   best way to handle this in marin and draccus?
     input_path: str | list[str]
-    output_path: str
+    output_path: str = THIS_OUTPUT_PATH
     attribute_name: str = "duplicate_text"
     min_length: int = 0
     min_words: int = 0
@@ -171,7 +177,7 @@ def extract_features(text: str, ngram_config: NGramConfig | None) -> Iterator[st
             yield para
 
 
-def collect_input_files(input_path: str | list[str]) -> list[str]:
+def _collect_input_files(input_path: str | list[str]) -> list[str]:
     """
     Given an input path or list of paths, collect all matching files (jsonl, parquet, etc).
     """
@@ -186,6 +192,7 @@ def collect_input_files(input_path: str | list[str]) -> list[str]:
             if not path.endswith(("jsonl", "jsonl.gz", "jsonl.zst", "parquet")):
                 raise FileNotFoundError(f"No files found in path: {path}")
             all_files.append(path)  # Assume it's a single file
+    assert all_files, "No input files found for deduplication."
     return all_files
 
 
@@ -208,6 +215,7 @@ def build_filter(
     Returns:
         Path to saved bloom filter
     """
+    from dupekit import Bloom
 
     def build_shard_bloom(records: Iterator[dict]) -> Iterator[bytes]:
         """Build bloom filter from a shard of records and yield serialized bytes."""
@@ -220,7 +228,7 @@ def build_filter(
 
         yield bf.save_bytes()
 
-    all_files = collect_input_files(input_path)
+    all_files = _collect_input_files(input_path)
     logger.info(f"Building bloom filter from {all_files} into {bloom_path}")
 
     # Build bloom filters for all shards in parallel
@@ -257,7 +265,7 @@ def build_filter(
     return merged_bloom[0]
 
 
-def calculate_paragraph_overlap(paragraph: str, bloom_filter: Bloom, ngram_config: NGramConfig | None) -> float:
+def calculate_paragraph_overlap(paragraph: str, bloom_filter: "Bloom", ngram_config: NGramConfig | None) -> float:
     """
     Calculate overlap score for a paragraph against a bloom filter.
 
@@ -295,6 +303,13 @@ def _record_id(record: dict) -> str:
         return str(_bloom_hash(s))
 
 
+def _get_extension(file_path: str) -> str:
+    for ext in sorted(SUPPORTED_EXTENSIONS, key=len, reverse=True):
+        if file_path.endswith(ext):
+            return ext
+    raise ValueError(f"Unsupported extension: {file_path}.")
+
+
 def mark_duplicates_bloom(
     input_path: str | list[str],
     bloom_path: str,
@@ -316,9 +331,11 @@ def mark_duplicates_bloom(
     Returns:
         List of output file paths
     """
+    from dupekit import Bloom
+
     # Determine base path for rebasing
     base_path = input_path[0] if isinstance(input_path, list) else input_path
-    all_files = collect_input_files(input_path)
+    all_files = _collect_input_files(input_path)
 
     def process_shard_with_bloom(records: Iterator[dict]) -> Iterator[dict]:
         """Load bloom filter once per shard and mark duplicates."""
@@ -357,7 +374,9 @@ def mark_duplicates_bloom(
             .flat_map(load_file)
             .map_shard(process_shard_with_bloom)
             .write_jsonl(
-                output_pattern=lambda shard_idx, total: rebase_file_path(base_path, all_files[shard_idx], output_path),
+                output_pattern=lambda shard_idx, total: rebase_file_path(
+                    base_path, all_files[shard_idx], output_path, old_extension=_get_extension(all_files[shard_idx])
+                ),
                 skip_existing=True,
             )
         )
@@ -365,87 +384,170 @@ def mark_duplicates_bloom(
     return result
 
 
-def _str_hash(s: str) -> str:
-    return hashlib.blake2b(s.encode(), digest_size=8).hexdigest()
+#
+# TODO (rav): move the deduplication specific logic/functions to dupekit
+#
+
+
+def _load_batches(file_path: str, columns: list[str] | None = None, **parquet_kwargs) -> Iterator[pa.RecordBatch]:
+    # Private function for now to isolate the `pa.RecordBatch` experiment
+    if not file_path.endswith(SUPPORTED_EXTENSIONS):
+        raise ValueError(f"Unsupported extension: {file_path}.")
+    with open_file(file_path, "rb") as f:
+        if file_path.endswith(".parquet"):
+            import pyarrow.parquet as pq
+
+            if columns is not None:
+                parquet_kwargs = {**parquet_kwargs, "columns": columns}
+
+            parquet_file = pq.ParquetFile(f)
+            yield from parquet_file.iter_batches(**parquet_kwargs)
+        else:
+            yield from pa_json.read_json(f).to_batches()
+
+
+def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
+    shard_dup_map = {}
+
+    def add_to_dup_map(record: dict):
+        shard_dup_map[record["hash"]] = {"canonical": record["canonical"]}
+
+    with log_time(f"Load duplicate map from {len(shards)} shards"):
+        create_backend("threadpool").execute(
+            Dataset.from_list(shards)
+            .flat_map(lambda p: load_parquet(p, columns=["hash", "canonical"]))
+            # NOTE: would be nice if Zephyr could optimize the predicate pushdown for Parquet
+            .filter(lambda record: record["hash"] is not None)
+            .map(add_to_dup_map)
+        )
+
+    return shard_dup_map
+
+
+@dataclass
+class Counters:
+    total: int = 0
+    unique: int = 0
+    unique_dups: int = 0
+
+    def __add__(self, other: "Counters") -> "Counters":
+        assert isinstance(other, Counters)
+
+        return Counters(
+            total=self.total + other.total,
+            unique=self.unique + other.unique,
+            unique_dups=self.unique_dups + other.unique_dups,
+        )
+
+
+def _compute_dedup_stats(shards: list[str]) -> Counters:
+    with log_time(f"Compute deduplication stats from {len(shards)} shards"):
+        result: Counters = create_backend("threadpool").execute(  # type: ignore[bad-assignment]
+            Dataset.from_list(shards)
+            .flat_map(lambda p: load_parquet(p, columns=["cnt"]))
+            .map(lambda c: Counters(total=c["cnt"], unique=int(c["cnt"] == 1), unique_dups=int(c["cnt"] > 1)))
+            .reduce(partial(sum, start=Counters()))
+        )[0]
+    return result
+
+
+class DupeReduceResult(typing.TypedDict):
+    hash: str | None
+    cnt: int
+    canonical: str | None
+
+
+def _count_reduce(key: str, items: Iterator[pa.StructScalar], *, canonical_id: str) -> DupeReduceResult:
+    head = next(items)
+    doc_cnt = sum(map(lambda _: 1, items)) + 1
+    if doc_cnt == 1:
+        return {
+            "hash": None,
+            "cnt": 1,
+            "canonical": None,
+        }
+
+    return {
+        "hash": key,
+        "cnt": doc_cnt,
+        "canonical": head[canonical_id],
+    }
+
+
+def _find_base_path(input_path: str | list[str], input_files: list[str]) -> str:
+    # Determine base path for rebasing
+    base_path = input_path[0] if isinstance(input_path, list) else input_path
+    if base_path in input_files:
+        # NOTE: if the base_path is in the input_files, means it's a specific file, so rebase to its directory
+        base_path = os.path.dirname(base_path)
+    return base_path
 
 
 def _run_deduplication(config: DedupeConfig):
-    input_files = collect_input_files(config.input_path)
+    import dupekit
+    from dupekit import Transformation
 
-    def _compute_hash(record: dict) -> Iterator[dict]:
-        text = record.get(config.text_field, "")
-        paras = text.split("\n")
-        record_id = _record_id(record)
-        for para in paras:
-            yield {
-                "hash": _str_hash(para),
-                "id": record_id,
-            }
+    input_files = _collect_input_files(config.input_path)
 
-    def _count_reduce(key, items):
-        items = list(items)
-        if len(items) <= 1:
-            return None  # Not a duplicate
+    backend = flow_backend(max_parallelism=config.processes)
 
-        return {
-            "hash": key,
-            "canonical": items[0]["id"],
-        }
+    def compute_paragraph_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
+        pipeline = [
+            Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
+            Transformation.SplitParagraphs(text_col=config.text_field, id_col="resolved_id"),
+            Transformation.Hash(input_col="paragraph_text", output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128),
+            Transformation.SelectColumns(columns=["hash", "doc_id"]),
+        ]
+        return dupekit.transform(batch, pipeline)
 
     # first compute the full set of duplicate keys.
     duplicate_key_shards = list(
-        flow_backend().execute(
-            Dataset.from_list(input_files)
-            .flat_map(load_file)
-            .flat_map(_compute_hash)
+        backend.execute(
+            Dataset.from_list(input_files).flat_map(_load_batches)
+            # NOTE: when do we want to trigger reshard. Keep in mind that reshard will materialize the
+            #   text field!
+            # TODO: the resharding logic should be improved, based on size and/or max_parallelism
+            .reshard(num_shards=config.processes if len(input_files) > 3 and len(input_files) < 42 else None)
+            .map(compute_paragraph_hashes)
+            .flat_map(lambda batch: batch.to_pylist())
             .group_by(
                 lambda key_fn: key_fn["hash"],
-                _count_reduce,
+                partial(_count_reduce, canonical_id="doc_id"),
+                num_output_shards=42,
             )
-            .filter(lambda record: record)
-            .reshard(1)
-            .write_parquet(f"{config.output_path}/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
+            .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
             verbose=True,
         )
     )
 
-    # Determine base path for rebasing
-    base_path = config.input_path[0] if isinstance(config.input_path, list) else config.input_path
+    cnts = _compute_dedup_stats(duplicate_key_shards)
+    logger.info(f"Stats: {cnts.total=:,} paragraphs, {cnts.unique=:,} unique, {cnts.unique_dups=:,} dups.")
 
-    # Load duplicate map once (will be captured in closure)
-    logger.info("Loading duplicate map")
-    dup_map = {}
-    for record in load_parquet(duplicate_key_shards[0]):
-        dup_map[record["hash"]] = {
-            "canonical": record["canonical"],
-        }
-
-    def mark_exact_dups(record: dict) -> dict:
+    def mark_exact_dups_paragraphs(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         """Mark duplicate paragraphs in a single record using exact hash matching."""
-        record_id = _record_id(record)
-        spans = []
-        offset = 0
-        paras = record.get(config.text_field, "").split("\n")
-        for para in paras:
-            hash_val = _str_hash(para)
-            if hash_val in dup_map:
-                if record_id != dup_map[hash_val]["canonical"]:
-                    spans.append([offset, offset + len(para), 1.0])
-            offset = offset + len(para) + 1  # +1 for newline
 
-        return {
-            "id": record_id,
-            "attributes": {config.attribute_name: spans},
-        }
+        dup_map = _load_dupe_map_shard(duplicate_key_shards)
 
-    # Use write_jsonl with callable output pattern
-    flow_backend().execute(
+        for batch in batches:
+            yield dupekit.mark_paragraph_duplicates(
+                batch,
+                dup_map,
+                config.attribute_name,
+                algorithm=dupekit.HashAlgorithm.Xxh3_128,
+            )
+
+    base_path = _find_base_path(config.input_path, input_files)
+    backend.execute(
         Dataset.from_list(input_files)
-        .flat_map(load_file)
-        .map(mark_exact_dups)
+        .flat_map(_load_batches)
+        .map_shard(mark_exact_dups_paragraphs)
+        .flat_map(lambda batch: batch.to_pylist())
         .write_jsonl(
             output_pattern=lambda shard_idx, total: rebase_file_path(
-                base_path, input_files[shard_idx], config.output_path
+                base_path,
+                input_files[shard_idx],
+                f"{config.output_path}/data",
+                old_extension=_get_extension(input_files[shard_idx]),
             ),
             skip_existing=True,
         )
@@ -454,6 +556,99 @@ def _run_deduplication(config: DedupeConfig):
     return {
         "success": True,
         "mode": "deduplication",
+        "level": "paragraph",
+        "total": cnts.total,
+        "unique": cnts.unique,
+        "unique_dups": cnts.unique_dups,
+    }
+
+
+def _run_exact_doc_deduplication(config: DedupeConfig):
+    """
+    Exact document deduplication: identify duplicate documents based on full text hash.
+    This is a temporary implementation, primarily to compare directly with the Ai2 duplodocus.
+    """
+    import dupekit
+    from dupekit import Transformation
+
+    input_files = _collect_input_files(config.input_path)
+
+    backend = flow_backend(max_parallelism=config.processes)
+
+    def compute_document_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
+        pipeline = [
+            Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
+            Transformation.Hash(input_col=config.text_field, output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128),
+            Transformation.SelectColumns(columns=["hash", "resolved_id"]),
+        ]
+        return dupekit.transform(batch, pipeline)
+
+    # first compute the full set of duplicate keys.
+    duplicate_key_shards = list(
+        backend.execute(
+            Dataset.from_list(input_files).flat_map(_load_batches)
+            # NOTE: when do we want to trigger reshard. Keep in mind that reshard will materialize the
+            #   text field!
+            # TODO: the resharding logic should be improved, based on size and/or max_parallelism
+            .reshard(num_shards=config.processes if len(input_files) > 3 and len(input_files) < 42 else None)
+            .map(compute_document_hashes)
+            .flat_map(lambda batch: batch.to_pylist())
+            .group_by(
+                lambda key_fn: key_fn["hash"],
+                partial(_count_reduce, canonical_id="resolved_id"),
+                num_output_shards=42,
+            )
+            .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
+            verbose=True,
+        )
+    )
+
+    cnts = _compute_dedup_stats(duplicate_key_shards)
+    logger.info(f"Stats: {cnts.total=:,} documents, {cnts.unique=:,} unique, {cnts.unique_dups=:,} dups.")
+
+    def mark_exact_dups_documents(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
+        """Mark exact duplicate documents using exact hash matching."""
+
+        dup_map = _load_dupe_map_shard(duplicate_key_shards)
+
+        for batch in batches:
+            prepared_batch = dupekit.transform(
+                batch,
+                [
+                    Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="id"),
+                    Transformation.Hash(
+                        input_col=config.text_field, output_col="hash", algo=dupekit.HashAlgorithm.Xxh3_128
+                    ),
+                ],
+            )
+            yield dupekit.mark_document_duplicates(prepared_batch, dup_map, config.attribute_name, hash_col="hash")
+
+    base_path = _find_base_path(config.input_path, input_files)
+    backend.execute(
+        Dataset.from_list(input_files).flat_map(_load_batches)
+        # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
+        # the shards of the input files for rebase_file_path to work correctly.
+        .map_shard(mark_exact_dups_documents)
+        .flat_map(lambda batch: batch.to_pylist())
+        .write_jsonl(
+            output_pattern=lambda shard_idx, total: rebase_file_path(
+                base_path,
+                input_files[shard_idx],
+                f"{config.output_path}/data",
+                old_extension=_get_extension(input_files[shard_idx]),
+            ),
+            skip_existing=True,
+        ),
+        verbose=True,
+    )
+
+    return {
+        "success": True,
+        "mode": "exact_doc_deduplication",
+        "level": "document",
+        "total": cnts.total,
+        "unique": cnts.unique,
+        "unique_dups": cnts.unique_dups,
     }
 
 
@@ -538,6 +733,8 @@ def dedupe(config: DedupeConfig):
         return _run_decontamination(config)
     elif config.mode == DedupMode.DEDUPLICATE:
         return _run_deduplication(config)
+    elif config.mode == DedupMode.EXACT_DOC_DEDUPLICATE:
+        return _run_exact_doc_deduplication(config)
     elif config.mode == DedupMode.TRAIN_TEST_OVERLAP:
         return _run_train_test_overlap(config)
     else:
@@ -546,6 +743,8 @@ def dedupe(config: DedupeConfig):
 
 @draccus.wrap()
 def main(config: DedupeConfig):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
     result = dedupe(config)
     print(f"Deduplication completed: {result}")
 
