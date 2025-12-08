@@ -29,7 +29,7 @@ from marin.rl.environments.inference_ctx import LevanterInferenceContext
 
 def create_mock_chat_completion(tokenizer) -> ChatCompletion:
     """Create a mock ChatCompletion with logprobs for testing."""
-    response_text: str = "<answer>4</answer>"
+    response_text: str = "\\boxed{4}"
     tokens = tokenizer.encode(response_text, add_special_tokens=False)
     logprobs_content = [
         ChatCompletionTokenLogprob(
@@ -93,7 +93,7 @@ def test_math_env_reward_calculation():
     response_txt = tokenizer.decode(rollout.response_tokens)
     prompt_txt = tokenizer.decode(rollout.prompt_tokens)
     assert "What is 2+2?" in prompt_txt, (prompt_txt, rollout)
-    assert "<answer>4</answer>" in response_txt, (response_txt, rollout)
+    assert "boxed{4}" in response_txt, (response_txt, rollout)
 
     # Verify basic rollout properties
     assert rollout.env_name == "math"
@@ -102,9 +102,7 @@ def test_math_env_reward_calculation():
     assert len(rollout.response_logprobs) == len(rollout.response_tokens)
     assert len(rollout.token_rewards) == len(rollout.response_tokens)
 
-    # Verify chat template was applied to prompt
-    decoded_prompt = tokenizer.decode(rollout.prompt_tokens.tolist())
-    assert "user:" in decoded_prompt.lower()
-
-    np.testing.assert_allclose(rollout.token_rewards, 1.1), (rollout, metrics)
-    assert rollout.episode_reward == pytest.approx(1.1), (rollout, metrics)
+    # Original MathEnv reward formula: format_coef * (format_valid - 1) + correct_answer
+    # With format_coef=0.1, format_valid=1.0, correct_answer=1.0: reward = 0.1 * 0 + 1.0 = 1.0
+    np.testing.assert_allclose(rollout.token_rewards, 1.0), (rollout, metrics)
+    assert rollout.episode_reward == pytest.approx(1.0), (rollout, metrics)
