@@ -117,15 +117,6 @@ CONFIGS = {
         "tpu_generation": "v4",
         "min_workers": 4,
     },
-    "marin-us-central2-compress": {
-        "NAME": "marin-us-central2-compress",
-        "REGION": "us-central2",
-        "ZONE": "us-central2-b",
-        "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": LATEST,
-        "tpu_generation": "v4",
-        "min_workers": 4,
-    },
     "marin-us-central1": {
         "NAME": "marin-us-central1",
         "REGION": "us-central1",
