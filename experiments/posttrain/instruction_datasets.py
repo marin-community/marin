@@ -266,6 +266,21 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         adapter_name="nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
         use_large_dataset_transform=True,
     ),
+}
+
+for split_name in SMOLTALK2_SPLITS:
+    dataset_key = f"HuggingFaceTB/smoltalk2/{split_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=f"HuggingFaceTB/smoltalk2/{split_name}",
+        hf_dataset_id="HuggingFaceTB/smoltalk2",
+        revision="fc6cc21",
+        adapter=multi_turn_adapter(metadata_remap={"chat_template_kwargs": "chat_template_kwargs"}),
+        metadata_columns=[],
+        subsets=["SFT"],
+        metadata_columns=["category", "license", "generator"],
+        adapter_name="nvidia/Llama-Nemotron-Post-Training-Dataset-v1-SFT",
+        use_large_dataset_transform=True,
+    ),
     "nvidia/Nemotron-Post-Training-Dataset-v2-SFT": InstructionDatasetConfig(
         hf_dataset_id="nvidia/Nemotron-Post-Training-Dataset-v2",
         revision="5c89e01",

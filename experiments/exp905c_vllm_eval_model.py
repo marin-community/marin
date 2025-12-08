@@ -13,13 +13,15 @@
 # limitations under the License.
 
 import logging
+from typing import Iterable, Sequence
 
 from experiments.evals.evals import evaluate_lm_evaluation_harness
-from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.execution.executor import ExecutorStep, executor_main
 from experiments.evals.resource_configs import ResourceConfig
+from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.execution.executor import ExecutorStep, OutputName, executor_main
 
-resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v6e-8", strategy="STRICT_PACK")
+# resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v6e-8", strategy="STRICT_PACK")
+resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v4-64", strategy="STRICT_PACK")
 
 """
 Note for people trying to do evals:
@@ -27,24 +29,28 @@ Note for people trying to do evals:
 - The lm-evaluation-harness library automatically loads evaluation datasets
 - Similar to exp905c_levanter_eval_model.py but uses vLLM instead of Levanter engine
 - The structure follows exp905c_levanter_eval_model.py with EVAL_TASKS, MODELS, and compile_results
-
 """
 EVAL_TASKS = [
+    # EvalTaskConfig("mmlu", num_fewshot=5, task_alias="mmlu_5shot"),
     EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
     # EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime25_0shot"),
 ]
 
-MODELS = [
-    {
-        "name": "qwen2.5-7b-instruct",
-        "path": "gs://marin-us-central2/models/qwen2.5-7b-instruct",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    }
-]
+DEFAULT_GENERATION_PARAMS = {
+    "temperature": 0.7,
+    "top_p": 1.0,
+    "do_sample": True,
+    "n": 1,  # Generate 1 sample per prompt
+    "seed": 42,
+}
+
+DEFAULT_ENGINE_KWARGS = {
+    "max_model_len": 8192,
+    "max_gen_toks": 2048,
+}
 
 
-def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
+def compile_results(eval_steps: Sequence[ExecutorStep], *, step_name: str) -> ExecutorStep:
     """
     Takes in a list of ExecutorSteps for lm-eval tasks and compiles the results into a single DataFrame.
 
@@ -60,7 +66,6 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
     import logging
     import pandas as pd
     import fsspec
-    from marin.execution.executor import InputName, OutputName
 
     logger = logging.getLogger(__name__)
 
@@ -172,35 +177,51 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
         logger.info(f"Compiled results saved to: {results_file}")
 
     # Create input paths and output path
-    input_paths = [step.cd("results.json") for step in steps]
+    input_paths = [step.cd("results.json") for step in eval_steps]
     output_path = OutputName("compiled_results")
 
     return ExecutorStep(
-        name="scratch/chiheem/compile_results",
+        name=step_name,
         fn=_compile_results_fn,
         config={"input_paths": input_paths, "output_path": output_path},
         description="Compile results from multiple lm-eval steps into a single DataFrame",
     )
 
 
-if __name__ == "__main__":
-    # Quiet ray logs for this experiment
-    logging.getLogger("ray").setLevel(logging.WARNING)
+def build_eval_steps(
+    model_config: dict,
+    *,
+    eval_tasks: Iterable[EvalTaskConfig] | None = None,
+    download_steps: Sequence[ExecutorStep] | None = None,
+    generation_params: dict | None = None,
+    engine_kwargs_override: dict | None = None,
+) -> list[ExecutorStep]:
+    """
+    Build executor steps for a single model, including optional download steps,
+    evaluation per task, and result compilation.
+    """
+    tasks = list(eval_tasks) if eval_tasks is not None else EVAL_TASKS
 
-    all_steps = []
+    generation = dict(DEFAULT_GENERATION_PARAMS)
+    if generation_params:
+        generation.update(generation_params)
 
-    for model_config in MODELS:
-        for task in EVAL_TASKS:
-            # Use evaluate_lm_evaluation_harness which handles dataset loading from lm-evaluation-harness
-            engine_kwargs = {
-                "tensor_parallel_size": model_config.get("tensor_parallel_size", 4),
-            }
-            # Ensure that max_model_len > max_gen_toks + prompt len.
-            # Note that max_gen_toks is controlled by lm-eval 
-            engine_kwargs["max_model_len"] = int(32768+2048)
-            engine_kwargs["max_gen_toks"] = int(32768) # No point. It will be overwritten by lm-eval task's yaml config
-            
-            lm_eval_task_step = evaluate_lm_evaluation_harness(
+    steps: list[ExecutorStep] = []
+    if download_steps:
+        steps.extend(download_steps)
+
+    eval_steps: list[ExecutorStep] = []
+    for task in tasks:
+        engine_kwargs = {
+            "tensor_parallel_size": model_config.get("tensor_parallel_size", 4),
+            # "max_model_len": model_config.get("max_model_len", DEFAULT_ENGINE_KWARGS["max_model_len"]),
+            # "max_gen_toks": model_config.get("max_gen_toks", DEFAULT_ENGINE_KWARGS["max_gen_toks"]),
+        }
+        if engine_kwargs_override:
+            engine_kwargs.update(engine_kwargs_override)
+
+        eval_steps.append(
+            evaluate_lm_evaluation_harness(
                 model_config["name"],
                 model_config["path"],
                 evals=[task],
@@ -208,18 +229,38 @@ if __name__ == "__main__":
                 engine_kwargs=engine_kwargs,
                 resource_config=resource_config,
                 apply_chat_template=model_config.get("apply_chat_template", False),
-                generation_params={
-                    "temperature": 0.7,
-                    "top_p": 1.0,
-                    "do_sample": True,
-                    "n": 1,  # Generate 1 sample per prompt
-                    "seed": 42,
-                },
+                generation_params=generation,
             )
-            all_steps.append(lm_eval_task_step)
+        )
 
-    # Add compile results step
-    compile_step = compile_results(all_steps)
-    all_steps.append(compile_step)
+    steps.extend(eval_steps)
+    steps.append(compile_results(eval_steps, step_name=f"{model_config['name']}_compile_results"))
+    return steps
 
-    executor_main(steps=all_steps)
+
+def run_model_eval(
+    model_config: dict,
+    *,
+    eval_tasks: Iterable[EvalTaskConfig] | None = None,
+    download_steps: Sequence[ExecutorStep] | None = None,
+    generation_params: dict | None = None,
+    engine_kwargs_override: dict | None = None,
+) -> None:
+    """
+    Run the vLLM evaluation flow for a single model.
+    """
+    # Quiet ray logs for this experiment
+    logging.getLogger("ray").setLevel(logging.WARNING)
+
+    steps = build_eval_steps(
+        model_config,
+        eval_tasks=eval_tasks,
+        download_steps=download_steps,
+        generation_params=generation_params,
+        engine_kwargs_override=engine_kwargs_override,
+    )
+    executor_main(steps=steps)
+
+
+if __name__ == "__main__":
+    raise SystemExit("Run one of the model-specific scripts: exp905c_vllm_eval_model_*.py")

@@ -506,20 +506,3 @@ register_adapter(
         },
     )
 )
-
-register_adapter(
-    TransformAdapter(
-        source="nvidia/Nemotron-Post-Training-Dataset-v2-SFT",
-        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
-        conversation_column="messages",
-        role_key="role",
-        user_value="user",
-        assistant_value="assistant",
-        system_value="system",
-        content_key="value",
-        special_keys_mapping={
-            "<think>": "<|start_think|>",
-            "</think>": "<|end_think|>",
-        },
-    )
-)
