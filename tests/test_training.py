@@ -17,12 +17,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from fray.cluster import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.distributed import RayConfig
 from levanter.main import train_lm
 from levanter.trainer import TrainerConfig
 
-from marin.resources import TpuPodConfig
 from marin.training.training import (
     TrainLmOnPodConfig,
     _doublecheck_paths,
@@ -74,12 +74,13 @@ def test_lm_config_with_local_paths(trainer_config, tpu_type):
         mock_get_bucket_location.return_value = "us-central1"
 
         # Create a config with local paths
+        resources = ResourceConfig.with_tpu(tpu_type) if tpu_type else ResourceConfig.with_cpu()
         config = TrainLmOnPodConfig(
             train_config=train_lm.TrainLmConfig(
                 data=MockDataConfig(cache_dir="local/path"),
                 trainer=trainer_config,
             ),
-            resources=TpuPodConfig(tpu_type=tpu_type),
+            resources=resources,
         )
 
         # This should not raise an exception
@@ -103,7 +104,7 @@ def test_lm_config_with_gcs_paths_same_region(trainer_config):
                 data=MockDataConfig(cache_dir="gs://bucket/path"),
                 trainer=trainer_config,
             ),
-            resources=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
         )
 
         # This should not raise an exception
@@ -127,7 +128,7 @@ def test_lm_config_with_gcs_paths_different_region(trainer_config):
                 data=MockDataConfig(cache_dir="gs://bucket/path"),
                 trainer=trainer_config,
             ),
-            resources=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
         )
 
         # This should raise an exception
@@ -154,7 +155,7 @@ def test_lm_config_with_allowed_out_of_region_paths(trainer_config):
                 data=MockDataConfig(cache_dir="gs://bucket/path"),
                 trainer=trainer_config,
             ),
-            resources=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
             allow_out_of_region=("data.cache_dir",),
         )
 
@@ -183,7 +184,7 @@ def test_recursive_path_checking(trainer_config):
                 data=nested_data,
                 trainer=trainer_config,
             ),
-            resources=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
         )
 
         # This should raise an exception
@@ -210,7 +211,7 @@ def test_dataclass_recursive_checking(trainer_config):
                 data=MockDataConfig(cache_dir=MockNestedConfig(path="gs://bucket/path")),  # type: ignore
                 trainer=trainer_config,
             ),
-            resources=TpuPodConfig(tpu_type="v3-8"),  # TPU mode
+            resources=ResourceConfig.with_tpu("v3-8"),  # TPU mode
         )
 
         # This should raise an exception
@@ -236,7 +237,7 @@ def test_pathlib_path_handling(trainer_config):
                 data=MockDataConfig(cache_dir=Path("gs://bucket/path")),
                 trainer=trainer_config,
             ),
-            resources=TpuPodConfig(tpu_type="v3-8"),
+            resources=ResourceConfig.with_tpu("v3-8"),
         )
 
         with pytest.raises(ValueError) as excinfo:

@@ -120,13 +120,22 @@ class BackendConfig:
 
     Attributes:
         max_parallelism: Maximum number of concurrent tasks
-        chunk_size: Number of items per chunk in Shard
         dry_run: If True, show optimization plan without executing
     """
 
     max_parallelism: int = 1024
-    chunk_size: int = 1000
     dry_run: bool = False
+
+
+@dataclass(frozen=True)
+class ExecutionHint:
+    """Hints for pipeline execution.
+
+    Attributes:
+        chunk_size: Number of items per chunk. Use -1 for 1 chunk per shard.
+    """
+
+    chunk_size: int = 100_000
 
 
 @dataclass
@@ -276,7 +285,7 @@ def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Generato
     chunk_idx = 0
     for item in items:
         chunk.append(item)
-        if len(chunk) >= chunk_size:
+        if chunk_size > 0 and len(chunk) >= chunk_size:
             header = ChunkHeader(shard_idx=shard_idx, chunk_idx=chunk_idx, count=len(chunk))
             yield header
             yield chunk
@@ -322,7 +331,7 @@ def _group_items_by_hash(
         key = key_fn(item)
         target_shard = deterministic_hash(key) % num_output_shards
         output_tmp[target_shard].append(item)
-        if len(output_tmp[target_shard]) >= chunk_size:
+        if chunk_size > 0 and len(output_tmp[target_shard]) >= chunk_size:
             sorted_items = sorted(output_tmp[target_shard], key=key_fn)
             output_chunks[target_shard].append(Chunk(count=len(sorted_items), data=sorted_items))
             output_tmp[target_shard] = []
@@ -566,7 +575,7 @@ def process_shard_group_by_reduce(ctx: ApplyShardCtx, key_fn: Callable, reducer_
     for item in result_generator():
         has_data = True
         batch.append(item)
-        if len(batch) >= ctx.chunk_size:
+        if ctx.chunk_size > 0 and len(batch) >= ctx.chunk_size:
             yield ChunkHeader(shard_idx=ctx.shard_idx, chunk_idx=chunk_idx, count=len(batch))
             yield batch
             batch = []
@@ -626,15 +635,12 @@ class Backend:
         self.config = config
         self.dry_run = config.dry_run
 
-    @property
-    def chunk_size(self) -> int:
-        return self.config.chunk_size
-
-    def execute(self, dataset: Dataset, verbose: bool = False) -> Sequence:
+    def execute(self, dataset: Dataset[T], hints: ExecutionHint = ExecutionHint(), verbose: bool = False) -> Sequence[T]:
         """Execute a dataset, returning a sequence of results.
 
         Args:
             dataset: Dataset to execute
+            hints: Execution hints (chunk_size, etc.)
             verbose: Print additional logging and optimization stats
 
         Returns:
@@ -648,7 +654,7 @@ class Backend:
         if self.dry_run:
             return
 
-        return list(self._execute_optimized(dataset.source, optimized_ops))
+        return list(self._execute_optimized(dataset.source, optimized_ops, hints))
 
     def _optimize_operations(self, operations: list) -> list:
         if not operations:
@@ -704,12 +710,13 @@ class Backend:
 
         logger.info("\n=== End Optimization Plan ===\n")
 
-    def _run_operations_on_shards(self, source: Iterable, optimized_ops: list) -> list[Shard]:
+    def _run_operations_on_shards(self, source: Iterable, optimized_ops: list, hints: ExecutionHint) -> list[Shard]:
         """Core execution logic - executes already-optimized operations on shards.
 
         Args:
             source: Source data iterable
             optimized_ops: Already-optimized operation chain
+            hints: Execution hints
 
         Returns:
             List of Shards after applying all operations
@@ -731,7 +738,7 @@ class Backend:
                     if not isinstance(join_op, SortedMergeJoinOp):
                         continue
                     right_ops = self._optimize_operations(join_op.right_dataset.operations)
-                    right_shards = self._run_operations_on_shards(join_op.right_dataset.source, right_ops)
+                    right_shards = self._run_operations_on_shards(join_op.right_dataset.source, right_ops, hints)
 
                     if len(shards) != len(right_shards):
                         raise ValueError(
@@ -748,28 +755,33 @@ class Backend:
                         shard_aux[join_idx] = [right_shards[shard_idx]]
                     aux_shards_per_left.append(shard_aux)
 
-                shards = self._execute_on_shards(process_shard_fused, (op.operations,), shards, aux_shards_per_left)
+                shards = self._execute_on_shards(
+                    process_shard_fused, (op.operations,), shards, aux_shards_per_left, hints
+                )
             elif isinstance(op, GroupByShuffleReduceOp):
-                shards = self._execute_on_shards(process_shard_group_by_reduce, (op.key_fn, op.reducer_fn), shards)
+                shards = self._execute_on_shards(
+                    process_shard_group_by_reduce, (op.key_fn, op.reducer_fn), shards, None, hints
+                )
             elif isinstance(op, ReshardOp):
                 shards = reshard_refs(shards, op.num_shards)
             elif isinstance(op, ReduceGlobalOp):
-                shards = process_shard_reduce_global(shards, op.global_reducer, self.context, self.chunk_size)
+                shards = process_shard_reduce_global(shards, op.global_reducer, self.context, hints.chunk_size)
 
         return shards
 
-    def _execute_optimized(self, source: Iterable, optimized_ops: list) -> Iterator:
+    def _execute_optimized(self, source: Iterable, optimized_ops: list, hints: ExecutionHint) -> Iterator:
         """Execute already-optimized operations and materialize results.
 
         Args:
             source: Source data iterable
             optimized_ops: Already-optimized operation chain
+            hints: Execution hints
 
         Yields:
             Results after applying all operations
         """
         # Execute operations to get shards
-        shards = self._run_operations_on_shards(source, optimized_ops)
+        shards = self._run_operations_on_shards(source, optimized_ops, hints)
 
         # Materialize results
         op_names = [op.__class__.__name__.replace("Op", "") for op in optimized_ops]
@@ -782,7 +794,12 @@ class Backend:
         yield from tqdm(materialize_all(), desc=desc, unit="shards", total=len(shards))
 
     def _execute_on_shards(
-        self, process_fn: Callable, fn_args: tuple, shards: list[Shard], aux_shards_per_shard: list[dict] | None = None
+        self,
+        process_fn: Callable,
+        fn_args: tuple,
+        shards: list[Shard],
+        aux_shards_per_shard: list[dict] | None,
+        hints: ExecutionHint,
     ) -> list[Shard]:
         """Execute a processing function on shards with optional per-shard auxiliary data.
 
@@ -792,6 +809,7 @@ class Backend:
             shards: List of input Shards
             aux_shards_per_shard: Optional list of aux_shards dicts, one per input shard.
                                  If None, creates empty dicts for each shard.
+            hints: Execution hints
 
         Returns:
             List of output Shards assembled from streamed chunks
@@ -823,7 +841,7 @@ class Backend:
                     shard=shard,
                     shard_idx=shard_idx,
                     total_shards=total,
-                    chunk_size=self.chunk_size,
+                    chunk_size=hints.chunk_size,
                     aux_shards=aux_shards,
                 )
                 active_gens.append(self.context.run(process_fn, ctx, *fn_args))
@@ -846,7 +864,7 @@ class Backend:
                                 shard=shard,
                                 shard_idx=shard_idx,
                                 total_shards=total,
-                                chunk_size=self.chunk_size,
+                                chunk_size=hints.chunk_size,
                                 aux_shards=aux_shards,
                             )
                             active_gens.append(self.context.run(process_fn, ctx, *fn_args))

@@ -11,7 +11,7 @@ RUN /tmp/google-cloud-sdk/install.sh --quiet --path-update false --command-compl
 RUN /tmp/google-cloud-sdk/bin/gcloud components install alpha --quiet
 
 # Rust toolchain
-FROM rust:1.82-slim AS rust-builder
+FROM rust:1.91-slim AS rust-builder
 
 
 # Main build
@@ -31,6 +31,7 @@ RUN sudo rm -rf /var/lib/apt/lists/* \
       docker.io \
       fuse \
       g++ \
+      gdb \
       gnupg \
       liblz4-dev \
       libpython3.11 \

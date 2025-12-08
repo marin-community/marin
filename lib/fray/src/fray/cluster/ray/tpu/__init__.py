@@ -14,11 +14,6 @@
 
 """Ray TPU orchestration for gang scheduling and multislice coordination."""
 
-from fray.cluster.ray.tpu.config import (
-    TPU_CONFIGS,
-    TPUConfig,
-    get_tpu_config,
-)
 from fray.cluster.ray.tpu.execution import (
     HEALTH_CHECK_TIMEOUT,
     START_ACTOR_TIMEOUT,
@@ -27,10 +22,10 @@ from fray.cluster.ray.tpu.execution import (
     SliceActor,
     SliceInfo,
     SlicePoolManager,
-    TPUHostActor,
-    TPUHostInfo,
     TpuCancelled,
     TpuFailed,
+    TPUHostActor,
+    TPUHostInfo,
     TpuPreempted,
     TpuRunError,
     TpuSuccess,

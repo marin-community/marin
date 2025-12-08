@@ -22,8 +22,8 @@ Example:
     ...     environment=create_environment(),
     ... )
     >>> job_id = cluster.launch(request)
-    >>> for line in cluster.monitor(job_id):
-    ...     print(line)
+    >>> job_info = cluster.monitor(job_id)  # Logs stream to logger
+    >>> print(job_info.status)
 """
 
 import logging
@@ -43,9 +43,12 @@ from fray.cluster.base import (
     JobRequest,
     ResourceConfig,
     TpuConfig,
+    TpuTopologyInfo,
     TpuType,
     create_environment,
+    get_tpu_topology,
 )
+from fray.cluster.device_flops import FlopDtype
 from fray.cluster.local_cluster import LocalCluster
 
 logger = logging.getLogger(__name__)
@@ -140,18 +143,20 @@ __all__ = [
     "DeviceConfig",
     "Entrypoint",
     "EnvironmentConfig",
+    "FlopDtype",
     "GpuConfig",
     "GpuType",
     "JobId",
     "JobInfo",
     "JobRequest",
-    "JobStatus",
     "LocalCluster",
     "ResourceConfig",
+    "TPUConfig",
     "TpuConfig",
     "TpuType",
     "create_cluster",
     "create_environment",
     "current_cluster",
+    "get_tpu_topology",
     "set_current_cluster",
 ]

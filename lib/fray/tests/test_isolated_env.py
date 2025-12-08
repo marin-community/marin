@@ -87,3 +87,66 @@ def test_multiple_processes_cleanup():
     for proc in processes:
         print(proc, proc.poll())
         assert proc.poll() is not None
+
+
+def test_workspace_copy_basic(tmp_path):
+    """Test workspace copying without pyproject.toml."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "test.py").write_text('print("hello")')
+    (workspace / "subdir").mkdir()
+    (workspace / "subdir" / "nested.py").write_text('print("nested")')
+
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=workspace, check=True, capture_output=True)
+
+    with TemporaryVenv(workspace=str(workspace)) as venv:
+        assert os.path.exists(os.path.join(venv.workspace_path, "test.py"))
+        assert os.path.exists(os.path.join(venv.workspace_path, "subdir", "nested.py"))
+        assert os.path.exists(os.path.join(venv.workspace_path, ".venv"))
+        assert venv.venv_path == os.path.join(venv.workspace_path, ".venv")
+        result = venv.run(["python", "test.py"], capture_output=True, text=True)
+        assert "hello" in result.stdout
+
+
+def test_workspace_with_extras(tmp_path):
+    """Test workspace extras installation."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    (workspace / "pyproject.toml").write_text(
+        """
+[project]
+name = "testpkg"
+version = "0.1.0"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["six"]
+"""
+    )
+
+    pkg_dir = workspace / "testpkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text('__version__ = "0.1.0"')
+    subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=workspace, check=True, capture_output=True)
+
+    with TemporaryVenv(workspace=str(workspace), extras=["dev"], pip_install_args=["regex"]) as venv:
+        result = venv.run(
+            ["python", "-c", "import testpkg; print(testpkg.__version__)"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "0.1.0" in result.stdout
+
+        result = venv.run(
+            ["python", "-c", "import six; print(six.__version__)"],
+        )
+        assert result.returncode == 0
+
+        result = venv.run(
+            ["python", "-c", "import regex; print(regex.__version__)"],
+        )
+        assert result.returncode == 0
