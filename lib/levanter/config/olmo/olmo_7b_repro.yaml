@@ -157,7 +157,6 @@ trainer:
   train_batch_size: 2048
   num_train_steps: 750000
   steps_per_eval: 1000
-  replica_dcn_axis_size: 2
 optimizer:
   learning_rate: 3E-4
   weight_decay: 0.1

@@ -19,8 +19,9 @@ trainer:
   train_batch_size: 256
   num_train_steps: 1000
   steps_per_eval: 50
-  axis_resources:
-    token: data
+  mesh:
+    compute_mapping:
+      token: data
 optimizer:
   learning_rate: 1.2e-05
   weight_decay: 0.1
