@@ -61,6 +61,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Default number of items per output chunk during streaming
+DEFAULT_CHUNK_SIZE = 100_000
+
+# Default number of parallel chunks when splitting files for intra-shard parallelism
+DEFAULT_INTRA_SHARD_PARALLELISM = 8
+
+# Size of micro-batches yielded from parallel chunk workers to reduce RPC overhead
+DEFAULT_MICRO_BATCH_SIZE = 1024
+
 
 @dataclass
 class SourceItem:
@@ -160,7 +169,7 @@ class ForkChunks:
         parallel_ops: Operations to apply to each chunk stream
     """
 
-    target_chunks: int = 8
+    target_chunks: int = DEFAULT_INTRA_SHARD_PARALLELISM
     parallel_ops: list = field(default_factory=list)  # list[PhysicalOp]
 
 
@@ -341,7 +350,7 @@ class ExecutionHint:
             0 to disable, or N to limit max parallel chunks per shard.
     """
 
-    chunk_size: int = 100_000
+    chunk_size: int = DEFAULT_CHUNK_SIZE
     intra_shard_parallelism: int = -1
 
 
@@ -376,7 +385,11 @@ class FusionState:
         # Create ForkChunks for file pipelines with parallelism enabled
         if has_load_file and self.hints.intra_shard_parallelism != 0 and not requires_full_shard:
             user_ops = self.pending_fusible[1:]  # Exclude LoadFileOp, ForkChunks handles file loading
-            target_chunks = self.hints.intra_shard_parallelism if self.hints.intra_shard_parallelism > 0 else 8
+            target_chunks = (
+                self.hints.intra_shard_parallelism
+                if self.hints.intra_shard_parallelism > 0
+                else DEFAULT_INTRA_SHARD_PARALLELISM
+            )
             parallel_ops = [Map(fn=compose_map(user_ops), requires_full_shard=False)] if user_ops else []
             logger.info("Creating ForkChunks with %d parallel ops, %d target chunks", len(parallel_ops), target_chunks)
             self.current_ops.append(ForkChunks(target_chunks=target_chunks, parallel_ops=parallel_ops))
@@ -757,8 +770,8 @@ def _compute_chunk_specs(spec, target_chunks: int) -> list:
         import pyarrow.parquet as pq
 
         with open_file(spec.path, "rb") as f:
-            dataset = pq.ParquetDataset(f)
-            num_rows = dataset.num_rows
+            parquet_file = pq.ParquetFile(f)
+            num_rows = parquet_file.metadata.num_rows
     else:
         import vortex
 
@@ -795,8 +808,8 @@ def _merge_streams_as_available(exec_ctx, futures: list):
         ready, _ = exec_ctx.wait(list(active.values()), num_returns=1)
         for gen in ready:
             try:
-                item = exec_ctx.get(next(gen))
-                yield item
+                items = exec_ctx.get(next(gen))
+                yield from items
             except StopIteration:
                 del active[id(gen)]
 
@@ -825,39 +838,31 @@ def _execute_fork_join(
 
     logger.info("All chunk specs: %s", all_chunk_specs)
 
-    if len(all_chunk_specs) <= 1 or exec_ctx is None:
-        # No parallelism benefit - run sequentially
-        for spec in all_chunk_specs:
-            if isinstance(spec, InputFileSpec):
-                stream = load_file(spec)
-            else:
-                stream = iter([spec])
-            # Apply parallel_ops
-            for op in parallel_ops:
-                if isinstance(op, Map):
-                    stream = op.fn(stream)
-            yield from stream
-        return
-
-    # Build the chunk task function
     def process_chunk(chunk_spec):
-        from zephyr.readers import load_file
-
         if isinstance(chunk_spec, InputFileSpec):
             stream = load_file(chunk_spec)
         else:
             stream = iter([chunk_spec])
-        # Apply the parallel ops
         for op in parallel_ops:
             if isinstance(op, Map):
                 stream = op.fn(stream)
-        yield from stream
 
-    # Spawn parallel tasks
-    futures = [exec_ctx.run(process_chunk, spec) for spec in all_chunk_specs]
+        # batch into micro-chunks to reduce RPC overhead
+        micro_chunks = []
+        for item in stream:
+            micro_chunks.append(item)
+            if len(micro_chunks) >= DEFAULT_MICRO_BATCH_SIZE:
+                yield micro_chunks
+                micro_chunks = []
+        if micro_chunks:
+            yield micro_chunks
 
-    # Merge results as-available
-    yield from _merge_streams_as_available(exec_ctx, futures)
+    if len(all_chunk_specs) == 1:
+        for batch in process_chunk(all_chunk_specs[0]):
+            yield from batch
+    else:
+        futures = [exec_ctx.run(process_chunk, spec) for spec in all_chunk_specs]
+        yield from _merge_streams_as_available(exec_ctx, futures)
 
 
 def _sorted_merge_join(
@@ -937,12 +942,16 @@ class StageContext:
     aux_shards: dict[int, list[Any]] = field(default_factory=dict)
     execution_context: Any = None  # ExecutionContext (avoids circular import)
 
-    def get_right_shard(self, op_index: int) -> Any | None:
-        """Get right shard for join at given op index."""
+    def get_right_shard(self, op_index: int) -> Any:
+        """Get right shard for join at given op index.
+
+        Raises:
+            ValueError: If no right shard is provided for the join
+        """
         shards = self.aux_shards.get(op_index, [])
-        if len(shards) == 1:
-            return shards[0]
-        return None
+        if len(shards) != 1:
+            raise ValueError(f"Expected exactly 1 right shard for join at op index {op_index}, got {len(shards)}")
+        return shards[0]
 
 
 def run_stage(
@@ -1052,10 +1061,7 @@ def run_stage(
             raise ValueError("Reshard should not be executed in run_stage")
 
         elif isinstance(op, Join):
-            # Get right shard from context
             right_shard = ctx.get_right_shard(i)
-            if right_shard is None:
-                raise ValueError(f"No right shard provided for join at op index {i}")
             stream = op.fn(stream, iter(right_shard))
             i += 1
 
