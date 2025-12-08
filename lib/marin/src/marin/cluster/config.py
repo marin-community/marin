@@ -202,6 +202,16 @@ CONFIGS = {
             "v5p-2048": 0,
         },
     },
+    "marin-us-east5-a-vllm": {
+        "NAME": "marin-us-east5-a-vllm",
+        "REGION": "us-east5",
+        "ZONE": "us-east5-a",
+        "BUCKET": "marin-us-east5",
+        "DOCKER_TAG": "6e804a10",
+        "tpu_generation": "v5p",
+        "min_workers": 2,
+        "VLLM": True,
+    },
     "marin-eu-west4-a": {
         "NAME": "marin-eu-west4-a",
         "REGION": "europe-west4",

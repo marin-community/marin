@@ -54,15 +54,15 @@ initialization_commands:
 
 setup_commands:
   # set the GCP project because it's not injected by default
-  - gcloud config set project hai-gcp-models
-  - gcloud config set compute/region us-central2
-  - gcloud config set compute/zone us-central2-b
+  - /root/gcloud/google-cloud-sdk/bin/gcloud config set project hai-gcp-models
+  - /root/gcloud/google-cloud-sdk/bin/gcloud config set compute/region us-central2
+  - /root/gcloud/google-cloud-sdk/bin/gcloud config set compute/zone us-central2-b
   - mkdir $HOME/.cache/huggingface -p
   - mkdir $HOME/.cache/openai -p
-  - mkdir -p $HOME/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > $HOME/.ssh/authorized_keys && chmod 600 $HOME/.ssh/authorized_keys
-  - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > $HOME/.ssh/marin_ray_cluster.pub
-  - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
-  - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
+  - mkdir -p $HOME/.ssh && /root/gcloud/google-cloud-sdk/bin/gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > $HOME/.ssh/authorized_keys && chmod 600 $HOME/.ssh/authorized_keys
+  - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > $HOME/.ssh/marin_ray_cluster.pub
+  - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
+  - /root/gcloud/google-cloud-sdk/bin/gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
   - echo 'export MARIN_PREFIX="gs://marin-us-central2"' >> $HOME/.bashrc
   - echo 'export BUCKET="marin-us-central2"' >> $HOME/.bashrc
   # cf https://github.com/ray-project/ray/blob/0bc6ec86ffd0fc0d4e43fb339ffe0ac03ee5531b/python/ray/autoscaler/_private/constants.py#L66
@@ -111,6 +111,114 @@ available_node_types:
     min_workers: 2
     node_config:
       acceleratorType: v4-8
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_16:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-16
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_32:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-32
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_64:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-64
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_128:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-128
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_256:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-256
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_512:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-512
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_1024:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-1024
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_2048:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-2048
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_4096:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-4096
       runtimeVersion: tpu-ubuntu2204-base
       schedulingConfig:
         preemptible: true
