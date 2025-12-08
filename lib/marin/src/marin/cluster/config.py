@@ -22,7 +22,7 @@ import jinja2
 import yaml
 
 # Cluster configuration constants and templates
-LATEST = "20251023"  # The latest docker tag used for the clusters
+LATEST = "5b9b77c"  # The latest docker tag used for the clusters
 
 
 @dataclass
@@ -110,15 +110,6 @@ def list_available_configs() -> list[str]:
 CONFIGS = {
     "marin-us-central2": {
         "NAME": "marin-us-central2",
-        "REGION": "us-central2",
-        "ZONE": "us-central2-b",
-        "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": LATEST,
-        "tpu_generation": "v4",
-        "min_workers": 4,
-    },
-    "marin-us-central2-compress": {
-        "NAME": "marin-us-central2-compress",
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
