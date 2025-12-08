@@ -74,6 +74,6 @@ for model_step in ALL_MODEL_STEPS:
     eval_steps.extend(_create_per_task_eval_steps(model_step, LM_EVAL_HARNESS_SELECTED_TASKS))
 
 if __name__ == "__main__":
-    executor_main(steps=eval_steps)
-    # for i in range(0, len(eval_steps), 4):
-    #     executor_main(steps=eval_steps[i : i + 4])
+    # executor_main(steps=eval_steps)
+    for i in range(0, len(eval_steps), 4):
+        executor_main(steps=eval_steps[i : i + 4])
