@@ -459,7 +459,7 @@ def _run_doc_deduplication(config: DedupeConfig):
     if wandb.run:
         wandb.log(exact_cnts.to_dict() | fuzzy_cnt.to_dict())
 
-    def mark_exact_dups_documents(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
+    def mark_exact_dups_documents(batches: Iterator[pa.RecordBatch]) -> Iterator[dict]:
         """Mark exact duplicate documents using exact hash matching."""
         dup_map = _load_dupe_map_shard(duplicate_key_shards)
         fuzzy_dup_map = _load_fuzzy_dupe_map_shard(fuzzy_dup_shards)

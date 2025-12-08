@@ -49,7 +49,7 @@ def minhash_lsh(
         shingle_size: Size of character shingles to extract from text (default: 5)
 
     Returns:
-        A dataset of MinHash LSH output records containing 'bucket' and 'ids' fields
+        A dataset of MinHash LSH output records containing 'bucket' and 'id' fields
     """
 
     assert (
@@ -110,7 +110,11 @@ def _minhash_lsh(
 
             bucket = sig[start:end]
             # TODO: is hashing the bucket necessary here?
-            bucket_bytes = struct.pack(f"{len(bucket)}d", *bucket)
+            # TODO: Is Q (unsigned long long) the right format?
+            assert all(
+                isinstance(x, int) and x >= 0 for x in bucket
+            ), f"Non-integer or negative value in bucket: {bucket}"
+            bucket_bytes = struct.pack(f"{len(bucket)}Q", *bucket)
             bucket_hash = str(hash_xxh3_128(bucket_bytes))
 
             yield {"bucket": bucket_hash, "id": record_id}

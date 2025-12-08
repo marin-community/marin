@@ -61,7 +61,7 @@ class CompMessage(CCMessage):
 CCInput = MinHashLshOutputRecord
 
 
-def _internal_orderable_id(record_id: dict) -> str:
+def _internal_orderable_id(record_id: Any) -> str:
     """
     We need an id that has a total ordering for connected components. If the id is an int,
     we can use it as is. If it's a string, we hash it and convert it to string. We convert
@@ -173,7 +173,8 @@ def _gen_links_within_buckets(
     norm_ids = [i["record_id_norm"] for i in ids]
     # TODO: this will materialize ids!
     if len(norm_ids) != len(set(norm_ids)):
-        raise ValueError("Duplicate para_ids found in bucket during link_reduce.!")
+        duplicate_ids = [x for x in norm_ids if norm_ids.count(x) > 1]
+        raise ValueError(f"Duplicate found in bucket during link_reduce: {duplicate_ids}")
 
     if preserve_singletons and len(ids) == 1:
         yield (ids[0], ids[0])
@@ -237,7 +238,7 @@ def _reduce_node_step(key: str, incoming: Iterator[tuple[str, CCMessage]]) -> CC
             if remote_comp < min_comp:
                 min_comp = remote_comp
 
-    if node_structure is None or min_comp is None:
+    if node_structure is None:
         # Should technically not happen if graph is well-formed
         raise ValueError(f"Lost/corrupted structure for node {key}")
 
