@@ -33,10 +33,10 @@ from typing import Any
 
 import click
 import psutil
-import pyarrow as pa
-import vortex
 from tqdm import tqdm
 from zephyr import Dataset, ExecutionHint, create_backend
+from zephyr.readers import load_file
+from zephyr.writers import write_parquet_file
 
 WORDS = """
 the be to of and a in that have I it for not on with he as you do at this but his by from
@@ -55,15 +55,9 @@ def generate_doc(doc_id: int, num_words: int = 1000) -> dict[str, Any]:
     words = [random.choice(WORDS) for _ in range(num_words)]
     body = " ".join(words)
 
-    # Create simhash from unique words (creates natural duplicates)
-    # Using modulo to control duplicate rate
-    unique_words = sorted(set(words))
-    simhash = hash(" ".join(unique_words)) % 10000
-
     return {
         "doc_id": doc_id,
         "body": body,
-        "simhash": simhash,
         "meta1": random.randint(0, 1000),
         "meta2": random.choice(["A", "B", "C", "D", "E"]),
         "meta3": random.random(),
@@ -78,7 +72,7 @@ def generate_doc(doc_id: int, num_words: int = 1000) -> dict[str, Any]:
 
 
 def write_input_files(docs: Iterator[dict[str, Any]], input_dir: str, num_files: int = 10) -> list[str]:
-    """Write documents to num_files Vortex files, returning file paths."""
+    """Write documents to num_files files, returning file paths."""
     os.makedirs(input_dir, exist_ok=True)
     file_paths = []
     file_buffers = [[] for _ in range(num_files)]
@@ -88,38 +82,40 @@ def write_input_files(docs: Iterator[dict[str, Any]], input_dir: str, num_files:
         file_buffers[file_idx].append(doc)
 
     for i in range(num_files):
-        file_path = os.path.join(input_dir, f"input-{i:05d}.vortex")
+        file_path = os.path.join(input_dir, f"input-{i:05d}.parquet")
         file_paths.append(file_path)
-        table = pa.Table.from_pylist(file_buffers[i])
-        vortex.io.write(table, file_path)
+        list(write_parquet_file(file_buffers[i], file_path))
+        # list(write_vortex_file(file_buffers[i], file_path))
 
     return file_paths
 
 
+def simhash(doc: dict[str, Any]) -> int:
+    words = doc["body"].split()
+    unique_words = sorted(set(words))
+    return hash(" ".join(unique_words)) % 10000
+
+
 def create_pipeline(input_dir: str, output_dir: str) -> Dataset:
-    """Create benchmark pipeline: load Vortex → map → deduplicate by simhash → write Vortex."""
+    """Create benchmark pipeline: load → map → deduplicate by simhash → write."""
     return (
-        Dataset.from_files(f"{input_dir}/*.vortex")
-        .load_vortex()
+        Dataset.from_files(f"{input_dir}/*.parquet")
+        .load_file()
         .map(
             lambda doc: {
-                **doc,
-                "words": doc["body"].split(),
-                "word_count": len(doc["body"].split()),
+                "simhash": simhash(doc),
             }
         )
         .group_by(
             key=lambda x: x["simhash"],
-            reducer=lambda key, items: next(iter(items)),  # Take first (deduplication)
+            reducer=lambda key, items: next(iter(items)),
         )
-        .write_vortex(f"{output_dir}/output-{{shard:05d}}-of-{{total:05d}}.vortex")
+        .write_parquet(f"{output_dir}/output-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
 
 
-def count_vortex_docs(file_path: str) -> int:
-    """Count records in a Vortex file."""
-    vf = vortex.open(file_path)
-    return len(vf)
+def count_docs(file_path: str) -> int:
+    return len(list(load_file(file_path)))
 
 
 def run_benchmark(
@@ -166,7 +162,7 @@ def run_benchmark(
 
         # Count output documents
         print("Counting output documents...")
-        output_docs = sum(count_vortex_docs(f) for f in results)
+        output_docs = sum(count_docs(f) for f in results)
         dedup_ratio = (1 - output_docs / num_docs) * 100
 
         # Report results
