@@ -818,8 +818,9 @@ class Olmo3Attention(ModuleWithStateDictSerialization, Attention):
     sliding_window: Optional[int] = eqx.field(static=True, default=None)
 
     @staticmethod
-    def init(config: Olmo3Config, *, key, sliding_window=None):
-        base = Attention.init(config.attention_config(), key=key)
+    def init(config: AttentionConfig, *, key):
+        attn_config = config.attention_config() if hasattr(config, "attention_config") else config
+        base = Attention.init(attn_config, key=key)
         return Olmo3Attention(
             base.config,
             base.q_proj,
@@ -829,7 +830,7 @@ class Olmo3Attention(ModuleWithStateDictSerialization, Attention):
             base.q_norm,
             base.k_norm,
             base.rot_embs,
-            sliding_window=sliding_window,
+            sliding_window=None,
         )
 
     def __call__(self, x, mask, *, key=None, pos_ids=None):
@@ -863,7 +864,8 @@ class Olmo3DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
 
         sliding = None if layer_sliding_window < 0 else int(layer_sliding_window)
 
-        attn = Olmo3Attention.init(config, key=k_attn, sliding_window=sliding)
+        attn = Olmo3Attention.init(config.attention_config(), key=k_attn)
+        attn = eqx.tree_at(lambda a: a.sliding_window, attn, sliding)
         mlp = Olmo3MLP.init(
             config.Embed,
             config.Mlp,
