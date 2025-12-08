@@ -24,6 +24,8 @@ from dupekit import hash_xxh3_128
 
 def minhash(s: set[str], vector_length: int = 128, prime=4294967311) -> list[int]:
     """
+    Compute the minhash of `s` which can be used to estimate the Jaccard similarity between sets.
+
     Given a set `s`, pass each member of the set through all permutation functions,
     and set the `ith` position of `vec` to the `ith` permutation function's output if
     that output is smaller than `vec[i]`.
