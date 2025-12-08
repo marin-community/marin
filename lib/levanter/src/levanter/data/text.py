@@ -1022,6 +1022,12 @@ class LMMixtureDatasetConfig(LMTaskConfig):
                 # Note(Will): This blocks on datasets being fully processed even for small simulated runs making simulating data size slightly latency inducing but I think that's ok
                 true_length_of_dataset = len(ds.as_sync_dataset())
                 simulated_length_of_dataset = int(true_length_of_dataset * simulated_data_ratio)
+                logger.info(
+                    f"Slicing simulated dataset {name} from {true_length_of_dataset} examples to {simulated_length_of_dataset} examples; "
+                    f"experiment_budget: {self.experiment_budget}, "
+                    f"target_budget: {self.target_budget}, "
+                    f"simulated_data_ratio: {simulated_data_ratio}"
+                )
                 sliced_datasets[name] = ds.slice_dataset(end_index=simulated_length_of_dataset)
             datasets = sliced_datasets
 
