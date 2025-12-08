@@ -43,7 +43,7 @@ from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
 from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import Dataset, flow_backend, load_parquet
 from zephyr.backend_factory import create_backend
-from zephyr.readers import open_file, SUPPORTED_EXTENSIONS
+from zephyr.readers import load_file, open_file, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
