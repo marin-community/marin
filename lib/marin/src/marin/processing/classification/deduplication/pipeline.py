@@ -31,7 +31,6 @@ import typing
 
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.processing.classification.deduplication.connected_components import connected_components
-from marin.processing.classification.deduplication.minhash_lsh import minhash_lsh
 from marin.utilities.time_logger import log_time
 import pyarrow as pa
 import pyarrow.json as pa_json
@@ -424,10 +423,43 @@ def _run_doc_deduplication(config: DedupeConfig):
     exact_cnts = _compute_dedup_stats(duplicate_key_shards, method="exact", level="document")
     logger.info(str(exact_cnts))
 
-    doc_minhash_lsh = minhash_lsh(
+    def compute_minhash_lsh_batches(batch: pa.RecordBatch) -> Iterator[dict]:
+        """
+        Runs the Rust-optimized MinHash LSH pipeline on a RecordBatch.
+        Yields {bucket: str, id: Any} for each bucket hit.
+        """
+        pipeline = [
+            Transformation.ResolveIds(text_col=config.text_field, id_col="id", output_col="resolved_id"),
+            Transformation.CleanText(input_col=config.text_field, output_col="clean_text"),
+            Transformation.MinHash(
+                input_col="clean_text",
+                output_col="signature",
+                num_perms=286,  # 26 bands * 11 rows
+                ngram_size=5,
+                seed=42,
+            ),
+            Transformation.MinHashLSH(input_col="signature", output_col="buckets", num_bands=26),
+            Transformation.SelectColumns(columns=["resolved_id", "buckets"]),
+        ]
+
+        result_batch = dupekit.transform(batch, pipeline)
+
+        ids = result_batch["resolved_id"]
+        buckets = result_batch["buckets"]
+
+        for doc_id, doc_buckets in zip(ids, buckets, strict=False):
+            if not doc_buckets.is_valid:
+                continue
+
+            doc_id_val = doc_id.as_py()
+            for b in doc_buckets.as_py():
+                yield {"bucket": str(b), "id": doc_id_val}
+
+    doc_minhash_lsh = (
         Dataset.from_list(input_files)
-        .flat_map(load_file)
+        .flat_map(lambda f: _load_batches(f, columns=[config.text_field, "id"]))
         .reshard(num_shards=config.processes if len(input_files) < 42 else None)
+        .flat_map(compute_minhash_lsh_batches)
     )
     converged, cc_files = connected_components(
         doc_minhash_lsh, backend=backend, output_dir=f"{config.output_path}/metadata/cc"
