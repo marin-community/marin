@@ -35,9 +35,7 @@ class MeshConfig:
     # Typically you should only set these fields in config, and only read the resolved_* properties.
     batch_axis_name: str | None = "batch"
     tensor_parallel_axes: list[str] = field(default_factory=lambda: ["mlp", "heads"])
-    shared_mapping: Mapping[str, list[str] | str] = field(
-        default_factory=lambda: {"position": "context", "key_position": "context"}
-    )
+    shared_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     compute_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     param_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {"embed": "data"})
 
