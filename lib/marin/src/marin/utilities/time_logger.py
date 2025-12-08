@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright 2025 The Marin Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,15 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
+import contextlib
+import logging
+import time
+from datetime import timedelta
+from collections.abc import Iterator
 
-from marin.run.ray_run import tpus_per_node
+logger = logging.getLogger(__name__)
 
 
-def test_tpus_per_node():
-    assert tpus_per_node("v4-8") == 4
-    assert tpus_per_node("v5p-8") == 4
-    assert tpus_per_node("v5e-4") == 4
-    assert tpus_per_node("v5e-2") == 2
-    with pytest.raises(ValueError):
-        tpus_per_node("v5e-16")
+@contextlib.contextmanager
+def log_time(label: str, level: int = logging.INFO) -> Iterator[None]:
+    t_start = time.perf_counter()
+    yield
+    t_end = time.perf_counter()
+    logger.log(level, f"{label} took {timedelta(seconds=t_end - t_start)}")

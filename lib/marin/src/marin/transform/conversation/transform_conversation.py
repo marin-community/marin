@@ -38,7 +38,7 @@ import fsspec
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
 from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
-from zephyr import Dataset, atomic_rename, flow_backend, load_jsonl, write_jsonl_file
+from zephyr import Dataset, flow_backend, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
 
@@ -361,8 +361,7 @@ def process_shard_task(task: ShardTask) -> dict:
             if transformed_row is not None:
                 yield transformed_row.model_dump()
 
-    with atomic_rename(output_filename) as tmp_filename:
-        result = write_jsonl_file(transform_records(), tmp_filename)
+    result = write_jsonl_file(transform_records(), output_filename)
 
     logging.info(
         f"Wrote {result['count']} rows to {result['path']} "

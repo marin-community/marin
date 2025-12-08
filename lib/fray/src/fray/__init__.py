@@ -24,7 +24,6 @@ from fray.cluster import (
     JobRequest,
     LocalCluster,
     ResourceConfig,
-    TpuConfig,
 )
 from fray.isolated_env import TemporaryVenv
 from fray.job_context import (
@@ -33,7 +32,7 @@ from fray.job_context import (
     RayContext,
     SyncContext,
     ThreadContext,
-    create_context,
+    fray_job_ctx,
 )
 
 __all__ = [
@@ -51,6 +50,5 @@ __all__ = [
     "SyncContext",
     "TemporaryVenv",
     "ThreadContext",
-    "TpuConfig",
-    "create_context",
+    "fray_job_ctx",
 ]

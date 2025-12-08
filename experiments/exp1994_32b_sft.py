@@ -21,16 +21,15 @@ import dataclasses
 
 from experiments.defaults import default_sft
 from experiments.evals.evals import default_sft_eval
-from experiments.evals.resource_configs import TPU_V4_8
+from experiments.exp1880_sft_baseline import mixture_config
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.tootsie.exp1529_32b_mantis_cooldown import (
     qwen3_32b_remat,
     tootsie_32b_cooldown_mantis,
 )
-from experiments.exp1880_sft_baseline import mixture_config
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
 
 TRAIN_BATCH_SIZE = 2048
 # Matches the 3-epoch budget from exp1880_sft_baseline (computed against that mixture).
@@ -42,7 +41,7 @@ qwen3_32b_remat_8k = dataclasses.replace(qwen3_32b_remat, seq_len=8192)
 mantis_checkpoint = tootsie_32b_cooldown_mantis.cd(f"checkpoints/step-{WARMSTART_STEP}/").nonblocking()
 
 mantis_sft_config = SimpleSFTConfig(
-    resources=TpuPodConfig(tpu_type="v4-2048"),
+    resources=ResourceConfig.with_tpu("v4-2048"),
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=LEARNING_RATE,
@@ -63,7 +62,7 @@ tootsie_32b_mantis_sft = default_sft(
 tootsie_32b_mantis_sft_evals = default_sft_eval(
     tootsie_32b_mantis_sft,
     use_levanter_inference=True,
-    resource_config=TPU_V4_8,
+    resource_config=ResourceConfig.with_tpu("v4-8"),
 )
 
 if __name__ == "__main__":

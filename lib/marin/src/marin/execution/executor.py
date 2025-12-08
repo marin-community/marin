@@ -87,6 +87,7 @@ might be:
   finish executing (or even check if it is executing or failed) before running.
 """
 
+import copy
 import dataclasses
 import hashlib
 import inspect
@@ -97,7 +98,6 @@ import re
 import subprocess
 import time
 import traceback
-import copy
 import urllib.parse
 from collections import defaultdict
 from collections.abc import Callable
@@ -112,6 +112,7 @@ import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
 import ray
 import ray.remote_function
+from fray.cluster.ray.deps import build_runtime_env_for_packages
 from ray.util import state  # noqa
 
 from marin.execution.executor_step_status import (
@@ -127,7 +128,6 @@ from marin.execution.executor_step_status import (
     get_status_path,
 )
 from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
-from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utilities.ray_utils import is_local_ray_cluster, schedule_on_head_node_strategy
 
@@ -1151,7 +1151,7 @@ def _setup_logging():
 
 def _detect_local_resources() -> dict[str, float]:
 
-    from marin.resources_utils import jax_device_kind_to_ray_accel_type
+    from fray.cluster.ray.resources import jax_device_kind_to_ray_accel_type
 
     resources: dict[str, float] = {"head_node": 1.0}
     try:
