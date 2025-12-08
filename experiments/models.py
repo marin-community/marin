@@ -163,6 +163,20 @@ olmo_2_base_32b = download_model_step(
     )
 )
 
+olmo_3_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/OLMo-3-1025-7B",
+        hf_revision="main",
+    )
+)
+
+olmo_3_32b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/OLMo-3-1125-32B",
+        hf_revision="main",
+    )
+)
+
 amber_base_7b = download_model_step(
     ModelConfig(
         hf_repo_id="LLM360/Amber",
@@ -182,6 +196,13 @@ marin_8b_base = download_model_step(
     ModelConfig(
         hf_repo_id="marin-community/marin-8b-base",
         hf_revision="0f1f658",
+    )
+)
+
+marin_32b_base = download_model_step(
+    ModelConfig(
+        hf_repo_id="marin-community/marin-32b-base",
+        hf_revision="main",
     )
 )
 
