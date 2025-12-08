@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Copyright 2025 The Marin Authors
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -24,22 +25,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Utilities for filtering Common Pile datasets by metadata extensions."""
+"""Utilities for filtering Common Pile datasets by metadata extensions.
 
-from __future__ import annotations
+Example Usage:
+uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
+    lib/marin/src/marin/transform/common_pile/filter_by_extension.py \
+    --input_path gs://marin-data/raw/common-pile/ \
+    --output_path gs://marin-data/processed/common-pile/filtered/ \
+    --allowed_extensions .txt .md
+"""
 
-import json
 import logging
 from collections.abc import Sequence
-from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from functools import cached_property
 
 import draccus
-import fsspec
-import ray
-
-from marin.core.runtime import TaskConfig, cached_or_construct_output, map_files_in_directory
-from marin.utils import fsspec_rm
+from zephyr import Dataset, flow_backend, load_jsonl
 
 logger = logging.getLogger("ray")
 
@@ -91,69 +93,46 @@ class FilterByMetadataExtensionConfig:
     input_glob: str = "*.json*"
     casefold: bool = True
     drop_missing_extensions: bool = True
-    task_config: TaskConfig = field(default_factory=TaskConfig)
 
+    @cached_property
     def normalised_allowed_extensions(self) -> set[str]:
         return _normalise_allowed_extensions(self.allowed_extensions, casefold=self.casefold)
 
 
-@ray.remote
-@cached_or_construct_output(success_suffix="SUCCESS")
-def _filter_file_by_metadata_extension(
-    input_file_path: str, output_file_path: str, config: FilterByMetadataExtensionConfig
-) -> dict[str, int]:
-    """Filter a JSONL(.gz) file to include only rows with allowed extensions."""
+def _filter_record_by_metadata_extension(record: dict, config: FilterByMetadataExtensionConfig):
+    """Filter a single record and return it if it has an allowed extension.
 
-    allowed_extensions = config.normalised_allowed_extensions()
-    # Remove any stale outputs before we start processing.
-    fsspec_rm(output_file_path)
+    Args:
+        record: Record from JSONL file
+        config: Filter configuration
 
-    total_records = 0
-    kept_records = 0
+    Returns:
+        The record if it matches allowed extensions, None otherwise
+    """
+    allowed_extensions = config.normalised_allowed_extensions
 
-    with fsspec.open(input_file_path, "rt", compression="infer") as input_file, ExitStack() as stack:
-        output_handle = None
-        for line in input_file:
-            total_records += 1
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                logger.warning("Skipping malformed JSON record from %s", input_file_path)
-                continue
+    metadata = record.get(config.metadata_column)
+    if not isinstance(metadata, dict):
+        if config.drop_missing_extensions:
+            return None
+        metadata = {}
 
-            metadata = record.get(config.metadata_column)
-            if not isinstance(metadata, dict):
-                if config.drop_missing_extensions:
-                    continue
-                metadata = {}
+    extension_value = metadata.get(config.extension_key)
+    normalised_extension = _normalize_extension(extension_value, casefold=config.casefold)
+    if normalised_extension is None:
+        if config.drop_missing_extensions:
+            return None
+    if normalised_extension not in allowed_extensions:
+        return None
 
-            extension_value = metadata.get(config.extension_key)
-            normalised_extension = _normalize_extension(extension_value, casefold=config.casefold)
-            if normalised_extension is None:
-                if config.drop_missing_extensions:
-                    continue
-            if normalised_extension not in allowed_extensions:
-                continue
-
-            if output_handle is None:
-                output_handle = stack.enter_context(fsspec.open(output_file_path, "wt", compression="infer"))
-            output_handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-            kept_records += 1
-
-    if output_handle is None:
-        # Remove the output if we didn't emit any rows.
-        fsspec_rm(output_file_path)
-
-    logger.info(
-        "Filtered %s -> %s | kept %d of %d records", input_file_path, output_file_path, kept_records, total_records
-    )
-    return {"total": total_records, "kept": kept_records}
+    return record
 
 
+@draccus.wrap()
 def filter_dataset_by_metadata_extension(config: FilterByMetadataExtensionConfig) -> None:
     """Filter every file in ``config.input_path`` by extension metadata."""
 
-    allowed_extensions = config.normalised_allowed_extensions()
+    allowed_extensions = config.normalised_allowed_extensions
     logger.info(
         "Filtering %s for %d allowed extensions: %s",
         config.input_path,
@@ -161,26 +140,12 @@ def filter_dataset_by_metadata_extension(config: FilterByMetadataExtensionConfig
         sorted(allowed_extensions),
     )
 
-    if config.task_config.task_options:
-        raise ValueError("task_options are not supported for metadata extension filtering steps.")
-
-    futures = list(
-        map_files_in_directory(
-            _filter_file_by_metadata_extension,
-            config.input_path,
-            config.input_glob,
-            config.output_path,
-            task_config=config.task_config,
-            config=config,
-        )
+    backend = flow_backend()
+    pipeline = (
+        Dataset.from_files(f"{config.input_path}/{config.input_glob}")
+        .flat_map(load_jsonl)
+        .map(lambda record: _filter_record_by_metadata_extension(record, config=config))
+        .filter(lambda record: record is not None)
+        .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    ray.get(futures)
-
-
-@draccus.wrap()
-def main(config: FilterByMetadataExtensionConfig) -> None:
-    filter_dataset_by_metadata_extension(config)
-
-
-if __name__ == "__main__":
-    main()
+    list(backend.execute(pipeline))

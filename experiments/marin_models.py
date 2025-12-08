@@ -11,31 +11,166 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# flake8: noqa
 
 """
 Various models and templates for Marin.
 """
 
-marin_tokenizer = "stanford-crfm/marin-tokenizer"
+marin_tokenizer = "marin-community/marin-tokenizer"
 """
 The HF Hub name for the Marin tokenizer.
 The Marin tokenizer is (currently) just the Llama 3 tokenizer with a custom chat template (MARIN_CHAT_TEMPLATE).
 """
 
-# to be clear this is the Olmo 2 template except we use llama3's special tokens
+# inspired by the smollm3 template and the Olmo 2 template, using llama3's special tokens
 MARIN_CHAT_TEMPLATE = """
 {{ bos_token }}
-{%- for message in messages -%}
-{%- if message['role'] == 'assistant' -%}
-    <|start_header_id|>{{ message['role'] }}<|end_header_id|>
-{% generation %}{{- message['content'] | trim }}<|eot_id|>{% endgeneration %}\n
-{% else %}
-<|start_header_id|>{{ message['role'] }}<|end_header_id|>
-{{ message['content'] | trim }}<|eot_id|>
+{%- if enable_thinking is defined -%}
+  {%- if enable_thinking is sameas true -%}
+    {%- set _reasoning_mode = "/think" -%}
+  {%- elif enable_thinking is sameas false -%}
+    {%- set _reasoning_mode = "/nothink" -%}
+  {%- else -%}
+    {%- set _reasoning_mode = enable_thinking -%}
+  {%- endif -%}
+{%- else -%}
+  {%- set _reasoning_mode = none -%}
+{%- endif -%}
+{%- set _custom_instructions = custom_instructions | default(None, true) -%}
+{%- set _xml_tools_list = xml_tools | default([], true) -%}
+{%- if tools is defined and tools -%}
+  {%- set _xml_tools_list = tools -%}
+{%- endif -%}
+{%- set _python_tools = python_tools | default([], true) -%}
+{%- set _has_aux_header = (_reasoning_mode is not none) or _custom_instructions or (_xml_tools_list) or (_python_tools) -%}
+{%- if _has_aux_header -%}
+<|start_header_id|>system<|end_header_id|>
+{%- if _reasoning_mode is not none -%}
+Reasoning: {{ _reasoning_mode }}
+{%- endif %}
+{%- if _custom_instructions %}
+{{ _custom_instructions | trim }}
+{%- endif %}
+{% if _xml_tools_list or _python_tools %}
+{{ "\n### Tools\n" }}
+You may call one or more functions to assist with the user query.
+{% if _xml_tools_list %}
+You are provided with function signatures within <tools> </tools> tags:
+
+<tools>
+{% for tool in _xml_tools_list %}
+{{ tool | string }}{% if not loop.last %}
 {% endif %}
+{% endfor %}
+</tools>
+
+For each function call, pass a json object with function name and arguments within <tool_call> </tool_call> tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call>
+
+{% endif %}
+{% if _python_tools %}
+When you send a message containing Python code between <|python_tag|> and <|eom_id|> tags, it will be executed in a stateful Jupyter notebook environment, and you will then be given the output.
+
+You can use the following tools in your python code like regular functions:
+<tools>
+{% for tool in _python_tools %}
+{{ tool | string }}{% if not loop.last %}
+{% endif %}
+{% endfor %}
+</tools>
+{% endif %}
+{% endif %}
+<|eot_id|>
+{%- endif -%}
+{%- for message in messages -%}
+  {%- set has_tool_calls = message.get('tool_calls') is not none and message.get('tool_calls') -%}
+  {%- if not (message.get('role') in ['tool', 'ipython'] or has_tool_calls) -%}
+    {%- if message.get('role') == 'assistant' -%}
+<|start_header_id|>assistant<|end_header_id|>
+{% set content = message.get('content') %}
+{% if content is string %}
+{% generation %}{{- content | trim }}<|eot_id|>{% endgeneration %}
+{% elif content is mapping %}
+{% generation %}{{- content.get('text', '') | trim }}<|eot_id|>{% endgeneration %}
+{% elif content is iterable %}
+{% generation %}
+{%- for chunk in content -%}
+  {%- if chunk.get('type') == 'text' -%}
+    {{ chunk.get('text', '') | trim }}
+  {%- endif -%}
+{%- endfor -%}
+<|eot_id|>
+{% endgeneration %}
+{% else %}
+{% generation %}{% endgeneration %}<|eot_id|>
+{% endif %}
+    {%- else -%}
+<|start_header_id|>{{ message['role'] }}<|end_header_id|>
+{% set content = message.get('content') %}
+{% if content is string %}
+{{ content | trim }}<|eot_id|>
+{% elif content is mapping %}
+{{ content.get('text', '') | trim }}<|eot_id|>
+{% elif content is iterable %}
+{%- for chunk in content -%}
+  {%- if chunk.get('type') == 'text' -%}
+    {{ chunk.get('text', '') | trim }}
+  {%- endif -%}
+{%- endfor -%}<|eot_id|>
+{% else %}
+<|eot_id|>
+{% endif %}
+    {%- endif -%}
+
+  {%- elif message.get('role') == 'tool' -%}
+    {%- set _tool_name = message.get('name') -%}
+    {%- set _tool_id = message.get('tool_call_id') -%}
+    {%- set _attr_name = ' name=\"' ~ _tool_name ~ '\"' if _tool_name else '' -%}
+    {%- set _attr_id = ' id=\"' ~ _tool_id ~ '\"' if _tool_id else '' -%}
+<|start_header_id|>tool<|end_header_id|>
+<tool_response{{ _attr_name }}{{ _attr_id }}>
+{%- set tool_content = message.get('content') -%}
+{%- if tool_content is mapping or (tool_content is iterable and tool_content is not string) -%}
+{{- tool_content | tojson }}
+{%- else -%}
+{{- tool_content if tool_content is not none else '' }}
+{%- endif -%}
+</tool_response><|eot_id|>
+{{- "\n" -}}
+  {%- elif message.get('role') == 'ipython' -%}
+<|start_header_id|>ipython<|end_header_id|>
+{% set ipy_content = message.get('content') %}
+{% if ipy_content is string %}
+{{- { "output": ipy_content } | tojson -}}
+{% elif ipy_content is iterable %}
+{%- for chunk in ipy_content -%}
+  {%- if chunk.get('type') == 'text' -%}
+    {{- { "output": chunk.get('text', '') } | tojson -}}
+  {%- endif -%}
+{%- endfor -%}
+{% else %}
+{{- { "output": ipy_content } | tojson -}}
+{% endif %}
+<|eot_id|>
+{% elif has_tool_calls -%}
+    {%- if message.tool_calls|length != 1 -%}
+      {{- raise_exception("This template expects exactly one tool call per assistant turn.") -}}
+    {%- endif -%}
+    {%- set tool_call = message.tool_calls[0].function -%}
+<|start_header_id|>assistant<|end_header_id|>
+{% generation %}
+{{- '{\"name\": \"' + tool_call.name + '\", \"arguments\": ' -}}
+{{- tool_call.arguments | tojson -}}
+{{- \"}\" -}}<|eot_id|>
+{% endgeneration %}
+  {%- endif -%}
 {%- endfor -%}
 {%- if add_generation_prompt -%}
-<|start_header_id|>assistant<|end_header_id|>\n{% endif -%}
+<|start_header_id|>assistant<|end_header_id|>
+{% endif -%}
 """.strip()
 
 """

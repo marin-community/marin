@@ -51,6 +51,17 @@ uv sync --extra=cuda12
 
 See [JAX's installation guide](https://jax.readthedocs.io/en/latest/installation.html) for more options.
 
+!!! tip
+If you are using a DGX Spark or similar machine with unified memory, you may need to dramatically reduce the memory that XLA preallocates for itself. You can do this by setting the `XLA_PYTHON_CLIENT_MEM_FRACTION` variable, to something like 0.5:
+`bash
+    export XLA_PYTHON_CLIENT_MEM_FRACTION=0.5
+    `
+
+    You can also set this in your `.bashrc` or `.zshrc` file.
+    ```bash
+    echo 'export XLA_PYTHON_CLIENT_MEM_FRACTION=0.5' >> ~/.bashrc
+    ```
+
 ## Running an Experiment
 
 Now you can run an experiment.

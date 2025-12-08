@@ -20,11 +20,11 @@ from abc import ABC
 import ray
 import requests
 
-from experiments.evals.resource_configs import ResourceConfig
+from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
-from marin.run.ray_deps import build_runtime_env_for_packages
+from fray.cluster.ray.deps import build_runtime_env_for_packages
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
@@ -131,6 +131,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         output_path: str,
         max_eval_instances: int | None = None,
         resource_config: ResourceConfig | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         """
         Launches the evaluation run with Ray.
@@ -147,10 +148,11 @@ class VllmTpuEvaluator(Evaluator, ABC):
             evals: list[EvalTaskConfig],
             output_path: str,
             max_eval_instances: int | None = None,
+            wandb_tags: list[str] | None = None,
         ) -> None:
             import logging
 
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            self.evaluate(model, evals, output_path, max_eval_instances)
+            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
 
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances))
+        ray.get(launch.remote(model, evals, output_path, max_eval_instances, wandb_tags))

@@ -126,6 +126,11 @@ TEST_CONVERSATION = [
     {"role": "assistant", "content": "Great!"},
 ]
 
+SIMPLE_CONVERSATION = [
+    {"role": "user", "content": "What is 2 + 2?"},
+    {"role": "assistant", "content": "The answer is 4."},
+]
+
 
 def chat_template_checks(marin_tokenizer: PreTrainedTokenizer):
     """Test that chat template is correctly set."""
@@ -151,7 +156,9 @@ def chat_template_checks(marin_tokenizer: PreTrainedTokenizer):
     expected_length = len(marin_tokenizer(REASONING_TRACE_EXAMPLE + "I'm doing well, thanks!")["input_ids"]) + len(
         marin_tokenizer("Great!")["input_ids"]
     )
-    assert np.sum(out["assistant_masks"]) == expected_length
+    assert (
+        np.sum(out["assistant_masks"]) == expected_length
+    ), f"Expected {expected_length} assistant tokens, got {np.sum(out['assistant_masks'])}"
 
     """Test that decoding of assistant tokens is correct."""
     out = marin_tokenizer.apply_chat_template(
@@ -161,10 +168,63 @@ def chat_template_checks(marin_tokenizer: PreTrainedTokenizer):
     expected_text = REASONING_TRACE_EXAMPLE + "I'm doing well, thanks!<|eot_id|>Great!<|eot_id|>"
     assert marin_tokenizer.decode(ids[np.array(out["assistant_masks"]).astype(bool)]) == expected_text
 
-    """Test that add_generation_prompt adds the final newline."""
     assert marin_tokenizer.apply_chat_template(TEST_CONVERSATION, tokenize=False, add_generation_prompt=True).endswith(
         "<|start_header_id|>assistant<|end_header_id|>\n"
     )
+
+    print(marin_tokenizer.apply_chat_template(TEST_CONVERSATION, tokenize=False, add_generation_prompt=True))
+
+    rendered = marin_tokenizer.apply_chat_template(
+        SIMPLE_CONVERSATION,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=True,
+    )
+    assert "Reasoning: /think" in rendered
+    assert "The answer is 4." in rendered
+
+    rendered = marin_tokenizer.apply_chat_template(
+        SIMPLE_CONVERSATION,
+        tokenize=False,
+        add_generation_prompt=False,
+        enable_thinking=False,
+    )
+    assert "Reasoning: /nothink" in rendered
+
+    rendered = marin_tokenizer.apply_chat_template(
+        SIMPLE_CONVERSATION,
+        tokenize=False,
+        add_generation_prompt=False,
+        enable_thinking="experimental",
+    )
+    assert "Reasoning: experimental" in rendered
+
+    rendered = marin_tokenizer.apply_chat_template(
+        SIMPLE_CONVERSATION,
+        tokenize=False,
+        add_generation_prompt=False,
+        xml_tools=[
+            '{"type": "function", "function": {"name": "final_answer", "description": "Provides final answers."}}',
+        ],
+        python_tools=[
+            '{"type": "function", "function": {"name": "python_exec", "description": "Execute Python code."}}',
+        ],
+        enable_thinking=True,
+    )
+    assert "### Tools" in rendered
+    assert "You may call one or more functions" in rendered
+    assert "<tools>" in rendered
+    assert "final_answer" in rendered
+    assert "When you send a message containing Python code" in rendered
+    assert "python_exec" in rendered
+    print(rendered)
+    rendered_tokens = marin_tokenizer.tokenize(rendered)
+    # print individual tokens with their ids for debugging
+    for token in rendered_tokens:
+        token_id = marin_tokenizer.convert_tokens_to_ids(token)
+        print(f"Token: {token} | ID: {token_id}")
+    print(len(rendered_tokens))
+    assert len(rendered_tokens) < 512, "Rendered template is too long!"
 
 
 def special_tokens_injection_check(marin_tokenizer: PreTrainedTokenizer):
@@ -181,7 +241,7 @@ def run_all_tests(marin_tokenizer: PreTrainedTokenizer):
 
 
 # ============ Main function ============
-def main():
+def main(dry_run: bool = False):
     """
     Create and save a modified version of the llama3 tokenizer.
 
@@ -205,12 +265,16 @@ def main():
         marin_tokenizer.save_pretrained(temp_path)
         marin_tokenizer = AutoTokenizer.from_pretrained(temp_path, local_files_only=True)
 
-    # Run tests to make sure that the tokenizer is modified correctly
     run_all_tests(marin_tokenizer)
 
-    # Push to huggingface
-    marin_tokenizer.push_to_hub(marin_tokenizer_hf_path)
+    if not dry_run:
+        marin_tokenizer.push_to_hub(marin_tokenizer_hf_path)
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if "--dry-run" in sys.argv:
+        main(dry_run=True)
+    else:
+        main()

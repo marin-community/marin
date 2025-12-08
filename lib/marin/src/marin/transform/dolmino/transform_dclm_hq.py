@@ -16,6 +16,33 @@
 marin/transform/dolmino/transform_dclm_hq.py
 
 Performs HTML->Text/MD conversion using the specified tools over a DCLM HQ dump save in DOLMA format.
+
+Example Usage (production, large dataset):
+uv run zephyr --backend=ray --max-parallelism=200 --memory=2GB \
+    lib/marin/src/marin/transform/dolmino/transform_dclm_hq.py \
+    --entry-point=process_dclm_hq_dump \
+    --input_hf_path "hf://datasets/allenai/dolmino-mix-1124@main/data/dclm" \
+    --output_path gs://bucket/processed/dclm-hq \
+    --extract_method resiliparse \
+    --extract_config.type resiliparse \
+    --extract_config.use_custom_variant true \
+    --hf_repo_id "allenai/dolmino-mix-1124" \
+    --hf_revision "main" \
+    --hf_paths '["data/dclm"]'
+
+Example Usage (local testing, small dataset):
+uv run zephyr --backend=threadpool --max-parallelism=2 --entry-point=process_dclm_hq_dump \
+    lib/marin/src/marin/transform/dolmino/transform_dclm_hq.py \
+    --input_hf_path "hf://datasets/allenai/dolmino-mix-1124@main/data/dclm" \
+    --output_path /tmp/dclm_hq_test \
+    --extract_method trafilatura \
+    --extract_config.type trafilatura \
+    --extract_config.favor_precision false \
+    --extract_config.favor_recall true \
+    --hf_repo_id "allenai/dolmino-mix-1124" \
+    --hf_revision "main" \
+    --hf_paths '["data/dclm"]' \
+    --max_split 1
 """
 
 import json
@@ -25,16 +52,15 @@ from dataclasses import dataclass
 
 import draccus
 import fsspec
-import ray
-from tqdm import tqdm
-
-from marin.core.runtime import cached_or_construct_output
 from marin.download.dclm_hq.download_dclm_hq_html import find_html_in_cc
 from marin.download.huggingface.stream_remove_columns import hf_fs
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
+from tqdm import tqdm
+from zephyr import Dataset, flow_backend
+from zephyr.writers import atomic_rename
 
-logger = logging.getLogger("ray")
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,8 +75,6 @@ class DCLMHQExtractionConfig:
     max_split: int | None = None
 
 
-@ray.remote(memory=2 * 1024 * 1024 * 1024)
-@cached_or_construct_output(success_suffix="SUCCESS")
 def process_file(
     input_file_path: str,
     output_file_path: str,
@@ -60,10 +84,11 @@ def process_file(
     logger.info(f"Starting processing of file {input_file_path}")
     logger.info(f"Source: {input_file_path}")
     logger.info(f"Destination: {output_file_path}")
-    try:
+
+    with atomic_rename(output_file_path) as temp_path:
         with (
-            fsspec.open(input_file_path, compression="zst") as source,
-            fsspec.open(output_file_path, "wt", compression="gzip") as output,
+            fsspec.open(input_file_path, "rt", compression="zstd") as source,
+            fsspec.open(temp_path, "wt", compression="gzip") as output,
         ):
             for line in tqdm(source, desc="Processing lines"):
                 row = json.loads(line)
@@ -92,71 +117,52 @@ def process_file(
                     logger.exception(f"Error processing line: {e}")
                     continue
 
-        logger.info("\nProcessing completed successfully!")
-        logger.info(f"File available at: {output_file_path}")
-
-    except Exception as e:
-        logger.error(f"Error during processing: {e}")
-        raise
-
-
-@ray.remote(memory=2 * 1024 * 1024 * 1024)
-def process_dclm_shard(
-    input_path: str,
-    output_path: str,
-    extract_method: str,
-    extract_config: ExtractionConfig,
-) -> None:
-    logger.info(f"Processing DCLM shard {input_path}")
-    logger.info(f"Output path: {output_path}")
-
-    result_refs = []
-    MAX_CONCURRENT_WORKERS = 16
-
-    shard_paths = [i.split("/")[-1] for i in hf_fs.glob(os.path.join(input_path, "*.json.zst"))]
-
-    for shard_path in shard_paths:
-        if len(result_refs) > MAX_CONCURRENT_WORKERS:
-            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            try:
-                ray.get(ready_refs)
-            except Exception as e:
-                logger.exception(f"Error processing the group: {e}")
-                continue
-
-        input_file_path = os.path.join(input_path, shard_path)
-        output_file_path = os.path.join(output_path, shard_path).replace(".json.zst", ".jsonl.gz")
-        result_refs.append(process_file.remote(input_file_path, output_file_path, extract_method, extract_config))
-
-    try:
-        ray.get(result_refs)
-    except Exception as e:
-        logger.exception(f"Error processing the group: {e}")
+    logger.info("\nProcessing completed successfully!")
+    logger.info(f"File available at: {output_file_path}")
 
 
 @draccus.wrap()
 def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
     logger.info(f"Starting processing of DCLM HQ dump in {cfg.input_hf_path}")
 
-    result_refs = []
-    MAX_CONCURRENT_WORKERS = 50
+    backend = flow_backend()
 
+    # Glob all files across all shards upfront
+    all_files = []
     paths = [i.split("/")[-1] for i in hf_fs.ls(cfg.input_hf_path, detail=False)]
     paths = paths[: cfg.max_split] if cfg.max_split else paths
 
-    for path in paths:
-        if len(result_refs) > MAX_CONCURRENT_WORKERS:
-            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            try:
-                ray.get(ready_refs)
-            except Exception as e:
-                logger.exception(f"Error processing the group: {e}")
-                continue
+    logger.info(f"Found {len(paths)} shards to process")
 
+    for path in paths:
         input_path = os.path.join(cfg.input_hf_path, path)
-        output_path = os.path.join(cfg.output_path, path)
-        result_refs.append(process_dclm_shard.remote(input_path, output_path, cfg.extract_method, cfg.extract_config))
-    try:
-        ray.get(result_refs)
-    except Exception as e:
-        logger.exception(f"Error processing the group: {e}")
+        shard_paths = [i.split("/")[-1] for i in hf_fs.glob(os.path.join(input_path, "*.json.zst"))]
+
+        for shard_path in shard_paths:
+            input_file_path = os.path.join(input_path, shard_path)
+            output_file_path = os.path.join(cfg.output_path, path, shard_path).replace(".json.zst", ".jsonl.gz")
+            all_files.append(
+                {
+                    "input": input_file_path,
+                    "output": output_file_path,
+                    "extract_method": cfg.extract_method,
+                    "extract_config": cfg.extract_config,
+                }
+            )
+
+    logger.info(f"Total files to process: {len(all_files)}")
+
+    pipeline = (
+        Dataset.from_list(all_files)
+        .filter(lambda f: not fsspec.url_to_fs(f["output"])[0].exists(f["output"]))
+        .map(
+            lambda f: process_file(
+                input_file_path=f["input"],
+                output_file_path=f["output"],
+                extract_method=f["extract_method"],
+                extract_config=f["extract_config"],
+            )
+        )
+    )
+
+    list(backend.execute(pipeline))

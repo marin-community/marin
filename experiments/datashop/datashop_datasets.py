@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from experiments.pretraining_datasets import dclm_baseline
+from experiments.pretraining_datasets.simple import tokenized
 from marin.classifiers.utils import CreateDatasetConfig, create_dataset
 from marin.download.filesystem.transfer import TransferConfig, transfer_files
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
@@ -20,13 +20,13 @@ from marin.execution.executor import ExecutorStep, executor_main, this_output_pa
 # Serves as the default pretraining dataset used for Datashop experiments. We want roughly 400B tokens
 # that we can use for training because we know that the quality filter will filter about 10% of the top
 # tokens since 3+ is roughly top 10% most of the time.
-dclm_baseline_global_shard_2 = dclm_baseline.cd(
+dclm_baseline_global_shard_2 = tokenized["dclm_baseline"].cd(
     "huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_02_of_10"
 )
 
 # Around 40B tokens which serves as the default seed annotation dataset for Datashop experiments. We take the top 4
 # files which amounts to about 350K examples.
-dclm_baseline_global_shard_1_local_shard_1 = dclm_baseline.cd(
+dclm_baseline_global_shard_1_local_shard_1 = tokenized["dclm_baseline"].cd(
     "huggingface.co/datasets/mlfoundations/dclm-baseline-1.0/resolve/a3b142c/global-shard_01_of_10/local-shard_0_of_10"
 )
 

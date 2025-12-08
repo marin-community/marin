@@ -13,12 +13,12 @@
 # limitations under the License.
 
 """
-Instruction datasets are downloaded from Hugging Face and transformed into OpenAI messages
+Instruction datasets are streamed from Hugging Face and transformed into OpenAI messages
 format which can be used for SFT.
 
 How to add a new instruction dataset:
 1. Add the dataset config to INSTRUCTION_DATASET_NAME_TO_CONFIG
-2. Register an adapter for the dataset in marin/transform/conversation/adapters.py
+2. Provide a TransformAdapter in that config entry (no separate registration required)
 
 How to retrieve an instruction dataset:
 1. Use the function `get_instruction_dataset` with the HF repo id.
@@ -41,16 +41,21 @@ Current datasets:
 15. PrimeIntellect/verifiable-math-problems
 16. sherryy/tulu-3-sft-personas-instruction-following-expanded
 17. facebook/natural_reasoning
+18. HuggingFaceTB/smoltalk2
+19. nvidia/Nemotron-Post-Training-Dataset-v1
+20. nvidia/Nemotron-Post-Training-Dataset-v2
+21. HuggingFaceH4/no_robots
 """
 
+import dataclasses
 import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
 from marin.execution.executor import (
     ExecutorStep,
     executor_main,
@@ -62,10 +67,53 @@ from marin.transform.conversation.conversation_to_dolma import (
     ConversationToDolmaConfig,
     convert_conversation_to_dolma,
 )
+from marin.transform.conversation.adapters import InputDatasetFormat, TransformAdapter
 from marin.transform.conversation.transform_conversation import (
     TransformSFTDatasetConfig,
     transform_hf_dataset,
 )
+
+SMOLTALK2_SPLITS = [
+    "LongAlign_64k_Qwen3_32B_yarn_131k_think",
+    "OpenThoughts3_1.2M_think",
+    "aya_dataset_Qwen3_32B_think",
+    "multi_turn_reasoning_if_think",
+    "s1k_1.1_think",
+    "smolagents_toolcalling_traces_think",
+    "smoltalk_everyday_convs_reasoning_Qwen3_32B_think",
+    "smoltalk_multilingual8_Qwen3_32B_think",
+    "smoltalk_systemchats_Qwen3_32B_think",
+    "table_gpt_Qwen3_32B_think",
+    "LongAlign_64k_context_lang_annotated_lang_6_no_think",
+    "Mixture_of_Thoughts_science_no_think",
+    "OpenHermes_2.5_no_think",
+    "OpenThoughts3_1.2M_no_think_no_think",
+    "hermes_function_calling_v1_no_think",
+    "smoltalk_multilingual_8languages_lang_5_no_think",
+    "smoltalk_smollm3_everyday_conversations_no_think",
+    "smoltalk_smollm3_explore_instruct_rewriting_no_think",
+    "smoltalk_smollm3_smol_magpie_ultra_no_think",
+    "smoltalk_smollm3_smol_rewrite_no_think",
+    "smoltalk_smollm3_smol_summarize_no_think",
+    "smoltalk_smollm3_systemchats_30k_no_think",
+    "table_gpt_no_think",
+    "tulu_3_sft_personas_instruction_following_no_think",
+    "xlam_traces_no_think",
+]
+
+NEMOTRON_V2_SPLITS = [
+    "stem",
+    "chat",
+    "math",
+    "code",
+    "multilingual_ja",
+    "multilingual_de",
+    "multilingual_it",
+    "multilingual_es",
+    "multilingual_fr",
+]
+
+NEMOTRON_V1_SPLITS = ["chat", "code", "math", "stem", "tool_calling"]
 
 
 @dataclass(frozen=True)
@@ -75,160 +123,369 @@ class InstructionDatasetConfig:
     Args:
         hf_dataset_id: The Hugging Face repo id of the dataset.
         revision: The revision of the dataset to download. A 7-character commit hash.
-        wait_for_completion: Whether to wait for the dataset to be downloaded, usually True.
+        adapter: Adapter that converts rows from this dataset to OpenAI chat format.
         metadata_columns: The columns to extract from the dataset. Check the dataset's schema for available columns.
-        filetype: The filetype of the dataset; check the dataset's files on Hugging Face for the correct filetype.
         subsets: Data subsets (from HuggingFace config) to use. Empty list indicates to use all/default subset(s).
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
-        legacy: True uses the Marin function as dataloader. False uses the `datasets` package as dataloader.
-        adapter_name: Nmae of the adapter. None indicates that the adapater name is the same as the `hf_dataset_id`.
+        name: Optional friendly name for the dataset; defaults to `hf_dataset_id`.
     """
 
     hf_dataset_id: str
     revision: str
-    wait_for_completion: bool
+    adapter: TransformAdapter
     metadata_columns: list[str]
-    filetype: str
+    name: str | None = None
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
-    legacy: bool = False
-    adapter_name: str = None
+
+
+def multi_turn_adapter(
+    conversation_column: str = "messages",
+    role_key: str = "role",
+    user_value: str = "user",
+    assistant_value: str = "assistant",
+    system_value: str = "system",
+    content_key: str = "content",
+    metadata_remap: dict[str, str] | None = None,
+    replacements: dict[str, str] | None = None,
+    extra_metadata_fn=None,
+) -> TransformAdapter:
+    return TransformAdapter(
+        dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+        conversation_column=conversation_column,
+        role_key=role_key,
+        user_value=user_value,
+        assistant_value=assistant_value,
+        system_value=system_value,
+        content_key=content_key,
+        metadata_remap=metadata_remap or {},
+        replacements=replacements,
+        extra_metadata_fn=extra_metadata_fn,
+    )
+
+
+def instruction_response_adapter(
+    *,
+    instruction_column: str,
+    response_column: str,
+    content_key: str = "",
+    filter_on_key: str = "",
+    metadata_remap: dict[str, str] | None = None,
+    replacements: dict[str, str] | None = None,
+    extra_metadata_fn=None,
+) -> TransformAdapter:
+    return TransformAdapter(
+        dataset_format=InputDatasetFormat.INSTRUCTION_RESPONSE,
+        instruction_column=instruction_column,
+        response_column=response_column,
+        content_key=content_key,
+        filter_on_key=filter_on_key,
+        metadata_remap=metadata_remap or {},
+        replacements=replacements,
+        extra_metadata_fn=extra_metadata_fn,
+    )
+
+
+def instruct_column_response_adapter(
+    instruction_column: str,
+    response_column: str,
+    content_key: str,
+    metadata_remap: dict[str, str] | None = None,
+    replacements: dict[str, str] | None = None,
+    extra_metadata_fn=None,
+) -> TransformAdapter:
+    return TransformAdapter(
+        dataset_format=InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE,
+        instruction_column=instruction_column,
+        response_column=response_column,
+        content_key=content_key,
+        metadata_remap=metadata_remap or {},
+        replacements=replacements,
+        extra_metadata_fn=extra_metadata_fn,
+    )
+
+
+def instruct_msg_response_adapter(
+    *,
+    instruction_column: str,
+    response_column: str,
+    role_key: str,
+    user_value: str,
+    assistant_value: str,
+    system_value: str,
+    content_key: str,
+    metadata_remap: dict[str, str] | None = None,
+    replacements: dict[str, str] | None = None,
+    extra_metadata_fn=None,
+) -> TransformAdapter:
+    return TransformAdapter(
+        dataset_format=InputDatasetFormat.INSTRUCT_MSG_RESPONSE,
+        instruction_column=instruction_column,
+        response_column=response_column,
+        role_key=role_key,
+        user_value=user_value,
+        assistant_value=assistant_value,
+        system_value=system_value,
+        content_key=content_key,
+        metadata_remap=metadata_remap or {},
+        replacements=replacements,
+        extra_metadata_fn=extra_metadata_fn,
+    )
+
+
+@dataclass
+class ReasoningToChatKwargs:
+    """Callable metadata helper to toggle thinking mode based on the "reasoning" column."""
+
+    def __call__(self, row: dict[str, Any]) -> dict[str, Any]:
+        value = row.get("reasoning")
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"on", "true", "1"}:
+                return {"chat_template_kwargs": {"enable_thinking": True}}
+            if lowered in {"off", "false", "0"}:
+                return {"chat_template_kwargs": {"enable_thinking": False}}
+        if isinstance(value, bool):
+            return {"chat_template_kwargs": {"enable_thinking": value}}
+        return {}
+
+
+reasoning_to_chat_kwargs = ReasoningToChatKwargs()
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
     "meta-math/MetaMathQA": InstructionDatasetConfig(
         hf_dataset_id="meta-math/MetaMathQA",
         revision="aa4f34d",
-        wait_for_completion=True,
+        adapter=instruction_response_adapter(
+            instruction_column="query",
+            response_column="response",
+        ),
         metadata_columns=["type"],
-        filetype="json",
+        name="meta-math/MetaMathQA",
     ),
     "allenai/tulu-v2-sft-mixture": InstructionDatasetConfig(
         hf_dataset_id="allenai/tulu-v2-sft-mixture",
         revision="6248b17",
-        wait_for_completion=True,
+        adapter=multi_turn_adapter(),
         metadata_columns=["dataset", "id"],
-        filetype="parquet",
+        name="allenai/tulu-v2-sft-mixture",
     ),
     "openbmb/UltraInteract_sft": InstructionDatasetConfig(
         hf_dataset_id="openbmb/UltraInteract_sft",
         revision="2b102e4",
-        wait_for_completion=True,
+        adapter=instruction_response_adapter(
+            instruction_column="instruction",
+            response_column="response",
+        ),
         metadata_columns=["task", "dataset"],
-        filetype="parquet",
+        name="openbmb/UltraInteract_sft",
     ),
     "teknium/OpenHermes-2.5": InstructionDatasetConfig(
         hf_dataset_id="teknium/OpenHermes-2.5",
         revision="b820378",
-        wait_for_completion=True,
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            system_value="system",
+            content_key="value",
+        ),
         metadata_columns=["id", "category", "source"],
-        filetype="json",
+        name="teknium/OpenHermes-2.5",
     ),
     "allenai/tulu-v2-sft-mixture-olmo-4096": InstructionDatasetConfig(
         hf_dataset_id="allenai/tulu-v2-sft-mixture-olmo-4096",
-        revision="7a7c388",  # The revision hash shown in the image
-        wait_for_completion=True,
-        metadata_columns=["dataset", "id"],  # Keeping these metadata columns
-        filetype="jsonl",  # Corrected from parquet to jsonl based on the file extension
+        revision="7a7c388",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["dataset", "id"],
+        name="allenai/tulu-v2-sft-mixture-olmo-4096",
     ),
     "allenai/tulu-3-sft-mixture": InstructionDatasetConfig(
         hf_dataset_id="allenai/tulu-3-sft-mixture",
-        revision="55e9fd6",  # The revision hash shown in the image
-        wait_for_completion=True,
-        metadata_columns=["dataset", "id"],  # Keeping these metadata columns
-        filetype="parquet",
+        revision="55e9fd6",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["dataset", "id"],
+        name="allenai/tulu-3-sft-mixture",
     ),
     "TIGER-Lab/AceCode-89K": InstructionDatasetConfig(
         hf_dataset_id="TIGER-Lab/AceCode-89K",
-        revision="0361e95",
-        wait_for_completion=True,
+        revision="13216309a9f6cb40b60cb1a9750071efeac414ad",
+        adapter=instruction_response_adapter(
+            instruction_column="question",
+            response_column="inferences",
+            content_key="completion",
+            filter_on_key="pass_rate",
+        ),
         metadata_columns=["id", "source"],
-        filetype="parquet",
+        name="TIGER-Lab/AceCode-89K",
     ),
     "cognitivecomputations/dolphin-r1-nonreasoning": InstructionDatasetConfig(
         hf_dataset_id="cognitivecomputations/dolphin-r1",
-        subsets=["nonreasoning"],  # "reasoning-deepseek" & "reasoning-flash" are omitted
-        revision="f6ac651",  # The revision hash shown in the image
-        wait_for_completion=True,
+        revision="f6ac651",
+        adapter=multi_turn_adapter(),
         metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],
+        name="cognitivecomputations/dolphin-r1-nonreasoning",
+        subsets=["nonreasoning"],
         splits=["train"],
-        filetype="jsonl",
-        adapter_name="cognitivecomputations/dolphin-r1-nonreasoning",
     ),
     "cognitivecomputations/dolphin-r1-reasoning": InstructionDatasetConfig(
         hf_dataset_id="cognitivecomputations/dolphin-r1",
-        subsets=["reasoning-deepseek", "reasoning-flash"],
-        revision="f6ac651",  # The revision hash shown in the image
-        wait_for_completion=True,
+        revision="f6ac651",
+        adapter=instruct_msg_response_adapter(
+            instruction_column="messages",
+            response_column="answer",
+            role_key="role",
+            user_value="user",
+            assistant_value="assistant",
+            system_value="system",
+            content_key="content",
+        ),
         metadata_columns=["score", "refusal", "compliance_rating", "overall_quality"],
+        name="cognitivecomputations/dolphin-r1-reasoning",
+        subsets=["reasoning-deepseek", "reasoning-flash"],
         splits=["train"],
-        filetype="jsonl",
-        adapter_name="cognitivecomputations/dolphin-r1-reasoning",
     ),
     "open-r1/OpenThoughts-114k-math": InstructionDatasetConfig(
         hf_dataset_id="open-r1/OpenThoughts-114k-math",
-        revision="2db609d",  # The revision hash shown in the image
-        wait_for_completion=True,
+        revision="2db609d",
+        adapter=multi_turn_adapter(),
         metadata_columns=["system", "source", "generated_token_count", "correct"],
-        filetype="parquet",
+        name="open-r1/OpenThoughts-114k-math",
     ),
     "bespokelabs/Bespoke-Stratos-17k": InstructionDatasetConfig(
         hf_dataset_id="bespokelabs/Bespoke-Stratos-17k",
-        revision="9e9adba",  # The revision hash shown in the image
-        wait_for_completion=True,
-        filetype="parquet",
+        revision="9e9adba",
+        adapter=TransformAdapter(
+            dataset_format=InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN,
+            instruction_column="system",
+            conversation_column="conversations",
+            role_key="from",
+            user_value="user",
+            assistant_value="assistant",
+            content_key="value",
+        ),
         metadata_columns=[],
+        name="bespokelabs/Bespoke-Stratos-17k",
     ),
     "HuggingFaceTB/smoltalk": InstructionDatasetConfig(
         hf_dataset_id="HuggingFaceTB/smoltalk",
-        revision="2c849df",  # The revision hash shown in the image
-        wait_for_completion=True,
-        metadata_columns=["source"],  # Keeping these metadata columns
+        revision="2c849df",
+        adapter=multi_turn_adapter(metadata_remap={"chat_template_kwargs": "chat_template_kwargs"}),
+        metadata_columns=["source"],
+        name="HuggingFaceTB/smoltalk",
         subsets=["all"],
-        filetype="parquet",
+    ),
+    "HuggingFaceH4/no_robots": InstructionDatasetConfig(
+        hf_dataset_id="HuggingFaceH4/no_robots",
+        revision="e6f9a4a",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["category", "prompt_id"],
+        name="HuggingFaceH4/no_robots",
+        splits=["train"],
     ),
     "PrimeIntellect/verifiable-math-problems": InstructionDatasetConfig(
         hf_dataset_id="PrimeIntellect/verifiable-math-problems",
-        revision="2ad7c92",  # The revision hash shown in the image
-        wait_for_completion=True,
-        metadata_columns=["source", "task_type", "problem_id"],  # Keeping these metadata columns
-        filetype="parquet",
+        revision="2ad7c92",
+        adapter=instruction_response_adapter(
+            instruction_column="prompt",
+            response_column="gold_standard_solution",
+        ),
+        metadata_columns=["source", "task_type", "problem_id"],
+        name="PrimeIntellect/verifiable-math-problems",
     ),
     "sherryy/tulu-3-sft-personas-instruction-following-expanded": InstructionDatasetConfig(
         hf_dataset_id="sherryy/tulu-3-sft-personas-instruction-following-expanded",
-        revision="79ab2c4",  # The revision hash shown in the image
-        wait_for_completion=True,
-        metadata_columns=["dataset", "id"],  # Keeping these metadata columns
-        filetype="parquet",
+        revision="79ab2c4",
+        adapter=multi_turn_adapter(),
+        metadata_columns=["dataset", "id"],
+        name="sherryy/tulu-3-sft-personas-instruction-following-expanded",
     ),
     "facebook/natural_reasoning": InstructionDatasetConfig(
         hf_dataset_id="facebook/natural_reasoning",
         revision="99eea5d",
-        wait_for_completion=True,
-        metadata_columns=["reference_answer"],  # Including reference_answer as metadata
-        filetype="jsonl",  # The dataset appears to be in parquet format
-        splits=["train"],  # Default to train split
+        adapter=instruct_column_response_adapter(
+            instruction_column="question",
+            response_column="responses",
+            content_key="response",
+        ),
+        metadata_columns=["reference_answer"],
+        name="facebook/natural_reasoning",
+        splits=["train"],
     ),
     "GeneralReasoning/GeneralThought-195K-modelanswer": InstructionDatasetConfig(
         hf_dataset_id="GeneralReasoning/GeneralThought-195K",
         revision="64f7cb8",
-        wait_for_completion=True,
-        metadata_columns=["question_id", "question_url", "reference_answer", "model_name", "question_source", "task"],
-        filetype="jsonl",  # The dataset appears to be in parquet format
-        splits=["train"],  # Default to train split
-        adapter_name="GeneralReasoning/GeneralThought-195K-modelanswer",
+        adapter=instruction_response_adapter(
+            instruction_column="question",
+            response_column="model_answer",
+        ),
+        metadata_columns=[
+            "question_id",
+            "question_url",
+            "reference_answer",
+            "model_name",
+            "question_source",
+            "task",
+        ],
+        name="GeneralReasoning/GeneralThought-195K-modelanswer",
+        splits=["train"],
     ),
     "GeneralReasoning/GeneralThought-195K-modelreasoning": InstructionDatasetConfig(
         hf_dataset_id="GeneralReasoning/GeneralThought-195K",
         revision="64f7cb8",
-        wait_for_completion=True,
-        metadata_columns=["question_id", "question_url", "reference_answer", "model_name", "question_source", "task"],
-        filetype="jsonl",  # The dataset appears to be in parquet format
-        splits=["train"],  # Default to train split
-        adapter_name="GeneralReasoning/GeneralThought-195K-modelreasoning",
+        adapter=instruction_response_adapter(
+            instruction_column="question",
+            response_column="model_reasoning",
+        ),
+        metadata_columns=[
+            "question_id",
+            "question_url",
+            "reference_answer",
+            "model_name",
+            "question_source",
+            "task",
+        ],
+        name="GeneralReasoning/GeneralThought-195K-modelreasoning",
+        splits=["train"],
     ),
 }
+
+for split_name in SMOLTALK2_SPLITS:
+    dataset_key = f"HuggingFaceTB/smoltalk2/{split_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=f"HuggingFaceTB/smoltalk2/{split_name}",
+        hf_dataset_id="HuggingFaceTB/smoltalk2",
+        revision="fc6cc21",
+        adapter=multi_turn_adapter(metadata_remap={"chat_template_kwargs": "chat_template_kwargs"}),
+        metadata_columns=[],
+        subsets=["SFT"],
+        splits=[split_name],
+    )
+
+for split_name in NEMOTRON_V2_SPLITS:
+    dataset_key = f"nvidia/Nemotron-Post-Training-Dataset-v2/{split_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id="nvidia/Nemotron-Post-Training-Dataset-v2",
+        revision="5c89e01",
+        adapter=multi_turn_adapter(extra_metadata_fn=reasoning_to_chat_kwargs),
+        metadata_columns=["category", "generator", "license"],
+        splits=[split_name],
+    )
+
+for split_name in NEMOTRON_V1_SPLITS:
+    dataset_key = f"nvidia/Nemotron-Post-Training-Dataset-v1/{split_name}"
+    INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_key] = InstructionDatasetConfig(
+        name=dataset_key,
+        hf_dataset_id="nvidia/Nemotron-Post-Training-Dataset-v1",
+        revision="74e23eb",
+        adapter=multi_turn_adapter(extra_metadata_fn=reasoning_to_chat_kwargs),
+        metadata_columns=["category", "generator", "license", "metadata", "version"],
+        splits=[split_name],
+    )
 
 
 def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
@@ -238,70 +495,45 @@ def get_directory_friendly_dataset_name(hf_dataset_id: str) -> str:
     return dataset_name
 
 
-def download_dataset_step(dataset: InstructionDatasetConfig) -> ExecutorStep:
-    """ExecutorStep for downloading of data from external source to GCP"""
-    dataset_name = get_directory_friendly_dataset_name(dataset.hf_dataset_id)
-    download_step = ExecutorStep(
-        name=f"raw/{dataset_name}",
-        fn=download_hf,
-        config=DownloadConfig(
-            hf_dataset_id=dataset.hf_dataset_id,
-            revision=versioned(dataset.revision),
-            gcs_output_path=this_output_path(),
-            wait_for_completion=True,
-        ),
-        override_output_path=f"raw/{dataset_name}-{dataset.revision}",
-    )
+def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorStep:
+    """ExecutorStep that preprocesses the input dataset into a canonicalized format for SFT training."""
+    adapter = dataset_cfg.adapter
+    output_name = dataset_cfg.name if dataset_cfg.name is not None else dataset_cfg.hf_dataset_id
+    dataset_name = get_directory_friendly_dataset_name(output_name)
 
-    return download_step
+    adapter_dict = dataclasses.asdict(adapter)
+    adapter_dict["dataset_format"] = adapter_dict["dataset_format"].value
 
+    def canonicalize(value):
+        if isinstance(value, dict):
+            return {k: canonicalize(v) for k, v in sorted(value.items())}
+        if isinstance(value, list):
+            return [canonicalize(x) for x in value]
+        if callable(value):
+            return f"{value.__module__}.{value.__qualname__}"
+        return value
 
-def transform_dataset_step(dataset_cfg: InstructionDatasetConfig, download_step: ExecutorStep) -> ExecutorStep:
-    """ExecutorStep that preprocesses and shards the input dataset.
-
-    ===========================================================================
-    dataset_cfg: {
-        ...
-        "hf_dataset_id": "cognitivecomputations/dolphin-r1",
-        "subsets": ["reasoning-flash"],
-        "splits": ['train', 'validation'],
-        ...
-    }
-    output_path_of(download_step) --> gs://.../raw/dolphin-r1-[revision_number]-[hash]
-
-    Expected files written: [
-        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/train/shard_00001.json.gz,
-        ...
-        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/train/shard_00055.json.gz,
-        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/validation/shard_00001.json.gz,
-        ...
-        gs://.../dolphin_r1__[revision_number]_[hash]/reasoning_flash/validation/shard_00023.json.gz,
-    ]
-    ===========================================================================
-    """
-    adapter_name = dataset_cfg.adapter_name if dataset_cfg.adapter_name is not None else dataset_cfg.hf_dataset_id
-    dataset_name = get_directory_friendly_dataset_name(adapter_name)
-    download_data_path = output_path_of(download_step)
+    adapter_signature = canonicalize(adapter_dict)
+    adapter_signature_str = json.dumps(adapter_signature, sort_keys=True)
 
     config_str = f"{dataset_name}-\
         {dataset_cfg.revision}\
         -{sorted(dataset_cfg.subsets)}\
-        -{sorted(dataset_cfg.splits)}"
+        -{sorted(dataset_cfg.splits)}\
+        -{adapter_signature_str}"
     hashed_config_str = hashlib.md5(config_str.encode()).hexdigest()[:6]
 
     transform_step = ExecutorStep(
-        name=f"documents/{dataset_name}",
+        name=f"documents/{output_name}",
         fn=transform_hf_dataset,
         config=TransformSFTDatasetConfig(
-            input_path=download_data_path,
+            source=versioned(dataset_cfg.hf_dataset_id),
+            revision=versioned(dataset_cfg.revision),
             output_path=this_output_path(),
-            shard_size=versioned(5000),
             metadata_columns=versioned(dataset_cfg.metadata_columns),
-            filetype=dataset_cfg.filetype,
-            source=dataset_cfg.hf_dataset_id,
-            subsets=dataset_cfg.subsets,
-            splits=dataset_cfg.splits,
-            adapter_name=adapter_name,
+            adapter=versioned(adapter),
+            subsets=versioned(dataset_cfg.subsets),
+            splits=versioned(dataset_cfg.splits),
         ),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
     )
@@ -319,9 +551,7 @@ def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train"
         **{k: v for k, v in original_config.__dict__.items() if k != "splits"}, splits=splits
     )
 
-    download_step = download_dataset_step(config)
-    transform_step = transform_dataset_step(config, download_step)
-    return transform_step
+    return transform_dataset_step(config)
 
 
 tulu_3_in_dolma = ExecutorStep(
@@ -347,9 +577,7 @@ tulu3_flat_llama_tokenized_as_train = default_tokenize(
 if __name__ == "__main__":
     all_steps = []
     for config in INSTRUCTION_DATASET_NAME_TO_CONFIG.values():
-        downloaded_dataset = download_dataset_step(config)
-        all_steps.append(downloaded_dataset)
-        transformed_dataset = transform_dataset_step(config, downloaded_dataset)
+        transformed_dataset = transform_dataset_step(config)
         all_steps.append(transformed_dataset)
 
     executor_main(steps=all_steps)

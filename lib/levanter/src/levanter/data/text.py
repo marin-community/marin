@@ -31,17 +31,16 @@ from typing import (
 
 import equinox as eqx
 import fsspec
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
 import regex
 import tensorstore as ts
 from draccus import ChoiceRegistry, field
+from haliax import Axis
 from jaxtyping import PRNGKeyArray
 from tokenizers import normalizers
-
-import haliax as hax
-from haliax import Axis
 
 import levanter
 from levanter.data import AsyncDataset
@@ -60,13 +59,11 @@ from levanter.utils.hf_utils import HfTokenizer, num_cpus_used_by_tokenizer
 # intercept the logging nonsense here
 from levanter.utils.logging import silence_transformer_nag  # noqa
 
-
 silence_transformer_nag()  # noqa
 from transformers import BatchEncoding, PreTrainedTokenizer, PreTrainedTokenizerBase, PreTrainedTokenizerFast  # noqa
 
 from levanter.compat.hf_checkpoints import load_tokenizer  # noqa
 from levanter.data._preprocessor import BatchProcessor, IdentityProcessor, U, dict_from_record_batch  # noqa
-from levanter.data.metrics_monitor import LoggerMetricsMonitor, LoggingMetricsMonitor, MetricsMonitor  # noqa
 from levanter.data.sharded_datasource import (  # noqa
     JsonlDataSource,
     ShardedDataSource,
@@ -76,6 +73,10 @@ from levanter.data.sharded_datasource import (  # noqa
 )
 from levanter.shapes import NamedShapeSpec, ShapeSpec  # noqa
 from levanter.store.cache import build_or_load_cache  # noqa
+
+
+# Metrics monitoring removed; keep alias for type hints.
+MetricsMonitor = Any
 from levanter.utils.jax_utils import key_iterator, use_cpu_device  # noqa
 
 
@@ -104,17 +105,16 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         super().__init__()
         self.doc_cache = doc_cache
         self.seq_len = seq_len
-        self._store: Optional[TreeStore] = None
+        self._store: Optional[TreeStore] = doc_cache.store
         self._cached_len: Optional[int] = None
 
     async def async_len(self) -> int:
-        await self.doc_cache.finished()
         token_arrays = await self._await_token_cache()
         return token_arrays.data_size // self.seq_len
 
     async def _await_token_cache(self) -> JaggedArrayStore:
         if self._store is None:
-            self._store = await self.doc_cache.store_async()
+            self._store = self.doc_cache.store
         return self._store.tree["input_ids"]
 
     async def final_length_is_known(self) -> bool:
@@ -416,15 +416,35 @@ class LmDatasetFormatBase(abc.ABC, ChoiceRegistry):
 @LmDatasetFormatBase.register_subclass("text")
 @dataclass(frozen=True)
 class TextLmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for raw text examples.
+
+    Attributes:
+        text_key: Field name containing the raw text or tokens.
+    """
+
     text_key: str = "text"  # key for the text field in the jsonl file
 
 
 @LmDatasetFormatBase.register_subclass("chat")
 @dataclass(frozen=True)
 class ChatLmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for multi-turn chat transcripts.
+
+    Attributes:
+        messages_field: Field name containing the ordered list of chat messages.
+        single_turn: Treat examples as a single user/assistant exchange.
+        chat_template: Overrides the tokenizer's chat template when provided.
+        system_prompt: Field name carrying an optional system instruction to prepend.
+        chat_template_kwargs: Field name containing optional keyword arguments passed to the chat template.
+        pack: Whether to allow example packing for efficient batching.
+        mask_user_turns: Mask user tokens from the training loss when True.
+    """
+
     messages_field: str = "messages"  # key for the messages field in the jsonl file
     single_turn: bool = False
     chat_template: str | None = None
+    system_prompt: str | None = None
+    chat_template_kwargs: str | None = "chat_template_kwargs"
     pack: bool = True
     mask_user_turns: bool = True
 
@@ -432,6 +452,16 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
 @LmDatasetFormatBase.register_subclass("supervised")
 @dataclass(frozen=True)
 class SupervisedLmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for supervised input/output pairs.
+
+    Attributes:
+        input_field: Field name with the model input text.
+        output_field: Field name with the target response text.
+        separate_with: Optional separator inserted between input and output.
+        pack: Whether to enable packing of multiple samples.
+        mask_inputs: Mask tokens from the input_field during loss computation.
+    """
+
     input_field: str = CANONICAL_INPUT_FIELD  # key for the input field in the jsonl file
     output_field: str = CANONICAL_OUTPUT_FIELD  # key for the output field in the jsonl file
     separate_with: str | int | None = None  # string to separate input and output with
@@ -556,7 +586,6 @@ class LMTaskConfig(abc.ABC):
         self,
         Pos: Axis,
         batch_schedule: BatchSchedule,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         *,
         key: PRNGKeyArray,
         epochs: Optional[int] = None,
@@ -567,7 +596,6 @@ class LMTaskConfig(abc.ABC):
     def train_sets(
         self,
         Pos: Axis,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         *,
         key: PRNGKeyArray,
         epochs: Optional[int] = None,
@@ -575,17 +603,11 @@ class LMTaskConfig(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def validation_sets(
-        self,
-        Pos: Axis,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
-    ) -> Mapping[str, AsyncDataset[LmExample]]:
+    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
         pass
 
     @abc.abstractmethod
-    def build_caches(
-        self, split: str, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Mapping[str, TreeCache[dict]]:
+    def build_caches(self, split: str) -> Mapping[str, TreeCache[dict]]:
         pass
 
     @property
@@ -593,11 +615,9 @@ class LMTaskConfig(abc.ABC):
     def sources(self) -> Mapping[str, LmDatasetSourceConfigBase]:
         pass
 
-    def tagged_eval_sets(
-        self, Pos: Axis, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> list[Tuple[AsyncDataset[LmExample], List[str]]]:
+    def tagged_eval_sets(self, Pos: Axis) -> list[Tuple[AsyncDataset[LmExample], List[str]]]:
         tags = {name: (config.tags or []) + [name] for name, config in self.sources.items()}
-        eval_sets = self.validation_sets(Pos, monitors)
+        eval_sets = self.validation_sets(Pos)
 
         return [(eval_sets[name], tags[name]) for name in eval_sets]
 
@@ -608,13 +628,27 @@ def preprocessor_for_format(
     match format:
         case TextLmDatasetFormat(text_key=key):
             return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=key)
-        case ChatLmDatasetFormat(messages_field=m, single_turn=s_turn, chat_template=ct, mask_user_turns=mt):
+        case ChatLmDatasetFormat(
+            messages_field=m,
+            single_turn=s_turn,
+            chat_template=ct,
+            system_prompt=sp,
+            chat_template_kwargs=ct_kwargs,
+            mask_user_turns=mt,
+        ):
             if s_turn:
                 if ct is not None:
                     raise NotImplementedError("Don't currently support chat templates for single turn chat")
                 return SingleTurnChatProcessor(tokenizer, messages_field=m)  # type: ignore
             else:
-                return ChatProcessor(tokenizer, messages_field=m, chat_template=ct, mask_user_turns=mt)  # type: ignore
+                return ChatProcessor(
+                    tokenizer,
+                    messages_field=m,
+                    chat_template=ct,
+                    system_prompt_field=sp,
+                    chat_template_kwargs_field=ct_kwargs,
+                    mask_user_turns=mt,
+                )  # type: ignore
         case SupervisedLmDatasetFormat(input_field=i, output_field=o, separate_with=s):
             return SupervisedProcessor(tokenizer, input_field=i, output_field=o, separate_with=s)  # type: ignore
         case _:
@@ -751,12 +785,14 @@ def _prepare_supervised_examples(ex: list[dict], tokenizer: PreTrainedTokenizerB
 @functools.partial(jax.jit, static_argnums=(0, 3, 4))
 def _mk_sup_example_jit(Pos, input_ids: hax.NamedArray, sources_len, pad_token_id, eos_id):
     # mask out padding and anything before the start of the target
-    loss_mask = hax.arange(Pos) >= sources_len - 1
+    loss_weight = (hax.arange(Pos) >= sources_len - 1).astype(jax.numpy.float32)
     # don't predict the padding
     targets = hax.roll(input_ids, -1, Pos)
-    loss_mask = loss_mask & (targets != pad_token_id)
-    loss_mask = loss_mask & (1 - hax.nn.one_hot(-1, Pos, dtype=jax.numpy.bool_))
-    return LmExample.causal(input_ids, loss_mask=loss_mask, eos_id=eos_id)
+    loss_weight = loss_weight * (targets != pad_token_id).astype(loss_weight.dtype)
+    loss_weight = loss_weight * hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jax.numpy.bool_)).astype(
+        loss_weight.dtype
+    )
+    return LmExample.causal(input_ids, loss_weight=loss_weight, eos_id=eos_id)
 
 
 def mk_supervised_dataset(
@@ -774,7 +810,6 @@ def mk_supervised_dataset(
         config.cache_dir,
         source,
         processor,
-        await_finished=True,
     )
 
     if tokenizer.pad_token is None:
@@ -867,7 +902,9 @@ def mk_single_turn_cached_sft_dataset(
     )
 
     # Cache the processed data
-    cached_dataset: AsyncDataset[dict] = dataset.build_or_load_cache(config.cache_dir, await_finished=True)
+    cached_dataset: AsyncDataset[dict] = dataset.build_or_load_cache(
+        config.cache_dir,
+    )
     return cached_dataset
 
 
@@ -878,8 +915,7 @@ def build_lm_dataset_cache(
     tokenizer: HfTokenizer,
     options: CacheOptions = CacheOptions.default(),
     enforce_eos=True,
-    monitors: Union[bool, List[MetricsMonitor]] = True,
-):
+) -> TreeCache[dict]:
     """
     Creates a cache for a dataset. If the cache already exists, it will be loaded. Otherwise, it will be built.
 
@@ -890,7 +926,6 @@ def build_lm_dataset_cache(
         tokenizer: the tokenizer
         options: the cache options to control how it's built
         enforce_eos: whether to enforce EOS
-        monitors: the metrics monitors to use
 
     Returns:
 
@@ -908,24 +943,11 @@ def build_lm_dataset_cache(
     except FileNotFoundError:
         pass
 
-    if source is None:
-        logger.info(f"No data for {name}")
-        return None
-
     logger.info(f"Building cache for {name}...")
-    if monitors is True:
-        monitors = [
-            LoggingMetricsMonitor(prefix=f"preprocessing/{name}", commit=False),
-            LoggerMetricsMonitor(f"preprocessing.{name}"),
-        ]
-    elif monitors is False:
-        monitors = []
     return build_or_load_cache(
         cache_dir,
         source,
         processor,
-        monitors=monitors,
-        await_finished=False,
         options=options,
     )
 
@@ -971,7 +993,9 @@ def mk_chat_sft_dataset(
     )
 
     # Cache the processed data
-    cached_dataset: AsyncDataset[dict] = dataset.build_or_load_cache(config.cache_dir, await_finished=True)
+    cached_dataset: AsyncDataset[dict] = dataset.build_or_load_cache(
+        config.cache_dir,
+    )
 
     # Ensure padding token is set (needed by _prepare_supervised_example)
     if tokenizer.pad_token is None:
@@ -990,14 +1014,13 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
         self,
         Pos: Axis,
         batch_schedule: BatchSchedule,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         *,
         key: PRNGKeyArray,
         epochs: Optional[int] = None,
     ) -> AsyncDataset[LmExample]:
         del batch_schedule  # unused
 
-        cache = self.build_or_load_cache("train", monitors=monitors)
+        cache = self.build_or_load_cache("train")
         if cache is None:
             raise ValueError("No training set!")
         else:
@@ -1026,22 +1049,20 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
     def train_sets(
         self,
         Pos: Axis,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         *,
         key: PRNGKeyArray,
         epochs: Optional[int] = None,
     ) -> Mapping[str, AsyncDataset[LmExample]]:
         return {
             # we don't care about BatchSchedule in this class
-            "": self.train_set(Pos, BatchSchedule(32), monitors, key=key, epochs=epochs)
+            "": self.train_set(Pos, BatchSchedule(32), key=key, epochs=epochs)
         }
 
     def validation_set(
         self,
         Pos: Axis,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
     ) -> AsyncDataset[LmExample] | None:
-        cache = self.build_or_load_cache("validation", monitors=monitors)
+        cache = self.build_or_load_cache("validation")
         if cache is None:
             return None
 
@@ -1049,10 +1070,8 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
             self.format, Pos, cache, eos_id=self.the_tokenizer.eos_token_id, ignore_index=self.ignore_token_id
         )
 
-    def validation_sets(
-        self, Pos: Axis, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Mapping[str, AsyncDataset[LmExample]]:
-        validation_set = self.validation_set(Pos, monitors)
+    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+        validation_set = self.validation_set(Pos)
         if validation_set is not None:
             return {"": validation_set}
         else:
@@ -1062,18 +1081,14 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
     def sources(self) -> Mapping[str, LmDatasetSourceConfigBase]:
         return {"": self}
 
-    def build_caches(
-        self, split: str, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Mapping[str, TreeCache[dict]]:
+    def build_caches(self, split: str) -> Mapping[str, TreeCache[dict]]:
         out = {}
-        cache = self.build_or_load_cache(split, monitors)
+        cache = self.build_or_load_cache(split)
         if cache is not None:
             out[""] = cache
         return out
 
-    def build_or_load_cache(
-        self, split: str, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Optional[TreeCache[dict]]:
+    def build_or_load_cache(self, split: str) -> Optional[TreeCache[dict]]:
         tokenizer = self.the_tokenizer
         cache_dir = self.cache_dir
         source = self.get_shard_source(split)
@@ -1096,7 +1111,7 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
             logger.warning(f"Skipping {split} because no source was provided")
             return None
 
-        return build_lm_dataset_cache(cache_dir, source, format, tokenizer, options, enforce_eos, monitors)
+        return build_lm_dataset_cache(cache_dir, source, format, tokenizer, options, enforce_eos)
 
 
 @dataclass(frozen=True)
@@ -1186,7 +1201,6 @@ class LMMixtureDatasetConfig(LMTaskConfig):
         self,
         Pos: Axis,
         batch_schedule: BatchSchedule,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         *,
         key: PRNGKeyArray,
         epochs: Optional[int] = None,
@@ -1199,9 +1213,7 @@ class LMMixtureDatasetConfig(LMTaskConfig):
 
         initial_batch_size = batch_schedule.batch_size_at_step(0)
 
-        causal_datasets = self.train_sets(
-            Pos, monitors, key=shuffle_key, epochs=epochs, initial_batch_size=initial_batch_size
-        )
+        causal_datasets = self.train_sets(Pos, key=shuffle_key, epochs=epochs, initial_batch_size=initial_batch_size)
 
         mixture = MixtureDataset(
             datasets=causal_datasets,
@@ -1216,13 +1228,12 @@ class LMMixtureDatasetConfig(LMTaskConfig):
     def train_sets(
         self,
         Pos: Axis,
-        monitors: Union[bool, List[MetricsMonitor]] = True,
         *,
         initial_batch_size: Optional[int] = None,
         epochs: Optional[int] = None,
         key: PRNGKeyArray,
     ) -> Mapping[str, AsyncDataset[LmExample]]:
-        doc_caches = self.build_caches("train", monitors=monitors)
+        doc_caches = self.build_caches("train")
         datasets = self.build_token_datasets(doc_caches, Pos)
 
         if epochs:
@@ -1298,14 +1309,12 @@ class LMMixtureDatasetConfig(LMTaskConfig):
 
         return datasets
 
-    def validation_sets(
-        self, Pos: Axis, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Mapping[str, AsyncDataset[LmExample]]:
-        doc_caches = self.build_caches("validation", monitors=monitors)
+    def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
+        doc_caches = self.build_caches("validation")
         validation_datasets = self.build_token_datasets(doc_caches, Pos)
 
         if self.num_validation_sequences is not None:
-            train_doc_caches = self.build_caches("train", monitors=monitors)
+            train_doc_caches = self.build_caches("train")
             train_datasets = self.build_token_datasets(train_doc_caches, Pos)
 
             for name, num_sequences in self.num_validation_sequences.items():
@@ -1325,10 +1334,8 @@ class LMMixtureDatasetConfig(LMTaskConfig):
 
         return validation_datasets
 
-    def build_caches(
-        self, split: str, monitors: Union[bool, List[MetricsMonitor]] = True
-    ) -> Dict[str, TreeCache[dict]]:
-        caches = {}
+    def build_caches(self, split: str) -> Dict[str, TreeCache[dict]]:
+        caches: dict[str, TreeCache[dict]] = {}
         for name, source_config in self.configs.items():
             # Skip datasets with zero weight in all stages
             if isinstance(self.train_weights, dict):
@@ -1374,15 +1381,7 @@ class LMMixtureDatasetConfig(LMTaskConfig):
                     self.the_tokenizer,
                     self.cache_options,
                     self.enforce_eos,
-                    monitors,
                 )
-
-        # In practice, it works best if we block on validation caches
-        if split == "validation":
-            for cache in caches.values():
-                cache.await_finished()
-        else:
-            logger.info(f"Not waiting for {split} caches to finish building")
 
         return caches
 
@@ -1452,6 +1451,8 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
         tokenizer: HfTokenizer,
         chat_template: str | None = None,
         messages_field: str = "messages",
+        system_prompt_field: str | None = "system",
+        chat_template_kwargs_field: str | None = "chat_template_kwargs",
         mask_user_turns: bool = True,
     ):
         if chat_template is None and tokenizer.chat_template is None:
@@ -1459,6 +1460,8 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
         self.tokenizer = tokenizer
         self.chat_template = chat_template or tokenizer.chat_template
         self.messages_field = messages_field
+        self.system_prompt_field = system_prompt_field
+        self.chat_template_kwargs_field = chat_template_kwargs_field
 
         if self.chat_template is None:
             raise ValueError("No chat template provided and tokenizer has no default chat template")
@@ -1475,15 +1478,84 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
             )
 
     def __call__(self, batch: Sequence[dict]) -> Sequence[ProcessedChatDict]:
-        # Extract messages from the specified field
-        messages = [example[self.messages_field] for example in batch]
-        tokenized = self.tokenizer.apply_chat_template(
-            messages,
-            tokenize=True,
-            chat_template=self.chat_template,
-            return_assistant_tokens_mask=True,
-            return_dict=True,
-        )
+        # Extract messages from the specified field, optionally injecting a system prompt
+        messages: list[list[dict[str, Any]]] = []
+        chat_kwargs_list: list[Mapping[str, Any] | None] = []
+        for example in batch:
+            example_messages = example[self.messages_field]
+            # Copy to avoid mutating the original structure
+            normalized_messages = list(example_messages)
+
+            if self.system_prompt_field is not None and self.system_prompt_field in example:
+                system_content = example[self.system_prompt_field]
+                if system_content is not None:
+                    if isinstance(system_content, Mapping):
+                        system_message = dict(system_content)
+                        system_message["role"] = "system"
+                        if "content" not in system_message:
+                            raise ValueError(
+                                "System prompt mapping must include a 'content' field when provided as a mapping."
+                            )
+                    else:
+                        system_message = {"role": "system", "content": system_content}
+                    normalized_messages = [system_message, *normalized_messages]
+
+            messages.append(normalized_messages)
+
+            example_kwargs: Mapping[str, Any] | None = None
+            if self.chat_template_kwargs_field is not None and self.chat_template_kwargs_field in example:
+                raw_kwargs = example[self.chat_template_kwargs_field]
+                if raw_kwargs is not None:
+                    if not isinstance(raw_kwargs, Mapping):
+                        raise ValueError("chat_template_kwargs must be provided as a mapping when present.")
+                    example_kwargs = dict(raw_kwargs)
+            chat_kwargs_list.append(example_kwargs)
+
+        use_per_example_kwargs = any(kwargs for kwargs in chat_kwargs_list)
+
+        if not use_per_example_kwargs:
+            tokenized = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                chat_template=self.chat_template,
+                return_assistant_tokens_mask=True,
+                return_dict=True,
+            )
+        else:
+            input_ids_batches: list[Sequence[int]] = []
+            assistant_mask_batches: list[Sequence[int]] = []
+
+            for conversation, example_kwargs in zip(messages, chat_kwargs_list):
+                kwargs_dict = dict(example_kwargs) if example_kwargs is not None else {}
+
+                for forbidden in ("tokenize", "return_assistant_tokens_mask", "return_dict"):
+                    if forbidden in kwargs_dict:
+                        raise ValueError(
+                            f"chat_template_kwargs may not override '{forbidden}' because the processor relies on it."
+                        )
+
+                chat_template_override = kwargs_dict.pop("chat_template", self.chat_template)
+                if chat_template_override is None:
+                    raise ValueError("Chat template must be provided either in the dataset format or per example.")
+
+                apply_kwargs = {
+                    **kwargs_dict,
+                    "tokenize": True,
+                    "return_assistant_tokens_mask": True,
+                    "return_dict": True,
+                    "chat_template": chat_template_override,
+                }
+
+                tokenized_single = self.tokenizer.apply_chat_template(
+                    [conversation],
+                    **apply_kwargs,
+                )
+
+                input_ids_batches.extend(tokenized_single["input_ids"])
+                assistant_mask_batches.extend(tokenized_single["assistant_masks"])
+
+            tokenized = {"input_ids": input_ids_batches, "assistant_masks": assistant_mask_batches}
+
         masks = tokenized["assistant_masks"]
         for seq, mask_for_seq in zip(batch, masks):
             if not np.any(mask_for_seq):
@@ -1518,6 +1590,8 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
             "vocab_size": len(self.tokenizer),
             "chat_template": self.chat_template,
             "messages_field": self.messages_field,
+            "system_prompt_field": self.system_prompt_field,
+            "chat_template_kwargs_field": self.chat_template_kwargs_field,
         }
 
 
@@ -1543,8 +1617,6 @@ class MultiturnChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, Processed
     ):
         # NB the GreedyPackedDataset returns a tuple, where the first has the packed leaves
         # and the second has the segment ids
-        # TODO: do better with blocking
-        cache.await_finished()
         self.packed: GreedyPrepackedDataset[ProcessedChatDict] = GreedyPrepackedDataset(
             cache.store.tree,
             Pos.size,
@@ -1564,15 +1636,15 @@ class MultiturnChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, Processed
             if mask_user_turns:
                 # mask is 1 on the position of the assistant tokens
                 mask = example["assistant_masks"]
-                # loss_mask by convention is 1 on the positions where we compute loss, i.e. shifted back 1
+                # loss_weight by convention is 1 on the positions where we compute loss, i.e. shifted back 1
                 mask = jnp.roll(mask, -1, axis=-1)
-                loss_mask = hax.named(mask, self.Pos)
+                loss_weight = hax.named(mask, self.Pos)
             else:
-                loss_mask = None
+                loss_weight = None
 
             seg_ids = hax.named(seg_ids["input_ids"], self.Pos)
 
-            out = LmExample.causal(tokens=tokens, loss_mask=loss_mask, segment_ids=seg_ids)
+            out = LmExample.causal(tokens=tokens, loss_weight=loss_weight, segment_ids=seg_ids)
             out = jax.lax.with_sharding_constraint(out, sharding)
             return out
 
@@ -1662,8 +1734,6 @@ class SupervisedDataset(MappedAsyncDataset[tuple[ProcessedSupervisedDict, Proces
         slice_strategy: Literal["left", "right", "raise"] = "right",
     ):
         self.mask_inputs = mask_inputs
-        # TODO: do better with blocking
-        cache.await_finished()
         self.packed = GreedyPrepackedDataset(
             cache.store.tree,
             Pos.size,
@@ -1678,12 +1748,12 @@ class SupervisedDataset(MappedAsyncDataset[tuple[ProcessedSupervisedDict, Proces
 
             if self.mask_inputs:
                 sequence_mask = self._make_sequence_mask(segment_ids, ex["sources_len"])
-                loss_mask = hax.named(sequence_mask, Pos)
+                loss_weight = hax.named(sequence_mask, Pos)
             else:
-                # Use default loss mask
-                loss_mask = None
+                # Use default loss weight
+                loss_weight = None
 
-            return LmExample.causal(tokens, loss_mask=loss_mask, segment_ids=hax.named(segment_ids, Pos))
+            return LmExample.causal(tokens, loss_weight=loss_weight, segment_ids=hax.named(segment_ids, Pos))
 
         super().__init__(self.packed, _create_lm_example)
 
@@ -1834,7 +1904,6 @@ def count_corpus_sizes(config: LMMixtureDatasetConfig | SingleDatasetLMConfig, p
 
     for name, cache in train_caches.items():
         source = sources[name]
-        cache.await_finished()
         metric_prefix = f"{prefix}train/{name}/"
 
         stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size
@@ -1859,7 +1928,6 @@ def count_corpus_sizes(config: LMMixtureDatasetConfig | SingleDatasetLMConfig, p
     validation_caches = config.build_caches("validation")
     for name, cache in validation_caches.items():
         source = sources[name]
-        cache.await_finished()
         metric_prefix = f"{prefix}validation/{name}/"
 
         stats[f"{metric_prefix}total_tokens"] = cache.store.tree["input_ids"].data_size

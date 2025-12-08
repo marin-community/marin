@@ -19,12 +19,12 @@ https://github.com/marin-community/marin/issues/524
 
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import llama_1_4b, llama_1_4b_train_config
-from experiments.pretraining_datasets import fineweb_edu
+from experiments.pretraining_datasets.simple import downloads
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_data_config
 
 fineweb_edu_llama3_tokenized = default_tokenize(
-    name="fineweb-edu", dataset=fineweb_edu, tokenizer="meta-llama/Meta-Llama-3.1-8B"
+    name="fineweb-edu", dataset=downloads["fineweb_edu"], tokenizer="meta-llama/Meta-Llama-3.1-8B"
 )
 llama_1_4b_fineweb_edu_llama3_model = default_train(
     name="llama3-tokenizer",
@@ -34,7 +34,7 @@ llama_1_4b_fineweb_edu_llama3_model = default_train(
 )
 
 fineweb_edu_llama2_tokenized = default_tokenize(
-    name="fineweb-edu", dataset=fineweb_edu, tokenizer="meta-llama/Llama-2-7b-hf"
+    name="fineweb-edu", dataset=downloads["fineweb_edu"], tokenizer="meta-llama/Llama-2-7b-hf"
 )
 llama_1_4b_fineweb_edu_llama2_model = default_train(
     name="llama2-tokenizer",
@@ -44,7 +44,7 @@ llama_1_4b_fineweb_edu_llama2_model = default_train(
 )
 
 fineweb_edu_neox_tokenized = default_tokenize(
-    name="fineweb-edu", dataset=fineweb_edu, tokenizer="EleutherAI/gpt-neox-20b"
+    name="fineweb-edu", dataset=downloads["fineweb_edu"], tokenizer="EleutherAI/gpt-neox-20b"
 )
 llama_1_4b_fineweb_edu_neox_model = default_train(
     name="neox-tokenizer",

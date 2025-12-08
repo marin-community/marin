@@ -87,6 +87,7 @@ might be:
   finish executing (or even check if it is executing or failed) before running.
 """
 
+import copy
 import dataclasses
 import hashlib
 import inspect
@@ -98,11 +99,12 @@ import subprocess
 import time
 import traceback
 import urllib.parse
+from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
 from functools import cached_property
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
@@ -110,6 +112,7 @@ import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
 import ray
 import ray.remote_function
+from fray.cluster.ray.deps import build_runtime_env_for_packages
 from ray.util import state  # noqa
 
 from marin.execution.executor_step_status import (
@@ -125,7 +128,6 @@ from marin.execution.executor_step_status import (
     get_status_path,
 )
 from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
-from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.utilities.json_encoder import CustomJsonEncoder
 from marin.utilities.ray_utils import is_local_ray_cluster, schedule_on_head_node_strategy
 
@@ -138,9 +140,25 @@ ExecutorFunction = Callable | ray.remote_function.RemoteFunction | None
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
-    """Return the `asdict` of an object, but remove the `description` field, because it doesn't affect the semantics."""
-    d = asdict(obj)
+    """Return the dict form of a dataclass, but remove the `description` field."""
+
+    def recurse(value: Any):
+        if is_dataclass(value):
+            return {f.name: recurse(getattr(value, f.name)) for f in fields(value)}
+        if isinstance(value, tuple) and hasattr(value, "_fields"):
+            return type(value)(*(recurse(v) for v in value))
+        if isinstance(value, (list, tuple)):
+            return type(value)(recurse(v) for v in value)
+        if isinstance(value, dict):
+            # RuntimeEnv (and other dict subclasses) require keyword-only init,
+            # so we normalize to a plain dict to avoid construction errors.
+            return {recurse(k): recurse(v) for k, v in value.items()}
+        return copy.deepcopy(value)
+
+    d = recurse(obj)
+    assert isinstance(d, dict)
     d.pop("description", None)
+    assert isinstance(d, dict)
     return d
 
 
@@ -269,11 +287,20 @@ def output_path_of(step: ExecutorStep, name: str | None = None) -> InputName:
     return InputName(step=step, name=name)
 
 
-@dataclass(frozen=True)
-class OutputName:
-    """To be interpreted as part of this step's output_path joined with `name`."""
+if TYPE_CHECKING:
 
-    name: str | None
+    class OutputName(str):
+        """Type-checking stub treated as a string so defaults like THIS_OUTPUT_PATH fit `str`."""
+
+        name: str | None
+
+else:
+
+    @dataclass(frozen=True)
+    class OutputName:
+        """To be interpreted as part of this step's output_path joined with `name`."""
+
+        name: str | None
 
 
 def this_output_path(name: str | None = None):
@@ -312,9 +339,29 @@ def unwrap_versioned_value(value: VersionedValue[T_co] | T_co) -> T_co:
     """
     Unwrap the value if it is a VersionedValue, otherwise return the value as is.
 
-    Sometimes we need to actually use a value that is wrapped in a VersionedValue before it is used in a config.
+    Recurses into dataclasses, dicts and lists to unwrap any nested VersionedValue instances.
+    This method cannot handle InputName, OutputName, or ExecutorStep instances inside VersionedValue as
+    their values depend on execution results.
     """
-    return value.value if isinstance(value, VersionedValue) else value
+
+    def recurse(obj: Any):
+        if isinstance(obj, VersionedValue):
+            return recurse(obj.value)
+        if isinstance(obj, OutputName | InputName | ExecutorStep):
+            raise ValueError(f"Cannot unwrap VersionedValue containing {type(obj)}: {obj}")
+        if is_dataclass(obj):
+            result = {}
+            for field in fields(obj):
+                val = getattr(obj, field.name)
+                result[field.name] = recurse(val)
+            return replace(obj, **result)
+        if isinstance(obj, dict):
+            return {k: recurse(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [recurse(x) for x in obj]
+        return obj
+
+    return recurse(value)  # type: ignore
 
 
 ############################################################
@@ -1098,6 +1145,37 @@ class ExecutorMainConfig:
     """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
 
 
+def _setup_logging():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+
+def _detect_local_resources() -> dict[str, float]:
+
+    from fray.cluster.ray.resources import jax_device_kind_to_ray_accel_type
+
+    resources: dict[str, float] = {"head_node": 1.0}
+    try:
+        import jax
+
+        # Group devices by their device_kind
+        devices_by_kind: defaultdict[str, list] = defaultdict(list)
+        for d in jax.devices():
+            if d.platform != "cpu":
+                devices_by_kind[d.device_kind].append(d)
+
+        for device_kind, devices in devices_by_kind.items():
+            accel_type = jax_device_kind_to_ray_accel_type(device_kind)
+            if accel_type:
+                logger.info(f"Auto-detected {len(devices)} device(s): '{device_kind}' -> accelerator_type:{accel_type}")
+                resources[f"accelerator_type:{accel_type}"] = len(devices)
+            else:
+                logger.warning(f"Could not map '{device_kind}' to a known Ray accelerator type.")
+
+    except ImportError:
+        logger.warning("jax is not installed. Accelerator detection skipped.")
+    return resources
+
+
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
@@ -1108,7 +1186,8 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     ray.init(
         namespace="marin",
         ignore_reinit_error=True,
-        resources={"head_node": 1} if is_local_ray_cluster() else None,
+        resources=_detect_local_resources() if is_local_ray_cluster() else None,
+        runtime_env={"worker_process_setup_hook": _setup_logging},
     )  # We need to init ray here to make sure we have the correct namespace for actors
     # (status_actor in particular)
     time_out = time.time()

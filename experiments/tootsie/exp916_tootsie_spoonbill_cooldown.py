@@ -26,9 +26,9 @@ import dataclasses
 
 from levanter.callbacks.watch import WatchConfig
 
-from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import default_sft, default_train
-from experiments.dolmino.tokenize_dolmino import get_dolmino_step_llama3
+from experiments.pretraining_datasets import tokenize_dolmino_subset
 from experiments.exp606_sft import tulu3_llama_data_old, tulu_sft_config
 from experiments.llama import llama_8b
 from experiments.posttrain.instruction_datasets import (
@@ -43,9 +43,9 @@ from experiments.tootsie.exp600_tootsie import (
     llama_8b_train_config_phase3,
     phase_3_tokenized,
 )
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
-from marin.resources import TpuPodConfig
 
 # 3072 * 4096 * 10000 is 125B tokens
 COOLDOWN_LEN = 10000
@@ -54,7 +54,7 @@ COOLDOWN_END = PHASE_3_END + COOLDOWN_LEN
 
 tootsie_8b_hypnotic_spoonbill_train = dataclasses.replace(
     llama_8b_train_config_phase3,
-    resources=TpuPodConfig(tpu_type="v4-128", slice_count=4),
+    resources=ResourceConfig.with_tpu("v4-128", slice_count=4),
     learning_rate=1.7e-4,  # only does what we want b/c we're warmstarting from the ckpt below
     num_train_steps=COOLDOWN_END,
     min_lr_ratio=2.75e-5 / 1.7e-4,
@@ -65,7 +65,7 @@ tootsie_8b_hypnotic_spoonbill_train = dataclasses.replace(
     allow_partial_checkpoint=False,
 )
 
-flan = get_dolmino_step_llama3("flan")
+flan = tokenize_dolmino_subset("flan")
 
 
 def _normalize_weights(weights, scale=1.0):

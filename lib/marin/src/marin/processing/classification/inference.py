@@ -26,19 +26,20 @@ import os
 import draccus
 import ray
 from ray.util.queue import Queue
+
 from marin.core.runtime import cached_or_construct_output
+from marin.processing.classification.autoscaler import AutoscalingActorPool, AutoscalingActorPoolConfig
+from marin.processing.classification.checkpoint_utils import get_finished_ids, get_id_from_row
 from marin.processing.classification.classifier import (
     AutoClassifierRayActor,
 )
 from marin.processing.classification.config.inference_config import DatasetSchemaConfig, InferenceConfig
+from marin.processing.classification.dataset_utils import read_dataset_streaming, write_dataset_streaming
 from marin.utils import (
     fsspec_glob,
     fsspec_mkdirs,
     rebase_file_path,
 )
-from marin.processing.classification.dataset_utils import read_dataset_streaming, write_dataset_streaming
-from marin.processing.classification.checkpoint_utils import get_finished_ids, get_id_from_row
-from marin.processing.classification.autoscaler import AutoscalingActorPool, AutoscalingActorPoolConfig
 
 logger = logging.getLogger("ray")
 
@@ -241,7 +242,7 @@ def run_inference(inference_config: InferenceConfig):
 
     for input_filepath in filepaths:
         # Throttle submissions
-        while len(pending_refs) >= max_in_flight:
+        while max_in_flight is not None and len(pending_refs) >= max_in_flight:
             ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
             ready_ref = ready_refs[0]
             file_for_ref = pending_refs.pop(ready_ref)

@@ -27,9 +27,9 @@ from experiments.datashop.default_configs import (
     default_quality_filter_train_config_kwargs,
     default_text_generation_config_kwargs,
 )
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.defaults import default_anneal, default_tokenize
-from experiments.evals.resource_configs import ResourceConfig
+from fray.cluster import ResourceConfig
 from experiments.llama import llama3_tokenizer
 from marin.classifiers.hf.launch_ray_training import LaunchConfig, launch_training_with_ray
 from marin.datashop.dataset_processor import DatasetOutputProcessorConfig
@@ -48,7 +48,6 @@ from marin.processing.classification.config.inference_config import InferenceCon
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import run_inference
 from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config
-from marin.resources import TpuPodConfig
 
 
 def default_label(
@@ -132,7 +131,7 @@ def default_label(
         output_path=this_output_path(),
         template=data_filter_prompt,
         template_path=data_filter_prompt_path,
-        tensor_parallel_size=resource_config.num_tpu,
+        tensor_parallel_size=resource_config.chip_count(),
         resource_config=resource_config,
         model_name=annotator_model_name_or_path,
         **text_generation_inference_config_kwargs,
@@ -194,7 +193,7 @@ def default_train_quality_model(
     training_config = replace(
         training_config,
         train_dataset=dataset,
-        tpu_num_cores=resource_config.num_tpu,
+        tpu_num_cores=resource_config.chip_count(),
         run_name=f"datashop-classifier-{experiment_name}",
     )
 
@@ -353,7 +352,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
                 weights={"dclm": 1.0},
                 permutation_type="linear",
             ),
-            resources=TpuPodConfig(tpu_type=tpu_type, slice_count=2),
+            resources=ResourceConfig.with_tpu(tpu_type, slice_count=2),
             use_default_validation=True,
         )
     else:
@@ -363,7 +362,7 @@ def _get_anneal_config(candidate_tokenized: TokenizerStep | None, tpu_type: str,
                 weights={"dclm": 0.70, "candidate": 0.30},
                 permutation_type="linear",
             ),
-            resources=TpuPodConfig(tpu_type=tpu_type, slice_count=2),
+            resources=ResourceConfig.with_tpu(tpu_type, slice_count=2),
             use_default_validation=True,
         )
 
@@ -453,7 +452,7 @@ def default_synthetic_data_generation(
             engine_kwargs=engine_kwargs,
             generation_kwargs=generation_kwargs,
             template=data_generation_template,
-            tensor_parallel_size=resource_config.num_tpu,
+            tensor_parallel_size=resource_config.chip_count(),
             prompt_column=prompt_column,
             filetype=input_filetype,
             output_filetype_override="jsonl.gz",

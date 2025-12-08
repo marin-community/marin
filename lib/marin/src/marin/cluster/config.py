@@ -22,7 +22,7 @@ import jinja2
 import yaml
 
 # Cluster configuration constants and templates
-LATEST = "20250923"  # The latest docker tag used for the clusters
+LATEST = "5b9b77c"  # The latest docker tag used for the clusters
 
 
 @dataclass
@@ -110,15 +110,6 @@ def list_available_configs() -> list[str]:
 CONFIGS = {
     "marin-us-central2": {
         "NAME": "marin-us-central2",
-        "REGION": "us-central2",
-        "ZONE": "us-central2-b",
-        "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": LATEST,
-        "tpu_generation": "v4",
-        "min_workers": 4,
-    },
-    "marin-us-central2-compress": {
-        "NAME": "marin-us-central2-compress",
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
@@ -248,9 +239,9 @@ CONFIGS = {
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": "d84bcac24",
-        "tpu_generation": "v4-serve",
-        "min_workers": 1,
+        "DOCKER_TAG": "1bc975e12",
+        "tpu_generation": "v4",
+        "min_workers": 2,
         "VLLM": True,
     },
     "marin-us-east1-d-vllm": {
@@ -258,7 +249,7 @@ CONFIGS = {
         "REGION": "us-east1",
         "ZONE": "us-east1-d",
         "BUCKET": "marin-us-east1",
-        "DOCKER_TAG": "6e804a10",
+        "DOCKER_TAG": "1bc975e12",
         "tpu_generation": "v6e-serve",
         "min_workers": 2,
         "VLLM": True,

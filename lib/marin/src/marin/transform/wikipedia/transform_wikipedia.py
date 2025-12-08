@@ -16,23 +16,24 @@
 wikipedia/transform_wikipedia.py
 
 Performs HTML->Text/MD conversion using the specified tools over a wiki dump save in DOLMA format.
+
+Example Usage:
+uv run zephyr --backend=ray --max-parallelism=400 --memory=2GB --cluster=us-central2 \
+    lib/marin/src/marin/transform/wikipedia/transform_wikipedia.py \
+    --input_path gs://path/to/input --output_path gs://path/to/output \
+    --revision v1.0 --extract_method readability ...
 """
 
-import json
 import logging
 import os
 import re
 from dataclasses import dataclass
 
 import draccus
-import fsspec
-import ray
-from tqdm_loggable.auto import tqdm
-
-from marin.core.runtime import cached_or_construct_output
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
+from zephyr import Dataset, flow_backend, load_jsonl
 
 logger = logging.getLogger("ray")
 
@@ -227,101 +228,83 @@ def clean_wiki_html(html: str, remove_reference_section: bool = True) -> str:
     return html
 
 
-@ray.remote(memory=2 * 1024 * 1024 * 1024)
-@cached_or_construct_output(success_suffix="SUCCESS")
-def process_file(
-    input_file_path: str,
-    output_file_path: str,
+def process_record(
+    row: dict,
     extract_method: str,
     extract_config: ExtractionConfig,
     remove_reference_section: bool = True,
     digit_threshold: int = 50,
     word_threshold: int = 70,
     special_char_threshold: float = 0.2,
-) -> None:
-    logger.info(f"Starting processing of file {input_file_path}")
-    logger.info(f"Source: {input_file_path}")
-    logger.info(f"Destination: {output_file_path}")
+):
+    """Process a single Wikipedia record and return transformed record.
+
+    Args:
+        row: Record from NDJSON file
+        extract_method: Method to use for HTML extraction
+        extract_config: Configuration for the extraction method
+        remove_reference_section: Whether to remove reference sections
+        digit_threshold: Percentage threshold for filtering pages with excessive digits
+        word_threshold: Percentage threshold for filtering pages with insufficient words
+        special_char_threshold: Percentage threshold for filtering pages with excessive special characters
+
+    Returns:
+        Transformed record in Dolma format, or None if record should be skipped
+    """
     try:
-        with (
-            fsspec.open(input_file_path, compression="gzip") as source,
-            fsspec.open(output_file_path, "wt", compression="gzip") as output,
-        ):
-            for line in tqdm(source, desc="Processing lines"):
-                row = json.loads(line)
+        content = None
+        if "html" not in row["article_body"].keys() and "wikitext" in row["article_body"].keys():
+            return None
+        elif "html" in row["article_body"]:
+            html_string = row["article_body"]["html"]
 
-                try:
-                    content = None
-                    if "html" not in row["article_body"].keys() and "wikitext" in row["article_body"].keys():
-                        continue
-                    elif "html" in row["article_body"]:
-                        html_string = row["article_body"]["html"]
+            filtered_html = clean_wiki_html(html_string, remove_reference_section)
+            content = convert_page(filtered_html, extract_method=extract_method, config=extract_config)["content"]
+        else:
+            logger.error(f"No content found in the row: {row}")
+            return None
 
-                        filtered_html = clean_wiki_html(html_string, remove_reference_section)
-                        content = convert_page(filtered_html, extract_method=extract_method, config=extract_config)[
-                            "content"
-                        ]
-                    else:
-                        logger.error(f"No content found in the row: {row}")
-                        continue
+        content = postprocess_content(content, digit_threshold, word_threshold, special_char_threshold)
+        if content is None:
+            return None
 
-                    content = postprocess_content(content, digit_threshold, word_threshold, special_char_threshold)
-                    if content is None:
-                        continue
+        out_dict = {
+            "id": row["identifier"],
+            "url": row["url"],
+            "title": row["name"],
+            "abstract": row.get("abstract", ""),
+            "date_created": row["date_created"] if "date_created" in row else row.get("date_modified", ""),
+            "text": content,
+        }
 
-                    out_dict = {
-                        "id": row["identifier"],
-                        "url": row["url"],
-                        "title": row["name"],
-                        "abstract": row.get("abstract", ""),
-                        "date_created": row["date_created"] if "date_created" in row else row.get("date_modified", ""),
-                        "text": content,
-                    }
-
-                    print(json.dumps(out_dict), file=output)  # Without this line, the JSON file will be corrupted
-                except Exception as e:
-                    logger.info(f"Keys in row: {row.keys()}")
-                    logger.info(f"Article body keys: {row['article_body'].keys()}")
-
-                    logger.exception(f"Error processing line: {e}")
-                    continue
-
-        logger.info("\nProcessing completed successfully!")
-        logger.info(f"File available at: {output_file_path}")
-
+        return out_dict
     except Exception as e:
-        logger.error(f"Error during processing: {e}")
-        raise
+        logger.info(f"Keys in row: {row.keys()}")
+        logger.info(f"Article body keys: {row['article_body'].keys()}")
+
+        logger.exception(f"Error processing line: {e}")
+        return None
 
 
 @draccus.wrap()
 def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
+    backend = flow_backend()
     logger.info(f"Starting processing of Wikipedia dump in {cfg.input_path}")
 
     files = fsspec_glob(f"{cfg.input_path}/*.ndjson")
     logger.info(f"Found {len(files)} files to process")
 
-    result_refs = []
-    MAX_CONCURRENT_WORKERS = 400
-
     if cfg.max_files:
         files = files[: cfg.max_files]
 
-    for file in files:
-        if len(result_refs) > MAX_CONCURRENT_WORKERS:
-            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            try:
-                ray.get(ready_refs)
-            except Exception as e:
-                logger.exception(f"Error processing the group: {e}")
-                continue
+    output_base = os.path.join(cfg.output_path, cfg.revision)
 
-        output_path = os.path.join(cfg.output_path, cfg.revision)
-        output_file_path = os.path.join(output_path, file.split("/")[-1].replace(".ndjson", ".jsonl.gz"))
-        result_refs.append(
-            process_file.remote(
-                file,
-                output_file_path,
+    pipeline = (
+        Dataset.from_list(files)
+        .flat_map(load_jsonl)
+        .map(
+            lambda row: process_record(
+                row,
                 cfg.extract_method,
                 cfg.extract_config,
                 cfg.remove_reference_section,
@@ -330,7 +313,7 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
                 cfg.special_char_threshold,
             )
         )
-    try:
-        ray.get(result_refs)
-    except Exception as e:
-        logger.exception(f"Error processing the group: {e}")
+        .filter(lambda record: record is not None)
+        .write_jsonl(f"{output_base}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
+    )
+    list(backend.execute(pipeline))

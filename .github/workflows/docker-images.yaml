@@ -86,29 +86,28 @@ jobs:
           password: ${{ steps.auth.outputs.access_token }}
 
       - name: Build and push Marin cluster image
-        uses: docker/build-push-action@v6
-        with:
-          push: true
-          file: docker/marin/Dockerfile.cluster
-          tags: |
-            europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
-            europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
-            europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
-            us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
-            us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
-            us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
-            us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
-            us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
-            us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
-            us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
-            us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
-            us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
-            us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
-            us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
-            us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
-            us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest
-            us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }}
-            us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }}
+        run: |
+          docker buildx build --file docker/marin/Dockerfile.cluster \
+            --provenance=false \
+            --tag europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
+            --tag europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
+            --tag europe-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
+            --tag us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
+            --tag us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
+            --tag us-central1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
+            --tag us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
+            --tag us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
+            --tag us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
+            --tag us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
+            --tag us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
+            --tag us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
+            --tag us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
+            --tag us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
+            --tag us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
+            --tag us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:latest \
+            --tag us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.DATE_TAG }} \
+            --tag us-west4-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:${{ steps.set-tags.outputs.HASH_TAG }} \
+            --push .
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
@@ -156,17 +155,16 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push TPU CI image
-        uses: docker/build-push-action@v6
-        with:
-          push: true
-          file: docker/marin/Dockerfile.tpu-ci
-          tags: |
-            ghcr.io/marin-community/marin/tpu-ci:latest
-            ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.DATE_TAG }}
-            ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.HASH_TAG }}
+        run: |
+          docker buildx build --file docker/marin/Dockerfile.tpu-ci \
+            --provenance=false \
+            --tag ghcr.io/marin-community/marin/tpu-ci:latest \
+            --tag ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.DATE_TAG }} \
+            --tag ghcr.io/marin-community/marin/tpu-ci:${{ steps.set-tags.outputs.HASH_TAG }} \
+            --push .
 
   # Levanter TPU Base Image - Foundation for TPU deployments
   levanter-base-image:
@@ -175,9 +173,6 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - name: Checkout code
@@ -203,11 +198,14 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push Levanter base image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.base --tag ghcr.io/${{ github.repository }}-base:latest --tag ghcr.io/${{ github.repository }}-base:${{ env.DATE }} --push .
+          docker buildx build --file lib/levanter/docker/tpu/Dockerfile.base \
+            --tag ghcr.io/marin-community/levanter-base:latest \
+            --tag ghcr.io/marin-community/levanter-base:${{ env.DATE }} \
+            --push .
 
   # Levanter TPU Incremental Image - Optimized TPU runtime
   levanter-tpu-image:
@@ -217,9 +215,6 @@ jobs:
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     needs: levanter-base-image
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - name: Checkout code
@@ -245,11 +240,14 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push Levanter TPU image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.incremental --tag ghcr.io/${{ github.repository }}-tpu:latest --tag ghcr.io/${{ github.repository }}-tpu:${{ env.DATE }} --push .
+          docker buildx build --file lib/levanter/docker/tpu/Dockerfile.incremental \
+            --tag ghcr.io/marin-community/levanter-tpu:latest \
+            --tag ghcr.io/marin-community/levanter-tpu:${{ env.DATE }} \
+            --push .
 
   # Levanter Cluster Image - For cluster deployments
   levanter-cluster-image:
@@ -259,9 +257,6 @@ jobs:
       (github.event_name == 'schedule' && github.event.schedule == '0 2 * * 0')
     runs-on: ubuntu-latest
     needs: levanter-tpu-image
-    defaults:
-      run:
-        working-directory: lib/levanter
 
     steps:
       - name: Checkout code
@@ -287,8 +282,11 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push Levanter cluster image
         run: |
-          docker buildx build --file docker/tpu/Dockerfile.cluster --tag ghcr.io/${{ github.repository }}-cluster:latest --tag ghcr.io/${{ github.repository }}-cluster:${{ env.DATE }} --push .
+          docker buildx build --file lib/levanter/docker/tpu/Dockerfile.cluster \
+            --tag ghcr.io/levanter-cluster:latest \
+            --tag ghcr.io/levanter-cluster:${{ env.DATE }} \
+            --push .

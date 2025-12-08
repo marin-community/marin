@@ -25,12 +25,12 @@ Example usage:
   python marin/run/ray_run.py --env_vars WANDB_API_KEY YOUR_WANDB_API_KEY -- python experiments/howto/dclm_7b1x.py
 """
 
+from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
 
-from experiments.dclm.tokenize_dclm import dclm_mixture_config_llama3
 from experiments.defaults import SimpleTrainConfig, default_train
+from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
 
 # Define the LlamaConfig for a 7B parameter model
 # This follows the 7B-1x competition scale in the DCLM benchmark
@@ -57,7 +57,7 @@ NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (BATCH_SIZE * SEQ_LEN)
 # Define training configuration with hyperparameters
 # https://github.com/mlfoundations/dclm/blob/main/training/configs/7b_1x_fast_2e-3_lr_5e-6_zloss.json
 training_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-128", slice_count=4),
+    resources=ResourceConfig.with_tpu("v4-128", slice_count=4),
     train_batch_size=BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=2e-3,

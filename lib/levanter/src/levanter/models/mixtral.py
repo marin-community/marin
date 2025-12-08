@@ -15,9 +15,9 @@ from jax.experimental.shard_map import shard_map
 
 import haliax as hax
 import haliax.nn as hnn
-from haliax import Axis, NamedArray
-from haliax._src.scan import ScanCheckpointSpec
+from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
+from haliax.nn.normalization import LayerNormBase
 from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
@@ -85,7 +85,7 @@ class MixtralConfig(MistralConfig):
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = 2048
 
-    gradient_checkpointing: ScanCheckpointSpec = True
+    gradient_checkpointing: bool = True
     scan_layers: bool = True
 
     use_bias: bool = False
@@ -97,9 +97,18 @@ class MixtralConfig(MistralConfig):
     tokenizer: Optional[str] = None
 
     # Axis
-    Pos = property(lambda self: Axis(name="position", size=self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
-    Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
+    @property
+    def Pos(self) -> Axis:
+        return Axis(name="position", size=self.seq_len)
+
+    @property
+    def KeyPos(self) -> Axis:
+        return self.Pos.alias("key_position")
+
+    @property
+    def Embed(self) -> Axis:
+        return Axis(name="embed", size=self.hidden_dim)
+
     Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
     KVHeads = property(lambda self: Axis(name="kv_heads", size=self.num_kv_heads))
     Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
@@ -186,7 +195,7 @@ class MixtralConfig(MistralConfig):
     def model_type(cls) -> Type["MixtralLMHeadModel"]:
         return MixtralLMHeadModel
 
-    def mk_LayerNorm(self, axis: Axis) -> hnn.RmsNorm:
+    def mk_LayerNorm(self, axis: AxisSpec) -> LayerNormBase:
         return hnn.RmsNorm.init(
             axis, eps=self.layer_norm_epsilon, use_weight=self.use_layer_norm_weight, use_bias=self.use_bias
         )
@@ -349,8 +358,8 @@ class MixtralSparseMoeBlock(eqx.Module):
         with jax.named_scope("route"):
             selected_weights_, selected_experts_ = sharded_route(router_probs.array)
 
-            selected_weights = NamedArray(selected_weights_, axes=(Token, TopExperts))
-            selected_experts = NamedArray(selected_experts_, axes=(Token, TopExperts))
+            selected_weights = NamedArray(selected_weights_, (Token, TopExperts))
+            selected_experts = NamedArray(selected_experts_, (Token, TopExperts))
 
         return selected_weights, selected_experts
 
@@ -380,9 +389,9 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         with jax.named_scope("permute"):
             x_repeat_sort_, group_sizes_, sort_idx_ = permute_sharded(x_flat.array, topk_idx_flat.array)
-            x_repeat_sort = NamedArray(x_repeat_sort_, axes=(TokenRepeat, self.config.Embed))
-            group_sizes = NamedArray(group_sizes_, axes=(Experts,))
-            sort_idx = NamedArray(sort_idx_, axes=(TokenRepeat,))
+            x_repeat_sort = NamedArray(x_repeat_sort_, (TokenRepeat, self.config.Embed))
+            group_sizes = NamedArray(group_sizes_, (Experts,))
+            sort_idx = NamedArray(sort_idx_, (TokenRepeat,))
 
         return x_repeat_sort, group_sizes, sort_idx
 
@@ -416,12 +425,12 @@ class MixtralSparseMoeBlock(eqx.Module):
 
         with jax.named_scope("unpermute"):
             out_repeat_unflat_ = unpermute_sharded(out_repeat_sort.array, sort_idx.array)
-            out_repeat_unflat = NamedArray(out_repeat_unflat_, axes=(Token, TopExperts, self.config.Embed))
+            out_repeat_unflat = NamedArray(out_repeat_unflat_, (Token, TopExperts, self.config.Embed))
 
         return out_repeat_unflat
 
     @named_call
-    def __call__(self, x: NamedArray, *, key=None) -> NamedArray:
+    def __call__(self, x: NamedArray, *, key=None) -> tuple[NamedArray, Dict[str, NamedArray]]:
         if x.has_axis("batch"):
             squash_axes = [x.resolve_axis("batch"), x.resolve_axis(self.config.Pos.name)]
         else:
@@ -497,7 +506,9 @@ class MixtralDecoderLayer(eqx.Module):
         return MixtralDecoderLayer(config, attn, block_sparse_moe, ln_1, ln_2, shared_mlp)
 
     @named_call
-    def __call__(self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None) -> NamedArray:
+    def __call__(
+        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None
+    ) -> tuple[NamedArray, Dict[str, NamedArray]]:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         # self attention and skip connection
         residual = x
@@ -538,7 +549,7 @@ class MixtralTransformer(eqx.Module):
     @named_call
     def __call__(
         self, x: NamedArray, attn_mask: Optional[NamedArray], *, key, pos_ids: NamedArray | None = None
-    ) -> NamedArray:
+    ) -> tuple[NamedArray, dict]:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x, extras = self.layers.scan(x, mask=attn_mask, key=keys)
         x = self.norm(x)
@@ -626,7 +637,7 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
         pos_ids: NamedArray | None = None,
         *,
         key=None,
-    ) -> NamedArray:
+    ) -> tuple[NamedArray, NamedArray | float]:
         """
         Compute the activations for the next token in a sequence.
         Args:
@@ -641,7 +652,7 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
         x = self.embeddings.embed(input_ids)
         x, extras = self.transformer(x, attn_mask=attn_mask, key=key, pos_ids=pos_ids)
 
-        aux_loss = 0
+        aux_loss: NamedArray | float = 0
         if self.config.lbl_coef is not None:
             aux_loss += extras["load_balancing_loss"]
         if self.config.rzl_coef is not None:

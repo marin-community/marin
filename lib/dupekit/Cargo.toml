@@ -1,0 +1,21 @@
+[package]
+name = "dupekit"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "dupekit"
+crate-type = ["cdylib"]
+
+[dependencies]
+arrow = { version = "57.1", features = ["pyarrow"] }
+blake2 = "0.10"
+blake3 = "1.8"
+hex = "0.4"
+parquet = { version = "57.1" }
+pyo3 = { version = "0.26", features = [
+    "extension-module",
+    "abi3-py311",
+] } # stable ABI with minimum Python version 3.11
+xxhash-rust = { version = "0.8", features = ["xxh3"] }

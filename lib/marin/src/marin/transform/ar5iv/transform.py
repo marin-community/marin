@@ -12,14 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import argparse
-import datetime
-import json
-import pathlib
+"""
+Transform ar5iv HTML to markdown in two stages: clean_html and markdownify.
 
-import fsspec
-import ray
+Example Usage:
+uv run zephyr --backend=ray --max-parallelism=600 --memory=512MB \
+    lib/marin/src/marin/transform/ar5iv/transform.py \
+    --input_path gs://bucket/ar5iv/ \
+    --output_path gs://bucket/ar5iv-processed/ \
+    --file_size 256
+"""
+
+import datetime
+from dataclasses import dataclass
+
+import draccus
 from bs4 import BeautifulSoup
+from zephyr import Dataset, flow_backend, load_jsonl
 
 from marin import markdown
 
@@ -194,174 +203,86 @@ def clean_html(html: BeautifulSoup | str) -> str:
     return str(html)
 
 
-@ray.remote(memory=512 * 1024 * 1024)  # 512 MB
-def clean_ar5iv_html(file, prefix_path, output_path, file_size):
-    """
-    Takes in the input file and processes it to get the html content.
+def clean_ar5iv_record(html_blob: dict) -> dict:
+    """Clean HTML in a single ar5iv record.
+
     Args:
-    input_file_path (str): The input file to process
-    zip_path (str): The path to the zip file
+        html_blob: Record with 'id' and 'text' (HTML content)
+
+    Returns:
+        Record with cleaned HTML text
     """
-
-    try:
-        outs = ""
-        with fsspec.open(file, "rb", compression="gzip") as outputf:
-            for _ in range(file_size):
-                line = outputf.readline()
-                if not line:
-                    break
-                html_blob = json.loads(line)
-                content = clean_html(html_blob["text"])
-                outs += (
-                    json.dumps(
-                        {
-                            "id": html_blob["id"],  # MANDATORY: source-specific identifier
-                            "text": content,  # MANDATORY: textual content of the document
-                            "source": "ar5iv",  # MANDATORY: source of the data, such as peS2o, common-crawl, etc.
-                            "added": datetime.datetime.now().isoformat(),  # OPTIONAL: timestamp ai2 acquired this data
-                        }
-                    )
-                    + "\n"
-                )
-        _file_path = pathlib.Path(file.replace("gs://", ""))
-        _output_path = pathlib.Path(output_path.replace("gs://", ""))
-        if _file_path.is_relative_to(prefix_path.replace("gs://", "")):
-            out_file = _output_path / "html_clean" / _file_path.relative_to(prefix_path.replace("gs://", ""))
-            if output_path.startswith("gs://"):
-                out_file = "gs://" + str(out_file)
-        else:
-            raise Exception(f"File {file} is not in the prefix path {prefix_path}")
-        with fsspec.open(out_file, "wb", compression="gzip") as outputf:
-            outputf.write(outs.encode("utf-8"))
-        print(f"Wrote to file {out_file}")
-    except FileNotFoundError as e:
-        print(f"Error reading the zip file: {e}")
-        return False
-
-    return True
+    content = clean_html(html_blob["text"])
+    return {
+        "id": html_blob["id"],
+        "text": content,
+        "source": "ar5iv",
+        "added": datetime.datetime.now().isoformat(),
+    }
 
 
-@ray.remote(memory=1024 * 1024 * 1024)  # 1 GB
-def markdownify_ar5iv_html(file, prefix_path, output_path, file_size):
-    """
-    Takes in the input file and processes it to get the html content.
+def markdownify_ar5iv_record(html_blob: dict) -> dict:
+    """Convert cleaned HTML to markdown for a single ar5iv record.
+
     Args:
-    input_file_path (str): The input file to process
-    zip_path (str): The path to the zip file
+        html_blob: Record with 'id' and 'text' (cleaned HTML content)
+
+    Returns:
+        Record with markdown text
     """
-
+    content = BeautifulSoup(html_blob["text"], "html.parser")
     try:
-        outs = ""
-        print(f"Starting Processing for the ar5iv file: {file}")
-        with fsspec.open(file, "rb", compression="gzip") as outputf:
-            for _ in range(file_size):
-                line = outputf.readline()
-                if not line:
-                    break
-                html_blob = json.loads(line)
-                content = BeautifulSoup(html_blob["text"], "html.parser")
-                try:
-                    content = markdown.MyMarkdownConverter().convert_soup(content)
-                except Exception as e:
-                    print(f"Error converting to markdown: {e}")
-                    print("content: ", content)
-                    raise e
-                # cleanup: replace nbsp as space
-                # this isn't quite right if we preserve html in places, but we currently are not doing that
-                content = content.replace("\xa0", " ").strip()
-                outs += (
-                    json.dumps(
-                        {
-                            "id": html_blob["id"],  # MANDATORY: source-specific identifier
-                            "text": content,  # MANDATORY: textual content of the document
-                            "source": "ar5iv",  # MANDATORY: source of the data, such as peS2o, common-crawl, etc.
-                            "added": datetime.datetime.now().isoformat(),  # OPTIONAL: timestamp ai2 acquired this data
-                        }
-                    )
-                    + "\n"
-                )
-        _file_path = pathlib.Path(file.replace("gs://", ""))
-        _output_path = pathlib.Path(output_path.replace("gs://", ""))
-        if _file_path.is_relative_to(prefix_path.replace("gs://", "")):
-            out_file = _output_path / "md" / _file_path.relative_to(prefix_path.replace("gs://", ""))
-            if output_path.startswith("gs://"):
-                out_file = "gs://" + str(out_file)
-        else:
-            raise Exception(f"File {file} is not in the prefix path {prefix_path}")
-        with fsspec.open(out_file, "wb", compression="gzip") as outputf:
-            outputf.write(outs.encode("utf-8"))
-        print(f"Wrote to file {out_file}")
-    except FileNotFoundError as e:
-        print(f"Error reading the zip file: {e}")
-        return False
-
-    return True
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Convert ar5iv to markdown.")
-    parser.add_argument("--input_path", type=str, help="Path to the ar5iv jsonl folder", required=True)
-    parser.add_argument("--output_path", type=str, help="Path to the ar5iv output folder", required=True)
-    parser.add_argument("--file_size", type=int, help="Number of ar5iv documents in a file", required=False, default=256)
-
-    args = parser.parse_args()
-    if args.input_path.startswith("gs://"):
-        fs = fsspec.filesystem("gcs")
-    else:
-        fs = fsspec.filesystem("file")
-    html_folder = args.input_path
-    output_path = args.output_path
-    files = fs.find(html_folder)
-
-    MAX_NUM_PENDING_TASKS = 600  # Max number of html files we want to process in pending state
-    ray.init()
-    result_refs = []
-
-    for html in files:
-        if len(result_refs) > MAX_NUM_PENDING_TASKS:
-            # update result_refs to only
-            # track the remaining tasks.
-            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            try:
-                ray.get(ready_refs)
-            except Exception as e:
-                print(f"Error processing the group: {e}")
-                continue
-        if "gs://" in html_folder:
-            html = "gs://" + html
-        result_refs.append(clean_ar5iv_html.remote(html, html_folder, output_path, args.file_size))
-    try:
-        ray.get(result_refs)
+        content = markdown.MyMarkdownConverter().convert_soup(content)
     except Exception as e:
-        print(f"Error processing the group: {e}")
+        print(f"Error converting to markdown: {e}")
+        print("content: ", content)
+        raise e
+    # cleanup: replace nbsp as space
+    # this isn't quite right if we preserve html in places, but we currently are not doing that
+    content = content.replace("\xa0", " ").strip()
+    return {
+        "id": html_blob["id"],
+        "text": content,
+        "source": "ar5iv",
+        "added": datetime.datetime.now().isoformat(),
+    }
 
-    result_refs = []
 
-    if args.input_path.startswith("gs://"):
-        fs = fsspec.filesystem("gcs")
-    else:
-        fs = fsspec.filesystem("file")
+@dataclass
+class Config:
+    """Configuration for ar5iv transformation."""
 
-    clean_html_folder = pathlib.Path(output_path.replace("gs://", "")) / "html_clean"
-    files = fs.find(clean_html_folder)
+    input_path: str
+    """Path to the ar5iv jsonl.gz folder"""
+    output_path: str
+    """Path to the ar5iv output folder"""
+    file_size: int = 256
+    """Number of ar5iv documents per file (unused, kept for compatibility)"""
 
-    for html in files:
-        if len(result_refs) > MAX_NUM_PENDING_TASKS:
-            # update result_refs to only
-            # track the remaining tasks.
-            ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
-            try:
-                ray.get(ready_refs)
-            except Exception as e:
-                print(f"Error processing the group: {e}")
-                continue
-        if "gs://" in html_folder:
-            html = "gs://" + html
-        print(f"Starting Processing for the ar5iv file: {html}")
-        result_refs.append(markdownify_ar5iv_html.remote(html, output_path, output_path, args.file_size))
 
-    # Wait for all the tasks to finish
-    try:
-        ray.get(result_refs)
-    except Exception as e:
-        print(f"Error processing the group: {e}")
+@draccus.wrap()
+def main(cfg: Config) -> None:
+    """Convert ar5iv HTML to markdown in two stages."""
+    backend = flow_backend()
+
+    # Stage 1: Clean HTML
+    print("Stage 1: Cleaning HTML...")
+    clean_pipeline = (
+        Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
+        .flat_map(load_jsonl)
+        .map(clean_ar5iv_record)
+        .write_jsonl(f"{cfg.output_path}/html_clean/{{shard:05d}}.jsonl.gz", skip_existing=True)
+    )
+    list(backend.execute(clean_pipeline))
+
+    # Stage 2: Convert to Markdown
+    print("Stage 2: Converting to markdown...")
+    markdown_pipeline = (
+        Dataset.from_files(f"{cfg.output_path}/html_clean/**/*.jsonl.gz")
+        .flat_map(load_jsonl)
+        .map(markdownify_ar5iv_record)
+        .write_jsonl(f"{cfg.output_path}/md/{{shard:05d}}.jsonl.gz", skip_existing=True)
+    )
+    list(backend.execute(markdown_pipeline))
+
+    print("Transformation complete!")

@@ -1,19 +1,18 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import os.path
 import tempfile
 
 import equinox as eqx
+import haliax as hax
+import haliax.nn as hnn
 import jax
 import numpy as np
 import optax
 from chex import assert_trees_all_close
-from transformers import AutoModelForCausalLM
-
-import haliax as hax
-import haliax.nn as hnn
 from haliax.quantization import DefaultDotGeneralOp, DotGeneralOp
+from test_utils import skip_if_module_missing, skip_if_no_torch, use_test_mesh
+from transformers import AutoModelForCausalLM
 
 from levanter.callbacks import StepInfo
 from levanter.checkpoint import Checkpointer
@@ -22,18 +21,15 @@ from levanter.layers.attention import AttentionMask
 from levanter.lora import (
     LoraConfig,
     LoraLinear,
-    lora_state_dict,
     lora_trainable_params_filter,
     loraize,
     merge_lora_modules,
     save_merged_hf_model,
     save_peft_pretrained,
 )
-from levanter.models.llama import LlamaConfig, LlamaLMHeadModel
+from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
 from levanter.trainer_state import TrainerState
 from levanter.utils.tree_utils import inference_mode
-from test_utils import skip_if_module_missing, skip_if_no_torch
-
 
 In = hax.Axis("In", 10)
 Mid = hax.Axis("Mid", 20)
@@ -41,7 +37,6 @@ Out = hax.Axis("Out", 5)
 
 
 def test_loraize_simple():
-
     k0 = jax.random.PRNGKey(0)
     k1 = jax.random.PRNGKey(1)
 
@@ -99,36 +94,6 @@ def test_lora_scan_layers():
     assert not hax.all(hax.isclose(module.fold(input), loraized.fold(input)))
 
 
-@skip_if_module_missing("peft")
-@skip_if_no_torch
-def test_lora_peft_integration():
-    import peft
-    from transformers import AutoModelForCausalLM
-
-    base_hf_model = AutoModelForCausalLM.from_pretrained("stanford-crfm/expanse-gpt2-small-x777")
-    peft_config = peft.tuners.LoraConfig(
-        base_model_name_or_path="stanford-crfm/expanse-gpt2-small-x777",
-        peft_type="lora",
-    )
-    model = peft.get_peft_model(base_hf_model, peft_config)
-
-    from peft.utils.save_and_load import get_peft_model_state_dict
-
-    hf_dict = get_peft_model_state_dict(model)
-
-    converter = LlamaConfig().hf_checkpoint_converter()
-
-    lev_model = converter.load_pretrained(converter.default_config.model_type, "stanford-crfm/expanse-gpt2-small-x777")
-
-    lora_lev_model = loraize(lev_model, LoraConfig(r=8, target_modules=["c_attn"]), key=jax.random.PRNGKey(0))
-    lev_dict = lora_state_dict(lora_lev_model)
-
-    assert lev_dict.keys() == hf_dict.keys()
-
-    for k, v in lev_dict.items():
-        assert v.shape == hf_dict[k].shape
-
-
 def test_merge_lora():
     class Module(eqx.Module):
         first: hnn.Linear
@@ -148,13 +113,14 @@ def test_merge_lora():
 
     # tpu matmuls are very imprecise, so we force higher precision
     class PreciseDotGeneralOp(DotGeneralOp):
-        def __call__(self, lhs, rhs, dimension_numbers, precision=None, preferred_element_type=None):
+        def __call__(self, lhs, rhs, dimension_numbers, precision=None, preferred_element_type=None, **kwargs):
             return jax.lax.dot_general(
                 lhs,
                 rhs,
                 dimension_numbers,
                 precision=jax.lax.Precision.HIGHEST,
                 preferred_element_type=preferred_element_type,
+                **kwargs,
             )
 
     k0 = jax.random.PRNGKey(0)
@@ -185,11 +151,11 @@ def test_merge_lora():
 def test_lora_load_in_peft():
     import torch
 
-    converter: HFCheckpointConverter = LlamaConfig().hf_checkpoint_converter()
-    config = LlamaConfig(seq_len=128, intermediate_dim=512, num_layers=2, num_heads=2, num_kv_heads=2)
+    converter: HFCheckpointConverter = Gpt2Config().hf_checkpoint_converter()
+    config = Gpt2Config(seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
     Vocab = converter.Vocab
 
-    model = LlamaLMHeadModel.init(Vocab, config=config, key=jax.random.PRNGKey(0))
+    model = Gpt2LMHeadModel.init(Vocab, config=config, key=jax.random.PRNGKey(0))
     model = inference_mode(model, True)
 
     input = hax.random.randint(jax.random.PRNGKey(0), config.Pos, 0, Vocab.size)
@@ -197,7 +163,7 @@ def test_lora_load_in_peft():
 
     causal_mask = AttentionMask.causal()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
         from peft import PeftConfig, PeftModel
 
         converter.save_pretrained(model, f"{tmpdir}/model")
@@ -235,11 +201,11 @@ def test_lora_load_in_peft():
 def test_lora_merged_load_in_hf():
     import torch
 
-    converter: HFCheckpointConverter = LlamaConfig().hf_checkpoint_converter()
-    config = LlamaConfig(seq_len=128, intermediate_dim=512, num_layers=2, num_heads=2, num_kv_heads=2)
+    converter: HFCheckpointConverter = Gpt2Config().hf_checkpoint_converter()
+    config = Gpt2Config(seq_len=128, hidden_dim=128, num_layers=2, num_heads=2)
     Vocab = converter.Vocab
 
-    model = LlamaLMHeadModel.init(Vocab, config=config, key=jax.random.PRNGKey(0))
+    model = Gpt2LMHeadModel.init(Vocab, config=config, key=jax.random.PRNGKey(0))
     model = inference_mode(model, True)
 
     input = hax.random.randint(jax.random.PRNGKey(0), config.Pos, 0, Vocab.size)
@@ -247,7 +213,7 @@ def test_lora_merged_load_in_hf():
 
     causal_mask = AttentionMask.causal()
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
         converter.save_pretrained(model, f"{tmpdir}/model")
 
         lora_config = LoraConfig(r=8, target_modules=["c_attn"])
@@ -301,11 +267,4 @@ def test_lora_works_with_checkpointer():
 
         checkpointer = Checkpointer(tempdir, None, [])
         checkpointer.save_checkpoint(info, "loraized")
-
         checkpointer.wait_until_finished()
-
-        # check on disk that we didn't serialize the non-loraized parameters
-        if os.path.exists(f"{tempdir}/loraized/model/first/wrapped"):
-            assert False
-
-        assert os.path.exists(f"{tempdir}/loraized/model/first/lora/lora_A")

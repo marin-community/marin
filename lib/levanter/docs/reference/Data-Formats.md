@@ -89,7 +89,7 @@ format:
   - If not supplied in config, will use `tokenizer.chat_template`
   - If neither is available, raises an error
 - Uses template to flatten messages into a single token sequence
-- Builds `loss_mask` so that only assistant spans are predicted
+- Builds `loss_weight` so that only assistant spans are predicted
 
 ### Chat Templates
 
@@ -97,7 +97,7 @@ Chat templates are Jinja2 templates that format a list of messages into a single
 Hugging Face provides mostly sufficient documentation [here](https://huggingface.co/docs/transformers/main/en/chat_templating_writing)
 but **misses one important detail**: the template must contain `{%generation%}` to indicate where the assistant message
 should be inserted. (See [here](https://github.com/huggingface/transformers/blob/main/src/transformers/tokenization_utils_base.py#L1530).)
-We need this tag to construct the `loss_mask` for training, unless `mask_user_turns` is set to `false`.
+We need this tag to construct the `loss_weight` for training, unless `mask_user_turns` is set to `false`.
 
 Unfortunately, almost no tokenizers use this format, so you will need to write your own.
 
