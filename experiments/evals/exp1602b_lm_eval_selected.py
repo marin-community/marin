@@ -20,37 +20,33 @@ from collections.abc import Iterable
 from dataclasses import replace
 
 from experiments.evals.evals import default_eval
-from experiments.evals.resource_configs import SINGLE_TPU_V5p_8
+from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
 from experiments.evals.task_configs import LM_EVAL_HARNESS_SELECTED_TASKS
 from experiments.models import (
     llama_3_1_8b,
-    llama_3_1_8b_instruct,
-    llama_3_3_70b_instruct,
+    llama_3_70b,
     marin_8b_base,
     marin_32b_base,
     olmo_2_base_32b,
     olmo_2_base_8b,
-    olmo_2_sft_8b,
     olmo_3_32b,
     olmo_3_7b,
     qwen2_5_32b,
-    qwen2_5_72b_instruct,
-    qwen2_5_7b_instruct,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, executor_main
 
 MARIN_MODELS: tuple[ExecutorStep, ...] = (marin_8b_base, marin_32b_base)
-QWEN_2_5_MODELS: tuple[ExecutorStep, ...] = (qwen2_5_7b_instruct, qwen2_5_32b, qwen2_5_72b_instruct)
-OLMO_2_MODELS: tuple[ExecutorStep, ...] = (olmo_2_base_8b, olmo_2_sft_8b, olmo_2_base_32b)
-LLAMA_3_MODELS: tuple[ExecutorStep, ...] = (llama_3_1_8b, llama_3_1_8b_instruct, llama_3_3_70b_instruct)
+QWEN_2_5_MODELS: tuple[ExecutorStep, ...] = (qwen2_5_32b, )
+OLMO_2_MODELS: tuple[ExecutorStep, ...] = (olmo_2_base_8b, olmo_2_base_32b)
+LLAMA_3_MODELS: tuple[ExecutorStep, ...] = (llama_3_1_8b, llama_3_70b)
 OLMO_3_MODELS: tuple[ExecutorStep, ...] = (olmo_3_7b, olmo_3_32b)
 
 ALL_MODEL_STEPS: tuple[ExecutorStep, ...] = (
-    *MARIN_MODELS,
-    *QWEN_2_5_MODELS,
-    *OLMO_2_MODELS,
-    *LLAMA_3_MODELS,
+    # *MARIN_MODELS,
+    # *QWEN_2_5_MODELS,
+    # *OLMO_2_MODELS,
+    # *LLAMA_3_MODELS,
     *OLMO_3_MODELS,
 )
 
@@ -62,7 +58,7 @@ def _create_per_task_eval_steps(model_step: ExecutorStep, tasks: Iterable[EvalTa
     for task in tasks:
         eval_step = default_eval(
             step=model_step,
-            resource_config=SINGLE_TPU_V5p_8,
+            resource_config=SINGLE_TPU_V5p_8_FULL,
             evals=(task,),
             discover_latest_checkpoint=False,
         )
@@ -78,5 +74,6 @@ for model_step in ALL_MODEL_STEPS:
     eval_steps.extend(_create_per_task_eval_steps(model_step, LM_EVAL_HARNESS_SELECTED_TASKS))
 
 if __name__ == "__main__":
-    for i in range(0, len(eval_steps), 4):
-        executor_main(steps=eval_steps[i : i + 4])
+    executor_main(steps=eval_steps)
+    # for i in range(0, len(eval_steps), 4):
+    #     executor_main(steps=eval_steps[i : i + 4])

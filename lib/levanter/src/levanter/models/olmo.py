@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Type, Union
 
 import equinox as eqx
+import numpy as np
 import jax.numpy as jnp
 import jax.random as jrandom
 from jaxtyping import PRNGKeyArray
@@ -14,7 +15,7 @@ import haliax as hax
 import haliax.nn as hnn
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
-from haliax.nn.scan import Stacked
+from haliax.nn.scan import BlockSeq, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
@@ -35,6 +36,7 @@ from levanter.utils.logging import silence_transformer_nag
 
 silence_transformer_nag()
 from transformers import Olmo2Config as HfOlmo2Config  # noqa: E402
+from transformers import Olmo3Config as HfOlmo3Config  # noqa: E402
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
 
 
@@ -609,3 +611,411 @@ class Olmo2LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo2Config
             return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)
         else:
             return dataclasses.replace(self, embeddings=new_embeddings)
+
+
+silence_transformer_nag()
+from transformers import PretrainedConfig as HfConfig  # noqa: E402
+
+
+# ------------------------------------------------------------
+# Sliding Window Mask
+# ------------------------------------------------------------
+
+def build_sliding_causal_mask(Pos, KeyPos, window):
+    pos = hax.broadcast_axis(hax.arange(Pos), KeyPos)
+    key_pos = hax.broadcast_axis(hax.arange(KeyPos), Pos)
+    causal = key_pos <= pos
+    window_mask = key_pos >= (pos - window + 1)
+    return (causal & window_mask).astype(jnp.bool_)
+
+
+# ------------------------------------------------------------
+# OLMO-3 Config (extends OLMo-2)
+# ------------------------------------------------------------
+
+@LmConfig.register_subclass("olmo3")
+@dataclass(frozen=True)
+class Olmo3Config(HFCompatConfig):
+    seq_len: int = 65536
+    hidden_dim: int = 4096
+    intermediate_dim: int = 11008
+    num_layers: int = 32
+    num_heads: int = 32
+    num_kv_heads: int = 32
+    activation_function: ActivationFunctionEnum = ActivationFunctionEnum.silu
+    initializer_range: float = 0.02
+    layer_norm_epsilon: float = 1e-6
+    tie_word_embeddings: bool = False
+    attention_bias: bool = False
+    attention_dropout: float = 0.0
+
+    upcast_attn: bool = False
+    use_flash_attention: Optional[bool] = True
+    attn_backend: Optional[AttentionBackend] = None
+    flash_attention_block_size: Optional[int] = None
+
+    gradient_checkpointing: bool = True
+    scan_layers: bool = True
+
+    use_bias: bool = False
+    use_layer_norm_weight: bool = True
+    rope: RotaryEmbeddingsConfig = dataclasses.field(default_factory=DefaultRotaryEmbeddingsConfig)
+
+    sliding_window: int = 4096
+    layer_types: tuple[str, ...] = tuple(
+        ["sliding_attention", "sliding_attention", "sliding_attention", "full_attention"] * 8
+    )
+
+    reference_checkpoint: str = "allenai/Olmo-3-1025-7B"
+    tokenizer: Optional[str] = None
+
+    @property
+    def Pos(self) -> Axis:
+        return Axis(name="position", size=self.seq_len)
+
+    @property
+    def KeyPos(self) -> Axis:
+        return self.Pos.alias("key_position")
+
+    @property
+    def Embed(self) -> Axis:
+        return Axis(name="embed", size=self.hidden_dim)
+
+    Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
+    KVHeads = property(lambda self: Axis(name="kv_head", size=self.num_kv_heads))
+    Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
+    Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
+    HeadSize = property(lambda self: Axis(name="head_size", size=self.hidden_dim // self.num_heads))
+
+    def __post_init__(self):
+        assert self.num_heads % self.num_kv_heads == 0
+        assert len(self.layer_types) == self.num_layers
+
+    def hf_checkpoint_converter(
+        self, ref_checkpoint: Optional[str] = None
+    ) -> HFCheckpointConverter["Olmo3Config"]:  # type: ignore
+        hf_model_path = self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint
+
+        return HFCheckpointConverter(
+            self.__class__,
+            reference_checkpoint=hf_model_path,
+            trust_remote_code=True,
+            tokenizer=hf_model_path if self.tokenizer is None else self.tokenizer,
+            HfConfigClass=HfOlmo3Config,
+        )
+
+    @classmethod
+    def from_hf_config(cls, hf_config: HfConfig):
+        rope_config = RotaryEmbeddingsConfig.from_hf_config(
+            getattr(hf_config, "rope_theta", None), getattr(hf_config, "rope_scaling", None)
+        )
+        return Olmo3Config(
+            seq_len=hf_config.max_position_embeddings,
+            hidden_dim=hf_config.hidden_size,
+            intermediate_dim=hf_config.intermediate_size,
+            num_layers=hf_config.num_hidden_layers,
+            num_heads=hf_config.num_attention_heads,
+            num_kv_heads=hf_config.num_key_value_heads,
+            activation_function=ActivationFunctionEnum(hf_config.hidden_act),
+            initializer_range=hf_config.initializer_range,
+            layer_norm_epsilon=hf_config.rms_norm_eps,
+            tie_word_embeddings=hf_config.tie_word_embeddings,
+            attention_bias=hf_config.attention_bias,
+            attention_dropout=hf_config.attention_dropout,
+            sliding_window=getattr(hf_config, "sliding_window", None),
+            layer_types=tuple(
+                getattr(hf_config, "layer_types", ["sliding_attention"] * hf_config.num_hidden_layers)
+            ),
+            rope=rope_config,
+        )
+
+    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfOlmo3Config:
+        if config_overrides is None:
+            config_overrides = {}
+
+        rope_theta, rope_scaling = self.rope.to_hf_config()
+
+        return HfOlmo3Config(
+            max_position_embeddings=self.seq_len,
+            hidden_size=self.hidden_dim,
+            intermediate_size=self.intermediate_dim,
+            num_hidden_layers=self.num_layers,
+            num_attention_heads=self.num_heads,
+            num_key_value_heads=self.num_kv_heads,
+            hidden_act=self.activation_function.name,
+            initializer_range=self.initializer_range,
+            rms_norm_eps=self.layer_norm_epsilon,
+            tie_word_embeddings=self.tie_word_embeddings,
+            attention_bias=self.attention_bias,
+            attention_dropout=self.attention_dropout,
+            sliding_window=self.sliding_window,
+            layer_types=list(self.layer_types),
+            vocab_size=vocab_size,
+            pad_token_id=None,
+            rope_theta=rope_theta,
+            rope_scaling=rope_scaling,
+            _attn_implementation="eager",
+            **config_overrides,
+        )
+
+    @property
+    def model_type(self):
+        return Olmo3LMHeadModel
+
+    def attention_config(self) -> AttentionConfig:
+        return AttentionConfig(
+            Embed=self.Embed,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            use_bias=self.attention_bias,
+            upcast_attn=self.upcast_attn,
+            attn_backend=self.attn_backend,
+            flash_attention_block_size=self.flash_attention_block_size,
+            rope=self.rope,
+            qk_norm=None,  # HF OLMo-3 checkpoints do not use qk_norm on Q/K
+        )
+
+    @property
+    def norm_config(self) -> RmsNormConfig:
+        return RmsNormConfig(
+            eps=self.layer_norm_epsilon,
+            use_weight=self.use_layer_norm_weight,
+            use_bias=self.use_bias,
+        )
+
+
+# ------------------------------------------------------------
+# MLP (unchanged)
+# ------------------------------------------------------------
+
+class Olmo3MLP(eqx.Module):
+    gate_proj: hnn.Linear
+    up_proj: hnn.Linear
+    down_proj: hnn.Linear
+    act: Callable = eqx.field(static=True)
+
+    @staticmethod
+    def init(Embed, Mlp, activation_fn, *, key, use_bias=False):
+        k_fc, k_up, k_down = jrandom.split(key, 3)
+        gate_proj = hnn.Linear.init(Out=Mlp, In=Embed, key=k_fc, use_bias=use_bias, out_first=True)
+        up_proj = hnn.Linear.init(Out=Mlp, In=Embed, key=k_up, use_bias=use_bias, out_first=True)
+        down_proj = hnn.Linear.init(Out=Embed, In=Mlp, key=k_down, use_bias=use_bias, out_first=True)
+        if isinstance(activation_fn, ActivationFunctionEnum):
+            activation_fn = activation_fn.to_fn()
+        return Olmo3MLP(gate_proj, up_proj, down_proj, activation_fn)
+
+    def __call__(self, x, *, key=None):
+        k1, k2, k3 = maybe_rng_split(key, 3)
+        h = self.act(self.gate_proj(x, key=k1)) * self.up_proj(x, key=k2)
+        return self.down_proj(h, key=k3)
+
+
+# ------------------------------------------------------------
+# OLMO-3 Attention (with SWA)
+# ------------------------------------------------------------
+
+class Olmo3Attention(ModuleWithStateDictSerialization, Attention):
+    sliding_window: Optional[int] = eqx.field(static=True, default=None)
+
+    @staticmethod
+    def init(config: Olmo3Config, *, key, sliding_window=None):
+        base = Attention.init(config.attention_config(), key=key)
+        return Olmo3Attention(
+            base.config,
+            base.q_proj,
+            base.k_proj,
+            base.v_proj,
+            base.o_proj,
+            base.q_norm,
+            base.k_norm,
+            base.rot_embs,
+            sliding_window=sliding_window,
+        )
+
+    def __call__(self, x, mask, *, key=None, pos_ids=None):
+        if self.sliding_window is not None:
+            pos_axis = next(ax for ax in x.axes if ax.name == "position")
+            sw_mask = build_sliding_causal_mask(pos_axis, pos_axis.alias("key_position"), self.sliding_window)
+            if isinstance(mask, AttentionMask):
+                mask = mask & AttentionMask(explicit_mask=sw_mask)
+            elif mask is None:
+                mask = AttentionMask(explicit_mask=sw_mask)
+            else:
+                mask = mask & sw_mask
+
+        return super().__call__(x, mask, key=key, pos_ids=pos_ids)
+
+
+# ------------------------------------------------------------
+# Decoder Layer
+# ------------------------------------------------------------
+
+class Olmo3DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
+    config: Olmo3Config = eqx.field(static=True)
+    self_attn: Olmo3Attention
+    mlp: Olmo3MLP
+    post_attention_layernorm: hnn.RmsNorm
+    post_feedforward_layernorm: hnn.RmsNorm
+
+    @staticmethod
+    def init(config: Olmo3Config, layer_sliding_window: int, *, key):
+        k_attn, k_mlp = jrandom.split(key, 2)
+
+        sliding = None if layer_sliding_window < 0 else int(layer_sliding_window)
+
+        attn = Olmo3Attention.init(config, key=k_attn, sliding_window=sliding)
+        mlp = Olmo3MLP.init(
+            config.Embed,
+            config.Mlp,
+            config.activation_function,
+            key=k_mlp,
+            use_bias=config.use_bias,
+        )
+
+        ln1 = config.norm_config.build(config.Embed)
+        ln2 = config.norm_config.build(config.Embed)
+
+        return Olmo3DecoderLayer(config, attn, mlp, ln1, ln2)
+
+    def __call__(self, x, mask, *, key=None, pos_ids=None):
+        k1, k2 = maybe_rng_split(key, 2)
+        h = x + self.post_attention_layernorm(self.self_attn(x, mask, key=k1, pos_ids=pos_ids))
+        return h + self.post_feedforward_layernorm(self.mlp(h, key=k2))
+
+
+# ------------------------------------------------------------
+# Transformer
+# ------------------------------------------------------------
+
+class Olmo3Transformer(ModuleWithStateDictSerialization, eqx.Module):
+    config: Olmo3Config = eqx.field(static=True)
+    layers: Stacked[Olmo3DecoderLayer]
+    norm: hnn.RmsNorm
+
+    @staticmethod
+    def init(config: Olmo3Config, *, key):
+        keys = shaped_rng_split(key, config.num_layers)
+
+        layer_sliding_windows = np.array(
+            [config.sliding_window if layer == "sliding_attention" else -1 for layer in config.layer_types],
+            dtype=int,
+        )
+
+        # BlockSeq is used to allow per-layer sliding window choices
+        layers = BlockSeq.init(
+            config.Layers,
+            Olmo3DecoderLayer,
+            gradient_checkpointing=config.gradient_checkpointing,
+        )(config, layer_sliding_windows, key=keys)
+
+        ln_f = config.norm_config.build(config.Embed)
+        return Olmo3Transformer(config, layers, ln_f)
+
+    def __call__(self, x, attn_mask, *, key, pos_ids=None):
+        keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
+        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
+        return self.norm(x)
+
+
+# ------------------------------------------------------------
+# Embedding
+# ------------------------------------------------------------
+
+class Olmo3Embedding(ModuleWithStateDictSerialization, eqx.Module):
+    Vocab: Axis = eqx.field(static=True)
+    token_embeddings: hnn.Embedding
+
+    @staticmethod
+    def init(Vocab: Axis, config: Olmo3Config, *, key):
+        return Olmo3Embedding(Vocab, hnn.Embedding.init(Vocab, config.Embed, key=key))
+
+    def embed(self, input_ids):
+        return self.token_embeddings(input_ids)
+
+    def unembed(self, x):
+        return self.token_embeddings.unembed(x)
+
+    def resize_embeddings(self, new_size: int, key: Optional[PRNGKeyArray] = None):
+        new_weights = self.token_embeddings.resize_embeddings(new_size, key=key)
+        return dataclasses.replace(self, Vocab=self.Vocab.resize(new_size), token_embeddings=new_weights)
+
+    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+        return {"token_embeddings": "embed_tokens"}
+
+
+# ------------------------------------------------------------
+# LM Head Model
+# ------------------------------------------------------------
+
+class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config]):
+    transformer: Olmo3Transformer
+    embeddings: Olmo3Embedding
+    lm_head: Optional[hnn.Linear]
+
+    @classmethod
+    def init(cls, Vocab: Axis, config: Olmo3Config, *, key):
+        k_t, k_emb, k_head = jrandom.split(key, 3)
+
+        transformer = Olmo3Transformer.init(config, key=k_t)
+        embeddings = Olmo3Embedding.init(Vocab, config, key=k_emb)
+
+        if config.tie_word_embeddings:
+            lm_head = None
+        else:
+            lm_head = hnn.Linear.init(
+                In=config.Embed, Out=Vocab, key=k_head, use_bias=False, out_first=True
+            )
+
+        return Olmo3LMHeadModel(transformer, embeddings, lm_head)
+
+    def __call__(self, input_ids, attn_mask=None, pos_ids=None, *, key=None):
+        k_t, k_h = maybe_rng_split(key, 2)
+        x = self.embeddings.embed(input_ids)
+        x = self.transformer(x, attn_mask=attn_mask, key=k_t, pos_ids=pos_ids)
+
+        if self.lm_head is None:
+            return self.embeddings.unembed(x)
+        else:
+            return self.lm_head(x, key=k_h)
+
+    @property
+    def config(self) -> Olmo3Config:
+        return self.transformer.config
+
+    @property
+    def Vocab(self) -> Axis:
+        return self.embeddings.Vocab
+
+    def activations(
+        self,
+        input_ids: NamedArray,
+        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        *,
+        key=None,
+        pos_ids: NamedArray | None = None,
+    ) -> NamedArray:
+        x = self.embeddings.embed(input_ids)
+        return self.transformer(x, attn_mask=attn_mask, key=key, pos_ids=pos_ids)
+
+    def get_lm_head(self) -> hax.NamedArray:
+        if self.lm_head is None:
+            return self.embeddings.token_embeddings.weight
+        return self.lm_head.weight
+
+    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+        return {
+            "transformer": "model",
+            "embeddings": "model",
+            "lm_head": "lm_head",
+        }
+
+    def resize_vocab(self, new_size: int, key=None) -> "LmHeadModel[Olmo3Config]":
+        new_vocab = self.Vocab.resize(new_size)
+        k1, k2 = maybe_rng_split(key, 2)
+        new_embeddings = self.embeddings.resize_embeddings(new_size, key=k1)
+        if self.lm_head is None:
+            return dataclasses.replace(self, embeddings=new_embeddings)
+
+        new_lm_matrix = hax.tree_util.resize_axis(self.lm_head.weight, self.Vocab, new_size, key=k2)
+        new_lm_head = dataclasses.replace(self.lm_head, Out=new_vocab, weight=new_lm_matrix)
+        return dataclasses.replace(self, embeddings=new_embeddings, lm_head=new_lm_head)

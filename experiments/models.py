@@ -128,6 +128,14 @@ llama_3_1_8b = download_model_step(
     )
 )
 
+llama_3_70b = download_model_step(
+    ModelConfig(
+        hf_repo_id="meta-llama/Meta-Llama-3-70B",
+        hf_revision="main",
+    )
+)
+
+
 tulu_3_1_8b_sft = download_model_step(
     ModelConfig(
         hf_repo_id="allenai/Llama-3.1-Tulu-3-8B-SFT",
