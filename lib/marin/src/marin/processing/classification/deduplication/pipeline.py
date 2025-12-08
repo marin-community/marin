@@ -433,8 +433,9 @@ def _run_doc_deduplication(config: DedupeConfig):
     converged, cc_files = connected_components(
         doc_minhash_lsh, backend=backend, output_dir=f"{config.output_path}/metadata/cc"
     )
-    # NOTE: it's probably fine if this doesn't converge in general, but for now we assert
-    assert converged, "Connected components did not converge!"
+    if not converged:
+        # TODO (rav): log the number of changed nodes?
+        logger.warning("Connected components did not converge")
     fuzzy_dup_shards = backend.execute(
         Dataset.from_list(cc_files)
         .flat_map(load_file)
