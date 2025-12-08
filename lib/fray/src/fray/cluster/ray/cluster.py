@@ -227,6 +227,12 @@ class RayCluster(Cluster):
         # disable access to the TPU if we're not a TPU job, otherwise
         # any import of JAX will claim the TPU and block other users.
         if request.resources.device.type == "cpu":
+            if "JAX_PLATFORMS" in env_vars or "PJRT_DEVICE" in env_vars:
+                logger.warning(
+                    "Found existing JAX_PLATFORMS=%s, PJRT_DEVICE=%s, overriding for CPU only job.",
+                    env_vars["JAX_PLATFORMS"],
+                    env_vars["PJRT_DEVICE"],
+                )
             env_vars["JAX_PLATFORMS"] = "cpu"
             env_vars["PJRT_DEVICE"] = "cpu"
 

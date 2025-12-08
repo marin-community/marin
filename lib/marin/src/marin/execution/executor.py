@@ -138,10 +138,11 @@ ExecutorFunction = Callable | None
 
 
 class StepRunner:
-    """Wraps Fray job execution with automatic lease refresh.
+    """Manages execution of a single step.
 
-    The heartbeat thread periodically refreshes the lease file,
-    allowing other executors to detect if this runner is still alive.
+    To prevent duplicate execution, Executor uses a per-step lease directory to track
+    the owner of a given step. Leases must be continually refreshed to prevent other
+    executors from running the same step.
     """
 
     def __init__(self, cluster: Cluster, status_file: StatusFile):
@@ -175,7 +176,7 @@ class StepRunner:
             raise
         finally:
             self._stop_heartbeat()
-            self._status_file.release_lease()
+            self._status_file.release_lock()
 
     def poll(self) -> bool:
         """Return True if job is finished."""
@@ -188,7 +189,7 @@ class StepRunner:
 
         def heartbeat_loop():
             while not self._stop_event.wait(HEARTBEAT_INTERVAL):
-                self._status_file.write_lease()
+                self._status_file.refresh_lock()
 
         self._heartbeat_thread = Thread(target=heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
@@ -1045,25 +1046,23 @@ def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool =
                 # Fall through to acquire lock
             else:
                 raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
-        elif status == STATUS_RUNNING and status_file.has_active_lease():
-            # Another worker is actively running with fresh lease
-            logger.debug(f"[{worker_id}] Step {step_name} has active lease, waiting...")
+        elif status == STATUS_RUNNING and status_file.has_active_lock():
+            # Another worker is actively running with current lease
+            logger.debug(f"[{worker_id}] Step {step_name} has active lock, waiting...")
             time.sleep(5)
             continue
         elif status == STATUS_RUNNING:
-            logger.info(f"[{worker_id}] Step {step_name} has no active lease, taking over.")
+            logger.info(f"[{worker_id}] Step {step_name} has no active lock, taking over.")
 
-        # Try to acquire lock using lease algorithm
-        logger.debug(f"[{worker_id}] Attempting to acquire lock for {step_name}")
+        logger.info(f"[{worker_id}] Attempting to acquire lock for {step_name}")
         if status_file.try_acquire_lock():
-            # We won! Write status and proceed
             status_file.write_status(STATUS_RUNNING)
             logger.info(f"[{worker_id}] Acquired lock for {step_name}")
             return True
 
         # We lost - clean up our lease and retry
         status_file.release_lease()
-        logger.debug(f"[{worker_id}] Lost lock race for {step_name}, retrying...")
+        logger.info(f"[{worker_id}] Lost lock race for {step_name}, retrying...")
         time.sleep(1)
 
 

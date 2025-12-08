@@ -17,13 +17,13 @@ We'll migrate these 2 types of functionality independently.
 
 ### Migrate resource configuration
 
-We'll first move our metadata - our resource speficiations - to use Fray. This
+We'll first move our metadata - our resource specifications - to use Fray. This
 is now completed in https://github.com/marin-community/marin/pull/2154 . This
 uses the Fray system of specifying resources consistently throughout our code base.
 
 ### Migrating job launches
 
-Now that we've migrated our resource specification, we can switch from using
+Now that we've migrated our resources, we can switch from using
 explicit ray.remote / ray_run calls for running jobs to instead running jobs
 with Fray. We'll do this system by system, testing and committing our work as we go.
 
