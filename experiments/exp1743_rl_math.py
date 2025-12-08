@@ -151,7 +151,7 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
             save_interval=datetime.timedelta(seconds=600),
         ),
         mesh=MeshConfig(
-            axes={"model": 1},  # inherited data:-1, replica:1
+            axes={"context": 1, "model": 1},  # inherited data:-1, replica:1
             shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
         ),
         ray=RayConfig(auto_start_cluster=False),

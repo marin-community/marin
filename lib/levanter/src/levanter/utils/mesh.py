@@ -56,10 +56,11 @@ class MeshConfig:
 
     @cached_property
     def resolved_param_mapping(self) -> ResourceMapping:
-        mapping = {}
+        # Parameter mapping should inherit the shared defaults (tensor_parallel_axes, shared_mapping)
+        # so parameters on those logical axes shard the same way as compute unless explicitly overridden.
+        mapping = self._resolved_shared_axis_mapping()
         for logical, physical in self.param_mapping.items():
             mapping[logical] = _norm(physical)
-
         return mapping
 
     def _resolved_shared_axis_mapping(self):

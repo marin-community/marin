@@ -782,7 +782,7 @@ class TrainerConfig:
     crash_on_inf: bool = True
 
     # config related to partitioning
-    mesh: MeshConfig = field(default_factory=lambda: MeshConfig())
+    mesh: MeshConfig = MeshConfig()
 
     @property
     def batch_axis_name(self) -> str | None:
