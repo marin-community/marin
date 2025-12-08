@@ -25,7 +25,7 @@ from levanter.optim import AdamConfig
 from experiments.llama import llama_1_4b, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
+from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 AUTHOR = Author(name="William Held", affiliation="Georgia Tech", url="https://WilliamHeld.com")
@@ -33,10 +33,10 @@ AUTHOR = Author(name="William Held", affiliation="Georgia Tech", url="https://Wi
 logger = logging.getLogger("ray")
 
 
-def get_num_train_steps(param_count, batch_size, max_seq_len):
+def get_num_train_steps(param_count, batch_size, seq_len):
     """Compute the number of steps for Chinchilla optimal training (20x params tokens)."""
     total_tokens = param_count * 20
-    tokens_per_step = batch_size * max_seq_len
+    tokens_per_step = batch_size * seq_len
     return total_tokens // tokens_per_step
 
 
@@ -67,10 +67,10 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     # Resource configs
     resource_cfgs = {
-        "130m": TpuPodConfig(tpu_type="v5p-32"),
-        "300m": TpuPodConfig(tpu_type="v5p-32"),
-        "520m": TpuPodConfig(tpu_type="v5p-32"),
-        "1_2b": TpuPodConfig(tpu_type="v5p-32"),
+        "130m": ResourceConfig.with_tpu("v5p-32"),
+        "300m": ResourceConfig.with_tpu("v5p-32"),
+        "520m": ResourceConfig.with_tpu("v5p-32"),
+        "1_2b": ResourceConfig.with_tpu("v5p-32"),
     }
 
     # AdamC optimizer configs for each size
@@ -154,10 +154,12 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     description = descriptions[size]
     run_name = run_names[size]
 
+    # we use max_seq_len == train_seq_len here
     num_train_steps = get_num_train_steps(param_count, batch_size, max_seq_len)
 
     train = SimpleTrainConfig(
         resource_config,
+        train_seq_len=max_seq_len,
         train_batch_size=batch_size,
         num_train_steps=num_train_steps,
         learning_rate=adam.learning_rate,
