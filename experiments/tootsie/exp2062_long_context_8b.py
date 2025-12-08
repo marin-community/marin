@@ -69,6 +69,7 @@ from experiments.tootsie.exp600_tootsie import (
     STARLING_END,
     cooldown_train_config,
 )
+from levanter.optim import AdamConfig
 from marin.processing.tokenize.data_configs import (
     lm_mixture_data_config,
     interpolate_mixture_weights,
@@ -87,7 +88,7 @@ from marin.execution.executor import executor_main
 GIRAFFE_4K_START = STARLING_END
 GIRAFFE_4K_STEPS = 6000  # 6000 * 4096 * 4096 ≈ 100B tokens
 
-GIRAFFE_4K_END = GIRAFFE_4K_START + GIRAFFE_4K_STEPS
+GIRAFFE_4K_END = GIRAFFE_4K_START + GIRAFFE_4K_STEPS + 3  # get around some dumb fencepost issues
 
 GIRAFFE_16K_STEPS = 3000  # 3000 * 512 * 32768 ≈ 50B tokens
 GIRAFFE_32K_STEPS = 3000  # 3000 * 256 * 65536 ≈ 50B tokens
@@ -179,7 +180,7 @@ reasoning_mixture = lm_mixture_data_config(reasoning_tokenized, reasoning_weight
 # Validation: finepdfs (original) eng_Latn test split
 finepdfs_validation_tokenized = {
     "finepdfs/eng": default_tokenize(
-        name="finepdfs_eng_Latn_val_llama3",
+        name="finepdfs_eng_Latn_val",
         dataset=finepdfs_validation_by_language["eng_Latn"],
         tokenizer=marin_tokenizer,
         is_validation=True,
@@ -214,6 +215,7 @@ giraffe_4K_mixture = lm_varying_mixture_data_config(
         (PHASE_4_END, starling_cooldown_weights),
         (GIRAFFE_4K_START, long_context_combined_weights),
     ],
+    mixture_block_size=1024,
 )
 
 
@@ -230,14 +232,14 @@ giraffe_long_mixture = dataclasses.replace(giraffe_long_mixture, tokenizer=marin
 # --------------------------
 # Model configs per phase
 # --------------------------
-llama_8b_4k = llama_8b
+llama_8b_4k = dataclasses.replace(llama_8b, cross_entropy_block_size=32000)
 
 llama_8b_32k = dataclasses.replace(
-    llama_8b, max_seq_len=32_768, rope=dataclasses.replace(llama_8b.rope, theta=1_500_000)  # type: ignore[arg-type]
+    llama_8b_4k, max_seq_len=32_768, rope=dataclasses.replace(llama_8b.rope, theta=1_500_000)  # type: ignore[arg-type]
 )
 
 llama_8b_64k = dataclasses.replace(
-    llama_8b,
+    llama_8b_4k,
     max_seq_len=65_536,
     rope=Llama3RotaryEmbeddingsConfig(theta=5_000_000),
 )
@@ -277,7 +279,10 @@ def _train_config(
 
 
 STARLING_WARMSTART_STEP = "1399923"
-starling_checkpoint = tootsie_8b_sensible_starling.cd(f"checkpoints/step-{STARLING_WARMSTART_STEP}").nonblocking()
+# needed to move step-1399923-patched/opt_state/inner_state/1 to opt_state/inner_state/0 for some reason
+starling_checkpoint = tootsie_8b_sensible_starling.cd(
+    f"checkpoints/step-{STARLING_WARMSTART_STEP}-patched"
+).nonblocking()
 
 # Phase 1: 4k -> ~100B tokens
 PHASE1_STEPS = GIRAFFE_4K_STEPS
@@ -285,20 +290,30 @@ PHASE1_STEPS = GIRAFFE_4K_STEPS
 giraffe_4k_config = dataclasses.replace(
     cooldown_train_config,
     resources=TpuPodConfig(tpu_type="v4-512", slice_count=1),
-    train_seq_len=4_096,
-    # similar to phoenix, we abuse WSD-S api to rewarmup
-    cycle_length=[STARLING_END, GIRAFFE_4K_END - STARLING_END],
+    train_seq_len=4096,
     num_train_steps=GIRAFFE_4K_END,
-    rewarmup=200,
-    learning_rate=1e-4,
     initialize_from_checkpoint_path=starling_checkpoint,
     steps_per_export=1000,
     steps_per_hf_export=1000,
+    optimizer_config=AdamConfig(
+        lr_schedule="linear",
+        learning_rate=1e-4,
+        max_grad_norm=cooldown_train_config.max_grad_norm,
+        # similar to phoenix, we abuse WSD-S api to rewarmup
+        cycles=[STARLING_END, GIRAFFE_4K_END],
+        decay=1.0,
+        # decay=1.0,
+        rewarmup=100,
+        min_lr_ratio=0.1,
+        adamc_weight_decay=True,
+    ),
+    allow_partial_checkpoint=False,
 )
 
 
+# the original had a botched lr schedule. classic me.
 tootsie_8b_giraffe_phase1 = default_train(
-    name="tootsie-8b-giraffe-4k",
+    name="tootsie-8b-giraffe-4k-v4",
     tokenized=giraffe_4K_mixture,
     model_config=llama_8b_4k,
     train_config=giraffe_4k_config,
@@ -308,7 +323,7 @@ tootsie_8b_giraffe_phase1 = default_train(
 
 # Phase 2: 32k with RoPE theta 1.5M for ~50B tokens
 PHASE2_STEPS = GIRAFFE_16K_STEPS  # 3000 * 512 * 32768 ≈ 50B tokens
-phase2_checkpoint = tootsie_8b_giraffe_phase1.cd(f"checkpoints/step-{PHASE1_STEPS}")
+phase2_checkpoint = tootsie_8b_giraffe_phase1.cd(f"checkpoints/step-{GIRAFFE_4K_END}")
 phase2_train_config = _train_config(
     num_steps=PHASE2_STEPS, batch_size=512, train_seq_len=32_768, initialize_from=phase2_checkpoint, seed=2
 )
@@ -324,7 +339,7 @@ tootsie_8b_giraffe_phase2 = default_train(
 
 # Phase 3: 64k with RoPE theta 5M for ~50B tokens
 PHASE3_STEPS = GIRAFFE_32K_STEPS  # 3000 * 256 * 65536 ≈ 50B tokens
-phase3_checkpoint = tootsie_8b_giraffe_phase2.cd(f"checkpoints/step-{PHASE2_STEPS}")
+phase3_checkpoint = tootsie_8b_giraffe_phase2.cd(f"checkpoints/step-{PHASE2_STEPS}-")
 phase3_train_config = _train_config(
     num_steps=PHASE3_STEPS,
     batch_size=256,

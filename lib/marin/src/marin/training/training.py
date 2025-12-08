@@ -50,6 +50,13 @@ class TrainLmOnPodConfig:
     """
     allow_out_of_region: tuple[str, ...] = ()
     """Tuple of JSON paths (e.g., 'data.cache_dir') that are allowed to be read from or written to different regions."""
+    auto_build_caches: bool = False
+    """Whether to allow Levanter to build dataset caches on the fly.
+
+    Defaults to False so Marin jobs fail fast when a cache is missing instead of
+    spending time (and money) building it during training. Override to True if
+    you explicitly want cache construction.
+    """
 
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
@@ -105,6 +112,15 @@ def _suppress_ray_config(config: TrainLmConfig) -> TrainLmConfig:
             config,
             trainer=replace(config.trainer, ray=replace(config.trainer.ray, start_workers=False)),
         )
+    return config
+
+
+def _maybe_override_auto_build_caches(config: TrainLmConfig, auto_build: bool) -> TrainLmConfig:
+    data = config.data
+    if data.auto_build_caches != auto_build:
+        logger.info("Overriding auto_build_caches to %s", auto_build)
+        data = dataclasses.replace(data, auto_build_caches=auto_build)
+        config = replace(config, data=data)
     return config
 
 
@@ -193,6 +209,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     train_config = config.train_config
     train_config = _suppress_ray_config(train_config)
+    train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
 
     # disable accelerator requirement when running without GPU/TPU resources
     if hw_config.accelerator_descriptor() is None:
