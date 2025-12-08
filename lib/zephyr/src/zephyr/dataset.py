@@ -179,11 +179,7 @@ class WriteOp:
 
 @dataclass
 class FlatMapOp:
-    """FlatMap operation - applies function that yields multiple results per input.
-
-    Use when a function processes one input and yields/returns many outputs.
-    For example, reading a file that contains multiple records.
-    """
+    """FlatMap operation - apply a function to each input and yield/return many outputs, flattening the result."""
 
     fn: Callable
 
@@ -193,11 +189,7 @@ class FlatMapOp:
 
 @dataclass
 class LoadFileOp:
-    """Load records from files (parquet, jsonl, vortex, etc.).
-
-    This is a first-class file loading operation that enables chunking optimization.
-    The planner will convert this to an internal FlatMapOp with file reading logic.
-    """
+    """Load records from files (parquet, jsonl, vortex, etc.)."""
 
     format: Literal["auto", "parquet", "jsonl", "vortex"] = "auto"
     columns: list[str] | None = None
@@ -228,9 +220,8 @@ class MapShardOp:
 class ReshardOp:
     """Reshard operation - redistributes data across target number of shards.
 
-    Best-effort operation that changes parallelism for subsequent operations.
-    For RayBackend, redistributes object refs without materializing data.
-    For other backends, this is a no-op.
+    This is best-effort. It merely re-arranges the set of chunks distributed across shards
+    as a metadata operation. It does not re-materialize the data.
     """
 
     num_shards: int
@@ -241,11 +232,7 @@ class ReshardOp:
 
 @dataclass
 class GroupByOp:
-    """Group by key and apply reducer.
-
-    This is a unified logical operation that the planner translates into
-    physical Scatter + Reduce operations across a shuffle boundary.
-    """
+    """Group items by `key_fn`, reducing each group with `reducer_fn`."""
 
     key_fn: Callable  # Function from item -> hashable key
     reducer_fn: Callable  # Function from (key, Iterator[items]) -> result
@@ -257,11 +244,7 @@ class GroupByOp:
 
 @dataclass
 class ReduceOp:
-    """Reduce dataset to a single value.
-
-    This is a unified logical operation that the planner translates into
-    physical Fold + FoldGlobal operations.
-    """
+    """Reduce dataset to a single value."""
 
     local_reducer: Callable  # Reduces items within each shard
     global_reducer: Callable  # Combines shard results into final value
@@ -274,8 +257,8 @@ class ReduceOp:
 class JoinOp:
     """Streaming merge join for pre-sorted, co-partitioned datasets.
 
-    Single-phase join that pairs up corresponding shards and streams through them.
-    Much faster than hash join but requires strict preconditions:
+    Preconditions:
+
     - Both datasets have the same number of shards
     - Corresponding shards (left[i], right[i]) contain the same key ranges
     - Items within each shard are sorted by join key
@@ -293,7 +276,6 @@ class JoinOp:
         return f"JoinOp(type={self.join_type})"
 
 
-# Type alias for logical operations (user-facing)
 LogicalOp = (
     MapOp
     | FilterOp
@@ -309,9 +291,6 @@ LogicalOp = (
     | JoinOp
     | LoadFileOp
 )
-
-# Backwards compatibility alias
-Operation = LogicalOp
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -337,7 +316,7 @@ class Dataset(Generic[T]):
         [4, 8]
     """
 
-    def __init__(self, source: Iterable[T], operations: list[Operation] | None = None):
+    def __init__(self, source: Iterable[T], operations: list[LogicalOp] | None = None):
         """Create a dataset from a source and optional operations.
 
         Args:
@@ -349,26 +328,12 @@ class Dataset(Generic[T]):
 
     @staticmethod
     def from_list(items: list[T]) -> Dataset[T]:
-        """Create a dataset from a list.
-
-        Args:
-            items: List of items
-
-        Returns:
-            Dataset wrapping the list
-        """
+        """Create a dataset from a list."""
         return Dataset(items)
 
     @staticmethod
     def from_iterable(iterable: Iterable[T]) -> Dataset[T]:
-        """Create a dataset from any iterable.
-
-        Args:
-            iterable: Source iterable
-
-        Returns:
-            Dataset wrapping the iterable
-        """
+        """Create a dataset from any iterable."""
         return Dataset(iterable)
 
     @staticmethod
@@ -423,9 +388,6 @@ class Dataset(Generic[T]):
     def map(self, fn: Callable[[T], R]) -> Dataset[R]:
         """Map a function over the dataset.
 
-        The execution strategy (parallel vs sequential) is determined by the
-        backend used to execute the dataset.
-
         Args:
             fn: Function to apply to each element
 
@@ -442,10 +404,6 @@ class Dataset(Generic[T]):
 
     def filter(self, predicate: Callable[[T], bool] | Expr) -> Dataset[T]:
         """Filter dataset elements by a predicate or expression.
-
-        Filter always executes synchronously as it's lightweight.
-        When using an expression, the filter can be pushed down to file readers
-        (e.g., Parquet) for more efficient processing.
 
         Args:
             predicate: Function returning True to keep element, False to drop,
@@ -473,9 +431,6 @@ class Dataset(Generic[T]):
 
     def select(self, *columns: str) -> Dataset[dict]:
         """Select specific columns (projection).
-
-        When placed after a file loading operation, column projection can be
-        pushed down to the reader for more efficient I/O.
 
         Args:
             *columns: Column names to select
@@ -517,7 +472,7 @@ class Dataset(Generic[T]):
         return Dataset(self.source, [*self.operations, TakePerShardOp(n)])
 
     def window(self, size: int) -> Dataset[list[T]]:
-        """Window dataset elements into fixed-size lists.
+        """Compute a sliding window of `size` elements across the dataset, returning a list of elements in each window.
 
         Args:
             size: Maximum number of elements per window
@@ -532,9 +487,6 @@ class Dataset(Generic[T]):
             [[1, 2], [3, 4], [5]]
         """
 
-        # Implement count-based windowing using folder function
-        # count tracks number of items in current window
-        # We continue if adding this item won't exceed size
         def count_folder(count: int, item: T) -> tuple[bool, int]:
             return (count < size, count + 1)
 
@@ -545,10 +497,7 @@ class Dataset(Generic[T]):
         folder_fn: Callable[[object, T], tuple[bool, object]],
         initial_state: object = None,
     ) -> Dataset[list[T]]:
-        """Window elements using a custom folder function.
-
-        The folder function controls window boundaries by maintaining state
-        and deciding whether to continue the current window or start a new one.
+        """Window elements using a custom fold function.
 
         Args:
             folder_fn: Function (state, item) -> (should_continue, new_state)
@@ -571,17 +520,6 @@ class Dataset(Generic[T]):
             ... )
         """
         return Dataset(self.source, [*self.operations, WindowOp(folder_fn, initial_state)])
-
-    def batch(self, batch_size: int) -> Dataset[list[T]]:
-        """Alias for window() for backwards compatibility.
-
-        Args:
-            batch_size: Number of elements per batch
-
-        Returns:
-            New dataset with window operation appended
-        """
-        return self.window(batch_size)
 
     def flat_map(self, fn: Callable[[T], Iterable[R]]) -> Dataset[R]:
         """Apply function that returns an iterable, flattening results.
@@ -608,9 +546,6 @@ class Dataset(Generic[T]):
     def load_file(self, columns: list[str] | None = None) -> Dataset[dict]:
         """Load records from file sources, auto-detecting format.
 
-        This is the recommended way to load files in a pipeline. The planner
-        will optimize file reading with chunking when appropriate.
-
         Args:
             columns: Optional column projection (for parquet files)
 
@@ -630,72 +565,23 @@ class Dataset(Generic[T]):
         return Dataset(self.source, [*self.operations, LoadFileOp("auto", columns)])
 
     def load_parquet(self, columns: list[str] | None = None) -> Dataset[dict]:
-        """Load records from parquet files.
-
-        Args:
-            columns: Optional column projection
-
-        Returns:
-            Dataset yielding records as dictionaries
-
-        Example:
-            >>> backend = create_backend("ray", max_parallelism=10)
-            >>> ds = (Dataset
-            ...     .from_files("data/*.parquet")
-            ...     .load_parquet(columns=["id", "text"])
-            ...     .map(transform)
-            ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
-            ... )
-            >>> output_files = list(backend.execute(ds))
-        """
+        """Load records from parquet files."""
         return Dataset(self.source, [*self.operations, LoadFileOp("parquet", columns)])
 
     def load_jsonl(self) -> Dataset[dict]:
-        """Load records from JSONL files.
-
-        Returns:
-            Dataset yielding records as dictionaries
-
-        Example:
-            >>> backend = create_backend("ray", max_parallelism=10)
-            >>> ds = (Dataset
-            ...     .from_files("data/*.jsonl.gz")
-            ...     .load_jsonl()
-            ...     .filter(lambda r: r["score"] > 0.5)
-            ...     .write_jsonl("/output/filtered-{shard:05d}.jsonl.gz")
-            ... )
-            >>> output_files = list(backend.execute(ds))
-        """
+        """Load records from JSONL files."""
         return Dataset(self.source, [*self.operations, LoadFileOp("jsonl", None)])
 
     def load_vortex(self, columns: list[str] | None = None) -> Dataset[dict]:
-        """Load records from Vortex files.
-
-        Args:
-            columns: Optional column projection
-
-        Returns:
-            Dataset yielding records as dictionaries
-
-        Example:
-            >>> backend = create_backend("ray", max_parallelism=10)
-            >>> ds = (Dataset
-            ...     .from_files("data/*.vortex")
-            ...     .load_vortex(columns=["id", "text"])
-            ...     .map(transform)
-            ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
-            ... )
-            >>> output_files = list(backend.execute(ds))
-        """
+        """Load records from Vortex files."""
         return Dataset(self.source, [*self.operations, LoadFileOp("vortex", columns)])
 
     def map_shard(self, fn: Callable[[Iterator[T]], Iterator[R]]) -> Dataset[R]:
         """Apply function to entire shard iterator.
 
         The function receives an iterator of all items in the shard and returns
-        an iterator of results. This is the recommended pattern for stateful
-        processing across a shard (deduplication, sampling, windowing, etc.)
-        without requiring callable classes.
+        an iterator of results. This can be used to perform stateful
+        processing across a shard (deduplication, sampling, windowing, etc.).
 
         Args:
             fn: Function from Iterator[items] -> Iterator[results]
@@ -833,27 +719,7 @@ class Dataset(Generic[T]):
         output_pattern: str | Callable[[int, int], str],
         skip_existing: bool = False,
     ) -> Dataset[str]:
-        """Write records as Vortex files.
-
-        Vortex is a columnar format optimized for fast random access and
-        efficient compression. Output files can be read back with load_vortex().
-
-        Args:
-            output_pattern: Output path pattern with {shard} placeholder
-                (e.g., "dir/data-{shard:05d}.vortex")
-            skip_existing: Skip if output file already exists
-
-        Returns:
-            Dataset yielding output paths
-
-        Example:
-            >>> ds = (Dataset
-            ...     .from_files("/input/**/*.parquet")
-            ...     .load_parquet()
-            ...     .filter(lambda r: r["score"] > 0.5)
-            ...     .write_vortex("/output/data-{shard:05d}.vortex")
-            ... )
-        """
+        """Write records as Vortex files."""
         return Dataset(
             self.source,
             [
@@ -990,20 +856,13 @@ class Dataset(Generic[T]):
     ) -> Dataset:
         """Streaming merge join for already-sorted, co-partitioned datasets.
 
-        **PRECONDITIONS (undefined behavior if violated):**
+        Preconditions:
         - Both datasets have the same number of shards
         - Corresponding shards (left[i], right[i]) contain the same key ranges
         - Items within each shard are sorted by their join key
 
         These preconditions are typically met when both datasets come from
         group_by() with the same key and num_output_shards.
-
-        **Use this when:**
-        - Both datasets already partitioned by join key (e.g., from group_by)
-        - Want to avoid shuffle overhead
-        - Know datasets are compatible
-
-        **Only supports inner and left joins** (no right or outer joins).
 
         Args:
             right: Right dataset to join with
