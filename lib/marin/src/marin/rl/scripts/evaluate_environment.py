@@ -44,7 +44,6 @@ from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from marin.execution import ExecutorStep
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
 from marin.rl.environments.base import EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.rollout_worker import create_inference_context
@@ -115,7 +114,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     if config.tpu_type is None:
         model_axis_size = 1
     else:
-        num_devices = TpuPodConfig(tpu_type=config.tpu_type).total_device_count()
+        num_devices = ResourceConfig.with_tpu(config.tpu_type).chip_count()
         model_axis_size = min(4, num_devices)
         logger.info(f"Using TPU type {config.tpu_type} with {num_devices} devices, model_axis_size={model_axis_size}")
 

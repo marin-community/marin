@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import sys
+import time
 
 import pytest
 from fray.cluster import (
@@ -71,6 +72,7 @@ def test_cluster_terminate(cluster, cluster_type):
 
     job_id = cluster.launch(request)
     cluster.terminate(job_id)
+    time.sleep(1)
     info = cluster.poll(job_id)
 
     # ray... doesn't necessarily terminate jobs promptly

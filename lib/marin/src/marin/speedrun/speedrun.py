@@ -28,46 +28,28 @@ from dataclasses import dataclass
 from enum import Enum
 
 import fsspec
-import wandb
+from fray.cluster import ResourceConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.lm_model import LmConfig
-from fray.cluster.ray.tpu import TPU_CONFIGS
-
-from experiments.defaults import _get_tokenizer_for_train, default_train
-from experiments.llama import llama3_tokenizer_vocab_size
-from experiments.simple_train_config import SimpleTrainConfig
-from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, unwrap_versioned_value
+from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize import add_validation_sets_to_mixture, lm_data_config
-from marin.resources import TpuPodConfig
 from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
 from marin.training.training import TrainLmOnPodConfig
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 from marin.utils import asdict_excluding
 
+import wandb
+from experiments.defaults import _get_tokenizer_for_train, default_train
+from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.simple_train_config import SimpleTrainConfig
+from experiments.speedrun.prebuilt_caches import fineweb_edu_subcache_10B
+
 logger = logging.getLogger("ray")
 
-_TPU_CONFIG_BY_NAME = {config.name: config for config in TPU_CONFIGS}
 
-
-def _num_accelerator_chips(resources) -> int:
+def _num_accelerator_chips(resources: ResourceConfig) -> int:
     """Return the total number of accelerator chips for the provided resources."""
-
-    if isinstance(resources, TpuPodConfig):
-        tpu_config = _TPU_CONFIG_BY_NAME.get(resources.tpu_type)
-        if tpu_config is None:
-            raise ValueError(f"Unknown TPU type: {resources.tpu_type}")
-
-        if isinstance(resources.slice_count, int):
-            slice_count = resources.slice_count
-        elif resources.slice_count is None:
-            slice_count = 1
-        else:
-            slice_count = max(resources.slice_count)
-
-        return tpu_config.chip_count * slice_count
-
-    return resources.total_device_count()
+    return resources.chip_count()
 
 
 @dataclass(frozen=True)
@@ -116,7 +98,7 @@ class SpeedrunConfig:
 
         # runtimeenv is not serializable
         train_config_dict = asdict_excluding(self.train_config, exclude={"resources", "runtime_env"})
-        resources_dict = asdict_excluding(unwrap_versioned_value(self.train_config.resources), exclude={"runtime_env"})
+        resources_dict = asdict_excluding(self.train_config.resources, exclude={"runtime_env"})
         return {
             "author": {"name": self.author.name, "affiliation": self.author.affiliation, "url": self.author.url},
             "description": self.description,
@@ -136,6 +118,7 @@ class SpeedrunConfig:
         total_peak_flops = device_flops * num_chips
 
         # Print simplified config info
+        logger.info("----- START OF PRINT RUN INFO -----")
         logger.info("Speedrun Configuration:")
         logger.info(json.dumps(self.as_json_dict(), indent=4))
 
@@ -154,6 +137,7 @@ class SpeedrunConfig:
             logger.info("Model size: unknown (model did not report total_trainable_params).")
         else:
             logger.info(f"Model size: {model_size/1e6:.2f} million parameters")
+        logger.info("----- END OF PRINT RUN INFO -----")
 
     def compute_model_flops(self) -> float:
         # TODO (Nikil): make this a helper and handle edge-cases
@@ -195,7 +179,7 @@ This is calculated based on assumed MFU values and can be used as a rough estima
     @property
     def device_flops(self) -> float:
         """Get the peak FLOPs/s for the device type."""
-        device_flops = unwrap_versioned_value(self.train_config.resources).device_flops()
+        device_flops = self.train_config.resources.device_flops()
         if device_flops is None:
             raise ValueError("Resources must provide device_flops() for speedrun calculations.")
         return device_flops
@@ -203,13 +187,13 @@ This is calculated based on assumed MFU values and can be used as a rough estima
     @property
     def num_devices(self) -> int:
         """Get the number of devices."""
-        return unwrap_versioned_value(self.train_config.resources).total_device_count()
+        return self.train_config.resources.chip_count()
 
     @property
     def num_chips(self) -> int:
         """Get the number of accelerator chips."""
 
-        return _num_accelerator_chips(unwrap_versioned_value(self.train_config.resources))
+        return _num_accelerator_chips(self.train_config.resources)
 
 
 @dataclass

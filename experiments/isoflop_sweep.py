@@ -31,18 +31,16 @@ from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 
-from experiments.defaults import default_train
-from experiments.llama import compute_num_parameters
+from experiments.common_pile.tokenize_common_pile import comma_main_mixture
+from experiments.defaults import default_tokenize, default_train
+from experiments.llama import compute_num_parameters, llama3_tokenizer
 from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
+from experiments.pretraining_datasets.simple import downloads
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
-from experiments.pretraining_datasets.simple import downloads
-from experiments.defaults import default_tokenize
-from experiments.llama import llama3_tokenizer
-from marin.processing.tokenize import lm_mixture_data_config
-from experiments.common_pile.tokenize_common_pile import comma_main_mixture
+from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main
-from marin.resources import TpuPodConfig
+from marin.processing.tokenize import lm_mixture_data_config
 
 DEFAULT_BUDGETS = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
 MLP_RATIO = 4
@@ -149,7 +147,7 @@ class IsoFlopSweepConfig:
     )
     base_train_config: SimpleTrainConfig = dataclasses.field(
         default_factory=lambda: SimpleTrainConfig(
-            resources=TpuPodConfig(tpu_type="v5p-8"),
+            resources=ResourceConfig.with_tpu("v5p-8"),
             train_batch_size=1,
             num_train_steps=50_000,
             learning_rate=1.0,  # Placeholder
@@ -307,7 +305,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                 train_batch_size=batch_size,
                 learning_rate=lr,
                 num_train_steps=train_steps,
-                resources=TpuPodConfig(tpu_type=tpu_type),
+                resources=ResourceConfig.with_tpu(tpu_type),
                 optimizer_config=optimizer_cfg,
             )
 

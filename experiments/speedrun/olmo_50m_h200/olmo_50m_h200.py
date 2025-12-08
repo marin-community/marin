@@ -23,7 +23,7 @@ from levanter.models.olmo import Olmo2Config
 
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.resources import GpuConfig
+from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
@@ -46,7 +46,7 @@ speedrun_config = SpeedrunConfig(
     description="50M param model based on OLMo architecture.",
     model_config=olmo_50m,
     train_config=SimpleTrainConfig(
-        GpuConfig(gpu_count=1, accelerator_type="H200"),
+        ResourceConfig.with_gpu("H200", count=1),
         train_batch_size=128,
         num_train_steps=7600,
         learning_rate=3e-3,

@@ -70,7 +70,7 @@ from levanter.utils.logging import silence_transformer_nag
 
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig, GpuConfig
+from fray.cluster import ResourceConfig
 from experiments.simple_train_config import SimpleTrainConfig
 
 # Optional: Muon optimizer configs
@@ -455,16 +455,16 @@ def _muon_presets() -> dict[str, MuonConfig]:
 def _resource_presets(use_gpu: bool = False):
     if use_gpu:
         return {
-            "130m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
-            "300m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
-            "520m": GpuConfig(gpu_count=2, accelerator_type="A100-80G"),
-            "1_2b": GpuConfig(gpu_count=4, accelerator_type="A100-80G"),
+            "130m": ResourceConfig.with_gpu("A100-80G", count=1),
+            "300m": ResourceConfig.with_gpu("A100-80G", count=1),
+            "520m": ResourceConfig.with_gpu("A100-80G", count=2),
+            "1_2b": ResourceConfig.with_gpu("A100-80G", count=4),
         }
     return {
-        "130m": TpuPodConfig(tpu_type="v5p-32"),
-        "300m": TpuPodConfig(tpu_type="v5p-32"),
-        "520m": TpuPodConfig(tpu_type="v5p-32"),
-        "1_2b": TpuPodConfig(tpu_type="v5p-32"),
+        "130m": ResourceConfig.with_tpu("v5p-32"),
+        "300m": ResourceConfig.with_tpu("v5p-32"),
+        "520m": ResourceConfig.with_tpu("v5p-32"),
+        "1_2b": ResourceConfig.with_tpu("v5p-32"),
     }
 
 
