@@ -20,6 +20,8 @@ import pandas as pd
 from rich.console import Console
 from rich.table import Table
 
+RESULT_PATH = "experiments/plantcad/results/v2"
+
 console = Console(record=True)
 
 
@@ -31,7 +33,7 @@ def load_and_filter_data(csv_path):
     df = pd.read_csv(path)
 
     # Filter
-    df = df[(df["architecture"] == "qwen") & (df["state"] == "finished")].dropna(
+    df = df[(df["architecture"] == "qwen") & (df["state"] == "finished") & (df["epochs"] == 1)].dropna(
         subset=["eval_loss", "tokens", "params", "flops_budget"]
     )
 
@@ -384,7 +386,7 @@ def print_summary(df, analysis_results, scaling_results, out_files):
 
 
 def main():
-    csv_path = "experiments/plantcad/results/plantcad_isoflops.csv"
+    csv_path = f"{RESULT_PATH}/plantcad_isoflops.csv"
     df = load_and_filter_data(csv_path)
     analysis_results = analyze_budgets(df)
 
@@ -431,7 +433,8 @@ def main():
     plt.figtext(0.5, 0.88, scaling_results["ratio_str"], ha="center", fontsize=14)
     plt.tight_layout(rect=[0, 0, 0.85, 0.91])
 
-    out_dir = Path("experiments/plantcad/results")
+    out_dir = Path(RESULT_PATH)
+    out_dir.mkdir(parents=True, exist_ok=True)
     out_png = out_dir / "plantcad_isoflop_fits.png"
     out_pdf = out_dir / "plantcad_isoflop_fits.pdf"
     plt.savefig(out_png, dpi=300, bbox_inches="tight")

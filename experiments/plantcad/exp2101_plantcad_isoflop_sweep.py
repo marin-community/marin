@@ -14,13 +14,14 @@
 
 """Generate ISOFlop sweep steps for varying model sizes and architectures on a target plant DNA dataset."""
 
-import dataclasses
-import math
-import logging
 import os
 import jax
-from collections.abc import Iterator
+import math
+import logging
+import dataclasses
+import numpy as np
 import pandas as pd
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 
 from levanter.data.text import TextLmDatasetFormat
@@ -31,12 +32,13 @@ from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 
-from experiments.defaults import default_train
+from experiments.defaults import default_train, _prepare_data_config
+from experiments.evals.task_configs import EvalTaskConfig
 from experiments.llama import compute_num_parameters
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path
-from marin.resources import TpuPodConfig
 from marin.processing.tokenize import TokenizeConfig, tokenize
+from fray.cluster import ResourceConfig
 from zephyr import Dataset, create_backend
 
 logger = logging.getLogger("ray")
@@ -48,6 +50,62 @@ CORES_PER_CHIP = 2
 V5P_CORE_OPTIONS = [8, 16, 32, 128, 256, 512]  # TPU slices
 
 ModelConfig = LlamaConfig | Qwen3Config
+
+
+def simulated_epoch_train(
+    name: str,
+    tokenized: InputName | ExecutorStep,
+    model_config: ModelConfig,
+    train_config: "SimpleTrainConfig",
+    train_tokens: int,
+    dataset_tokens: int,
+    epoch_count: int = 1,
+    tags: Sequence[str] = (),
+    use_default_validation: bool = False,
+    eval_harness_tasks: Sequence[EvalTaskConfig] = (),
+) -> ExecutorStep:
+    """Train with simulated epoching. When epoch_count=1, uses full dataset."""
+    if not isinstance(epoch_count, int) or epoch_count < 1:
+        raise ValueError(f"epoch_count must be int >= 1, got {epoch_count}")
+
+    if epoch_count == 1:
+        return default_train(
+            name, tokenized, model_config, train_config, tags, use_default_validation, eval_harness_tasks
+        )
+
+    pretraining_data = _prepare_data_config(tokenized, use_default_validation)
+
+    # To use simulated epoching in Levanter, we need to first address the fact that
+    # we are already limiting training to less than 1 true epoch in each run.
+    #
+    # The Levanter formula for this feature takes two arguments, experiment_budget and target_budget,
+    # and then uses this formula to determine how to slice each epoch:
+    #
+    # simulated_data_ratio = experiment_budget / target_budget
+    # simulated_length_of_dataset = int(true_length_of_dataset * simulated_data_ratio)
+    # sliced_datasets[name] = ds.slice_dataset(end_index=simulated_length_of_dataset)
+    #
+    # See: https://github.com/marin-community/marin/blob/eb4acbdd185a34202da16052c46c74eb570e69a5/lib/levanter/src/levanter/data/text.py#L1273-L1280
+    #
+    # This means that `simulated_data_ratio` must become equal to `train_tokens / dataset_tokens / epoch_count`
+    # in order for the simulated epochs to work on top of a partial epoch.
+    # We accomplish this here by setting:
+    # - experiment_budget = train_tokens
+    # - target_budget = dataset_tokens * epoch_count
+    experiment_budget, target_budget = train_tokens, dataset_tokens * epoch_count
+    simulated_pretraining_data = dataclasses.replace(
+        pretraining_data, target_budget=target_budget, experiment_budget=experiment_budget
+    )
+
+    return default_train(
+        name,
+        tokenized=simulated_pretraining_data,
+        model_config=model_config,
+        train_config=train_config,
+        tags=tags,
+        use_default_validation=use_default_validation,
+        eval_harness_tasks=eval_harness_tasks,
+    )
 
 
 def format_num(n: int | float) -> str:
@@ -97,15 +155,19 @@ class IsoFlopSweepConfig:
     total_token_count: int
     output_seq_len: int
     input_seq_len: int
-    experiment_name: str = "plantcad_isoflop_01"
-    budgets: list[float] = dataclasses.field(default_factory=lambda: [3.3e16, 6.6e16, 1e17, 3.3e17])
-    architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen", "llama"])
+    experiment_name: str = "plantcad_isoflop_03"
+
+    budgets: list[float] = dataclasses.field(
+        default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.8e17), 5)[4:5])
+    )
+    epochs: list[int] = dataclasses.field(default_factory=lambda: [1, 2, 4, 8, 16, 32][2:3])
+
+    architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen"])
     steps_per_run: int = 8_192
     per_device_eval_parallelism: int = 512
     max_eval_batches: int = 64
     num_evals: int = 3
     flop_tolerance: float = 0.01
-    max_train_token_multiplier: float = 1.2
     base_hidden_layer_ratio: int = 64
     hidden_head_ratio: int = 128
     lr_constant: float = 0.33
@@ -130,7 +192,7 @@ class IsoFlopSweepConfig:
     )
     base_train_config: SimpleTrainConfig = dataclasses.field(
         default_factory=lambda: SimpleTrainConfig(
-            resources=TpuPodConfig(tpu_type="v5p-8"),
+            resources=ResourceConfig.with_tpu("v5p-8"),
             train_batch_size=1,
             num_train_steps=50_000,  # Placeholder
             learning_rate=1.0,  # Placeholder
@@ -232,12 +294,17 @@ class IsoFlopRunConfig:
     budget: float
     steps_per_eval: int
     train_tokens: int
+    dataset_tokens: int
     num_params: int
+    epoch_count: int
     model_config: ModelConfig
 
 
 def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[IsoFlopRunConfig]:
     """Generate ISOFlop run configurations within the FLOP budget."""
+
+    # Effective token count after cropping
+    dataset_tokens = int(cfg.total_token_count * (cfg.output_seq_len / cfg.input_seq_len))
 
     # Hidden size step for grid
     step_size: int = 128
@@ -326,9 +393,16 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
             num_evals = max(1, cfg.num_evals - 1)
             steps_per_eval = max(1, train_steps // num_evals)
 
+            if train_tokens > dataset_tokens:
+                logger.warning(
+                    f"Skipping config for ({architecture=}, {hidden_size=}) with train tokens {train_tokens} "
+                    f"(greater than dataset tokens {dataset_tokens})"
+                )
+                continue
+
             if architecture == "llama":
                 model_cfg = LlamaConfig(
-                    seq_len=cfg.seq_len,
+                    max_seq_len=cfg.seq_len,
                     hidden_dim=hidden_size,
                     intermediate_dim=intermediate_dim,
                     num_heads=n_heads,
@@ -337,7 +411,7 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
                 )
             elif architecture == "qwen":
                 model_cfg = Qwen3Config(
-                    seq_len=cfg.seq_len,
+                    max_seq_len=cfg.seq_len,
                     hidden_dim=hidden_size,
                     intermediate_dim=intermediate_dim,
                     num_heads=n_heads,
@@ -349,23 +423,26 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
 
             num_params = compute_num_parameters(model_cfg, cfg.vocab_size)
 
-            yield IsoFlopRunConfig(
-                architecture=architecture,
-                hidden_size=hidden_size,
-                intermediate_dim=intermediate_dim,
-                num_layers=num_layers,
-                n_heads=n_heads,
-                n_kv_heads=n_kv_heads,
-                batch_size=batch_size,
-                train_steps=train_steps,
-                lr=lr,
-                beta2=b2,
-                budget=budget,
-                steps_per_eval=steps_per_eval,
-                train_tokens=train_tokens,
-                num_params=num_params,
-                model_config=model_cfg,
-            )
+            for epoch_count in cfg.epochs:
+                yield IsoFlopRunConfig(
+                    architecture=architecture,
+                    hidden_size=hidden_size,
+                    intermediate_dim=intermediate_dim,
+                    num_layers=num_layers,
+                    n_heads=n_heads,
+                    n_kv_heads=n_kv_heads,
+                    batch_size=batch_size,
+                    train_steps=train_steps,
+                    lr=lr,
+                    beta2=b2,
+                    budget=budget,
+                    steps_per_eval=steps_per_eval,
+                    train_tokens=train_tokens,
+                    dataset_tokens=dataset_tokens,
+                    num_params=num_params,
+                    epoch_count=epoch_count,
+                    model_config=model_cfg,
+                )
 
 
 def _log_isoflop_run_configs(all_configs: list[IsoFlopRunConfig]):
@@ -415,20 +492,6 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
 
     _log_isoflop_run_configs(all_configs)
 
-    if all_configs:
-        # Validate that train_tokens are never too high
-        logger.info("Validating that number of training tokens doesn't exceed available tokens")
-        effective_token_count = config.total_token_count * (config.output_seq_len / config.input_seq_len)
-        max_allowed_tokens = effective_token_count * config.max_train_token_multiplier
-        max_train_tokens = max(c.train_tokens for c in all_configs)
-        if max_train_tokens > max_allowed_tokens:
-            raise ValueError(
-                f"Maximum train_tokens ({max_train_tokens:,}) exceeds available tokens "
-                f"after cropping ({effective_token_count:,.0f}) with multiplier {config.max_train_token_multiplier}. "
-                f"Original token count: {config.total_token_count:,}, "
-                f"Cropping ratio: {config.output_seq_len}/{config.input_seq_len}"
-            )
-
     # Generate executor steps from validated configs
     steps: list[ExecutorStep] = []
     for c in all_configs:
@@ -452,12 +515,12 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
             steps_per_eval=c.steps_per_eval,
             per_device_eval_parallelism=config.per_device_eval_parallelism,
             max_eval_batches=config.max_eval_batches,
-            resources=TpuPodConfig(tpu_type=tpu_type),
+            resources=ResourceConfig.with_tpu(tpu_type),
             optimizer_config=optimizer_cfg,
         )
 
         param_count = c.num_params
-        step = default_train(
+        step = simulated_epoch_train(
             name="-".join(
                 [
                     config.experiment_name,
@@ -465,13 +528,15 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
                     f"F{c.budget:.1e}",
                     f"P{format_num(param_count)}",
                     f"T{format_num(c.train_tokens)}",
-                    f"S{c.train_steps}",
-                    f"B{c.batch_size}",
+                    f"E{c.epoch_count}",
                 ]
             ),
             tokenized=config.tokenized_dataset,
             model_config=model_cfg,
             train_config=train_cfg,
+            train_tokens=c.train_tokens,
+            dataset_tokens=c.dataset_tokens,
+            epoch_count=c.epoch_count,
             eval_harness_tasks=[],
             use_default_validation=False,
             tags=(
@@ -484,6 +549,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
                 f"tpu={tpu_type}",
                 f"params={param_count}",
                 f"tokens={c.train_tokens}",
+                f"epochs={c.epoch_count}",
             ),
         )
         steps.append(step)
