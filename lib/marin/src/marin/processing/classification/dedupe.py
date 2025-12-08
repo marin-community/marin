@@ -30,6 +30,7 @@ import logging
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import StrEnum, auto
 import typing
 
@@ -41,6 +42,9 @@ import pyarrow.json as pa_json
 import draccus
 import fsspec
 import msgspec
+import wandb
+
+from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
 
 from marin.utils import fsspec_glob, rebase_file_path
 from zephyr import Dataset, flow_backend, load_parquet
@@ -294,6 +298,35 @@ def calculate_paragraph_overlap(paragraph: str, bloom_filter: "Bloom", ngram_con
         return 1.0 if _bloom_hash(paragraph) in bloom_filter else 0.0
 
 
+def _init_wandb(config: DedupeConfig, tags: list[str] | None = None):
+    """
+    Initialize wandb if configured.
+
+    Args:
+        config: DedupeConfig containing wandb settings
+        tags: Additional tags to add beyond those in config
+    """
+    if "WANDB_API_KEY" not in os.environ:
+        return
+
+    run_name = os.environ.get("WANDB_RUN_NAME")
+    if not run_name:
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        run_name = f"{config.mode}-{timestamp}"
+
+    wandb.init(
+        entity=WANDB_ENTITY,
+        project=WANDB_PROJECT,
+        name=run_name,
+        tags=[str(config.mode)] + (tags or []),
+        config={
+            "mode": str(config.mode),
+            "input_path": config.input_path,
+            "processes": config.processes,
+        },
+    )
+
+
 def _record_id(record: dict) -> str:
     if "id" in record:
         return record["id"]
@@ -490,6 +523,7 @@ def _run_deduplication(config: DedupeConfig):
     input_files = _collect_input_files(config.input_path)
 
     backend = flow_backend(max_parallelism=config.processes)
+    _init_wandb(config, tags=["paragraph"])
 
     def compute_paragraph_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
         pipeline = [
@@ -523,6 +557,15 @@ def _run_deduplication(config: DedupeConfig):
     cnts = _compute_dedup_stats(duplicate_key_shards)
     logger.info(f"Stats: {cnts.total=:,} paragraphs, {cnts.unique=:,} unique, {cnts.unique_dups=:,} dups.")
 
+    if wandb.run:
+        wandb.log(
+            {
+                "dedup/total": cnts.total,
+                "dedup/unique": cnts.unique,
+                "dedup/unique_dups": cnts.unique_dups,
+            }
+        )
+
     def mark_exact_dups_paragraphs(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         """Mark duplicate paragraphs in a single record using exact hash matching."""
 
@@ -553,6 +596,9 @@ def _run_deduplication(config: DedupeConfig):
         )
     )
 
+    if wandb.run:
+        wandb.finish()
+
     return {
         "success": True,
         "mode": "deduplication",
@@ -574,6 +620,7 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
     input_files = _collect_input_files(config.input_path)
 
     backend = flow_backend(max_parallelism=config.processes)
+    _init_wandb(config, tags=["exact-doc"])
 
     def compute_document_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
         pipeline = [
@@ -605,6 +652,15 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
 
     cnts = _compute_dedup_stats(duplicate_key_shards)
     logger.info(f"Stats: {cnts.total=:,} documents, {cnts.unique=:,} unique, {cnts.unique_dups=:,} dups.")
+
+    if wandb.run:
+        wandb.log(
+            {
+                "dedup/total": cnts.total,
+                "dedup/unique": cnts.unique,
+                "dedup/unique_dups": cnts.unique_dups,
+            }
+        )
 
     def mark_exact_dups_documents(batches: Iterator[pa.RecordBatch]) -> Iterator[pa.RecordBatch]:
         """Mark exact duplicate documents using exact hash matching."""
@@ -641,6 +697,9 @@ def _run_exact_doc_deduplication(config: DedupeConfig):
         ),
         verbose=True,
     )
+
+    if wandb.run:
+        wandb.finish()
 
     return {
         "success": True,
