@@ -106,7 +106,7 @@ def test_fused_execution_with_batch():
         .flat_map(lambda x: x)  # Unfold into individual items within the shard
         .map(lambda x: x * 2)  # [2, 4, 6, 8, 10, 12]
         .filter(lambda x: x > 4)  # [6, 8, 10, 12]
-        .batch(2)  # [[6, 8], [10, 12]]
+        .window(2)  # [[6, 8], [10, 12]]
     )
 
     result = list(backend.execute(ds))

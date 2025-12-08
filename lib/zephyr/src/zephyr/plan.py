@@ -63,7 +63,7 @@ DEFAULT_CHUNK_SIZE = 100_000
 # Default number of parallel chunks when splitting files for intra-shard parallelism
 DEFAULT_INTRA_SHARD_PARALLELISM = 8
 
-# Size of micro-batches yielded from parallel chunk workers to reduce RPC overhead
+# Size of micro-batches yielded from parallel chunk workers to reduce overhead
 DEFAULT_MICRO_BATCH_SIZE = 1024
 
 
@@ -327,7 +327,7 @@ class FusionState:
     stage_type: StageType = StageType.WORKER
     hints: ExecutionHint = field(default_factory=ExecutionHint)
 
-    def _flush_pending_map(self) -> None:
+    def flush_pending(self) -> None:
         """Convert pending fusible ops to a physical Map or ForkChunks.
 
         When the first op is LoadFileOp and parallelism is enabled, creates ForkChunks
@@ -361,21 +361,27 @@ class FusionState:
 
         self.pending_fusible = []
 
-    def flush_stage(
+    def add_op(
         self,
+        op: PhysicalOp,
         *,
-        next_op: PhysicalOp | None = None,
         output_shards: int | None = None,
-        stage_type: StageType = StageType.WORKER,
+        stage_type: StageType | None = None,
     ) -> None:
-        """Flush pending map, close current stage, optionally start next stage.
+        """Add physical op to current stage.
 
-        Args:
-            next_op: Op to add to new stage after flushing
-            output_shards: Output shards for the new stage (set before next flush)
-            stage_type: Type for the new stage containing next_op
+        Flushes any pending fusible ops to a Map first, then adds this op.
         """
-        self._flush_pending_map()
+        self.flush_pending()
+        self.current_ops.append(op)
+        if output_shards is not None:
+            self.output_shards = output_shards
+        if stage_type is not None:
+            self.stage_type = stage_type
+
+    def end_stage(self) -> None:
+        """Flush pending ops and close current stage."""
+        self.flush_pending()
         if self.current_ops:
             self.stages.append(
                 PhysicalStage(
@@ -388,29 +394,9 @@ class FusionState:
             self.output_shards = None
             self.stage_type = StageType.WORKER
 
-        if next_op is not None:
-            self.current_ops.append(next_op)
-            self.output_shards = output_shards
-            self.stage_type = stage_type
-
-    def add_op(self, op: PhysicalOp, *, output_shards: int | None = None) -> None:
-        """Add op to current stage, optionally setting output_shards."""
-        self._flush_pending_map()
-        self.current_ops.append(op)
-        if output_shards is not None:
-            self.output_shards = output_shards
-
     def finalize(self) -> list[PhysicalStage]:
         """Flush remaining ops and return completed stages."""
-        self._flush_pending_map()
-        if self.current_ops:
-            self.stages.append(
-                PhysicalStage(
-                    operations=self.current_ops,
-                    stage_type=self.stage_type,
-                    output_shards=self.output_shards,
-                )
-            )
+        self.end_stage()
         return self.stages
 
 
@@ -462,24 +448,20 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
                 Scatter(key_fn=op.key_fn, num_output_shards=num_shards),
                 output_shards=num_shards if num_shards > 0 else None,
             )
-            state.flush_stage(next_op=Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn))
+            state.end_stage()
+            state.add_op(Reduce(key_fn=op.key_fn, reducer_fn=op.reducer_fn))
 
         elif isinstance(op, ReduceOp):
             state.add_op(Fold(fn=op.local_reducer))
-            state.flush_stage(
-                next_op=Reshard(num_shards=1),
-                output_shards=1,
-                stage_type=StageType.RESHARD,
-            )
-            state.flush_stage(next_op=Fold(fn=op.global_reducer))
+            state.end_stage()
+            state.add_op(Reshard(num_shards=1), output_shards=1, stage_type=StageType.RESHARD)
+            state.end_stage()
+            state.add_op(Fold(fn=op.global_reducer))
 
         elif isinstance(op, ReshardOp):
-            state.flush_stage(
-                next_op=Reshard(num_shards=op.num_shards),
-                output_shards=op.num_shards,
-                stage_type=StageType.RESHARD,
-            )
-            state.flush_stage()
+            state.end_stage()
+            state.add_op(Reshard(num_shards=op.num_shards), output_shards=op.num_shards, stage_type=StageType.RESHARD)
+            state.end_stage()
 
         elif isinstance(op, JoinOp):
             right_plan = compute_plan(op.right_dataset, hints)
@@ -497,16 +479,12 @@ def _fuse_operations(operations: list, hints: ExecutionHint | None = None) -> li
     return state.finalize()
 
 
-def _create_file_plan(
+def _compute_file_pushdown(
     paths: list[str],
     load_op: LoadFileOp,
     operations: list,
 ) -> tuple[list[SourceItem], list]:
     """Create source items for file pipeline with pushdown optimizations applied.
-
-    Combines source item creation with filter/column pushdown into a single phase.
-    Creates InputFileSpecs with the final columns/filter. LoadFileOp is kept in
-    the operations list so fusion can detect file-loading pipelines.
 
     Args:
         paths: List of file paths to load
@@ -514,17 +492,16 @@ def _create_file_plan(
         operations: Full operations list (first op is LoadFileOp)
 
     Returns:
-        Tuple of (source_items, remaining_operations) where remaining_operations
-        keeps LoadFileOp and has any pushed-down ops removed.
+        Tuple of (source_items, remaining_operations), where filter/select have been pushed down.
     """
-    remaining_ops = operations[1:]  # Skip LoadFileOp for pushdown analysis
-
-    # Scan for pushdown candidates
     filter_expr = None
-    select_columns = load_op.columns  # Default from LoadFileOp
+    select_columns = load_op.columns
     ops_to_skip: set[int] = set()
 
-    for i, op in enumerate(remaining_ops):
+    # We don't try to do anything fancy, e.g. AND multiple filters.
+    # We can however aggregate select operations, though this is obviously unusual.
+
+    for i, op in enumerate(operations):
         if isinstance(op, FilterOp) and op.expr is not None and filter_expr is None:
             filter_expr = op.expr
             ops_to_skip.add(i)
@@ -552,8 +529,8 @@ def _create_file_plan(
         for i, path in enumerate(paths)
     ]
 
-    # Build final operations list: LoadFileOp + remaining ops (minus pushed-down ones)
-    final_ops = [load_op] + [op for i, op in enumerate(remaining_ops) if i not in ops_to_skip]
+    # Build final operations list: LoadFileOp + remaining ops
+    final_ops = [load_op] + [op for i, op in enumerate(operations) if i not in ops_to_skip]
 
     return source_items, final_ops
 
@@ -563,10 +540,10 @@ def compute_plan(dataset: Dataset, hints: ExecutionHint = ExecutionHint()) -> Ph
     operations = list(dataset.operations)
 
     if operations and isinstance(operations[0], LoadFileOp):
-        source_items, operations = _create_file_plan(
+        source_items, operations = _compute_file_pushdown(
             list(dataset.source),
             operations[0],
-            operations,
+            operations[1:],
         )
     else:
         source_list = list(dataset.source)
@@ -661,7 +638,7 @@ def _group_items_by_hash(
     num_output_shards: int,
     chunk_size: int,
 ) -> dict[int, list[Chunk]]:
-    """Group items by hash of key into output shards with sorted chunks.
+    """Group items by hash of key into num_output_shards target shards with sorted chunks.
 
     Args:
         items: Items to group
@@ -706,7 +683,6 @@ def _merge_sorted_chunks(shard, key_fn: Callable) -> Iterator[tuple[object, Iter
     Yields:
         Tuples of (key, iterator_of_items) for each unique key
     """
-    # Create iterators for each chunk
     chunk_iterators = []
     for chunk_data in shard.iter_chunks():
         chunk_iterators.append(iter(chunk_data))
@@ -757,8 +733,7 @@ def _compute_chunk_specs(spec, target_chunks: int) -> list:
     ]
 
 
-def _merge_streams_as_available(exec_ctx, futures: list):
-    """Merge streaming futures, yielding as-available."""
+def _merge_chunk_streams(exec_ctx, futures: list):
     active = {id(f): f for f in futures}
 
     while active:
@@ -777,7 +752,7 @@ def _execute_fork_join(
     parallel_ops: list[PhysicalOp],
     target_chunks: int,
 ):
-    """Execute ops in parallel across chunks, merge results."""
+    """Execute ops in parallel across chunks, merging results."""
     from zephyr.readers import load_file
 
     source_items = list(source_stream)
@@ -801,10 +776,10 @@ def _execute_fork_join(
         else:
             stream = iter([chunk_spec])
         for op in parallel_ops:
-            if isinstance(op, Map):
-                stream = op.fn(stream)
+            assert isinstance(op, Map)
+            stream = op.fn(stream)
 
-        # batch into micro-chunks to reduce RPC overhead
+        # batch into micro-chunks to reduce overhead
         micro_chunks = []
         for item in stream:
             micro_chunks.append(item)
@@ -819,7 +794,7 @@ def _execute_fork_join(
             yield from batch
     else:
         futures = [exec_ctx.run(process_chunk, spec) for spec in all_chunk_specs]
-        yield from _merge_streams_as_available(exec_ctx, futures)
+        yield from _merge_chunk_streams(exec_ctx, futures)
 
 
 def _sorted_merge_join(
@@ -870,11 +845,6 @@ def _sorted_merge_join(
                         yield combiner_fn(left_item, right_item)
                 else:
                     yield combiner_fn(left_item, None)
-
-
-# =============================================================================
-# Stage Execution
-# =============================================================================
 
 
 @dataclass
@@ -1024,15 +994,3 @@ def run_stage(
 
     # Yield remaining items as chunks
     yield from _stream_chunks(stream, ctx.shard_idx, ctx.chunk_size)
-
-
-def _infer_extension(output_path: str) -> str:
-    """Infer file extension from output path, handling compression."""
-    if output_path.endswith(".jsonl.gz"):
-        return ".jsonl.gz"
-    if output_path.endswith(".jsonl.zst"):
-        return ".jsonl.zst"
-    if output_path.endswith(".parquet"):
-        return ".parquet"
-    parts = output_path.rsplit(".", 1)
-    return f".{parts[-1]}" if len(parts) > 1 else ""

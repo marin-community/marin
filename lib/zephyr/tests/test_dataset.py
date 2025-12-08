@@ -100,20 +100,6 @@ def test_take_with_filter_and_map(backend):
     assert result == [0, 4, 8, 12, 16]
 
 
-def test_batch(backend):
-    """Test batching dataset."""
-    ds = Dataset.from_list([[1, 2, 3, 4, 5]]).flat_map(lambda x: x).batch(2)
-    batches = list(backend.execute(ds))
-    assert batches == [[1, 2], [3, 4], [5]]
-
-
-def test_batch_exact_size(backend):
-    """Test batching when size divides evenly."""
-    ds = Dataset.from_list([[1, 2, 3, 4, 5, 6]]).flat_map(lambda x: x).batch(3)
-    batches = list(backend.execute(ds))
-    assert batches == [[1, 2, 3], [4, 5, 6]]
-
-
 def test_window(backend):
     """Test window operation (same as batch)."""
     ds = Dataset.from_list([[1, 2, 3, 4, 5]]).flat_map(lambda x: x).window(2)
@@ -217,7 +203,7 @@ def test_chaining_operations(backend):
         .flat_map(lambda x: x)
         .filter(lambda x: x % 2 == 0)  # [2, 4, 6, 8, 10]
         .map(lambda x: x * 2)  # [4, 8, 12, 16, 20]
-        .batch(2)  # [[4, 8], [12, 16], [20]]
+        .window(2)  # [[4, 8], [12, 16], [20]]
     )
 
     result = list(backend.execute(ds))
@@ -257,7 +243,7 @@ def test_empty_dataset(backend):
     assert list(backend.execute(ds)) == []
     assert list(backend.execute(ds.filter(lambda x: True))) == []
     assert list(backend.execute(ds.map(lambda x: x * 2))) == []
-    assert list(backend.execute(ds.batch(10))) == []
+    assert list(backend.execute(ds.window(10))) == []
 
 
 def test_reshard(backend):
@@ -319,7 +305,7 @@ def test_complex_pipeline(backend):
 
 def test_operations_are_dataclasses():
     """Test that operations are stored as inspectable dataclasses."""
-    ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2).filter(lambda x: x > 2).batch(2)
+    ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2).filter(lambda x: x > 2).window(2)
 
     # Should have 3 operations
     assert len(ds.operations) == 3

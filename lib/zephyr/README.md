@@ -29,7 +29,7 @@ list(backend.execute(pipeline))
 - `.map(fn)` - transform each item
 - `.flat_map(fn)` - expand items (e.g., `load_jsonl`)
 - `.filter(fn)` - filter items
-- `.batch(n)` - group into batches
+- `.window(n)` - group into batches
 - `.reshard(n)` - redistribute across n shards
 
 **Output:**
