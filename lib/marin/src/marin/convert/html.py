@@ -19,13 +19,13 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
-from marin.markdown import to_markdown
-from marin.schemas.web.convert import (
+from .config import (
     ExtractionConfig,
     HtmlToMarkdownConfig,
     ResiliparseConfig,
     TrafilaturaConfig,
 )
+from .markdown import to_markdown
 
 logger = logging.getLogger("ray")
 HTML_CORRECTION_PREFIX = "<!DOCTYPE html>"
@@ -84,7 +84,7 @@ def convert_page_with_trafilatura(
     """
     from trafilatura import extract, extract_metadata
 
-    title = None
+    title = ""
     try:
         metadata = extract_metadata(html)
 
@@ -92,7 +92,7 @@ def convert_page_with_trafilatura(
             title = metadata.title
     except Exception as e:
         logger.warning(f"Error extracting metadata: {e}")
-        title = None
+        title = ""
 
     content = extract(html, **asdict(config))
     if not content:
@@ -135,7 +135,7 @@ def convert_page_with_resiliparse(
     from resiliparse.parse.html import HTMLTree
 
     tree = HTMLTree.parse(html)
-    title = tree.title or None
+    title = tree.title or ""
 
     content = None
     if not config.use_custom_variant:
@@ -184,7 +184,6 @@ def convert_page_with_readability(
         dict[str, str]: Dictionary containing the title, content, and HTML of the page.
     """
     import htmlmin
-    from bs4 import BeautifulSoup
     from readability import Document
 
     # remove null character and control characters
@@ -208,7 +207,7 @@ def convert_page_with_readability(
 
     # readability-lxml uses "[no-title]" for pages without a title
     if title == "[no-title]":
-        title = None
+        title = ""
 
     # add title to markdown
     if title:
@@ -228,7 +227,6 @@ def convert_page_with_readability(
 def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
     print("This is Legacy method, use convert_page_python instead")
     import htmlmin
-    from bs4 import BeautifulSoup
     from readabilipy import simple_json_from_html_string
 
     reabilitied = simple_json_from_html_string(html, use_readability=True)
