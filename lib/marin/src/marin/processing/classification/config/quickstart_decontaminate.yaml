@@ -3,8 +3,6 @@ output_path: gs://marin-us-central2/attributes/hello_world_fw/v1.0/quickstart_de
 decontaminate_path: gs://marin-us-central2/documents/mmlu/v2024-08-30/v1-basic/ #gs://marin-us-central2/documents/stackexchange/v2024-04-02/
 decontaminate: true
 attribute_name: duplicate_text
-min_length: 0
-min_words: 0
 estimated_doc_count: 1000000
 false_positive_rate: 0.001
 processes: 1
