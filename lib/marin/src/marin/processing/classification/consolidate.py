@@ -36,7 +36,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-import draccus
 from marin.utils import (
     fsspec_exists,
     fsspec_glob,
@@ -318,7 +317,6 @@ def process_file_shard(shard, filters: list[FilterConfig], input_base: str) -> I
             yield doc
 
 
-@draccus.wrap()
 def consolidate(config: ConsolidateConfig):
     """Consolidate documents by applying filters based on attributes."""
     backend = flow_backend()

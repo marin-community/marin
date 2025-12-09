@@ -49,7 +49,7 @@ def test_qwen3_roundtrip():
     converter = Qwen3Config().hf_checkpoint_converter()  # type: ignore
 
     # Inputs
-    input_ids = hax.random.randint(random.PRNGKey(0), config.Pos, 0, Vocab.size)
+    input_ids = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
     attn_mask = AttentionMask.causal()
     input_torch = torch.from_numpy(np.array(input_ids.array)).to(torch.int32).unsqueeze(0)
 

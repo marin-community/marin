@@ -53,7 +53,7 @@ steps_per_eval = num_train_steps // 100
 # Define ~600M Llama model noting that the PlantCAD vocabulary is only 7
 # tokens, which drastically reduces final parameter count at this scale.
 model_config = LlamaConfig(
-    seq_len=512,
+    max_seq_len=512,
     hidden_dim=1408,
     intermediate_dim=4224,
     num_heads=22,

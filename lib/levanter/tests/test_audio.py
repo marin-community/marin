@@ -4,24 +4,12 @@
 import tempfile
 
 import pytest
-import ray
 from datasets import load_dataset
+from test_utils import skip_if_hf_model_not_accessible, skip_if_no_soundlibs
 from transformers import AutoProcessor, AutoTokenizer
 
 from levanter.data.audio import AudioDatasetSourceConfig, AudioIODatasetConfig, BatchAudioProcessor
 from levanter.store.cache import SerialCacheWriter
-from levanter.utils.py_utils import logical_cpu_core_count
-from test_utils import skip_if_hf_model_not_accessible, skip_if_no_soundlibs
-
-
-def setup_module(module):
-    ray.init(
-        "local", num_cpus=max(2 * logical_cpu_core_count(), 8), ignore_reinit_error=True
-    )  # 2x cpu count is faster on my m1
-
-
-def teardown_module(module):
-    ray.shutdown()
 
 
 @skip_if_no_soundlibs

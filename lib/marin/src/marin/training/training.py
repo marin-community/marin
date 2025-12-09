@@ -21,10 +21,15 @@ from pathlib import PurePath
 
 import draccus
 import levanter.infra.cli_helpers
-import ray
-from fray.cluster import CpuConfig, ResourceConfig, TpuConfig
-from fray.cluster.ray import as_remote_kwargs
-from fray.cluster.ray.tpu import run_on_pod
+from fray.cluster import (
+    CpuConfig,
+    Entrypoint,
+    EnvironmentConfig,
+    JobRequest,
+    ResourceConfig,
+    TpuConfig,
+    current_cluster,
+)
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.main import train_lm
 from levanter.main.train_lm import TrainLmConfig
@@ -148,7 +153,6 @@ def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
     return replace(config, train_config=inner_config)
 
 
-@ray.remote(num_cpus=0.1)
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """
     Run the Levanter training main function on a Ray cluster.
@@ -174,7 +178,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     env = _add_default_env_variables(
         config.env_vars or {},
-        default_launch_config.env_for_accel(config.resources.device.type),
+        default_launch_config.env_for_accel(config.resources.device.variant),
     )
     # if we're on tpu, ensure we have wandb
     if isinstance(config.resources.device, TpuConfig):
@@ -197,30 +201,24 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     train_config = _suppress_ray_config(train_config)
 
     # disable accelerator requirement when running without GPU/TPU resources
-    if config.resources.device.type == "cpu":
+    if config.resources.device.kind == "cpu":
         trainer = replace(train_config.trainer, require_accelerator=False)
         train_config = replace(train_config, trainer=trainer)
 
     if not config.allow_out_of_region and not isinstance(config.resources.device, CpuConfig):
-        # run this on the Ray cluster to get the right region
-        # doesn't need to be a TPU because ray insists that all VMs are in the same region
-        runtime_env = {"env_vars": env} if env else {}
-        ray.get(ray.remote(_doublecheck_paths).options(runtime_env=runtime_env, num_cpus=0.1).remote(config))
+        _doublecheck_paths(config)
 
-    @ray.remote(**as_remote_kwargs(config.resources, env_vars=env), max_calls=1)
-    def train_lm_task():
-        train_lm.main(train_config)
+    cluster = current_cluster()
 
-    # TODO: abstract this?
-    if isinstance(config.resources.device, TpuConfig):
-        return run_on_pod(
-            train_lm_task,
-            config.resources.device.type,
-            num_slices=config.resources.replicas,
-            max_retries_failure=10,
-        )
-    else:
-        return ray.get(train_lm_task.remote())
+    job_request = JobRequest(
+        name="train_lm",
+        entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
+        resources=config.resources,
+        environment=EnvironmentConfig.create(env_vars=env, extras=["tokenize_train"]),
+        max_retries_failure=10,
+    )
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)
 
 
 def _doublecheck_paths(config: TrainLmOnPodConfig):

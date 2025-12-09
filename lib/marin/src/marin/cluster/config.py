@@ -23,6 +23,7 @@ import yaml
 
 # Cluster configuration constants and templates
 LATEST = "5b9b77c"  # The latest docker tag used for the clusters
+LATEST_VLLM = "20251209"
 
 
 @dataclass
@@ -135,6 +136,25 @@ CONFIGS = {
             "v5p-512": 0,
         },
     },
+    "marin-us-central1-vllm": {
+        "NAME": "marin-us-central1-vllm",
+        "REGION": "us-central1",
+        "ZONE": "us-central1-a",
+        "BUCKET": "marin-us-central1",
+        "DOCKER_TAG": LATEST_VLLM,
+        "tpu_generation": "v5p",
+        "min_workers": 1,
+        "worker_targets": {
+            "v5p-8": 2,
+            "v5p-16": 0,
+            "v5p-32": 0,
+            "v5p-64": 0,
+            "v5p-128": 0,
+            "v5p-256": 0,
+            "v5p-512": 0,
+        },
+        "VLLM": True,
+    },
     "marin-big-run": {
         "NAME": "marin-big-run",
         "REGION": "us-central2",
@@ -201,6 +221,25 @@ CONFIGS = {
             "v5p-64": 4,
             "v5p-2048": 0,
         },
+    },
+    "marin-us-east5-a-vllm": {
+        "NAME": "marin-us-east5-a-vllm",
+        "REGION": "us-east5",
+        "ZONE": "us-east5-a",
+        "BUCKET": "marin-us-east5",
+        "DOCKER_TAG": LATEST_VLLM,
+        "tpu_generation": "v5p",
+        "min_workers": 1,
+        "worker_targets": {
+            "v5p-8": 2,
+            "v5p-16": 0,
+            "v5p-32": 0,
+            "v5p-64": 0,
+            "v5p-128": 0,
+            "v5p-256": 0,
+            "v5p-512": 0,
+        },
+        "VLLM": True,
     },
     "marin-eu-west4-a": {
         "NAME": "marin-eu-west4-a",
