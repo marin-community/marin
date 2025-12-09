@@ -30,8 +30,11 @@ All runs:
 * use a small sweep of learning rates
 * run on v5p-8"""
 
+import dataclasses
 from functools import lru_cache
 from itertools import islice
+
+import haliax
 
 from experiments.defaults import default_train
 from experiments.llama import llama3_tokenizer
@@ -48,7 +51,7 @@ QWEN2_5_HANDLES: dict[str, str] = {
     "qwen2_5_1_5b": "Qwen/Qwen2.5-1.5B",
     "qwen2_5_3b": "Qwen/Qwen2.5-3B",
     "qwen2_5_7b": "Qwen/Qwen2.5-7B",
-    "qwen2_5_14b": "Qwen/Qwen2.5-14B",
+    #    "qwen2_5_14b": "Qwen/Qwen2.5-14B",
 }
 
 QWEN2_5_TOKENIZER = "Qwen/Qwen2.5-7B"
@@ -57,7 +60,7 @@ OLMO2_7B_HF = "allenai/OLMo-2-1124-7B"
 
 LEARNING_RATES: tuple[float, ...] = (1e-5, 3e-5, 1e-4)
 
-BATCH_SIZE = 16
+BATCH_SIZE = 4
 NUM_TRAIN_STEPS = 1000
 MAX_STEPS_PER_EXECUTOR = 4
 
@@ -68,13 +71,22 @@ def build_model_configs() -> dict[str, tuple[str, object]]:
     models: dict[str, tuple[str, object]] = {}
 
     llama3_8b_cfg = LlamaConfig().hf_checkpoint_converter(ref_checkpoint=llama3_tokenizer).default_config
-    models["llama3_8b"] = (llama3_tokenizer, llama3_8b_cfg)
+    llama3_8b_cfg = dataclasses.replace(
+        llama3_8b_cfg, gradient_checkpointing=haliax.ScanCheckpointPolicy(save_carries="offload")
+    )
+    # models["llama3_8b"] = (llama3_tokenizer, llama3_8b_cfg)
 
     for name, handle in QWEN2_5_HANDLES.items():
         qwen_cfg = QwenConfig().hf_checkpoint_converter(ref_checkpoint=handle).default_config
+        qwen_cfg = dataclasses.replace(
+            qwen_cfg, gradient_checkpointing=haliax.ScanCheckpointPolicy(save_carries="offload")
+        )
         models[name] = (handle, qwen_cfg)
 
-    models["olmo2_7b"] = (OLMO2_7B_HF, olmo_7b)
+    olmo2_7b_cfg = dataclasses.replace(
+        olmo_7b, gradient_checkpointing=haliax.ScanCheckpointPolicy(save_carries="offload")
+    )
+    # models["olmo2_7b"] = (OLMO2_7B_HF, olmo2_7b_cfg)
 
     return models
 
@@ -126,9 +138,7 @@ def build_social_scaling_runs() -> list[ExecutorStep]:
                     num_train_steps=NUM_TRAIN_STEPS,
                     learning_rate=lr,
                     initialize_from_hf=hf_handle,
-                    steps_per_eval=250,
                     steps_per_export=NUM_TRAIN_STEPS,
-                    steps_per_hf_export=-1,
                 )
 
                 step = default_train(
@@ -141,7 +151,7 @@ def build_social_scaling_runs() -> list[ExecutorStep]:
                         model_name,
                         dataset_key,
                     ),
-                    use_default_validation=False,
+                    use_default_validation=True,
                     eval_harness_tasks=[],
                 )
                 steps.append(step)
