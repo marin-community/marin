@@ -93,11 +93,7 @@ class MapOp:
 
 @dataclass
 class FilterOp:
-    """Filter operation - keeps elements matching predicate.
-
-    When expr is provided, the filter can be pushed down to file readers
-    (e.g., Parquet) for more efficient processing.
-    """
+    """Filter operation - keeps elements matching predicate."""
 
     predicate: Callable
     expr: Expr | None = field(default=None)
@@ -110,11 +106,7 @@ class FilterOp:
 
 @dataclass
 class SelectOp:
-    """Select specific columns (projection).
-
-    When placed after LoadFileOp, the planner can push column projection
-    down to the file reader for more efficient I/O.
-    """
+    """Select specific columns (projection)."""
 
     columns: tuple[str, ...]
 
@@ -127,7 +119,6 @@ class TakePerShardOp:
     """Take operation - limits to first N items per shard.
 
     Takes the first n items from each shard independently.
-    This preserves parallelism while limiting data volume for testing/debugging.
     """
 
     n: int

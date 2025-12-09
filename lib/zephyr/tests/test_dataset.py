@@ -23,6 +23,7 @@ import pytest
 from zephyr import Dataset, create_backend, load_file, load_parquet
 from zephyr._test_helpers import SampleDataclass
 from zephyr.dataset import FilterOp, MapOp, WindowOp
+from zephyr.writers import write_parquet_file
 
 from .conftest import CallCounter
 
@@ -1044,11 +1045,6 @@ def test_repr_handles_lambdas():
     assert repr(op) == "FilterOp(predicate=test_repr_handles_lambdas.<locals>.<lambda>)"
 
 
-# =============================================================================
-# Expression-based Filter and Select Tests
-# =============================================================================
-
-
 def test_filter_with_expression(backend):
     """Test filter with expression on in-memory data."""
     from zephyr import col
@@ -1186,91 +1182,35 @@ def test_filter_and_select_combined(backend):
     assert all(set(r.keys()) == {"id", "name"} for r in results)
 
 
-def test_parquet_filter_with_expression(tmp_path, backend):
-    """Test filter pushdown to parquet reader."""
-    from zephyr import col
-    from zephyr.writers import write_parquet_file
-
-    # Write test parquet file
-    input_path = tmp_path / "input.parquet"
-    write_parquet_file(
-        [
-            {"id": 1, "score": 80},
-            {"id": 2, "score": 60},
-            {"id": 3, "score": 90},
-        ],
-        str(input_path),
-    )
-
-    ds = Dataset.from_files(str(input_path)).load_parquet().filter(col("score") > 70)
-
-    results = list(backend.execute(ds))
-    assert len(results) == 2
-    assert all(r["score"] > 70 for r in results)
-
-
-def test_parquet_select_columns(tmp_path, backend):
-    """Test column projection pushdown to parquet reader."""
-    from zephyr.writers import write_parquet_file
-
-    input_path = tmp_path / "data.parquet"
-    write_parquet_file(
-        [
-            {"id": 1, "name": "alice", "score": 80, "extra": "x"},
-            {"id": 2, "name": "bob", "score": 60, "extra": "y"},
-        ],
-        str(input_path),
-    )
-
-    ds = Dataset.from_files(str(input_path)).load_parquet().select("id", "name")
-
-    results = list(backend.execute(ds))
-    assert len(results) == 2
-    assert all(set(r.keys()) == {"id", "name"} for r in results)
-
-
-def test_parquet_filter_and_select(tmp_path, backend):
+@pytest.mark.parametrize("output_format", ["parquet", "jsonl"])
+def test_filter_and_select(tmp_path, backend, output_format: str):
     """Test combined filter and select on parquet."""
     from zephyr import col
-    from zephyr.writers import write_parquet_file
 
-    input_path = tmp_path / "data.parquet"
-    write_parquet_file(
+    ds = Dataset.from_list(
         [
             {"id": 1, "name": "alice", "score": 80, "extra": "x"},
             {"id": 2, "name": "bob", "score": 60, "extra": "y"},
             {"id": 3, "name": "charlie", "score": 90, "extra": "z"},
-        ],
-        str(input_path),
-    )
+        ]
+    ).reshard(1)
 
-    ds = Dataset.from_files(str(input_path)).load_parquet().filter(col("score") > 70).select("id", "name")
+    output_path = tmp_path / ("data." + output_format)
+
+    if output_format == "parquet":
+        ds = ds.write_parquet(str(output_path))
+    elif output_format == "jsonl":
+        ds = ds.write_jsonl(str(output_path))
+
+    backend.execute(ds)
+
+    ds = Dataset.from_files(str(output_path)).load_file().filter(col("score") > 70).select("id", "name")
 
     results = list(backend.execute(ds))
     assert len(results) == 2
     assert all(set(r.keys()) == {"id", "name"} for r in results)
     names = {r["name"] for r in results}
     assert names == {"alice", "charlie"}
-
-
-def test_jsonl_filter_with_expression(tmp_path, backend):
-    """Test expression filter on JSONL files."""
-    from zephyr import col
-
-    input_path = tmp_path / "data.jsonl"
-    with open(input_path, "w") as f:
-        for record in [
-            {"id": 1, "value": 10},
-            {"id": 2, "value": 20},
-            {"id": 3, "value": 5},
-        ]:
-            f.write(json.dumps(record) + "\n")
-
-    ds = Dataset.from_files(str(input_path)).load_jsonl().filter(col("value") >= 10)
-
-    results = list(backend.execute(ds))
-    assert len(results) == 2
-    assert all(r["value"] >= 10 for r in results)
 
 
 def test_filter_expression_repr():
@@ -1314,7 +1254,6 @@ def test_mixed_filter_expression_and_lambda(backend):
 def test_input_file_spec_row_range_basic(tmp_path):
     """Test InputFileSpec reads only the specified row range."""
     from zephyr.readers import InputFileSpec, load_parquet
-    from zephyr.writers import write_parquet_file
 
     data = [{"id": i, "value": i * 10} for i in range(100)]
     input_path = tmp_path / "data.parquet"
@@ -1337,7 +1276,6 @@ def test_input_file_spec_row_range_basic(tmp_path):
 def test_input_file_spec_with_columns_and_row_range(tmp_path):
     """Test InputFileSpec with both columns and row_range."""
     from zephyr.readers import InputFileSpec, load_parquet
-    from zephyr.writers import write_parquet_file
 
     data = [{"id": i, "name": f"item_{i}", "value": i * 10} for i in range(50)]
     input_path = tmp_path / "data.parquet"
@@ -1363,7 +1301,6 @@ def test_fork_chunks_inserted_with_intra_shard_parallelism(tmp_path):
     """Test that ForkChunks is inserted when intra_shard_parallelism is enabled."""
     import pyarrow as pa
     import pyarrow.parquet as pq
-
     from zephyr.plan import ExecutionHint, ForkChunks, Map, compute_plan
 
     # Create a parquet file
@@ -1404,7 +1341,6 @@ def test_fork_chunks_not_inserted_when_disabled(tmp_path):
     """Test that ForkChunks is NOT inserted when intra_shard_parallelism is 0."""
     import pyarrow as pa
     import pyarrow.parquet as pq
-
     from zephyr.plan import ExecutionHint, ForkChunks, compute_plan
 
     # Create a parquet file
@@ -1439,7 +1375,6 @@ def test_fork_chunks_not_inserted_with_map_shard(tmp_path):
     """Test that ForkChunks is NOT inserted when MapShardOp requires full shard context."""
     import pyarrow as pa
     import pyarrow.parquet as pq
-
     from zephyr.plan import ExecutionHint, ForkChunks, compute_plan
 
     # Create a parquet file
