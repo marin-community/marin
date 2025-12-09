@@ -28,12 +28,13 @@ import zlib
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import StrEnum, auto
 from itertools import groupby, islice
 from typing import TYPE_CHECKING, Any
 
 import fsspec
 import msgspec
+from fray.job import JobContext
 
 from zephyr.dataset import (
     FilterOp,
@@ -159,7 +160,7 @@ class ForkChunks:
 PhysicalOp = Map | Write | Scatter | Reduce | Fold | Reshard | Join | ForkChunks
 
 
-class StageType(Enum):
+class StageType(StrEnum):
     """Type of stage execution."""
 
     WORKER = auto()  # Normal worker execution
@@ -190,7 +191,7 @@ def _reduce_gen(shard: Any, key_fn: Callable, reducer_fn: Callable) -> Iterator:
 def _select_gen(stream: Iterator, columns: tuple[str, ...]) -> Iterator:
     cols_set = set(columns)
     for item in stream:
-        yield {k: v for k, v in item.items() if k in cols_set}
+        yield {k: item[k] for k in cols_set if k in item}
 
 
 def _load_file_gen(stream: Iterator) -> Iterator:
@@ -558,7 +559,6 @@ class ChunkHeader:
     """Metadata for a chunk being streamed from a worker."""
 
     shard_idx: int
-    chunk_idx: int
     count: int
 
 
@@ -616,18 +616,16 @@ def make_windows(
 def _stream_chunks(items: Iterator, shard_idx: int, chunk_size: int) -> Iterator[ChunkHeader | list[Any]]:
     """Stream chunks from an iterator, yielding header/data pairs."""
     chunk: list = []
-    chunk_idx = 0
     for item in items:
         chunk.append(item)
         if chunk_size > 0 and len(chunk) >= chunk_size:
-            header = ChunkHeader(shard_idx=shard_idx, chunk_idx=chunk_idx, count=len(chunk))
+            header = ChunkHeader(shard_idx=shard_idx, count=len(chunk))
             yield header
             yield chunk
             chunk = []
-            chunk_idx += 1
     # Yield final partial chunk
     if chunk:
-        header = ChunkHeader(shard_idx=shard_idx, chunk_idx=chunk_idx, count=len(chunk))
+        header = ChunkHeader(shard_idx=shard_idx, count=len(chunk))
         yield header
         yield chunk
 
@@ -867,7 +865,7 @@ class StageContext:
     total_shards: int
     chunk_size: int
     aux_shards: dict[int, list[Any]] = field(default_factory=dict)
-    execution_context: Any = None  # ExecutionContext (avoids circular import)
+    execution_context: JobContext = None
 
     def get_right_shard(self, op_index: int) -> Any:
         """Get right shard for join at given op index.
@@ -901,13 +899,13 @@ def run_stage(
 
     stream: Iterator = iter(ctx.shard)
 
-    i = 0
-    while i < len(ops):
-        op = ops[i]
+    op_index = 0
+    while op_index < len(ops):
+        op = ops[op_index]
 
         if isinstance(op, Map):
             stream = op.fn(stream)
-            i += 1
+            op_index += 1
         elif isinstance(op, ForkChunks):
             # Execute chunk parallelism with contained parallel_ops
             stream = _execute_fork_join(
@@ -916,7 +914,7 @@ def run_stage(
                 op.parallel_ops,
                 op.target_chunks,
             )
-            i += 1
+            op_index += 1
 
         elif isinstance(op, Write):
             output_path = op.output_pattern(ctx.shard_idx, ctx.total_shards)
@@ -962,12 +960,12 @@ def run_stage(
             for shard_idx in range(num_output_shards):
                 if output_chunks[shard_idx]:
                     for chunk in output_chunks[shard_idx]:
-                        header = ChunkHeader(shard_idx=shard_idx, chunk_idx=0, count=chunk.count)
+                        header = ChunkHeader(shard_idx=shard_idx, count=chunk.count)
                         yield header
                         yield chunk.data
                 else:
                     # Yield empty chunk so controller knows this shard exists
-                    header = ChunkHeader(shard_idx=shard_idx, chunk_idx=0, count=0)
+                    header = ChunkHeader(shard_idx=shard_idx, count=0)
                     yield header
                     yield []
             return
@@ -975,22 +973,22 @@ def run_stage(
         elif isinstance(op, Reduce):
             # Merge sorted chunks and reduce per key
             stream = _reduce_gen(ctx.shard, op.key_fn, op.reducer_fn)
-            i += 1
+            op_index += 1
 
         elif isinstance(op, Fold):
             # Reduction to single value
             result = op.fn(stream)
             stream = iter([result])
-            i += 1
+            op_index += 1
 
         elif isinstance(op, Reshard):
             # Reshard is handled by the backend, not in worker
             raise ValueError("Reshard should not be executed in run_stage")
 
         elif isinstance(op, Join):
-            right_shard = ctx.get_right_shard(i)
+            right_shard = ctx.get_right_shard(op_index)
             stream = op.fn(stream, iter(right_shard))
-            i += 1
+            op_index += 1
 
     # Yield remaining items as chunks
     yield from _stream_chunks(stream, ctx.shard_idx, ctx.chunk_size)

@@ -16,7 +16,6 @@
 
 from zephyr.expr import (
     col,
-    extract_columns,
     lit,
     to_pyarrow_expr,
 )
@@ -207,44 +206,6 @@ class TestFieldAccessExpr:
     def test_repr(self):
         expr = col("meta")["score"]
         assert repr(expr) == "col('meta')['score']"
-
-
-class TestExtractColumns:
-    def test_single_column(self):
-        assert extract_columns(col("name")) == {"name"}
-
-    def test_literal(self):
-        assert extract_columns(lit(42)) == set()
-
-    def test_comparison(self):
-        assert extract_columns(col("score") > 0.5) == {"score"}
-
-    def test_comparison_two_columns(self):
-        assert extract_columns(col("a") > col("b")) == {"a", "b"}
-
-    def test_logical_and(self):
-        expr = (col("a") > 0) & (col("b") < 10)
-        assert extract_columns(expr) == {"a", "b"}
-
-    def test_logical_or(self):
-        expr = (col("x") == 1) | (col("y") == 2)
-        assert extract_columns(expr) == {"x", "y"}
-
-    def test_not(self):
-        expr = ~(col("flag") == True)  # noqa: E712
-        assert extract_columns(expr) == {"flag"}
-
-    def test_arithmetic(self):
-        expr = col("a") + col("b") * col("c")
-        assert extract_columns(expr) == {"a", "b", "c"}
-
-    def test_field_access(self):
-        expr = col("meta")["score"] > 0.5
-        assert extract_columns(expr) == {"meta"}
-
-    def test_complex_expression(self):
-        expr = ((col("a") > 0) & (col("b") < col("c"))) | (col("d") == 1)
-        assert extract_columns(expr) == {"a", "b", "c", "d"}
 
 
 class TestPyArrowConversion:

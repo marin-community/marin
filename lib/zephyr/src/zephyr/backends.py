@@ -354,7 +354,7 @@ class Backend:
         self,
         contexts: list[StageContext],
         operations: list[PhysicalOp],
-    ) -> dict[int, list[tuple[int, ChunkHeader, Any]]]:
+    ) -> dict[int, list[tuple[ChunkHeader, Any]]]:
         """Run stage tasks for contexts, return results grouped by output shard_idx.
 
         Args:
@@ -362,10 +362,9 @@ class Backend:
             operations: Physical operations to execute
 
         Returns:
-            Dict mapping shard_idx -> list of (chunk_idx, header, data_ref) tuples.
-            chunk_idx is always 0 (reserved for future use).
+            Dict mapping shard_idx -> list of (header, data_ref) tuples.
         """
-        results_by_shard: dict[int, list[tuple[int, ChunkHeader, Any]]] = defaultdict(list)
+        results_by_shard: dict[int, list[tuple[ChunkHeader, Any]]] = defaultdict(list)
 
         if not contexts:
             return results_by_shard
@@ -390,7 +389,7 @@ class Backend:
                         try:
                             header = self.context.get(next(ready_gen))
                             data_ref = next(ready_gen)
-                            results_by_shard[header.shard_idx].append((0, header, data_ref))
+                            results_by_shard[header.shard_idx].append((header, data_ref))
                         except StopIteration:
                             active_gens.remove((g, ctx))
                             if queued:
@@ -425,7 +424,6 @@ class Backend:
 
         total = len(shards)
 
-        # Build contexts (one per shard)
         contexts = [
             StageContext(
                 shard=shard,
@@ -438,10 +436,8 @@ class Backend:
             for shard_idx, (shard, aux_shards) in enumerate(zip(shards, aux_shards_per_shard, strict=True))
         ]
 
-        # Run tasks
         results = self._run_tasks(contexts, operations)
 
-        # Build Shards from results
         # Use input shard count to preserve empty shards (important for joins)
         num_output_shards = total
         if results:
@@ -453,7 +449,7 @@ class Backend:
         return [
             Shard(
                 idx=idx,
-                chunks=[Chunk(header.count, data_ref) for _, header, data_ref in results.get(idx, [])],
+                chunks=[Chunk(header.count, data_ref) for header, data_ref in results.get(idx, [])],
                 context=self.context,
             )
             for idx in range(num_output_shards)

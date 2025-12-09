@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import operator
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
-from collections.abc import Callable
 
 if TYPE_CHECKING:
     import pyarrow.compute as pc
@@ -197,7 +197,7 @@ class NotExpr(Expr):
         return not self.child.evaluate(record)
 
     def __repr__(self) -> str:
-        return f"~{self.child}"
+        return f"~({self.child})"
 
 
 _ARITHMETIC_OPS: dict[str, Callable[[Any, Any], Any]] = {
@@ -266,35 +266,6 @@ def lit(value: Any) -> LiteralExpr:
         (col('a') + lit(10))
     """
     return LiteralExpr(value)
-
-
-def expr_to_callable(expr: Expr) -> Callable[[dict], Any]:
-    """Convert an expression to a callable predicate."""
-    return expr.evaluate
-
-
-def extract_columns(expr: Expr) -> set[str]:
-    """Extract all column names referenced by an expression.
-
-    Example:
-        >>> extract_columns((col("a") > 0) & (col("b") < 10))
-        {'a', 'b'}
-    """
-    columns: set[str] = set()
-
-    def visit(e: Expr) -> None:
-        if isinstance(e, ColumnExpr):
-            columns.add(e.name)
-        elif isinstance(e, (CompareExpr, LogicalExpr, ArithmeticExpr)):
-            visit(e.left)
-            visit(e.right)
-        elif isinstance(e, NotExpr):
-            visit(e.child)
-        elif isinstance(e, FieldAccessExpr):
-            visit(e.parent)
-
-    visit(expr)
-    return columns
 
 
 def to_pyarrow_expr(expr: Expr) -> pc.Expression:

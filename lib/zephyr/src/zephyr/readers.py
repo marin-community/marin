@@ -24,7 +24,7 @@ import logging
 import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 import fsspec
@@ -51,11 +51,11 @@ class InputFileSpec:
     """
 
     path: str
-    format: Literal["parquet", "jsonl", "auto"] = "auto"
+    format: Literal["parquet", "jsonl", "vortex", "auto"] = "auto"
     columns: list[str] | None = None
     row_start: int | None = None
     row_end: int | None = None
-    filter_expr: Expr | None = field(default=None)
+    filter_expr: Expr | None = None
 
 
 def _as_spec(source: str | InputFileSpec) -> InputFileSpec:
@@ -166,6 +166,7 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
     import pyarrow.dataset as pads
 
     spec = _as_spec(source)
+    logger.info("Loading: %s", spec.path)
     columns = spec.columns
 
     pa_filter = None
@@ -182,6 +183,7 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
         for fragment in dataset.get_fragments():
             for rg_fragment in fragment.split_by_row_group():
                 # Get row group size from RowGroupInfo (no data read)
+                assert len(rg_fragment.row_groups) == 1
                 rg_info = rg_fragment.row_groups[0]
                 rg_num_rows = rg_info.num_rows
                 rg_start = cumulative_rows

@@ -413,11 +413,9 @@ class Dataset(Generic[T]):
             >>> ds = Dataset.from_list([{"score": 80}, {"score": 60}]).filter(col("score") > 70)
         """
         from zephyr.expr import Expr as ExprType
-        from zephyr.expr import expr_to_callable
 
         if isinstance(predicate, ExprType):
-            callable_pred = expr_to_callable(predicate)
-            return Dataset(self.source, [*self.operations, FilterOp(callable_pred, expr=predicate)])
+            return Dataset(self.source, [*self.operations, FilterOp(predicate.evaluate, expr=predicate)])
         return Dataset(self.source, [*self.operations, FilterOp(predicate)])
 
     def select(self, *columns: str) -> Dataset[dict]:
