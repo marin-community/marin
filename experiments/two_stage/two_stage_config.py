@@ -179,7 +179,7 @@ class TwoStageConfig:
                 f"{self.rare_fraction_epoched * self.rare_stage2_allocation}"
             )
 
-        self.total_tokens = self.num_train_steps * self.train_batch_size * self.model_config.seq_len
+        self.total_tokens = self.num_train_steps * self.train_batch_size * self.model_config.max_seq_len
         self.rare_batches = int(self.num_train_steps * self.rare_fraction)
 
         self.stage1_duration = 1.0 - self.stage2_duration
@@ -378,7 +378,7 @@ def two_stage_train_step(two_stage_config: TwoStageConfig) -> ExecutorStep:
         description=f"Train a model for "
         f"{two_stage_config.num_train_steps} (steps) * "
         f"{two_stage_config.train_batch_size} (batch_size) * "
-        f"{two_stage_config.model_config.seq_len} (seq_len) "
+        f"{two_stage_config.model_config.max_seq_len} (seq_len) "
         f"= {two_stage_config.total_tokens:,} tokens.",
         config=train_lm_on_pod_config,
         pip_dependency_groups=["tokenize_train"],

@@ -119,8 +119,7 @@ def train(config: SFTConfig):
         else:
             converter = converter.replaced(tokenizer=tokenizer)
 
-        model_config = converter.default_config
-        model_config = dataclasses.replace(converter.default_config, seq_len=config.max_seq_len)
+        model_config = dataclasses.replace(converter.default_config, max_seq_len=config.max_seq_len)
     elif config.trainer.initialize_from is None:
         raise ValueError("Must specify either --initialize_from_hf or --initialize_from")
     else:
@@ -218,7 +217,7 @@ def train(config: SFTConfig):
                 logger.info(f"Rounding vocab size from {vocab_size} to {Vocab.size} for partitioning")
             state = trainer.initial_state(training_key, model_init=lambda: config.model.build(Vocab, key=model_key))
 
-        flops_per_token = config.model.flops_per_token(vocab_size)
+        flops_per_token = config.model.flops_per_token(vocab_size, Pos.size)
         flops_per_example = 3 * flops_per_token * Pos.size if flops_per_token is not None else None
         trainer.add_hook(
             callbacks.log_performance_stats(Pos.size, trainer.config.train_batch_size, flops_per_example),
