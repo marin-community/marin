@@ -113,10 +113,13 @@ def test_write_jsonl_no_compression_without_gz_extension(tmp_path):
 
 def test_flow_backend_defaults_to_ray_when_initialized():
     """Test that flow_backend returns ray backend when Ray is initialized."""
-    from fray import RayContext
+    from fray.job import RayContext, set_job_ctx
 
     if ray.is_initialized():
         ray.shutdown()
+
+    # Reset cached context from previous tests
+    set_job_ctx(None)
 
     try:
         ray.init(ignore_reinit_error=True)
@@ -124,6 +127,7 @@ def test_flow_backend_defaults_to_ray_when_initialized():
         assert isinstance(backend.context, RayContext)
     finally:
         ray.shutdown()
+        set_job_ctx(None)
 
 
 def test_write_jsonl_infers_compression_from_zst_extension(tmp_path):

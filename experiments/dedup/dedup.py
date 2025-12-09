@@ -23,7 +23,6 @@ Usage:
 import logging
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-import ray
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.processing.classification.deduplication.pipeline import DedupeConfig, DedupMode, deduplicate
 
@@ -61,7 +60,6 @@ fineweb_edu_small_10bt = ExecutorStep(
 )
 
 
-@ray.remote(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "cpu"}})
 def run_dedup(config: DedupeConfig) -> str:
     logger.info(f"Starting dedupe with config: {config}")
 

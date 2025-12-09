@@ -25,7 +25,6 @@ uv run zephyr --backend=ray --max-parallelism=1000 --memory=1GB --num-cpus=1 --c
 import logging
 from dataclasses import dataclass, field
 
-import draccus
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
 from zephyr import Dataset, flow_backend, load_jsonl
 
@@ -88,7 +87,6 @@ class SimpleHtmlToMdConfig:
     # Configuration for the extraction method.
 
 
-@draccus.wrap()
 def html_to_md(cfg: SimpleHtmlToMdConfig):
     """Transform HTML content to markdown using the specified extraction method."""
     backend = flow_backend()
