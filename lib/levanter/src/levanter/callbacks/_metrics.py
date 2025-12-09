@@ -8,6 +8,7 @@ from datetime import timedelta
 from typing import Optional
 
 import jax
+from fray.cluster.device_flops import device_flops_for_jax_device
 from tqdm_loggable.auto import tqdm
 from tqdm_loggable.tqdm_logging import tqdm_logging
 
@@ -16,7 +17,6 @@ from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset
 from levanter.schedule import BatchSchedule
 from levanter.tracker import log_optimizer_hyperparams
-from levanter.utils import flop_utils
 from levanter.utils.jax_utils import jnp_to_python
 
 logger = pylogging.getLogger(__name__)
@@ -96,7 +96,7 @@ def log_performance_stats(
     device_count = jax.device_count()
     device = jax.devices()[0]
 
-    flops_per_device = flop_utils.device_hardware_flops(device)
+    flops_per_device = device_flops_for_jax_device(device.device_kind)
     levanter.tracker.log_summary(
         {
             wrap_key("device_kind"): device.device_kind,
