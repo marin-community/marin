@@ -214,7 +214,7 @@ def test_force_run_failed():
     cleanup_log(log)
 
 
-def test_status_actor_one_executor_waiting_for_another(count: int):
+def test_status_actor_one_executor_waiting_for_another():
     # Test when 2 experiments have a step in common and one waits for another to finish
     with tempfile.NamedTemporaryFile() as file:
         with open(file.name, "w") as f:
