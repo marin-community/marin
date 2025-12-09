@@ -20,8 +20,8 @@ from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, OutputName, executor_main
 
-# resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v6e-8", strategy="STRICT_PACK")
-resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v4-64", strategy="STRICT_PACK")
+resource_config = ResourceConfig(num_tpu=8, tpu_type="TPU-v6e-8", strategy="STRICT_PACK")
+# resource_config = ResourceConfig(num_tpu=4, tpu_type="TPU-v4-64", strategy="STRICT_PACK")
 
 """
 Note for people trying to do evals:
@@ -31,8 +31,9 @@ Note for people trying to do evals:
 - The structure follows exp905c_levanter_eval_model.py with EVAL_TASKS, MODELS, and compile_results
 """
 EVAL_TASKS = [
+    EvalTaskConfig("eq_bench", num_fewshot=0),
     # EvalTaskConfig("mmlu", num_fewshot=5, task_alias="mmlu_5shot"),
-    EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
+    # EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
     # EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime25_0shot"),
 ]
 
@@ -48,6 +49,10 @@ DEFAULT_ENGINE_KWARGS = {
     "max_model_len": 8192,
     "max_gen_toks": 2048,
 }
+
+MODEL_REGION = "marin-us-east1"
+GCSFUSE_MODEL_ROOT = f"gs://{MODEL_REGION}/gcsfuse_mount/models"
+MODEL_ROOT = GCSFUSE_MODEL_ROOT
 
 
 def compile_results(eval_steps: Sequence[ExecutorStep], *, step_name: str) -> ExecutorStep:
@@ -214,8 +219,8 @@ def build_eval_steps(
     for task in tasks:
         engine_kwargs = {
             "tensor_parallel_size": model_config.get("tensor_parallel_size", 4),
-            # "max_model_len": model_config.get("max_model_len", DEFAULT_ENGINE_KWARGS["max_model_len"]),
-            # "max_gen_toks": model_config.get("max_gen_toks", DEFAULT_ENGINE_KWARGS["max_gen_toks"]),
+            "max_model_len": model_config.get("max_model_len", DEFAULT_ENGINE_KWARGS["max_model_len"]),
+            "max_gen_toks": model_config.get("max_gen_toks", DEFAULT_ENGINE_KWARGS["max_gen_toks"]),
         }
         if engine_kwargs_override:
             engine_kwargs.update(engine_kwargs_override)

@@ -14,17 +14,16 @@
 
 """Run vLLM evals for Llama-3.1-8B (base)."""
 
-from experiments.exp905c_vllm_eval_model import run_model_eval
-from experiments.models import llama_3_1_8b
+from experiments.exp905c_vllm_eval_model import GCSFUSE_MODEL_ROOT, run_model_eval
 
 
 MODEL_CONFIG = {
     "name": "llama-3.1-8b",
-    "path": "gs://marin-us-central2/gcsfuse_mount/models/meta-llama--Llama-3-1-8B--d04e592",
-    "apply_chat_template": True,
+    "path": f"{GCSFUSE_MODEL_ROOT}/meta-llama--Llama-3-1-8B--d04e592",
+    "apply_chat_template": False,
     "tensor_parallel_size": 1,
 }
 
 
 if __name__ == "__main__":
-    run_model_eval(MODEL_CONFIG, download_steps=[llama_3_1_8b])
+    run_model_eval(MODEL_CONFIG)

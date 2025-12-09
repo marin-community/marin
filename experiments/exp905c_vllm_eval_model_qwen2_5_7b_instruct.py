@@ -14,12 +14,12 @@
 
 """Run vLLM evals for Qwen2.5-7B-Instruct."""
 
-from experiments.exp905c_vllm_eval_model import run_model_eval
+from experiments.exp905c_vllm_eval_model import MODEL_ROOT, run_model_eval
 
 
 MODEL_CONFIG = {
-    "name": "qwen2.5-7b-instruct",
-    "path": "gs://marin-us-central2/models/qwen2.5-7b-instruct",
+    "name": "qwen2.5-7b",
+    "path": f"{MODEL_ROOT}/qwen2.5-7b",
     "apply_chat_template": True,
     "max_model_len": int(8094 * 4),
     "tensor_parallel_size": 4,

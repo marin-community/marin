@@ -14,26 +14,16 @@
 
 """Run vLLM evals for OLMo3-7B-Base."""
 
-from experiments.exp905c_vllm_eval_model import run_model_eval
-from experiments.models import ModelConfig, download_model_step
+from experiments.exp905c_vllm_eval_model import GCSFUSE_MODEL_ROOT, run_model_eval
 
 
 MODEL_CONFIG = {
     "name": "olmo3-7b-base",
-    "path": "gs://marin-us-central2/gcsfuse_mount/models/allenai--Olmo-3-1025-7B--main",
-    "apply_chat_template": True,
+    "path": f"{GCSFUSE_MODEL_ROOT}/allenai--Olmo-3-1025-7B--main",
+    "apply_chat_template": False,
     "tensor_parallel_size": 1,
 }
 
-DOWNLOAD_STEPS = [
-    download_model_step(
-        ModelConfig(
-            hf_repo_id="allenai/Olmo-3-1025-7B",
-            hf_revision="main",
-        )
-    )
-]
-
 
 if __name__ == "__main__":
-    run_model_eval(MODEL_CONFIG, download_steps=DOWNLOAD_STEPS)
+    run_model_eval(MODEL_CONFIG)

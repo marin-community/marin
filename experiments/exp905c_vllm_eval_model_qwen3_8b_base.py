@@ -14,17 +14,16 @@
 
 """Run vLLM evals for Qwen3-8B-Base."""
 
-from experiments.exp905c_vllm_eval_model import run_model_eval
-from experiments.models import qwen3_8b_base
+from experiments.exp905c_vllm_eval_model import GCSFUSE_MODEL_ROOT, run_model_eval
 
 
 MODEL_CONFIG = {
     "name": "qwen3-8b-base",
-    "path": "gs://marin-us-central2/gcsfuse_mount/models/Qwen--Qwen3-8B-Base--49e3418",
+    "path": f"{GCSFUSE_MODEL_ROOT}/Qwen--Qwen3-8B-Base--49e3418",
     "apply_chat_template": True,
     "tensor_parallel_size": 1,
 }
 
 
 if __name__ == "__main__":
-    run_model_eval(MODEL_CONFIG, download_steps=[qwen3_8b_base])
+    run_model_eval(MODEL_CONFIG)

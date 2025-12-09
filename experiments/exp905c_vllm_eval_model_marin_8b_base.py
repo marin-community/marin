@@ -14,17 +14,16 @@
 
 """Run vLLM evals for marin-8b-base."""
 
-from experiments.exp905c_vllm_eval_model import run_model_eval
-from experiments.models import marin_8b_base
+from experiments.exp905c_vllm_eval_model import GCSFUSE_MODEL_ROOT, run_model_eval
 
 
 MODEL_CONFIG = {
     "name": "marin-8b-base",
-    "path": "gs://marin-us-central2/gcsfuse_mount/models/marin-community--marin-8b-base--0f1f658",
+    "path": f"{GCSFUSE_MODEL_ROOT}/marin-community--marin-8b-base--0f1f658",
     "apply_chat_template": False,
     "tensor_parallel_size": 1,
 }
 
 
 if __name__ == "__main__":
-    run_model_eval(MODEL_CONFIG, download_steps=[marin_8b_base])
+    run_model_eval(MODEL_CONFIG)
