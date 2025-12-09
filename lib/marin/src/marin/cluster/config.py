@@ -207,7 +207,7 @@ CONFIGS = {
         "REGION": "us-east5",
         "ZONE": "us-east5-a",
         "BUCKET": "marin-us-east5",
-        "DOCKER_TAG": "6e804a10",
+        "DOCKER_TAG": "20251209",
         "tpu_generation": "v5p",
         "min_workers": 2,
         "VLLM": True,
