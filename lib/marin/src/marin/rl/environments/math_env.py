@@ -156,7 +156,10 @@ class MathEnv(MarinEnv):
             raise ValueError(f"No examples available for mode '{mode}'")
 
         n_to_sample = min(n_examples, len(available_examples))
-        seed = jax.random.randint(prng_key, (), 0, 1_000_000).item()
+        if isinstance(prng_key, int):
+            seed = prng_key
+        else:
+            seed = jax.random.randint(prng_key, (), 0, 1_000_000).item()
         rng = np.random.default_rng(seed)
         indices = rng.choice(len(available_examples), size=n_to_sample, replace=False)
         sampled_examples = [available_examples[int(idx)] for idx in indices]
