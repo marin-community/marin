@@ -1522,7 +1522,7 @@ class AttentionConfig:
     scaling_factor: Optional[float] = None
     logits_soft_cap: Optional[float] = None
     qk_norm: Optional[LayerNormConfigBase] = None
-    """Configuration for QK normalization. If None, no normalization is applied."""
+    gated: bool = False
 
     def __post_init__(self):
         assert (
@@ -1581,12 +1581,17 @@ class Attention(eqx.Module):
     q_norm: Optional[LayerNormBase] = None
     k_norm: Optional[LayerNormBase] = None
     rot_embs: Optional[RotaryEmbeddings] = None
+    gate_proj: Optional[hnn.Linear] = None
 
     @staticmethod
     def init(config: AttentionConfig, *, key) -> "Attention":
         use_bias = config.use_bias
         use_output_bias = config.use_output_bias if config.use_output_bias is not None else use_bias
-        k_q, k_k, k_v, k_o = jrandom.split(key, 4)
+        if config.gated:
+            k_q, k_k, k_v, k_o, k_g = jrandom.split(key, 5)
+        else:
+            k_q, k_k, k_v, k_o = jrandom.split(key, 4)
+            k_g = None
         q_proj = hnn.Linear.init(
             In=config.Embed,
             Out=(config.KVHeads, config.QHeadsPerGroup, config.HeadSize),
@@ -1616,6 +1621,16 @@ class Attention(eqx.Module):
             out_first=True,
         )
 
+        gate_proj = None
+        if config.gated:
+            gate_proj = hnn.Linear.init(
+                In=config.Embed,
+                Out=(config.KVHeads, config.QHeadsPerGroup, config.HeadSize),
+                key=k_g,
+                use_bias=use_bias,
+                out_first=True,
+            )
+
         q_norm = None
         k_norm = None
         if config.qk_norm is not None:
@@ -1625,7 +1640,7 @@ class Attention(eqx.Module):
         # Build rotary embeddings once during initialization if configured
         rot_embs = config.rope.build(config.HeadSize) if config.rope is not None else None
 
-        return Attention(config, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs)
+        return Attention(config, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm, rot_embs, gate_proj)
 
     def empty_page_cache(self, spec: PageTableSpec, *, dtype) -> "KvPageCache":
         return KvPageCache.init(spec, self.config.KVHeads, self.config.HeadSize, dtype=dtype)
@@ -1639,7 +1654,11 @@ class Attention(eqx.Module):
         key=None,
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
-        key_proj, key_o = maybe_rng_split(key, 2)
+        if self.gate_proj is not None:
+            key_proj, key_o, key_g = maybe_rng_split(key, 3)
+        else:
+            key_proj, key_o = maybe_rng_split(key, 2)
+            key_g = None
 
         # Shared computation of q, k, v
         q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
@@ -1671,6 +1690,12 @@ class Attention(eqx.Module):
             prng=key,
         )
 
+        if self.gate_proj is not None:
+            gate = self.gate_proj(x, key=key_g)
+            gate = gate.rearrange((..., "kv_head", "q_heads_per_group", "position", "head_size"))
+            gate = hax.nn.sigmoid(gate)
+            attn_output = attn_output * gate
+
         # Flatten heads and apply output projection
         attn_output = attn_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
         attn_output = attn_output.astype(x.dtype)
@@ -1698,7 +1723,11 @@ class Attention(eqx.Module):
         Currently only causal masks are supported.
         """
 
-        key_proj, key_o = maybe_rng_split(key, 2)
+        if self.gate_proj is not None:
+            key_proj, key_o, key_g = maybe_rng_split(key, 3)
+        else:
+            key_proj, key_o = maybe_rng_split(key, 2)
+            key_g = None
 
         q, k, v = self._compute_qkv(x, key=key_proj, pos_ids=pos_ids)
 
@@ -1720,6 +1749,12 @@ class Attention(eqx.Module):
             sm_scale=sm_scale,
             soft_cap=self.config.logits_soft_cap,
         )
+
+        if self.gate_proj is not None:
+            gate = self.gate_proj(x, key=key_g)
+            gate = gate.rearrange((..., "kv_head", "q_heads_per_group", "position", "head_size"))
+            gate = hax.nn.sigmoid(gate)
+            attn_tokens = attn_tokens * gate
 
         attn_output = attn_tokens.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
         attn_output = attn_output.astype(x.dtype)
@@ -2296,6 +2331,7 @@ class AttentionWithSink(Attention):
             base.q_norm,
             base.k_norm,
             base.rot_embs,
+            base.gate_proj,
             sinks,
         )
 
@@ -2309,6 +2345,10 @@ class AttentionWithSink(Attention):
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
         key_q, key_k, key_v, key_o = maybe_rng_split(key, 4)
+        key_g = None
+
+        if self.gate_proj is not None:
+            key_q, key_k, key_v, key_o, key_g = maybe_rng_split(key, 5)
 
         q_proj = self.q_proj(x, key=key_q)
         k_proj = self.k_proj(x, key=key_k)
@@ -2352,6 +2392,12 @@ class AttentionWithSink(Attention):
             prng=key,
             attn_sink=self.sinks,
         )
+
+        if self.gate_proj is not None:
+            gate = self.gate_proj(x, key=key_g)
+            gate = gate.rearrange((..., "kv_head", "q_heads_per_group", "position", "head_size"))
+            gate = hax.nn.sigmoid(gate)
+            attn_output = attn_output * gate
 
         attn_output = attn_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
         attn_output = attn_output.astype(x.dtype)

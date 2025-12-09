@@ -19,6 +19,7 @@ from haliax import Axis
 from haliax.partitioning import ResourceAxis
 
 from levanter.layers.attention import (
+    Attention,
     AttentionBackend,
     AttentionConfig,
     AttentionMask,
@@ -126,6 +127,31 @@ def test_attention_with_sink_module():
     out = attn(x, None)
 
     expected = np.full((2, 1), 2.0 / 3)
+    assert_trees_all_close(out.array, expected)
+
+
+def test_attention_with_gating_module():
+    Pos = hax.Axis("position", 2)
+    Embed = hax.Axis("embed", 1)
+
+    config = AttentionConfig(Embed=Embed, num_heads=1, num_kv_heads=1, use_bias=True, gated=True)
+    attn = Attention.init(config, key=jrandom.PRNGKey(0))
+
+    attn = eqx.tree_at(lambda a: a.q_proj.weight, attn, hax.zeros(attn.q_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.q_proj.bias, attn, hax.zeros(attn.q_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.k_proj.weight, attn, hax.zeros(attn.k_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.k_proj.bias, attn, hax.zeros(attn.k_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.v_proj.weight, attn, hax.zeros(attn.v_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.v_proj.bias, attn, hax.ones(attn.v_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.o_proj.weight, attn, hax.ones(attn.o_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.o_proj.bias, attn, hax.zeros(attn.o_proj.bias.axes))
+    attn = eqx.tree_at(lambda a: a.gate_proj.weight, attn, hax.zeros(attn.gate_proj.weight.axes))
+    attn = eqx.tree_at(lambda a: a.gate_proj.bias, attn, hax.zeros(attn.gate_proj.bias.axes))
+
+    x = hax.zeros((Pos, Embed))
+    out = attn(x, None)
+
+    expected = np.full((2, 1), 0.5)
     assert_trees_all_close(out.array, expected)
 
 
