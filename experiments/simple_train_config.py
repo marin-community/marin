@@ -31,6 +31,7 @@ class SimpleTrainConfig:
     """
     num_train_steps: int
     learning_rate: float
+    train_seq_len: int | None = None
     data_seed: int | None = None
     weight_decay: float | None = None
     beta1: float | None = None

@@ -99,7 +99,7 @@ def test_llama_math_integration(ray_tpu_cluster, tmp_path):
     # Load model config from HuggingFace
     hf_config = AutoConfig.from_pretrained(MODEL_NAME)
     model_config = LlamaConfig.from_hf_config(hf_config)
-    model_config = dataclasses.replace(model_config, seq_len=MAX_TOKENS, tokenizer=MODEL_NAME)
+    model_config = dataclasses.replace(model_config, max_seq_len=MAX_TOKENS, tokenizer=MODEL_NAME)
 
     # Create trainer config
     trainer_config = TrainerConfig(

@@ -77,12 +77,12 @@ class WhisperConfig(HFCompatConfig, ASRConfig):
     MelPos = property(lambda self: Axis(name="position", size=self.max_source_positions * 2))
 
     @property
-    def Pos(self) -> Axis:
+    def max_Pos(self) -> Axis:
         return Axis(name="position", size=self.max_length)
 
     @property
     def KeyPos(self) -> Axis:
-        return self.Pos.alias("key_position")
+        return self.max_Pos.alias("key_position")
 
     SourcePos = property(lambda self: Axis(name="position", size=self.max_source_positions))
     Vocab = property(lambda self: Axis(name="vocab_size", size=self.vocab_size))
@@ -376,7 +376,7 @@ class WhisperDecoderEmbeddings(eqx.Module):
         )
 
         # Whisper Initializes the Positional Embeddings as Empty
-        position_embeddings = hnn.Embedding.init(config.Pos, config.Embed, key=k_wpe, initializer_range=0)
+        position_embeddings = hnn.Embedding.init(config.max_Pos, config.Embed, key=k_wpe, initializer_range=0)
 
         return WhisperDecoderEmbeddings(Vocab, config, token_embeddings, position_embeddings)
 
@@ -414,7 +414,7 @@ class WhisperDecoder(ModuleWithStateDictSerialization):
 
     @property
     def Pos(self) -> Axis:
-        return self.config.Pos
+        return self.config.max_Pos
 
     @classmethod
     def init(cls, config: WhisperConfig, *, key) -> "WhisperDecoder":
@@ -468,7 +468,7 @@ class WhisperModel(eqx.Module, ModelWithHfSerializationMixin[WhisperConfig]):
 
     @property
     def Pos(self) -> Axis:
-        return self.config.Pos
+        return self.config.max_Pos
 
     @property
     def Vocab(self) -> Axis:
