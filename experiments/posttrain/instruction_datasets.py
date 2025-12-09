@@ -130,6 +130,7 @@ class InstructionDatasetConfig:
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
         name: Optional friendly name for the dataset; defaults to `hf_dataset_id`.
+        max_parallelism: Max number of concurrent shard processing tasks. Reduce if needed to avoid Hugging Face rate limits.
     """
 
     hf_dataset_id: str
@@ -139,6 +140,7 @@ class InstructionDatasetConfig:
     name: str | None = None
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
+    max_parallelism: int | None = None
 
 
 def multi_turn_adapter(
@@ -464,6 +466,7 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         ),
         metadata_columns=["difficulty", "source", "domain"],
         name="open-thoughts/OpenThoughts3-1.2M",
+        max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
     ),
 }
 
@@ -548,6 +551,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
             adapter=versioned(adapter),
             subsets=versioned(dataset_cfg.subsets),
             splits=versioned(dataset_cfg.splits),
+            max_parallelism=versioned(dataset_cfg.max_parallelism),
         ),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
     )
