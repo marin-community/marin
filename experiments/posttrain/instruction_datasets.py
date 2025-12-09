@@ -45,6 +45,7 @@ Current datasets:
 19. nvidia/Nemotron-Post-Training-Dataset-v1
 20. nvidia/Nemotron-Post-Training-Dataset-v2
 21. HuggingFaceH4/no_robots
+22. open-thoughts/OpenThoughts3-1.2M  # Note that this is the *original* OpenThoughts3 dataset; smoltalk2 has a slightly different version
 """
 
 import dataclasses
@@ -450,6 +451,19 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         ],
         name="GeneralReasoning/GeneralThought-195K-modelreasoning",
         splits=["train"],
+    ),
+    "open-thoughts/OpenThoughts3-1.2M": InstructionDatasetConfig(
+        hf_dataset_id="open-thoughts/OpenThoughts3-1.2M",
+        revision="61bcf9d",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["difficulty", "source", "domain"],
+        name="open-thoughts/OpenThoughts3-1.2M",
     ),
 }
 
