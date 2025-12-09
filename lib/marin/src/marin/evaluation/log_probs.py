@@ -21,10 +21,8 @@ import os
 import shutil
 from dataclasses import dataclass
 
-import ray
-from fray.cluster import ResourceConfig
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 from fray.cluster.base import TpuConfig
-from fray.cluster.ray.resources import get_scheduling_strategy
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
@@ -108,11 +106,6 @@ def default_lm_log_probs(
     )
 
 
-@ray.remote(
-    memory=64 * 1024 * 1024 * 1024,
-    max_calls=1,
-    runtime_env={"env_vars": {"HF_HOME": HUGGINGFACE_CACHE_PATH}},
-)
 def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     """
     Visualizes log probabilities of a language model.
@@ -191,5 +184,13 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
 
     assert isinstance(config.resource_config.device, TpuConfig), "evaluate_lm_log_probs requires TPU resource config"
 
-    scheduling_strategy = get_scheduling_strategy(config.resource_config)
-    ray.get(do_eval_lm.options(scheduling_strategy=scheduling_strategy).remote(levanter_config))
+    env_vars = {"HF_HOME": HUGGINGFACE_CACHE_PATH}
+    cluster = current_cluster()
+    job_request = JobRequest(
+        name=f"eval-lm-{name}",
+        resources=config.resource_config,
+        entrypoint=Entrypoint.from_callable(do_eval_lm, args=[levanter_config]),
+        environment=EnvironmentConfig.create(env_vars=env_vars),
+    )
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)

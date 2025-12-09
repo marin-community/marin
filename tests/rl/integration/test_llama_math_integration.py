@@ -87,7 +87,7 @@ def create_simple_math_curriculum(run_id: str) -> CurriculumConfig:
 
 
 @pytest.mark.slow("Integration test with real model")
-def test_llama_math_integration(ray_tpu_cluster, tmp_path):
+def test_llama_math_integration(tmp_path):
     """Test full integration with Llama-3.2-1B and math curriculum.
 
     Runs both training and rollout workers for 10 training steps to validate

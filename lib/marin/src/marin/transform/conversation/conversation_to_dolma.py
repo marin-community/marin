@@ -58,7 +58,6 @@ def transform_conversation_to_dolma(row: dict):
     return dolma_row
 
 
-@draccus.wrap
 def process_dataset(config: ConversationToDolmaConfig):
     """Convert conversation format to Dolma format."""
     backend = flow_backend()
@@ -76,4 +75,5 @@ convert_conversation_to_dolma = process_dataset
 
 
 if __name__ == "__main__":
+    process_dataset = draccus.wrap(process_dataset)
     process_dataset()

@@ -44,7 +44,7 @@ def run_vllm_inference(model_path, **model_init_kwargs):
 
 
 @pytest.mark.tpu_ci
-def test_local_llm_inference(ray_tpu_cluster):
+def test_local_llm_inference():
     config = ModelConfig(
         name="test-llama-200m",
         path="gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m",

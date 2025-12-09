@@ -225,39 +225,6 @@ def convert_page_with_readability(
     return out
 
 
-def convert_page_legacy(html: str, url: str | None = None) -> dict[str, str]:
-    print("This is Legacy method, use convert_page_python instead")
-    import htmlmin
-    from bs4 import BeautifulSoup
-    from readabilipy import simple_json_from_html_string
-
-    reabilitied = simple_json_from_html_string(html, use_readability=True)
-    tree = reabilitied["content"]
-    tree = htmlmin.minify(tree, remove_empty_space=True, keep_pre=True)
-    tree = BeautifulSoup(tree, "html.parser")
-    if url:
-        tree = make_links_absolute(tree, url)
-    # reconvert tree to str with absolute URLs
-    reabilitied["content"] = str(tree)
-    markdown = to_markdown(tree)
-
-    # add title to markdown
-    if reabilitied["title"]:
-        markdown = f"# {reabilitied['title']}\n\n{markdown}"
-
-    out = {
-        "title": reabilitied["title"],
-        "content": markdown,
-        "date": reabilitied["date"],
-        "byline": reabilitied["byline"],
-        "html": reabilitied["content"],
-    }
-    if url:
-        out["url"] = url
-
-    return out
-
-
 def convert_page(
     html: str,
     url: str | None = None,
@@ -284,8 +251,6 @@ def convert_page(
             return convert_page_with_readability(html, url, config)
         case "resiliparse":
             return convert_page_with_resiliparse(html, url, config)
-        case "legacy":
-            return convert_page_legacy(html, url)
         case _:
             raise Exception(f"Invalid extract_method: {extract_method}")
 

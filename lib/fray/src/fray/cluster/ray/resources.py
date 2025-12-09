@@ -38,8 +38,8 @@ def as_remote_kwargs(
         out: dict[str, Any] = {"num_cpus": 8}
     elif isinstance(config.device, GpuConfig):
         out = {"num_gpus": config.device.count}
-        if config.device.type != "auto":
-            out["accelerator_type"] = config.device.type
+        if config.device.variant != "auto":
+            out["accelerator_type"] = config.device.variant
     else:
         out = {"num_cpus": 1}
 
@@ -53,7 +53,7 @@ def get_scheduling_strategy(config: ResourceConfig) -> PlacementGroupSchedulingS
     if not isinstance(config.device, TpuConfig):
         return None
 
-    tpu_type_head = f"TPU-{config.device.type}-head"
+    tpu_type_head = f"TPU-{config.device.variant}-head"
     bundles: list[dict[str, int]] = [{"TPU": 1, "CPU": 1}] * config.chip_count()
     bundles.append({tpu_type_head: 1})
 
@@ -64,9 +64,9 @@ def get_scheduling_strategy(config: ResourceConfig) -> PlacementGroupSchedulingS
 def accelerator_descriptor(config: ResourceConfig) -> str | None:
     """Get accelerator type string (e.g., 'v4-8', 'H100') for logging/tracking."""
     if isinstance(config.device, TpuConfig):
-        return config.device.type
+        return config.device.variant
     elif isinstance(config.device, GpuConfig):
-        return config.device.type
+        return config.device.variant
     return None
 
 

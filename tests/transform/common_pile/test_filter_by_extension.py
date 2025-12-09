@@ -18,7 +18,6 @@ import gzip
 import json
 from pathlib import Path
 
-import pytest
 from marin.transform.common_pile.filter_by_extension import (
     FilterByMetadataExtensionConfig,
     filter_dataset_by_metadata_extension,
@@ -34,7 +33,6 @@ def _write_jsonl_gz(path: Path, records: list[dict]) -> None:
             handle.write("\n")
 
 
-@pytest.mark.usefixtures("ray_tpu_cluster")
 def test_filter_by_metadata_extension(tmp_path: Path) -> None:
     input_dir = tmp_path / "input"
     output_dir = tmp_path / "output"

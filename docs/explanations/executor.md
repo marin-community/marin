@@ -29,6 +29,10 @@ generating data and compute statistics.
 
 See the documentation in [`executor.py`](https://github.com/marin-community/marin/blob/main/lib/marin/src/marin/execution/executor.py) for more details.
 
+Coordination between multiple pipelines is handled via lease files. This
+prevents duplicate execution if, for example, 2 Executor pipelines share common
+ancestor steps.
+
 ## Ray
 
 Recall that a step's function can either be a normal Python function or in most realistic cases,

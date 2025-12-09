@@ -22,7 +22,7 @@ from marin.processing.classification.autoscaler import AutoscalingActorPool, DEF
 from marin.processing.classification.classifier import AutoClassifierRayActor
 
 
-def test_autoscaler_requeues_failed_tasks(ray_tpu_cluster):
+def test_autoscaler_requeues_failed_tasks():
     task_queue = Queue()
     result_queue = Queue()
 

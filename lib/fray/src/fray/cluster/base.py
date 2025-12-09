@@ -21,9 +21,9 @@ import os
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
-from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Literal, NewType
+from enum import StrEnum
+from typing import Any, Literal, NewType, Self
 
 logger = logging.getLogger(__name__)
 
@@ -242,11 +242,15 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
+DeviceKind = Literal["cpu", "gpu", "tpu"]
+
+
 @dataclass(frozen=True)
 class CpuConfig:
     """CPU-only device configuration."""
 
-    type: str = "cpu"
+    kind: DeviceKind = "cpu"
+    variant: str = "cpu"
 
     def chip_count(self) -> int:
         """CPU has no accelerator chips."""
@@ -261,7 +265,8 @@ class CpuConfig:
 class GpuConfig:
     """GPU device configuration."""
 
-    type: GpuType
+    variant: GpuType
+    kind: DeviceKind = "gpu"
     count: int = 1
 
     def chip_count(self) -> int:
@@ -272,9 +277,9 @@ class GpuConfig:
         """Peak FLOP/s for a single GPU."""
         from fray.cluster.device_flops import device_flops
 
-        flops = device_flops(self.type, dtype)
+        flops = device_flops(self.variant, dtype)
         if flops is None:
-            raise ValueError(f"Unknown device/dtype: {self.type}/{dtype}")
+            raise ValueError(f"Unknown device/dtype: {self.variant}/{dtype}")
         return flops
 
     def total_flops(self, dtype: str = "bf16") -> float:
@@ -287,28 +292,29 @@ class TpuConfig:
     """TPU device configuration.
 
     Args:
-        type: TPU accelerator type (e.g., "v5litepod-16", "v4-8")
+        variant: TPU accelerator type (e.g., "v5litepod-16", "v4-8")
         topology: Optional topology specification (e.g., "2x2x1")
     """
 
-    type: TpuType
+    variant: TpuType
+    kind: DeviceKind = "tpu"
     topology: str | None = None
 
     def chip_count(self) -> int:
         """Total number of TPU chips."""
-        return get_tpu_topology(self.type).chip_count
+        return get_tpu_topology(self.variant).chip_count
 
     def vm_count(self) -> int:
         """Number of VMs in the TPU pod."""
-        return get_tpu_topology(self.type).vm_count
+        return get_tpu_topology(self.variant).vm_count
 
     def device_flops(self, dtype: str = "bf16") -> float:
         """Peak FLOP/s for a single TPU chip."""
         from fray.cluster.device_flops import device_flops
 
-        flops = device_flops(self.type, dtype)
+        flops = device_flops(self.variant, dtype)
         if flops is None:
-            raise ValueError(f"Unknown device/dtype: {self.type}/{dtype}")
+            raise ValueError(f"Unknown device/dtype: {self.variant}/{dtype}")
         return flops
 
     def total_flops(self, dtype: str = "bf16") -> float:
@@ -357,21 +363,18 @@ class ResourceConfig:
         return self.device_flops(dtype) * self.chip_count()
 
     @staticmethod
-    def with_tpu(tpu_type: str, slice_count: int = 1) -> ResourceConfig:
-        """Create a TPU resource config with sensible defaults."""
-        device = TpuConfig(type=tpu_type)  # type: ignore[arg-type]
-        return ResourceConfig(device=device, replicas=slice_count)
+    def with_tpu(tpu_type: str, slice_count: int = 1, **kwargs) -> ResourceConfig:
+        device = TpuConfig(variant=tpu_type)
+        return ResourceConfig(device=device, replicas=slice_count, **kwargs)
 
     @staticmethod
-    def with_gpu(gpu_type: str = "auto", count: int = 1) -> ResourceConfig:
-        """Create a GPU resource config with sensible defaults."""
-        device = GpuConfig(type=gpu_type, count=count)  # type: ignore[arg-type]
-        return ResourceConfig(device=device)
+    def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs) -> ResourceConfig:
+        device = GpuConfig(variant=gpu_type, count=count)
+        return ResourceConfig(device=device, **kwargs)
 
     @staticmethod
-    def with_cpu() -> ResourceConfig:
-        """Create a CPU-only resource config."""
-        return ResourceConfig(device=CpuConfig())
+    def with_cpu(**kwargs) -> ResourceConfig:
+        return ResourceConfig(device=CpuConfig(), **kwargs)
 
 
 @dataclass
@@ -401,39 +404,40 @@ class EnvironmentConfig:
         if not self.workspace and not self.docker_image:
             raise ValueError("Must specify either workspace or docker_image")
 
+    @staticmethod
+    def create(*args, **kw):
+        return create_environment(*args, **kw)
+
+
+@dataclass(frozen=True)
+class BinaryEntrypoint:
+    command: str
+    args: Sequence[str]
+
+
+@dataclass(frozen=True)
+class CallableEntrypoint:
+    callable: Callable[..., Any]
+    args: Sequence[Any] = field(default_factory=tuple)
+    kwargs: dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass(frozen=True)
 class Entrypoint:
-    """Job entrypoint specification.
+    callable_entrypoint: CallableEntrypoint | None = None
+    binary_entrypoint: BinaryEntrypoint | None = None
 
-    Args:
-        binary: Binary to execute (e.g., "python", "uv", "bash")
-        args: Command-line arguments for the binary
-        callable: Callable for direct execution
-        function_args: Keyword arguments to pass to callable
+    @staticmethod
+    def from_callable(
+        c: Callable[..., Any],
+        args: Sequence[Any] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> Self:
+        return Entrypoint(callable_entrypoint=CallableEntrypoint(callable=c, args=args, kwargs=kwargs or {}))
 
-    Examples:
-        Entrypoint(binary="python", args=["train.py", "--config", "config.yaml"])
-        Entrypoint(callable=train_fn, function_args={"config": config, "epochs": 100})
-        Entrypoint(callable=lambda: train_fn(config))
-    """
-
-    binary: str | None = None
-    args: Sequence[str] = field(default_factory=list)
-    callable: Callable[..., Any] | None = None
-    function_args: dict[str, Any] | None = None
-
-    def __post_init__(self):
-        if self.binary is None and self.callable is None:
-            raise ValueError("Must specify either binary or callable")
-        if self.binary is not None and self.callable is not None:
-            raise ValueError("Cannot specify both binary and callable")
-        if self.args and self.callable is not None:
-            raise ValueError("args only valid with binary, not callable")
-        if self.function_args is not None and self.callable is None:
-            raise ValueError("function_args only valid with callable, not binary")
-        if self.function_args is not None and not isinstance(self.function_args, dict):
-            raise ValueError("function_args must be a dictionary")
+    @staticmethod
+    def from_binary(command: str, args: Sequence[str]) -> Self:
+        return Entrypoint(binary_entrypoint=BinaryEntrypoint(command=command, args=args))
 
 
 @dataclass
@@ -452,6 +456,9 @@ class JobRequest:
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     environment: EnvironmentConfig | None = None
 
+    max_retries_failure: int = 0
+    max_retries_preemption: int = 100
+
     def __post_init__(self):
         if " " in self.name:
             raise ValueError("Job name must not contain spaces")
@@ -460,16 +467,28 @@ class JobRequest:
 JobId = NewType("JobId", str)
 
 
+class JobStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    STOPPED = "stopped"
+
+    @staticmethod
+    def finished(status: Self) -> bool:
+        return status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED)
+
+
 @dataclass
 class TaskStatus:
-    status: Literal["pending", "running", "succeeded", "failed", "stopped"]
+    status: JobStatus
     error_message: str | None = None
 
 
 @dataclass
 class JobInfo:
     job_id: JobId
-    status: Literal["pending", "running", "succeeded", "failed", "stopped"]
+    status: JobStatus
     tasks: list[TaskStatus]
     name: str
     error_message: str | None = None
@@ -598,19 +617,40 @@ class Cluster(ABC):
         """
         ...
 
-    @abstractmethod
-    @contextmanager
-    def connect(self):
-        """Establish connection to cluster."""
-        ...
+    def wait(self, job_id: JobId | Sequence[JobId], raise_on_failure: bool = False) -> JobInfo | list[JobInfo]:
+        """Block until the specified job(s) complete, returning final status.
 
-    def wait(self, job_id: JobId) -> JobInfo:
-        """Block until the specified job completes, returning its final status."""
+        Args:
+            job_id: Single job ID or sequence of job IDs to wait for
+            raise_on_failure: If True, raises RuntimeError when any job fails
+
+        Returns:
+            JobInfo for single job, or list of JobInfo for multiple jobs
+        """
+        if isinstance(job_id, str):
+            return self._wait_single(job_id, raise_on_failure)
+
+        # Multiple jobs: wait for all, then check for failures
+        results = [self._wait_single(jid, raise_on_failure=False) for jid in job_id]
+        if raise_on_failure:
+            failed = [r for r in results if r.status in (JobStatus.FAILED, JobStatus.STOPPED)]
+            if failed:
+                msg = "; ".join(f"{r.job_id}: {r.error_message}" for r in failed)
+                raise RuntimeError(f"{len(failed)} job(s) failed: {msg}")
+        return results
+
+    def _wait_single(self, job_id: JobId, raise_on_failure: bool = False) -> JobInfo:
+        """Wait for a single job to complete."""
         logger.info(f"Starting wait for job {job_id}")
+        sleep_secs = 0.1
+        max_sleep_secs = 10.0
 
         while True:
             info = self.poll(job_id)
-            if info.status in ["succeeded", "failed", "stopped"]:
+            if JobStatus.finished(info.status):
                 logger.info(f"Job {job_id} completed with status {info.status}")
+                if raise_on_failure and info.status in (JobStatus.FAILED, JobStatus.STOPPED):
+                    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
                 return info
-            time.sleep(10.0)
+            time.sleep(sleep_secs)
+            sleep_secs = min(sleep_secs * 2, max_sleep_secs)
