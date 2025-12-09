@@ -42,6 +42,8 @@ def create_test_rollout(
         response_logprobs=response_logprobs,
         token_rewards=token_rewards,
         episode_reward=episode_reward,
+        temperature=1.0,
+        is_truncated=False,
     )
 
 
@@ -76,12 +78,15 @@ def test_basic_conversion():
         "loss_weights",
         "loss_masks",
         "policy_logprobs",
+        "temperature",
+        "truncated",
     }
     assert set(result.keys()) == expected_keys
 
     # Check shapes - should be padded to max_tokens
     for _, value in result.items():
-        assert len(value) == 16
+        if isinstance(value, np.ndarray):
+            assert len(value) == 16
 
 
 def test_loss_mask_correct():

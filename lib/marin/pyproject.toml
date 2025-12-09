@@ -21,7 +21,6 @@ dependencies = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "jax==0.6.2",
     "haliax",
     "levanter[serve]",
     "lz4",
@@ -118,6 +117,18 @@ conflicts = [
         { extra = "cuda12" },
         { extra = "cpu" },
     ],
+    [
+        { extra = "vllm" },
+        { extra = "cpu" },
+    ],
+    [
+        { extra = "vllm" },
+        { extra = "tpu" },
+    ],
+    [
+        { extra = "vllm" },
+        { extra = "cuda12" },
+    ],
 ]
 
 [tool.uv.sources]
@@ -132,6 +143,7 @@ torch = [
     { index = "pytorch-cpu", extra="tpu" },
     # CUDA12 index only when --extra cuda12
     { index = "pytorch-cu128", extra = "cuda12" },
+    { index = "pytorch-cu128", extra = "vllm" },
 ]
 
 
@@ -161,6 +173,10 @@ cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
 tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
 
 cpu = ["jax==0.6.2", "torch>=2.7.0"]
+
+vllm = ["jax[tpu]==0.7.2", "vllm-tpu==0.11.1", "torch>=2.7.0"]
+
+math = ["pylatexenc", "sympy"]
 
 crawl = [
     "w3lib",
@@ -240,7 +256,7 @@ rl = [
 post_training = [
     "gcsfs",
     "transformers",
-    "flax==0.10.0",
+    "flax==0.11.1",
     "jaxtyping",
     "tyro==0.8.11",
     "tqdm",
