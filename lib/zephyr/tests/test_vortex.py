@@ -18,7 +18,7 @@ import pytest
 
 from zephyr import Dataset, create_backend
 from zephyr.expr import col
-from zephyr.readers import load_vortex
+from zephyr.readers import InputFileSpec, load_vortex
 from zephyr.writers import write_vortex_file
 
 
@@ -55,7 +55,8 @@ class TestVortexReader:
 
     def test_load_vortex_column_projection(self, vortex_file):
         """Test column selection (projection)."""
-        records = list(load_vortex(str(vortex_file), columns=["id", "name"]))
+        spec = InputFileSpec(path=str(vortex_file), columns=["id", "name"])
+        records = list(load_vortex(spec))
         assert len(records) == 100
         assert set(records[0].keys()) == {"id", "name"}
 

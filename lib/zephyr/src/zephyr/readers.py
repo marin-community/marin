@@ -41,15 +41,13 @@ logger = logging.getLogger(__name__)
 class InputFileSpec:
     """Specification for reading a file or portion of a file.
 
-    Used by LoadFileOp to specify what file to read and optional chunking.
-
     Attributes:
         path: Path to the file
         format: File format ("parquet", "jsonl", or "auto" to detect)
-        columns: Optional column projection (for parquet)
+        columns: List of columns to read
         row_start: Optional start row for chunked reading
         row_end: Optional end row for chunked reading
-        filter_expr: Optional filter expression for pushdown
+        filter_expr: Optional filter expression to apply
     """
 
     path: str
@@ -140,7 +138,7 @@ def load_jsonl(source: str | InputFileSpec) -> Iterator[dict]:
                 yield decoder.decode(line)
 
 
-def load_parquet(source: str | InputFileSpec, **kwargs) -> Iterator[dict]:
+def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
     """Load Parquet file and yield records as dicts.
 
     When given an InputFileSpec with row_start/row_end, reads only the exact rows
@@ -149,8 +147,8 @@ def load_parquet(source: str | InputFileSpec, **kwargs) -> Iterator[dict]:
     is pushed down to PyArrow for efficient filtering at read time.
 
     Args:
-        source: Path to Parquet file or InputFileSpec containing the path and optional row range.
-        **kwargs: Additional arguments to the ParquetFile.iter_batches() method
+        source: Path to Parquet file or InputFileSpec containing the path, columns,
+            row range, and filter expression.
 
     Yields:
         Records as dictionaries
@@ -165,87 +163,69 @@ def load_parquet(source: str | InputFileSpec, **kwargs) -> Iterator[dict]:
         ... )
         >>> output_files = list(backend.execute(ds))
     """
-    import pyarrow.parquet as pq
+    import pyarrow.dataset as pads
 
     spec = _as_spec(source)
-    if spec.columns is not None:
-        kwargs = {**kwargs, "columns": spec.columns}
+    columns = spec.columns
 
-    # Convert filter expression to PyArrow if provided
     pa_filter = None
     if spec.filter_expr is not None:
         from zephyr.expr import to_pyarrow_expr
 
         pa_filter = to_pyarrow_expr(spec.filter_expr)
 
-    with open_file(spec.path, "rb") as f:
-        parquet_file = pq.ParquetFile(f)
+    dataset = pads.dataset(spec.path, format="parquet")
 
-        if spec.row_start is not None and spec.row_end is not None:
-            # Read only row groups that overlap with [row_start, row_end)
-            row_groups_to_read = []
-            first_rg_start = 0  # Global row index where first selected row group starts
-            cumulative_rows = 0
-            for i in range(parquet_file.metadata.num_row_groups):
-                rg = parquet_file.metadata.row_group(i)
+    if spec.row_start is not None and spec.row_end is not None:
+        # Row range first: select rows by position, then apply filter
+        cumulative_rows = 0
+        for fragment in dataset.get_fragments():
+            for rg_fragment in fragment.split_by_row_group():
+                # Get row group size from RowGroupInfo (no data read)
+                rg_info = rg_fragment.row_groups[0]
+                rg_num_rows = rg_info.num_rows
                 rg_start = cumulative_rows
-                rg_end = cumulative_rows + rg.num_rows
+                rg_end = cumulative_rows + rg_num_rows
 
                 if rg_end > spec.row_start and rg_start < spec.row_end:
-                    if not row_groups_to_read:
-                        first_rg_start = rg_start
-                    row_groups_to_read.append(i)
+                    is_interior = rg_start >= spec.row_start and rg_end <= spec.row_end
+
+                    if is_interior:
+                        # Entirely within range: push filter down, yield all
+                        table = rg_fragment.to_table(columns=columns, filter=pa_filter)
+                        yield from table.to_pylist()
+                    else:
+                        # Boundary row group: slice first, then filter
+                        table = rg_fragment.to_table(columns=columns)
+                        local_start = max(0, spec.row_start - rg_start)
+                        local_end = min(rg_num_rows, spec.row_end - rg_start)
+                        sliced = table.slice(local_start, local_end - local_start)
+
+                        if pa_filter is not None:
+                            yield from sliced.filter(pa_filter).to_pylist()
+                        else:
+                            yield from sliced.to_pylist()
 
                 cumulative_rows = rg_end
                 if cumulative_rows >= spec.row_end:
-                    break
-
-            if pa_filter is not None:
-                # Use read_table with filter for row group subset
-                table = pq.read_table(
-                    f,
-                    columns=kwargs.get("columns"),
-                    filters=pa_filter,
-                )
-                # Slice to exact row range
-                slice_start = spec.row_start - first_rg_start
-                slice_end = spec.row_end - first_rg_start
-                yield from table.slice(slice_start, slice_end - slice_start).to_pylist()
-            else:
-                # Read selected row groups and filter to exact row range
-                global_row_idx = first_rg_start
-                for batch in parquet_file.iter_batches(row_groups=row_groups_to_read, **kwargs):
-                    for record in batch.to_pylist():
-                        if global_row_idx >= spec.row_start and global_row_idx < spec.row_end:
-                            yield record
-                        global_row_idx += 1
-                        if global_row_idx >= spec.row_end:
-                            return
-        elif pa_filter is not None:
-            # Use read_table with filter (ParquetFile.iter_batches doesn't support filter)
-            table = pq.read_table(
-                f,
-                columns=kwargs.get("columns"),
-                filters=pa_filter,
-            )
-            yield from table.to_pylist()
-        else:
-            for batch in parquet_file.iter_batches(**kwargs):
-                yield from batch.to_pylist()
+                    return
+    elif pa_filter is not None:
+        table = dataset.to_table(columns=columns, filter=pa_filter)
+        yield from table.to_pylist()
+    else:
+        for batch in dataset.to_batches(columns=columns):
+            yield from batch.to_pylist()
 
 
-def load_vortex(
-    source: str | InputFileSpec,
-    columns: list[str] | None = None,
-) -> Iterator[dict]:
+def load_vortex(source: str | InputFileSpec) -> Iterator[dict]:
     """Load records from a Vortex file with optional pushdown.
 
     Uses Vortex's PyArrow Dataset interface for filter/column pushdown.
     Supports row-range reading via take() for chunked parallel execution.
 
     Args:
-        source: Path to .vortex file or InputFileSpec
-        columns: Optional column projection
+        source: Path to .vortex file or InputFileSpec containing the path,
+            columns, row range, and filter expression.
 
     Yields:
         Records as dictionaries
@@ -263,7 +243,7 @@ def load_vortex(
     import vortex
 
     spec = _as_spec(source)
-    columns = spec.columns or columns
+    columns = spec.columns
 
     # Convert filter to PyArrow expression if provided
     pa_filter = None
@@ -305,15 +285,12 @@ SUPPORTED_EXTENSIONS = tuple(
 )
 
 
-def load_file(source: str | InputFileSpec, columns: list[str] | None = None, **parquet_kwargs) -> Iterator[dict]:
-    """Load records from file, auto-detecting JSONL or Parquet format.
+def load_file(source: str | InputFileSpec) -> Iterator[dict]:
+    """Load records from file, auto-detecting JSONL, Parquet, or Vortex format.
 
     Args:
-        source: Path to file or InputFileSpec containing the path.
-        columns: Optional list of column names to select. For Parquet files, this
-            enables efficient column pushdown. For JSONL files, only specified
-            columns that exist in each record are included.
-        **parquet_kwargs: Additional arguments for load_parquet (ignored for JSONL)
+        source: Path to file or InputFileSpec containing the path, columns,
+            row range, and filter expression.
 
     Yields:
         Parsed records as dictionaries
@@ -323,7 +300,6 @@ def load_file(source: str | InputFileSpec, columns: list[str] | None = None, **p
 
     Example:
         >>> backend = create_backend("ray", max_parallelism=10)
-        >>> # Works with mixed JSONL and Parquet files
         >>> ds = (Dataset
         ...     .from_files("/input/**/*.jsonl")
         ...     .load_file()
@@ -331,32 +307,24 @@ def load_file(source: str | InputFileSpec, columns: list[str] | None = None, **p
         ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
         ... )
         >>> output_files = list(backend.execute(ds))
-        >>> # Select specific columns
-        >>> ds = (Dataset
-        ...     .from_files("/input/**/*.parquet")
-        ...     .load_file(columns=["id", "text", "score"])
-        ...     .write_jsonl("/output/data-{shard:05d}.jsonl.gz")
-        ... )
     """
     spec = _as_spec(source)
-    effective_columns = columns if columns is not None else spec.columns
 
     if not spec.path.endswith(SUPPORTED_EXTENSIONS):
         raise ValueError(f"Unsupported extension: {spec.path}.")
+
     if spec.path.endswith(".parquet"):
-        if effective_columns is not None:
-            parquet_kwargs = {**parquet_kwargs, "columns": effective_columns}
-        yield from load_parquet(spec, **parquet_kwargs)
+        yield from load_parquet(spec)
     elif spec.path.endswith(".vortex"):
-        yield from load_vortex(spec, columns=effective_columns)
+        yield from load_vortex(spec)
     else:
         # For JSONL, apply filter and column selection manually
         filter_fn = spec.filter_expr.evaluate if spec.filter_expr is not None else None
         for record in load_jsonl(spec):
             if filter_fn is not None and not filter_fn(record):
                 continue
-            if effective_columns is not None:
-                yield {k: v for k, v in record.items() if k in effective_columns}
+            if spec.columns is not None:
+                yield {k: v for k, v in record.items() if k in spec.columns}
             else:
                 yield record
 
