@@ -31,6 +31,8 @@ from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 
+from experiments.evals.evals import default_eval
+from experiments.evals.task_configs import MMLU_5_SHOT, EvalTaskConfig
 from experiments.common_pile.tokenize_common_pile import comma_main_mixture
 from experiments.defaults import default_tokenize, default_train
 from experiments.llama import compute_num_parameters, llama3_tokenizer
@@ -130,6 +132,7 @@ class IsoFlopSweepConfig:
     lr_constant: float = 0.33
     min_hidden_pow: int = 9
     max_hidden_pow: int = 12
+    eval_tasks: tuple[EvalTaskConfig, ...] | None = (MMLU_5_SHOT,)
     base_optimizer_config: OptimizerConfig = dataclasses.field(
         default_factory=lambda: CautiousConfig(
             learning_rate=1.0,  # Placeholder
@@ -263,11 +266,21 @@ def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
         yield (hidden_size, intermediate_dim, num_layers, n_heads, n_kv_heads, batch_size, train_steps, lr, b2)
 
 
-def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> list[ExecutorStep]:
-    """Generate executor steps for an ISOFlop sweep."""
+def generate_isoflop_steps(
+    config: IsoFlopSweepConfig,
+    experiment_name: str,
+) -> tuple[list[ExecutorStep], list[tuple[float, int, int, int, int]]]:
+    """Generate executor steps for an ISOFlop sweep.
 
-    steps: list[ExecutorStep] = []
-    metadata = []
+    Returns:
+        A tuple of:
+        - steps: Training and evaluation ExecutorSteps for the sweep.
+        - metadata: (budget, hidden_size, num_layers, batch_size, train_steps) for each training run.
+    """
+
+    train_steps_list: list[ExecutorStep] = []
+    eval_steps: list[ExecutorStep] = []
+    metadata: list[tuple[float, int, int, int, int]] = []
     vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
 
     for budget in config.budgets:
@@ -310,7 +323,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
             )
 
             run_name = f"isoflop-{budget:.0e}-d{hidden_size}-L{num_layers}-B{batch_size}-{experiment_name}"
-            step = default_train(
+            train_step = default_train(
                 name=run_name,
                 tokenized=config.tokenized_dataset,
                 model_config=model_cfg,
@@ -332,9 +345,20 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                 "isoflop",
                 run_name,
             )
-            steps.append(step.with_output_path(static_output_path))
+            train_step = train_step.with_output_path(static_output_path)
+            train_steps_list.append(train_step)
 
-    return steps, metadata
+            # Evaluation on the latest checkpoint for each ISOFlop run.
+            if config.eval_tasks:
+                eval_step = default_eval(
+                    train_step,
+                    resource_config=train_cfg.resources,
+                    evals=config.eval_tasks,
+                )
+                eval_steps.append(eval_step)
+
+    all_steps: list[ExecutorStep] = [*train_steps_list, *eval_steps]
+    return all_steps, metadata
 
 
 def generate_isoflop_sweep(
