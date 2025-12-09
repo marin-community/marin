@@ -709,6 +709,10 @@ class Olmo3Config(HFCompatConfig):
         rope_config = RotaryEmbeddingsConfig.from_hf_config(
             getattr(hf_config, "rope_theta", None), getattr(hf_config, "rope_scaling", None)
         )
+        hf_sliding_window = getattr(hf_config, "sliding_window", None)
+        if hf_sliding_window is None:
+            hf_sliding_window = getattr(hf_config, "max_position_embeddings", None) or cls.sliding_window
+
         return Olmo3Config(
             seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
@@ -722,7 +726,7 @@ class Olmo3Config(HFCompatConfig):
             tie_word_embeddings=hf_config.tie_word_embeddings,
             attention_bias=hf_config.attention_bias,
             attention_dropout=hf_config.attention_dropout,
-            sliding_window=getattr(hf_config, "sliding_window", None),
+            sliding_window=hf_sliding_window,
             layer_types=tuple(
                 getattr(hf_config, "layer_types", ["sliding_attention"] * hf_config.num_hidden_layers)
             ),
@@ -818,7 +822,7 @@ class Olmo3Attention(ModuleWithStateDictSerialization, Attention):
     sliding_window: Optional[int] = eqx.field(static=True, default=None)
 
     @staticmethod
-    def init(config: AttentionConfig, *, key):
+    def init(config: AttentionConfig, *, key, sliding_window: int | None = None):
         attn_config = config.attention_config() if hasattr(config, "attention_config") else config
         base = Attention.init(attn_config, key=key)
         return Olmo3Attention(
@@ -830,7 +834,7 @@ class Olmo3Attention(ModuleWithStateDictSerialization, Attention):
             base.q_norm,
             base.k_norm,
             base.rot_embs,
-            sliding_window=None,
+            sliding_window=int(sliding_window) if sliding_window is not None else None,
         )
 
     def __call__(self, x, mask, *, key=None, pos_ids=None):
@@ -862,10 +866,9 @@ class Olmo3DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
     def init(config: Olmo3Config, layer_sliding_window: int, *, key):
         k_attn, k_mlp = jrandom.split(key, 2)
 
-        sliding = None if layer_sliding_window < 0 else int(layer_sliding_window)
+        sliding = None if layer_sliding_window is None or layer_sliding_window < 0 else int(layer_sliding_window)
 
-        attn = Olmo3Attention.init(config.attention_config(), key=k_attn)
-        attn = eqx.tree_at(lambda a: a.sliding_window, attn, sliding)
+        attn = Olmo3Attention.init(config.attention_config(), key=k_attn, sliding_window=sliding)
         mlp = Olmo3MLP.init(
             config.Embed,
             config.Mlp,
