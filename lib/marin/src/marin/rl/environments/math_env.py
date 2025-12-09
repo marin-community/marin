@@ -26,7 +26,6 @@ from marin.rl.environments.tinker_environments.math_env import (
     MathEnv as TinkerMathEnvBase,
     _get_hendrycks_math_test,
     _get_hendrycks_math_train,
-    parse_response_for_stop_token,
 )
 from marin.rl.environments.tinker_environments.math_grading import extract_boxed, grade_answer, normalize_answer
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
@@ -68,7 +67,7 @@ class MathEnv(MarinEnv):
         self.max_eval_examples = max_eval_examples
         self.format_coef = format_coef
         self._rng = np.random.default_rng(seed)
-        
+
         # Get few-shot prefix from TinkerMathEnvBase
         self.fewshot_prefix = TinkerMathEnvBase.standard_fewshot_prefix()
 
@@ -238,20 +237,20 @@ class MathEnv(MarinEnv):
         """Score a single generated response text using MathEnv logic."""
 
         decoded_response = response_text.strip()
-        
+
         # Penalize truncated responses
         parse_success = finish_reason != "length"
-        
+
         # Check format
         format_valid = float(parse_success and self.check_format(decoded_response))
-        
+
         true_answer = example.processed_answer.strip()
-        
+
         # Grade using Tinker's grading
         correct_answer = float(self.check_answer(decoded_response, true_answer))
-        
+
         reward = self.format_coef * (format_valid - 1) + correct_answer
-        
+
         return reward, format_valid, correct_answer
 
     def get_eval_examples(self, n_examples: int) -> list[dict[str, Any]]:
@@ -278,20 +277,14 @@ class MathEnv(MarinEnv):
         boxed_answer = last_boxed_only_string(raw_answer)
         # Use Tinker's normalize_answer instead of our own
         cleaned_answer = normalize_answer(boxed_answer) if boxed_answer else normalize_answer(raw_answer)
-        
+
         # Build chat messages with few-shot examples
         question_text = self.add_instruction(raw_prompt)
-        messages = self.fewshot_prefix + [
-            {"role": "user", "content": question_text}
-        ]
-        
+        messages = [*self.fewshot_prefix, {"role": "user", "content": question_text}]
+
         # Apply chat template to get the formatted prompt
         if self.tokenizer:
-            processed_prompt = self.tokenizer.apply_chat_template(
-                messages, 
-                tokenize=False, 
-                add_generation_prompt=True
-            )
+            processed_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         else:
             # Fallback if tokenizer not available during init
             processed_prompt = question_text

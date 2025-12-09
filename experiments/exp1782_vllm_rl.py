@@ -27,7 +27,7 @@ from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig
 
 from marin.execution.executor import (
     ExecutorStep,
@@ -409,9 +409,7 @@ def main():
         max_rollout_step_delay=1,
     )
 
-    experiment_configs = [
-        llama_8b
-    ]
+    experiment_configs = [llama_8b]
     experiments = []
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     for experiment_config in experiment_configs:
