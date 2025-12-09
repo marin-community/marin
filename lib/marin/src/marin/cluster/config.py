@@ -209,7 +209,16 @@ CONFIGS = {
         "BUCKET": "marin-us-east5",
         "DOCKER_TAG": "20251209",
         "tpu_generation": "v5p",
-        "min_workers": 2,
+        "min_workers": 1,
+        "worker_targets": {
+            "v5p-8": 2,
+            "v5p-16": 0,
+            "v5p-32": 0,
+            "v5p-64": 0,
+            "v5p-128": 0,
+            "v5p-256": 0,
+            "v5p-512": 0,
+        },
         "VLLM": True,
     },
     "marin-eu-west4-a": {
