@@ -166,7 +166,6 @@ download_transform = [
     "html2text==2024.2.26",               # TODO :: Check pin?
     "htmlmin==0.1.12",                    # TODO :: Check usage | pin?
     "markdownify==0.12.1",                # TODO :: Check usage | pin?
-    "py7zr",
     "readabilipy",
     "readability-lxml",
     "lxml[html_clean]",

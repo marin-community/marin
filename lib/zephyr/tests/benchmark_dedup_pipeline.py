@@ -15,7 +15,10 @@
 
 """Benchmark Zephyr deduplication pipeline (generate docs → map → deduplicate by simhash → write).
 
-Usage: uv run python tests/benchmark_dedup_pipeline.py --backends ray threadpool [--profile]
+Usage:
+    uv run python tests/benchmark_dedup_pipeline.py                           # Run benchmark with defaults
+    uv run python tests/benchmark_dedup_pipeline.py benchmark --backends ray  # Benchmark specific backend
+    uv run python tests/benchmark_dedup_pipeline.py write-input --output-dir /tmp/input  # Just generate input files
 """
 
 import logging
@@ -140,7 +143,15 @@ def run_benchmark(
         elif backend_type == "threadpool":
             backend = create_backend("threadpool", max_parallelism=16)
         elif backend_type == "ray":
-            backend = create_backend("ray", max_parallelism=16, memory="2GB")
+            import ray
+
+            ray.init(
+                address="local",
+                resources={"head_node": 1},
+                num_cpus=16,
+                runtime_env={"working_dir": None},
+            )
+            backend = create_backend("ray", max_parallelism=16)
         else:
             raise ValueError(f"Unknown backend: {backend_type}")
 
@@ -194,9 +205,38 @@ def run_benchmark(
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
-def setup_input_files(num_docs: int, words_per_doc: int, num_input_files: int) -> tuple[str, float]:
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx: click.Context) -> None:
+    """Benchmark Zephyr deduplication pipeline."""
+    if ctx.invoked_subcommand is None:
+        # Default to benchmark command with default args
+        ctx.invoke(benchmark)
+
+
+@cli.command("write-input")
+@click.option("--output-dir", type=click.Path(path_type=Path), required=True, help="Directory to write input files")
+@click.option("--num-docs", type=int, default=1_000_000, help="Number of documents to generate")
+@click.option("--words-per-doc", type=int, default=1000, help="Number of words per document")
+@click.option("--num-input-files", type=int, default=10, help="Number of input parquet files to create")
+def write_input(
+    output_dir: Path,
+    num_docs: int,
+    words_per_doc: int,
+    num_input_files: int,
+) -> None:
+    """Generate and write input files for benchmarking."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    setup_input_files(num_docs, words_per_doc, num_input_files, str(output_dir))
+    print(f"\nInput files written to: {output_dir}")
+
+
+def setup_input_files(
+    num_docs: int, words_per_doc: int, num_input_files: int, input_dir: str | None = None
+) -> tuple[str, float]:
     """Generate input files and return directory path and generation time."""
-    input_dir = tempfile.mkdtemp(prefix="zephyr_benchmark_input_")
+    if input_dir is None:
+        input_dir = tempfile.mkdtemp(prefix="zephyr_benchmark_input_")
 
     print(f"Generating {num_docs:,} documents and writing to {num_input_files} files...")
     gen_start = time.time()
@@ -212,7 +252,7 @@ def setup_input_files(num_docs: int, words_per_doc: int, num_input_files: int) -
     return input_dir, gen_time
 
 
-@click.command()
+@cli.command("benchmark")
 @click.option(
     "--backends",
     multiple=True,
@@ -233,16 +273,16 @@ def setup_input_files(num_docs: int, words_per_doc: int, num_input_files: int) -
     default=None,
     help="Directory for profile output (default: tests/profiles/)",
 )
-def main(
-    backends: tuple[str, ...],
-    num_docs: int,
-    words_per_doc: int,
-    num_input_files: int,
-    input_dir: str | None,
-    profile: bool,
-    profile_output: Path | None,
+def benchmark(
+    backends: tuple[str, ...] = ("threadpool",),
+    num_docs: int = 1_000_000,
+    words_per_doc: int = 1000,
+    num_input_files: int = 10,
+    input_dir: str | None = None,
+    profile: bool = False,
+    profile_output: Path | None = None,
 ) -> None:
-    """Benchmark Zephyr deduplication pipeline."""
+    """Run benchmark on deduplication pipeline."""
     backends_list = list(backends) if backends else ["threadpool"]
 
     # Handle profiling mode - generate input once and subprocess with py-spy
@@ -289,6 +329,7 @@ def main(
                     "--",
                     sys.executable,
                     __file__,
+                    "benchmark",
                     "--backends",
                     backend,
                     "--num-docs",
@@ -333,9 +374,10 @@ def main(
     should_cleanup = input_dir is None
     if should_cleanup:
         print()
-        input_dir, gen_time = setup_input_files(num_docs, words_per_doc, num_input_files)
+        temp_input_dir, gen_time = setup_input_files(num_docs, words_per_doc, num_input_files)
     else:
         gen_time = 0.0
+        temp_input_dir = input_dir
         print(f"Using existing input directory: {input_dir}")
 
     try:
@@ -343,7 +385,7 @@ def main(
         results = []
         for backend in backends_list:
             try:
-                result = run_benchmark(backend, input_dir, num_docs, num_input_files)
+                result = run_benchmark(backend, temp_input_dir, num_docs, num_input_files)
                 result["gen_time"] = gen_time
                 results.append(result)
             except Exception as e:
@@ -366,10 +408,10 @@ def main(
     finally:
         # Only cleanup if we generated the input
         if should_cleanup:
-            print(f"\nCleaning up input directory {input_dir}...")
-            shutil.rmtree(input_dir, ignore_errors=True)
+            print(f"\nCleaning up input directory {temp_input_dir}...")
+            shutil.rmtree(temp_input_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    main()
+    cli()

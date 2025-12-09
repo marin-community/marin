@@ -49,7 +49,7 @@ def create_backend(
     Examples:
         >>> backend = create_backend()  # Auto-detect
         >>> backend = create_backend("sync")
-        >>> backend = create_backend("ray", max_parallelism=100, memory="2GB")
+        >>> backend = create_backend("ray", max_parallelism=100)
         >>> backend = create_backend("ray", max_parallelism=10, max_retries=3)
     """
     context = fray_job_ctx(

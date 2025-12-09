@@ -61,7 +61,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_CHUNK_SIZE = 100_000
 
 # Default number of parallel chunks when splitting files for intra-shard parallelism
-DEFAULT_INTRA_SHARD_PARALLELISM = 8
+DEFAULT_INTRA_SHARD_PARALLELISM = 1
 
 # Size of micro-batches yielded from parallel chunk workers to reduce overhead
 DEFAULT_MICRO_BATCH_SIZE = 1024
