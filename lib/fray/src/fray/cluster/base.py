@@ -27,8 +27,6 @@ from typing import Any, Literal, NewType, Self
 
 logger = logging.getLogger(__name__)
 
-DeviceKind = Literal["cpu", "gpu", "tpu"]
-
 TpuType = Literal[
     "v4-8",
     "v4-16",
@@ -244,8 +242,7 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
-# one of "cpu", "gpu", or tpu sub-type, e.g. "v4-8", "v5p-8", "v6e-1", etc.
-DeviceType = NewType("DeviceType", str)
+DeviceKind = Literal["cpu", "gpu", "tpu"]
 
 
 @dataclass(frozen=True)
@@ -253,7 +250,7 @@ class CpuConfig:
     """CPU-only device configuration."""
 
     kind: DeviceKind = "cpu"
-    variant: None = None
+    variant: str = "cpu"
 
     def chip_count(self) -> int:
         """CPU has no accelerator chips."""

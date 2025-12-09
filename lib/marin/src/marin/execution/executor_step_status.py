@@ -124,14 +124,26 @@ class StatusFile:
             data = json.loads(blob.download_as_string())
             return (blob.generation, Lease(**data))
         else:
-            if not self.fs.exists(self._lock_path):
+            import fcntl
+
+            try:
+                # Use flock to avoid reading partially written files
+                with open(self._lock_path, "r") as f:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+                    content = f.read()
+                    if not content:
+                        return (0, None)
+                    data = json.loads(content)
+                return (1, Lease(**data))
+            except FileNotFoundError:
                 return (0, None)
-            with self.fs.open(self._lock_path, "r") as f:
-                data = json.load(f)
-            return (1, Lease(**data))
 
     def _write_lock(self, lease: Lease, if_generation_match: int) -> None:
-        """Write LOCK file with generation precondition (GCS only)."""
+        """Write LOCK file with generation precondition.
+
+        On GCS, uses generation-based conditional writes.
+        On local, uses atomic rename then read-back to verify.
+        """
         data = json.dumps(asdict(lease))
 
         if self._is_gcs:
@@ -141,10 +153,22 @@ class StatusFile:
             blob = bucket.blob(blob_path)
             blob.upload_from_string(data, if_generation_match=if_generation_match)
         else:
+            import fcntl
+
             parent = os.path.dirname(self._lock_path)
-            if not self.fs.exists(parent):
-                self.fs.makedirs(parent, exist_ok=True)
-            with self.fs.open(self._lock_path, "w") as f:
+            os.makedirs(parent, exist_ok=True)
+
+            # Use flock on the lock file itself for mutual exclusion
+            with open(self._lock_path, "a+") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                f.seek(0)
+                content = f.read()
+                if content:
+                    current = Lease(**json.loads(content))
+                    if not current.is_stale() and current.worker_id != lease.worker_id:
+                        raise FileExistsError(f"Lock held by {current.worker_id}")
+                f.seek(0)
+                f.truncate()
                 f.write(data)
 
     def refresh_lock(self) -> None:
@@ -179,6 +203,9 @@ class StatusFile:
         lease = Lease(worker_id=self.worker_id, timestamp=time.time())
         try:
             self._write_lock(lease, if_generation_match=generation)
+        except FileExistsError:
+            logger.info("[%s] Lost lock race", self.worker_id)
+            return False
         except Exception as e:
             if self._is_gcs and "PreconditionFailed" in type(e).__name__:
                 logger.info("[%s] Lost lock race", self.worker_id)

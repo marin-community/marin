@@ -214,7 +214,7 @@ def test_force_run_failed():
     cleanup_log(log)
 
 
-def test_status_actor_one_executor_waiting_for_another():
+def test_status_actor_one_executor_waiting_for_another(count: int):
     # Test when 2 experiments have a step in common and one waits for another to finish
     with tempfile.NamedTemporaryFile() as file:
         with open(file.name, "w") as f:
@@ -606,15 +606,7 @@ def test_parent_will_run_if_some_child_is_not_skippable():
 
 
 def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
-    """Test taking over a stale lock from a dead worker and then refreshing it.
-
-    This replicates the scenario where:
-    1. Worker A acquires a lock and dies (lock becomes stale)
-    2. Worker B takes over the stale lock
-    3. Worker B tries to refresh the lock (heartbeat)
-
-    This should work but was failing in production.
-    """
+    """Test taking over a stale lock from a dead worker and then refreshing it."""
     from marin.execution.executor_step_status import HEARTBEAT_TIMEOUT, Lease
 
     # Simulate worker A creating a stale lock (as if it died)
@@ -641,11 +633,10 @@ def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
     _, lease_after_takeover = live_worker._read_lock_with_generation()
     assert lease_after_takeover.worker_id == "live-worker"
 
-    # Now try to refresh (this is what the heartbeat thread does)
+    # Now try to refresh
     time.sleep(0.1)
     live_worker.refresh_lock()
 
-    # Verify refresh worked
     _, lease_after_refresh = live_worker._read_lock_with_generation()
     assert lease_after_refresh.worker_id == "live-worker"
     assert lease_after_refresh.timestamp > lease_after_takeover.timestamp
