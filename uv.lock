@@ -3429,7 +3429,6 @@ requires-dist = [
     { name = "haliax", editable = "lib/haliax" },
     { name = "haliax", marker = "extra == 'tokenize-train'", editable = "lib/haliax" },
     { name = "html2text", marker = "extra == 'download-transform'", specifier = "==2024.2.26" },
-    { name = "htmlmin", marker = "extra == 'download-transform'" },
     { name = "htmlmin", marker = "extra == 'download-transform'", specifier = "==0.1.12" },
     { name = "huggingface-hub", marker = "extra == 'quality-dedup-consolidate'" },
     { name = "immutabledict", marker = "extra == 'eval'" },

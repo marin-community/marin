@@ -251,7 +251,7 @@ def main(config: ExecutorMainConfig):
         # start Ray explicitly and set it as the current cluster
         import ray
 
-        ray.init(resources={"cpu": 8, "head_node": 1})
+        ray.init(resources={"head_node": 1}, runtime_env={"working_dir": None}, num_cpus=16)
         set_current_cluster(create_cluster("ray"))
 
         # path to synthetic test data
