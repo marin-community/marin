@@ -40,7 +40,7 @@ def test_causal_mask_blocking():
     mask = AttentionMask.causal()
 
     blocked_mask = mask.blocked(pos, 16).blocked(key_pos, 16)
-    assert blocked_mask.Pos.size == 128 // 16
+    assert blocked_mask.max_Pos.size == 128 // 16
     assert blocked_mask.KeyPos.size == 128 // 16
 
     mat_blocked = blocked_mask.materialize()
