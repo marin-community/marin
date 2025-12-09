@@ -272,7 +272,10 @@ class GpuConfig:
         """Peak FLOP/s for a single GPU."""
         from fray.cluster.device_flops import device_flops
 
-        return device_flops(self.type, dtype)
+        flops = device_flops(self.type, dtype)
+        if flops is None:
+            raise ValueError(f"Unknown device/dtype: {self.type}/{dtype}")
+        return flops
 
     def total_flops(self, dtype: str = "bf16") -> float:
         """Total peak FLOP/s across all GPUs."""
@@ -303,7 +306,10 @@ class TpuConfig:
         """Peak FLOP/s for a single TPU chip."""
         from fray.cluster.device_flops import device_flops
 
-        return device_flops(self.type, dtype)
+        flops = device_flops(self.type, dtype)
+        if flops is None:
+            raise ValueError(f"Unknown device/dtype: {self.type}/{dtype}")
+        return flops
 
     def total_flops(self, dtype: str = "bf16") -> float:
         """Total peak FLOP/s across all TPU chips."""
