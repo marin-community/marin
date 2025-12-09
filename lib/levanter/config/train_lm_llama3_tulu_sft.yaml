@@ -18,7 +18,7 @@ data:
 
 model:  # 8B llama3 class model from sft_tootsie_mixture.yaml
   type: llama
-  seq_len: 4096
+  max_seq_len: 4096
   hidden_dim: 4096
   intermediate_dim: 14336
   num_layers: 32
@@ -31,6 +31,7 @@ model:  # 8B llama3 class model from sft_tootsie_mixture.yaml
   rope:
     type: "llama3"
 
+train_seq_len: 4096
 trainer:
   seed: 0
   tracker:

@@ -156,7 +156,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
             # Update seq_len for inference
             model_config = dataclasses.replace(
                 model_config,
-                seq_len=config.max_input_length + config.max_output_length,
+                max_seq_len=config.max_input_length + config.max_output_length,
             )
             logger.info(f"Model config: {model_config}")
 

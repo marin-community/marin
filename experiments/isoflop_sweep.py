@@ -283,7 +283,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
             b2,
         ) in candidate_configs(config, budget):
             model_cfg = Qwen3Config(
-                seq_len=config.seq_len,
+                max_seq_len=config.seq_len,
                 hidden_dim=hidden_size,
                 intermediate_dim=intermediate_dim,
                 num_heads=n_heads,

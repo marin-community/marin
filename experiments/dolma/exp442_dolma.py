@@ -58,7 +58,7 @@ olmoish_1b_config = LlamaConfig(
     intermediate_dim=7168,
     num_heads=16,
     num_kv_heads=16,
-    seq_len=2048,
+    max_seq_len=2048,
     tie_word_embeddings=True,
     # they don't learn the layer norm weights
     use_layer_norm_weight=False,

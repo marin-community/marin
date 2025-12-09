@@ -29,7 +29,7 @@ from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 logger = logging.getLogger("ray")
 
 moe_300m = MixtralConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=768,
     intermediate_dim=768,
     num_heads=12,

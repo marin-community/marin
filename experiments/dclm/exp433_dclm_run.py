@@ -82,7 +82,7 @@ dclm_baseline_only_config_wrong = lm_mixture_data_config(
 # hyperparams and numbers below are chosen to replicate the numbers in https://arxiv.org/abs/2406.11794.
 # Table 1 (page 5) has # model parameters and # training tokens. Table 11, page 43 has the hyperparameters.
 llama_1_4b_dclm = LlamaConfig(
-    seq_len=2048,
+    max_seq_len=2048,
     hidden_dim=2048,
     intermediate_dim=8192,
     num_heads=16,

@@ -38,7 +38,7 @@ from levanter.utils.activation import ActivationFunction, ActivationFunctionEnum
 
 @dataclass(frozen=True)
 class HyenaConfig:
-    seq_len: int = 1024  # l_max from PyTorch impl
+    max_seq_len: int = 1024  # l_max from PyTorch impl
     hidden_dim: int = 768  # d_model from PyTorch impl
     num_heads: int = 1
 
@@ -66,11 +66,11 @@ class HyenaConfig:
     use_bias: bool = True  # Whether to use bias in linear layers
 
     # Axes
-    Pos = property(lambda self: Axis(name="position", size=self.seq_len))
+    Pos = property(lambda self: Axis(name="position", size=self.max_seq_len))
     KeyPos = property(lambda self: self.Pos.alias("key_position"))
     Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
     Block = property(lambda self: Axis(name="blocks", size=self.num_blocks))
-    PosPerBlock = property(lambda self: Axis(name="pos_per_block", size=self.seq_len // self.num_blocks))
+    PosPerBlock = property(lambda self: Axis(name="pos_per_block", size=self.max_seq_len // self.num_blocks))
     FilterOrder = property(lambda self: Axis(name="hyena_filter_order", size=self.filter_order))
     FilterEmbed = property(lambda self: Axis(name="hyena_filter_embed", size=self.filter_emb_dim))
     HeadSizeOrderMinus1 = property(
@@ -87,8 +87,8 @@ class HyenaConfig:
     def __post_init__(self):
         if self.hidden_dim % self.num_heads:
             raise ValueError(f"hidden_dim {self.hidden_dim} must be divisible by num_heads {self.num_heads}")
-        if self.seq_len % self.num_blocks:
-            raise ValueError(f"seq_len {self.seq_len} must be divisible by num_blocks {self.num_blocks}")
+        if self.max_seq_len % self.num_blocks:
+            raise ValueError(f"seq_len {self.max_seq_len} must be divisible by num_blocks {self.num_blocks}")
 
 
 class PositionalEmbedding(eqx.Module):

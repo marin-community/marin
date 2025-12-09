@@ -31,7 +31,7 @@ logger = logging.getLogger("ray")
 # Configuration for a ~75M parameter model with parallel attention/MLP computation
 # Matches the standard llama_75m config from experiments/llama.py
 parallel_llama_75m = ParallelLlamaConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=256,
     intermediate_dim=896,
     num_heads=4,

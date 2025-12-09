@@ -5,6 +5,7 @@ model:
   type: llama
 initialize_from_hf: true
 use_hf_model_config: true
+train_seq_len: 4096
 trainer:
   tracker:
     type: wandb
