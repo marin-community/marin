@@ -48,6 +48,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 
 import equinox as eqx
+import numpy as np
 import jax.random as jrandom
 from jaxtyping import PRNGKeyArray
 
@@ -472,11 +473,24 @@ def _batch_sizes() -> dict[str, int]:
     return {"130m": 128, "300m": 128, "520m": 128, "1_2b": 256}
 
 
+def _lr_multipliers(start: float = 1.0, stop: float = 2.5, step: float = 0.5) -> list[float]:
+    """Generate LR multipliers for sweep. Paper suggests training with increased LR."""
+    vals = np.arange(start, stop + step / 2, step)  # +step/2 to include stop
+    return [float(v) for v in vals]
+
+
+def _format_multiplier_label(mult: float) -> str:
+    s = f"{mult:.6g}"
+    s = s.rstrip("0").rstrip(".") if "." in s else s
+    return s.replace(".", "_")
+
+
 def build_run(
     size: str,
     use_gate: bool,
     *,
     use_gpu: bool = False,
+    lr_multiplier: float | None = None,
 ) -> tuple[str, SpeedrunConfig]:
     sizes = _size_presets()
     if size not in sizes:
@@ -486,10 +500,15 @@ def build_run(
     batch = _batch_sizes()[size]
     seq_len = model_cfg.seq_len
     params = int(model_cfg.total_trainable_params(llama3_tokenizer_vocab_size))
-    print(params)
     steps = _get_num_train_steps(params, batch, seq_len, tpp=20)
 
     muon = _muon_presets()[size]
+    if lr_multiplier is not None:
+        muon = dataclasses.replace(
+            muon,
+            learning_rate=muon.learning_rate * lr_multiplier,
+            adam_lr=muon.adam_lr * lr_multiplier,
+        )
     resources = _resource_presets(use_gpu=use_gpu)[size]
 
     train = SimpleTrainConfig(
@@ -501,10 +520,12 @@ def build_run(
         steps_per_hf_export=-1,  # disable checkpointing
     )
 
-    run_name = f"hacktx_{size}_{'attngate' if use_gate else 'stdattn'}_{seq_len}_splash"
+    lr_tag = f"_lr_x{_format_multiplier_label(lr_multiplier)}" if lr_multiplier is not None else ""
+    run_name = f"hacktx_{size}_{'attngate' if use_gate else 'stdattn'}_{seq_len}_splash_lr_sweep{lr_tag}"
     desc = (
         f"Hackable Transformer ({size}); "
-        f"{'Gated Attention' if use_gate else 'Std Attention'} (Splash)"
+        f"{'Gated Attention' if use_gate else 'Std Attention'} (Splash); "
+        f"LR sweep multiplier={lr_multiplier if lr_multiplier is not None else 1.0:g}"
     )
     cfg = SpeedrunConfig(author=AUTHOR, description=desc, model_config=model_cfg, train_config=train)
     return run_name, cfg
@@ -530,7 +551,10 @@ if __name__ == "__main__":
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
     use_gate = True
     steps = []
+    # Sweep LR from 1x to 4x at 0.5x increments (paper suggests higher LR for gated attention)
+    lr_mults = _lr_multipliers(start=1.0, stop=4.0, step=0.5)
     for s in sizes:
-        name, cfg = build_run(s, use_gate, use_gpu=use_gpu)
-        steps.extend(default_speedrun(name, cfg))
-    executor_main(steps=steps, description="Hackable transformer gated-attention sweep")
+        for m in lr_mults:
+            name, cfg = build_run(s, use_gate, use_gpu=use_gpu, lr_multiplier=m)
+            steps.extend(default_speedrun(name, cfg))
+    executor_main(steps=steps, description="Hackable transformer gated-attention LR sweep")
