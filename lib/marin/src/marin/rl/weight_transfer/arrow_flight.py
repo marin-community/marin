@@ -43,10 +43,10 @@ import jax
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
+from fray.job.context import JobContext, fray_job_ctx
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
-from fray.job.context import JobContext, fray_job_ctx
 from levanter.utils.jax_utils import barrier_sync
 
 from .base import (
@@ -373,7 +373,7 @@ class ArrowFlightServer(WeightTransferServer):
         self.metrics = WeightTransferServerMetrics()
         self._ctx: JobContext = fray_job_ctx()
         self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True
+            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
         )
         logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
 
@@ -469,7 +469,7 @@ class ArrowFlightClient(WeightTransferClient):
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
         self._ctx: JobContext = fray_job_ctx()
         self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True
+            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
         )
 
     def _connect_to_servers(self, new_locations) -> bool:

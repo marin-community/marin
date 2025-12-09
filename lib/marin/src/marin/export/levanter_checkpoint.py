@@ -98,7 +98,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
 
     env = _add_default_env_variables(
         {},
-        default_launch_config.env_for_accel(config.resources.device.type),
+        default_launch_config.env_for_accel(config.resources.device.variant),
     )
     env = _add_run_env_variables(env)
 

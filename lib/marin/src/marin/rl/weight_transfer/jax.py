@@ -355,7 +355,7 @@ class JAXTransferServer(WeightTransferServer):
 
         self._ctx: JobContext = fray_job_ctx()
         self.coordinator = self._ctx.create_actor(
-            WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True
+            WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True, preemptible=False
         )
 
         # Start transfer server and register its address with coordinator
@@ -447,7 +447,7 @@ class JAXTransferClient(WeightTransferClient):
 
         self._ctx: JobContext = fray_job_ctx()
         self.coordinator = self._ctx.create_actor(
-            WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True
+            WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True, preemptible=False
         )
 
         # Start transfer server for client (doesn't register address with coordinator)

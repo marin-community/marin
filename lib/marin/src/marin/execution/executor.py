@@ -1060,8 +1060,6 @@ def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool =
             logger.info(f"[{worker_id}] Acquired lock for {step_name}")
             return True
 
-        # We lost - clean up our lease and retry
-        status_file.release_lease()
         logger.info(f"[{worker_id}] Lost lock race for {step_name}, retrying...")
         time.sleep(1)
 

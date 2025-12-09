@@ -28,6 +28,7 @@ from ray.job_submission import JobSubmissionClient
 
 from fray.cluster.base import (
     Cluster,
+    CpuConfig,
     EnvironmentConfig,
     GpuConfig,
     JobId,
@@ -40,7 +41,7 @@ from fray.cluster.ray.config import find_config_by_region
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 
 # We can't launch TPU or callable entrypoint jobs directly via Ray, as it
@@ -199,6 +200,8 @@ class RayCluster(Cluster):
         # strip out keys that can only be set at the Job level
         runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
 
+        logger.info(f"Launching TPU job {request.name} with runtime env: {runtime_env}")
+
         if callable_ep.args or callable_ep.kwargs:
             remote_fn = ray.remote(max_calls=1, runtime_env=runtime_env)(
                 lambda: callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
@@ -208,7 +211,7 @@ class RayCluster(Cluster):
 
         object_ref = run_on_pod_ray.remote(
             remote_fn,
-            tpu_type=device.type,
+            tpu_type=device.variant,
             num_slices=request.resources.replicas,
             max_retries_preemption=10000,
             max_retries_failure=1,
@@ -226,15 +229,25 @@ class RayCluster(Cluster):
 
         # disable access to the TPU if we're not a TPU job, otherwise
         # any import of JAX will claim the TPU and block other users.
-        if request.resources.device.type == "cpu":
-            if "JAX_PLATFORMS" in env_vars or "PJRT_DEVICE" in env_vars:
+        if isinstance(request.resources.device, CpuConfig):
+            if "JAX_PLATFORMS" in env_vars:
                 logger.warning(
-                    "Found existing JAX_PLATFORMS=%s, PJRT_DEVICE=%s, overriding for CPU only job.",
+                    "Found existing JAX_PLATFORMS=%s, overriding for CPU only job.",
                     env_vars["JAX_PLATFORMS"],
-                    env_vars["PJRT_DEVICE"],
                 )
             env_vars["JAX_PLATFORMS"] = "cpu"
-            env_vars["PJRT_DEVICE"] = "cpu"
+        elif isinstance(request.resources.device, TpuConfig):
+            if "tpu" not in environment.extras:
+                environment.extras.append("tpu")
+            env_vars["JAX_PLATFORMS"] = "tpu,cpu"
+        elif isinstance(request.resources.device, GpuConfig):
+            if "gpu" not in environment.extras:
+                environment.extras.append("gpu")
+            env_vars["JAX_PLATFORMS"] = "cuda,cpu"
+
+        logger.info(
+            "Building environment for device: %s/%s", request.resources.device.kind, request.resources.device.variant
+        )
 
         env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
         logger.info(
@@ -265,7 +278,7 @@ class RayCluster(Cluster):
             params["entrypoint_num_gpus"] = float(device.count)
         elif isinstance(device, TpuConfig):
             params["entrypoint_resources"] = {
-                f"TPU-{device.type}-head": 1.0,
+                f"TPU-{device.variant}-head": 1.0,
                 "TPU": float(device.count),
             }
 

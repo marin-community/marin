@@ -182,7 +182,7 @@ class RLJob:
         return lambda config: RLJob(config).run()
 
     def run(self, name: str):
-        """Run with TPU pod deployment using run_on_pod_ray."""
+        """Run with TPU pod deployment."""
         run_config = self.config.run_config
         train_worker_config, rollout_worker_config = self.to_worker_configs()
 

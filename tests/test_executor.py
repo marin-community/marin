@@ -603,3 +603,49 @@ def test_parent_will_run_if_some_child_is_not_skippable():
 
         # make sure parent ran
         assert os.path.exists(os.path.join(executor.output_paths[parent], "dummy", "done.txt"))
+
+
+def test_status_file_takeover_stale_lock_then_refresh(tmp_path):
+    """Test taking over a stale lock from a dead worker and then refreshing it.
+
+    This replicates the scenario where:
+    1. Worker A acquires a lock and dies (lock becomes stale)
+    2. Worker B takes over the stale lock
+    3. Worker B tries to refresh the lock (heartbeat)
+
+    This should work but was failing in production.
+    """
+    from marin.execution.executor_step_status import HEARTBEAT_TIMEOUT, Lease
+
+    # Simulate worker A creating a stale lock (as if it died)
+    dead_worker = StatusFile(tmp_path, worker_id="dead-worker")
+    dead_worker.try_acquire_lock()
+
+    # Manually backdate the lock to make it stale
+    generation, _ = dead_worker._read_lock_with_generation()
+    stale_lease = Lease(worker_id="dead-worker", timestamp=time.time() - HEARTBEAT_TIMEOUT - 10)
+    dead_worker._write_lock(stale_lease, if_generation_match=generation)
+
+    # Worker B comes along and takes over
+    live_worker = StatusFile(tmp_path, worker_id="live-worker")
+
+    # Verify the lock is stale
+    _, lease = live_worker._read_lock_with_generation()
+    assert lease is not None
+    assert lease.is_stale()
+
+    # Take over the stale lock
+    assert live_worker.try_acquire_lock()
+
+    # Verify we now own the lock
+    _, lease_after_takeover = live_worker._read_lock_with_generation()
+    assert lease_after_takeover.worker_id == "live-worker"
+
+    # Now try to refresh (this is what the heartbeat thread does)
+    time.sleep(0.1)
+    live_worker.refresh_lock()
+
+    # Verify refresh worked
+    _, lease_after_refresh = live_worker._read_lock_with_generation()
+    assert lease_after_refresh.worker_id == "live-worker"
+    assert lease_after_refresh.timestamp > lease_after_takeover.timestamp

@@ -27,6 +27,8 @@ from typing import Any, Literal, NewType, Self
 
 logger = logging.getLogger(__name__)
 
+DeviceKind = Literal["cpu", "gpu", "tpu"]
+
 TpuType = Literal[
     "v4-8",
     "v4-16",
@@ -242,14 +244,16 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
-DeviceType = Literal["cpu", "gpu", "tpu"]
+# one of "cpu", "gpu", or tpu sub-type, e.g. "v4-8", "v5p-8", "v6e-1", etc.
+DeviceType = NewType("DeviceType", str)
 
 
 @dataclass(frozen=True)
 class CpuConfig:
     """CPU-only device configuration."""
 
-    type: DeviceType = "cpu"
+    kind: DeviceKind = "cpu"
+    variant: None = None
 
     def chip_count(self) -> int:
         """CPU has no accelerator chips."""
@@ -264,7 +268,8 @@ class CpuConfig:
 class GpuConfig:
     """GPU device configuration."""
 
-    type: DeviceType = "gpu"
+    variant: GpuType
+    kind: DeviceKind = "gpu"
     count: int = 1
 
     def chip_count(self) -> int:
@@ -275,9 +280,9 @@ class GpuConfig:
         """Peak FLOP/s for a single GPU."""
         from fray.cluster.device_flops import device_flops
 
-        flops = device_flops(self.type, dtype)
+        flops = device_flops(self.variant, dtype)
         if flops is None:
-            raise ValueError(f"Unknown device/dtype: {self.type}/{dtype}")
+            raise ValueError(f"Unknown device/dtype: {self.variant}/{dtype}")
         return flops
 
     def total_flops(self, dtype: str = "bf16") -> float:
@@ -290,28 +295,29 @@ class TpuConfig:
     """TPU device configuration.
 
     Args:
-        type: TPU accelerator type (e.g., "v5litepod-16", "v4-8")
+        variant: TPU accelerator type (e.g., "v5litepod-16", "v4-8")
         topology: Optional topology specification (e.g., "2x2x1")
     """
 
-    type: DeviceType = "tpu"
+    variant: TpuType
+    kind: DeviceKind = "tpu"
     topology: str | None = None
 
     def chip_count(self) -> int:
         """Total number of TPU chips."""
-        return get_tpu_topology(self.type).chip_count
+        return get_tpu_topology(self.variant).chip_count
 
     def vm_count(self) -> int:
         """Number of VMs in the TPU pod."""
-        return get_tpu_topology(self.type).vm_count
+        return get_tpu_topology(self.variant).vm_count
 
     def device_flops(self, dtype: str = "bf16") -> float:
         """Peak FLOP/s for a single TPU chip."""
         from fray.cluster.device_flops import device_flops
 
-        flops = device_flops(self.type, dtype)
+        flops = device_flops(self.variant, dtype)
         if flops is None:
-            raise ValueError(f"Unknown device/dtype: {self.type}/{dtype}")
+            raise ValueError(f"Unknown device/dtype: {self.variant}/{dtype}")
         return flops
 
     def total_flops(self, dtype: str = "bf16") -> float:
@@ -361,12 +367,12 @@ class ResourceConfig:
 
     @staticmethod
     def with_tpu(tpu_type: str, slice_count: int = 1, **kwargs) -> ResourceConfig:
-        device = TpuConfig(type=tpu_type)
+        device = TpuConfig(variant=tpu_type)
         return ResourceConfig(device=device, replicas=slice_count, **kwargs)
 
     @staticmethod
     def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs) -> ResourceConfig:
-        device = GpuConfig(type=gpu_type, count=count)
+        device = GpuConfig(variant=gpu_type, count=count)
         return ResourceConfig(device=device, **kwargs)
 
     @staticmethod

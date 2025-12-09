@@ -21,7 +21,15 @@ from pathlib import PurePath
 
 import draccus
 import levanter.infra.cli_helpers
-from fray.cluster import CpuConfig, Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, TpuConfig, current_cluster
+from fray.cluster import (
+    CpuConfig,
+    Entrypoint,
+    EnvironmentConfig,
+    JobRequest,
+    ResourceConfig,
+    TpuConfig,
+    current_cluster,
+)
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
 from levanter.main import train_lm
 from levanter.main.train_lm import TrainLmConfig
@@ -170,7 +178,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     env = _add_default_env_variables(
         config.env_vars or {},
-        default_launch_config.env_for_accel(config.resources.device.type),
+        default_launch_config.env_for_accel(config.resources.device.variant),
     )
     # if we're on tpu, ensure we have wandb
     if isinstance(config.resources.device, TpuConfig):
@@ -193,7 +201,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     train_config = _suppress_ray_config(train_config)
 
     # disable accelerator requirement when running without GPU/TPU resources
-    if config.resources.device.type == "cpu":
+    if config.resources.device.kind == "cpu":
         trainer = replace(train_config.trainer, require_accelerator=False)
         train_config = replace(train_config, trainer=trainer)
 
@@ -201,11 +209,12 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         _doublecheck_paths(config)
 
     cluster = current_cluster()
+
     job_request = JobRequest(
         name="train_lm",
         entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
         resources=config.resources,
-        environment=EnvironmentConfig.create(env_vars=env),
+        environment=EnvironmentConfig.create(env_vars=env, extras=["tokenize_train"]),
         max_retries_failure=10,
     )
     job_id = cluster.launch(job_request)

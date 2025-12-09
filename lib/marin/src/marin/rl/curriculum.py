@@ -606,7 +606,7 @@ class Curriculum:
 
 def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
     job_ctx = fray_job_ctx()
-    actor = job_ctx.create_actor(Curriculum, actor_name=config.actor_name, actor_args=(config,))
+    actor = job_ctx.create_actor(Curriculum, actor_name=config.actor_name, actor_args=(config,), preemptible=False)
 
     # Auto-restore from checkpoint if path provided
     if checkpoint_path:

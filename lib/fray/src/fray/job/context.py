@@ -405,15 +405,18 @@ class RayContext:
         name: str | None = None,
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
+        preemptible: bool = True,
         **kwargs,
-    ):
+    ) -> ActorHandle:
         options = {}
         if name is not None:
             options["name"] = name
         options["get_if_exists"] = get_if_exists
         options["lifetime"] = lifetime
-        # always run Ray actors on the head node for persistence
-        options["resources"] = {"head_node": 0.0001}
+
+        # run non-preemptible actors on the head node for persistence
+        if not preemptible:
+            options["resources"] = {"head_node": 0.0001}
 
         remote_class = ray.remote(actor_class)
         ray_actor = remote_class.options(**options).remote(*args, **kwargs)

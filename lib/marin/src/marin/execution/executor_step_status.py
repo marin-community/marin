@@ -31,7 +31,7 @@ from dataclasses import asdict, dataclass
 import fsspec
 from google.cloud import storage
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 HEARTBEAT_INTERVAL = 30  # seconds between lease refreshes
 HEARTBEAT_TIMEOUT = 90  # seconds before considering a lease stale
@@ -97,14 +97,19 @@ class StatusFile:
             return content or None
 
     def write_status(self, status: str) -> None:
-        """Write final status (SUCCESS/FAILURE/RUNNING)."""
+        """Write status (SUCCESS/FAILURE/RUNNING).
+
+        For terminal statuses (SUCCESS/FAILED), the lock is released.
+        For RUNNING, the lock is maintained so heartbeat can continue refreshing it.
+        """
         parent = os.path.dirname(self.path)
         if not self.fs.exists(parent):
             self.fs.makedirs(parent, exist_ok=True)
         with self.fs.open(self.path, "w") as f:
             f.write(status)
 
-        self.release_lock()
+        if status != STATUS_RUNNING:
+            self.release_lock()
         logger.debug("[%s] Wrote status %s to %s", self.worker_id, status, self.path)
 
     def _read_lock_with_generation(self) -> tuple[int, Lease | None]:
@@ -146,10 +151,13 @@ class StatusFile:
         """Refresh a lock held by the current worker."""
         generation, lock_data = self._read_lock_with_generation()
         if lock_data and lock_data.worker_id == self.worker_id:
-            logger.info("Refreshing lock for worker %s at generation %s", self.worker_id, generation)
+            logger.debug("Refreshing lock for worker %s at generation %s", self.worker_id, generation)
             self._write_lock(Lease(self.worker_id, time.time()), generation)
         else:
-            raise ValueError("Failed precondition: lock not held by current worker")
+            lock_worker = lock_data.worker_id if lock_data else "unknown"
+            raise ValueError(
+                f"Failed precondition: lock not held by current worker: found {lock_worker}, expected {self.worker_id}"
+            )
 
     def try_acquire_lock(self) -> bool:
         """Try to acquire the lock using atomic LOCK file, or update the lock if held.
@@ -177,7 +185,6 @@ class StatusFile:
                 return False
             raise
 
-        logger.info("[%s] Acquired lock", self.worker_id)
         return True
 
     def release_lock(self) -> None:

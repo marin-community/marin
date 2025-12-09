@@ -104,9 +104,9 @@ def submit(ctx, extra, cpus, memory, disk, tpu, gpu, gpu_count, env, auto_stop, 
         sys.exit(1)
 
     if tpu:
-        device = TpuConfig(type=tpu)
+        device = TpuConfig(variant=tpu)
     elif gpu:
-        device = GpuConfig(type=gpu, count=gpu_count)
+        device = GpuConfig(variant=gpu, count=gpu_count)
 
     # Build environment config
     extra_groups = [g for g in extra.split(",") if g]
