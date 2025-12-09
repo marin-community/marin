@@ -20,12 +20,6 @@ import pytest
 from zephyr import Dataset, create_backend
 
 
-@pytest.fixture(autouse=True)
-def ensure_ray(ray_cluster):
-    """Ensure Ray is initialized for all tests."""
-    pass
-
-
 @pytest.fixture(
     params=[
         pytest.param(create_backend("sync"), id="sync"),

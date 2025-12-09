@@ -127,33 +127,16 @@ def test_mixed_paths_one_invalid_inputname():
 @pytest.mark.slow
 def test_tokenize_full_pipeline_integration(tmp_path):
     """Integration test for the full tokenization pipeline."""
-    import ray
-    from zephyr import create_backend, set_flow_backend
+    config = HfTokenizeConfig(
+        id="dlwh/wikitext_103_detokenized",
+        cache_path=str(tmp_path / "cache"),
+        tokenizer="gpt2",
+        sample_count=100,
+        window_size_bytes=1_000_000,
+        format=TextLmDatasetFormat(),
+    )
 
-    # Initialize Ray and set up Ray backend for the test
-    # Note: local_mode=True doesn't support runtime_env, so we use regular mode
-    if not ray.is_initialized():
-        ray.init(ignore_reinit_error=True)
-
-    try:
-        # Create and set a Ray backend so the test uses Ray workers
-        ray_backend = create_backend("ray", max_parallelism=8)
-        set_flow_backend(ray_backend)
-
-        config = HfTokenizeConfig(
-            id="dlwh/wikitext_103_detokenized",
-            cache_path=str(tmp_path / "cache"),
-            tokenizer="gpt2",
-            sample_count=100,
-            window_size_bytes=1_000_000,
-            format=TextLmDatasetFormat(),
-        )
-
-        tokenize(config)
-    finally:
-        # Clean up Ray
-        ray.shutdown()
-
+    tokenize(config)
     train_cache_dir = tmp_path / "cache" / "train"
     train_ledger_path = train_cache_dir / "shard_ledger.json"
     assert train_ledger_path.exists(), f"Ledger not found at {train_ledger_path}"
