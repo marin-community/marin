@@ -13,13 +13,14 @@
 # limitations under the License.
 
 """
-Evaluate the multilingual CPT continuation (exp1457) against multilingual LM Eval Harness tasks.
+Evaluate the multilingual CPT continuation (exp1457) and Llama 3.1 8B on multilingual LM Eval Harness tasks.
 """
 
 from collections.abc import Iterable
 from dataclasses import replace
 
-from experiments.evals.evals import default_eval
+from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
+from experiments.evals.evals import default_eval, evaluate_lm_evaluation_harness
 from experiments.evals.resource_configs import SINGLE_TPU_V5p_8
 from experiments.evals.task_configs import MULTILINGUAL_LM_EVAL_LOGPROB_TASKS
 from experiments.multilingual.exp1457_multilingual_cpt import multilingual_cpt_8b_fineweb2_hq
@@ -28,7 +29,7 @@ from marin.execution.executor import ExecutorStep, executor_main
 
 
 def _create_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[ExecutorStep]:
-    """Return one evaluation step per LM Eval Harness task."""
+    """Return one evaluation step per LM Eval Harness task for the multilingual CPT model."""
 
     per_task_steps: list[ExecutorStep] = []
     for task in tasks:
@@ -38,15 +39,37 @@ def _create_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[Executo
             evals=(task,),
         )
         task_label = task.task_alias or task.name
-        # Make it obvious which harness task is running to simplify scheduling/debugging.
         per_task_steps.append(replace(eval_step, name=f"{eval_step.name}/{task_label}"))
 
     return per_task_steps
 
 
-multilingual_eval_steps = _create_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS)
+def _create_llama3_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[ExecutorStep]:
+    """Return one evaluation step per LM Eval Harness task for Llama 3.1 8B."""
 
-# TODO: add per-task generative evals once MULTILINGUAL_LM_EVAL_GENERATIVE_TASKS is ready.
+    llama3_steps: list[ExecutorStep] = []
+    for task in tasks:
+        eval_step = evaluate_lm_evaluation_harness(
+            model_name="llama-3.1-8b-base",
+            model_path="meta-llama/Meta-Llama-3.1-8B",
+            evals=(task,),
+            max_eval_instances=None,
+            engine_kwargs=DEFAULT_LM_EVAL_MODEL_KWARGS,
+            resource_config=SINGLE_TPU_V5p_8,
+            apply_chat_template=False,
+            discover_latest_checkpoint=False,
+        )
+        task_label = task.task_alias or task.name
+        llama3_steps.append(replace(eval_step, name=f"{eval_step.name}/{task_label}"))
+
+    return llama3_steps
+
+
+multilingual_eval_steps = [
+    # *_create_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
+    *_create_llama3_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
+]
+
 
 if __name__ == "__main__":
     for i in range(0, len(multilingual_eval_steps), 4):
