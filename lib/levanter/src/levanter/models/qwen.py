@@ -61,6 +61,7 @@ class QwenConfig(LlamaConfig):
     def from_hf_config(cls, hf_config: HfConfig):
         rope_theta = hf_config.rope_theta
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
+        no_bias = getattr(hf_config, "no_bias", False)
         return QwenConfig(
             seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
@@ -76,7 +77,7 @@ class QwenConfig(LlamaConfig):
             layer_norm_epsilon=hf_config.rms_norm_eps,
             tie_word_embeddings=hf_config.tie_word_embeddings,
             rope=rope_config,
-            use_bias=not hf_config.no_bias,
+            use_bias=not no_bias,
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfQwenConfig:

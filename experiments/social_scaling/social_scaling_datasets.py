@@ -181,4 +181,3 @@ def tokenize_social_scaling(
 if __name__ == "__main__":
     all_steps = list(tokenize_social_scaling().values())
     executor_main(steps=all_steps, description="Tokenize social scaling text datasets")
-
