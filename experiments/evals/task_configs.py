@@ -534,7 +534,6 @@ MULTILINGUAL_LM_EVAL_LOGPROB_TASKS = (
     FEW_SHOT_OG_MULTILINGUAL_TASKS
     + BELEBELE_TASKS
     + XSTORYCLOZE_MULTILINGUAL_TASKS
-    + MMMLU_MULTILINGUAL_TASKS
     + (
         EvalTaskConfig("cmmlu", 0, task_alias="cmmlu_0shot"),
         EvalTaskConfig("kmmlu", 0, task_alias="kmmlu_0shot"),
@@ -543,6 +542,7 @@ MULTILINGUAL_LM_EVAL_LOGPROB_TASKS = (
         EvalTaskConfig("turblimp_core", 0, task_alias="turblimp_core_0shot"),
         EvalTaskConfig("blimp_nl", 0, task_alias="blimp_nl_0shot"),
     )
+    + MMMLU_MULTILINGUAL_TASKS
 )
 
 MULTILINGUAL_LM_EVAL_GENERATIVE_TASKS = MGSM_MULTILINGUAL_TASKS
