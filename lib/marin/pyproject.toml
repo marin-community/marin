@@ -107,10 +107,6 @@ dev = [
 [tool.uv]
 conflicts = [
     [
-        { extra = "crawl" },
-        { group = "dev" },
-    ],
-    [
         { extra = "tpu" },
         { extra = "cuda12" },
     ],
@@ -161,37 +157,6 @@ cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
 tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
 
 cpu = ["jax==0.6.2", "torch>=2.7.0"]
-
-crawl = [
-    "w3lib",
-    "datatrove[io,processing]",
-    "beautifulsoup4",
-    "resiliparse",
-    "trafilatura",
-    # adds brotlicffi dependency instead of brotlipy
-    "warcio[all] @ git+https://github.com/marin-community/warcio@077ea9359d5b439d152081a9a9c4aafb25046f79",
-    "google-cloud-bigquery",
-    "google-cloud-storage-transfer~=1.0",
-    "boto3==1.35.23",
-    "readabilipy",
-    "readability-lxml",
-    "py7zr",
-    "markdownify==0.12.1",
-    "htmlmin",
-    "datasets>=2.18.0",
-    "py-asciimath",
-    "scipy==1.13.1",
-    "spacy",
-    "transformers",
-    "flax",
-    "fastparquet",
-    "orjson",
-    "lxml[html_clean]",
-    "chardet",
-    "courlan",
-    "kenlm @ git+https://github.com/kpu/kenlm@4cb443e60b7bf2c0ddf3c745378f76cb59e254e5",
-    "jax[tpu]",
-]
 
 download_transform = [
     "chardet",

@@ -31,7 +31,7 @@ from typing import Any, TypeVar
 import fsspec
 import msgspec
 import numpy as np
-from fray import ExecutionContext
+from fray.job import JobContext
 from tqdm_loggable.auto import tqdm
 
 from zephyr.dataset import (
@@ -161,7 +161,7 @@ class Shard:
 
     idx: int  # Shard index (e.g., 0 of 50)
     chunks: list[Chunk]
-    context: ExecutionContext
+    context: JobContext
 
     @property
     def count(self) -> int:
@@ -180,7 +180,7 @@ class Shard:
             yield from chunk_data
 
     @staticmethod
-    def from_single_ref(ref: Any, context: ExecutionContext, idx: int, count: int) -> Shard:
+    def from_single_ref(ref: Any, context: JobContext, idx: int, count: int) -> Shard:
         """Wrap a single ref as a Shard.
 
         Args:
@@ -591,7 +591,7 @@ def process_shard_group_by_reduce(ctx: ApplyShardCtx, key_fn: Callable, reducer_
 
 
 def process_shard_reduce_global(
-    shards: list[Shard], global_reducer: Callable, context: ExecutionContext, chunk_size: int
+    shards: list[Shard], global_reducer: Callable, context: JobContext, chunk_size: int
 ) -> list[Shard]:
     logger.info(f"reduce_global: reducing {len(shards)} shard results")
 
@@ -624,7 +624,7 @@ def reshard_refs(shards: list[Shard], num_shards: int) -> list[Shard]:
 
 
 class Backend:
-    def __init__(self, context: ExecutionContext, config: BackendConfig):
+    def __init__(self, context: JobContext, config: BackendConfig):
         """Initialize backend with execution context and configuration.
 
         Args:
