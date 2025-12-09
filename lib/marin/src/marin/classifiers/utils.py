@@ -95,7 +95,7 @@ def label_documents(
         )
         return label_documents_shard(input_file_path, label_func, attr_file_paths)
 
-    backend = flow_backend(max_parallelism=1000, memory="1GB")
+    backend = flow_backend(max_parallelism=1000)
     pipeline = (
         Dataset.from_files(f"{input_doc_path}/**/*.jsonl.gz")
         .flat_map(processing_func)
@@ -175,7 +175,7 @@ def create_dataset(
     )
     shard_path = os.path.join(config.output_dataset_path, "shards", doc_fs_path.lstrip("/"))
 
-    backend = flow_backend(max_parallelism=1000, memory="1GB")
+    backend = flow_backend(max_parallelism=1000)
     pipeline = (
         Dataset.from_files(f"{config.input_doc_path}/**/*.{config.filetype}")
         .flat_map(processing_func)

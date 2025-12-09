@@ -62,7 +62,7 @@ class QwenConfig(LlamaConfig):
         rope_theta = hf_config.rope_theta
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
         return QwenConfig(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,
@@ -86,7 +86,7 @@ class QwenConfig(LlamaConfig):
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
         return HfQwenConfig(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -110,14 +110,14 @@ class QwenConfig(LlamaConfig):
     def model_type(self) -> Type["QwenLMHeadModel"]:
         return QwenLMHeadModel
 
-    def flops_per_token(self, vocab_size: int):
+    def flops_per_token(self, vocab_size: int, context_length: int):
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )
@@ -328,7 +328,7 @@ class Qwen3Config(LlamaConfig):
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
         return HfQwen3Config(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -355,7 +355,7 @@ class Qwen3Config(LlamaConfig):
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
 
         return Qwen3Config(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,

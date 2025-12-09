@@ -32,10 +32,8 @@ from functools import partial
 
 import fsspec
 import fsspec.generic
-import ray
 from datasets import DatasetDict, load_from_disk
-from fray.cluster.base import ResourceConfig
-from fray.cluster.ray.resources import get_scheduling_strategy
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -137,14 +135,14 @@ def _mp_fn(
     logger.info("Training Label Counts (label_id -> count):")
     for label_id, count in sorted(train_label_counts.items()):
         label_name = class_label_feature.int2str(label_id)
-        logger.info(f"  {label_id} ({label_name}): {count} ({count/len(dataset['train']):.2%})")
+        logger.info(f"  {label_id} ({label_name}): {count} ({count / len(dataset['train']):.2%})")
 
     # Print val label distribution
     val_label_counts = Counter(dataset["val"]["label"])
     logger.info("Validation Label Counts (label_id -> count):")
     for label_id, count in sorted(val_label_counts.items()):
         label_name = class_label_feature.int2str(label_id)
-        logger.info(f"  {label_id} ({label_name}): {count} ({count/len(dataset['val']):.2%})")
+        logger.info(f"  {label_id} ({label_name}): {count} ({count / len(dataset['val']):.2%})")
 
     tokenizer = AutoTokenizer.from_pretrained(hf_model)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -290,9 +288,7 @@ def train_model(
     logger.info(f"Training BERT model for experiment {output_path}")
     datetime_start = datetime.utcnow()
 
-    # run training on remote worker, not head node
-    @ray.remote(memory=memory_req * 1024 * 1024 * 1024)
-    @remove_tpu_lockfile_on_exit
+    @remove_tpu_lockfile_on_exit()
     def run():
         if fsspec_exists(f"{output_path}/model"):
             logger.info(f"Model already exists at {output_path}/model. Skipping training.")
@@ -339,13 +335,16 @@ def train_model(
             fsspec_cpdir(tmp_dir, output_path)
 
     resource_config = ResourceConfig.with_tpu("v4-8")
-    scheduling_strategy = get_scheduling_strategy(resource_config)
-    response = run.options(scheduling_strategy=scheduling_strategy).remote()
-    try:
-        ray.get(response)
-    except Exception as e:
-        logger.exception(f"Error processing: {e}")
-        raise
+    job_request = JobRequest(
+        name="bert-training",
+        entrypoint=Entrypoint.from_callable(run),
+        resources=resource_config,
+        environment=EnvironmentConfig.create(),
+    )
+
+    cluster = current_cluster()
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)
 
     datetime_end = datetime.utcnow()
     logger.info(f"Training BERT for experiment {output_path} completed in {datetime_end - datetime_start}.")
