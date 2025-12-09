@@ -17,7 +17,7 @@
 import hashlib
 
 import pytest
-from zephyr import Dataset, create_backend
+from zephyr import Dataset
 
 
 @pytest.fixture(
