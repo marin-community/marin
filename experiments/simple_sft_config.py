@@ -61,8 +61,8 @@ class SimpleSFTConfig:
     warmup: float = 0.03
     """Fraction of training steps to use for learning rate warmup."""
 
-    cooldown: float = 0.0
-    """Fraction of training steps to use for learning rate cooldown."""
+    decay: float = 0.0
+    """Fraction of training steps to use for learning rate decay."""
 
     lr_schedule: str = "linear"
     """Learning rate schedule to use: 'linear', 'cosine', etc."""

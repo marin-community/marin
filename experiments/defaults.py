@@ -477,7 +477,7 @@ def default_sft(
         num_train_steps=sft_config.num_train_steps,
         learning_rate=sft_config.learning_rate,
         lr_schedule=sft_config.lr_schedule,
-        decay=sft_config.cooldown,
+        decay=sft_config.decay,
         weight_decay=sft_config.weight_decay,
         min_lr_ratio=sft_config.min_lr_ratio,
         max_grad_norm=sft_config.max_grad_norm,

@@ -85,8 +85,9 @@ mixture_sft_config = SimpleSFTConfig(
     max_seq_len=16384,
     seed=0,
     steps_per_checkpoint=1000,  # Around 2344 steps per epoch with batch size 512
-    warmup=0.1,
     lr_schedule="cosine",
+    warmup=0.1,
+    decay=0.9,
     weight_decay=0.0,
 )
 
