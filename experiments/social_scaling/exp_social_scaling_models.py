@@ -28,12 +28,13 @@ All runs:
 * train with global batch size 16
 * train for 1000 steps
 * use a small sweep of learning rates
-* run on v5p-8
-"""
+* run on v5p-8"""
 
 from functools import lru_cache
+from itertools import islice
 
 from experiments.defaults import default_train
+from experiments.llama import llama3_tokenizer
 from experiments.olmo2 import olmo_7b
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.social_scaling.social_scaling_datasets import tokenize_social_scaling
@@ -41,8 +42,6 @@ from fray.cluster import ResourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import QwenConfig
 from marin.execution.executor import ExecutorStep, executor_main
-
-LLAMA3_8B_HF = "meta-llama/Llama-3.1-8B"
 
 QWEN2_5_HANDLES: dict[str, str] = {
     "qwen2_5_0_5b": "Qwen/Qwen2.5-0.5B",
@@ -52,12 +51,15 @@ QWEN2_5_HANDLES: dict[str, str] = {
     "qwen2_5_14b": "Qwen/Qwen2.5-14B",
 }
 
+QWEN2_5_TOKENIZER = "Qwen/Qwen2.5-7B"
+
 OLMO2_7B_HF = "allenai/OLMo-2-1124-7B"
 
 LEARNING_RATES: tuple[float, ...] = (1e-5, 3e-5, 1e-4)
 
 BATCH_SIZE = 16
 NUM_TRAIN_STEPS = 1000
+MAX_STEPS_PER_EXECUTOR = 4
 
 
 @lru_cache(maxsize=1)
@@ -65,8 +67,8 @@ def build_model_configs() -> dict[str, tuple[str, object]]:
     """Build Levanter model configs for each HF checkpoint."""
     models: dict[str, tuple[str, object]] = {}
 
-    llama3_8b_cfg = LlamaConfig().hf_checkpoint_converter(ref_checkpoint=LLAMA3_8B_HF).default_config
-    models["llama3_8b"] = (LLAMA3_8B_HF, llama3_8b_cfg)
+    llama3_8b_cfg = LlamaConfig().hf_checkpoint_converter(ref_checkpoint=llama3_tokenizer).default_config
+    models["llama3_8b"] = (llama3_tokenizer, llama3_8b_cfg)
 
     for name, handle in QWEN2_5_HANDLES.items():
         qwen_cfg = QwenConfig().hf_checkpoint_converter(ref_checkpoint=handle).default_config
@@ -85,14 +87,14 @@ def build_tokenized() -> dict[str, dict[str, ExecutorStep]]:
     # Llama 3 8B uses its own tokenizer.
     tokenized_by_model["llama3_8b"] = tokenize_social_scaling(
         base_path="tokenized/social_scaling/llama3_8b",
-        tokenizer=LLAMA3_8B_HF,
+        tokenizer=llama3_tokenizer,
     )
 
-    # Qwen 2.5 family: each size uses the shared tokenizer for that HF repo.
-    for model_name, handle in QWEN2_5_HANDLES.items():
+    # Qwen 2.5 family: all sizes share a single tokenizer.
+    for model_name in QWEN2_5_HANDLES:
         tokenized_by_model[model_name] = tokenize_social_scaling(
             base_path=f"tokenized/social_scaling/{model_name}",
-            tokenizer=handle,
+            tokenizer=QWEN2_5_TOKENIZER,
         )
 
     # OLMo 2 7B.
@@ -147,10 +149,22 @@ def build_social_scaling_runs() -> list[ExecutorStep]:
     return steps
 
 
+def _chunked(steps: list[ExecutorStep], chunk_size: int) -> list[list[ExecutorStep]]:
+    chunks: list[list[ExecutorStep]] = []
+    iterator = iter(steps)
+    while True:
+        chunk = list(islice(iterator, chunk_size))
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return chunks
+
+
 def main() -> None:
     """Entry point for the social scaling fine-tuning sweep."""
     steps = build_social_scaling_runs()
-    executor_main(steps=steps)
+    for group in _chunked(steps, MAX_STEPS_PER_EXECUTOR):
+        executor_main(steps=group)
 
 
 if __name__ == "__main__":
