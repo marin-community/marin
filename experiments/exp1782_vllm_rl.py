@@ -129,7 +129,7 @@ class ExperimentConfig:
     per_device_parallelism: int = 16
 
     # some sampling params
-    max_input_tokens: int = 256
+    max_input_tokens: int = 4096
     max_output_tokens: int = 512
     n_prompts: int = 64
     n_generations_per_prompt: int = 16
@@ -401,7 +401,7 @@ def main():
         train_batch_size=1024,
         per_device_parallelism=4,
         learning_rate=2e-6,
-        max_input_tokens=256,
+        max_input_tokens=4096,
         max_output_tokens=512,
         n_prompts=64,
         n_generations_per_prompt=16,
