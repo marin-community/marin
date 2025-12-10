@@ -541,9 +541,9 @@ def test_write_dataclass_to_jsonl(tmp_path, backend):
 
     # Create dataset with dataclass instances
     sample_data = [
-        {"name": "alpha", "value": 100},
-        {"name": "beta", "value": 200},
-        {"name": "gamma", "value": 300},
+        SampleDataclass("alpha", 100),
+        SampleDataclass("beta", 200),
+        SampleDataclass("gamma", 300),
     ]
 
     ds = Dataset.from_list(sample_data).write_jsonl(str(output_dir / "dataclass-{shard:05d}.jsonl"))
@@ -562,11 +562,11 @@ def test_write_dataclass_to_jsonl(tmp_path, backend):
 
     # Sort both lists by name for comparison
     records_sorted = sorted(records, key=lambda x: x["name"])
-    sample_sorted = sorted(sample_data, key=lambda x: x["name"])
+    sample_sorted = sorted(sample_data, key=lambda x: x.name)
 
     for record, expected in zip(records_sorted, sample_sorted, strict=True):
-        assert record["name"] == expected["name"]
-        assert record["value"] == expected["value"]
+        assert record["name"] == expected.name
+        assert record["value"] == expected.value
 
 
 def test_load_file_parquet(tmp_path, backend):
