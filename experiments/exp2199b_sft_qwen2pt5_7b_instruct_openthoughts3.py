@@ -70,7 +70,7 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 5
-TRAIN_BATCH_SIZE = 224  # Fits on 2 x TPU-v4-64 (for v4-64, batch size must be divisible by # devices which is 32)
+TRAIN_BATCH_SIZE = 512  # Fits on 2 x TPU-v4-64 (for v4-64, batch size must be divisible by # devices which is 32)
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 mixture_sft_config = SimpleSFTConfig(
@@ -79,10 +79,10 @@ mixture_sft_config = SimpleSFTConfig(
     model_name_or_path="Qwen/Qwen2.5-7B-Instruct",
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=5e-5,
+    learning_rate=8e-5,
     max_seq_len=16384,
     seed=0,
-    steps_per_checkpoint=1000,  # Around 5357 steps per epoch with batch size 224
+    steps_per_checkpoint=1000,  # Around 2344 steps per epoch with batch size 512
     lr_schedule="cosine",
     warmup=0.1,
     decay=0.9,
@@ -99,7 +99,7 @@ mixture_config = lm_mixture_data_config(
 )
 
 exp2199b_sft_qwen2pt5_7b_instruct_openthoughts3 = default_sft(
-    name="exp2199b_sft_qwen2pt5_7b_instruct_openthoughts3",
+    name="exp2199b_sft_qwen2pt5_7b_instruct_openthoughts3_bsz512_lr8e_5",
     tokenized=mixture_config,
     model_config=qwen2_5_7b_instruct,
     sft_config=mixture_sft_config,
