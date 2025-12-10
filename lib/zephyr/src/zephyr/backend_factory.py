@@ -20,7 +20,7 @@ import logging
 from contextvars import ContextVar
 from typing import Literal
 
-from fray.job import fray_job_ctx
+from fray.job import fray_job_ctx, set_job_ctx
 
 from zephyr.backends import Backend, BackendConfig
 
@@ -52,6 +52,7 @@ def create_backend(
         >>> backend = create_backend("ray", max_parallelism=100)
         >>> backend = create_backend("ray", max_parallelism=10, max_retries=3)
     """
+    set_job_ctx(None)
     context = fray_job_ctx(
         context_type=backend_type,
         max_workers=max_parallelism,

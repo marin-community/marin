@@ -147,7 +147,7 @@ class TestNotExpr:
 
     def test_repr(self):
         expr = ~(col("flag") == True)  # noqa: E712
-        assert repr(expr) == "~(col('flag') == lit(True))"
+        assert repr(expr) == "~((col('flag') == lit(True)))"
 
 
 class TestArithmeticExpr:

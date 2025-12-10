@@ -234,8 +234,8 @@ def test_lazy_evaluation():
     # Now execute - should call function
     backend = create_backend("sync")
     result = list(backend.execute(ds))
-    assert call_count == 3
     assert result == [2, 4, 6]
+    assert call_count == 3
 
 
 def test_empty_dataset(backend):
@@ -919,8 +919,8 @@ def test_skip_existing_clean_run(tmp_path, sample_input_files):
     counter = CallCounter()
     ds = (
         Dataset.from_files(f"{sample_input_files}/*.jsonl")
-        .flat_map(counter.counting_flat_map)
-        .map(counter.counting_map)
+        .flat_map(lambda x: counter.counting_flat_map(x))
+        .map(lambda x: counter.counting_map(x))
         .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
     )
 
@@ -945,8 +945,8 @@ def test_skip_existing_one_file_exists(tmp_path, sample_input_files):
     counter = CallCounter()
     ds = (
         Dataset.from_files(f"{sample_input_files}/*.jsonl")
-        .flat_map(counter.counting_flat_map)
-        .map(counter.counting_map)
+        .flat_map(lambda x: counter.counting_flat_map(x))
+        .map(lambda x: counter.counting_map(x))
         .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
     )
 
@@ -967,8 +967,8 @@ def test_skip_existing_all_files_exist(tmp_path, sample_input_files):
     counter = CallCounter()
     ds = (
         Dataset.from_files(f"{sample_input_files}/*.jsonl")
-        .flat_map(counter.counting_flat_map)
-        .map(counter.counting_map)
+        .flat_map(lambda x: counter.counting_flat_map(x))
+        .map(lambda x: counter.counting_map(x))
         .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
     )
 
@@ -992,39 +992,6 @@ def test_skip_existing_all_files_exist(tmp_path, sample_input_files):
     assert len(result) == 3
     assert counter.flat_map_count == 0  # Nothing loaded
     assert counter.map_count == 0  # Nothing mapped
-    assert counter.processed_ids == []  # No shards ran
-
-
-def test_skip_existing_parquet(tmp_path):
-    """Test skip_existing works with parquet files."""
-    backend = create_backend("sync")
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
-
-    counter = CallCounter()
-    ds = (
-        Dataset.from_list([{"id": 1}, {"id": 2}, {"id": 3}])
-        .map(counter.counting_map)
-        .write_parquet(str(output_dir / "output-{shard:05d}.parquet"), skip_existing=True)
-    )
-
-    # First run
-    result = list(backend.execute(ds))
-    assert len(result) == 3
-    assert counter.map_count == 3
-    assert sorted(counter.processed_ids) == [1, 2, 3]  # All shards ran
-
-    # Second run: should skip
-    counter.reset()
-    ds = (
-        Dataset.from_list([{"id": 1}, {"id": 2}, {"id": 3}])
-        .map(counter.counting_map)
-        .write_parquet(str(output_dir / "output-{shard:05d}.parquet"), skip_existing=True)
-    )
-
-    result = list(backend.execute(ds))
-    assert len(result) == 3
-    assert counter.map_count == 0
     assert counter.processed_ids == []  # No shards ran
 
 

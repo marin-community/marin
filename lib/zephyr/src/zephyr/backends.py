@@ -439,6 +439,7 @@ class Backend:
         results = self._run_tasks(contexts, operations)
 
         # Use input shard count to preserve empty shards (important for joins)
+        # TODO: the planner should just inform the controller about the number of output shards
         num_output_shards = total
         if results:
             # If scatter/groupby produces more shards, use that count
@@ -446,11 +447,17 @@ class Backend:
             if max_result_idx >= num_output_shards:
                 num_output_shards = max_result_idx + 1
 
-        return [
-            Shard(
-                idx=idx,
-                chunks=[Chunk(header.count, data_ref) for header, data_ref in results.get(idx, [])],
-                context=self.context,
-            )
-            for idx in range(num_output_shards)
-        ]
+        shards = []
+        for idx in range(num_output_shards):
+            if idx not in results:
+                shards.append(Shard(idx=idx, chunks=[], context=self.context))
+            else:
+                shards.append(
+                    Shard(
+                        idx=idx,
+                        chunks=[Chunk(header.count, data_ref) for header, data_ref in results[idx]],
+                        context=self.context,
+                    )
+                )
+
+        return shards
