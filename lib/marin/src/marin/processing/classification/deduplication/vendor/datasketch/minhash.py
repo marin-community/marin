@@ -15,10 +15,11 @@ except Exception:
 import numpy as np
 
 # GPU backend
-try:
-    import cupy as cp
-except ImportError:
-    cp = None
+# try:
+    # import cupy as cp
+# except ImportError:
+# NOTE: GPU backend disabled for now
+cp = None
 
 # The size of a hash value in number of bytes
 hashvalue_byte_size = len(bytes(np.int64(42).data))
