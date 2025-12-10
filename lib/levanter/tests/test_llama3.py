@@ -82,7 +82,7 @@ def test_llama3_roundtrip(test_seq_len):
     config = LlamaConfig.from_hf_config(hf_config)
 
     # Make input and attn_mask
-    test_Pos = config.Pos.resize(test_seq_len)
+    test_Pos = config.max_Pos.resize(test_seq_len)
     input = hax.random.randint(random.PRNGKey(0), test_Pos, 0, Vocab.size)
     attn_mask = AttentionMask.causal()
     input_torch = torch.from_numpy(np.array(input.array)).to(torch.int32).unsqueeze(0)
@@ -137,7 +137,7 @@ def test_llama3_rotary_embedding():
 
     lev_config = LlamaConfig.from_hf_config(llama_config)
 
-    Pos = lev_config.Pos
+    Pos = lev_config.max_Pos.resize(64)
     Heads = lev_config.attention_config().Heads
     HeadSize = lev_config.attention_config().HeadSize
     Batch = hax.Axis("batch", 3)

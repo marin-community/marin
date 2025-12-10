@@ -17,6 +17,8 @@
 import pytest
 import ray
 
+from zephyr import create_backend, load_file
+
 
 @pytest.fixture(scope="module")
 def ray_cluster():
@@ -31,3 +33,38 @@ def ray_cluster():
 def sample_data():
     """Sample data for testing."""
     return list(range(1, 11))  # [1, 2, 3, ..., 10]
+
+
+@pytest.fixture(
+    params=[
+        pytest.param(create_backend("sync"), id="sync"),
+        pytest.param(create_backend("threadpool", max_parallelism=2), id="thread"),
+        pytest.param(create_backend("ray", max_parallelism=2), id="ray"),
+    ]
+)
+def backend(request):
+    """Parametrized fixture providing all backend types."""
+    return request.param
+
+
+class CallCounter:
+    """Helper to track function calls across test scenarios."""
+
+    def __init__(self):
+        self.flat_map_count = 0
+        self.map_count = 0
+        self.processed_ids = []
+
+    def reset(self):
+        self.flat_map_count = 0
+        self.map_count = 0
+        self.processed_ids = []
+
+    def counting_flat_map(self, path):
+        self.flat_map_count += 1
+        return load_file(path)
+
+    def counting_map(self, x):
+        self.map_count += 1
+        self.processed_ids.append(x["id"])
+        return {**x, "processed": True}

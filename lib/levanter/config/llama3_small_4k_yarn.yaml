@@ -12,7 +12,7 @@ model:
   num_heads: 12
   num_kv_heads: 12
   num_layers: 12
-  seq_len: 4096
+  max_seq_len: 4096
   gradient_checkpointing: true
   rope:
     type: yarn
@@ -21,6 +21,7 @@ model:
     beta_slow: 1.0
     original_max_position_embeddings: 256
     mscale: 1.0
+train_seq_len: 4096
 trainer:
   tracker:
   - type: wandb
