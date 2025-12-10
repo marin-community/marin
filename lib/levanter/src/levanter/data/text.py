@@ -579,7 +579,9 @@ class LMTaskConfig(abc.ABC):
         if self.tokenizer == "passthrough":
             return PassthroughTokenizer(self.vocab_size)
         else:
-            return load_tokenizer(self.tokenizer)
+            tokenizer = load_tokenizer(self.tokenizer)
+            tokenizer = maybe_replace_chat_template(tokenizer)
+            return tokenizer
 
     @abc.abstractmethod
     def train_set(
@@ -1455,6 +1457,7 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
         chat_template_kwargs_field: str | None = "chat_template_kwargs",
         mask_user_turns: bool = True,
     ):
+        tokenizer = maybe_replace_chat_template(tokenizer)
         if chat_template is None and tokenizer.chat_template is None:
             raise ValueError("No chat template provided and tokenizer has no default chat template")
         self.tokenizer = tokenizer
@@ -1942,6 +1945,21 @@ def count_corpus_sizes(
         stats[f"{metric_prefix}total_seqs"] = len(validation_set.as_sync_dataset())
 
     return stats
+
+
+def maybe_replace_chat_template(tokenizer: HfTokenizer):
+    """For some tokenizers, replace the chat template with a custom template that is compatible with Levanter's {%generation%} expectations."""
+    # TODO (moojink): Can we do this in a cleaner way?
+    if tokenizer.name_or_path == "Qwen/Qwen2.5-7B-Instruct":
+        from experiments.qwen2pt5_chat_template import QWEN_2_5_CHAT_TEMPLATE
+        tokenizer.chat_template = QWEN_2_5_CHAT_TEMPLATE
+    elif tokenizer.name_or_path == "Qwen/Qwen3-8B":
+        from experiments.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
+        tokenizer.chat_template = QWEN_3_CHAT_TEMPLATE
+    elif tokenizer.name_or_path == "meta-llama/Llama-3.1-8B-Instruct":
+        from experiments.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
+        tokenizer.chat_template = LLAMA_3_1_CHAT_TEMPLATE
+    return tokenizer
 
 
 if __name__ == "__main__":

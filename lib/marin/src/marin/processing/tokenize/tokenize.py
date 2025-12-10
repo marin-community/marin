@@ -36,6 +36,7 @@ from levanter.data.text import (
     LMDatasetSourceConfig,
     TextLmDatasetFormat,
     UrlDatasetSourceConfig,
+    maybe_replace_chat_template,
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
@@ -251,6 +252,7 @@ def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterat
     assert all(d.platform == "cpu" for d in jax_devices), f"Expected all CPU devices, got: {jax_devices}"
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
+    tokenizer = maybe_replace_chat_template(tokenizer)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 
     for batch in batches:
