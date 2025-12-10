@@ -71,19 +71,19 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 5
-TRAIN_BATCH_SIZE = 512  # Fits on 3 x TPU-v4-64 (for v4-64, batch size must be divisible by # devices which is 32)
+TRAIN_BATCH_SIZE = 224  # Fits on 2 x TPU-v4-64 (for v4-64, batch size must be divisible by # devices which is 32)
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 mixture_sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v5p-64", slice_count=3),
+    resources=ResourceConfig.with_tpu("v5p-64"),
     tokenizer=llama_3_1_8b_instruct_tokenizer,
     model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=8e-5,
+    learning_rate=5e-5,
     max_seq_len=16384,
     seed=0,
-    steps_per_checkpoint=1000,  # Around 2344 steps per epoch with batch size 512
+    steps_per_checkpoint=1000,  # Around 5357 steps per epoch with batch size 224
     lr_schedule="cosine",
     warmup=0.1,
     decay=0.9,
