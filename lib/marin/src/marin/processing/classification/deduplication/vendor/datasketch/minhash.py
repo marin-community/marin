@@ -5,6 +5,8 @@ import warnings
 from collections.abc import Generator, Iterable
 from collections.abc import Callable
 
+from xxhash import xxh32_intdigest
+
 try:
     from typing import Literal  # py3.8+; if older, you can fallback to typing_extensions
 except Exception:
@@ -17,8 +19,6 @@ try:
     import cupy as cp
 except ImportError:
     cp = None
-
-from .hashfunc import sha1_hash32
 
 # The size of a hash value in number of bytes
 hashvalue_byte_size = len(bytes(np.int64(42).data))
@@ -112,7 +112,7 @@ class MinHash:
         num_perm: int = 128,
         seed: int = 1,
         gpu_mode: Literal["disable", "detect", "always"] = "disable",
-        hashfunc: Callable = sha1_hash32,
+        hashfunc: Callable = xxh32_intdigest,
         hashobj: object | None = None,  # Deprecated.
         hashvalues: Iterable | None = None,
         permutations: tuple[Iterable, Iterable] | None = None,
