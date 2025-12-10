@@ -14,10 +14,11 @@
 # flake8: noqa
 
 """
-Updated chat template for Qwen2.5 that has {% generation %} tags inserted (required by Levanter).
+Updated chat template for Qwen2.5 Instruct models that has {% generation %} tags inserted (required by Levanter).
+Note that all Qwen2.5-XXX-Instruct models have the same chat template.
 """
 
-QWEN_2_5_CHAT_TEMPLATE = """{%- if tools %}
+QWEN_2_5_INSTRUCT_CHAT_TEMPLATE = """{%- if tools %}
     {{- '<|im_start|>system\\n' }}
     {%- if messages[0]['role'] == 'system' %}
         {{- messages[0]['content'] }}

@@ -1951,9 +1951,9 @@ def count_corpus_sizes(
 def maybe_replace_chat_template(tokenizer: HfTokenizer):
     """For some tokenizers, replace the chat template with a custom template that is compatible with Levanter's {%generation%} expectations."""
     # TODO (moojink): Can we do this in a cleaner way?
-    if tokenizer.name_or_path == "Qwen/Qwen2.5-7B-Instruct":
-        from experiments.qwen2pt5_chat_template import QWEN_2_5_CHAT_TEMPLATE
-        tokenizer.chat_template = QWEN_2_5_CHAT_TEMPLATE
+    if "Qwen/Qwen2.5" in tokenizer.name_or_path and "-Instruct" in tokenizer.name_or_path:
+        from experiments.qwen2pt5_instruct_chat_template import QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
+        tokenizer.chat_template = QWEN_2_5_INSTRUCT_CHAT_TEMPLATE
     elif tokenizer.name_or_path == "Qwen/Qwen3-8B":
         from experiments.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
         tokenizer.chat_template = QWEN_3_CHAT_TEMPLATE
