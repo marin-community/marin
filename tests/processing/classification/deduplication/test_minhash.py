@@ -12,8 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from marin.processing.classification.deduplication.minhash import minhash
+from marin.processing.classification.deduplication.vendor.datasketch.minhash import MinHash, _max_hash
 import pytest
+
+
+def minhash(shingle_set):
+    m = MinHash(num_perm=128)
+    for shingle in shingle_set:
+        m.update(shingle.encode("utf8"))
+    return m.hashvalues.tolist()
 
 
 def test_minhash_exact_equal():
@@ -25,7 +32,7 @@ def test_minhash_different():
 
 
 def test_minhash_empty():
-    assert minhash(set()) == [float("inf")] * 128
+    assert minhash(set()) == [_max_hash] * 128
 
 
 def test_minhash_similar():
