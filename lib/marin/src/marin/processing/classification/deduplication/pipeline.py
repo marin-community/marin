@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 
 class DedupMode(StrEnum):
-    PARAGRAPH_DEDUPLICATE = auto()
+    EXACT_PARAGRAPH_DEDUPLICATE = auto()
     DOCUMENT_DEDUPLICATE = auto()
 
 
@@ -75,7 +75,7 @@ class DedupeConfig:
     output_path: str = THIS_OUTPUT_PATH
     attribute_name: str = "duplicate_text"
     processes: int = 1
-    mode: DedupMode = DedupMode.PARAGRAPH_DEDUPLICATE
+    mode: DedupMode = DedupMode.EXACT_PARAGRAPH_DEDUPLICATE
     # field to use for text content in Parquet files
     text_field: str = "text"
 
@@ -507,7 +507,7 @@ def _run_doc_deduplication(config: DedupeConfig):
 
 def deduplicate(config: DedupeConfig):
     """Main entry point for deduplication workflows."""
-    if config.mode == DedupMode.PARAGRAPH_DEDUPLICATE:
+    if config.mode == DedupMode.EXACT_PARAGRAPH_DEDUPLICATE:
         return _run_deduplication(config)
     elif config.mode == DedupMode.DOCUMENT_DEDUPLICATE:
         return _run_doc_deduplication(config)
