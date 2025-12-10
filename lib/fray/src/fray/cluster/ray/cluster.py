@@ -302,7 +302,8 @@ class RayCluster(Cluster):
             runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
             runtime_env["config"] = {"setup_timeout_seconds": 1800}
         else:
-            runtime_env = {}
+            # if the user doesn't specify any packages, reuse the existing environment
+            runtime_env = {"env_vars": env_vars}
         logger.info("Runtime env: %s", runtime_env)
 >>>>>>> 555f3e846 (Cleanups from code review.)
         return runtime_env
