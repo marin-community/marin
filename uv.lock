@@ -3508,7 +3508,7 @@ requires-dist = [
     { name = "py7zr", marker = "extra == 'download-transform'" },
     { name = "pyarrow", specifier = ">=22" },
     { name = "pylatexenc", marker = "extra == 'post-training'" },
-    { name = "ray", specifier = ">=2.45" },
+    { name = "ray", specifier = "==2.45" },
     { name = "readabilipy", marker = "extra == 'download-transform'" },
     { name = "readability-lxml", marker = "extra == 'download-transform'" },
     { name = "regex" },
