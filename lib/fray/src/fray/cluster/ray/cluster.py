@@ -208,7 +208,7 @@ class RayCluster(Cluster):
         runtime_env = self._get_runtime_env(request)
 
         # strip out keys that can only be set at the Job level
-        runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
+        runtime_env = {k: v for k, v in runtime_env.items() if k not in ["excludes", "config", "working_dir"]}
 
         logger.info(f"Launching TPU job {request.name} with runtime env: {runtime_env}")
 
@@ -275,7 +275,7 @@ class RayCluster(Cluster):
         else:
             runtime_env = {"env_vars": env_vars}
 
-        logger.info("Using environement: %s", runtime_env)
+        logger.info("Ray runtime env: %s", runtime_env)
         return runtime_env
 
     def _get_entrypoint_params(self, request: JobRequest) -> dict:

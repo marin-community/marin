@@ -57,8 +57,11 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
         logger.debug(f"Converting {data_id} {url}")
         md = convert_page(html, url, extract_method, config)["content"]
         error = None
+    except (ModuleNotFoundError, ImportError):
+        # Configuration errors should fail the job, not be caught
+        raise
     except Exception as e:
-        # Failed to convert
+        # Failed to convert - content-level errors are logged and recorded
         logger.exception(f"{e} in processing {data_id = }, {url = }")
         md = None
         error = e

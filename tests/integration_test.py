@@ -15,6 +15,7 @@
 import dataclasses
 import logging
 import os
+import sys
 
 import draccus
 from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
@@ -249,9 +250,13 @@ def main(config: ExecutorMainConfig):
         )
 
         # start Ray explicitly and set it as the current cluster
+        # N.B. This script must not be launched via `uv run`, or Ray will prefer to use `uv` for all execution
+        # ignoring package dependencies specified in each step.
+        if "uv run" in " ".join(sys.argv):
+            raise RuntimeError("integration_test.py must not be launched via `uv run`. Please run it directly.")
         import ray
 
-        ray.init(resources={"cpu": 8, "head_node": 1})
+        ray.init(resources={"head_node": 1}, runtime_env={"working_dir": None}, num_cpus=16)
         set_current_cluster(create_cluster("ray"))
 
         # path to synthetic test data
