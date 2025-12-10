@@ -18,8 +18,7 @@ from levanter.data.text import (
     BatchTokenizer,
     ChatLmDatasetFormat,
     MultiturnChatDataset,
-    SupervisedDataset,
-    SupervisedLmDatasetFormat,
+    TextLmDatasetFormat,
     UrlSingleDatasetLMConfig,
     build_lm_dataset_cache,
     preprocessor_for_format,
@@ -95,46 +94,6 @@ def test_llama_tokenizer_needs_long_sequence_workaround():
     tokenizer = AutoTokenizer.from_pretrained("NousResearch/Llama-2-7b-hf")
     batch_tokenizer = BatchTokenizer(tokenizer)
     assert batch_tokenizer._needs_long_sequence_workaround
-
-
-def test_make_sequence_mask_basic_two_segments():
-    make_output_mask = SupervisedDataset._make_sequence_mask
-    segment_ids = np.array([0, 0, 1, 1, 1])
-    segment_source_len = np.array([1, 2])
-    expected = np.array([0, 1, 0, 0, 1], dtype=np.int32)
-    assert_array_equal(make_output_mask(segment_ids, segment_source_len), expected)
-
-
-def test_make_sequence_mask_all_input_tokens():
-    make_output_mask = SupervisedDataset._make_sequence_mask
-    segment_ids = np.array([0, 0, 1, 1])
-    segment_source_len = np.array([2, 2])
-    expected = np.array([0, 0, 0, 0], dtype=np.int32)
-    assert_array_equal(make_output_mask(segment_ids, segment_source_len), expected)
-
-
-def test_make_sequence_mask_all_output_tokens():
-    make_output_mask = SupervisedDataset._make_sequence_mask
-    segment_ids = np.array([0, 0, 1, 1])
-    segment_source_len = np.array([0, 0])
-    expected = np.array([1, 1, 1, 1], dtype=np.int32)
-    assert_array_equal(make_output_mask(segment_ids, segment_source_len), expected)
-
-
-def test_make_sequence_mask_alternating_inputs_outputs():
-    make_output_mask = SupervisedDataset._make_sequence_mask
-    segment_ids = np.array([0, 0, 0, 1, 1, 1])
-    segment_source_len = np.array([2, 1])
-    expected = np.array([0, 0, 1, 0, 1, 1], dtype=np.int32)
-    assert_array_equal(make_output_mask(segment_ids, segment_source_len), expected)
-
-
-def test_make_sequence_mask_single_segment_mixed():
-    make_output_mask = SupervisedDataset._make_sequence_mask
-    segment_ids = np.array([0, 0, 0, 0])
-    segment_source_len = np.array([2])
-    expected = np.array([0, 0, 1, 1], dtype=np.int32)
-    assert_array_equal(make_output_mask(segment_ids, segment_source_len), expected)
 
 
 @pytest.fixture
