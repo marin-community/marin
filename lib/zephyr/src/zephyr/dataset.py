@@ -826,6 +826,22 @@ class Dataset(Generic[T]):
 
         return Dataset(self.source, [*self.operations, ReduceLocalOp(local_reducer), ReduceGlobalOp(global_reducer)])
 
+    def count(self) -> Dataset[int]:
+        """Count the total number of items in the dataset.
+
+        Returns:
+            Dataset containing a single integer count
+
+        Example:
+            >>> ds = Dataset.from_list(range(100)).filter(lambda x: x % 2 == 0)
+            >>> count = list(backend.execute(ds.count()))[0]
+            50
+        """
+        return self.reduce(
+            local_reducer=lambda items: sum(1 for _ in items),
+            global_reducer=sum,
+        )
+
     def sorted_merge_join(
         self,
         right: Dataset[R],
