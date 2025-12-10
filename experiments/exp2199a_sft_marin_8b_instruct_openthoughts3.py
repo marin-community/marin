@@ -72,7 +72,7 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 5
-TRAIN_BATCH_SIZE = 512  # Fits on 2 x TPU-v4-64 (for v4-64, batch size must be divisible by # devices which is 32)
+TRAIN_BATCH_SIZE = 512  # Fits on 1 x TPU-v5p-64 (for v5p-64, batch size must be divisible by # devices which is 32)
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 mixture_sft_config = SimpleSFTConfig(
