@@ -138,9 +138,7 @@ def connected_components(
             Dataset.from_list(curr_it)
             .flat_map(lambda f: load_file(f, columns=["changed"]))
             .filter(lambda node: node["changed"])
-            # TODO: why is there no .count() method?
-            .map(lambda _: 1)
-            .reduce(sum)
+            .count()
         )
 
         num_changes = changes[0]
