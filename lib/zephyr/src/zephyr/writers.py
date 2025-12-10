@@ -188,6 +188,46 @@ def write_parquet_file(
     return {"path": output_path, "count": count}
 
 
+def write_vortex_file(records: Iterable, output_path: str) -> dict:
+    """Write records to a Vortex file.
+
+    Args:
+        records: Records to write (iterable of dicts)
+        output_path: Path to output .vortex file
+
+    Returns:
+        Dict with metadata: {"path": output_path, "count": num_records}
+    """
+    import pyarrow as pa
+    import vortex
+
+    ensure_parent_dir(output_path)
+
+    record_iter = iter(records)
+
+    try:
+        first_record = next(record_iter)
+    except StopIteration:
+        # Empty case - write empty vortex file
+        empty_table = pa.Table.from_pylist([])
+        with atomic_rename(output_path) as temp_path:
+            vortex.io.write(empty_table, temp_path)
+        return {"path": output_path, "count": 0}
+
+    # Accumulate all records and write
+    all_records = [first_record]
+    for record in record_iter:
+        all_records.append(record)
+
+    count = len(all_records)
+    table = pa.Table.from_pylist(all_records)
+
+    with atomic_rename(output_path) as temp_path:
+        vortex.io.write(table, temp_path)
+
+    return {"path": output_path, "count": count}
+
+
 def batchify(batch: Iterable, n: int = 1024) -> Iterable:
     iterator = iter(batch)
     while batch := tuple(itertools.islice(iterator, n)):

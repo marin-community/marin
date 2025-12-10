@@ -39,7 +39,9 @@ jobs:
 
       - name: Run the quickstart script
         shell: bash -l {0}
-        run: uv run python tests/integration_test.py
+        # N.B. You _must not_ use `uv run` here, as that triggers weird behavior from Ray
+        # https://github.com/ray-project/ray/issues/54344
+        run: .venv/bin/python tests/integration_test.py
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           JAX_TRACEBACK_FILTERING: off

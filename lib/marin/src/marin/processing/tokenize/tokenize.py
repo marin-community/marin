@@ -318,7 +318,7 @@ def tokenize(config: TokenizeConfigBase):
             ds = ds.take_per_shard(config.sample_count)
 
         temp_shards = (
-            ds.batch(64)
+            ds.window(64)
             .map_shard(lambda batches: _tokenize_batches(config, batches))
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
