@@ -135,12 +135,7 @@ def connected_components(
 
         # Check for convergence
         changes = backend.execute(
-            Dataset.from_list(curr_it)
-            .load_parquet(columns=["changed"])
-            .filter(col("changed"))
-            # TODO: why is there no .count() method?
-            .map(lambda _: 1)
-            .reduce(sum)
+            Dataset.from_list(curr_it).load_parquet(columns=["changed"]).filter(col("changed")).count()
         )
 
         num_changes = changes[0]
