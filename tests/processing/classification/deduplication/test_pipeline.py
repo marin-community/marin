@@ -44,7 +44,7 @@ def test_exact_deduplication_paragraph(fox_corpus):
         output_path=fox_corpus["output_dir"],
         attribute_name="duplicate_text",
         processes=1,
-        mode=DedupMode.DEDUPLICATE,
+        mode=DedupMode.PARAGRAPH_DEDUPLICATE,
     )
 
     result = deduplicate(dedupe_config)
@@ -83,7 +83,7 @@ def test_exact_deduplication_document(fox_corpus):
         input_path=fox_corpus["test_dir"],
         output_path=fox_corpus["output_dir"],
         attribute_name="is_duplicate",
-        mode=DedupMode.DOC_DEDUPLICATE,
+        mode=DedupMode.DOCUMENT_DEDUPLICATE,
         processes=1,
     )
 
@@ -118,7 +118,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
         input_path=fox_corpus["test_dir"],
         output_path=dedupe_output_dir,
         attribute_name="duplicate_text",
-        mode=DedupMode.DEDUPLICATE,
+        mode=DedupMode.PARAGRAPH_DEDUPLICATE,
         processes=1,
     )
 

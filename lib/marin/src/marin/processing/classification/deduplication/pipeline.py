@@ -49,8 +49,8 @@ logger = logging.getLogger(__name__)
 
 
 class DedupMode(StrEnum):
-    DEDUPLICATE = auto()
-    DOC_DEDUPLICATE = auto()
+    PARAGRAPH_DEDUPLICATE = auto()
+    DOCUMENT_DEDUPLICATE = auto()
 
 
 @dataclass(frozen=True)
@@ -75,7 +75,7 @@ class DedupeConfig:
     output_path: str = THIS_OUTPUT_PATH
     attribute_name: str = "duplicate_text"
     processes: int = 1
-    mode: DedupMode = DedupMode.DEDUPLICATE
+    mode: DedupMode = DedupMode.PARAGRAPH_DEDUPLICATE
     # field to use for text content in Parquet files
     text_field: str = "text"
 
@@ -507,9 +507,9 @@ def _run_doc_deduplication(config: DedupeConfig):
 
 def deduplicate(config: DedupeConfig):
     """Main entry point for deduplication workflows."""
-    if config.mode == DedupMode.DEDUPLICATE:
+    if config.mode == DedupMode.PARAGRAPH_DEDUPLICATE:
         return _run_deduplication(config)
-    elif config.mode == DedupMode.DOC_DEDUPLICATE:
+    elif config.mode == DedupMode.DOCUMENT_DEDUPLICATE:
         return _run_doc_deduplication(config)
     else:
         raise ValueError(f"Unknown mode {config.mode}")
