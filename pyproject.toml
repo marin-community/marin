@@ -14,7 +14,7 @@ dependencies = [
     "zephyr",
     "haliax",
     "fray",
- #   "dupekit"
+    "dupekit"
 ]
 
 [tool.uv]
@@ -31,7 +31,7 @@ members = [
     "lib/zephyr",
     "lib/haliax",
     "lib/fray",
- #   "lib/dupekit"
+    "lib/dupekit"
 ]
 
 [tool.uv.sources]
@@ -40,7 +40,7 @@ haliax.workspace = true
 levanter.workspace = true
 marin.workspace = true
 zephyr.workspace = true
-#dupekit.workspace = true
+dupekit.workspace = true
 
 [tool.black]
 line-length = 121
