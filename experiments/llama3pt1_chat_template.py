@@ -33,7 +33,12 @@ LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
 
 {#- This block extracts the system message, so we can slot it into the right place. #}
 {%- if messages[0]['role'] == 'system' %}
-    {%- set system_message = messages[0]['content']|trim %}
+    {%- set system_content = messages[0].get('content', '') %}
+    {%- if system_content %}
+        {%- set system_message = system_content.strip() if system_content is string else "" %}
+    {%- else %}
+        {%- set system_message = "" %}
+    {%- endif %}
     {%- set messages = messages[1:] %}
 {%- else %}
     {%- set system_message = "" %}
@@ -65,7 +70,12 @@ LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
 {%- if tools_in_user_message and not tools is none %}
     {#- Extract the first user message so we can plug it in here #}
     {%- if messages | length != 0 %}
-        {%- set first_user_message = messages[0]['content']|trim %}
+        {%- set first_content = messages[0].get('content', '') %}
+        {%- if first_content %}
+            {%- set first_user_message = first_content.strip() if first_content is string else "" %}
+        {%- else %}
+            {%- set first_user_message = "" %}
+        {%- endif %}
         {%- set messages = messages[1:] %}
     {%- else %}
         {{- raise_exception("Cannot put tools in the first user message when there's no first user message!") }}
@@ -84,12 +94,21 @@ LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
 
 {%- for message in messages %}
     {%- if not (message.role == 'ipython' or message.role == 'tool' or 'tool_calls' in message) %}
+        {%- set content = message.get('content', '') %}
         {%- if message.role == 'assistant' %}
             {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\\n\\n' }}
-            {% generation %}{{- message['content'] | trim }}{% endgeneration %}
+            {% generation %}
+            {%- if content is string and content %}
+                {{- content.strip() }}
+            {%- endif %}
+            {% endgeneration %}
             {{- '<|eot_id|>' }}
         {%- else %}
-            {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\\n\\n'+ message['content'] | trim + '<|eot_id|>' }}
+            {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\\n\\n' }}
+            {%- if content is string and content %}
+                {{- content.strip() }}
+            {%- endif %}
+            {{- '<|eot_id|>' }}
         {%- endif %}
     {%- elif 'tool_calls' in message %}
         {%- if not message.tool_calls|length == 1 %}
@@ -120,11 +139,14 @@ LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
             {{- "<|eot_id|>" }}
         {%- endif %}
     {%- elif message.role == "tool" or message.role == "ipython" %}
+        {%- set content = message.get('content', '') %}
         {{- "<|start_header_id|>ipython<|end_header_id|>\\n\\n" }}
-        {%- if message.content is mapping or message.content is iterable %}
-            {{- message.content | tojson }}
-        {%- else %}
-            {{- message.content }}
+        {%- if content is string %}
+            {{- content }}
+        {%- elif content is mapping %}
+            {{- content | tojson }}
+        {%- elif content is iterable %}
+            {{- content | tojson }}
         {%- endif %}
         {{- "<|eot_id|>" }}
     {%- endif %}

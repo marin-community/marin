@@ -1465,6 +1465,7 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
         self.messages_field = messages_field
         self.system_prompt_field = system_prompt_field
         self.chat_template_kwargs_field = chat_template_kwargs_field
+        self.mask_user_turns = mask_user_turns
 
         if self.chat_template is None:
             raise ValueError("No chat template provided and tokenizer has no default chat template")
@@ -1521,7 +1522,7 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
                 messages,
                 tokenize=True,
                 chat_template=self.chat_template,
-                return_assistant_tokens_mask=True,
+                return_assistant_tokens_mask=True if self.mask_user_turns else False,
                 return_dict=True,
             )
         else:
@@ -1544,7 +1545,7 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
                 apply_kwargs = {
                     **kwargs_dict,
                     "tokenize": True,
-                    "return_assistant_tokens_mask": True,
+                    "return_assistant_tokens_mask": True if self.mask_user_turns else False,
                     "return_dict": True,
                     "chat_template": chat_template_override,
                 }
@@ -1956,9 +1957,10 @@ def maybe_replace_chat_template(tokenizer: HfTokenizer):
     elif tokenizer.name_or_path == "Qwen/Qwen3-8B":
         from experiments.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
         tokenizer.chat_template = QWEN_3_CHAT_TEMPLATE
-    elif tokenizer.name_or_path == "meta-llama/Llama-3.1-8B-Instruct":
-        from experiments.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
-        tokenizer.chat_template = LLAMA_3_1_CHAT_TEMPLATE
+    # elif tokenizer.name_or_path == "meta-llama/Llama-3.1-8B-Instruct":
+    #     from experiments.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
+    #     tokenizer.chat_template = LLAMA_3_1_CHAT_TEMPLATE
+
     return tokenizer
 
 

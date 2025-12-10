@@ -57,7 +57,7 @@ def create_tokenization_step(dataset_identifier: str, short_name: str) -> Execut
         name=f"{short_name}_llama_3_1_8b_instruct_tokenizer",
         dataset=dataset / "**/*.jsonl.gz",
         tokenizer=llama_3_1_8b_instruct_tokenizer,
-        format=ChatLmDatasetFormat(),
+        format=ChatLmDatasetFormat(mask_user_turns=False),  # NOTE: Set to False since couldn't get an updated Llama-3.1 chat template with {%generation%} tags working
     )
 
 
