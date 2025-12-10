@@ -8,7 +8,7 @@ import pytest
 
 import haliax as hax
 
-from levanter.main.sft import reinitialize_some_tokens
+from levanter.utils.token_init import reinitialize_some_tokens
 from levanter.models.llama import LlamaEmbedding
 
 
