@@ -112,6 +112,86 @@ qwen3_32b = Qwen3Config(
     rope=Llama3RotaryEmbeddingsConfig(),
 )
 
+qwen2_5_1_5b_tokenizer = "Qwen/Qwen2.5-1.5B"
+qwen2_5_1_5b = QwenConfig(
+    # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-1.5B/blob/main/config.json
+    max_seq_len=4096,
+    hidden_dim=1536,
+    intermediate_dim=8960,
+    num_heads=12,
+    num_kv_heads=2,
+    num_layers=28,
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-6,
+    tie_word_embeddings=True,  # NOTE: This is different than 7B
+    reference_checkpoint="Qwen/Qwen2.5-1.5B",
+    rope=DefaultRotaryEmbeddingsConfig(
+        theta=1000000.0,
+        factor=1.0
+    ),
+)
+
+qwen2_5_1_5b_instruct_tokenizer = "Qwen/Qwen2.5-1.5B-Instruct"
+qwen2_5_1_5b_instruct = QwenConfig(
+    # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/blob/main/config.json
+    max_seq_len=4096,
+    hidden_dim=1536,
+    intermediate_dim=8960,
+    num_heads=12,
+    num_kv_heads=2,
+    num_layers=28,
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-6,
+    tie_word_embeddings=True,  # NOTE: This is different than 7B
+    reference_checkpoint="Qwen/Qwen2.5-1.5B-Instruct",
+    rope=DefaultRotaryEmbeddingsConfig(
+        theta=1000000.0,
+        factor=1.0
+    ),
+)
+
+qwen2_5_3b_tokenizer = "Qwen/Qwen2.5-3B"
+qwen2_5_3b = QwenConfig(
+    # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-3B/blob/main/config.json
+    max_seq_len=4096,
+    hidden_dim=2048,
+    intermediate_dim=11008,
+    num_heads=16,
+    num_kv_heads=2,
+    num_layers=36,
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-6,
+    tie_word_embeddings=True,  # NOTE: This is different than 7B
+    reference_checkpoint="Qwen/Qwen2.5-3B",
+    rope=DefaultRotaryEmbeddingsConfig(
+        theta=1000000.0,
+        factor=1.0
+    ),
+)
+
+qwen2_5_3b_instruct_tokenizer = "Qwen/Qwen2.5-3B-Instruct"
+qwen2_5_3b_instruct = QwenConfig(
+    # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-3B-Instruct/blob/main/config.json
+    max_seq_len=4096,
+    hidden_dim=2048,
+    intermediate_dim=11008,
+    num_heads=16,
+    num_kv_heads=2,
+    num_layers=36,
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-6,
+    tie_word_embeddings=True,  # NOTE: This is different than 7B
+    reference_checkpoint="Qwen/Qwen2.5-3B-Instruct",
+    rope=DefaultRotaryEmbeddingsConfig(
+        theta=1000000.0,
+        factor=1.0
+    ),
+)
+
 qwen2_5_7b_tokenizer = "Qwen/Qwen2.5-7B"
 qwen2_5_7b = QwenConfig(
     # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-7B/blob/main/config.json
@@ -152,16 +232,46 @@ qwen2_5_7b_instruct = QwenConfig(
     ),
 )
 
-# seems not supported by levanter yet
+qwen2_5_32b_tokenizer = "Qwen/Qwen2.5-32B"
 qwen2_5_32b = QwenConfig(
-    max_seq_len=131072,
+    # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-32B/blob/main/config.json
+    max_seq_len=4096,
     hidden_dim=5120,
     intermediate_dim=27648,
     num_heads=40,
     num_kv_heads=8,
     num_layers=64,
-    rope=Llama3RotaryEmbeddingsConfig(),
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-5,
+    tie_word_embeddings=False,
+    reference_checkpoint="Qwen/Qwen2.5-32B",
+    rope=DefaultRotaryEmbeddingsConfig(
+        theta=1000000.0,
+        factor=1.0
+    ),
 )
+
+qwen2_5_32b_instruct_tokenizer = "Qwen/Qwen2.5-32B-Instruct"
+qwen2_5_32b_instruct = QwenConfig(
+    # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-32B-Instruct/blob/main/config.json
+    max_seq_len=4096,
+    hidden_dim=5120,
+    intermediate_dim=27648,
+    num_heads=40,
+    num_kv_heads=8,
+    num_layers=64,
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-6,  # NOTE: This is changed from the base 32B version
+    tie_word_embeddings=False,
+    reference_checkpoint="Qwen/Qwen2.5-32B-Instruct",
+    rope=DefaultRotaryEmbeddingsConfig(
+        theta=1000000.0,
+        factor=1.0
+    ),
+)
+
 
 marin_32b = Qwen3Config(
     max_seq_len=4096,
