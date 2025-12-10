@@ -182,7 +182,17 @@ class RayCluster(Cluster):
         runtime_env = self._get_runtime_env(request)
         # strip out keys that can only be set at the Job level
         runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
-        remote_fn = ray.remote(entrypoint.callable)
+
+        if isinstance(request.resources.device, GpuConfig):
+            logger.info(
+                f"Launching callable job {request.name} on GPU device {request.resources.device.variant} "
+                f"with {request.resources.device.count} GPUs."
+            )
+            num_gpus = request.resources.device.count
+        else:
+            num_gpus = 0
+
+        remote_fn = ray.remote(num_gpus=num_gpus)(entrypoint.callable)
         ref = remote_fn.options(runtime_env=runtime_env).remote(*entrypoint.args, **entrypoint.kwargs)
         job_id = JobId(str(id(ref)))
         self._jobs[job_id] = RayJobInfo.from_ref(ref, request.name)
@@ -239,11 +249,11 @@ class RayCluster(Cluster):
         elif isinstance(request.resources.device, TpuConfig):
             if "tpu" not in environment.extras:
                 environment.extras.append("tpu")
-            env_vars["JAX_PLATFORMS"] = "tpu,cpu"
+            env_vars["JAX_PLATFORMS"] = ""
         elif isinstance(request.resources.device, GpuConfig):
             if "gpu" not in environment.extras:
-                environment.extras.append("gpu")
-            env_vars["JAX_PLATFORMS"] = "cuda,cpu"
+                environment.extras.extend(["cuda12"])
+            env_vars["JAX_PLATFORMS"] = ""
 
         logger.info(
             "Building environment for device: %s/%s", request.resources.device.kind, request.resources.device.variant
@@ -253,15 +263,19 @@ class RayCluster(Cluster):
         logger.info(
             f"Building environment with {environment.pip_packages}, extras {environment.extras} for job: {request.name}"
         )
-        runtime_env = build_runtime_env_for_packages(
-            extra=list(environment.extras),
-            pip_packages=list(environment.pip_packages),
-            env_vars=env_vars,
-        )
+        if environment.pip_packages or environment.extras:
+            runtime_env = build_runtime_env_for_packages(
+                extra=list(environment.extras),
+                pip_packages=list(environment.pip_packages),
+                env_vars=env_vars,
+            )
+            runtime_env["working_dir"] = environment.workspace
+            runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
+            runtime_env["config"] = {"setup_timeout_seconds": 1800}
+        else:
+            runtime_env = {"env_vars": env_vars}
 
-        runtime_env["working_dir"] = environment.workspace
-        runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
-        runtime_env["config"] = {"setup_timeout_seconds": 1800}
+        logger.info("Using environement: %s", runtime_env)
         return runtime_env
 
     def _get_entrypoint_params(self, request: JobRequest) -> dict:
