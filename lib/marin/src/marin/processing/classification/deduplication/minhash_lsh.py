@@ -13,11 +13,10 @@
 # limitations under the License.
 
 from collections.abc import Iterator
-import struct
 from typing import Any, TypeVar, TypedDict
-from dupekit import hash_xxh3_128
 from marin.processing.classification.deduplication.text_cleaning import clean_text
 from marin.processing.classification.deduplication.vendor.datasketch.minhash import MinHash
+from xxhash import xxh128_intdigest
 from zephyr.dataset import Dataset
 
 T = TypeVar("T")
@@ -100,7 +99,7 @@ def _minhash_lsh(
         # NOTE: this is the method used in datasketch MinHash.generator
         _m = min_hash.copy()
         _m.update_batch(shingles)
-        sig = _m.digest().tolist()
+        sig = _m.digest()
 
         rows_per_band = len(sig) // num_bands
 
@@ -108,13 +107,5 @@ def _minhash_lsh(
             start = band * rows_per_band
             end = start + rows_per_band
 
-            bucket = sig[start:end]
-            # TODO: is hashing the bucket necessary here?
-            # TODO: Is Q (unsigned long long) the right format?
-            assert all(
-                isinstance(x, int) and x >= 0 for x in bucket
-            ), f"Non-integer or negative value in bucket: {bucket}"
-            bucket_bytes = struct.pack(f"{len(bucket)}Q", *bucket)
-            bucket_hash = str(hash_xxh3_128(bucket_bytes))
-
+            bucket_hash = str(xxh128_intdigest(sig[start:end]))
             yield {"bucket": bucket_hash, "id": record_id}
