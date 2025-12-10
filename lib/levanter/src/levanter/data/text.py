@@ -689,8 +689,8 @@ def load_lm_dataset_cache(
     processor = preprocessor_for_format(format, tokenizer, enforce_bos=True, enforce_eos=enforce_eos)
     cache = TreeCache.load(
         cache_dir,
-        exemplar=exemplar_to_use,
-        options=cache_meta,
+        exemplar=processor.output_exemplar,
+        options=CacheMetadata(preprocessor_metadata=processor.metadata),
     )
     return cache
 
@@ -786,7 +786,6 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
         format = self.format
         enforce_eos = self.enforce_eos
         options = self.cache_options
-        processor = self.preprocessor(tokenizer, enforce_eos=enforce_eos)
 
         if cache_dir is None:
             raise ValueError("cache_dir cannot be None")
@@ -795,14 +794,7 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
 
         if fsspec_utils.exists(cache_dir):
             try:
-                return load_lm_dataset_cache(
-                    cache_dir,
-                    format,
-                    tokenizer,
-                    enforce_eos,
-                    processor=processor,
-                    exemplar=self.cache_exemplar(),
-                )
+                return load_lm_dataset_cache(cache_dir, format, tokenizer, enforce_eos)
             except FileNotFoundError:
                 pass
 
@@ -810,7 +802,7 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
             logger.warning(f"Skipping {split} because no source was provided")
             return None
 
-        return build_lm_dataset_cache(cache_dir, source, format, tokenizer, options, enforce_eos, processor=processor)
+        return build_lm_dataset_cache(cache_dir, source, format, tokenizer, options, enforce_eos)
 
 
 @dataclass(frozen=True)
