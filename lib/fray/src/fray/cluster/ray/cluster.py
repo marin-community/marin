@@ -242,7 +242,7 @@ class RayCluster(Cluster):
             env_vars["JAX_PLATFORMS"] = "tpu,cpu"
         elif isinstance(request.resources.device, GpuConfig):
             if "gpu" not in environment.extras:
-                environment.extras.append("gpu")
+                environment.extras.append("cuda12")
             env_vars["JAX_PLATFORMS"] = "gpu,cpu"
 
         logger.info(
@@ -253,15 +253,17 @@ class RayCluster(Cluster):
         logger.info(
             f"Building environment with {environment.pip_packages}, extras {environment.extras} for job: {request.name}"
         )
-        runtime_env = build_runtime_env_for_packages(
-            extra=list(environment.extras),
-            pip_packages=list(environment.pip_packages),
-            env_vars=env_vars,
-        )
-
-        runtime_env["working_dir"] = environment.workspace
-        runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
-        runtime_env["config"] = {"setup_timeout_seconds": 1800}
+        if not environment.pip_packages and not environment.extras:
+            runtime_env = {"env_vars": env_vars}
+        else:
+            runtime_env = build_runtime_env_for_packages(
+                extra=list(environment.extras),
+                pip_packages=list(environment.pip_packages),
+                env_vars=env_vars,
+            )
+            runtime_env["working_dir"] = environment.workspace
+            runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
+            runtime_env["config"] = {"setup_timeout_seconds": 1800}
         return runtime_env
 
     def _get_entrypoint_params(self, request: JobRequest) -> dict:
