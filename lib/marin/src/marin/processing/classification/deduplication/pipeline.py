@@ -347,6 +347,7 @@ def _compute_fuzzy_dedup_stats(shards: list[str], method: str, level: str) -> Du
         result: DupCounters = create_backend("threadpool").execute(  # type: ignore[bad-assignment]
             Dataset.from_list(shards)
             .flat_map(load_parquet)
+            # Compute the per-component statistics and then roll them up into a single counter group
             .group_by(
                 key=lambda r: r["component_id"],
                 reducer=lambda _, items: DupCounters(
