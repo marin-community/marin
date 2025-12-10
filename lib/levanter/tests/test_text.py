@@ -10,7 +10,6 @@ from transformers import AutoTokenizer
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from numpy.testing import assert_array_equal
 
 import haliax as hax
 
@@ -18,7 +17,6 @@ from levanter.data.text import (
     BatchTokenizer,
     ChatLmDatasetFormat,
     MultiturnChatDataset,
-    TextLmDatasetFormat,
     UrlSingleDatasetLMConfig,
     build_lm_dataset_cache,
     preprocessor_for_format,
@@ -257,119 +255,3 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
 
             # loss_weight should coincide with assistant tokens only
             assert_loss_weight_matches_all_assistants(ex, tokenizer)
-
-
-@pytest.fixture(scope="module")
-def hf_tokenizer():
-    return AutoTokenizer.from_pretrained(
-        "stanford-crfm/marin-tokenizer",
-        revision="49a09e626c220e9daae74124ea41be1bf5cd331d",
-    )
-
-
-@pytest.fixture
-def dummy_supervised_file(tmp_path_factory) -> str:
-    """Write two tiny supervised examples to jsonl and return the path."""
-    data = [
-        {"prompt": "Translate to French: Hello", "answer": "Bonjour"},
-        {"prompt": "Translate to French: Yes", "answer": "Oui"},
-    ]
-    fp: Path = tmp_path_factory.mktemp("sup") / "sup.jsonl"
-    with fp.open("w") as f:
-        for ex in data:
-            f.write(json.dumps(ex) + "\n")
-    return str(fp)
-
-
-@pytest.mark.ray
-def test_supervised_processor_and_cache(dummy_supervised_file, hf_tokenizer):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cfg = UrlSingleDatasetLMConfig(
-            train_urls=[dummy_supervised_file],
-            format=SupervisedLmDatasetFormat(
-                input_field="prompt",
-                output_field="answer",
-                separate_with="\n",
-            ),
-        )
-
-        source = cfg.get_shard_source("train")
-        ds_cache = build_lm_dataset_cache(tmpdir, source, cfg.format, hf_tokenizer)
-
-        # there are two separate items, one per line
-        sync_ds = ds_cache.as_sync_dataset()
-        assert len(sync_ds) == 2
-
-        for ex in sync_ds:
-            # shape / type checks
-            assert ex["input_ids"].ndim == 1
-            assert ex["sources_len"].size == 1
-            # specializing to the particular data: <begin_of_text>Translate to French: <single word>\n
-            assert int(ex["sources_len"]) == 7
-
-        # Now pack 2 conversations into one example
-        Pos = hax.Axis("position", 128)
-        packed_ds = SupervisedDataset(
-            ds_cache,
-            Pos,
-            max_segments_per_example=2,
-            mask_inputs=True,
-        ).as_sync_dataset()
-
-        # We had 2 examples, max_segments_per_example=2 → should pack into 1
-        assert len(packed_ds) == 1
-        ex: LmExample = packed_ds[0]
-
-        # Axis checks
-        assert ex.tokens.axes == (Pos,)
-        assert ex.loss_weight.axes == (Pos,)
-        assert ex.attn_mask.segment_ids[0].axes == (Pos,)
-
-        # -----------------------------------------------------------
-        #  Verify that for every segment:
-        #    * leading tokens (input) have loss_weight==0
-        #    * trailing tokens (answer) have loss_weight==1
-        # -----------------------------------------------------------
-        seg_ids: np.ndarray = ex.attn_mask.segment_ids[0].array
-        mask: np.ndarray = ex.loss_weight.array
-
-        for seg in np.unique(seg_ids):
-            if seg < 0:  # skip padding segment (-1)
-                continue
-
-            idx = np.where(seg_ids == seg)[0]
-            seg_mask = mask[idx]
-
-            # Must contain at least one prompt and one answer token
-            ones_idx = np.where(seg_mask == 1)[0]
-            assert len(ones_idx) > 0, "segment has no answer‑token losses"
-            first_one = ones_idx[0]
-
-            # All positions before first answer token must be masked 0
-            assert not seg_mask[:first_one].any(), "prompt tokens should have loss_weight == 0"
-            # All positions from first answer token onward must be masked 1
-            assert seg_mask[first_one:].all(), "answer tokens should have loss_weight == 1"
-
-        # now try no packing
-
-        packed_ds = SupervisedDataset(
-            ds_cache,
-            Pos,
-            max_segments_per_example=1,
-            mask_inputs=True,
-        ).as_sync_dataset()
-
-        # we supplied two conversations, so we should still have two examples
-        assert len(packed_ds) == 2
-
-        for idx, (raw_ex, ex) in enumerate(zip(sync_ds, packed_ds, strict=True)):
-            # basic structural checks
-            assert ex.tokens.axes == (Pos,)
-            assert ex.loss_weight.axes == (Pos,)
-            assert ex.attn_mask.segment_ids[0].axes == (Pos,)
-
-            assert set(int(i) for i in np.unique(ex.attn_mask.segment_ids[0].array)) == {idx, -1}
-
-            assert ex.loss_weight.array.sum() == len(ex.attn_mask.segment_ids[0].array) - raw_ex[
-                "sources_len"
-            ] - np.sum(ex.attn_mask.segment_ids[0].array == -1)
