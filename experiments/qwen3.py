@@ -16,8 +16,9 @@
 Specifies a sequence of Llama 3 models from small to large.
 """
 
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config, QwenConfig
+from levanter.utils.activation import ActivationFunctionEnum
 
 # default head_dim = hidden_dim // num_heads = 64, mismatch with "Qwen/Qwen3-0.6B"
 qwen3_0_6b = Qwen3Config(
@@ -99,6 +100,46 @@ qwen3_32b = Qwen3Config(
     num_kv_heads=8,
     num_layers=64,
     rope=Llama3RotaryEmbeddingsConfig(),
+)
+
+qwen2_5_7b_tokenizer = "Qwen/Qwen2.5-7B"
+qwen2_5_7b = QwenConfig(
+    # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-7B/blob/main/config.json
+    max_seq_len=4096,
+    hidden_dim=3584,
+    intermediate_dim=18944,
+    num_heads=28,
+    num_kv_heads=4,
+    num_layers=28,
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-6,
+    tie_word_embeddings=False,
+    reference_checkpoint="Qwen/Qwen2.5-7B",
+    rope=DefaultRotaryEmbeddingsConfig(
+        theta=1000000.0,
+        factor=1.0
+    ),
+)
+
+qwen2_5_7b_instruct_tokenizer = "Qwen/Qwen2.5-7B-Instruct"
+qwen2_5_7b_instruct = QwenConfig(
+    # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/blob/main/config.json
+    max_seq_len=4096,
+    hidden_dim=3584,
+    intermediate_dim=18944,
+    num_heads=28,
+    num_kv_heads=4,
+    num_layers=28,
+    activation_function=ActivationFunctionEnum.silu,
+    initializer_range=0.02,
+    layer_norm_epsilon=1e-6,
+    tie_word_embeddings=False,
+    reference_checkpoint="Qwen/Qwen2.5-7B-Instruct",
+    rope=DefaultRotaryEmbeddingsConfig(
+        theta=1000000.0,
+        factor=1.0
+    ),
 )
 
 # seems not supported by levanter yet
