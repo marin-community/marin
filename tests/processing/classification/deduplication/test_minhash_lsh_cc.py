@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections import defaultdict
 from collections.abc import Iterator
+from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.processing.classification.deduplication.minhash_lsh import minhash_lsh
 from zephyr.dataset import Dataset
+from zephyr.readers import load_file
 
 
 def _get_ids_per_bucket(_: str, records: Iterator[dict]) -> set:
@@ -75,3 +78,24 @@ def test_minhash_docs(sync_backend, docs):
 
     assert similar_doc_collisions > 0  # doc_1 and doc_1_diff_header should collide in some buckets
     assert different_doc_collisions == 0  # doc_2 should not collide with doc_1 or doc_1_diff_header
+
+
+def test_connected_components_happy_path(sync_backend, docs, tmp_path):
+    input_data = [{"text": text, "id": doc_id} for doc_id, text in docs.items()]
+
+    ds = Dataset.from_list(input_data)
+
+    lsh_result = minhash_lsh(ds)
+
+    converged, output_path = connected_components(
+        lsh_result, backend=sync_backend, output_dir=tmp_path.as_posix(), max_iterations=5
+    )
+    assert converged
+    results = sync_backend.execute(Dataset.from_list(output_path).flat_map(load_file))
+    assert len(results) == len(docs)
+
+    components = defaultdict(list)
+    for r in results:
+        components[r["component_id"]].append(r["node_id"]["record_id"])
+
+    assert sorted(components.values()) == [["doc_1_diff_header", "doc_1"], ["doc_2"]]
