@@ -104,6 +104,7 @@ project-excludes = [
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
     "lib/**/post_training/**",  # No longer used
+    "lib/marin/src/marin/processing/classification/deduplication/vendor", # Exclude vendor stuff in dedupe
 ]
 
 # Disable specific error codes that are primarily noise from missing type stubs

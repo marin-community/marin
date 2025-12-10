@@ -12,19 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
 import pytest
-import pyarrow as pa
-from typing import Any
-import dupekit
+from zephyr.backend_factory import create_backend
 
 
-@pytest.mark.parametrize("batch_size", [1, 128, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072])
-def test_arrow_batch_sizes(benchmark: Any, in_memory_table: pa.Table, batch_size: int) -> None:
-    """
-    Benchmarks the effect of PyArrow batch size on marshaling throughput.
-    """
+@pytest.fixture(scope="module")
+def sync_backend():
+    return create_backend("sync")
 
-    def _pipeline() -> int:
-        return sum(len(dupekit.process_arrow_batch(b)) for b in in_memory_table.to_batches(max_chunksize=batch_size))
 
-    assert benchmark(_pipeline) > 0
+@pytest.fixture(scope="module")
+def docs():
+    test_resources = Path(__file__).parent.joinpath("resources", "docs")
+    docs = {}
+    for doc_file in test_resources.glob("*.txt"):
+        docs[doc_file.stem] = doc_file.read_text()
+    return docs
