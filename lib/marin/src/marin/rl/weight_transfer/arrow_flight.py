@@ -43,12 +43,11 @@ import jax
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
+from fray.job.context import JobContext, fray_job_ctx
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
 from levanter.utils.jax_utils import barrier_sync
-
-from marin.rl.robust_actor import RobustActor
 
 from .base import (
     WeightTransferClient,
@@ -200,7 +199,9 @@ def deserialize_arrow_to_pytree(param_name: str, reader: pa.RecordBatchReader) -
         array_np = np.concatenate(buffer_parts)
         array_np = array_np.view(dtype).reshape(shape)
         # Convert to JAX array directly
-        res = jax.numpy.asarray(array_np)
+        # If we place on the TPU then we OOM. Need the context manager or default device is TPU
+        with jax.default_device(jax.devices("cpu")[0]):
+            res = jax.numpy.asarray(array_np)
         ed = time.time()
         if ed - st > 0.1:
             logger.debug(f"Deserialized param {param_name} of shape {shape} and dtype {dtype} in {ed - st:.2f}s")
@@ -370,7 +371,10 @@ class ArrowFlightServer(WeightTransferServer):
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
         self.metrics = WeightTransferServerMetrics()
-        self._coordinator = RobustActor.create(ArrowFlightCoordinator, actor_name=self.config.coordinator_name)
+        self._ctx: JobContext = fray_job_ctx()
+        self._coordinator = self._ctx.create_actor(
+            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
+        )
         logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
 
     def serve_weights(self, weight_id: int, model: PyTree) -> None:
@@ -404,7 +408,7 @@ class ArrowFlightServer(WeightTransferServer):
                 param_names = list(params_dict.keys())
                 actual_host = self.config.flight_host if self.config.flight_host != "0.0.0.0" else socket.gethostname()
                 server_locations = [(actual_host, server.port) for server in self._flight_servers]
-                self._coordinator.update_server.call(weight_id, param_names, server_locations)
+                self._ctx.get(self._coordinator.update_server.remote(weight_id, param_names, server_locations))
                 update_time = time.time()
 
                 self.metrics.successful_transfers += 1
@@ -448,7 +452,6 @@ class ArrowFlightClient(WeightTransferClient):
     _flight_clients: list[flight.FlightClient]
     _server_locations: list[str]
     metrics: WeightTransferClientMetrics
-    _coordinator: RobustActor
     _receive_pool: ThreadPoolExecutor
 
     def __init__(
@@ -464,7 +467,10 @@ class ArrowFlightClient(WeightTransferClient):
 
         self.metrics = WeightTransferClientMetrics()
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
-        self._coordinator = RobustActor.create(ArrowFlightCoordinator, actor_name=self.config.coordinator_name)
+        self._ctx: JobContext = fray_job_ctx()
+        self._coordinator = self._ctx.create_actor(
+            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
+        )
 
     def _connect_to_servers(self, new_locations) -> bool:
         """Connect to all Arrow Flight servers."""
@@ -521,7 +527,7 @@ class ArrowFlightClient(WeightTransferClient):
             start_time = time.time()
 
             # Fetch server info from coordinator
-            server_info = self._coordinator.fetch_server.call()
+            server_info = self._ctx.get(self._coordinator.fetch_server.remote())
 
             if not server_info:
                 logger.info("No Arrow Flight server info available from coordinator.")

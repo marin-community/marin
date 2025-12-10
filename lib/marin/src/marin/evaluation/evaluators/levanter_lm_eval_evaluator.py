@@ -32,7 +32,7 @@ from experiments.evals.task_configs import convert_to_levanter_task_config
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.levanter_tpu_evaluator import LevanterTpuEvaluator
-from marin.run.ray_deps import build_runtime_env_for_packages
+from fray.cluster.ray.deps import build_runtime_env_for_packages
 
 logger = logging.getLogger(__name__)
 
@@ -109,12 +109,8 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
         # Run the harness with the model and the specified evals
 
         try:
-            # Download the model from GCS or HuggingFace
-            print("before download")
-            model_name_or_path: str = self.download_model(model)
-            print(f"in lm_eval: {model_name_or_path}")
+            model_name_or_path: str = self.download_model_if_necessary(model)
             name = model.name + "_lmeval_" + "-".join([eval_task.name for eval_task in evals])
-            print(name)
             logger.info(f"WandB Run Name: {name}")
             logger.info(f"Running eval harness on model: {model_name_or_path}")
 
@@ -144,7 +140,6 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
             # convert to the config that Levanter's eval_harness expects
             tasks = convert_to_levanter_task_config(evals)
             logger.info(f"Tasks: {tasks}")
-            print("converted tasks")
 
             model_path = model_name_or_path
 

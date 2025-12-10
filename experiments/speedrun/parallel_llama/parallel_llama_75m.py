@@ -22,7 +22,7 @@ import logging
 from experiments.speedrun.parallel_llama.exp1571_parallel_llama import ParallelLlamaConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.resources import GpuConfig
+from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
@@ -31,7 +31,7 @@ logger = logging.getLogger("ray")
 # Configuration for a ~75M parameter model with parallel attention/MLP computation
 # Matches the standard llama_75m config from experiments/llama.py
 parallel_llama_75m = ParallelLlamaConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=256,
     intermediate_dim=896,
     num_heads=4,
@@ -47,7 +47,7 @@ parallel_llama_75m = ParallelLlamaConfig(
 )
 
 train_config = SimpleTrainConfig(
-    resources=GpuConfig(gpu_count=1, accelerator_type="H100"),
+    resources=ResourceConfig.with_gpu("H100", count=1),
     train_batch_size=64,
     num_train_steps=10000,
     learning_rate=3e-3,

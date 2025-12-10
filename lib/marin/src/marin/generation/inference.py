@@ -19,15 +19,13 @@ from typing import Any
 
 import fsspec
 import ray
+from fray.cluster import ResourceConfig
+from fray.cluster.ray import get_scheduling_strategy
+from marin.generation.chunk_utils import ChunkStrategy
+from marin.generation.pipeline import vLLMTextGeneration
+from marin.utils import fsspec_glob
 from ray.data import DataContext
 from ray.data.datasource import FilenameProvider
-
-
-from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
-from marin.generation.pipeline import vLLMTextGeneration
-from marin.generation.ray_utils import get_ray_remote_args_scheduling_strategy_fn
-from marin.generation.chunk_utils import ChunkStrategy
-from marin.utils import fsspec_glob
 
 
 @dataclass
@@ -64,7 +62,7 @@ class TextGenerationInferenceConfig:
     prompt_column: str = "text"
 
     # Hardware specific
-    resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
+    resource_config: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_tpu("v6e-8"))
     generated_text_column_name: str = "text"
 
     # Checkpoint specific
@@ -90,7 +88,7 @@ class OverwriteOutputFiletypeFilenameProvider(FilenameProvider):
         self.dataset_id = str(uuid.uuid4())
 
     def get_filename_for_block(self, block, task_index, block_index):
-        return f"{self.dataset_id}_{task_index:06}_{block_index:06}" f".{self.file_format}"
+        return f"{self.dataset_id}_{task_index:06}_{block_index:06}.{self.file_format}"
 
 
 def set_ray_data_config(config: TextGenerationInferenceConfig):
@@ -116,11 +114,11 @@ def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     if config.tensor_parallel_size == 1:
         return {"resources": {"TPU": 1}, "max_restarts": -1}
     else:
-        return {
-            "ray_remote_args_fn": get_ray_remote_args_scheduling_strategy_fn(
-                config.resource_config.num_tpu, config.resource_config.strategy
-            )
-        }
+
+        def scheduling_strategy_dict_fn():
+            return dict(scheduling_strategy=get_scheduling_strategy(config.resource_config))
+
+        return {"ray_remote_args_fn": scheduling_strategy_dict_fn}
 
 
 def get_ray_data_read_kwargs(config: TextGenerationInferenceConfig):
@@ -150,9 +148,8 @@ def get_ray_data_write_kwargs(config: TextGenerationInferenceConfig):
     return ray_data_write_kwargs
 
 
-@ray.remote
 def _find_finished_ids_for_file(checkpoint_filepath: str, id_column: str | dict[str, str]):
-    from marin.processing.classification.inference import read_dataset
+    from marin.processing.classification.dataset_utils import read_dataset
 
     if isinstance(id_column, dict):
         dataset_column = next(iter(id_column.keys()))

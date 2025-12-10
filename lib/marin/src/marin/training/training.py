@@ -21,14 +21,20 @@ from pathlib import PurePath
 
 import draccus
 import levanter.infra.cli_helpers
-import ray
+from fray.cluster import (
+    CpuConfig,
+    Entrypoint,
+    EnvironmentConfig,
+    JobRequest,
+    ResourceConfig,
+    TpuConfig,
+    current_cluster,
+)
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
-from levanter.infra.ray_tpu import run_on_pod_multislice_resumable, run_on_pod_resumable
 from levanter.main import train_lm
 from levanter.main.train_lm import TrainLmConfig
 from mergedeep import mergedeep
 
-from marin.resources import CpuOnlyConfig, ResourceConfig, TpuPodConfig
 from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
 
 logger = logging.getLogger(__name__)
@@ -50,6 +56,8 @@ class TrainLmOnPodConfig:
     """
     allow_out_of_region: tuple[str, ...] = ()
     """Tuple of JSON paths (e.g., 'data.cache_dir') that are allowed to be read from or written to different regions."""
+    env_vars: dict[str, str] | None = None
+    """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
 
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
@@ -115,14 +123,14 @@ def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
 
     Look for:
         * config.trainer.id
-        * environment variable RUN_ID in the config
+        * environment variable RUN_ID in config.env_vars
         * environment variable RUN_ID
         * default to a random UID
     """
     run_id = config.train_config.trainer.id
 
     if run_id is None:
-        run_id = config.resources.runtime_env.get("env_vars", {}).get("RUN_ID", os.environ.get("RUN_ID"))
+        run_id = (config.env_vars or {}).get("RUN_ID", os.environ.get("RUN_ID"))
 
     if run_id is None and config.impute_run_id_from_output_path and config.output_path is not None:
         path = config.output_path
@@ -145,7 +153,6 @@ def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
     return replace(config, train_config=inner_config)
 
 
-@ray.remote(num_cpus=0.1)
 def run_levanter_train_lm(config: TrainLmOnPodConfig):
     """
     Run the Levanter training main function on a Ray cluster.
@@ -170,11 +177,11 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         config = _update_config_to_use_out_path(config)
 
     env = _add_default_env_variables(
-        config.resources.runtime_env.get("env_vars", {}),
-        default_launch_config.env_for_accel(config.resources.accelerator_descriptor() or ""),
+        config.env_vars or {},
+        default_launch_config.env_for_accel(config.resources.device.variant),
     )
     # if we're on tpu, ensure we have wandb
-    if isinstance(config.resources, TpuPodConfig):
+    if isinstance(config.resources.device, TpuConfig):
         _check_for_wandb_key(env)
 
     env = _add_run_env_variables(env)
@@ -186,7 +193,6 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
             logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
         else:
             logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
-    hw_config = config.resources.with_env_vars(env)
 
     config = _enforce_run_id(config)
     logger.info(f"Using run ID: {config.train_config.trainer.id}")
@@ -195,32 +201,24 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     train_config = _suppress_ray_config(train_config)
 
     # disable accelerator requirement when running without GPU/TPU resources
-    if hw_config.accelerator_descriptor() is None:
+    if config.resources.device.kind == "cpu":
         trainer = replace(train_config.trainer, require_accelerator=False)
         train_config = replace(train_config, trainer=trainer)
 
-    if not config.allow_out_of_region and not isinstance(hw_config, CpuOnlyConfig):
-        # run this on the Ray cluster to get the right region
-        # doesn't need to be a TPU because ray insists that all VMs are in the same region
-        ray.get(ray.remote(_doublecheck_paths).options(runtime_env=hw_config.runtime_env, num_cpus=0.1).remote(config))
+    if not config.allow_out_of_region and not isinstance(config.resources.device, CpuConfig):
+        _doublecheck_paths(config)
 
-    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1)
-    def train_lm_task():
-        train_lm.main(train_config)
+    cluster = current_cluster()
 
-    # TODO: abstract this?
-    if isinstance(hw_config, TpuPodConfig):
-        if hw_config.slice_count == 1:
-            return run_on_pod_resumable(train_lm_task, config.resources.accelerator_descriptor(), max_retries_failure=10)
-        else:
-            return run_on_pod_multislice_resumable(
-                train_lm_task,
-                config.resources.accelerator_descriptor(),
-                hw_config.slice_count,
-                max_retries_failure=10,
-            )
-    else:
-        return ray.get(train_lm_task.remote())
+    job_request = JobRequest(
+        name="train_lm",
+        entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
+        resources=config.resources,
+        environment=EnvironmentConfig.create(env_vars=env, extras=["tokenize_train"]),
+        max_retries_failure=10,
+    )
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)
 
 
 def _doublecheck_paths(config: TrainLmOnPodConfig):
@@ -233,7 +231,7 @@ def _doublecheck_paths(config: TrainLmOnPodConfig):
     # Determine if we're running locally or if path checks should be bypassed
     allow_out_of_region = config.allow_out_of_region
 
-    local_ok = not isinstance(config.resources, TpuPodConfig)
+    local_ok = not isinstance(config.resources.device, TpuConfig)
 
     try:
         region = get_vm_region()

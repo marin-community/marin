@@ -15,14 +15,12 @@
 import dataclasses
 import logging
 import os
-import sys
 
 import draccus
+from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-
-from experiments.defaults import default_tokenize
 from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
@@ -38,12 +36,11 @@ from marin.processing.classification.fasttext.train_fasttext import (
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import lm_data_config
-from marin.resources import CpuOnlyConfig, TpuPodConfig
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, transform
-from marin.utilities.ray_utils import is_local_ray_cluster
-from marin.utils import is_in_ci
+from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
+
+from experiments.defaults import default_tokenize
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -55,7 +52,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     transform_hq_data_step = ExecutorStep(
         name=os.path.join(prefix, "hq-transformed"),
-        fn=transform,
+        fn=html_to_md,
         config=SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "pos"),
             output_path=this_output_path(),
@@ -67,7 +64,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     transform_lq_data_step = ExecutorStep(
         name=os.path.join(prefix, "lq-transformed"),
-        fn=transform,
+        fn=html_to_md,
         config=SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "neg"),
             output_path=this_output_path(),
@@ -106,7 +103,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 "thread": 1,
             },
         ),
-        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -190,23 +186,13 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 
     # ############################################################
     # Training
-    if not is_in_ci() and not is_local_ray_cluster():
-        pod_config = TpuPodConfig(tpu_type="v4-8").with_env_vars(
-            {
-                "WANDB_API_KEY": "",
-                "WANDB_MODE": "disabled",
-                "JAX_TRACEBACK_FILTERING": "off",
-            }
-        )
-    else:
-        pod_config = CpuOnlyConfig().with_env_vars(
-            {
-                "WANDB_API_KEY": "",
-                "WANDB_MODE": "disabled",
-                "JAX_PLATFORMS": "cpu",
-                "JAX_TRACEBACK_FILTERING": "off",
-            }
-        )
+    train_env_vars = {
+        "WANDB_API_KEY": "",
+        "WANDB_MODE": "disabled",
+        "JAX_TRACEBACK_FILTERING": "off",
+    }
+
+    pod_config = ResourceConfig.with_cpu()
 
     train_step = ExecutorStep(
         name=os.path.join(prefix, "train"),
@@ -214,13 +200,14 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=TrainLmOnPodConfig(
             output_path=this_output_path(),
             resources=pod_config,
+            env_vars=train_env_vars,
             train_config=TrainLmConfig(
                 data=lm_data_config(tokenize_step, permutation_type="linear"),
                 hf_save_steps=1,
                 model=Gpt2Config(
                     num_layers=2,
                     num_heads=2,
-                    seq_len=64,
+                    max_seq_len=64,
                     hidden_dim=32,
                 ),
                 trainer=TrainerConfig(
@@ -251,8 +238,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 @draccus.wrap()
 def main(config: ExecutorMainConfig):
     try:
-        # Replace this only if it's not in argv
-        if "--prefix" in sys.argv:  # Check if prefix is already provided
+        if config.prefix is not None:
             bucket_prefix = config.prefix
         else:
             bucket_prefix = "/tmp"  # Default to a temporary directory
@@ -261,6 +247,12 @@ def main(config: ExecutorMainConfig):
         config = dataclasses.replace(
             config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
         )
+
+        # start Ray explicitly and set it as the current cluster
+        import ray
+
+        ray.init(resources={"cpu": 8, "head_node": 1})
+        set_current_cluster(create_cluster("ray"))
 
         # path to synthetic test data
         synth_data: str = "./tests/quickstart-data"

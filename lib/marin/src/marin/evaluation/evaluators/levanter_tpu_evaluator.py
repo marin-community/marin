@@ -15,10 +15,10 @@
 import logging
 import os
 from abc import ABC
+from urllib.parse import urlparse
 
-import ray
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 
-from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import is_remote_path
@@ -35,18 +35,26 @@ class LevanterTpuEvaluator(Evaluator, ABC):
     CACHE_PATH: str = "/opt/gcsfuse_mount/models"
 
     @staticmethod
-    def download_model(model: ModelConfig) -> str:
-        """
-        Download the model if it's not already downloaded
-        """
-        if is_remote_path(model.path):
-            downloaded_path = model.path
-        else:
-            downloaded_path: str | None = model.ensure_downloaded(
-                local_path=os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
-            )
+    def _looks_like_url(path: str) -> bool:
+        parsed = urlparse(path)
+        return bool(parsed.scheme and parsed.netloc)
 
-        print(f"IN TPU: {downloaded_path}")
+    @staticmethod
+    def download_model_if_necessary(model: ModelConfig) -> str:
+        """Return a path or identifier Levanter can read without copying checkpoints needlessly."""
+
+        if model.path:
+            if (
+                is_remote_path(model.path)
+                or os.path.isdir(model.path)
+                or LevanterTpuEvaluator._looks_like_url(model.path)
+            ):
+                return model.path
+
+        downloaded_path: str | None = model.ensure_downloaded(
+            local_path=os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
+        )
+
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
 
@@ -62,51 +70,34 @@ class LevanterTpuEvaluator(Evaluator, ABC):
         # Delete the checkpoint
         model.destroy()
 
-    def get_runtime_env(self) -> dict:
-        """
-        Returns the runtime environment to run the evaluator on the Ray cluster.
-        """
-        return build_runtime_env_for_packages(
-            extra=["eval", "tpu"],
-            env_vars={
-                "HF_DATASETS_TRUST_REMOTE_CODE": "1",
-                "TOKENIZERS_PARALLELISM": "false",
-            },
-        )
-
     def launch_evaluate_with_ray(
         self,
         model: ModelConfig,
         evals: list[EvalTaskConfig],
         output_path: str,
+        resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
-        resource_config: ResourceConfig | None = None,
         wandb_tags: list[str] | None = None,
         max_length: int | None = None,
         generation_kwargs: dict | None = None,
     ) -> None:
         """
-        Launches the evaluation run with Ray.
+        Launches the evaluation run with Fray.
         """
 
-        @ray.remote(
-            resources={
-                "TPU": resource_config.num_tpu,
-                f"{resource_config.tpu_type}-head": 1,
-            },
-            runtime_env=self.get_runtime_env(),
-            max_calls=1,
-        )
-        @remove_tpu_lockfile_on_exit
-        def launch(
-            model: ModelConfig,
-            evals: list[EvalTaskConfig],
-            output_path: str,
-            max_eval_instances: int | None = None,
-            wandb_tags: list[str] | None = None,
-            max_length: int | None = None,
-            generation_kwargs: dict | None = None,
-        ) -> None:
-            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags, max_length=max_length, generation_kwargs=generation_kwargs)
+        def _run():
+            with remove_tpu_lockfile_on_exit():
+                self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
 
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances, wandb_tags, max_length, generation_kwargs))
+        job_request = JobRequest(
+            name="levanter-tpu-eval",
+            entrypoint=Entrypoint.from_callable(_run),
+            resources=resource_config,
+            environment=EnvironmentConfig.create(
+                extras=["eval", "tpu"],
+            ),
+        )
+
+        cluster = current_cluster()
+        job_id = cluster.launch(job_request)
+        cluster.wait(job_id, raise_on_failure=True)

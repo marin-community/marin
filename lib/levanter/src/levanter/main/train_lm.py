@@ -9,10 +9,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
+import haliax as hax
 import jax.numpy as jnp
 import jax.random as jrandom
-
-import haliax as hax
 from haliax import Axis
 from haliax.partitioning import named_jit, round_axis_for_partitioning
 
@@ -31,7 +30,6 @@ from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +38,7 @@ class TrainLmConfig:
     data: Union[SingleDatasetLMConfig, LMMixtureDatasetConfig] = field(default_factory=UrlSingleDatasetLMConfig)
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     model: LmConfig = field(default_factory=LlamaConfig)
+    train_seq_len: int | None = None
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
 
     # config related to continued pretraining
@@ -126,7 +125,21 @@ def main(config: TrainLmConfig):
 
         # some axes we need
         EvalBatch = config.trainer.EvalBatch
-        Pos = config.model.Pos
+        model_max_seq_len = config.model.max_seq_len
+        train_length = config.train_seq_len
+        if train_length is None:
+            train_length = model_max_seq_len
+
+        if train_length <= 0:
+            raise ValueError(f"train_length must be positive, got {train_length}")
+
+        if train_length > model_max_seq_len:
+            raise ValueError(f"train_length ({train_length}) cannot exceed model max_seq_len ({model_max_seq_len}).")
+
+        if train_length != model_max_seq_len:
+            logger.info(f"Training with sequence length {train_length} (model supports {model_max_seq_len}).")
+
+        Pos = config.model.max_Pos.resize(train_length)
 
         # to do partitioning, our dimensions have to be divisible by the size of the physical axes they're mapped to
         # For most things, we just insist you specify the config right, but tokenizers often have strange numbers of
@@ -151,6 +164,8 @@ def main(config: TrainLmConfig):
 
         if int(state.step) == 0 and config.initialize_from_checkpoint_path is not None:
             state = load_checkpoint(state, config.initialize_from_checkpoint_path)
+            # reset to step 0, we're just initializing weights here
+            state = dataclasses.replace(state, step=jnp.array(0))
 
         if int(state.step) == 0:
             # TODO: I don't love that we init the model twice, but it's not a big deal i think?
@@ -195,7 +210,7 @@ def main(config: TrainLmConfig):
             )
             trainer.add_hook(cb, every=config.trainer.steps_per_eval)
 
-        flops_per_token = config.model.flops_per_token(vocab_size)
+        flops_per_token = config.model.flops_per_token(vocab_size, Pos.size)
         flops_per_example = 3 * flops_per_token * Pos.size if flops_per_token is not None else None
         trainer.add_hook(
             callbacks.log_performance_stats(Pos.size, trainer.config.batch_schedule, flops_per_example), every=1

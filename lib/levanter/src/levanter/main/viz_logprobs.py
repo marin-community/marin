@@ -39,6 +39,8 @@ class VizLmConfig:
     data: SingleDatasetLMConfigBase | LMMixtureDatasetConfig = field(default_factory=SingleDatasetLMConfigBase)
     model: LmConfig = field(default_factory=LlamaConfig)
 
+    max_eval_length: int = 4096
+
     num_docs: int = 32
 
     checkpoint_is_hf: bool = False
@@ -48,6 +50,8 @@ class VizLmConfig:
     comparison_model_path: str | None = None
     comparison_is_hf: bool = False
 
+    local_model_dir: str = "/opt/gcsfuse_mount/models"
+
 
 def main(config: VizLmConfig):
     levanter.initialize(config)
@@ -55,12 +59,9 @@ def main(config: VizLmConfig):
 
     # some axes we use outside the model proper
     EvalBatch = config.trainer.EvalBatch
-    Pos = config.model.Pos
+    Pos = config.model.max_Pos.resize(config.max_eval_length)
 
     validation_sets = config.data.validation_sets(Pos)
-
-    # some axes we use outside the model proper
-    Pos = config.model.Pos
 
     compute_axis_mapping = config.trainer.compute_axis_mapping
     parameter_axis_mapping = config.trainer.parameter_axis_mapping
@@ -91,7 +92,7 @@ def main(config: VizLmConfig):
                     model.Vocab,
                     logits=logits,
                     true_ids=example.tokens,
-                    loss_mask=example.loss_mask,
+                    loss_weight=example.loss_weight,
                     reduction=None,
                 )
                 logprobs = -loss

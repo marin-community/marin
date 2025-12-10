@@ -26,7 +26,7 @@ from levanter.optim import MuonConfig
 from experiments.llama import llama_1_4b, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
+from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 AUTHOR = Author(
@@ -50,7 +50,7 @@ def _to_qwen3_from_llama(llama_cfg: LlamaConfig, *, seq_len_override=None) -> Qw
     Build a Qwen3Config with identical sizes to a given LLaMA config.
     """
     qwen = Qwen3Config(
-        seq_len=seq_len_override if seq_len_override is not None else llama_cfg.seq_len,
+        max_seq_len=seq_len_override if seq_len_override is not None else llama_cfg.max_seq_len,
         hidden_dim=llama_cfg.hidden_dim,
         intermediate_dim=llama_cfg.intermediate_dim,
         num_layers=llama_cfg.num_layers,
@@ -95,10 +95,10 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     }
 
     resource_cfgs = {
-        "130m": TpuPodConfig(tpu_type="v5p-32"),
-        "300m": TpuPodConfig(tpu_type="v5p-32"),
-        "520m": TpuPodConfig(tpu_type="v5p-32"),
-        "1_2b": TpuPodConfig(tpu_type="v5p-32"),
+        "130m": ResourceConfig.with_tpu("v5p-32"),
+        "300m": ResourceConfig.with_tpu("v5p-32"),
+        "520m": ResourceConfig.with_tpu("v5p-32"),
+        "1_2b": ResourceConfig.with_tpu("v5p-32"),
     }
 
     # Optimizer configs for each size
@@ -191,7 +191,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     # Convert to Qwen3Config and set seq_len=4096 for the sweep
     model_config = _to_qwen3_from_llama(llama_cfg, seq_len_override=4096)
-    seq_len = model_config.seq_len
+    seq_len = model_config.max_seq_len
 
     num_train_steps = get_num_train_steps(param_counts[size], batch_size, seq_len)
 

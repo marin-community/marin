@@ -234,7 +234,7 @@ class InferenceContext:
         logger.info("Unloading inference model...")
         with self.model_lock:
             self.model = None
-            self.engine = None
+            self.engine = None  # type: ignore[assignment]
         logger.info("Inference model unloaded.")
 
     def reload(self, weight_callback: WeightSource):

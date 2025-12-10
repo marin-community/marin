@@ -18,10 +18,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from experiments.evals.resource_configs import ResourceConfig
+from fray.cluster import ResourceConfig
+from fray.cluster.ray import get_scheduling_strategy
+
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.utils import download_from_gcs, is_remote_path
-from marin.generation.ray_utils import scheduling_strategy_fn
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ class ModelConfig:
             # Show the contents of self.path
             print(f"Downloaded model checkpoint to {self.path}: {os.listdir(self.path)}")
             return local_path
+        return None
 
     def destroy(self) -> None:
         """Deletes the model checkpoint."""
@@ -87,16 +89,8 @@ class ModelConfig:
 class Evaluator(ABC):
     def _get_scheduling_strategy(self, resource_config: ResourceConfig | None):
         if resource_config is None:
-            fn = None
-        else:
-            fn = scheduling_strategy_fn(
-                resource_config.num_tpu,
-                resource_config.strategy,
-                resource_config.tpu_type,
-                resource_config.include_head_in_scheduling_strategy,
-            )
-
-        return fn
+            return None
+        return get_scheduling_strategy(resource_config)
 
     @abstractmethod
     def launch_evaluate_with_ray(
@@ -104,8 +98,8 @@ class Evaluator(ABC):
         model: ModelConfig,
         evals: list[EvalTaskConfig],
         output_path: str,
+        resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
-        resource_config: ResourceConfig | None = None,
         wandb_tags: list[str] | None = None,
         max_length: int | None = None,
     ) -> None:

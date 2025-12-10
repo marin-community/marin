@@ -19,8 +19,9 @@ Specifies a sequence of Llama 3 models from small to large.
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig, DefaultRotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config, QwenConfig
 
+# default head_dim = hidden_dim // num_heads = 64, mismatch with "Qwen/Qwen3-0.6B"
 qwen3_0_6b = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=1024,
     intermediate_dim=3072,
     num_heads=16,
@@ -30,8 +31,21 @@ qwen3_0_6b = Qwen3Config(
     tie_word_embeddings=True,
 )
 
+# qwen3_0_6b_hd128: head_dim=128, identical to "Qwen/Qwen3-0.6B"
+qwen3_0_6b_hd128 = Qwen3Config(
+    max_seq_len=4096,
+    hidden_dim=1024,
+    intermediate_dim=3072,
+    num_heads=16,
+    num_kv_heads=8,
+    num_layers=28,
+    rope=Llama3RotaryEmbeddingsConfig(),
+    tie_word_embeddings=True,
+    head_dim=128,
+)
+
 qwen3_1_7b = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2048,
     intermediate_dim=6144,
     num_heads=16,
@@ -41,8 +55,9 @@ qwen3_1_7b = Qwen3Config(
     tie_word_embeddings=True,
 )
 
+# default head_dim = hidden_dim // num_heads = 80, mismatch with "Qwen/Qwen3-4B"
 qwen3_4b = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2560,
     intermediate_dim=9728,
     num_heads=32,
@@ -52,8 +67,21 @@ qwen3_4b = Qwen3Config(
     tie_word_embeddings=True,
 )
 
+# qwen3_4b_hd128: head_dim=128, identical to "Qwen/Qwen3-4B"
+qwen3_4b_hd128 = Qwen3Config(
+    max_seq_len=4096,
+    hidden_dim=2560,
+    intermediate_dim=9728,
+    num_heads=32,
+    num_kv_heads=8,
+    num_layers=36,
+    rope=Llama3RotaryEmbeddingsConfig(),
+    tie_word_embeddings=True,
+    head_dim=128,
+)
+
 qwen3_8b = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=4096,
     intermediate_dim=12288,
     num_heads=32,
@@ -64,7 +92,7 @@ qwen3_8b = Qwen3Config(
 
 # same as olmo 32b
 qwen3_32b = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=5120,
     intermediate_dim=27648,
     num_heads=40,
@@ -86,7 +114,7 @@ qwen2_5_7b_instruct = QwenConfig(
 
 # seems not supported by levanter yet
 qwen2_5_32b = QwenConfig(
-    seq_len=131072,
+    max_seq_len=131072,
     hidden_dim=5120,
     intermediate_dim=27648,
     num_heads=40,
@@ -96,7 +124,7 @@ qwen2_5_32b = QwenConfig(
 )
 
 marin_32b = Qwen3Config(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=5120,
     intermediate_dim=27648,
     num_heads=40,

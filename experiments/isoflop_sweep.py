@@ -21,6 +21,7 @@ as a lightweight scaffold for ISOFlop scaling law experiments.
 
 import dataclasses
 import math
+import os
 from dataclasses import dataclass, replace
 
 from levanter.data.text import LMMixtureDatasetConfig
@@ -30,14 +31,16 @@ from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 
-from experiments.defaults import default_train
-from experiments.llama import compute_num_parameters
+from experiments.common_pile.tokenize_common_pile import comma_main_mixture
+from experiments.defaults import default_tokenize, default_train
+from experiments.llama import compute_num_parameters, llama3_tokenizer
 from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
+from experiments.pretraining_datasets.simple import downloads
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
-from experiments.common_pile.tokenize_common_pile import comma_main_mixture
+from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main
-from marin.resources import TpuPodConfig
+from marin.processing.tokenize import lm_mixture_data_config
 
 DEFAULT_BUDGETS = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
 MLP_RATIO = 4
@@ -144,7 +147,7 @@ class IsoFlopSweepConfig:
     )
     base_train_config: SimpleTrainConfig = dataclasses.field(
         default_factory=lambda: SimpleTrainConfig(
-            resources=TpuPodConfig(tpu_type="v5p-8"),
+            resources=ResourceConfig.with_tpu("v5p-8"),
             train_batch_size=1,
             num_train_steps=50_000,
             learning_rate=1.0,  # Placeholder
@@ -280,7 +283,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
             b2,
         ) in candidate_configs(config, budget):
             model_cfg = Qwen3Config(
-                seq_len=config.seq_len,
+                max_seq_len=config.seq_len,
                 hidden_dim=hidden_size,
                 intermediate_dim=intermediate_dim,
                 num_heads=n_heads,
@@ -302,12 +305,13 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                 train_batch_size=batch_size,
                 learning_rate=lr,
                 num_train_steps=train_steps,
-                resources=TpuPodConfig(tpu_type=tpu_type),
+                resources=ResourceConfig.with_tpu(tpu_type),
                 optimizer_config=optimizer_cfg,
             )
 
+            run_name = f"isoflop-{budget:.0e}-d{hidden_size}-L{num_layers}-B{batch_size}-{experiment_name}"
             step = default_train(
-                name=f"isoflop-{budget:.0e}-d{hidden_size}-L{num_layers}-B{batch_size}-{experiment_name}",
+                name=run_name,
                 tokenized=config.tokenized_dataset,
                 model_config=model_cfg,
                 train_config=train_cfg,
@@ -322,7 +326,13 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> 
                 ),
             )
             metadata.append((budget, hidden_size, num_layers, batch_size, train_steps))
-            steps.append(step)
+            # Reuse checkpoints by pinning every sweep run to a deterministic directory.
+            static_output_path = os.path.join(
+                "checkpoints",
+                "isoflop",
+                run_name,
+            )
+            steps.append(step.with_output_path(static_output_path))
 
     return steps, metadata
 
@@ -338,14 +348,45 @@ def generate_isoflop_sweep(
     return steps, metadata
 
 
+dclm_tokenized = dataclasses.replace(
+    default_tokenize(
+        name="dclm_baseline",
+        dataset=downloads["dclm_baseline"],
+        tokenizer=llama3_tokenizer,
+    ).with_output_path("tokenized/dclm_baseline-0206f1/"),
+)
+
+
+dclm_mix = lm_mixture_data_config(
+    components={"dclm": dclm_tokenized},
+    weights={"dclm": 1.0},
+    num_validation_sequences={"dclm": 1024},
+)
+
+dolma3_mix_tokenized = dataclasses.replace(
+    default_tokenize(
+        name="dolma3_mix-150B-1025",
+        dataset=downloads["dolma3_mix_150b_1025"],
+        tokenizer=llama3_tokenizer,
+    ).with_output_path("tokenized/dolma3_mix-150B-1025-15d04ee/"),
+)
+
+dolma3_mix = lm_mixture_data_config(
+    components={"dolma3_mix-150B-1025": dolma3_mix_tokenized},
+    weights={"dolma3_mix-150B-1025": 1.0},
+    num_validation_sequences={"dolma3_mix-150B-1025": 1024},
+)
+
 MARIN_SCALING_SUITES = {
     "nemotron": generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt"),
     "common_pile": generate_isoflop_sweep(comma_main_mixture(permutation_type="linear"), experiment_name="comma-mix"),
     "common_pile_feistel": generate_isoflop_sweep(
         comma_main_mixture(permutation_type="feistel"), experiment_name="comma-mix-feistel"
     ),
+    "dclm-default": generate_isoflop_sweep(dclm_mix, experiment_name="dclm-default"),
+    "dolma3_mix_150b": generate_isoflop_sweep(dolma3_mix, experiment_name="dolma3-mix-150b-1025"),
 }
 
 if __name__ == "__main__":
-    steps = MARIN_SCALING_SUITES["common_pile"]
-    executor_main(steps=steps[0])
+    steps, _ = MARIN_SCALING_SUITES["dolma3_mix_150b"]
+    executor_main(steps=steps)

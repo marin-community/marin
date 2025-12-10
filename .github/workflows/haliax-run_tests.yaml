@@ -1,0 +1,44 @@
+name: Haliax - Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - lib/haliax/**
+      - uv.lock
+      - .github/workflows/haliax-*.yaml
+  pull_request:
+    paths:
+      - lib/haliax/**
+      - uv.lock
+      - .github/workflows/haliax-*.yaml
+
+jobs:
+  cpu-test:
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+        jax-version: ["0.6.2", "0.7.2"]
+
+    defaults:
+      run:
+        working-directory: lib/haliax
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install uv
+          uv sync --package haliax --dev
+      - name: Test with pytest (JAX ${{ matrix.jax-version }})
+        run: |
+          # Test with specific JAX version
+          JAX_NUM_CPU_DEVICES=8 PYTHONPATH=tests:src:. uv run --package haliax --with "jax[cpu]==${{ matrix.jax-version }}" pytest -c pyproject.toml tests

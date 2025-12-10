@@ -17,10 +17,8 @@ import re
 from dataclasses import dataclass
 from typing import ClassVar
 
-import ray
-
-from marin.core.runtime import TaskConfig, map_files_in_directory
-from marin.generation.dataset import convert_labeled_documents_to_scores
+from marin.generation.dataset import convert_labeled_document_to_score
+from zephyr import Dataset, flow_backend, load_jsonl
 
 
 @dataclass
@@ -55,21 +53,16 @@ class DatasetOutputProcessor:
         raise NotImplementedError("Subclasses must implement this method")
 
     def convert_dataset(self):
-        responses = map_files_in_directory(
-            convert_labeled_documents_to_scores.remote,
-            self.input_path,
-            "**/*.jsonl.gz",
-            self.output_path,
-            TaskConfig(),
-            False,
-            self.score_values,
-            self.extract_score,
+        backend = flow_backend()
+        pipeline = (
+            Dataset.from_files(f"{self.input_path}/**/*.jsonl.gz")
+            .flat_map(load_jsonl)
+            .map(lambda example: convert_labeled_document_to_score(example, extract_score_fn=self.extract_score))
+            .filter(lambda record: record is not None)
+            .write_jsonl(f"{self.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
         )
 
-        for score_distribution in ray.get(responses):
-            for score, count in score_distribution.items():
-                self.score_distribution[score] = self.score_distribution.get(score, 0) + count
-
+        list(backend.execute(pipeline))
         return self.score_distribution
 
 

@@ -1,54 +1,98 @@
-# vllm/vllm-tpu:9dbf7a2dc1448d6657adfb2daba36be270dcebcd - 0.7.4 has some issues
-# FROM vllm/vllm-tpu:e92694b6fe264a85371317295bca6643508034ef
+# Google Cloud SDK
+FROM ubuntu:22.04 AS gcloud-sdk
+RUN apt-get update && apt-get install -y \
+    curl \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
 
-# 3c545 has some bad interactions with ray data that make it not work
-# FROM vllm/vllm-tpu:3c545c0c3b98ee642373a308197d750d0e449403 # newest one that is 0.9.2 thought it should work but some ray data issues
-# ABSOLUTE NEWEST vLLM vllm/vllm-tpu:b395b3b0a3166d17c75e74f4eaf0ff4b15f2554f
+WORKDIR /tmp
+RUN curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-x86_64.tar.gz && tar -xf google-cloud-cli-linux-x86_64.tar.gz
+RUN /tmp/google-cloud-sdk/install.sh --quiet --path-update false --command-completion false
+RUN /tmp/google-cloud-sdk/bin/gcloud components install alpha --quiet
 
-# 3c529fc9945964819dc17b9910ad6ccdbf231413 used in central2
-FROM vllm/vllm-tpu:3c529fc9945964819dc17b9910ad6ccdbf231413
-# Setup gcsfuse
-# cmake, build-essential, libssl-dev, protobuf-compiler for dolma
-RUN apt-get update && apt-get install lsb-release rsync docker.io cmake build-essential libssl-dev protobuf-compiler -y
-RUN usermod -aG docker $(whoami)
+# Rust toolchain
+FROM rust:1.91-slim AS rust-builder
 
-# Install rust for dolma
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH=$HOME/.cargo/bin:$PATH
 
-RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | tee /etc/apt/sources.list.d/gcsfuse.list
-RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | apt-key add -
-RUN apt-get update && apt-get install fuse gcsfuse -y
-RUN mkdir /opt/gcsfuse_mount
-RUN chown -R $(whoami) /opt/gcsfuse_mount
+# Main build
+FROM rayproject/ray:2.49.2-py311-cpu
+ARG VLLM_VERSION=0.11.1
 
-# Install the Google Cloud SDK
-RUN curl -sSL https://sdk.cloud.google.com > /tmp/gcl && \
-    bash /tmp/gcl --install-dir=/root/gcloud --disable-prompts \
-    && chown -R $(whoami) /root/gcloud
+# For some reason, ray destroys the apt sources list, so we need to restore it
+RUN sudo rm -rf /var/lib/apt/lists/* \
+ && sudo apt-get update \
+ && sudo apt-get install -y --no-install-recommends \
+      apt-transport-https \
+      build-essential \
+      ca-certificates \
+      clang \
+      cmake \
+      curl \
+      docker.io \
+      fuse \
+      g++ \
+      gdb \
+      gnupg \
+      liblz4-dev \
+      libpython3.11 \
+      libpython3.11-dev \
+      libre2-dev \
+      libssl-dev \
+      libuchardet-dev \
+      lsb-release \
+      pkg-config \
+      ubuntu-keyring \
+      vim \
+      zlib1g-dev \
+ && sudo rm -rf /var/lib/apt/lists/*
 
-# Install uv and use system Python similar to the Marin cluster image
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH=$PATH:/root/.local/bin
-ENV UV_SYSTEM_PYTHON=1
+# Setup gcsfuse repository and install
+RUN export GCSFUSE_REPO=gcsfuse-`lsb_release -c -s` && echo "deb https://packages.cloud.google.com/apt $GCSFUSE_REPO main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list
+RUN curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+RUN sudo apt-get update && sudo apt-get install -y gcsfuse
+RUN sudo mkdir /opt/gcsfuse_mount && sudo chown -R ray /opt/gcsfuse_mount
 
-# Install core dependencies
-RUN uv pip install --system --no-cache-dir draccus==0.11.5 google-api-python-client~=2.0 gcsfs google-cloud-storage google-cloud-storage-transfer regex requests braceexpand deepdiff tqdm tqdm-loggable levanter==1.2.dev1500 haliax==1.4.dev381 lm-eval https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
+# Copy Google Cloud SDK from gcloud stage
+COPY --from=gcloud-sdk --chown=ray /tmp/google-cloud-sdk /home/ray/google-cloud-sdk
+ENV PATH=$PATH:/home/ray/google-cloud-sdk/bin
 
-COPY docker/marin/vllm-vmem-oom.patch .
-RUN patch -p0 -d /workspace/vllm < vllm-vmem-oom.patch
-# Need the latest accelerate due to some deprecations in the newest pytorch
-# RUN pip install --no-cache-dir https://github.com/huggingface/accelerate/archive/refs/heads/main.zip
+# Copy Rust toolchain from rust stage
+COPY --from=rust-builder --chown=ray /usr/local/cargo /home/ray/.cargo
+COPY --from=rust-builder --chown=ray /usr/local/rustup /home/ray/.rustup
+ENV PATH=/home/ray/.cargo/bin:$PATH
+ENV RUSTUP_HOME=/home/ray/.rustup
+ENV CARGO_HOME=/home/ray/.cargo
+
+RUN sudo mkdir -p /opt/marin/
+RUN sudo chown -R ray /opt/marin/
+
+# Ray uses conda
+ENV PATH=/home/ray/anaconda3/bin:/home/ray/anaconda3/condabin:$PATH
 
 # Add /usr/lib/x86_64-linux-gnu/ to LD_LIBRARY_PATH so that bash prefers the systems
 # libtinfo.so over the conda-provided version. Using the conda-provided libtinfo.so
 # outputs a noisy warning because it doesn't include version information.
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/x86_64-linux-gnu/
-ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/ray/anaconda3/lib
-ENV PATH=$PATH:/root/gcloud/google-cloud-sdk/bin
-ENV VLLM_USE_V1=1
-ENV TF_CPP_MIN_LOG_LEVEL=1
-ENV HF_HOME=/opt/gcsfuse_mount/huggingface-cache
-ENV TPU_MIN_LOG_LEVEL=3
+ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/:/home/ray/anaconda3/lib
+
+COPY docker/marin/preemptible-fix.patch .
+# apply the patch to fix preemptible GCP in Ray in the installed ray package
+RUN patch -d /home/ray/anaconda3/lib/python3.11/site-packages/ -p2 < preemptible-fix.patch
+
+# to run docker containers, we need to be in the docker group
+RUN sudo usermod -aG docker ray
+
+# Set UV to use system Python
+ENV UV_SYSTEM_PYTHON=1
+
+# Install into the system Python environment b/c Ray will use this as a base
+COPY --chown=ray pyproject.toml /tmp/marin/
+COPY --chown=ray lib/ /tmp/marin/lib/
+WORKDIR /tmp/marin
+RUN mkdir -p src/marin/\
+  && touch src/marin/__init__.py\
+  && touch README.md\
+  && touch LICENSE\
+  && uv pip install -e .[dev,gcp,vllm] --system \
+  && rm -rf /tmp/marin
 
 WORKDIR /opt/marin

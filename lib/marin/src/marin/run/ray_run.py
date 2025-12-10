@@ -28,8 +28,8 @@ import yaml
 from ray.job_submission import JobSubmissionClient
 
 from marin.cluster.config import find_config_by_region
-from marin.cluster.ray import DashboardConfig, ray_dashboard
-from marin.run.ray_deps import build_runtime_env_for_packages
+from fray.cluster.ray import DashboardConfig, ray_dashboard
+from fray.cluster.ray.deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +102,9 @@ async def submit_and_track_job(
     # Inject GIT_COMMIT into the environment for logging
     env_vars["GIT_COMMIT"] = subprocess.getoutput("git rev-parse HEAD")
 
+    # Tell Fray to use Ray cluster for job execution
+    env_vars["FRAY_CLUSTER_SPEC"] = "ray"
+
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
     logger.info(f"Extras: {extra}")
     logger.info(f"env_vars: {json.dumps(env_vars, indent=4)}")
@@ -109,11 +112,15 @@ async def submit_and_track_job(
     runtime_dict = {
         "working_dir": current_dir,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": [".git", "tests/", "docs/", "**/*.pack"],
+        "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"],
     }
 
     # add the TPU dependency for cluster jobs.
-    runtime_dict = build_runtime_env_for_packages(extra=[*extra.split(","), "tpu"], env_vars=env_vars) | runtime_dict
+    extra_list = extra.split(",") if extra else []
+    if accelerator_type_from_extra(extra_list) == AcceleratorType.NONE:
+        extra_list.append("tpu")
+
+    runtime_dict = build_runtime_env_for_packages(extra=[*extra_list], env_vars=env_vars) | runtime_dict
 
     logger.info(
         f"Terminal command: \n"
@@ -205,7 +212,11 @@ def main():
         default=None,
         help="Custom submission ID for the job. If not provided, a default ID will be generated.",
     )
-    parser.add_argument("--auto-stop", action="store_true", help="Automatically stop the cluster on shutdown.")
+    parser.add_argument(
+        "--auto-stop",
+        action="store_true",
+        help="Automatically stop the submitted job on exit (including ctrl+c interrupt).",
+    )
     parser.add_argument("cmd", help="The command to run in the Ray cluster.", nargs=argparse.REMAINDER)
 
     args = parser.parse_args()
@@ -277,10 +288,6 @@ def main():
         else:
             cluster_config = find_config_by_region(args.cluster)
 
-    if not cluster_config:
-        logger.error("--cluster is required (name or path to an infra YAML).")
-        exit(1)
-
     # Submit the job and track it asynchronously
     if args.submission_id:
         submission_id = args.submission_id
@@ -315,6 +322,8 @@ def main():
                 asyncio.run(run_job())
         else:
             asyncio.run(run_job())
+    except Exception:
+        logger.error("Failed to run job", exc_info=True)
     finally:
         if args.auto_stop:
             logger.info(f"Auto-stopping job {submission_id}...")

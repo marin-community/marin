@@ -257,7 +257,7 @@ def test_mixtral_roundtrip():
     converter = MixtralConfig().hf_checkpoint_converter()
 
     config = MixtralConfig(
-        seq_len=128,
+        max_seq_len=128,
         hidden_dim=16,
         intermediate_dim=64,
         num_heads=4,
@@ -268,8 +268,8 @@ def test_mixtral_roundtrip():
     hf_config = config.to_hf_config(Vocab.size)
 
     # Make input and attn_mask
-    input = hax.random.randint(random.PRNGKey(0), config.Pos, 0, Vocab.size)
-    attn_mask = hax.nn.attention.causal_mask(config.Pos, config.KeyPos)
+    input = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
+    attn_mask = hax.nn.attention.causal_mask(config.max_Pos, config.KeyPos)
     input_torch = torch.from_numpy(np.array(input.array)).to(torch.int32).unsqueeze(0)
 
     torch.random.manual_seed(0)
@@ -311,7 +311,7 @@ def test_mixtral_roundtrip():
 
 def _get_mixtral_config(use_flash=False, num_kv_heads=4, seq_len=128) -> MixtralConfig:
     return MixtralConfig(
-        seq_len=seq_len,
+        max_seq_len=seq_len,
         hidden_dim=16,
         intermediate_dim=32,
         num_heads=4,
@@ -327,7 +327,7 @@ def _get_random_inputs(config: MixtralConfig, override_Pos=None):
     if override_Pos is not None:
         Pos = override_Pos
     else:
-        Pos = config.Pos
+        Pos = config.max_Pos
     Batch = hax.Axis("batch", 2)
     x = hax.random.normal(random.PRNGKey(0), (Batch, Pos, Embed))
     mask = AttentionMask.causal()
@@ -346,7 +346,7 @@ def test_mixtral_configs(config_file):
 # @pytest.mark.parametrize("num_kv_heads", [1, 2])
 # def test_pass_different_length_seq(num_kv_heads):
 #     config = MixtralConfig(
-#         seq_len=128,
+#         max_seq_len=128,
 #         hidden_dim=64,
 #         intermediate_dim=32,
 #         num_heads=2,
@@ -366,7 +366,7 @@ def test_state_dict_consistency(scan_layers, num_kv_heads):
     from transformers import MixtralForCausalLM
 
     config = MixtralConfig(
-        seq_len=128,
+        max_seq_len=128,
         hidden_dim=16,
         intermediate_dim=32,
         num_heads=4,

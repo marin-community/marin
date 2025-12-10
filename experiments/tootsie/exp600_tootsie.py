@@ -32,20 +32,24 @@ import dataclasses
 from levanter.schedule import ScheduleStep
 
 from experiments.cooldown_anneal import dolmino_dclm
-from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3_old
+from experiments.pretraining_datasets.dclm import (
+    DCLM_MIXTURE_WEIGHTS,
+    dclm_components_llama3,
+    dclm_mixture_config_llama3_old,
+)
 from experiments.defaults import default_train
-from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
-from experiments.dolmino.tokenize_dolmino import dolmino_math_tokenized_llama3, get_dolmino_step_llama3
+from experiments.pretraining_datasets import tokenize_dolma
+from experiments.pretraining_datasets import tokenize_dolmino_math, tokenize_dolmino_subset
 from experiments.evals.evals import default_base_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.llama import llama3_tokenizer, llama_8b, llama_8b_old_rotary
 from experiments.midtraining_datasets import finemath_3_plus_tokenized
-from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
+from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
-from marin.resources import TpuPodConfig
+from fray.cluster import ResourceConfig
 
 # Phases/Runs in this file:
 # 1. Kestrel: WSD-S on DCLM+Starcode+Proofpile on 2x v5litepod-256 (from scratch)
@@ -68,7 +72,7 @@ from marin.resources import TpuPodConfig
 # we use the exponential moving average (EMA) of the model weights to get a better model.
 
 tootsie_phase1_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v5litepod-256", slice_count=2),
+    resources=ResourceConfig.with_tpu("v5litepod-256", slice_count=2),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     # these hypers from Table 12 in https://arxiv.org/html/2406.11794v1#A6
@@ -107,7 +111,7 @@ PHASE_1_END = 660_000
 kestrel_phase_1_checkpoint_for_phase2 = llama_8b_tootsie_phase1.cd(f"checkpoints/step-{PHASE_1_END}").nonblocking()
 
 llama_8b_train_config_phase2 = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
+    resources=ResourceConfig.with_tpu("v4-2048", slice_count=1),
     num_train_steps=1_000_000,
     # after PHASE_1_END we changed things up:
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=PHASE_1_END + 1, value=3072)],
@@ -166,7 +170,7 @@ DECAY_FRACTION = (PHASE_3_END - PHASE_3_START) / PHASE_3_END
 # This is basically the same as the phase 2 train config, but we
 # add DECAY_FRACTION.
 llama_8b_train_config_phase3 = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
+    resources=ResourceConfig.with_tpu("v4-2048", slice_count=1),
     num_train_steps=PHASE_3_END,
     # From Phase 2:
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=PHASE_1_END + 1, value=3072)],
@@ -202,7 +206,7 @@ dolma_splits = [
     "dolma/stackexchange",
     "dolma/wiki",
 ]
-all_dolma_steps = tokenize_dolma_steps(tokenizer=llama3_tokenizer)
+all_dolma_steps = tokenize_dolma(tokenizer=llama3_tokenizer)
 phase_3_tokenized.update({dataset: step for dataset, step in all_dolma_steps.items() if dataset in dolma_splits})
 phase_3_tokenized["finemath_3_plus"] = finemath_3_plus_tokenized
 phase_3_tokenized["dolmino_dclm"] = dolmino_dclm
@@ -288,7 +292,7 @@ llama_8b_tootsie_phase3 = dataclasses.replace(
 ## TinyGSM-Mind
 
 dessert_dolmino_sets = {
-    s: get_dolmino_step_llama3(s)
+    s: tokenize_dolmino_subset(s)
     for s in [
         "flan",
         "math/dolmino_math_synth",
@@ -349,7 +353,7 @@ bad_dessert_data_mixture_v1 = lm_varying_mixture_data_config(
 DESSERT_END = PHASE_3_END + 17000
 
 llama_8b_train_config_dessert = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-128", slice_count=4),
+    resources=ResourceConfig.with_tpu("v4-128", slice_count=4),
     num_train_steps=DESSERT_END,
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=PHASE_1_END + 1, value=3072)],
     # coast along at 1.7e-4
@@ -397,7 +401,7 @@ dessert_weights_v2 = {
     ),
 }
 
-all_math = dolmino_math_tokenized_llama3
+all_math = tokenize_dolmino_math()
 
 dessert_tokenized_v2 = {
     **phase_3_tokenized,
@@ -510,7 +514,7 @@ PHASE_4_REWARMUP_DURATION = 2000
 REALLY_FAR_AWAY_STEP = 2_000_000
 
 
-nemotron_cc_steps = tokenize_nemotron_steps()
+nemotron_cc_steps = tokenize_nemotron()
 
 # Nemotron weights are in compressed TiB. We'll use the rule of thumb that compressed bytes ≈ tokens
 

@@ -24,8 +24,6 @@ from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoConfig, AutoTokenizer
-
 from marin.execution.executor import (
     ExecutorStep,
     OutputName,
@@ -38,6 +36,7 @@ from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
+from transformers import AutoConfig, AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +121,7 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
     lev_config = LlamaConfig.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    lev_config = dataclasses.replace(lev_config, seq_len=MAX_TOKENS, tokenizer=model_config.model_tokenizer)
+    lev_config = dataclasses.replace(lev_config, max_seq_len=MAX_TOKENS, tokenizer=model_config.model_tokenizer)
 
     _ = WandbConfig
 
@@ -176,8 +175,8 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
 
     curriculum_config = create_math_curriculum(name, model_config.model_name)
 
-    # Create RLJobConfig using the new unified interface
     lev_config = RLJobConfig(
+        inference_type="levanter",
         model=lev_config,
         trainer=trainer_config,
         train_params=TrainParams(

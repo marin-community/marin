@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Dict, Optional, Type
+from typing import Dict, Optional, Type, cast
 
 import equinox as eqx
 import jax
@@ -65,7 +65,7 @@ class QwenConfig(LlamaConfig):
         rope_theta = hf_config.rope_theta
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
         return QwenConfig(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,
@@ -90,7 +90,7 @@ class QwenConfig(LlamaConfig):
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
         return HfQwenConfig(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -114,14 +114,14 @@ class QwenConfig(LlamaConfig):
     def model_type(self) -> Type["QwenLMHeadModel"]:
         return QwenLMHeadModel
 
-    def flops_per_token(self, vocab_size: int):
+    def flops_per_token(self, vocab_size: int, context_length: int):
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )
@@ -174,10 +174,11 @@ class QwenDecoderLayer(eqx.Module):
         k_attn, k_mlp = maybe_rng_split(key, 2)
 
         # Apply sliding window attention if configured and past max_window_layers
-        if (self.config.use_sliding_window and self.config.sliding_window is not None) and x.resolve_axis(
-            "position"
-        ) > self.config.sliding_window:
-            raise NotImplementedError("Sliding window attention is not implemented in Qwen yet.")
+        if self.config.use_sliding_window and self.config.sliding_window is not None:
+            pos_axis = x.resolve_axis("position")
+            pos_size = getattr(pos_axis, "size", None)
+            if pos_size is not None and pos_size > self.config.sliding_window:
+                raise NotImplementedError("Sliding window attention is not implemented in Qwen yet.")
 
         residual = x
         x = self.input_layernorm(x)
@@ -250,7 +251,7 @@ class QwenTransformer(LlamaTransformer):
         self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
+        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
 
@@ -460,7 +461,7 @@ class Qwen3Config(LlamaConfig):
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
         return HfQwen3Config(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -487,7 +488,7 @@ class Qwen3Config(LlamaConfig):
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
 
         return Qwen3Config(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,

@@ -14,25 +14,24 @@ theme:
     - navigation.footer
   language: en
   palette:
-      - scheme: slate
-        toggle:
-          icon: material/weather-sunny
-          name: Switch to light mode
-        primary: black
-        accent: white
-      - scheme: default
-        toggle:
-          icon: material/weather-night
-          name: Switch to dark mode
-        primary: black
-        accent: white
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+      primary: black
+      accent: white
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+      primary: black
+      accent: white
   icon:
-      repo: fontawesome/brands/git-alt
-      edit: material/pencil
-      view: material/eye
+    repo: fontawesome/brands/git-alt
+    edit: material/pencil
+    view: material/eye
   logo: static/logo.png
   favicon: static/favicon.ico
-
 
 repo_url: https://github.com/marin-community/marin
 repo_name: marin-community/marin
@@ -57,47 +56,48 @@ watch:
   - docs/
   - lib/marin/src/
 
-
 nav:
   - Home: index.md
   - Tutorials:
-    - Installation: tutorials/installation.md
-    - First Experiment: tutorials/first-experiment.md
-    - Setting up a Local GPU Environment: tutorials/local-gpu.md
-    - Executor 101: tutorials/executor-101.md
-    - Data Browser: tutorials/data-browser.md
-    - Using Data Shop: tutorials/datashop.md
-    - Training an LM: tutorials/train-an-lm.md
-    - Submitting a Speedrun: tutorials/submitting-speedrun.md
-    - Filtering Data: tutorials/filtering-data.md
-    - Running an Annealing Experiment: tutorials/annealing-experiment.md
-    - Co-Developing with Marin and Levanter: tutorials/co-develop.md
-    - Adding an Optimizer for Speedrun: tutorials/add-optimizer.md
+      - Installation: tutorials/installation.md
+      - First Experiment: tutorials/first-experiment.md
+      - Setting up a Local GPU Environment: tutorials/local-gpu.md
+      - Prepare a Storage Bucket: tutorials/storage-bucket.md
+      - Setting up a TPU Cluster: tutorials/tpu-cluster-setup.md
+      - Executor 101: tutorials/executor-101.md
+      - Data Browser: tutorials/data-browser.md
+      - Using Data Shop: tutorials/datashop.md
+      - Training an LM: tutorials/train-an-lm.md
+      - Submitting a Speedrun: tutorials/submitting-speedrun.md
+      - Filtering Data: tutorials/filtering-data.md
+      - Running an Annealing Experiment: tutorials/annealing-experiment.md
+      - Co-Developing with Marin and Levanter: tutorials/co-develop.md
+      - Adding an Optimizer for Speedrun: tutorials/add-optimizer.md
   - Explanations:
-    - The Language Modeling Pipeline: explanations/lm-pipeline.md
-    - Datashop: explanations/datashop.md
-    - Evaluation: explanations/evaluation.md
-    - Experiments: explanations/experiments.md
-    - Executor: explanations/executor.md
-    - Guidelines: explanations/guidelines.md
+      - The Language Modeling Pipeline: explanations/lm-pipeline.md
+      - Datashop: explanations/datashop.md
+      - Evaluation: explanations/evaluation.md
+      - Experiments: explanations/experiments.md
+      - Executor: explanations/executor.md
+      - Guidelines: explanations/guidelines.md
   - Experiments:
-    - Report Index: reports/index.md
-    - Auto-Generated Summary: reports/summary.md
-    - Marin 8B Retro: reports/marin-8b-retro.md
-    - Marin 32B Retro: reports/marin-32b-retro.md
-    - Markdownified Datasets: reports/markdownified-datasets.md
+      - Report Index: reports/index.md
+      - Auto-Generated Summary: reports/summary.md
+      - Marin 8B Retro: reports/marin-8b-retro.md
+      - Marin 32B Retro: reports/marin-32b-retro.md
+      - Markdownified Datasets: reports/markdownified-datasets.md
   - Developer Guide:
-    - Contributing: dev-guide/contributing.md
-    - Deployment: dev-guide/deployment.md
-    - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
-    - Internal Guidelines: dev-guide/guidelines-internal.md
-    - Building Docs: dev-guide/building-docs.md
-    - Snapshot Tests: dev-guide/snapshot-tests.md
+      - Contributing: dev-guide/contributing.md
+      - Deployment: dev-guide/deployment.md
+      - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
+      - Internal Guidelines: dev-guide/guidelines-internal.md
+      - Building Docs: dev-guide/building-docs.md
+      - Snapshot Tests: dev-guide/snapshot-tests.md
   - Technical Reference:
-    - Specifying Hardware Resources: references/resource-config.md
-    - Executor API: references/executor-api.md
-    - Default Steps: references/default-steps.md
-    - Training Configuration: references/train-config.md
+      - Specifying Hardware Resources: references/resource-config.md
+      - Executor API: references/executor-api.md
+      - Default Steps: references/default-steps.md
+      - Training Configuration: references/train-config.md
 
 markdown_extensions:
   - markdown.extensions.footnotes
@@ -111,9 +111,10 @@ markdown_extensions:
   - pymdownx.emoji
   - pymdownx.tasklist
   - pymdownx.highlight:
-     anchor_linenums: true
+      anchor_linenums: true
   - admonition
   - footnotes
+  - attr_list
   - toc:
       permalink: true
 

@@ -29,8 +29,8 @@ from levanter.data.text import (
 )
 from levanter.store.cache import CacheOptions
 
-from marin.download.huggingface.download import DownloadConfig as HfDownloadConfig
 from marin.download.huggingface.download_hf import (
+    DownloadConfig as HfDownloadConfig,
     download_hf as hf_download_logic,
 )
 from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, InputName, ensure_versioned
@@ -71,7 +71,7 @@ class PretokenizedCacheDownloadConfig(TokenizeConfigBase):
 
         return UrlDatasetSourceConfig(
             tags=self.tags,
-            train_urls=["dummy.jsonl"],  # Levanter misbehaves if these are empty
+            train_urls=[],
             validation_urls=[],  # No raw validation URLs; cache is already built
             cache_dir=actual_output_path,
             format=self.format,  # Retain format info if needed downstream

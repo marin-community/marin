@@ -5,7 +5,7 @@ import dataclasses
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import Optional, Union, cast
 
 import jax
 import jax.random as jrandom
@@ -35,6 +35,7 @@ class TrainASRConfig:
     model: ASRConfig = field(default_factory=WhisperConfig)
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     batch_size: int = 16
+    train_seq_len: int = 448  # in tokens
 
     # config related to continued pretraining
     initialize_from_hf: Union[bool, str] = False
@@ -91,7 +92,7 @@ def main(config: TrainASRConfig):
         example: AudioTextExample,
         *,
         key=None,
-        reduction: Optional[hax.ReductionFunction] = hax.mean,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
         reduction_axis: Optional[hax.AxisSelection] = None,
     ) -> jax.numpy.ndarray | hax.NamedArray:
         return m.compute_loss(example, key=key, reduction=reduction, reduction_axis=reduction_axis)
@@ -114,7 +115,7 @@ def main(config: TrainASRConfig):
         # some axes we need
         Batch = config.trainer.TrainBatch
         EvalBatch = config.trainer.EvalBatch
-        Pos = config.model.Pos
+        Pos = config.model.max_Pos
         KeyPos = config.model.KeyPos
 
         if config.data_seed is not None:

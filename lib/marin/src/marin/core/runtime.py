@@ -15,23 +15,11 @@
 import functools
 import json
 import logging
-import os
-from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import fsspec
-import ray
-from ray import ObjectRef
-from ray.remote_function import RemoteFunction
-
-from marin.utils import (
-    fsspec_exists,
-    fsspec_get_curr_subdirectories,
-    fsspec_glob,
-    fsspec_mkdirs,
-    rebase_file_path,
-)
+from marin.utils import fsspec_exists
 
 logger = logging.getLogger("ray")
 
@@ -143,134 +131,7 @@ def workflow_cached(success_suffix="SUCCESS", verbose=True):
 
 @dataclass(frozen=True)
 class TaskConfig:
-    """
-    Configuration for controlling tasks run with Ray
-    """
+    """Configuration for controlling tasks run with Ray."""
 
-    max_in_flight: int | None = 1000  # Maximum number of tasks to run concurrently
-    task_options: dict | None = None  # Options to pass to ray.remote decorator
-
-
-def map_files_in_directory(
-    func: Callable | RemoteFunction,
-    input_path: os.PathLike | str,
-    pattern: str,
-    output_path: os.PathLike | str,
-    task_config: TaskConfig = TaskConfig(),
-    empty_glob_ok: bool = False,
-    *args,
-    **kwargs,
-):
-    """
-    Map a function to all files in a directory.
-    If the function is a ray.remote function, then it will be executed in parallel.
-
-    Args:
-        func: The function to map
-        input_path: The input directory
-        pattern: Input file pattern to glob on
-        output_path: The output directory
-        task_config: TaskConfig object
-
-        empty_glob_ok: If True, then an empty glob will not raise an error.
-
-    Returns:
-        List: A list of outputs from the function.
-    """
-    # Get a list of all files in the input directory
-    files = fsspec_glob(os.path.join(input_path, pattern))
-
-    file_pairs = []
-    for file in files:
-        output_file = rebase_file_path(input_path, file, output_path)
-        dir_name = os.path.dirname(output_file)
-        fsspec_mkdirs(dir_name)
-        file_pairs.append([file, output_file])
-
-    if len(file_pairs) == 0:
-        logger.error(f"No files found in {input_path} with pattern {pattern}!!! This is likely an error.")
-        if not empty_glob_ok:
-            raise FileNotFoundError(f"No files found in {input_path} with pattern {pattern}")
-
-    if isinstance(func, ray.remote_function.RemoteFunction):
-        # If the function is a ray.remote function, then execute it in parallel
-        responses = simple_backpressure(
-            func, iter(file_pairs), task_config.max_in_flight, fetch_local=True, *args, **kwargs  # noqa: B026
-        )
-        return responses
-    else:
-        # Map the function to all files
-        outputs = []
-        for file in file_pairs:
-            outputs.append(func(*file, *args, **kwargs))
-
-    return outputs
-
-
-def map_directories_in_directory(
-    func: Callable | RemoteFunction,
-    input_path: str,
-    output_path: str,
-    task_config: TaskConfig = TaskConfig(),
-    *args,
-    **kwargs,
-):
-    # Gets all the directories in a directory
-    directories = fsspec_get_curr_subdirectories(input_path)
-
-    if len(directories) == 0:
-        return []
-
-    def func_to_call(input_subdir):
-        # Construct the output directory
-        output_subdir = rebase_file_path(input_path, input_subdir, output_path)
-        fsspec_mkdirs(output_subdir)
-        return func(input_subdir, output_subdir, *args, **kwargs)
-
-    if isinstance(func, ray.remote_function.RemoteFunction):
-        # If the function is a ray.remote function, then execute it in parallel
-        responses = simple_backpressure(func_to_call, iter(directories), task_config.max_in_flight, fetch_local=True)
-        return responses
-    else:
-        # Map the function to all files
-        outputs = []
-        for directory in directories:
-            outputs.append(func_to_call(directory))
-
-    return outputs
-
-
-def simple_backpressure(
-    remote_func, task_generator: Iterator, max_in_flight: int | None, fetch_local: bool, *args, **kwargs
-) -> Iterator[ObjectRef]:
-    """
-    Simple backpressure implementation for ray.remote functions.
-
-    This function will return a list of refs *in order* of the tasks that are being executed.
-    (The usual ray.wait returns the refs in the order of completion, or at least when they're
-    determined to be completed.)
-
-    Parameters:
-    - remote_func: The Ray remote function to execute.
-    - task_generator: An iterator that generates the tasks to be executed.
-    - max_in_flight: The maximum number of tasks to run concurrently.
-    - fetch_local: Whether to fetch the results locally before returning.
-
-    Returns:
-    - An iterator of refs in the order of the tasks that are being executed.
-    """
-    refs = []
-    in_flight = []
-
-    for task in task_generator:
-        if max_in_flight is not None:
-            while len(in_flight) >= max_in_flight:
-                done, in_flight = ray.wait(in_flight, fetch_local=fetch_local, num_returns=1)
-
-        ref = remote_func.remote(*task, *args, **kwargs)
-        refs.append(ref)
-
-        if max_in_flight is not None:
-            in_flight.append(ref)
-
-    yield from refs
+    max_in_flight: int | None = 1000
+    task_options: dict | None = None

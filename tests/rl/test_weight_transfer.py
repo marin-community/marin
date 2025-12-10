@@ -24,17 +24,18 @@ import jax.numpy as jnp
 import jmp
 import numpy as np
 import pytest
-import ray
 from jax.sharding import Mesh
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.models.llama import LlamaConfig
-from transformers import AutoConfig
-
+from marin.rl.environments.inference_ctx import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
 from marin.rl.weight_transfer import (
     WeightTransferConfig,
     WeightTransferMode,
     create_weight_transfer_client,
     create_weight_transfer_server,
 )
+from marin.rl.weight_utils import levanter_to_nnx_state
+from transformers import AutoConfig, AutoTokenizer
 
 TRANSFER_TYPES = [
     WeightTransferMode.GCS_CHECKPOINT,
@@ -139,7 +140,7 @@ def weight_transfer_config(transfer_mode):
         yield config
 
 
-def test_multiple_weight_updates(ray_tpu_cluster, weight_transfer_config, sample_params):
+def test_multiple_weight_updates(weight_transfer_config, sample_params):
     """Test multiple sequential weight updates."""
     server, client = create_test_weight_transfer_pair(weight_transfer_config)
 
@@ -170,7 +171,7 @@ def test_multiple_weight_updates(ray_tpu_cluster, weight_transfer_config, sample
     client.cleanup()
 
 
-def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_params):
+def test_concurrent_clients(weight_transfer_config, sample_params):
     server, client_1 = create_test_weight_transfer_pair(weight_transfer_config)
 
     client_2 = create_weight_transfer_client(
@@ -203,7 +204,7 @@ def test_concurrent_clients(ray_tpu_cluster, weight_transfer_config, sample_para
 
 
 @pytest.mark.skip("Manual benchmark test")
-def benchmark_arrow_flight_with_llama(ray_tpu_cluster):
+def benchmark_arrow_flight_with_llama():
     """Test Arrow Flight weight transfer with a LLama 1B model."""
     MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
 
@@ -286,12 +287,102 @@ def benchmark_arrow_flight_with_llama(ray_tpu_cluster):
         client.cleanup()
 
 
+@pytest.mark.skip("Manual benchmark test")
+@pytest.mark.slow("Uses real Llama model, requires HuggingFace access.")
+def test_arrow_flight_transfer_to_vllm():
+    """Test Arrow Flight weight transfer to vLLM."""
+    from vllm import LLM
+
+    MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
+    devices = jax.devices("tpu")
+    num_devices = len(devices)
+    print(f"Found {num_devices} TPU devices")
+
+    # Only use device one for now so we don't have to deal with sharded arrays.
+    # This is fine since the model will fit on single TPU.
+    mesh = Mesh(
+        np.array(devices)[:1].reshape(
+            1,
+        ),
+        axis_names=("data",),
+    )
+    print(f"Mesh created with shape {mesh.shape}: {mesh.devices}")
+
+    # Create weight transfer config
+    weight_transfer_config = WeightTransferConfig(
+        mode=WeightTransferMode.ARROW_FLIGHT,
+        sync_interval_steps=1,
+        checkpoint_dir=tempfile.mkdtemp(),
+        coordinator_name=f"test_coordinator_{uuid.uuid4().hex[:8]}",
+    )
+
+    server = create_weight_transfer_server(
+        config=weight_transfer_config,
+        mesh=mesh,
+        axis_mapping={},
+    )
+
+    client = create_weight_transfer_client(
+        config=weight_transfer_config,
+        mesh=mesh,
+        axis_mapping={},
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    hf_checkpoint = RepoRef.from_string(MODEL_NAME)
+    hf_config = AutoConfig.from_pretrained(MODEL_NAME)
+    model_config = LlamaConfig.from_hf_config(hf_config)
+    converter: HFCheckpointConverter = model_config.hf_checkpoint_converter()
+    converter = converter.replaced(reference_checkpoint=hf_checkpoint, tokenizer=tokenizer)
+
+    # Load pretrained weights from HuggingFace
+    with hax.partitioning.set_mesh(mesh):
+        model = converter.load_pretrained(
+            model_config.model_type,
+            ref=hf_checkpoint,
+            config=model_config,
+            dtype=jmp.get_policy("p=bfloat16,c=bfloat16").compute_dtype,
+        )
+
+    print(f"Model built with vocab size: {hf_config.vocab_size}")
+
+    llm = LLM(MODEL_NAME, gpu_memory_utilization=0.50)
+    try:
+        # Test weight transfer
+        print("Starting weight transfer test to vllm...")
+        print("Transfer iteration 0")
+        server.serve_weights(0, model)
+        update = client.receive_weights(model)
+
+        assert update is not None, "Weight update failed"
+        assert update.weight_id == 0, f"Expected weight_id 0, got {update.weight_id}"
+        model = update.model
+        model_nnx_state = levanter_to_nnx_state(model)
+        llm.llm_engine.model_executor.driver_worker.sync_weights(
+            model_nnx_state,
+            mappings=MODEL_MAPPINGS[MODEL_NAME],
+            transpose_keys=MODEL_TRANSPOSE_KEYS[MODEL_NAME],
+            reshard_fn=None,
+        )
+
+        output = llm.generate(["Hello, how are you?"])
+
+        key_phrase = "I'm excited to be here"
+        generated_text = output[0].outputs[0].text
+        assert key_phrase in generated_text, f"Key phrase: {key_phrase} not found in output: {generated_text}"
+
+        print(f"Client metrics: {client.get_metrics()}")
+
+        print("All transfers completed successfully")
+
+    finally:
+        server.cleanup()
+        client.cleanup()
+
+
 if __name__ == "__main__":
-    # log to stderr
     import logging
     import sys
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
-    cluster = ray.init("local")
-    benchmark_arrow_flight_with_llama(ray_tpu_cluster=cluster)
+    benchmark_arrow_flight_with_llama()

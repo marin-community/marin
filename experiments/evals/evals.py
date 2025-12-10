@@ -19,7 +19,7 @@ Canonical set of evals.
 import logging
 
 from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
-from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V6E_8, ResourceConfig
+from fray.cluster import ResourceConfig
 from experiments.evals.task_configs import (
     BASE_GENERATION_TASKS,
     CORE_TASKS,
@@ -280,7 +280,7 @@ def evaluate_levanter_lm_evaluation_harness(
 
 def default_eval(
     step: ExecutorStep | InputName | str,
-    resource_config: ResourceConfig = SINGLE_TPU_V4_8,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v4-8"),
     evals: list[EvalTaskConfig] | None = None,
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
@@ -319,7 +319,7 @@ def default_eval(
 
 def default_base_eval(
     step: ExecutorStep | InputName | str,
-    resource_config: ResourceConfig = SINGLE_TPU_V6E_8,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
     run_generation_evals: bool = True,
@@ -379,11 +379,12 @@ def default_base_eval(
 
 def default_sft_eval(
     step: ExecutorStep | InputName | str,
-    resource_config: ResourceConfig = SINGLE_TPU_V6E_8,
+    resource_config: ResourceConfig = ResourceConfig.with_tpu("v6e-8"),
     max_eval_instances: int | None = None,
     engine_kwargs: dict | None = DEFAULT_LM_EVAL_MODEL_KWARGS,
     run_generation_evals: bool = True,
     apply_chat_template: bool = True,
+    use_levanter_inference: bool = False,
 ):
     # Set up evaluations for core tasks (including GPQA)
     eval_jobs = []
@@ -409,28 +410,49 @@ def default_sft_eval(
 
     name, model_step_path = extract_model_name_and_path(step)
     if run_generation_evals:
-        leaderboard_generation = evaluate_lm_evaluation_harness(
-            name,
-            model_step_path,
-            KEY_GENERATION_TASKS,
-            max_eval_instances=max_eval_instances,
-            engine_kwargs=engine_kwargs,
-            resource_config=resource_config,
-            apply_chat_template=apply_chat_template,
-        )
+        if use_levanter_inference:
+            leaderboard_generation = evaluate_levanter_lm_evaluation_harness(
+                name,
+                model_step_path,
+                KEY_GENERATION_TASKS,
+                resource_config,
+                max_eval_instances=max_eval_instances,
+                apply_chat_template=apply_chat_template,
+            )
+            eval_jobs.append(leaderboard_generation)
 
-        eval_jobs.append(leaderboard_generation)
+            olmo_generation = evaluate_levanter_lm_evaluation_harness(
+                name,
+                model_step_path,
+                OPEN_LM_LEADERBOARD_GEN,
+                resource_config,
+                max_eval_instances=max_eval_instances,
+                apply_chat_template=apply_chat_template,
+            )
+            eval_jobs.append(olmo_generation)
+        else:
+            leaderboard_generation = evaluate_lm_evaluation_harness(
+                name,
+                model_step_path,
+                KEY_GENERATION_TASKS,
+                max_eval_instances=max_eval_instances,
+                engine_kwargs=engine_kwargs,
+                resource_config=resource_config,
+                apply_chat_template=apply_chat_template,
+            )
 
-        olmo_generation = evaluate_lm_evaluation_harness(
-            name,
-            model_step_path,
-            OPEN_LM_LEADERBOARD_GEN,
-            max_eval_instances=max_eval_instances,
-            engine_kwargs=engine_kwargs,
-            resource_config=resource_config,
-            apply_chat_template=apply_chat_template,
-        )
-        eval_jobs.append(olmo_generation)
+            eval_jobs.append(leaderboard_generation)
+
+            olmo_generation = evaluate_lm_evaluation_harness(
+                name,
+                model_step_path,
+                OPEN_LM_LEADERBOARD_GEN,
+                max_eval_instances=max_eval_instances,
+                engine_kwargs=engine_kwargs,
+                resource_config=resource_config,
+                apply_chat_template=apply_chat_template,
+            )
+            eval_jobs.append(olmo_generation)
     return eval_jobs
 
 

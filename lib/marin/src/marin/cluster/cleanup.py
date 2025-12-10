@@ -89,6 +89,16 @@ class CleanupIterationResult:
     low_disk_terminated: list[str] = field(default_factory=list)
 
 
+def list_nodes() -> list[dict[str, Any]]:
+    """Get list of Ray nodes."""
+    result = subprocess.check_output(
+        ["ray", "list", "nodes", "--format=json", "--limit=10000"],
+        text=True,
+        timeout=60,
+    )
+    return json.loads(result)
+
+
 def get_tpu_worker_resources() -> dict[str, int]:
     """Get list of unique worker resource names from Ray cluster.
 
@@ -100,8 +110,6 @@ def get_tpu_worker_resources() -> dict[str, int]:
         - ray-marin-us-east5-a-worker-09614199-tpu
         - ray-marin-us-east5-a-worker-2f248a95-tpu
     """
-    from .ray import list_nodes
-
     worker_resources = {}
     try:
         nodes = list_nodes()
@@ -339,7 +347,7 @@ def terminate_workers_by_ip(worker_ips: list[str], project: str, zone: str) -> l
                 logger.warning(f"Could not find TPU node for IP {worker_ip}")
                 continue
 
-            tpu_name, tpu_zone, worker_index = tpu_info
+            tpu_name, _tpu_zone, _worker_index = tpu_info
             if tpu_name not in tpu_to_ips:
                 tpu_to_ips[tpu_name] = []
             tpu_to_ips[tpu_name].append(worker_ip)
@@ -453,7 +461,7 @@ def run_cleanup_loop(gcp_project: str, zone: str, interval: int = 600, disk_thre
 
 def running_cleanup_jobs() -> Sequence[dict[str, Any]]:
     """Return a list of job dicts for any currently running or pending cleanup jobs."""
-    from .ray import list_jobs
+    from marin.cluster.ray import list_jobs
 
     running_jobs = list_jobs(filters=["status=RUNNING"])
     pending_jobs = list_jobs(filters=["status=PENDING"])
@@ -494,12 +502,13 @@ def submit_cleanup_cron_job(
 
     entrypoint = " ".join(
         [
-            "PYTHONPATH=src/",
+            "PYTHONPATH=lib/marin/src/",
             "python",
             "./scripts/ray/cleanup_tpus.py",
-            f"--project {project}" f"--zone {zone}",
+            f"--project {project}",
+            f"--zone {zone}",
             f"--interval {interval}",
-            f"--disk-threshold {disk_threshold_pct}",
+            f"--disk_threshold_pct {disk_threshold_pct}",
         ]
     )
 
@@ -513,7 +522,7 @@ def submit_cleanup_cron_job(
         [
             "uv",
             "run",
-            "src/marin/run/ray_run.py",
+            "lib/marin/src/marin/run/ray_run.py",
             f"--submission-id={submission_id}",
             f"--cluster={cluster}",
             "--no_wait",

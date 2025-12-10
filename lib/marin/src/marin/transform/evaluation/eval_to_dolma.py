@@ -15,16 +15,18 @@
 """Given a directory of evaluation files, convert them to Dolma format.
 
 The Dolma format is a JSONL file with a "text" field.
+
+Example Usage:
+uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
+    lib/marin/src/marin/transform/evaluation/eval_to_dolma.py \
+    --input_path gs://marin-us-central2/raw/evaluation/ \
+    --output_path gs://marin-data/processed/evaluation/dolma
 """
 
-import json
 from dataclasses import dataclass
 
 import draccus
-import fsspec
-import ray
-
-from marin.core.runtime import cached_or_construct_output, map_files_in_directory
+from zephyr import Dataset, flow_backend, load_jsonl
 
 
 @dataclass
@@ -34,25 +36,28 @@ class ConvertEvalToDolmaConfig:
 
 
 def map_row(row: dict):
+    """Transform evaluation record to Dolma format.
+
+    Args:
+        row: Record with "prompt" and "response" fields
+
+    Returns:
+        Record with "text" field containing prompt + response
+    """
     row["text"] = row["prompt"] + "\n" + row["response"]
     return row
 
 
-@ray.remote
-@cached_or_construct_output(success_suffix="SUCCESS")
-def _process_file(input_filename: str, output_filename: str):
-    """Convert an evaluation file with "prompt" and "response" fields to Dolma format with a "text" field."""
-    with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
-        with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
-            for line in f_in:
-                row = json.loads(line)
-                dolma_row = map_row(row)
-                f_out.write(f"{json.dumps(dolma_row)}\n")
-
-
 @draccus.wrap()
 def convert_eval_to_dolma(cfg: ConvertEvalToDolmaConfig):
-    ray.get(map_files_in_directory(_process_file.remote, cfg.input_path, "**/*.jsonl.gz", cfg.output_path))
+    backend = flow_backend()
+    pipeline = (
+        Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
+        .flat_map(load_jsonl)
+        .map(map_row)
+        .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+    )
+    list(backend.execute(pipeline))
 
 
 if __name__ == "__main__":
