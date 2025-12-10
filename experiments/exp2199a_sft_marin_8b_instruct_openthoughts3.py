@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Fine-tunes Marin-8b-Instruct (marin-community/marin-8b-instruct) on the OpenThoughts3 dataset (open-thoughts/OpenThoughts3-1.2M).
+Fine-tunes Marin-8B-Instruct (marin-community/marin-8b-instruct) on the OpenThoughts3 dataset (open-thoughts/OpenThoughts3-1.2M).
 """
 import dataclasses
 import math

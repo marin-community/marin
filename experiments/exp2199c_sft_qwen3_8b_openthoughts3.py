@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Fine-tunes Qwen2.5-7B-Instruct (Qwen/Qwen2.5-7B-Instruct) on the OpenThoughts3 dataset (open-thoughts/OpenThoughts3-1.2M).
+Fine-tunes Qwen3-8B (Qwen/Qwen3-8B) on the OpenThoughts3 dataset (open-thoughts/OpenThoughts3-1.2M).
 """
 import dataclasses
 import math
@@ -23,7 +23,7 @@ from levanter.data.text import ChatLmDatasetFormat
 
 from experiments.defaults import default_sft, default_tokenize
 from experiments.evals.evals import default_sft_eval
-from experiments.qwen3 import qwen2_5_7b_instruct, qwen2_5_7b_instruct_tokenizer
+from experiments.qwen3 import qwen3_8b, qwen3_8b_tokenizer
 from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     get_instruction_dataset,
@@ -53,9 +53,9 @@ def create_tokenization_step(dataset_identifier: str, short_name: str) -> Execut
     dataset_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[dataset_identifier]
     dataset = get_instruction_dataset(dataset_identifier, splits=dataset_config.splits)
     return default_tokenize(
-        name=f"{short_name}_qwen2_5_7b_instruct_tokenizer",
+        name=f"{short_name}_qwen3_8b_tokenizer",
         dataset=dataset / "**/*.jsonl.gz",
-        tokenizer=qwen2_5_7b_instruct_tokenizer,
+        tokenizer=qwen3_8b_tokenizer,
         format=ChatLmDatasetFormat(),
     )
 
@@ -75,8 +75,8 @@ NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 mixture_sft_config = SimpleSFTConfig(
     resources=ResourceConfig.with_tpu("v5p-64"),
-    tokenizer=qwen2_5_7b_instruct_tokenizer,
-    model_name_or_path="Qwen/Qwen2.5-7B-Instruct",
+    tokenizer=qwen3_8b_tokenizer,
+    model_name_or_path="Qwen/Qwen3-8B",
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=5e-5,
@@ -98,14 +98,14 @@ mixture_config = lm_mixture_data_config(
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )
 
-exp2199b_sft_qwen2pt5_7b_instruct_openthoughts3 = default_sft(
-    name="exp2199b_sft_qwen2pt5_7b_instruct_openthoughts3",
+exp2199c_sft_qwen3_8b_openthoughts3 = default_sft(
+    name="exp2199c_sft_qwen3_8b_openthoughts3",
     tokenized=mixture_config,
-    model_config=qwen2_5_7b_instruct,
+    model_config=qwen3_8b,
     sft_config=mixture_sft_config,
     tags=["qwen", "openthoughts3", "sft"],
 )
 
 
 if __name__ == "__main__":
-    executor_main(steps=[exp2199b_sft_qwen2pt5_7b_instruct_openthoughts3])
+    executor_main(steps=[exp2199c_sft_qwen3_8b_openthoughts3])
