@@ -23,7 +23,7 @@ from dupekit import hash_xxh3_128
 from marin.processing.classification.deduplication.minhash_lsh import MinHashLshOutputRecord
 from zephyr.backends import Backend
 from zephyr.dataset import Dataset
-from zephyr.readers import load_file
+from zephyr.expr import col
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +125,7 @@ def connected_components(
         logger.info(f"Connected components iteration {i}...")
         curr_it = backend.execute(
             Dataset.from_list(curr_it)
-            .flat_map(load_file)
+            .load_parquet()
             .map(lambda record: CCNode(**record))
             .flat_map(_emit_messages)
             .group_by(key=lambda x: x[0], reducer=_reduce_node_step)
@@ -136,8 +136,8 @@ def connected_components(
         # Check for convergence
         changes = backend.execute(
             Dataset.from_list(curr_it)
-            .flat_map(lambda f: load_file(f, columns=["changed"]))
-            .filter(lambda node: node["changed"])
+            .load_parquet(columns=["changed"])
+            .filter(col("changed"))
             # TODO: why is there no .count() method?
             .map(lambda _: 1)
             .reduce(sum)

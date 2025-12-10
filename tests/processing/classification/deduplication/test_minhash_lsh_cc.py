@@ -17,7 +17,6 @@ from collections.abc import Iterator
 from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.processing.classification.deduplication.minhash_lsh import minhash_lsh
 from zephyr.dataset import Dataset
-from zephyr.readers import load_file
 
 
 def _get_ids_per_bucket(_: str, records: Iterator[dict]) -> set:
@@ -91,7 +90,7 @@ def test_connected_components_happy_path(sync_backend, docs, tmp_path):
         lsh_result, backend=sync_backend, output_dir=tmp_path.as_posix(), max_iterations=5
     )
     assert converged
-    results = sync_backend.execute(Dataset.from_list(output_path).flat_map(load_file))
+    results = sync_backend.execute(Dataset.from_list(output_path).load_parquet())
     assert len(results) == len(docs)
 
     components = defaultdict(list)
