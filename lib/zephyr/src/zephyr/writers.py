@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass, is_dataclass
 import itertools
 import os
 from collections.abc import Iterable
@@ -128,9 +129,12 @@ def infer_parquet_type(value):
         return pa.string()
 
 
-def infer_parquet_schema(record: dict):
+def infer_parquet_schema(record: dict | dataclass):
     """Infer PyArrow schema from a dictionary record."""
     import pyarrow as pa
+
+    if is_dataclass(record):
+        record = asdict(record)
 
     fields = []
     for key, value in record.items():
@@ -171,13 +175,14 @@ def write_parquet_file(
         return {"path": output_path, "count": 0}
 
     actual_schema = schema or infer_parquet_schema(first_record)
+    maybe_map_to_dict = asdict if is_dataclass(first_record) else (lambda x: x)
 
     count = 1
     with atomic_rename(output_path) as temp_path:
         with pq.ParquetWriter(temp_path, actual_schema) as writer:
-            batch = [first_record]
+            batch = [maybe_map_to_dict(first_record)]
             for record in record_iter:
-                batch.append(record)
+                batch.append(maybe_map_to_dict(record))
                 count += 1
                 if len(batch) >= batch_size:
                     table = pa.Table.from_pylist(batch, schema=actual_schema)
