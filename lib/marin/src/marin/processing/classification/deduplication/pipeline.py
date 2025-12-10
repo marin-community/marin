@@ -347,7 +347,7 @@ def _compute_fuzzy_dedup_stats(shards: list[str], method: str, level: str) -> Du
     with log_time(f"Compute fuzzy deduplication stats from {len(shards)} shards"):
         result: DupCounters = create_backend("threadpool").execute(  # type: ignore[bad-assignment]
             Dataset.from_list(shards)
-            .flat_map(load_parquet)
+            .load_parquet(columns=["component_id"])
             # Compute the per-component statistics and then roll them up into a single counter group
             .group_by(
                 key=lambda r: r["component_id"],
@@ -377,7 +377,7 @@ def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
         shard_dup_map[record["id"]] = record["fuzzy_duplicate"]
 
     with log_time(f"Load fuzzy duplicate map from {len(shards)} shards"):
-        create_backend("threadpool").execute(Dataset.from_list(shards).flat_map(load_parquet).map(add_to_dup_map))
+        create_backend("threadpool").execute(Dataset.from_list(shards).load_parquet().map(add_to_dup_map))
 
     return shard_dup_map
 
