@@ -198,7 +198,7 @@ def _load_file_gen(stream: Iterator) -> Iterator:
     from zephyr.readers import load_file
 
     for spec in stream:
-        yield from load_file(spec, columns=spec.columns)
+        yield from load_file(spec)
 
 
 def compose_map(operations: list) -> Callable[[Iterator], Iterator]:

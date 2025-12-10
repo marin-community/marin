@@ -98,6 +98,13 @@ class Expr(ABC):
     def __getitem__(self, key: str) -> FieldAccessExpr:
         return FieldAccessExpr(self, key)
 
+    # Null checks
+    def is_null(self) -> IsNullExpr:
+        return IsNullExpr(self)
+
+    def is_not_null(self) -> NotExpr:
+        return NotExpr(IsNullExpr(self))
+
 
 def _to_expr(value: Any) -> Expr:
     """Convert a value to an expression if not already one."""
@@ -198,6 +205,19 @@ class NotExpr(Expr):
 
     def __repr__(self) -> str:
         return f"~({self.child})"
+
+
+@dataclass(eq=False)
+class IsNullExpr(Expr):
+    """Check if value is null/None."""
+
+    child: Expr
+
+    def evaluate(self, record: dict) -> bool:
+        return self.child.evaluate(record) is None
+
+    def __repr__(self) -> str:
+        return f"{self.child}.is_null()"
 
 
 _ARITHMETIC_OPS: dict[str, Callable[[Any, Any], Any]] = {
@@ -303,6 +323,8 @@ def to_pyarrow_expr(expr: Expr) -> pc.Expression:
         return pc.or_(left, right)
     elif isinstance(expr, NotExpr):
         return pc.invert(to_pyarrow_expr(expr.child))
+    elif isinstance(expr, IsNullExpr):
+        return pc.is_null(to_pyarrow_expr(expr.child))
     elif isinstance(expr, ArithmeticExpr):
         left = to_pyarrow_expr(expr.left)
         right = to_pyarrow_expr(expr.right)

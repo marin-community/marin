@@ -177,6 +177,11 @@ def load_parquet(source: str | InputFileSpec) -> Iterator[dict]:
 
     dataset = pads.dataset(spec.path, format="parquet")
 
+    # Handle empty parquet files (no data columns in schema)
+    schema_names = dataset.schema.names
+    if not schema_names:
+        return
+
     if spec.row_start is not None and spec.row_end is not None:
         # Row range first: select rows by position, then apply filter
         cumulative_rows = 0
