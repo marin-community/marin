@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -15,8 +13,8 @@ class RotaryConfig:
 
 
 @dataclass(frozen=True)
-class GruGPTModelConfig:
-    """Hyperparameters for the GruGPT Llama-style transformer."""
+class GrugModelConfig:
+    """Hyperparameters for the Grug Llama-style transformer."""
 
     vocab_size: int = 32000
     hidden_dim: int = 2048
@@ -53,10 +51,10 @@ class AttentionRuntimeConfig:
 
 
 @dataclass(frozen=True)
-class TrainingConfig:
+class GrugTrainingConfig:
     """Full training recipe, nested around a model + runtime config."""
 
-    model: GruGPTModelConfig = field(default_factory=GruGPTModelConfig)
+    model: GrugModelConfig = field(default_factory=GrugModelConfig)
     attention: AttentionRuntimeConfig = field(default_factory=AttentionRuntimeConfig)
     learning_rate: float = 1e-3
     weight_decay: float = 0.01
@@ -65,7 +63,7 @@ class TrainingConfig:
     global_batch_size: int = 8
 
 
-def validate_config(cfg: GruGPTModelConfig) -> None:
+def validate_config(cfg: GrugModelConfig) -> None:
     _ = cfg.inferred_head_dim
     if cfg.num_heads % cfg.num_kv_heads != 0:
         raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
@@ -77,8 +75,8 @@ def validate_config(cfg: GruGPTModelConfig) -> None:
 
 __all__ = [
     "RotaryConfig",
-    "GruGPTModelConfig",
+    "GrugModelConfig",
     "AttentionRuntimeConfig",
-    "TrainingConfig",
+    "GrugTrainingConfig",
     "validate_config",
 ]

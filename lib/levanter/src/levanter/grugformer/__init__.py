@@ -1,24 +1,24 @@
-"""GruGPT: a grug-simple explicit-sharding transformer trainer."""
+"""Grug: a grug-simple explicit-sharding transformer trainer."""
 
 from .attention import apply_rotary_embedding, default_attention_mask, resolve_attention_backend
-from .config import AttentionRuntimeConfig, GruGPTModelConfig, RotaryConfig, TrainingConfig
+from .config import AttentionRuntimeConfig, GrugModelConfig, GrugTrainingConfig, RotaryConfig
 from .data import build_token_loader, make_dataloader, make_token_dataset
 from .model import (
-    GruGPTAttentionParams,
-    GruGPTBlockParams,
-    GruGPTModelParameters,
+    GrugAttentionParams,
+    GrugBlockParams,
+    GrugModelParameters,
     forward,
     init_parameters,
 )
 
 __all__ = [
     "AttentionRuntimeConfig",
-    "TrainingConfig",
-    "GruGPTModelConfig",
+    "GrugTrainingConfig",
+    "GrugModelConfig",
     "RotaryConfig",
-    "GruGPTAttentionParams",
-    "GruGPTBlockParams",
-    "GruGPTModelParameters",
+    "GrugAttentionParams",
+    "GrugBlockParams",
+    "GrugModelParameters",
     "apply_rotary_embedding",
     "default_attention_mask",
     "forward",

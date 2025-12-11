@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 from dataclasses import dataclass, replace
 from typing import Iterator
@@ -14,9 +12,9 @@ from jax.sharding import AxisType
 from levanter.store.cache import TreeCache
 
 from .attention import default_attention_mask
-from .config import AttentionRuntimeConfig, GruGPTModelConfig, TrainingConfig, validate_config
+from .config import AttentionRuntimeConfig, GrugModelConfig, GrugTrainingConfig, validate_config
 from .data import DEFAULT_AXIS_MAPPING, build_token_loader
-from .model import GruGPTModelParameters, forward, init_parameters
+from .model import GrugModelParameters, forward, init_parameters
 
 
 def synthetic_batch_iterator(
@@ -62,13 +60,13 @@ def create_mesh() -> jax.sharding.Mesh:
 
 
 def make_train_step(
-    model_cfg: GruGPTModelConfig,
+    model_cfg: GrugModelConfig,
     runtime_cfg: AttentionRuntimeConfig,
     optimizer: optax.GradientTransformation,
     *,
     causal_mask: jax.Array | None,
 ):
-    def loss_and_metrics(params: GruGPTModelParameters, batch: dict[str, jax.Array]):
+    def loss_and_metrics(params: GrugModelParameters, batch: dict[str, jax.Array]):
         logits = forward(params, batch["tokens"], model_cfg, runtime_cfg, mask=causal_mask, causal=True)
         loss = cross_entropy_loss(logits, batch["labels"])
         metrics = {"loss": loss, "ppl": jnp.exp(loss)}
@@ -95,7 +93,7 @@ def load_cache(cache_dir: str, *, seq_len: int) -> TreeCache[dict]:
     return TreeCache.load(cache_dir, exemplar)
 
 
-def run_training(train_cfg: TrainingConfig, *, cache_dir: str | None = None) -> None:
+def run_training(train_cfg: GrugTrainingConfig, *, cache_dir: str | None = None) -> None:
     validate_config(train_cfg.model)
     mesh = create_mesh()
 
@@ -137,7 +135,7 @@ def run_training(train_cfg: TrainingConfig, *, cache_dir: str | None = None) -> 
 @dataclass(frozen=True)
 class TrainingState:
     step: int
-    params: GruGPTModelParameters
+    params: GrugModelParameters
     opt_state: optax.OptState
 
 
@@ -145,7 +143,7 @@ register_dataclass(TrainingState)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the GruGPT trainer.")
+    parser = argparse.ArgumentParser(description="Run the Grug trainer.")
     parser.add_argument("--cache-dir", type=str, default=None, help="Optional TreeCache directory for real data.")
     parser.add_argument("--steps", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -157,8 +155,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_training_config(args: argparse.Namespace) -> TrainingConfig:
-    model_cfg = GruGPTModelConfig(
+def build_training_config(args: argparse.Namespace) -> GrugTrainingConfig:
+    model_cfg = GrugModelConfig(
         vocab_size=args.vocab_size,
         hidden_dim=args.hidden_dim,
         intermediate_dim=4 * args.hidden_dim,
@@ -167,7 +165,7 @@ def build_training_config(args: argparse.Namespace) -> TrainingConfig:
         num_kv_heads=args.heads,
         max_seq_len=args.seq_len,
     )
-    train_cfg = TrainingConfig(
+    train_cfg = GrugTrainingConfig(
         model=model_cfg,
         attention=AttentionRuntimeConfig(backend="reference"),
         learning_rate=1e-3,

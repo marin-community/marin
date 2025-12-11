@@ -9,12 +9,12 @@ from jax.sharding import PartitionSpec as P, reshard
 from jax.tree_util import register_dataclass
 
 from .attention import apply_rotary_embedding, resolve_attention_backend
-from .config import AttentionRuntimeConfig, GruGPTModelConfig
+from .config import AttentionRuntimeConfig, GrugModelConfig
 
 
 @register_dataclass
 @dataclass(frozen=True)
-class GruGPTAttentionParams:
+class GrugAttentionParams:
     w_q: jax.Array
     w_k: jax.Array
     w_v: jax.Array
@@ -23,8 +23,8 @@ class GruGPTAttentionParams:
 
 @register_dataclass
 @dataclass(frozen=True)
-class GruGPTBlockParams:
-    attn: GruGPTAttentionParams
+class GrugBlockParams:
+    attn: GrugAttentionParams
     rms_attn: jax.Array
     rms_mlp: jax.Array
     mlp_gate: jax.Array
@@ -34,10 +34,10 @@ class GruGPTBlockParams:
 
 @register_dataclass
 @dataclass(frozen=True)
-class GruGPTModelParameters:
+class GrugModelParameters:
     token_embed: jax.Array
     output_proj: jax.Array
-    blocks: tuple[GruGPTBlockParams, ...]
+    blocks: tuple[GrugBlockParams, ...]
     final_norm: jax.Array
 
 
@@ -46,7 +46,7 @@ def _init_weight(key: jax.Array, shape: tuple[int, ...], std: float) -> jax.Arra
 
 
 @partial(jax.jit, static_argnames=("cfg",))
-def init_parameters(cfg: GruGPTModelConfig, *, key: jax.Array) -> GruGPTModelParameters:
+def init_parameters(cfg: GrugModelConfig, *, key: jax.Array) -> GrugModelParameters:
     head_dim = cfg.inferred_head_dim
     keys = random.split(key, 3 + 7 * cfg.num_layers)
     embed_key, out_key, final_norm_key, *rest = keys
@@ -67,27 +67,27 @@ def init_parameters(cfg: GruGPTModelConfig, *, key: jax.Array) -> GruGPTModelPar
         output_proj = reshard(output_proj, P("data", None))
     final_norm = reshard(jnp.ones((cfg.hidden_dim,), dtype=jnp.float32), P("data",))
 
-    blocks: list[GruGPTBlockParams] = []
+    blocks: list[GrugBlockParams] = []
     for i in range(cfg.num_layers):
         k_q, k_k, k_v, k_o, k_gate, k_up, k_down = layer_keys[i]
         # extract shape sizes for brevity and consistency
         H, N, M, D, I = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, head_dim, cfg.intermediate_dim
 
-        attn = GruGPTAttentionParams(
+        attn = GrugAttentionParams(
             w_q=reshard(_init_weight(k_q, (H, N * D), cfg.initializer_std), P("data", "tensor")),
             w_k=reshard(_init_weight(k_k, (H, M * D), cfg.initializer_std), P("data", "tensor")),
             w_v=reshard(_init_weight(k_v, (H, M * D), cfg.initializer_std), P("data", "tensor")),
             w_o=reshard(_init_weight(k_o, (N * D, H), cfg.initializer_std), P("tensor", "data")),
         )
-        mlp_gate = reshard(_init_weight(k_gate, (H, I), cfg.initializer_std), P("data", "tensor"),)
-        mlp_up = reshard(_init_weight(k_up, (H, I), cfg.initializer_std), P("data", "tensor"),)
-        mlp_down = reshard(_init_weight(k_down, (I, H), cfg.initializer_std), P("tensor", "data"),)
+        mlp_gate = reshard(_init_weight(k_gate, (H, I), cfg.initializer_std), P("data", "tensor"))
+        mlp_up = reshard(_init_weight(k_up, (H, I), cfg.initializer_std), P("data", "tensor"))
+        mlp_down = reshard(_init_weight(k_down, (I, H), cfg.initializer_std), P("tensor", "data"))
         # keep rms replicated
         rms_attn = jnp.ones((H,), dtype=jnp.float32)
         rms_mlp = jnp.ones((H,), dtype=jnp.float32)
 
         blocks.append(
-            GruGPTBlockParams(
+            GrugBlockParams(
                 attn=attn,
                 rms_attn=rms_attn,
                 rms_mlp=rms_mlp,
@@ -97,7 +97,7 @@ def init_parameters(cfg: GruGPTModelConfig, *, key: jax.Array) -> GruGPTModelPar
             )
         )
 
-    return GruGPTModelParameters(
+    return GrugModelParameters(
         token_embed=token_embed,
         output_proj=output_proj,
         blocks=tuple(blocks),
@@ -117,7 +117,7 @@ def _rms_norm(x: jax.Array, weight: jax.Array, eps: float) -> jax.Array:
     return normed * weight
 
 
-def _mlp(block: GruGPTBlockParams, x: jax.Array) -> jax.Array:
+def _mlp(block: GrugBlockParams, x: jax.Array) -> jax.Array:
     gate = jnp.einsum("bsh,hm->bsm", x, block.mlp_gate)
     up = jnp.einsum("bsh,hm->bsm", x, block.mlp_up)
     activated = jax.nn.silu(gate) * up
@@ -125,9 +125,9 @@ def _mlp(block: GruGPTBlockParams, x: jax.Array) -> jax.Array:
 
 
 def forward(
-    params: GruGPTModelParameters,
+    params: GrugModelParameters,
     token_ids: jax.Array,
-    cfg: GruGPTModelConfig,
+    cfg: GrugModelConfig,
     runtime: AttentionRuntimeConfig,
     *,
     mask: jax.Array | None = None,
@@ -160,9 +160,9 @@ def forward(
 
 
 __all__ = [
-    "GruGPTAttentionParams",
-    "GruGPTBlockParams",
-    "GruGPTModelParameters",
+    "GrugAttentionParams",
+    "GrugBlockParams",
+    "GrugModelParameters",
     "init_parameters",
     "forward",
 ]

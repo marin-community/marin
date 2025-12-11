@@ -33,6 +33,7 @@ dependencies = [
     "jax>=0.6.2,!=0.7.0,!=0.7.1",
     "fray",
     "zephyr",
+    "einops>=0.8.0",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
     "transformers>=4.57.1,<5.0",
