@@ -345,11 +345,7 @@ class RolloutWorker:
         lesson_config = self.config.curriculum_config.lessons[lesson_id]
 
         # Get sampling params from lesson config
-        if mode == "eval":
-            temperature = 0.0
-        else:
-            temperature = lesson_config.sampling_params.temperature
-
+        temperature = lesson_config.sampling_params.temperature
         stop_tokens = lesson_config.sampling_params.stop_tokens
         max_tokens = lesson_config.sampling_params.max_tokens
 
