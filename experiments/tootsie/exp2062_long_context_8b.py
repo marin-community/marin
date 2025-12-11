@@ -83,7 +83,7 @@ from marin.execution.executor import executor_main
 # Phases
 # ---------------------------
 # Giraffe phase 1 (4k) is a partial recooldown of starling with shifted data distribution toward long-context data.
-# Phases 2 (16k) and 3 (32k) are context length extensions with the same data ditribution that show up as distinct runs
+# Phases 2 (32k) and 3 (64k) are context length extensions with the same data ditribution that show up as distinct runs
 # We do this because changing context length means we have to reset data loader (b/c we permuted over sequences not docs)
 GIRAFFE_4K_START = STARLING_END
 GIRAFFE_4K_STEPS = 6000  # 6000 * 4096 * 4096 ≈ 100B tokens
