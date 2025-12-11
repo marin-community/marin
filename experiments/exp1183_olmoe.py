@@ -31,13 +31,13 @@ from experiments.pretraining_datasets.dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, t
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
-from marin.resources import TpuPodConfig
+from fray.cluster import ResourceConfig
 
 logger = logging.getLogger("ray")
 
 LR = 4e-4
 WD = 0.1
-TPU = TpuPodConfig(tpu_type="v5litepod-128")
+TPU = ResourceConfig.with_tpu("v5litepod-128")
 TOKEN_TARGETS = 2_000_000_000_000
 BATCH_SIZE = 1024
 SEQ_LEN = 4096
