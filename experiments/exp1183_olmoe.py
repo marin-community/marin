@@ -27,7 +27,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.mixtral import MixtralConfig
 
 from experiments.defaults import default_train
-from experiments.dolma.tokenize_dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma_steps
+from experiments.pretraining_datasets.dolma import DOLMA_OLMO_MIXTURE_WEIGHTS, tokenize_dolma
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
@@ -43,7 +43,7 @@ BATCH_SIZE = 1024
 SEQ_LEN = 4096
 
 dolma_llama3_tokenized = lm_mixture_data_config(
-    components=tokenize_dolma_steps(),
+    components=tokenize_dolma(),
     weights=DOLMA_OLMO_MIXTURE_WEIGHTS,
     permutation_type="linear",
     include_raw_paths=False,
