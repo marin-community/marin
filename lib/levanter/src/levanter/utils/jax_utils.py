@@ -135,7 +135,13 @@ def barrier_sync(timeout: float = 200):
     if jax.process_count() == 1:
         return
     import jax._src.distributed as distributed
-    from jaxlib.xla_extension import DistributedRuntimeClient
+
+    try:
+        from jaxlib.xla_extension import DistributedRuntimeClient
+    except ModuleNotFoundError:  # jaxlib>=0.6.2
+        from jax._src.lib import _jax as _jax_lib
+
+        DistributedRuntimeClient = _jax_lib.DistributedRuntimeClient
 
     client: Optional[DistributedRuntimeClient] = distributed.global_state.client
 
