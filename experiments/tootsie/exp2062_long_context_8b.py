@@ -275,9 +275,6 @@ def _train_config(
     )
 
 
-# ensure we're using marin_tokenizer in the tokenized_config
-
-
 STARLING_WARMSTART_STEP = "1399923"
 # needed to move step-1399923-patched/opt_state/inner_state/1 to opt_state/inner_state/0 for some reason
 starling_checkpoint = tootsie_8b_sensible_starling.cd(
