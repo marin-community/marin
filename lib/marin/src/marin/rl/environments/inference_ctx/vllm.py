@@ -92,6 +92,19 @@ class vLLMInferenceContext(BaseInferenceContext):
         self.model_name = inference_config.model_name
         self.sampling_params = inference_config.sampling_params
 
+        # Override chat template to remove hardcoded "Cutting Knowledge Date" system prompt
+        # This custom template preserves Llama's format but doesn't inject default system content
+        # ruff: noqa: E501
+        self.tokenizer.chat_template = """{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|start_header_id|>system<|end_header_id|>
+
+' + message['content'] + '<|eot_id|>' }}{% elif message['role'] == 'user' %}{{ '<|start_header_id|>user<|end_header_id|>
+
+' + message['content'] + '<|eot_id|>' }}{% elif message['role'] == 'assistant' %}{{ '<|start_header_id|>assistant<|end_header_id|>
+
+' + message['content'] + '<|eot_id|>' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>
+
+' }}{% endif %}"""  # fmt: skip
+
         if inference_config.mode == InferenceMode.ASYNC:
             self.sampling_params.output_kind = RequestOutputKind.FINAL_ONLY
 
@@ -264,14 +277,23 @@ class vLLMInferenceContext(BaseInferenceContext):
 
     def batch_completions(
         self,
-        prompts: list[str],
+        prompts: list[str] | list[list[dict]],
         temperature: float,
         n: int,
         max_tokens: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
-        """Batch completions from the inference server."""
+        """Batch completions from the inference server.
+
+        Args:
+            prompts: Either a list of strings or a list of message lists (with few-shot examples)
+            temperature: Sampling temperature
+            n: Number of completions per prompt
+            max_tokens: Maximum tokens to generate
+            stop: Stop sequences
+            system_prompt: Optional system prompt (only used if prompts are strings)
+        """
         if SamplingParams is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
         sampling_params = SamplingParams(
@@ -286,7 +308,21 @@ class vLLMInferenceContext(BaseInferenceContext):
         )
 
         bos_token = self.tokenizer.decode([self.tokenizer.bos_token_id])
-        if system_prompt:
+
+        # Check if prompts are already message lists or plain strings
+        if prompts and isinstance(prompts[0], list):
+            # Prompts are already message lists with few-shot examples
+            # Our custom chat template doesn't inject default system content
+            prompts_with_templates = [
+                self.tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                for messages in prompts
+            ]
+        elif system_prompt:
+            # Plain string prompts with system prompt
             prompts_with_templates = [
                 self.tokenizer.apply_chat_template(
                     [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
@@ -296,6 +332,7 @@ class vLLMInferenceContext(BaseInferenceContext):
                 for prompt in prompts
             ]
         else:
+            # Plain string prompts without system prompt
             prompts_with_templates = [
                 self.tokenizer.apply_chat_template(
                     [{"role": "user", "content": prompt}],
@@ -306,7 +343,8 @@ class vLLMInferenceContext(BaseInferenceContext):
             ]
 
         # .generate prepends a BOS token, so we just remove it here
-        prompts_with_templates = [prompt.replace(bos_token, "") for prompt in prompts_with_templates]
+        # see: https://github.com/huggingface/trl/issues/3853
+        prompts_with_templates = [prompt.removeprefix(bos_token) for prompt in prompts_with_templates]
 
         outputs = self.llm.generate(prompts_with_templates, sampling_params)
 

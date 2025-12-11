@@ -99,11 +99,12 @@ class LevanterInferenceContext(BaseInferenceContext):
     # TODO: add support for ChatCompletion style [ { role, content} ] messages
     def batch_completions(
         self,
-        prompts: list[str],
+        prompts: list[str] | list[list[dict]],
         temperature: float,
         n: int,
         max_tokens: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Call OpenAI API in batches with concurrency control."""
 

@@ -163,13 +163,17 @@ class MathEnv(MarinEnv):
         indices = rng.choice(len(available_examples), size=n_to_sample, replace=False)
         sampled_examples = [available_examples[int(idx)] for idx in indices]
 
-        prompts = [example.processed_prompt for example in sampled_examples]
+        # Build message lists with few-shot examples for each prompt
+        prompts = [
+            [*self.fewshot_prefix, {"role": "user", "content": example.processed_prompt}] for example in sampled_examples
+        ]
         completions = inference_ctx.batch_completions(
             prompts=prompts,
             temperature=temperature,
             n=n_generations,
             max_tokens=max_tokens,
             stop=stop,
+            system_prompt=None,  # No system prompt - use few-shot examples instead
         )
 
         rollout_groups: list[RolloutGroup] = []
@@ -278,16 +282,8 @@ class MathEnv(MarinEnv):
         # Use Tinker's normalize_answer instead of our own
         cleaned_answer = normalize_answer(boxed_answer) if boxed_answer else normalize_answer(raw_answer)
 
-        # Build chat messages with few-shot examples
-        question_text = self.add_instruction(raw_prompt)
-        messages = [*self.fewshot_prefix, {"role": "user", "content": question_text}]
-
-        # Apply chat template to get the formatted prompt
-        if self.tokenizer:
-            processed_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        else:
-            # Fallback if tokenizer not available during init
-            processed_prompt = question_text
+        # Just add instruction suffix - chat template will be applied by inference context
+        processed_prompt = self.add_instruction(raw_prompt)
 
         return DataExample(
             raw_prompt=raw_prompt,

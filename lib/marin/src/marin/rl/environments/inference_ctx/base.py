@@ -41,11 +41,12 @@ class BaseInferenceContext:
 
     def batch_completions(
         self,
-        prompts: list[str],
+        prompts: list[str] | list[list[dict]],
         temperature: float,
         n: int,
         max_tokens: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
         """Batch completions from the inference server."""
         raise NotImplementedError
