@@ -23,6 +23,20 @@ from pathlib import Path
 
 import fsspec
 
+CURRENT_FILE = Path(__file__).resolve()
+
+
+def _find_repo_root(start_file: Path) -> Path | None:
+    """Return the repository root that also contains the experiments directory if possible."""
+    for parent in start_file.parents:
+        if (parent / "pyproject.toml").exists() and (parent / "experiments").exists():
+            return parent
+    return None
+
+
+REPO_ROOT = _find_repo_root(CURRENT_FILE)
+DEFAULT_RESULTS_DIR = (REPO_ROOT / "experiments" / "speedrun") if REPO_ROOT else Path("experiments") / "speedrun"
+
 
 @dataclass(frozen=True)
 class SpeedrunAuthor:
@@ -80,11 +94,14 @@ def load_results_file(path: str) -> dict:
 
 def create_entry_from_results(results: dict, results_filepath: str, base_path: str) -> LeaderboardEntry:
     base_path_abs = Path(base_path).resolve()
+    filepath = Path(results_filepath).resolve()
+    run_dir = filepath.parent
+
     # Path information
-    run_name = Path(results_filepath).parent.relative_to(base_path_abs).as_posix()
-    filepath = Path(results_filepath)
-    repo_root = Path(__file__).resolve().parent.parent.parent.parent
-    relative_path = filepath.relative_to(repo_root).parent
+    run_name = run_dir.relative_to(base_path_abs).as_posix()
+    relative_path = run_dir
+    if REPO_ROOT and run_dir.is_relative_to(REPO_ROOT):
+        relative_path = run_dir.relative_to(REPO_ROOT)
 
     # Get the run info which contains all the information
     run_data = results["run_info"]
@@ -125,6 +142,7 @@ def create_entry_from_results(results: dict, results_filepath: str, base_path: s
 def get_entries(base_path: str) -> list[LeaderboardEntry]:
     entries = []
     results_files = find_speedrun_results(base_path)
+    print(f"Found {len(results_files)} result files under {base_path}")
 
     for file_path in results_files:
         try:
@@ -141,14 +159,11 @@ def get_entries(base_path: str) -> list[LeaderboardEntry]:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate static leaderboard data")
-    current_file = Path(__file__).resolve()
-    marin_root = current_file.parent.parent.parent.parent
-    experiments_path = marin_root / "experiments" / "speedrun"
 
     parser.add_argument(
         "--results-dir",
         type=str,
-        default=experiments_path,
+        default=str(DEFAULT_RESULTS_DIR),
         help="Storage directory containing runs, which then contain JSONs (usually experiments/speedrun/)",
     )
     parser.add_argument(
