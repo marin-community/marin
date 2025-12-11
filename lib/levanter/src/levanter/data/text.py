@@ -629,7 +629,7 @@ def dataset_for_format(
         case TextLmDatasetFormat():
             return CausalLmDataset(TokenSeqDataset(cache, Pos.size), Pos, eos_id=eos_id, ignore_index=ignore_index)
         case ChatLmDatasetFormat(pack=pack, mask_user_turns=mask_user_turns):
-            return MultiturnChatDataset(cache, Pos, max_segments_per_example=64 if pack else 1, mask_user_turns=mask_user_turns)  # type: ignore
+            return ChatDataset(cache, Pos, max_segments_per_example=64 if pack else 1, mask_user_turns=mask_user_turns)  # type: ignore
         case _:
             raise ValueError(f"Unknown format {format}")
 
@@ -1244,7 +1244,7 @@ class ChatProcessor(BatchProcessor[dict, ProcessedChatDict]):
         }
 
 
-class MultiturnChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict], LmExample]):
+class ChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, ProcessedChatDict], LmExample]):
     """
     A dataset that yields multiturn chat examples from a cache of processed chat data.
 

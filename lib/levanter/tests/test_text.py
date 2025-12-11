@@ -16,7 +16,7 @@ import haliax as hax
 from levanter.data.text import (
     BatchTokenizer,
     ChatLmDatasetFormat,
-    MultiturnChatDataset,
+    ChatDataset,
     UrlSingleDatasetLMConfig,
     build_lm_dataset_cache,
     preprocessor_for_format,
@@ -229,7 +229,7 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
 
         # now test packing
         Pos = hax.Axis("position", 100)
-        packed_ds = MultiturnChatDataset(ds, Pos, max_segments_per_example=2)
+        packed_ds = ChatDataset(ds, Pos, max_segments_per_example=2)
         packed_ds = packed_ds.as_sync_dataset()
 
         assert len(packed_ds) == 1
@@ -242,7 +242,7 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
         assert_loss_weight_matches_all_assistants(ex, tokenizer)
 
         # test no packing
-        packed_ds = MultiturnChatDataset(ds, Pos, max_segments_per_example=1).as_sync_dataset()
+        packed_ds = ChatDataset(ds, Pos, max_segments_per_example=1).as_sync_dataset()
 
         # we supplied two conversations, so we should still have two examples
         assert len(packed_ds) == 2
