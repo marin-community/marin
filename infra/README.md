@@ -29,21 +29,17 @@ actual tasks. In general, we try to avoid running any actual computation on the 
 
 ## Ray
 
-[Ray](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/index.html) provides a simple interface
-for programmatically spinning up compute and scheduling/running jobs at scale. For Marin, we structure our data
-processing jobs to be Ray compatible, so we can quickly parallelize across different nodes.
+[Ray](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/index.html) provides the underlying
+cluster infrastructure for Marin. We use Ray for:
+- **Cluster management**: Autoscaling, node provisioning, job scheduling
+- **Training**: Distributed model training via Levanter
+- **Inference**: GPU/TPU actor pools for model serving
 
-**Useful Documentation** -- Time-permitting, consult the official Ray documentation to learn more about how Ray works,
-with helpful examples for working with Clusters and Jobs:
-- [Ray Core](https://docs.ray.io/en/latest/ray-core/walkthrough.html): Provides a walkthrough of Ray "tasks" (atomic
-  unit of work to be distributed), as well as `@ray.remote` syntax. For concrete code, try
-  [this guide with examples](https://docs.ray.io/en/latest/ray-core/tasks.html).
-- [Ray Jobs](https://docs.ray.io/en/latest/cluster/running-applications/job-submission/quickstart.html): Ray Jobs
-  quickstart, with additional details about "special case" jobs (specifying CPUs, adding new Python packages).
-- [Ray Cluster](https://docs.ray.io/en/latest/cluster/key-concepts.html): Nitty-gritty of Ray Clusters.
-  After reading overview, see
-  [this guide for deploying on GCP](https://docs.ray.io/en/latest/cluster/vms/user-guides/launching-clusters/gcp.html)
-  and [this repository for setting up with TPUs](https://github.com/tensorflow/tpu/tree/master/tools/ray_tpu/src/serve).
+For **data processing** (downloads, transforms, deduplication), we use Zephyr instead of raw Ray.
+
+**Useful Documentation**:
+- [Ray Cluster](https://docs.ray.io/en/latest/cluster/key-concepts.html): Cluster architecture and key concepts
+- [Ray on GCP](https://docs.ray.io/en/latest/cluster/vms/user-guides/launching-clusters/gcp.html): GCP-specific deployment
 
 ## Preemptibility
 
@@ -56,97 +52,47 @@ any time by Google, and we will lose all data on them. Preemptibility imposes a 
 - Checkpoint often, use GCS for anything durable.
 - If you need absolutely need something to not crash, ask to schedule it on the head node. Do not do anything heavy on the head node.
 
-## Structuring Code & Running Jobs
+## Data Processing with Zephyr
 
-TODO: we should update this for the experiment framework
+For data processing jobs (downloads, transforms, deduplication, etc.), we use **Zephyr**, a lightweight Dataset
+abstraction that handles parallelism and fault tolerance automatically.
 
-The way we're using Ray for data curation / processing is really as a distributed task queue -- we define an individual
-Python script for each "job" (e.g., running a toxicity classifier on Reddit), breaking the computation into "tasks" that
-are parallelized across the entire cluster.
-
-A task is a "pure" function that operates over some atomic unit of the overall job (e.g., running the toxicity
-classifier on a single Reddit thread). A good rule of thumb is to break a job down into individual tasks that can
-complete within 1-10 minutes.
-
-The following provides a simple sketch of what a job script might look like:
+### Quick Example
 
 ```python
-from marin.toxicity import toxicity_classifier
-from marin.utils import fsspec_exists
+from zephyr import Dataset, flow_backend
 
-import fsspec
-import ray
-
-
-def get_sentinel_path(gcs_file_path: str) -> str:
-    return f"{gcs_file_path}.COMPLETE"
-
-
-def finalize_sentinel(sentinel_gcs_path: str, content: str = "Task Completed") -> None:
-    with fsspec.open(sentinel_gcs_path, "w") as f:
-        f.write(content)
-
-
-# Task Function --> this actually will be parallelized across cluster workers
-@ray.remote
-def classify_reddit_toxicity(gcs_reddit_input: str, gcs_toxicity_output: str) -> bool:
-    """Read from input, perform toxicity classification, write to output -- return success/failure."""
-
-    # [Short-Circuit] If "sentinel" file exists, task has been successfully completed
-    sentinel_gcs_path = get_sentinel_path(gcs_toxicity_output)
-    if fsspec_exists(sentinel_gcs_path):
-        return True
-
-    # Read and validate `gcs_reddit_input`
+def process_file(input_path: str, output_path: str) -> None:
+    # Your processing logic here - no @ray.remote needed
     ...
 
-    # Run toxicity classifier and get scores --> write to `gcs_toxicity_output` as you go!
-    with fsspec.open(gcs_toxicity_output, "w", compression="infer") as out:
-        ...
-
-    # Finalize Sentinel
-    finalize_sentinel(sentinel_gcs_path)
-
-    return True
-
-
-# Main Function (runs in a single processing on cluster head node) --> responsible for "dispatching" tasks
-def run_toxicity_classifier_reddit() -> None:
-    """Iterate over Reddit threads and run toxicity classifier."""
-
-    # Load List of GCS Input Paths (e.g., one file for K threads)
-    gcs_reddit_inputs: List[str] = [...]
-
-    # Create Corresponding List of GCS Output Paths (to store toxicity scores)
-    gcs_toxicity_outputs: List[str] = ["<...>" for input_path in gcs_reddit_inputs]
-
-    # Initialize Connection to Ray Cluster
-    ray.init()
-
-    # Invoke / Dispatch Tasks (call .remote() --> return *promises* -- a list of references to task output)
-    success_refs = []
-    for i in range(len(gcs_reddit_inputs)):
-        success_refs.append(classify_reddit_toxicity.remote(gcs_reddit_inputs[i], gcs_toxicity_outputs[i]))
-
-    # Resolve / Verify Task Successes (call .get() on individual references)
-    #   =>> TODO (siddk) :: There's actually a cleaner API for this that doesn't block on task ordering... fix!
-    task_successes = {input_path: False for input_path in gcs_reddit_inputs}
-    for i, input_path in enumerate(gcs_reddit_inputs):
-        successful = ray.get(success_refs[i])  # Blocks until ready
-        task_successes[input_path] = successful
-
-    # Cleanup -- Write Successes / Failures to GCS
-    ...
-
-
-if __name__ == "__main__":
-    run_toxicity_classifier_reddit()
+def main():
+    backend = flow_backend()  # Backend configured via CLI flags
+    pipeline = (
+        Dataset.from_list(input_files)
+        .filter(lambda f: not output_exists(f))
+        .map(lambda f: process_file(f["input"], f["output"]))
+    )
+    list(backend.execute(pipeline))
 ```
 
-Note the "short-circuiting" structure of the `@ray.remote` decorated function `classify_reddit_toxicity`; in general,
-writing your job scripts and tasks so that they are
-[*idempotent*](https://stackoverflow.com/questions/1077412/what-is-an-idempotent-operation) (can be invoked multiple times, always returning the same output) is a good idea, and gracefully
-handles cases where individual tasks crash or a VM worker gets preempted in the middle of running a task.
+Run with:
+```bash
+uv run zephyr --backend=ray --max-parallelism=200 --memory=2GB script.py
+```
+
+### Documentation
+
+- **Quick start**: See `lib/zephyr/README.md`
+- **Design & API**: See `lib/zephyr/docs/design.md`
+- **Migration patterns**: See `.agents/docs/zephyr-migration.md` for patterns like bounded parallel map, flat_map for file processing, and nested parallelism
+
+### Design Principles
+
+Jobs should still follow these principles for preemptible compute:
+- **Idempotent**: Can be restarted without side effects (use `skip_existing=True` in writers)
+- **Checkpointable**: Write to GCS frequently, use small atomic units of work
+- **Streaming**: Avoid materializing entire datasets in memory
 
 ---
 
@@ -181,7 +127,7 @@ in [scripts/ray/README.md]. Some sample commands:
 ```
 uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml {start-cluster,stop-cluster,restart-cluster}
 uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml {add-worker}
-uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml open-dashboard
+uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml dashboard
 ```
 
 ### Ray Commands
@@ -218,89 +164,28 @@ the config file configures each worker with only 120 visible CPUs.
 ### Restarting the Cluster
 There is currently an error on the Ray autoscaler side with spot-TPU instances, where the Ray autoscaler is not able
 to detect when spot-TPU instances are dead and as a result, we may be left in a state with just the head node and
-no more spot-TPU worker instances starting up. When this state occurs, please message in the #marin-infra slack
-that you are going to restart the cluster (call `uv run scripts/ray/cluster.py --config <config> restart-cluster`)
+no more spot-TPU worker instances starting up. When this state occurs, please message in the #infra Discord
+that you are going to restart the cluster, and then run `uv run scripts/ray/cluster.py --config <config> restart-cluster`.
 
-**Important step for reserved workers**
+Notes:
+* Please check whether there are any running jobs from other users before restarting so that you do not kill all their
+jobs without getting permission first.
+* You can specify `--preserve-jobs=0` when restarting the cluster if you want to skip backing up running jobs and start
+with a completely clean slate (the default value is `--preserve-jobs=1`, which backs up jobs and resubmits them after the restart).
+Example: `uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml restart-cluster --preserve-jobs=0`
+* See the instructions below if there are any reserved workers on the cluster, though in many cases the command above is all you need.
 
-If there are reserved workers, you all also need to take care to delete the reserved workers, then take down the cluster,
-bring up the cluster and finally spin the reserved workers back up
+### Adding manual workers
 
-To add manual workers from our reserved quota to cluster:
-1. If rebooting, first go to **[Queued Resources](https://console.cloud.google.com/compute/tpus?authuser=1&project=hai-gcp-models&tab=queuedResources&invt=AbuT6A)** and delete any existing queued resources for the zone you want to add workers for.
-2. Use the cluster manager to add workers:
-```bash
-# Add a reserved worker
-uv run scripts/ray/cluster.py --config infra/marin-us-central2.yaml add-worker v4-128 --capacity reserved
+Ray cannot automatically schedule TPUs using our reserved capacity. These must be added to the cluster manually.
 
-# Or add a preemptible worker if needed
-uv run scripts/ray/cluster.py --config infra/marin-us-central2.yaml add-worker v4-128 --capacity preemptible
-```
-3. Repeat step 2 as needed to launch additional manual workers.
-
-Please note that after restarting the cluster and queueing the first job, it will likely stall because it takes a while
-for the head node to actually spin up the worker sometimes (~10min).
-
-To recap the full process for restarting the cluster is as follows:
-
-```bash
-# 1. First, delete any existing queued resources for the zone
-# Go to Queued Resources in GCP Console and delete existing resources
-
-# 2. Delete any queued workers
-# Go to VM instances in GCP Console and delete queued workers
-
-# 3. Delete any reserved workers
-gcloud alpha compute tpus tpu-vm list --project=hai-gcp-models --zone $CLUSTER
-
-# Example output format:
-# NAME                                    ZONE        ACCELERATOR_TYPE  TYPE  TOPOLOGY  NETWORK  RANGE          STATUS
-# ray-marin-{cluster}-worker-{id}-tpu     {zone}      v6e-4            V6E   2x2       default  10.202.0.0/20  READY
-# ray-marin-{cluster}-worker-{id}-tpu     {zone}      v6e-8            V6E   2x4       default  10.202.0.0/20  READY
-# ray-marin-{cluster}-worker-{id}-tpu     {zone}      v6e-64           V6E   8x8       default  10.202.0.0/20  DELETING
-# WORKER_NAME below is which one of the workers above you want to delete
-
-gcloud alpha compute tpus tpu-vm delete $WORKER_NAME --zone $CLUSTER --project hai-gcp-models
-
-# 4. Take down the cluster
-ray down -y infra/marin-$CLUSTER.yaml
-
-# 5. Bring up the cluster
-ray up -y infra/marin-$CLUSTER.yaml
-
-# 6. Get the head node's internal IP
-# Go to VM instances in GCP Console and find the head node's internal IP
-
-# 7. Add reserved workers back (repeat for each worker needed)
-uv run scripts/ray/cluster.py --config infra/marin-$CLUSTER.yaml add-worker $TPU_TYPE --capacity reserved
-
-# 8. Monitor the cluster startup
-ray exec infra/marin-$CLUSTER.yaml "tail -n 100 -f /tmp/ray/session_latest/logs/monitor*"
-
-# Note: After restarting and queueing the first job, it may stall for ~10 minutes
-# while the head node spins up workers
-```
-
-If you want the command below will delete all reserved workers **BE VERY CAREFUL**
-not to delete workers others are running jobs on. It will only be necessary for full resets
-```bash
-gcloud alpha compute tpus tpu-vm list --project=hai-gcp-models --zone $CLUSTER | grep "ray-marin-$CLUSTER-$worker" | awk '{print $1}' | xargs -I {} gcloud alpha compute tpus tpu-vm delete {} --zone $CLUSTER --project hai-gcp-models --quiet
-```
-Note that some clusters have an extra letter at the end so you'll need to change the work template i.e.
 ```bash
 export CLUSTER=us-east5-b-vllm
-gcloud alpha compute tpus tpu-vm list --project=hai-gcp-models --zone $CLUSTER | grep "ray-marin-us-east5-worker" | awk '{print $1}' | xargs -I {} gcloud alpha compute tpus tpu-vm delete {} --zone $CLUSTER --project hai-gcp-models --quiet
-
-# after that's finished then run
-uv run scripts/ray/cluster.py --config infra/marin-us-east5-b-vllm.yaml add-worker v6e-8 --capacity preemptible
+uv run scripts/ray/cluster.py --config infra/marin-us-east5-b-vllm.yaml add-worker v6e-8 --capacity reserved
 ```
-Where:
-- `$CLUSTER` is the cluster name (e.g., `us-central2`, `us-west4`, or `eu-west4`)
-- `$IP` is the head node's internal IP address
-- `$ZONE` is the GCP zone (e.g., `us-central2-b`)
 
 Remember to:
-1. Message in the #marin-infra Slack channel before restarting
+1. Message in the #marin Discord channel before restarting
 2. Wait for the cluster to fully initialize before running jobs
 3. Be patient with the first job after restart as it may take ~10 minutes for workers to spin up
 

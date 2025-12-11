@@ -34,7 +34,7 @@ class MistralConfig(LlamaConfig):
     """Config for MistralModel
 
     Args:
-        seq_len (int, optional): maximum length of the input sequence. Defaults to 8192.
+        max_seq_len (int, optional): maximum length of the input sequence. Defaults to 8192.
         hidden_dim (int, optional): dimension of the hidden state. Defaults to 4096.
         intermediate_dim (int, optional): dimension of the intermediate state. Defaults to 14336.
         num_layers (int, optional): number of hidden layers in the Transformer encoder. Defaults to 32.
@@ -46,7 +46,7 @@ class MistralConfig(LlamaConfig):
         sliding_window (int, optional): window size of sliding window attention. Defaults to 4096.
     """
 
-    seq_len: int = 8192
+    max_seq_len: int = 8192
     hidden_dim: int = 4096
     intermediate_dim: int = 14336
     num_layers: int = 32
@@ -69,9 +69,10 @@ class MistralConfig(LlamaConfig):
     rope: RotaryEmbeddingsConfig = dataclasses.field(default_factory=DefaultRotaryEmbeddingsConfig)
 
     # Axis
-    Pos = property(lambda self: Axis(name="position", size=self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
-    Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
+    @property
+    def Embed(self) -> Axis:
+        return Axis(name="embed", size=self.hidden_dim)
+
     Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
     KVHeads = property(lambda self: Axis(name="kv_heads", size=self.num_kv_heads))
     Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
@@ -96,7 +97,7 @@ class MistralConfig(LlamaConfig):
         rope_theta = hf_config.rope_theta
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, None)
         return MistralConfig(
-            seq_len=hf_config.max_position_embeddings,  # this might be too big...
+            max_seq_len=hf_config.max_position_embeddings,  # this might be too big...
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,
@@ -125,7 +126,7 @@ class MistralConfig(LlamaConfig):
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
         return HfMistralConfig(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -146,14 +147,14 @@ class MistralConfig(LlamaConfig):
     def model_type(cls) -> Type["MistralLMHeadModel"]:
         return MistralLMHeadModel
 
-    def flops_per_token(self, vocab_size: int) -> Optional[float]:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> float:
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=False,
         )

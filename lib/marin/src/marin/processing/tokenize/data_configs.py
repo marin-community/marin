@@ -24,6 +24,7 @@ from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
 
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
+from marin.utils import load_tokenizer_with_backoff
 
 PermutationType = Literal["linear", "feistel"]
 """Permutation type for shuffle. feistel is much better but we historically used linear."""
@@ -116,6 +117,7 @@ def lm_mixture_data_config(
     include_raw_paths: bool = True,
     max_train_batches: dict[str, int] | None = None,
     num_validation_sequences: dict[str, int] | None = None,
+    mixture_block_size: int | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources.
@@ -141,6 +143,10 @@ def lm_mixture_data_config(
 
     tokenizer = _verify_tokenizers_same(components)
 
+    kwargs = {}
+    if mixture_block_size is not None:
+        kwargs["mixture_block_size"] = mixture_block_size
+
     return LMMixtureDatasetConfig(
         configs=configs,
         train_weights=weights,
@@ -150,6 +156,7 @@ def lm_mixture_data_config(
         permutation_type=permutation_type,
         max_train_batches=max_train_batches,
         num_validation_sequences=num_validation_sequences,
+        **kwargs,
     )
 
 
@@ -391,7 +398,7 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LMMixtureDatasetC
 @lru_cache(maxsize=32)
 def _load_tokenizer(tokenizer_name: str) -> transformers.PreTrainedTokenizer:
     """Load and cache a tokenizer by name"""
-    return transformers.AutoTokenizer.from_pretrained(tokenizer_name)
+    return load_tokenizer_with_backoff(tokenizer_name)
 
 
 def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
@@ -422,7 +429,7 @@ def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
 
 
 def _verify_tokenizers_same(components: dict[str, TokenizerStep]):
-    first_name, first_step = next(iter(components.items()))
+    _first_name, first_step = next(iter(components.items()))
     tokenizer = first_step.config.tokenizer
     for name, step in components.items():
         if step.config.tokenizer != tokenizer:

@@ -31,6 +31,8 @@ dependencies = [
     "haliax>=1.4.dev450",
     "equinox>=0.11.7,!=0.12.0",
     "jax>=0.6.2,!=0.7.0,!=0.7.1",
+    "fray",
+    "zephyr",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
     "transformers>=4.57.1,<5.0",
@@ -131,6 +133,9 @@ dev = [
   "prompt_toolkit>=3.0.0",
 ]
 
+
+
+
 [tool.uv]
 default-groups = ["test", "docs", "dev"]
 conflicts = [
@@ -139,6 +144,11 @@ conflicts = [
     { extra = "tpu" },
   ],
 ]  # Never solve for both GPU and TPU at once
+
+[tool.uv.sources]
+zephyr = { workspace = true }
+fray = { workspace = true }
+haliax = { workspace = true }
 
 [tool.ruff]
 line-length = 119
@@ -167,5 +177,6 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "entry: marks tests as entry point tests (deselect with '-m \"not entry\"')",
     "ray: marks tests that require Ray (deselect with '-m \"not ray\"')",
+    "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
 ]
 asyncio_default_fixture_loop_scope = "function"

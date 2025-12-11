@@ -36,7 +36,7 @@ pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integrati
 
 
 @pytest.mark.slow("Integration test.")
-def test_train_worker(ray_tpu_cluster, tmp_path):
+def test_train_worker(tmp_path):
     """Test training worker processes rollout batch and creates checkpoint."""
     rollout_storage_config = create_test_rollout_storage_config()
     queue_writer = rollout_storage_config.create_writer()
@@ -54,6 +54,7 @@ def test_train_worker(ray_tpu_cluster, tmp_path):
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),
         rollout_storage=rollout_storage_config,
+        inference_type="levanter",
     )
 
     job = RLJob(job_config)

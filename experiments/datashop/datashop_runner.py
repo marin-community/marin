@@ -39,7 +39,7 @@ from experiments.datashop.defaults import (
     default_train_quality_model,
 )
 from experiments.evals.evals import default_eval
-from experiments.evals.resource_configs import SINGLE_TPU_V6E_8, TPU_V6E_8_STRICT_PACK, ResourceConfig
+from fray.cluster import ResourceConfig
 from experiments.evals.task_configs import MMLU_5_SHOT
 from marin.datashop.pipeline import CorpusContent
 from marin.execution.executor import executor_main
@@ -73,7 +73,7 @@ class DatashopRunnerConfig:
     pretraining_data_path_name: str = "datashop-dclm-pretraining-subset"
 
     # How to schedule the TPUs (what hardware to use and how to pack them) specifically for labeling
-    labeler_resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
+    labeler_resource_config: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_tpu("v6e-8"))
 
     # What hardware to use for training the final model
     training_tpu_type: str = "v6e-128"
@@ -100,7 +100,7 @@ class DatashopRunnerConfig:
     consolidate_config_kwargs: dict | None = None
 
     # What hardware to use for evaluating the model
-    eval_resource_config: ResourceConfig = field(default_factory=lambda: SINGLE_TPU_V6E_8)
+    eval_resource_config: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_tpu("v6e-8"))
 
 
 class DatashopRunner:

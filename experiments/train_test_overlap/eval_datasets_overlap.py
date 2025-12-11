@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from marin.download.huggingface.download_hf import DownloadConfig, download_hf
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
+from marin.transform.huggingface.dataset_to_eval import DatasetConversionConfig, OutputFormatOptions, hf_dataset_to_jsonl
+
 from experiments.eval_datasets import (
     arc_raw as ai2_arc_raw,
 )
@@ -35,10 +39,6 @@ from experiments.eval_datasets import (
 from experiments.eval_datasets import (
     piqa_baber_raw as piqa_raw,
 )
-from marin.download.huggingface.download import DownloadConfig
-from marin.download.huggingface.download_hf import download_hf
-from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
-from marin.raw2json.huggingface.qa.raw2json import DatasetConversionConfig, OutputFormatOptions, raw2json
 
 """
 This script downloads HF datasets and converts them to dolma "text" format for decontamination.
@@ -72,7 +72,7 @@ mmlu_raw = ExecutorStep(
 # Convert gsm8k to dolma format
 gsm8k_convert_dolma = ExecutorStep(
     name="decontamination/gsm8k-dolma",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="gsm8k/main",
         subsets=["*"],
@@ -89,7 +89,7 @@ gsm8k_convert_dolma = ExecutorStep(
 # Convert math dataset to dolma format
 math_convert_dolma = ExecutorStep(
     name="decontamination/math-dolma",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="hendrycks/math",
         subsets=["*"],
@@ -107,7 +107,7 @@ math_convert_dolma = ExecutorStep(
 # columns are: question (string), best_answer (string), correct_answers (List[string])
 truthful_qa_convert_dolma = ExecutorStep(
     name="decontamination/truthful_qa-dolma",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="truthful_qa/truthful_qa",
         subsets=["generation"],
@@ -125,7 +125,7 @@ truthful_qa_convert_dolma = ExecutorStep(
 # Convert bbh to dolma format
 bbh_convert_dolma = ExecutorStep(
     name="decontamination/bbh-dolma",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="SaylorTwift/bbh",
         subsets=["*"],
@@ -142,7 +142,7 @@ bbh_convert_dolma = ExecutorStep(
 
 mmlu_convert_dolma = ExecutorStep(
     name="decontamination/mmlu",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="cais/mmlu",
         subsets=["*"],
@@ -162,7 +162,7 @@ mmlu_convert_dolma = ExecutorStep(
 # Convert humaneval to dolma format
 humaneval_convert_dolma = ExecutorStep(
     name="decontamination/humaneval",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="openai/openai_humaneval",
         subsets=["*"],
@@ -179,7 +179,7 @@ humaneval_convert_dolma = ExecutorStep(
 # Convert instruction_following to dolma format (load remotely, no answers)
 instruction_following_convert_dolma = ExecutorStep(
     name="decontamination/instruction_following",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="wis-k/instruction-following-eval",
         subsets=["*"],
@@ -197,7 +197,7 @@ instruction_following_convert_dolma = ExecutorStep(
 # Convert gpqa to dolma format (load from HF hub, single split)
 gpqa_convert_dolma = ExecutorStep(
     name="decontamination/gpqa",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="Idavidrein/gpqa",
         subsets=["gpqa_main", "gpqa_extended", "gpqa_diamond"],
@@ -215,7 +215,7 @@ gpqa_convert_dolma = ExecutorStep(
 
 mmlu_pro_convert_dolma = ExecutorStep(
     name="decontamination/mmlu_pro",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="TIGER-Lab/MMLU-Pro",
         subsets=["*"],
@@ -234,7 +234,7 @@ mmlu_pro_convert_dolma = ExecutorStep(
 # Convert musr to dolma format
 musr_convert_dolma = ExecutorStep(
     name="decontamination/musr",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="WillHeld/MuSRDecontam",
         subsets=[""],
@@ -253,7 +253,7 @@ musr_convert_dolma = ExecutorStep(
 # Convert HellaSwag to dolma format
 hellaswag_convert_dolma = ExecutorStep(
     name="decontamination/hellaswag",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="Rowan/hellaswag",
         subsets=["*"],
@@ -270,7 +270,7 @@ hellaswag_convert_dolma = ExecutorStep(
 # Convert AI2-ARC to dolma format
 ai2_arc_convert_dolma = ExecutorStep(
     name="decontamination/ai2_arc",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="allenai/ai2_arc",
         subsets=["*"],
@@ -290,7 +290,7 @@ ai2_arc_convert_dolma = ExecutorStep(
 # Convert BoolQ to dolma format
 boolq_convert_dolma = ExecutorStep(
     name="decontamination/boolq",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="google/boolq",
         subsets=["*"],
@@ -307,7 +307,7 @@ boolq_convert_dolma = ExecutorStep(
 # Insert Tau Commonsense QA conversion step
 commonsense_qa_convert_dolma = ExecutorStep(
     name="decontamination/commonsense_qa",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="tau/commonsense_qa",
         subsets=["*"],
@@ -327,7 +327,7 @@ commonsense_qa_convert_dolma = ExecutorStep(
 # Convert Lambada OpenAI to dolma format
 lambada_openai_convert_dolma = ExecutorStep(
     name="decontamination/lambada_openai",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="EleutherAI/lambada_openai",
         subsets=["*"],
@@ -344,7 +344,7 @@ lambada_openai_convert_dolma = ExecutorStep(
 # Convert AllenAI OpenBookQA to dolma format
 openbookqa_convert_dolma = ExecutorStep(
     name="decontamination/openbookqa",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="allenai/openbookqa",
         subsets=["*"],
@@ -364,7 +364,7 @@ openbookqa_convert_dolma = ExecutorStep(
 # Convert PIQA to dolma format
 piqa_convert_dolma = ExecutorStep(
     name="decontamination/piqa",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="baber/piqa",
         subsets=["*"],
@@ -384,7 +384,7 @@ piqa_convert_dolma = ExecutorStep(
 # Convert Winograd WSC to dolma format
 winograd_wsc_convert_dolma = ExecutorStep(
     name="decontamination/winograd_wsc",
-    fn=raw2json,
+    fn=hf_dataset_to_jsonl,
     config=DatasetConversionConfig(
         dataset_name="marcov/winograd_wsc_wsc273_promptsource",
         subsets=["*"],
@@ -402,6 +402,28 @@ winograd_wsc_convert_dolma = ExecutorStep(
 )
 
 ############################################################
+
+# List of evaluation dataset conversion steps for train-test overlap detection
+EVAL_DATASET_STEPS: list[ExecutorStep] = [
+    gsm8k_convert_dolma,
+    math_convert_dolma,
+    truthful_qa_convert_dolma,
+    bbh_convert_dolma,
+    mmlu_convert_dolma,
+    humaneval_convert_dolma,
+    instruction_following_convert_dolma,
+    gpqa_convert_dolma,
+    musr_convert_dolma,
+    mmlu_pro_convert_dolma,
+    hellaswag_convert_dolma,
+    ai2_arc_convert_dolma,
+    boolq_convert_dolma,
+    commonsense_qa_convert_dolma,
+    lambada_openai_convert_dolma,
+    openbookqa_convert_dolma,
+    piqa_convert_dolma,
+    winograd_wsc_convert_dolma,
+]
 
 if __name__ == "__main__":
     executor_main(

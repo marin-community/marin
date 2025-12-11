@@ -22,13 +22,13 @@ from levanter.data.text import LMMixtureDatasetConfig
 from levanter.models.llama import LlamaConfig
 
 from experiments.common_pile.tokenize_common_pile import stackv2, stackv2_edu_filtered
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_tokenize, simulated_epoching_train
-from experiments.llama import llama3_tokenizer, llama_1_4b
-from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main
-from marin.resources import TpuPodConfig
 from experiments.evals.task_configs import CORE_TASKS
+from experiments.llama import llama3_tokenizer, llama_1_4b
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
+from experiments.simple_train_config import SimpleTrainConfig
+from fray.cluster import ResourceConfig
+from marin.execution.executor import ExecutorStep, InputName, executor_main
 
 TPU_TYPE = "v5p-8"
 TAG = ["exp1752", "simulated_epoching"]
@@ -40,7 +40,7 @@ STARCODER_SWEEP_NAME = "exp1752-starcoderdata-sim"
 SIMULATED_TARGET_BUDGET_TOKENS = 15_000_000_000_000  # 15T tokens to mimic full-budget epoching behaviour
 
 training_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type=TPU_TYPE, slice_count=1),
+    resources=ResourceConfig.with_tpu(TPU_TYPE, slice_count=1),
     train_batch_size=256,
     learning_rate=1e-3,
     weight_decay=0.1,

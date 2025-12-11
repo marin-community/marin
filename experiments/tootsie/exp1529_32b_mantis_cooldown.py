@@ -32,11 +32,11 @@ from experiments.tootsie.exp1395_qwen3_32b import (
 )
 from experiments.evals.evals import default_base_eval
 from experiments.models import ModelConfig, download_model_step
-from experiments.nemotron_cc.tokenize_nemotron import (
+from experiments.pretraining_datasets import (
     NEMOTRON_WEIGHTS,
-    tokenize_nemotron_steps,
+    tokenize_nemotron,
 )
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.exp934_hq_vs_pt import pt_vs_hq_components
 from experiments.midtraining_datasets import (
     megamath_token_counts,
@@ -44,15 +44,14 @@ from experiments.midtraining_datasets import (
     stackv2_edu_filtered_python_tokenized,
 )
 from experiments.tootsie.exp600_tootsie import phase_3_tokenized, starling_components
+from fray.cluster import ResourceConfig
 from marin.execution import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
-
-from experiments.evals.resource_configs import SINGLE_TPU_V5p_8
 
 PHASE_3_START = 160_000
 PHASE_3_END = 192_000  # 20% of Training for Cooldown
 
-nemotron_steps = tokenize_nemotron_steps()
+nemotron_steps = tokenize_nemotron()
 proofpile_2 = dclm_components_llama3["proofpile_2"]
 starcoderdata = dclm_components_llama3["starcoderdata"]
 
@@ -196,7 +195,7 @@ for model, revision in baselines:
     baseline_evals.extend(
         default_base_eval(
             output_path_of(model_instance),
-            resource_config=SINGLE_TPU_V5p_8,
+            resource_config=ResourceConfig.with_tpu("v5p-8"),
             run_generation_evals=False,
             discover_latest_checkpoint=False,
         )
@@ -208,7 +207,7 @@ if __name__ == "__main__":
             tootsie_32b_cooldown_mantis,
             *default_base_eval(
                 tootsie_32b_cooldown_mantis,
-                resource_config=SINGLE_TPU_V5p_8,
+                resource_config=ResourceConfig.with_tpu("v5p-8"),
                 run_generation_evals=False,
             ),
             *baseline_evals,

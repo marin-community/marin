@@ -126,7 +126,13 @@ def barrier_sync(timeout: float = 200):
     if jax.process_count() == 1:
         return
     import jax._src.distributed as distributed
-    from jaxlib.xla_extension import DistributedRuntimeClient
+
+    try:
+        from jaxlib.xla_extension import DistributedRuntimeClient
+    except ModuleNotFoundError:  # jaxlib>=0.6.2
+        from jax._src.lib import _jax as _jax_lib
+
+        DistributedRuntimeClient = _jax_lib.DistributedRuntimeClient
 
     client: Optional[DistributedRuntimeClient] = distributed.global_state.client
 
@@ -321,7 +327,7 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
         else:
             return NamedSharding(mesh, PartitionSpec(None))
 
-        axis_sharding = [None] * len(shape)
+        axis_sharding: list[str | None] = [None] * len(shape)
         axis_sharding[sharded_axis] = hax.partitioning.ResourceAxis.DATA
         sharding = NamedSharding(mesh, PartitionSpec(*axis_sharding))
 
@@ -474,9 +480,6 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
      2. Then, inside jit, we select the source'th element of the array, then reshard with the out_axis_specs
 
     """
-    if jax.process_count() == 1:
-        return x
-
     current_mesh: jax.sharding.Mesh = hax.partitioning._get_mesh()
 
     axis_names = current_mesh.axis_names
@@ -509,7 +512,7 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
         arr = jax.lax.with_sharding_constraint(arr[valid_device_for_process], pspec)
 
         if isinstance(x, hax.NamedArray):
-            return hax.named(arr, x.axes)
+            return hax.named(arr, x.axis_names)
         else:
             return arr
 
@@ -642,7 +645,7 @@ def sharded_tree_size(
 
     def _size(x):
         if isinstance(x, hax.NamedArray):
-            pspec = haliax.partitioning.pspec_for(x, mapping, preserve_existing_shardings=False)
+            pspec = haliax.partitioning.pspec_for(x, mapping)
             num_shards = _shards_for_pspec(pspec)
             x_a = x.array
             if hasattr(x_a, "nbytes"):

@@ -1,4 +1,4 @@
-name: Marin - Run unit tests
+name: Marin - Tests
 on:
   push:
     branches:
@@ -6,8 +6,7 @@ on:
   pull_request:
     branches:
       - main
-  pull_request_review:
-    types: [submitted]
+
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -65,52 +64,10 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CI: true
         run: |
-          PYTHONPATH=tests:. uv run --frozen pytest -n3 --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
+          PYTHONPATH=tests:. uv run --frozen pytest -n 2 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
 
-  tpu-test:
-    runs-on: [tpu-ci]
-    timeout-minutes: 10
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-        with:
-          ref: ${{ (github.event_name == 'pull_request_review' && format('refs/pull/{0}/merge', github.event.pull_request.number)) || '' }}
-
-      - name: Run TPU tests in Docker
+      - name: Test zephyr
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          CI: true
         run: |
-          bash infra/tpu-ci/clean-tpu.sh
-
-          DOCKER_IMAGE="ghcr.io/marin-community/marin/tpu-ci:latest"
-          echo "Using Docker image: $DOCKER_IMAGE"
-
-          # Create UV cache directory
-          mkdir -p /tmp/uv-cache
-          chmod 777 /tmp/uv-cache
-
-          docker run --rm \
-            --device /dev/vfio:/dev/vfio \
-            --shm-size=100g \
-            --stop-timeout=5 \
-            --cap-add=SYS_RESOURCE \
-            --ulimit memlock=68719476736:68719476736 \
-            -e TPU_CI=true \
-            -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
-            -e START_RAY_TPU_CLUSTER=true \
-            -e TPU_STDERR_LOG_LEVEL=3 \
-            -e TPU_MIN_LOG_LEVEL=3 \
-            -e PYTHONPATH=/workspace \
-            -e JAX_PLATFORMS=tpu,cpu \
-            -e PJRT_DEVICE=TPU \
-            -e HF_TOKEN \
-            -e WANDB_API_KEY \
-            -e WANDB_MODE=offline \
-            -e UV_CACHE_DIR=/tmp/uv-cache \
-            -v ${{ github.workspace }}:/workspace-src:ro \
-            -v /tmp/uv-cache:/tmp/uv-cache:rw \
-            -w /workspace \
-            $DOCKER_IMAGE \
-            bash -c "cp -a /workspace-src/. /workspace/ && cd /workspace && timeout --kill-after=5 --signal=TERM 590 uv run --package marin --extra tpu --group test --frozen pytest tests/tpu -m tpu_ci -v --tb=short -s --log-cli-level=INFO"
+          cd lib/zephyr && uv run --frozen pytest -n 2 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/

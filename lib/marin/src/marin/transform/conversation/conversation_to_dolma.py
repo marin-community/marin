@@ -12,15 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Transform conversation format to Dolma format.
+
+Example Usage:
+uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
+    lib/marin/src/marin/transform/conversation/conversation_to_dolma.py \
+    --input_path gs://marin-us-central2/conversations/ \
+    --output_path gs://marin-data/processed/conversations/dolma-v1.0/
+"""
+
 import dataclasses
-import json
 
 import draccus
-import fsspec
-import ray
-
-from marin.core.runtime import TaskConfig, cached_or_construct_output, map_files_in_directory
 from marin.execution.executor import THIS_OUTPUT_PATH
+from zephyr import Dataset, flow_backend, load_jsonl
 
 
 @dataclasses.dataclass
@@ -52,28 +58,22 @@ def transform_conversation_to_dolma(row: dict):
     return dolma_row
 
 
-@ray.remote
-@cached_or_construct_output(success_suffix="SUCCESS")
-def process_file(input_filename: str, output_filename: str):
-    with fsspec.open(input_filename, "rt", compression="gzip") as f_in:
-        with fsspec.open(output_filename, "wt", compression="gzip") as f_out:
-            for line in f_in:
-                row = json.loads(line)
-                dolma_row = transform_conversation_to_dolma(row)
-                f_out.write(f"{json.dumps(dolma_row)}\n")
-
-
-@ray.remote
 def process_dataset(config: ConversationToDolmaConfig):
-    responses = map_files_in_directory(
-        process_file.remote, config.input_path, "**/*.jsonl.gz", config.output_path, TaskConfig(), False
+    """Convert conversation format to Dolma format."""
+    backend = flow_backend()
+    pipeline = (
+        Dataset.from_files(f"{config.input_path}/**/*.jsonl.gz", empty_glob_ok=False)
+        .flat_map(load_jsonl)
+        .map(transform_conversation_to_dolma)
+        .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    ray.get(responses)
+    list(backend.execute(pipeline))
 
 
-def convert_conversation_to_dolma(config: ConversationToDolmaConfig):
-    ray.get(process_dataset.remote(config))
+# Alias for other callers
+convert_conversation_to_dolma = process_dataset
 
 
 if __name__ == "__main__":
-    draccus.wrap(convert_conversation_to_dolma)()
+    process_dataset = draccus.wrap(process_dataset)
+    process_dataset()

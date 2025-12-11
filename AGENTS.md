@@ -22,7 +22,7 @@
 
 - Assume Python >=3.11.
 - Always use `uv run` for Python entry points. If that fails, try `.venv/bin/python` directly.
-- Run `uv run pre-commit run --all-files` before sending changes; formatting and linting are enforced with `ruff`.
+- Run `uv run python infra/pre-commit.py --all-files` before sending changes; formatting and linting are enforced with `ruff`.
 - Keep type hints passing under `uv run mypy`; configuration lives in `pyproject.toml`.
 
 ### Communication & Commits

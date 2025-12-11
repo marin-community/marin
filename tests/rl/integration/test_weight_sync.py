@@ -37,7 +37,7 @@ pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integrati
 
 
 @pytest.mark.slow("Integration test.")
-def test_rollout_and_train_workers(ray_tpu_cluster, tmp_path):
+def test_rollout_and_train_workers(tmp_path):
     """Test inference & training workers running together with checkpoint updates."""
     rollout_storage_config = create_test_rollout_storage_config()
 
@@ -54,6 +54,7 @@ def test_rollout_and_train_workers(ray_tpu_cluster, tmp_path):
         curriculum=create_test_curriculum_config(),
         tokenizer=DummyTokenizer(),
         rollout_storage=rollout_storage_config,
+        inference_type="levanter",
     )
 
     job = RLJob(job_config)

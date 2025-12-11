@@ -23,16 +23,15 @@ import json
 import logging
 import os
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
-import ray
+from zephyr import Dataset, flow_backend
 
 from marin.classifiers.types import Attribute, Document, LabeledExample
-from marin.core.runtime import cached_or_construct_output, map_files_in_directory
 from marin.utils import fsspec_glob, fsspec_rm, rebase_file_path
 
 logger = logging.getLogger("ray")
@@ -88,40 +87,37 @@ def label_documents(
 
     logger.info(f"Creating custom attribute for documents in {input_doc_path}, writing to {output_attr_path}.")
 
-    # curry write_label so that we can pass it to map_files_in_directory
-    @ray.remote(memory=1 * 1024 * 1024 * 1024, num_cpus=1)  # 1 GB
-    def processing_func(input_file_path, output_file_path):
+    def processing_func(input_file_path):
         attr_file_paths = (
             [rebase_file_path(input_doc_path, input_file_path, input_attr_path) for input_attr_path in input_attr_paths]
             if input_attr_paths is not None
             else []
         )
-        return label_documents_shard(input_file_path, output_file_path, label_func, attr_file_paths)
+        return label_documents_shard(input_file_path, label_func, attr_file_paths)
 
-    responses = map_files_in_directory(processing_func.remote, input_doc_path, "**/*.jsonl.gz", output_attr_path)
-    try:
-        ray.get(responses)
-    except Exception as e:
-        logger.exception(f"Error processing {input_doc_path}: {e}")
-        raise
+    backend = flow_backend(max_parallelism=1000)
+    pipeline = (
+        Dataset.from_files(f"{input_doc_path}/**/*.jsonl.gz")
+        .flat_map(processing_func)
+        .write_jsonl(f"{output_attr_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
+    )
+    list(backend.execute(pipeline))
 
 
-@cached_or_construct_output(success_suffix="SUCCESS")
 def label_documents_shard(
     input_doc_file_path: str,
-    output_file_path: str,
     label_func: Callable[[Document, list[Attribute]], dict],
     input_attr_file_paths: list[str] | None = None,
-) -> None:
-    """
-    Writes new attribute file by applying label_func.
+):
+    """Process documents file and yield labeled attribute records.
 
     Args:
-        input_doc_file_path (str): Path to the input JSONL file in Dolma format (gzip compressed).
-        output_file_path (str): Path to the output attribute JSONL file (gzip compressed).
-        label_func (Callable[[Document, list[Attribute]], dict]): Generates attribute dict from
-        document and other input attributes.
-        input_attr_file_paths (list[str] | None): Path to attributes needed to determine new attribute.
+        input_doc_file_path: Path to the input JSONL file in Dolma format (gzip compressed).
+        label_func: Generates attribute dict from document and other input attributes.
+        input_attr_file_paths: Path to attributes needed to determine new attribute.
+
+    Yields:
+        Attribute records with labels
     """
     with ExitStack() as stack:
         f_attrs = (
@@ -132,10 +128,7 @@ def label_documents_shard(
             if input_attr_file_paths is not None
             else []
         )
-        with (
-            fsspec.open(input_doc_file_path, "rt", compression="infer") as f_doc,
-            fsspec.open(output_file_path, "wt", compression="infer") as f_out,
-        ):
+        with fsspec.open(input_doc_file_path, "rt", compression="infer") as f_doc:
             for lines in zip(f_doc, *f_attrs, strict=False):
                 document: Document = json.loads(lines[0])
                 input_attributes: list[Attribute] = [json.loads(line) for line in lines[1:]]
@@ -145,7 +138,7 @@ def label_documents_shard(
                     "source": document["source"],
                     "attributes": label_func(document, input_attributes),
                 }
-                f_out.write(json.dumps(output_attribute) + "\n")
+                yield output_attribute
 
 
 def create_dataset(
@@ -158,8 +151,7 @@ def create_dataset(
         config (CreateDatasetConfig): Configuration object containing all parameters for dataset creation.
     """
 
-    @ray.remote(memory=1 * 1024 * 1024 * 1024, num_cpus=1)  # 1 GB
-    def processing_func(input_file_path: str, output_file_path: str) -> None:
+    def processing_func(input_file_path: str) -> Generator:
         attr_file_paths = (
             [
                 rebase_file_path(config.input_doc_path, input_file_path, input_attr_path)
@@ -170,7 +162,6 @@ def create_dataset(
         )
         return create_dataset_shard(
             input_file_path,
-            output_file_path,
             config.label_func,
             attr_file_paths,
             config.sampling_rate,
@@ -184,17 +175,13 @@ def create_dataset(
     )
     shard_path = os.path.join(config.output_dataset_path, "shards", doc_fs_path.lstrip("/"))
 
-    responses = map_files_in_directory(
-        processing_func.remote,
-        config.input_doc_path,
-        f"**/*.{config.filetype}",
-        shard_path,
+    backend = flow_backend(max_parallelism=1000)
+    pipeline = (
+        Dataset.from_files(f"{config.input_doc_path}/**/*.{config.filetype}")
+        .flat_map(processing_func)
+        .write_jsonl(f"{shard_path}/data-{{shard:05d}}-of-{{total:05d}}.{config.filetype}")
     )
-    try:
-        ray.get(responses)
-    except Exception as e:
-        logger.exception(f"Error processing {config.input_doc_path}: {e}")
-        raise
+    list(backend.execute(pipeline))
 
     shard_paths = fsspec_glob(os.path.join(shard_path, f"**/*.{config.filetype}"))
     if config.max_sample_size is None:
@@ -221,29 +208,29 @@ def create_dataset(
     fsspec_rm(shard_path)
 
 
-@cached_or_construct_output(success_suffix="SUCCESS")
 def create_dataset_shard(
     input_doc_file_path: str,
-    output_file_path: str,
     label_func: Callable[[Document, list[Attribute]], str] | None,
     input_attr_file_paths: list[str],
     sampling_rate: float,
     seed: int,
     columns_to_keep: list[str],
-) -> None:
-    """
-    Writes training examples to an output file.
-    Only a fraction of the examples, determined by the sampling rate, are written to the output file (eg, to control size
+):
+    """Process documents file and yield sampled training examples.
+
+    Only a fraction of the examples, determined by the sampling rate, are yielded (eg, to control size
     of training dataset and/or weight different domains).
 
     Args:
-        input_doc_file_path (str): Path to the input JSONL file (gzip compressed).
-        output_file_path (str): Path to the output file (gzip compressed).
-        label_func (Callable[[Document, list[Attribute]], str]): Generates label from document and input attributes.
-        input_attr_file_paths (list[str]): Path to the attribute JSONL file (gzip compressed).
-        sampling_rate (float): Fraction of lines to be written to the output file.
-        seed (int): Seed for random number generator to ensure reproducibility.
-        columns_to_keep (list[str]): List of columns to keep in the output file.
+        input_doc_file_path: Path to the input JSONL file (gzip compressed).
+        label_func: Generates label from document and input attributes.
+        input_attr_file_paths: Path to the attribute JSONL file (gzip compressed).
+        sampling_rate: Fraction of lines to be yielded.
+        seed: Seed for random number generator to ensure reproducibility.
+        columns_to_keep: List of columns to keep in the output.
+
+    Yields:
+        Training examples with labels
     """
 
     def hash_fn(text: str) -> int:
@@ -261,10 +248,7 @@ def create_dataset_shard(
             if input_attr_file_paths is not None
             else []
         )
-        with (
-            fsspec.open(input_doc_file_path, "rt", compression="infer") as f_doc,
-            fsspec.open(output_file_path, "wt", compression="infer") as f_out,
-        ):
+        with fsspec.open(input_doc_file_path, "rt", compression="infer") as f_doc:
             for lines in zip(f_doc, *f_attrs, strict=False):
                 if rng.random() > sampling_rate:
                     continue
@@ -276,7 +260,7 @@ def create_dataset_shard(
                     example = {col: doc_obj[col] for col in columns_to_keep}
                     if label_func is not None:
                         example.update({"label": label_func(doc_obj, attr_objs)})
-                    f_out.write(json.dumps(example) + "\n")
+                    yield example
                 else:
                     logging.warning(f"Document {doc_obj['id']} has no text field.")
 

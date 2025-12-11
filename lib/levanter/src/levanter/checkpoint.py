@@ -31,8 +31,8 @@ from levanter.tensorstore_serialization import (
     tree_serialize_leaves_tensorstore,
 )
 from levanter.utils import fsspec_utils
-from levanter.utils.types import FilterSpec
 from levanter.utils.jax_utils import broadcast_one_to_all
+from levanter.utils.types import FilterSpec
 
 logger = logging.getLogger(__name__)
 
@@ -263,18 +263,18 @@ class Checkpointer:
             logger.info(f"Removing checkpoint {checkpoint}")
             self._async_checkpoint_remover_queue.put(checkpoint)
 
-    def _do_rm_checkpoint(self, checkpoint):
-        fs, plain_path = _get_fs_and_plain_path(self.base_path)
+    def _do_rm_checkpoint(self, cp_path):
         # have to strip protocol from path because fsspec filesystems don't like them
+        fs, plain_path = _get_fs_and_plain_path(cp_path)
+
         try:
-            cp_path = fsspec_utils.join_path(plain_path, checkpoint)
-            logger.info(f"Deleting old checkpoint {checkpoint} from {cp_path}")
+            logger.info(f"Deleting old checkpoint from {cp_path}")
             time_in = time.time()
-            fs.rm(cp_path, recursive=True)
+            fs.rm(plain_path, recursive=True)
             time_out = time.time()
-            logger.info(f"Deleted old checkpoint {checkpoint} from {cp_path} in {time_out - time_in:.2f} seconds")
+            logger.info(f"Deleted old checkpoint from {cp_path} in {time_out - time_in:.2f} seconds")
         except Exception:  # pylint: disable=broad-except
-            logger.exception(f"Failed to delete checkpoint {checkpoint}", exc_info=True)
+            logger.exception(f"Failed to delete checkpoint {cp_path}", exc_info=True)
 
     def save_checkpoint(
         self,
@@ -355,13 +355,12 @@ def save_checkpoint(
     is_temporary: bool = True,
 ):
     """
-    Save a checkpoint to a given path using TensorStore.
+    Save a checkpoint to a given path using TensorStore with OCDBT.
+    Old checkpoints (non-OCDBT) can still be loaded for backward compatibility.
 
     If the path does not exist, it will be created.
 
-    If training_state is None, no training state will be saved.
-
-    This method is jax.Array-aware and will save shards in a way that can be restored
+    This method is jax.Array-aware and will save shards in a way that can be restored.
 
     Args:
         tree: the PyTree to save
@@ -411,10 +410,14 @@ def load_checkpoint(
     allow_partial: bool = False,
 ) -> M:
     """
-    Load a checkpoint from a given path. If discover_latest is True, then the latest checkpoint
-    in a subdirectory of the given path will be loaded. If subpath is not None, then the checkpoint
-    loads only that subpath of the checkpoint. This is useful for loading, e.g., just the model and not
-    the entire training state.
+    Load a checkpoint from a given path using TensorStore.
+
+    Supports both OCDBT (new format) and non-OCDBT (old format) checkpoints through automatic
+    format detection.
+
+    If discover_latest is True, then the latest checkpoint in a subdirectory of the given path
+    will be loaded. If subpath is not None, then the checkpoint loads only that subpath of the
+    checkpoint. This is useful for loading, e.g., just the model and not the entire training state.
 
     Args:
         tree: an exemplar of the tree to load. Can be a PyTree[ShapeDTypeStruct] instead of a PyTree[Any]

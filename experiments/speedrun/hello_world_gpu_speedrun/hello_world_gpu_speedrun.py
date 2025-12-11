@@ -24,7 +24,7 @@ import logging
 from experiments.llama import llama_nano
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.resources import GpuConfig
+from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
@@ -38,7 +38,7 @@ speedrun_config = SpeedrunConfig(
     description="Nano model based on Llama architecture.",
     model_config=llama_nano,
     train_config=SimpleTrainConfig(
-        GpuConfig(gpu_count=1, accelerator_type="A100"),
+        ResourceConfig.with_gpu("A100", count=1),
         train_batch_size=32,
         num_train_steps=100,
         learning_rate=3e-3,

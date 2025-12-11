@@ -25,7 +25,7 @@ from experiments.evals.task_configs import (
 )
 
 # Hardware / executor
-from experiments.evals.resource_configs import SINGLE_TPU_V4_8, SINGLE_TPU_V6E_8
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.execution.executor import ExecutorMainConfig  # for retry logic
 ```
@@ -36,8 +36,8 @@ Run the canonical CORE_TASKS (subset of DCLM tasks) via LM Evaluation Harness:
 
 ```python
 # run_mcqa_eval.py
+from fray.cluster import ResourceConfig
 from experiments.evals.evals import default_eval
-from experiments.evals.resource_configs import SINGLE_TPU_V4_8
 from marin.execution.executor import executor_main
 
 # Example: evaluate a standalone checkpoint
@@ -46,7 +46,7 @@ model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
 # This creates an ExecutorStep that runs CORE_TASKS
 core_evals_step = default_eval(
     step=model_path,
-    resource_config=SINGLE_TPU_V4_8,
+    resource_config=ResourceConfig.with_tpu("v4-8"),
     # Optional: override the task set:
     # evals=CORE_TASKS_PLUS_MMLU,
     # max_eval_instances=100,
@@ -65,8 +65,8 @@ Use `default_key_evals` to run a collection of generation tasks (`KEY_GENERATION
 
 ```python
 # run_key_evals.py  (see 1:18:experiments/evals/run_key_evals.py)
+from fray.cluster import ResourceConfig
 from experiments.evals.evals import default_key_evals
-from experiments.evals.resource_configs import SINGLE_TPU_V6E_8
 from marin.execution.executor import executor_main
 
 # Point to your checkpoint or a training ExecutorStep
@@ -78,7 +78,7 @@ model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
 #  3) Alpaca eval
 key_steps = default_key_evals(
     step=model_path,
-    resource_config=SINGLE_TPU_V6E_8,
+    resource_config=ResourceConfig.with_tpu("v6e-8"),
     model_name="my_key_evals",
     # max_eval_instances=50,
 )
@@ -104,7 +104,7 @@ from experiments.evals.evals import evaluate_alpaca_eval
 alpaca_step = evaluate_alpaca_eval(
     model_name="my_model",
     model_path="...",
-    resource_config=SINGLE_TPU_V6E_8,
+    resource_config=ResourceConfig.with_tpu("v6e-8"),
     engine_kwargs=DEFAULT_VLLM_ENGINE_KWARGS,
     stop_token_ids=[<YOUR_EOS_TOKEN_ID>],  # must match your HF model's eos_token_id
 )
@@ -117,8 +117,8 @@ alpaca_step = evaluate_alpaca_eval(
 If you want fine‐grained control over which tasks to run:
 
 ```python
+from fray.cluster import ResourceConfig
 from experiments.evals.evals import evaluate_lm_evaluation_harness
-from experiments.evals.resource_configs import SINGLE_TPU_V4_8
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import executor_main
 
@@ -132,7 +132,7 @@ custom_step = evaluate_lm_evaluation_harness(
     model_name="custom_eval",
     model_path="...",
     evals=custom_tasks,
-    resource_config=SINGLE_TPU_V4_8,
+    resource_config=ResourceConfig.with_tpu("v4-8"),
     max_eval_instances=200,
 )
 

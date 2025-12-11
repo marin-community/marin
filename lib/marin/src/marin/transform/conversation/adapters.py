@@ -84,12 +84,13 @@ class TransformAdapter:
     and the system_value is "system". This helps us map the roles to the correct values in the OpenAI
     format from "from" -> "role" and "human"/"gpt" -> "user"/"assistant".
     """
-    conversation_column: str = ""
-    role_key: str = ""
-    user_value: str = ""
-    assistant_value: str = ""
-    system_value: str = ""
-    content_key: str = ""
+    conversation_column: str = "messages"
+    role_key: str = "role"
+    user_value: str = "user"
+    assistant_value: str = "assistant"
+    system_value: str = "system"
+    content_key: str = "content"
+    tool_value: str = "tool"
 
     # If specified, the key will be used to select the message with
     # best metric in multiple turn conversations
@@ -101,7 +102,7 @@ class TransformAdapter:
     def transform_conversation_to_openai_format(
         self,
         row: dict[str, Any],
-    ) -> list[OpenAIChatMessage] | None:
+    ) -> list[OpenAIChatMessage]:
         if self.dataset_format == InputDatasetFormat.INSTRUCTION_RESPONSE:
             messages = []
             instruction = row[self.instruction_column]
@@ -127,6 +128,7 @@ class TransformAdapter:
                 self.user_value: "user",
                 self.assistant_value: "assistant",
                 self.system_value: "system",
+                self.tool_value: "tool",
             }
             conversation = row[self.conversation_column]
             for conv in conversation:
@@ -155,7 +157,7 @@ class TransformAdapter:
                 # This occurs in Dolphin-R1 reasoning, where instructions are
                 # sometimes part of the 'system' prompt instead of 'user' prompt.
                 # We handle misaligned data gracefully rather than crash.
-                return None
+                return []
             else:
                 instruction_content = instruction[0][self.content_key]
                 messages.append(OpenAIChatMessage(role="user", content=instruction_content))

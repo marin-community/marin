@@ -2,6 +2,7 @@
 
 scratch
 cache
+levanter/cache
 new-cache
 wandb
 checkpoints
@@ -118,3 +119,7 @@ dmypy.json
 
 # local execution commands
 local_*.sh
+
+node_modules
+
+local_store

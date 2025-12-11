@@ -24,14 +24,14 @@ from levanter.optim import AdamConfig
 from levanter.optim.clip_update_norm import ClipUpdateNormConfig
 from levanter.schedule import ScheduleStep
 
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.defaults import default_train
 from experiments.llama import llama_32b
-from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
+from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
+from fray.cluster import ResourceConfig
 from marin.execution import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
-from marin.resources import TpuPodConfig
 
 ## 32b experiments
 
@@ -41,7 +41,7 @@ llama_32b_remat = dataclasses.replace(
 )
 
 llama_32b_train_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
+    resources=ResourceConfig.with_tpu("v4-2048", slice_count=1),
     # decreasing so we don't have padding at slice count 3
     # but we moved to v4 once we lost the v5 compute so we moved back to 8192 again
     train_batch_size=[
@@ -85,7 +85,7 @@ llama_32b_train_config = SimpleTrainConfig(
     ),
 )
 
-nemotron_steps = tokenize_nemotron_steps()
+nemotron_steps = tokenize_nemotron()
 proofpile_2 = dclm_components_llama3["proofpile_2"]
 starcoderdata = dclm_components_llama3["starcoderdata"]
 nemotron_mix = lm_mixture_data_config(
