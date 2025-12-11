@@ -57,7 +57,7 @@ def step_target(token_target, batch_size, seq_len):
 
 
 baseline_1_4b = LlamaConfig(
-    seq_len=SEQ_LEN,
+    max_seq_len=SEQ_LEN,
     hidden_dim=2048,
     intermediate_dim=8192,
     num_heads=16,
@@ -66,7 +66,7 @@ baseline_1_4b = LlamaConfig(
 )
 
 olmoe_8x_1_4b = MixtralConfig(
-    seq_len=SEQ_LEN,
+    max_seq_len=SEQ_LEN,
     hidden_dim=2048,
     intermediate_dim=1024,
     num_heads=16,
