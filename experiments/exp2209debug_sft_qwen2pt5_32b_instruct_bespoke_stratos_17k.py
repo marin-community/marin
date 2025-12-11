@@ -70,7 +70,7 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 5
-TRAIN_BATCH_SIZE = 224  # Fits on 1 x TPU-v5p-64 (for v5p-64, batch size must be divisible by # devices which is 32)
+TRAIN_BATCH_SIZE = 512  # Fits on 1 x TPU-v5p-64 (for v5p-64, batch size must be divisible by # devices which is 32)
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 mixture_sft_config = SimpleSFTConfig(
@@ -82,7 +82,7 @@ mixture_sft_config = SimpleSFTConfig(
     learning_rate=1e-5,
     max_seq_len=16384,
     seed=0,
-    steps_per_checkpoint=1000,  # Around 5357 steps per epoch with batch size 224
+    steps_per_checkpoint=(total_examples/TRAIN_BATCH_SIZE)//4,  # Every quarter epoch
     lr_schedule="cosine",
     warmup=0.1,
     decay=0.9,
@@ -98,8 +98,8 @@ mixture_config = lm_mixture_data_config(
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )
 
-exp2199debug_sft_qwen2pt5_32b_instruct_bespoke_stratos_17k = default_sft(
-    name="exp2199debug_sft_qwen2pt5_32b_instruct_bespoke_stratos_17k",
+exp2209debug_sft_qwen2pt5_32b_instruct_bespoke_stratos_17k = default_sft(
+    name="exp2209debug_sft_qwen2pt5_32b_instruct_bespoke_stratos_17k",
     tokenized=mixture_config,
     model_config=qwen2_5_32b_instruct,
     sft_config=mixture_sft_config,
@@ -108,4 +108,4 @@ exp2199debug_sft_qwen2pt5_32b_instruct_bespoke_stratos_17k = default_sft(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[exp2199debug_sft_qwen2pt5_32b_instruct_bespoke_stratos_17k])
+    executor_main(steps=[exp2209debug_sft_qwen2pt5_32b_instruct_bespoke_stratos_17k])
