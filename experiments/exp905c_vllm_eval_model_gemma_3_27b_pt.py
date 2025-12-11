@@ -21,7 +21,9 @@ MODEL_CONFIG = {
     "name": "gemma-3-27b-pt",
     "path": f"{GCSFUSE_MODEL_ROOT}/google--gemma-3-27b-pt--main",
     "apply_chat_template": False,
-    "tensor_parallel_size": 1,
+    "tensor_parallel_size": 8,
+    # Shard weights across all 8 chips to keep memory within a single v6e-8 host.
+    "max_model_len": 4096,
 }
 
 
