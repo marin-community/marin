@@ -15,8 +15,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from levanter.grugformer.config import AttentionRuntimeConfig, GrugModelConfig, GrugTrainingConfig
-from levanter.grugformer.main import run_training
+from levanter.grug.config import AttentionRuntimeConfig, GrugModelConfig, GrugTrainingConfig
+from levanter.grug.main import run_training
 
 
 def test_synthetic_training_step_runs():
