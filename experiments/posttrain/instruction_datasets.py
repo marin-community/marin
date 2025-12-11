@@ -46,6 +46,7 @@ Current datasets:
 20. nvidia/Nemotron-Post-Training-Dataset-v2
 21. HuggingFaceH4/no_robots
 22. open-thoughts/OpenThoughts3-1.2M  # Note that this is the *original* OpenThoughts3 dataset; smoltalk2 has a slightly different version
+23. marin-community/OpenThoughts4-1.2M-Qwen3-32B  # Subsampled from full OT4 dataset annotated with Qwen3-32B
 """
 
 import dataclasses
@@ -467,6 +468,17 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         metadata_columns=["difficulty", "source", "domain"],
         name="open-thoughts/OpenThoughts3-1.2M",
         max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
+    ),
+    "marin-community/OpenThoughts4-1.2M-Qwen3-32B": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/OpenThoughts4-1.2M-Qwen3-32B",
+        revision="0f1fb76",
+        adapter=instruction_response_adapter(
+            instruction_column="instruction_seed",
+            response_column="generated_text",
+        ),
+        metadata_columns=["source", "dataset", "domain", "split", "difficulty", "difficulty_reasoning"],
+        name="marin-community/OpenThoughts4-1.2M-Qwen3-32B",
+        max_parallelism=4,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
     ),
 }
 
