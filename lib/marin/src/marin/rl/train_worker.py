@@ -22,6 +22,7 @@ checkpoints are read by the rollout workers to update their models.
 
 import dataclasses
 import logging
+import time
 from dataclasses import dataclass
 
 import haliax as hax
@@ -213,6 +214,35 @@ class TrainWorker:
 
         self.reference_model = _load_model()
 
+    def _wait_for_initial_rollouts(self, max_wait_time: float = 1200.0, poll_interval: float = 5.0) -> bool:
+        """Wait for initial rollouts from step -1 to be received.
+
+        Args:
+            max_wait_time: Maximum time to wait in seconds (default: 20 minutes)
+            poll_interval: How often to check for rollouts in seconds (default: 5 seconds)
+
+        Returns:
+            True if initial rollouts were received, False if timeout
+        """
+        logger.info("Waiting for initial rollouts from step -1...")
+        start_time = time.time()
+
+        while time.time() - start_time < max_wait_time:
+            buffer_size = self.replay_buffer.size()
+            if buffer_size > 0:
+                elapsed = time.time() - start_time
+                logger.info(f"Received initial rollouts! Buffer size: {buffer_size} (waited {elapsed:.1f}s)")
+                return True
+
+            elapsed = time.time() - start_time
+            if int(elapsed) % 10 == 0 and elapsed > 0:  # Log every 10 seconds
+                logger.info(f"Still waiting for initial rollouts (elapsed: {elapsed:.0f}s, buffer size: {buffer_size})")
+
+            time.sleep(poll_interval)
+
+        logger.warning(f"Timeout waiting for initial rollouts after {max_wait_time}s")
+        return False
+
     def train(self):
         """Main training method using Levanter's standard train_lm infrastructure."""
         logger.info("Starting RLOO training with Levanter...")
@@ -235,6 +265,9 @@ class TrainWorker:
             # Always transfer initial weights to rollout workers before we attempt to start training
             self.transfer_server.serve_weights(-1, state.model)
             self.replay_buffer.set_current_step(-1)
+
+            # Wait for initial rollouts to ensure we have baseline measurements
+            self._wait_for_initial_rollouts()
 
             self._configure_training_hooks(trainer)
 
