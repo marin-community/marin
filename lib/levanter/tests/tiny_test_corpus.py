@@ -4,11 +4,10 @@
 import json
 import os
 
-import numpy
 import numpy as np
 
 from levanter.data.audio import AudioIODatasetConfig
-from levanter.data.text import UrlSingleDatasetLMConfig
+from levanter.data.text.datasets import UrlSingleDatasetLMConfig
 from levanter.store.cache import TreeCache
 
 
@@ -50,11 +49,11 @@ def construct_small_data_cache(
 ) -> tuple[UrlSingleDatasetLMConfig, dict[str, TreeCache]]:
     from levanter.store.cache import SerialCacheWriter
 
-    rng = numpy.random.default_rng(0)
+    rng = np.random.default_rng(0)
 
     caches: dict[str, TreeCache] = {}
 
-    exemplar = {"input_ids": numpy.zeros((doc_len,), dtype=numpy.int32)}
+    exemplar = {"input_ids": np.zeros((doc_len,), dtype=np.int32)}
 
     for split in ["train", "validation"]:
         with SerialCacheWriter(f"{path}/cache/{split}", exemplar) as writer:
