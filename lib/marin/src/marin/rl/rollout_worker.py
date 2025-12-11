@@ -522,7 +522,7 @@ class RolloutWorker:
         if not batch or not batch.groups:
             return
 
-        sample_groups = min(5, len(batch.groups))
+        sample_groups = min(1000, len(batch.groups))
         selected_group_indices = random.sample(range(len(batch.groups)), k=sample_groups)
 
         rows = []
@@ -531,8 +531,8 @@ class RolloutWorker:
             if not group.rollouts:
                 continue
             rollout = random.choice(group.rollouts)
-            prompt_text = self._tokenizer.decode(rollout.prompt_tokens, skip_special_tokens=True)
-            response_text = self._tokenizer.decode(rollout.response_tokens, skip_special_tokens=True)
+            prompt_text = self._tokenizer.decode(rollout.prompt_tokens, skip_special_tokens=False)
+            response_text = self._tokenizer.decode(rollout.response_tokens, skip_special_tokens=False)
             rows.append(
                 {"prompt": prompt_text, "response": response_text, "reward": rollout.episode_reward, "step": step}
             )
