@@ -247,6 +247,7 @@ You can do that by running:
 
 ```bash
 cd data_browser
+npm install
 uv run python run-dev.py --config conf/local.conf
 ```
 
