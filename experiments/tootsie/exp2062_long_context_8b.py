@@ -42,6 +42,7 @@ import dataclasses
 
 from experiments.marin_models import marin_tokenizer
 from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS
+from fray import ResourceConfig
 from levanter.data.text import ChatLmDatasetFormat
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 
@@ -75,7 +76,6 @@ from marin.processing.tokenize.data_configs import (
     interpolate_mixture_weights,
     lm_varying_mixture_data_config,
 )
-from marin.resources import TpuPodConfig
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 
@@ -252,7 +252,7 @@ def _train_config(
     *, num_steps: int, batch_size: int, train_seq_len: int, initialize_from, seed: int
 ) -> SimpleTrainConfig:
     return SimpleTrainConfig(
-        resources=TpuPodConfig(tpu_type="v4-512", slice_count=1),
+        resources=ResourceConfig.with_tpu(tpu_type="v4-512", slice_count=1),
         train_batch_size=batch_size,
         num_train_steps=num_steps,
         train_seq_len=train_seq_len,
@@ -289,7 +289,7 @@ PHASE1_STEPS = GIRAFFE_4K_STEPS
 
 giraffe_4k_config = dataclasses.replace(
     cooldown_train_config,
-    resources=TpuPodConfig(tpu_type="v4-512", slice_count=1),
+    resources=ResourceConfig.with_tpu("v4-512", slice_count=1),
     train_seq_len=4096,
     num_train_steps=GIRAFFE_4K_END,
     initialize_from_checkpoint_path=starling_checkpoint,
