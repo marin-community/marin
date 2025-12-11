@@ -634,6 +634,14 @@ class RolloutWorker:
 
         logger.info(f"Starting rollout worker with seed {self.config.seed}")
 
+        # Run initial evaluation before first training step to establish baseline
+        if use_jax_rng:
+            rng, eval_rng = jrandom.split(rng)
+        else:
+            eval_rng = py_rng.randint(0, 2**31 - 1)
+        self._evaluate_curriculum(eval_rng, step=0)
+        logger.info("Initial evaluation complete, starting training loop")
+
         while self._running:
             # Synchronize weights on main thread unless using inflight weight updates
             if not self.config.inflight_weight_updates:
