@@ -17,8 +17,10 @@
 Data originally from Mosaic SPDX-License-Identifier: Apache-2.0
 https://github.com/mosaicml/composer/blob/56ccc2ebc59a8c68a6d075c4b61735ebf089b5a2/composer/callbacks/speed_monitor.py#L23
 """
-
+import logging
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 FlopDtype = Literal["bf16", "fp16", "fp32", "fp64", "tf32", "int8", "int4", "fp8"]
 
@@ -57,6 +59,13 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
     },
     # source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf
     "a100": {
+        "fp64": 19.5e12,
+        "fp32": 19.5e12,
+        "tf32": 156e12,
+        "fp16": 312e12,
+        "bf16": 312e12,
+    },
+    "a100-80g": {
         "fp64": 19.5e12,
         "fp32": 19.5e12,
         "tf32": 156e12,
@@ -164,6 +173,9 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "int8": 393e12,
     },
     # Source: https://cloud.google.com/tpu/docs/v5p
+    "v5": {
+        "bf16": 459e12,
+    },
     "v5p": {
         "bf16": 459e12,
     },
@@ -225,12 +237,15 @@ def jax_device_kind_to_fray_device_type(kind: str) -> str:
     if kind.startswith("tpu "):
         tpu_gen = kind[4:].strip()
         # "v5 lite" -> "v5litepod"
-        if "5" in tpu_gen and "lite" in tpu_gen:
-            return "v5litepod"
+        if "5" in tpu_gen:
+            if "lite" in tpu_gen:
+                return "v5litepod"
+            else:
+                return "v5p"
         # "v6 lite" -> "v6e"
         if "6" in tpu_gen and "lite" in tpu_gen:
             return "v6e"
-        # "v4" -> "v4", "v5p" -> "v5p"
+        # "v4" -> "v4"
         return tpu_gen.replace(" ", "")
 
     # NVIDIA GPUs - check more specific patterns first
@@ -279,27 +294,38 @@ def normalize_dtype(dtype: str) -> str:
     return dtype
 
 
-def device_flops(device_type: str, dtype: str = "bf16") -> float:
+def device_flops(device_type: str, dtype: str = "bf16") -> float | None:
     """Get peak FLOP/s for a device.
 
     Args:
-        device_type: Device type (e.g., "h100", "v4-128", "tpu v4")
+        device_type: Fray device type (e.g., "v4", "h100", "a100")
         dtype: Data type (e.g., "bf16", "fp16", "int8")
 
     Returns:
-        Peak FLOP/s for a single device/chip
-
-    Raises:
-        ValueError: If device type or dtype is unknown
+        Peak FLOP/s for a single device/chip, or None if unknown
     """
     normalized = normalize_device_type(device_type)
     flops_dict = DEVICE_FLOPS.get(normalized)
     if flops_dict is None:
-        raise ValueError(f"Unknown device type: {device_type} (normalized: {normalized})")
+        logger.warning(f"Unknown device type: {device_type} - {normalized}")
+        return None
 
     normalized_dtype = normalize_dtype(dtype)
-    flops = flops_dict.get(normalized_dtype)
-    if flops is None:
-        raise ValueError(f"No FLOPS data for {normalized} with dtype {dtype}")
+    if normalized_dtype not in flops_dict:
+        logger.warning(f"Unknown dtype: {dtype} - {normalized_dtype} for device {device_type}")
+        return None
+    return flops_dict.get(normalized_dtype)
 
-    return flops
+
+def device_flops_for_jax_device(jax_device_kind: str, dtype: str = "bf16") -> float | None:
+    """Get peak FLOP/s given a JAX device kind string.
+
+    Args:
+        jax_device_kind: JAX device kind string (e.g., "TPU v4", "NVIDIA H100 80GB HBM3")
+        dtype: Data type (e.g., "bf16", "fp16")
+
+    Returns:
+        Peak FLOP/s, or None if device/dtype unknown
+    """
+    fray_device_type = jax_device_kind_to_fray_device_type(jax_device_kind)
+    return device_flops(fray_device_type, dtype)

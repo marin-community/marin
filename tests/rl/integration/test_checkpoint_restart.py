@@ -39,7 +39,7 @@ pytestmark = pytest.mark.skipif(os.environ.get("CI"), reason="Skipping integrati
 
 
 @pytest.mark.slow("Integration test with checkpoint restart")
-def test_train_worker_checkpoint_restart(ray_tpu_cluster, tmp_path):
+def test_train_worker_checkpoint_restart(tmp_path):
     """Test that training worker correctly restarts from checkpoint without repeating steps."""
     rollout_storage_config = create_test_rollout_storage_config()
     queue_writer = rollout_storage_config.create_writer()
