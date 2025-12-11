@@ -36,13 +36,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-import draccus
 from marin.utils import (
     fsspec_exists,
     fsspec_glob,
     rebase_file_path,
 )
-from zephyr import Dataset, flow_backend, load_file
+from zephyr import Dataset, flow_backend
+from zephyr.readers import InputFileSpec, load_file
 
 
 class FilterType(StrEnum):
@@ -217,7 +217,8 @@ def _compute_percentile_threshold(
     backend = flow_backend()
     result = backend.execute(
         Dataset.from_list(attr_paths)
-        .flat_map(lambda p: load_file(p, columns=["attributes"]))
+        .load_file()
+        .select("attributes")
         .reduce(local_reducer=local_reducer, global_reducer=global_reducer)
     )
 
@@ -292,7 +293,8 @@ def process_file_shard(shard, filters: list[FilterConfig], input_base: str) -> I
 
         # Build dict mapping doc_id -> attributes
         attr_dict = {}
-        for row in load_file(final_attr_path, columns=[get_id_column_name(corpus_type), "attributes"]):
+        columns = [get_id_column_name(corpus_type), "attributes"]
+        for row in load_file(InputFileSpec(path=final_attr_path, columns=columns)):
             doc_id = extract_id(row, corpus_type)
             attr_dict[doc_id] = row["attributes"]
 
@@ -318,7 +320,6 @@ def process_file_shard(shard, filters: list[FilterConfig], input_base: str) -> I
             yield doc
 
 
-@draccus.wrap()
 def consolidate(config: ConsolidateConfig):
     """Consolidate documents by applying filters based on attributes."""
     backend = flow_backend()

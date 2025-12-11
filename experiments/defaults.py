@@ -223,11 +223,14 @@ def simulated_epoching_train(
     """
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
-    # Extract sequence length from model configuration
-    seq_len = model_config.Pos.size
+    # Use explicit training length rather than inferring from the model
+    actual_model_config = unwrap_versioned_value(model_config)
+    train_length = train_config.train_seq_len or actual_model_config.max_seq_len
+    if train_length > actual_model_config.max_seq_len:
+        raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual_model_config.max_seq_len}.")
 
     # Calculate the experiment token budget
-    experiment_budget = train_config.train_batch_size * train_config.num_train_steps * seq_len
+    experiment_budget = train_config.train_batch_size * train_config.num_train_steps * train_length
 
     simulated_pretraining_data = dataclasses.replace(
         pretraining_data, target_budget=target_budget, experiment_budget=experiment_budget
@@ -321,6 +324,11 @@ def default_train(
         raise ValueError("Cannot specify both initialize_from_checkpoint_path and initialize_from_hf")
 
     # Create the inner config
+    actual_model_config = unwrap_versioned_value(model_config)
+    train_length = train_config.train_seq_len or actual_model_config.max_seq_len
+    if train_length > actual_model_config.max_seq_len:
+        raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual_model_config.max_seq_len}.")
+
     inner_config = TrainLmConfig(
         data=pretraining_data,
         trainer=TrainerConfig(
@@ -359,6 +367,7 @@ def default_train(
         ),
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
         z_loss_weight=train_config.z_loss_weight,
+        train_seq_len=train_length,
         model=model_config,
         optimizer=(
             train_config.optimizer_config
@@ -411,8 +420,8 @@ def default_train(
             f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
-            f"{model_config.seq_len} (seq_len) "
-            f"= {total_examples * model_config.seq_len:,} tokens."
+            f"{train_length} (train_seq_len) "
+            f"= {total_examples * train_length} tokens."
         ),
         fn=run_levanter_train_lm,
         config=config,

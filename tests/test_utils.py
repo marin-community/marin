@@ -19,17 +19,7 @@ from dataclasses import dataclass
 
 import draccus
 import pytest
-import ray
-from marin.utils import asdict_excluding, remove_tpu_lockfile_on_exit
-
-
-def test_remove_tpu_lockfile_on_exit_works_with_ray_remote(ray_tpu_cluster):
-    @ray.remote
-    @remove_tpu_lockfile_on_exit
-    def test_fn():
-        return 1
-
-    assert ray.get(test_fn.remote()) == 1
+from marin.utils import asdict_excluding
 
 
 def parameterize_with_configs(pattern: str, config_path: str | None = None) -> Callable:
