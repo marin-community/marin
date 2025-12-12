@@ -689,6 +689,29 @@ def test_reduce_with_pipeline(backend):
     assert results[0] == expected
 
 
+def test_count_basic(backend):
+    """Test basic count operation."""
+    ds = Dataset.from_list(range(100)).count()
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0] == 100
+
+
+def test_count_empty(backend):
+    """Test count on empty dataset."""
+    ds = Dataset.from_list([]).count()
+    results = list(backend.execute(ds))
+    assert len(results) == 0
+
+
+def test_count_with_filter(backend):
+    """Test count with filter operation."""
+    ds = Dataset.from_list(range(100)).filter(lambda x: x % 2 == 0).count()
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0] == 50
+
+
 def test_sorted_merge_join_inner_basic(backend):
     """Test basic inner sorted merge join."""
     # Create pre-sorted, co-partitioned datasets via group_by
