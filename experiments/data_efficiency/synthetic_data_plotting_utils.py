@@ -62,6 +62,7 @@ DARKER_SELF_DISTILL_COLOR = "#1E5323"
 NEON_GREEN = "#8FFF00"
 WRAP_COLOR = BLACK
 MIX_COLOR = DARK_ORANGE
+SBP_COLOR = "#FF0000"
 
 PARAM_STR_COLOR_DICT = {
     "150m4k": CRAYOLA_BLUE,
@@ -75,6 +76,7 @@ SYNTH_DATA_COLOR_DICT = {
     "sd_cpr200": DARKER_SELF_DISTILL_COLOR,
     "sdn_c200": NEON_GREEN,
     "symx_c16": MIX_COLOR,
+    "sbp_cpr16": SBP_COLOR,
 }
 
 SYNTH_DATA_NAME_DICT = {
@@ -83,6 +85,7 @@ SYNTH_DATA_NAME_DICT = {
     "sd_cpr200": "Self-Distill cpr200",
     "symx_c16": "WRAP + Self-Distill cpr16",
     "sdn_c200": "Self-Distill (Ens Teacher) cpr200",
+    "sbp_cpr16": "SBP cpr16",
 }
 
 PRETTY_NAME_DICT = {
@@ -94,6 +97,7 @@ PRETTY_NAME_DICT = {
     "sd_cpr16": "Self-Distill",
     "sdn_c200": "Self-Distill (Ens Teacher)",
     "symx_c16": "WRAP + Self-Distill",
+    "sbp_cpr16": "SBP",
 }
 
 # =========================

@@ -31,8 +31,8 @@ train_steps = [
         ("hq_cpr16", None, "", 3e-3, 8),
         ("hq_cpr16", None, "", 3e-3, 16),
     ]
-    for synthetic_data_weight in [0.25, 0.5, 0.75]
-    for model_name in ["1_5b4k"]
+    for synthetic_data_weight in [0.5, 0.75]
+    for model_name in ["150m4k"]
 ]
 
 if __name__ == "__main__":

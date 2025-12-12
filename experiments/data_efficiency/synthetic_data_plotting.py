@@ -217,6 +217,7 @@ def plot_ensemble_scaling(run_list, regularized_runs, ensembles_types, title="En
 
         # Filter for runs with max weight decay only (hack to deal with 1.5B ablation)
         max_weight_decay = max([run["weight_decay"] for run in ensemble_runs])
+        print("Max weight decay: ", max_weight_decay)
         ensemble_runs = [run for run in ensemble_runs if run["weight_decay"] == max_weight_decay]
 
         total_params = [PARAM_STR_TO_COUNT[run["model_name"]] * run["ensemble_member_count"] for run in ensemble_runs]
@@ -260,6 +261,7 @@ def plot_synth_data_all(run_list):
     plot_ensemble_scaling(run_list, regularized_runs, base_ensembles + [("hq_cpr16", "300m4k"), ("sd_cpr16", "300m4k")], title="WRAP vs. Self-Distill Ensemble")
     plot_ensemble_scaling(run_list, regularized_runs, base_ensembles + [("sd_cpr16", "300m4k"), ("sdn_c200", "300m4k")], title="Self-Distill vs. Self-Distill (Ens Teacher) Ensemble")
     plot_ensemble_scaling(run_list, regularized_runs, base_ensembles + [("hq_cpr16", "300m4k"), ("sd_cpr16", "300m4k"), ("symx_c16", "300m4k")], title="Synthetic Data Ensembles")
+    plot_ensemble_scaling(run_list, regularized_runs, base_ensembles + [("hq_cpr16", "300m4k"), ("sd_cpr16", "300m4k"), ("symx_c16", "300m4k"), ("sbp_cpr16", "300m4k")], title="SBP Ensemble")
     plot_ensemble_scaling(run_list, regularized_runs, base_ensembles + [("hq_cpr16", "300m4k"), ("sd_cpr16", "300m4k"), ("symx_c16", "300m4k"), ("hq_cpr16", "600m4k")], title="WRAP Ensembles (600M) vs Mixed Ensembles (300M)")
 
 if __name__ == "__main__":

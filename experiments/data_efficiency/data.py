@@ -221,6 +221,20 @@ sd_cpr200_new_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 )
 
+sbp_cpr16 = default_download(
+    name="raw/data_efficiency/sbp_cpr16",
+    hf_dataset_id="konwoo/dclm-164k-sbp-pf-cpr16-ml1024",
+    revision="1d64554",
+    override_output_path="raw/data_efficiency/sbp_cpr16",
+)
+
+sbp_cpr16_tokenized = default_tokenize(
+    name="data_efficiency/sbp_cpr16",
+    dataset=sbp_cpr16,
+    tokenizer=llama3_tokenizer,
+)
+
+
 data_dict = {
     "dclm": dclm_tokenized,
     "code": starcoderdata_tokenized,
@@ -239,5 +253,6 @@ data_dict = {
     "sd_cpr200": sd_cpr200_tokenized,
     "symx_c16": synth_mixed_cpr16_tokenized,
     "sdn_c200": sd_cpr200_new_tokenized,
+    "sbp_cpr16": sbp_cpr16_tokenized,
 }
 
