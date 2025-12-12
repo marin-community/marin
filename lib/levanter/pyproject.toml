@@ -31,6 +31,8 @@ dependencies = [
     "haliax>=1.4.dev450",
     "equinox>=0.11.7,!=0.12.0",
     "jax>=0.6.2,!=0.7.0,!=0.7.1",
+    "fray",
+    "zephyr",
     "jaxtyping>=0.2.34",
     "tokenizers>=0.15.2",
     "transformers>=4.57.1,<5.0",
@@ -51,7 +53,7 @@ dependencies = [
     "matplotlib>=3.7.0",
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
-    "ray[default]>=2.34.0",
+    "ray[default]==2.45.0",
     "pydantic<3",
     "filelock~=3.13",
     "async-lru~=2.0",
@@ -131,6 +133,9 @@ dev = [
   "prompt_toolkit>=3.0.0",
 ]
 
+
+
+
 [tool.uv]
 default-groups = ["test", "docs", "dev"]
 conflicts = [
@@ -139,6 +144,11 @@ conflicts = [
     { extra = "tpu" },
   ],
 ]  # Never solve for both GPU and TPU at once
+
+[tool.uv.sources]
+zephyr = { workspace = true }
+fray = { workspace = true }
+haliax = { workspace = true }
 
 [tool.ruff]
 line-length = 119

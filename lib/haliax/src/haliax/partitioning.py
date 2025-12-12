@@ -10,13 +10,15 @@ import threading
 import typing
 import warnings
 from math import prod
-from typing import Callable, ContextManager, Mapping, Optional, ParamSpec, Sequence, TypeAlias, TypeVar, cast
+from typing import Any, Callable, ContextManager, Mapping, Optional, ParamSpec, Sequence, TypeAlias, TypeVar, cast
 
 import equinox as eqx
 import jax
 from equinox import is_array, module_update_wrapper
+from jax._src.pjit import reshard
+from jax.experimental.shard_map import shard_map as jax_shard_map
 from jax.lax import with_sharding_constraint
-from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, SingleDeviceSharding, get_abstract_mesh
+from jax.sharding import AbstractMesh, NamedSharding, Mesh, PartitionSpec, get_abstract_mesh, AxisType
 
 
 from jaxtyping import PyTree
@@ -157,6 +159,36 @@ def set_mesh(mesh: MeshLike) -> ContextManager[None]:
     return mesh_context(mesh)
 
 
+def all_mesh_axes_explicit(mesh: MeshLike | None, pspec: PartitionSpec | None) -> bool:
+    """
+    Returns True iff every mesh axis referenced by ``pspec`` is Explicit.
+    Falls back to False when mesh/pspec/axis_types are missing.
+    """
+    if mesh is None or pspec is None:
+        return False
+
+    axis_types = mesh.axis_types
+    axis_names = mesh.axis_names
+    if axis_types is None or axis_names is None:
+        return False
+
+    referenced: set[str] = set()
+    for entry in pspec:
+        if entry is None or entry is PartitionSpec.UNCONSTRAINED:
+            continue
+        if isinstance(entry, str):
+            referenced.add(entry)
+        else:
+            for e in entry:
+                if e is not None:
+                    referenced.add(e)
+
+    for name, atype in zip(axis_names, axis_types):
+        if name in referenced and atype != AxisType.Explicit:
+            return False
+    return True
+
+
 def auto_sharded(x: T, mesh: Optional[Mesh] = None) -> T:
     """
     Shard a PyTree using the global axis mapping. NamedArrays in the PyTree are sharded using the axis mapping
@@ -214,12 +246,17 @@ def shard(x: T, mapping: ResourceMapping | None = None, mesh: Mesh | None = None
             # could use eqx.partition to avoid this, but eh
             return named
 
-        pspec = pspec_for(named, mapping, preserve_existing_shardings=False)
+        pspec = pspec_for(named, mapping)
         assert isinstance(pspec, PartitionSpec)
-        sharding = NamedSharding(resolved_mesh, pspec)
         if is_in_jit():
-            return with_sharding_constraint(named, sharding)
+            # ok so jax is mildly annoying right now. we have to use reshard if *all* mesh axes are explicit.
+            # otherwise, we need to use with_sharding_constraint.
+            if all_mesh_axes_explicit(resolved_mesh, pspec):
+                return reshard(named, pspec)
+
+            return with_sharding_constraint(named, pspec)
         else:
+            sharding = NamedSharding(resolved_mesh, pspec)
             ret = jax.device_put(named, sharding)
             return ret
 
@@ -235,7 +272,6 @@ def shard_with_axis_mapping(x: T, mapping: ResourceMapping, mesh: Mesh | None = 
 def pspec_for(
     tree: PyTree,
     resource_mapping: ResourceMapping | None = None,
-    preserve_existing_shardings: bool = True,
 ) -> PyTree:
     """Infer the :class:`PartitionSpec` for a module.
 
@@ -243,9 +279,6 @@ def pspec_for(
     objects instead of :class:`~jax.sharding.NamedSharding`. It is primarily a helper
     for :func:`infer_resource_partitions` but may be useful when only the partition
     specification is required.
-
-    If ``preserve_existing_shardings`` is ``True``, then arrays that already have a
-    sharding are left untouched and ``None`` is returned for those leaves.
     """
     if resource_mapping is None:
         resource_mapping = current_thread_local_mapping()
@@ -255,15 +288,7 @@ def pspec_for(
 
     def partition_spec(node: typing.Any):
         if isinstance(node, NamedArray):
-            # If our NamedArray doesn't have an array (or a shapedtypestruct), we can't shard it
-            if not is_jax_array_like(node.array):
-                return None
-
-            current_sharding = getattr(node.array, "sharding", None) if preserve_existing_shardings else None
-            if current_sharding is not None:
-                return None
-            else:
-                return pspec_for_axis(node.axes, resource_mapping)
+            return pspec_for_axis(node.axes, resource_mapping)
         elif isinstance(node, eqx.Module):
             # handle eqx.Module explicitly so that we can look at axis_names metadata
             updates: dict[str, typing.Any] = {}
@@ -274,11 +299,7 @@ def pspec_for(
                 value = getattr(node, field.name)
                 axis_names = field.metadata.get("axis_names") if field.metadata is not None else None
                 if axis_names is not None and is_jax_array_like(value):
-                    current_sharding = getattr(value, "sharding", None) if preserve_existing_shardings else None
-                    if current_sharding is not None:
-                        updates[field.name] = None
-                    else:
-                        updates[field.name] = pspec_for_axis(axis_names, resource_mapping)
+                    updates[field.name] = pspec_for_axis(axis_names, resource_mapping)
                 else:
                     updates[field.name] = htu.tree_map(
                         partition_spec, value, is_leaf=lambda x: isinstance(x, eqx.Module)
@@ -294,22 +315,12 @@ def pspec_for(
 
             return new_node
         elif is_jax_array_like(node):
-            sharding = getattr(node, "sharding", None)
-            # TODO: these are usually replicated. Is there a better way to tell?
-            if node.shape == ():
-                return PartitionSpec()
-            elif isinstance(sharding, SingleDeviceSharding):
-                return PartitionSpec(None)
-            elif sharding is not None and preserve_existing_shardings:
-                return None
-            # elif use_auto_sharding:
-            # TODO: auto doesn't seem to really work reliably yet
-            #     compat between 0.4.10 and 0.4.11
-            # if isinstance(AUTO, typing.Callable):  # type: ignore
-            #     return AUTO(mesh)
-            # else:
-            #     return AUTO
-            return PartitionSpec(None)
+            tpe = jax.typeof(node)
+            type_pspec = tpe.sharding.spec
+            if type_pspec is not None:
+                return type_pspec
+
+            return PartitionSpec((PartitionSpec.UNCONSTRAINED,) * len(tpe.shape))
         elif isinstance(node, (bool, float, complex, int)):
             return PartitionSpec()
         else:
@@ -321,22 +332,14 @@ def pspec_for(
 def infer_resource_partitions(
     tree: PyTree,
     resource_mapping: ResourceMapping | None = None,
-    preserve_existing_shardings: bool = True,
     mesh: Mesh | None = None,
 ) -> PyTree:
     """
     Infer the sharding for a module, to be used with ``named_jit``.
 
     This first calls :func:`pspec_for` to compute ``PartitionSpec`` objects and then
-    wraps them in :class:`~jax.sharding.NamedSharding` using the provided mesh. If
-    ``preserve_existing_shardings`` is ``True``, then arrays that are already sharded
-    retain their current sharding.
-    """
-    pspecs = pspec_for(
-        tree,
-        resource_mapping=resource_mapping,
-        preserve_existing_shardings=preserve_existing_shardings,
-    )
+    wraps them in :class:`~jax.sharding.NamedSharding` using the provided mesh."""
+    pspecs = pspec_for(tree, resource_mapping=resource_mapping)
 
     resolved_mesh = _resolve_mesh(mesh)
     if resolved_mesh is None:
@@ -446,15 +449,11 @@ class _NamedJitWrapper(eqx.Module):
                 in_resources = infer_resource_partitions(
                     (dynamic_donated, dynamic_reserved),
                     in_axis_resources,
-                    preserve_existing_shardings=in_axis_resources is None,
                 )
                 my_pjit_args["in_shardings"] = in_resources
 
             if out_axis_resources is not None:
-                # TODO: when AUTO is fixed (or eval_shape can give shardings), use it here
-                out_resources = infer_resource_partitions(
-                    output_shape, out_axis_resources, preserve_existing_shardings=False
-                )
+                out_resources = infer_resource_partitions(output_shape, out_axis_resources)
                 my_pjit_args["out_shardings"] = out_resources
 
             cached_pjitted_fun = _named_pjit_cache(self._fn, **my_pjit_args)
@@ -714,8 +713,6 @@ def sharding_for_axis(
 
     return NamedSharding(resolved_mesh, pspec_for_axis(axis, mapping))
 
-    return NamedSharding(resolved_mesh, pspec_for_axis(axis, mapping))
-
 
 def pspec_for_axis(axis: AxisSelection, mapping: ResourceMapping | None = None) -> PartitionSpec:
     """Get the PartitionSpec for a single axis"""
@@ -734,16 +731,127 @@ def round_axis_for_partitioning(axis: Axis, mapping: ResourceMapping | None = No
 
 
 def _get_mesh() -> Mesh | None:
-    """Deprecated helper that simply proxies to :func:`get_abstract_mesh`."""
+    # Backward-compatible helper for callers that expect a concrete or abstract mesh.
+    return _resolve_mesh()
 
-    warnings.warn(
-        "`_get_mesh` is deprecated; use `jax's get_abstract_mesh or get_concrete_mesh` instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
 
-    mesh = _resolve_mesh()
-    return mesh
+@typing.overload
+def shard_map(
+    f: Callable[Args, R],
+    *,
+    in_specs: Any = None,
+    out_specs: Any = None,
+    mesh: Mesh | None = None,
+    axis_mapping: ResourceMapping | None = None,
+    check_rep: bool = False,
+    **kwargs,
+) -> Callable[Args, R]: ...
+
+
+@typing.overload
+def shard_map(
+    *,
+    in_specs: Any = None,
+    out_specs: Any = None,
+    mesh: Mesh | None = None,
+    axis_mapping: ResourceMapping | None = None,
+    check_rep: bool = False,
+    **kwargs,
+) -> typing.Callable[[Callable[Args, R]], Callable[Args, R]]: ...
+
+
+def shard_map(
+    f: Optional[Callable] = None,
+    *,
+    in_specs: PyTree = None,
+    out_specs: PyTree = None,
+    mesh: Optional[Mesh] = None,
+    axis_mapping: Optional[ResourceMapping] = None,
+    check_rep: bool = False,
+    **shmap_kwargs: dict,
+) -> Callable:
+    """A NamedArray-friendly wrapper around :func:`jax.experimental.shard_map.shard_map`.
+
+    This function can be used either as ``haliax.shard_map(fn, ...)`` or as a
+    decorator::
+
+        @haliax.shard_map
+        def fn(x):
+            ...
+
+    Note that, unlike the JAX version, you don't need to provide in_specs or out_specs if all arguments and the return value
+    are ``NamedArray`` objects. The mesh can be inferred from the context mesh (which JAX could do, but doesn't).
+    Axis mapping can be inferred from the context axis mapping or provided explicitly.
+
+    Also note that this function will call ``f`` twice at trace time unless out_specs is provided: once to infer the output
+    pspec, and once to actually run the computation.
+
+    Args:
+        f: The function to apply with ``shard_map``.
+        in_specs: Optional PyTree prefix describing the input sharding. If None, the input
+            specifications are inferred from the input NamedArray arguments and the
+            provided `axis_mapping`.
+        out_specs: Like `in_specs` but for the output. If `None` the output
+            specifications are inferred by evaluating `f` on placeholder inputs
+            and using the returned axis names.
+        mesh: The mesh to run the computation on. Defaults to the current mesh
+            returned by [jax.sharding.get_abstract_mesh][].
+        axis_mapping: Optional mapping from logical axis names to mesh axis names
+            used when converting `Axis` objects to `PartitionSpec`.
+        check_rep: Passed through to `jax.shard_map`.
+        **shmap_kwargs: Additional arguments forwarded to `jax.shard_map`.
+
+    Returns:
+        A wrapped function that accepts and returns `NamedArray` objects
+        according to the provided specifications.
+    """
+
+    if f is None:
+        return lambda fn: shard_map(
+            fn,
+            in_specs=in_specs,
+            out_specs=out_specs,
+            mesh=mesh,
+            axis_mapping=axis_mapping,
+            check_rep=check_rep,
+            **shmap_kwargs,
+        )
+
+    def wrapper(*args, **kwargs):
+        if mesh is not None:
+            this_mesh = mesh
+        else:
+            this_mesh = _resolve_mesh()
+
+        def inner(args, kwargs):
+            return f(*args, **kwargs)
+
+        if in_specs is None:
+            this_in_specs = pspec_for((args, kwargs), axis_mapping)
+        else:
+            this_in_specs = (in_specs, {})
+
+        # for output, we need to evaluate the function on placeholder inputs to get the output shape
+        # we have to do this under shard_map so that psum etc. work
+        almost_shmap = functools.partial(
+            jax_shard_map,
+            inner,
+            mesh=this_mesh,
+            in_specs=this_in_specs,
+            check_rep=check_rep,
+            **shmap_kwargs,
+        )
+
+        if out_specs is not None:
+            this_out_specs = out_specs
+        else:
+            out_shape = eqx.filter_eval_shape(almost_shmap(out_specs=PartitionSpec()), args, kwargs)
+            this_out_specs = pspec_for(out_shape, axis_mapping)
+
+        out = almost_shmap(out_specs=this_out_specs)(args, kwargs)
+        return out
+
+    return functools.update_wrapper(wrapper, f)
 
 
 def _is_jit_tracer(x) -> bool:
@@ -760,6 +868,7 @@ __all__ = [
     "auto_sharded",
     "shard",
     "shard_with_axis_mapping",
+    "shard_map",
     "pspec_for",
     "infer_resource_partitions",
     "named_jit",

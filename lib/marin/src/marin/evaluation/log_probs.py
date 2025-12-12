@@ -21,7 +21,9 @@ import os
 import shutil
 from dataclasses import dataclass
 
-import ray
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.cluster.base import TpuConfig
+from levanter.compat.hf_checkpoints import RepoRef
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
 from levanter.infra.ray_tpu import run_on_pod_resumable
@@ -33,13 +35,12 @@ from levanter.models.lm_model import LmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.evaluation.utils import download_from_gcs, is_remote_path, discover_levanter_checkpoints
+from marin.evaluation.utils import discover_levanter_checkpoints, download_from_gcs, is_remote_path
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
-from marin.resources import ResourceConfig
 
 HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
-DEFAULT_ENSEMBLE_RESOURCES: dict[str, float] = {"TPU": 4, "TPU-v4-8-head": 1}
+GCSFUSE_MOUNT_POINT = "/opt/gcsfuse_mount"
 
 
 @dataclass
@@ -153,7 +154,7 @@ def default_ensemble_log_probs(
     """
     name = ckpt_path_to_step_name(checkpoints[0])
     name = f"analysis/log_probs/data-efficiency/{name_prefix}{len(checkpoints)}x-{name}"
-    resources = resource_overrides.copy() if resource_overrides is not None else DEFAULT_ENSEMBLE_RESOURCES.copy()
+    resources = resource_overrides.copy() if resource_overrides is not None else {"TPU": 4, "TPU-v4-8-head": 1}
     return ExecutorStep(
         name=name,
         fn=evaluate_ensemble_log_probs,
@@ -172,11 +173,6 @@ def default_ensemble_log_probs(
     )
 
 
-@ray.remote(
-    memory=64 * 1024 * 1024 * 1024,
-    max_calls=1,
-    runtime_env={"env_vars": {"HF_HOME": HUGGINGFACE_CACHE_PATH}},
-)
 def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     """
     Visualizes log probabilities of a language model.
@@ -201,17 +197,23 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
             print(f"Deleted local checkpoint at {config.checkpoint_path}.")
 
     try:
-        if config.hf_checkpoint:
+        local_path = None
+        # for hf checkpoints, levanter can read hf://, gs:// directly
+        # but for non-gcs hf checkpoints, we download to gcs fuse for now.
+        if config.hf_checkpoint and is_remote_path(config.hf_checkpoint.model_name_or_path):
+            pass
+        elif config.hf_checkpoint:
             # Use GCSFuse directly so that we don't have to download the checkpoint to the local filesystem
-            local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.hf_checkpoint))
+            checkpoint_ref = str(config.hf_checkpoint)
+            local_path = os.path.join(config.local_model_dir, ckpt_path_to_step_name(checkpoint_ref))
             download_from_gcs(
-                gcs_path=config.hf_checkpoint,
+                gcs_path=checkpoint_ref,
                 destination_path=local_path,
             )
-            config.hf_checkpoint = local_path
+            config.hf_checkpoint = RepoRef.from_string(local_path)
             print(f"Downloaded model checkpoint to {local_path}: {os.listdir(local_path)}")
         elif config.checkpoint_path and is_remote_path(config.checkpoint_path):
-            local_path = os.path.join("/opt/gcsfuse_mount/models", ckpt_path_to_step_name(config.checkpoint_path))
+            local_path = os.path.join(config.local_model_dir, ckpt_path_to_step_name(config.checkpoint_path))
             download_from_gcs(
                 gcs_path=config.checkpoint_path,
                 destination_path=local_path,
@@ -220,20 +222,14 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
         eval_lm_main(config)
     finally:
         if config.hf_checkpoint:
-            if os.path.exists(config.hf_checkpoint):
-                shutil.rmtree(config.hf_checkpoint, ignore_errors=True)
-                print(f"Deleted local checkpoint at {config.checkpoint_path}.")
-            else:
+            hf_checkpoint_path = str(config.hf_checkpoint)
+            if not os.path.exists(hf_checkpoint_path):
                 shutil.rmtree(HUGGINGFACE_CACHE_PATH, ignore_errors=True)
-                print(f"Deleted local checkpoint at {HUGGINGFACE_CACHE_PATH}.")
-        if "gcsfuse" not in local_path:
+                print(f"Deleted HuggingFace cache at {HUGGINGFACE_CACHE_PATH}.")
+        if local_path and not local_path.startswith(GCSFUSE_MOUNT_POINT):
             shutil.rmtree(local_path, ignore_errors=True)
             print(f"Deleted local checkpoint at {local_path}.")
 
-# Minimal memory request - actual computation happens on TPU, not in Ray's memory pool
-# This matches how training.py works (only requests 0.1 CPU)
-# runtime_env ensures JAX properly initializes the TPU
-@ray.remote(num_cpus=0.1, max_calls=1, runtime_env={"env_vars": {"PJRT_DEVICE": "TPU"}})
 def do_eval_ensemble(config: LevanterEvalEnsembleConfig) -> None:
     """
     Evaluate log probabilities of a language model on a mixture, and optionally entropies.
@@ -259,24 +255,35 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
     else:
         max_eval_batches = config.max_samples_per_dataset // config.per_device_batch_size
 
+    wandb_tags = ["eval_lm", *(config.wandb_tags or [])]
     levanter_config = LevanterEvalLmConfig(
         checkpoint_path=config.checkpoint_path if not config.checkpoint_is_hf else None,
-        hf_checkpoint=config.checkpoint_path if config.checkpoint_is_hf else None,
+        hf_checkpoint=RepoRef.from_string(config.checkpoint_path) if config.checkpoint_is_hf else None,
         model=config.model,
         data=config.datasets,
         trainer=TrainerConfig(
-            tracker=WandbConfig(project="suhas-eval-data-efficiency", tags=["eval_lm", *config.wandb_tags], name=name, id=name[:64]),
-            # tracker=WandbConfig(project="marin", tags=["eval_lm", *config.wandb_tags], name=name),
+            tracker=WandbConfig(project="suhas-eval-data-efficiency", tags=wandb_tags, name=name, id=name[:64]),
+            # tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
             ray=RayConfig(auto_start_cluster=False),
             per_device_eval_parallelism=config.per_device_batch_size,
             max_eval_batches=max_eval_batches,
         ),
         log_entropy=config.log_entropy,
     )
-    # ray.get(do_eval_lm.remote(levanter_config))
-    ray.get(
-        do_eval_lm.options(resources={"TPU": 4, f"{config.resource_config.tpu_type}-head": 1}).remote(levanter_config)
+
+    assert isinstance(config.resource_config.device, TpuConfig), "evaluate_lm_log_probs requires TPU resource config"
+
+    env_vars = {"HF_HOME": HUGGINGFACE_CACHE_PATH}
+    cluster = current_cluster()
+    job_request = JobRequest(
+        name=f"eval-lm-{name}",
+        resources=config.resource_config,
+        entrypoint=Entrypoint.from_callable(do_eval_lm, args=[levanter_config]),
+        environment=EnvironmentConfig.create(env_vars=env_vars),
     )
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)
+
 
 def evaluate_ensemble_log_probs(config: EvalEnsembleLmConfig) -> None:
     """
@@ -308,20 +315,15 @@ def evaluate_ensemble_log_probs(config: EvalEnsembleLmConfig) -> None:
         log_entropy=config.log_entropy,
     )
     
-    # Extract TPU type from resource overrides (e.g., "TPU-v4-8-head" -> "v4-8")
-    resources = config.resource_overrides or DEFAULT_ENSEMBLE_RESOURCES
-    tpu_type = None
-    for key in resources:
-        if key.endswith("-head"):
-            tpu_type = key.replace("TPU-", "").replace("-head", "")
-            break
-    
-    if tpu_type is None:
-        raise ValueError(f"Could not determine TPU type from resources: {resources}")
-    
-    # Use run_on_pod_resumable like training does - this properly coordinates TPU resources
-    @ray.remote(max_calls=1)
-    def eval_ensemble_task():
-        eval_ensemble_main(levanter_config)
-    
-    run_on_pod_resumable(eval_ensemble_task, tpu_type, max_retries_failure=3)
+    assert isinstance(config.resource_config.device, TpuConfig), "evaluate_ensemble_log_probs requires TPU resource config"
+
+    env_vars = {"HF_HOME": HUGGINGFACE_CACHE_PATH}
+    cluster = current_cluster()
+    job_request = JobRequest(
+        name=name,
+        resources=config.resource_config,
+        entrypoint=Entrypoint.from_callable(do_eval_ensemble, args=[levanter_config]),
+        environment=EnvironmentConfig.create(env_vars=env_vars),
+    )
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)

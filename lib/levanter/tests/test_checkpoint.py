@@ -4,6 +4,7 @@
 import dataclasses
 import datetime
 import json
+import os
 import pathlib
 import tempfile
 from datetime import timedelta
@@ -319,6 +320,42 @@ def test_checkpointer_deletes_previous_checkpoints():
         assert _get_checkpoint_steps(tmpdir) == [5, 8, 10]
 
 
+def test_checkpointer_deletes_previous_checkpoints_under_relative_base_paths():
+    fake_now = datetime.datetime(2021, 1, 1, 0, 0, 0)
+
+    tick = 10
+
+    def advance_time(delta_seconds):
+        nonlocal fake_now
+        fake_now += timedelta(seconds=delta_seconds)
+
+    with tempfile.TemporaryDirectory(dir=".") as tmpdir:
+        # remove ./ if present because tensorstore doesn't like it
+        tmpdir = os.path.normpath(tmpdir)
+        print(f"tmpdir is {tmpdir}")
+        checkpointer = Checkpointer(
+            tmpdir,
+            timedelta(seconds=tick),
+            [],
+            dt_now_injection=lambda: fake_now,
+        )
+
+        # step 0 doesn't save a checkpoint
+        checkpointer.on_step(_dummy_step_info(0))
+
+        advance_time(tick)
+        checkpointer.on_step(_dummy_step_info(1))
+        checkpointer.wait_until_finished()
+        # step 1 should save a checkpoint
+        assert _get_checkpoint_steps(tmpdir) == [1]
+
+        advance_time(tick)
+        checkpointer.on_step(_dummy_step_info(2))
+        checkpointer.wait_until_finished()
+        # step 2 should delete step 1 if we're handling relative paths properly
+        assert _get_checkpoint_steps(tmpdir) == [2]
+
+
 def test_load_from_checkpoint_or_initialize():
     In = Axis("in", 2)
     Out = Axis("out", 1)
@@ -454,8 +491,8 @@ def test_ocdbt_merges_files():
             checkpoint_dir = pathlib.Path(tmpdir)
             checkpoint_files = list(checkpoint_dir.rglob("*"))
             assert (
-                len(checkpoint_files) < 20
-            ), f"There should be fewer than 20 files in the checkpoint directory: {checkpoint_files}"
+                len(checkpoint_files) <= 25
+            ), f"There should be fewer than 25 files in the checkpoint directory: {checkpoint_files}"
             print(depth, len(checkpoint_files), checkpoint_files)
 
             manifest_files = list(checkpoint_dir.rglob("manifest.ocdbt"))

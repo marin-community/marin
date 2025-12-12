@@ -83,10 +83,10 @@ def test_ar5iv_download_sync(test_zip_file, tmp_path):
 
     # Verify output files were created
     output_files = list(output_dir.glob("*.jsonl.gz"))
-    success_files = list(output_dir.glob("*.SUCCESS"))
+    metrics_files = list(output_dir.glob(".metrics/*.jsonl"))
 
     assert len(output_files) >= 1, "Should create at least one output file"
-    assert len(success_files) >= 1, "Should create at least one SUCCESS file"
+    assert len(metrics_files) >= 1, "Should create at least one metrics file"
 
     # Verify content of output files
     all_records = []

@@ -23,16 +23,16 @@ The goal is to systematically compare different candidate datasets
 and determine their relative contributions to model performance.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 from experiments.anneal_config import AnnealConfig
-from experiments.dclm.tokenize_dclm import dclm_components_llama3
 from experiments.defaults import default_anneal
-from experiments.dolma.tokenize_dolma import tokenize_dolma_steps
+from experiments.pretraining_datasets import tokenize_dolma
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
+from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep
-from marin.processing.tokenize.data_configs import TokenizerStep, lm_mixture_data_config, PermutationType
-from marin.resources import TpuPodConfig
+from marin.processing.tokenize.data_configs import PermutationType, TokenizerStep, lm_mixture_data_config
 
 
 @dataclass(frozen=True)
@@ -41,14 +41,14 @@ class QualityAblationConfig:
 
     # Dataset components and weights
     baseline_component: TokenizerStep = dclm_components_llama3["dclm_baseline"]
-    mcq_component: TokenizerStep = tokenize_dolma_steps()["dolma/flan"]
+    mcq_component: TokenizerStep = tokenize_dolma()["dolma/flan"]
     baseline_weight: float = 0.7
     mcq_weight: float = 0.15
     candidate_weight: float = 0.15
 
     # Training parameters
     num_anneal_tokens: int = 50_000_000_000
-    resources: TpuPodConfig = TpuPodConfig(tpu_type="v5litepod-128")  # noqa: RUF009
+    resources: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_tpu("v5litepod-128"))
 
     # Naming
     model_name_prefix: str = "8b-quality-eval"

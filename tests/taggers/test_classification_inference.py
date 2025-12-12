@@ -17,17 +17,14 @@ import os
 
 import fsspec
 import pytest
-import ray
-
 from marin.core.runtime import TaskConfig
-from marin.processing.classification.config.inference_config import DatasetSchemaConfig
-from marin.processing.classification.config.inference_config import InferenceConfig, RuntimeConfig
+from marin.processing.classification.autoscaler import DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG
+from marin.processing.classification.config.inference_config import DatasetSchemaConfig, InferenceConfig, RuntimeConfig
 from marin.processing.classification.inference import (
     read_dataset_streaming,
     run_inference,
 )
 from marin.utils import fsspec_exists, fsspec_mkdirs
-from marin.processing.classification.autoscaler import DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG
 
 DEFAULT_DATASET_SCHEMA = DatasetSchemaConfig(input_columns=["id", "text"], output_columns=["id", "attributes"])
 
@@ -128,8 +125,8 @@ class TestMultipleFileProcessing:
             ("parquet", create_parquet_file, read_parquet_file),
         ],
     )
-    def test_process_multiple_files(self, ray_tpu_cluster, sample_data, tmpdir, num_files, ext, create_fn, read_fn):
-        """Test processing multiple files with Ray for both JSONL.GZ and Parquet"""
+    def test_process_multiple_files(self, sample_data, tmpdir, num_files, ext, create_fn, read_fn):
+        """Test processing multiple files with both JSONL.GZ and Parquet"""
         # Create input directory structure
         input_dir = os.path.join(tmpdir, f"tagger-{ext}-input")
         output_dir = os.path.join(tmpdir, f"tagger-{ext}-output")
@@ -163,8 +160,7 @@ class TestMultipleFileProcessing:
             dataset_schema=DEFAULT_DATASET_SCHEMA,
         )
 
-        # Run inference
-        ray.get(run_inference.remote(config))
+        run_inference(config)
 
         # Verify all output files were created
         for i in range(len(file_data)):

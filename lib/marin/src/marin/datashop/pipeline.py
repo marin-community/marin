@@ -23,7 +23,8 @@ import fsspec
 import ray
 from transformers import AutoTokenizer
 
-from experiments.evals.resource_configs import TPU_V6E_8_STRICT_PACK, ResourceConfig
+from fray.cluster import ResourceConfig
+from fray.cluster.ray import get_scheduling_strategy
 from marin.datashop.dataset_processor import AutoDatasetOutputProcessor, DatasetOutputProcessorConfig
 from marin.datashop.templates import (
     MEDU_BENCHMARK_DESCRIPTION_MERGING_TEMPLATE,
@@ -32,7 +33,6 @@ from marin.datashop.templates import (
 )
 from marin.generation.dataset import DatasetSampler
 from marin.generation.llm_generation import vLLMProvider
-from marin.generation.ray_utils import scheduling_strategy_fn
 from marin.utils import fsspec_glob
 
 logger = logging.getLogger("ray")
@@ -93,7 +93,7 @@ class MEDUPipelineConfig:
     num_instances: tuple[int, int] = (1, 4)
     save_templated_prompt: bool = False
     output_filetype_override: str = "jsonl.gz"
-    resource_config: ResourceConfig = field(default_factory=lambda: TPU_V6E_8_STRICT_PACK)
+    resource_config: ResourceConfig = field(default_factory=lambda: ResourceConfig.with_tpu("v6e-8"))
     medu_benchmark_description_template: str = MEDU_BENCHMARK_DESCRIPTION_TEMPLATE
     max_corpus_tokens: int = 7000
 
@@ -144,7 +144,7 @@ class MEDUPipeline:
         return self.tokenizer.apply_chat_template(chat_prompt, tokenize=False, add_generation_prompt=True)
 
     # Stage 1: Get benchmark description prompt
-    def get_benchmark_description_prompt(self) -> str:
+    def get_benchmark_description_prompt(self) -> list[str]:
         """Given the corpus content, generate a description of the corpus content and the type of data and skills
         that the data should have.
         """
@@ -254,11 +254,11 @@ def _write_final_benchmark_description_prompt(final_benchmark_description_prompt
 
 
 def _run_benchmark_prompt_generation_pipeline(config: MEDUPipelineConfig):
-    scheduling_strategy = scheduling_strategy_fn(config.resource_config.num_tpu, config.resource_config.strategy)
+    scheduling_strategy = get_scheduling_strategy(config.resource_config)
     pipeline = MEDUPipeline.options(scheduling_strategy=scheduling_strategy).remote(
         config.model_name,
         config.corpus_contents,
-        config.resource_config.num_tpu,
+        config.resource_config.chip_count(),
         config.engine_kwargs,
         config.generation_kwargs,
         config.medu_benchmark_description_template,

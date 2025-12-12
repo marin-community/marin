@@ -27,26 +27,23 @@ import logging
 import zipfile
 from collections import defaultdict
 from dataclasses import dataclass
-from pathlib import Path
 
 import draccus
 import fsspec
 from zephyr import Dataset, flow_backend
-
-from marin.utils import fsspec_exists, fsspec_glob
+from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class DownloadConfig:
-    input_path: Path
+    input_path: str
     output_path: str
-    chunk_size: int = 20 * 1024 * 1024  # 20MB - not heavily used now, but left for compatibility
     max_files: int | None = None  # Maximum number of shards to process
 
 
-def process_shard(shard_task: dict) -> None:
+def process_shard(shard_task: dict) -> dict:
     """
     Process a single shard by extracting its files from the zip in GCS and uploading the merged JSONL.
 
@@ -57,22 +54,11 @@ def process_shard(shard_task: dict) -> None:
     output_path = shard_task["output_path"]
     shard_id = shard_task["shard_id"]
     file_list = shard_task["file_list"]
+    gcs_path = f"{output_path}/{shard_id}.jsonl.gz"
 
-    # Open the GCS zip file again for random access
     with fsspec.open(str(input_path), "rb") as f:
         with zipfile.ZipFile(f) as zf:
-            gcs_path = f"{output_path}/{shard_id}.jsonl.gz"
-            success_path = f"{output_path}/{shard_id}.SUCCESS"
-
-            # Avoid overwriting if shard already exists
-            if fsspec_exists(success_path):
-                logger.info(f"Shard {shard_id} already exists at {gcs_path}, skipping...")
-                return
-
-            with (
-                fsspec.open(gcs_path, "wt", compression="gzip") as out_f,
-                fsspec.open(success_path, "wt") as success_f,
-            ):
+            with atomic_rename(gcs_path) as temp_path, fsspec.open(temp_path, "wt", compression="gzip") as out_f:
                 for filename in file_list:
                     with zf.open(filename, "r") as file_handle:
                         content = file_handle.read()
@@ -81,14 +67,10 @@ def process_shard(shard_task: dict) -> None:
                             "format": "html",
                             "content": content.decode("utf-8", errors="replace"),
                         }
-                        success_record = {
-                            "filename": filename,
-                            "format": "html",
-                        }
                         print(json.dumps(record), file=out_f)
-                        print(json.dumps(success_record), file=success_f)
 
             logger.info(f"Shard {shard_id} with {len(file_list)} files uploaded to {gcs_path}")
+            return {"shard_id": shard_id, "num_files": len(file_list), "output_path": gcs_path}
 
 
 def download(cfg: DownloadConfig) -> None:
@@ -124,12 +106,8 @@ def download(cfg: DownloadConfig) -> None:
                 shard_id = parts[-2]  # get the second-last directory as shard_id
                 shard_dict[shard_id].append(info.filename)
 
-            # Filter out shards we already processed
-            downloaded_files = fsspec_glob(f"{cfg.output_path}/*.SUCCESS")
-            downloaded_shards = set(f.split("/")[-1].split(".")[0] for f in downloaded_files)
-
             # Apply max_files limit if provided
-            shard_ids = [s for s in shard_dict.keys() if s not in downloaded_shards]
+            shard_ids = list(shard_dict.keys())
             if cfg.max_files is not None:
                 shard_ids = shard_ids[: cfg.max_files]
 
@@ -149,7 +127,12 @@ def download(cfg: DownloadConfig) -> None:
 
     # Execute pipeline with zephyr
     backend = flow_backend()
-    pipeline = Dataset.from_list(shard_tasks).map(process_shard)
+
+    pipeline = (
+        Dataset.from_list(shard_tasks)
+        .map(process_shard)
+        .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
+    )
     list(backend.execute(pipeline))
 
     logger.info("Transfer completed successfully!")
@@ -158,4 +141,5 @@ def download(cfg: DownloadConfig) -> None:
 @draccus.wrap()
 def main(cfg: DownloadConfig) -> None:
     """CLI entrypoint for downloading and processing Ar5iv dataset."""
+    logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
     download(cfg)

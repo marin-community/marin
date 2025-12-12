@@ -48,6 +48,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 
 import equinox as eqx
+import numpy as np
 import jax.random as jrandom
 from jaxtyping import PRNGKeyArray
 
@@ -69,7 +70,7 @@ from levanter.utils.logging import silence_transformer_nag
 
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig, GpuConfig
+from fray.cluster import ResourceConfig
 from experiments.simple_train_config import SimpleTrainConfig
 
 # Optional: Muon optimizer configs
@@ -91,7 +92,7 @@ silence_transformer_nag()
 @dataclass(frozen=True)
 class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     # Core dims
-    seq_len: int = 2048
+    max_seq_len: int = 2048
     hidden_dim: int = 4096
     intermediate_dim: int = 11008
     num_layers: int = 32
@@ -129,8 +130,6 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     def model_type(self) -> type["HackableLMHeadModel"]:
         return HackableLMHeadModel
 
-    Pos = property(lambda self: Axis("position", self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
     Embed = property(lambda self: Axis("embed", self.hidden_dim))
     Layers = property(lambda self: Axis("layers", self.num_layers))
     Mlp = property(lambda self: Axis("mlp", self.intermediate_dim))
@@ -160,14 +159,14 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     def actual_head_size(self) -> int:
         return self.head_dim or (self.hidden_dim // self.num_heads)
 
-    def flops_per_token(self, vocab_size: int) -> float | None:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> float | None:
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )
@@ -359,14 +358,14 @@ class HackableLMHeadModel(
 AUTHOR = Author(name="Calvin Xu", affiliation="Stanford University", url="https://pinlinxu.com")  # TODO: update me
 
 
-def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: int = 20) -> int:
+def _get_num_train_steps(param_count: int, batch_size: int, max_seq_len: int, tpp: int = 20) -> int:
     total_tokens = param_count * tpp
-    return max(1, total_tokens // (batch_size * seq_len))
+    return max(1, total_tokens // (batch_size * max_seq_len))
 
 
 def _size_presets() -> dict[str, HackableTransformerConfig]:
     base = dict(
-        seq_len=4096,
+        max_seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
         attn_backend=None,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
@@ -456,16 +455,16 @@ def _muon_presets() -> dict[str, MuonConfig]:
 def _resource_presets(use_gpu: bool = False):
     if use_gpu:
         return {
-            "130m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
-            "300m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
-            "520m": GpuConfig(gpu_count=2, accelerator_type="A100-80G"),
-            "1_2b": GpuConfig(gpu_count=4, accelerator_type="A100-80G"),
+            "130m": ResourceConfig.with_gpu("A100-80G", count=1),
+            "300m": ResourceConfig.with_gpu("A100-80G", count=1),
+            "520m": ResourceConfig.with_gpu("A100-80G", count=2),
+            "1_2b": ResourceConfig.with_gpu("A100-80G", count=4),
         }
     return {
-        "130m": TpuPodConfig(tpu_type="v5p-32"),
-        "300m": TpuPodConfig(tpu_type="v5p-32"),
-        "520m": TpuPodConfig(tpu_type="v5p-32"),
-        "1_2b": TpuPodConfig(tpu_type="v5p-32"),
+        "130m": ResourceConfig.with_tpu("v5p-32"),
+        "300m": ResourceConfig.with_tpu("v5p-32"),
+        "520m": ResourceConfig.with_tpu("v5p-32"),
+        "1_2b": ResourceConfig.with_tpu("v5p-32"),
     }
 
 
@@ -473,23 +472,57 @@ def _batch_sizes() -> dict[str, int]:
     return {"130m": 128, "300m": 128, "520m": 128, "1_2b": 256}
 
 
-def build_run(size: str, use_sink: bool, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]:
+def _lr_multipliers(num: int = 5, start_exp: float = -2.0, stop_exp: float = 2.0) -> list[float]:
+    # Base-2 logspace, exclude 1x and 2x (already swept)
+    vals = np.logspace(start=start_exp, stop=stop_exp, num=num, base=2.0)
+    filtered = [float(v) for v in vals if not np.isclose(v, 1.0)]
+    # Deduplicate while preserving order (in case ranges overlap)
+    seen = set()
+    out: list[float] = []
+    for v in filtered:
+        key = f"{v:.8f}"
+        if key not in seen:
+            seen.add(key)
+            out.append(v)
+    return out
+
+
+def _format_multiplier_label(mult: float) -> str:
+    s = f"{mult:.6g}"
+    s = s.rstrip("0").rstrip(".") if "." in s else s
+    return s.replace(".", "_")
+
+
+def build_run(
+    size: str,
+    use_sink: bool,
+    *,
+    use_gpu: bool = False,
+    lr_multiplier: float | None = None,
+) -> tuple[str, SpeedrunConfig]:
     sizes = _size_presets()
     if size not in sizes:
         raise ValueError(f"Unknown size: {size}")
     model_cfg = dataclasses.replace(sizes[size], use_attention_sink=use_sink)
 
     batch = _batch_sizes()[size]
-    seq_len = model_cfg.seq_len
+    max_seq_len = model_cfg.max_seq_len
     params = int(model_cfg.total_trainable_params(llama3_tokenizer_vocab_size))
-    print(params)
-    steps = _get_num_train_steps(params, batch, seq_len, tpp=20)
+
+    steps = _get_num_train_steps(params, batch, max_seq_len, tpp=20)
 
     muon = _muon_presets()[size]
+    if lr_multiplier is not None:
+        muon = dataclasses.replace(
+            muon,
+            learning_rate=muon.learning_rate * lr_multiplier,
+            adam_lr=muon.adam_lr * lr_multiplier,
+        )
     resources = _resource_presets(use_gpu=use_gpu)[size]
 
     train = SimpleTrainConfig(
         resources,
+        train_seq_len=max_seq_len,
         train_batch_size=batch,
         num_train_steps=steps,
         learning_rate=muon.learning_rate,
@@ -497,8 +530,13 @@ def build_run(size: str, use_sink: bool, *, use_gpu: bool = False) -> tuple[str,
         steps_per_hf_export=-1,  # disable checkpointing
     )
 
-    run_name = f"hacktx_{size}_{'attnsink' if use_sink else 'stdattn'}_{seq_len}"
-    desc = f"Hackable Transformer ({size}); {'AttentionWithSink' if use_sink else 'Attention'} (Muon)"
+    lr_tag = f"_lr_x{_format_multiplier_label(lr_multiplier)}" if lr_multiplier is not None else ""
+    run_name = f"hacktx_{size}_{'attnsink' if use_sink else 'stdattn'}_{max_seq_len}_splash_lr_sweep{lr_tag}"
+    desc = (
+        f"Hackable Transformer ({size}); "
+        f"{'AttentionWithSink' if use_sink else 'Attention'} (Splash); "
+        f"LR sweep multiplier={lr_multiplier if lr_multiplier is not None else 1.0:g}"
+    )
     cfg = SpeedrunConfig(author=AUTHOR, description=desc, model_config=model_cfg, train_config=train)
     return run_name, cfg
 
@@ -521,9 +559,11 @@ if __name__ == "__main__":
 
     sizes = ["130m", "300m", "520m", "1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
-    sink = False
+    sink = True
     steps = []
+    lr_mults = _lr_multipliers()
     for s in sizes:
-        name, cfg = build_run(s, sink, use_gpu=use_gpu)
-        steps.extend(default_speedrun(name, cfg))
+        for m in lr_mults:
+            name, cfg = build_run(s, sink, use_gpu=use_gpu, lr_multiplier=m)
+            steps.extend(default_speedrun(name, cfg))
     executor_main(steps=steps, description="Hackable transformer attention-sink sweep")

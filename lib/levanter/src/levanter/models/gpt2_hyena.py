@@ -29,6 +29,7 @@ from levanter.models.lm_model import LmConfig, LmHeadModel
 @LmConfig.register_subclass("gpt2_hyena")
 @dataclass(frozen=True)
 class Gpt2HyenaConfig(LmConfig):
+    max_seq_len: int = 1024
     num_layers: int = 12
 
     # how much to scale the embedding dim for the mlp layer
@@ -46,12 +47,13 @@ class Gpt2HyenaConfig(LmConfig):
     # as well (e.g. use_bias, layer_norm_epsilon, etc.). Some of these could in theory be
     # different between hyena and the outer Gpt2 part of the architecture, but keeping it simple
     # by having a single value for now.
-    hyena: HyenaConfig = HyenaConfig()
+    hyena: HyenaConfig = dataclasses.field(default_factory=HyenaConfig)
 
     # Axes
-    Pos = property(lambda self: self.hyena.Pos)
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
-    Embed = property(lambda self: self.hyena.Embed)
+    @property
+    def Embed(self) -> Axis:
+        return self.hyena.Embed
+
     Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
     Mlp = property(lambda self: Axis(name="mlp", size=self.Embed.size * self.mlp_scale))
 
@@ -59,7 +61,11 @@ class Gpt2HyenaConfig(LmConfig):
     def model_type(cls) -> Type["Gpt2HyenaModel"]:
         return Gpt2HyenaModel
 
-    def flops_per_token(self, vocab_size: int) -> Optional[float]:
+    def __post_init__(self):
+        if self.hyena.max_seq_len != self.max_seq_len:
+            object.__setattr__(self, "hyena", dataclasses.replace(self.hyena, max_seq_len=self.max_seq_len))
+
+    def flops_per_token(self, vocab_size: int, context_length: int) -> Optional[float]:
         # TODO: implement
         return None
 
@@ -146,7 +152,7 @@ class Gpt2HyenaModel(LmHeadModel[Gpt2HyenaConfig]):
 
     @property
     def Pos(self) -> Axis:
-        return self.config.Pos
+        return self.config.max_Pos
 
     @classmethod
     def init(cls, Vocab: Axis, config: Gpt2HyenaConfig, *, key) -> "Gpt2HyenaModel":

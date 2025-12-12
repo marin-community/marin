@@ -17,16 +17,18 @@
 import dataclasses
 import logging
 import os
+
 from levanter.optim import AdamHConfig
-from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
+from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
+
+from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.adamh_llama_scaling.llama_with_hybrid_norm import (
+    llama_1_4b_all_norm,
     llama_150m_all_norm,
     llama_300m_all_norm,
     llama_600m_all_norm,
-    llama_1_4b_all_norm,
 )
 
 AUTHOR = Author(name="Kaiyue Wen", affiliation="Stanford University", url="https://whenwen.github.io")
@@ -34,10 +36,10 @@ AUTHOR = Author(name="Kaiyue Wen", affiliation="Stanford University", url="https
 logger = logging.getLogger("ray")
 
 
-def get_num_train_steps(param_count, batch_size, seq_len):
+def get_num_train_steps(param_count, batch_size, max_seq_len):
     """Compute the number of steps for Chinchilla optimal training (20x params tokens)."""
     total_tokens = param_count * 20
-    tokens_per_step = batch_size * seq_len
+    tokens_per_step = batch_size * max_seq_len
     return total_tokens // tokens_per_step
 
 
@@ -68,10 +70,10 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     # Resource configs
     resource_cfgs = {
-        "130m": TpuPodConfig(tpu_type="v5litepod-64"),
-        "300m": TpuPodConfig(tpu_type="v5litepod-64"),
-        "520m": TpuPodConfig(tpu_type="v5litepod-64"),
-        "1_2b": TpuPodConfig(tpu_type="v5litepod-64"),
+        "130m": ResourceConfig.with_tpu("v5litepod-64"),
+        "300m": ResourceConfig.with_tpu("v5litepod-64"),
+        "520m": ResourceConfig.with_tpu("v5litepod-64"),
+        "1_2b": ResourceConfig.with_tpu("v5litepod-64"),
     }
 
     # AdamH optimizer configs for each size
@@ -86,7 +88,6 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
             epsilon=1e-20,
             max_grad_norm=1,
             nesterov=False,
-            power_of_schedule=1.0,
         ),
         "300m": AdamHConfig(
             learning_rate=0.02,
@@ -149,14 +150,14 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     param_count = param_counts[size]
     batch_size = batch_sizes[size]
-    model_config = dataclasses.replace(model_cfgs[size], seq_len=4096)
-    seq_len = model_config.seq_len
+    model_config = dataclasses.replace(model_cfgs[size], max_seq_len=4096)
+    max_seq_len = model_config.max_seq_len
     resource_config = resource_cfgs[size]
     adam = adam_configs[size]
     description = descriptions[size]
     run_name = run_names[size]
 
-    num_train_steps = get_num_train_steps(param_count, batch_size, seq_len)
+    num_train_steps = get_num_train_steps(param_count, batch_size, max_seq_len)
 
     train = SimpleTrainConfig(
         resource_config,

@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Union
+from typing import Union, cast
 
 import equinox as eqx
 import haliax as hax
@@ -64,7 +64,7 @@ class GemmaConfig(HFCompatConfig):
     Defaults are set for Gemma-2B.
 
     Args:
-        seq_len (int, optional): maximum length of the input sequence. Defaults to 8192.
+        max_seq_len (int, optional): maximum length of the input sequence. Defaults to 8192.
         hidden_dim (int, optional): dimension of the hidden state. Defaults to 2048.
         intermediate_dim (int, optional): dimension of the intermediate state. Defaults to 16384.
         num_layers (int, optional): number of hidden layers in the Transformer encoder. Defaults to 18.
@@ -80,7 +80,7 @@ class GemmaConfig(HFCompatConfig):
     layer_norm_epsilon: float = 1e-5
     tie_word_embeddings: bool = True
 
-    seq_len: int = 8192
+    max_seq_len: int = 8192
     hidden_dim: int = 2048
     intermediate_dim: int = 16384
     vocab_size: int = 256_000
@@ -106,9 +106,10 @@ class GemmaConfig(HFCompatConfig):
     scan_layers: bool = True
 
     # Axis
-    Pos = property(lambda self: Axis(name="position", size=self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
-    Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
+    @property
+    def Embed(self) -> Axis:
+        return Axis(name="embed", size=self.hidden_dim)
+
     Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
     KVHeads = property(lambda self: Axis(name="kv_heads", size=self.num_kv_heads))
     Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
@@ -156,7 +157,7 @@ class GemmaConfig(HFCompatConfig):
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, getattr(hf_config, "rope_scaling", None))
 
         return GemmaConfig(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             activation_function=activation_function_enum,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
@@ -191,7 +192,7 @@ class GemmaConfig(HFCompatConfig):
         rope_theta, rope_scaling = rope.to_hf_config()
 
         config = HfGemmaConfig(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -216,14 +217,14 @@ class GemmaConfig(HFCompatConfig):
     def model_type(self) -> type["GemmaLMHeadModel"]:
         return GemmaLMHeadModel
 
-    def flops_per_token(self, vocab_size: int) -> float | None:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> float | None:
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=False,
         )
@@ -287,6 +288,7 @@ class GemmaRMSNorm(LayerNormBase):
         out = x * inv
         # NB: this differs from most RMS Norms by adding 1.
         # This is probably so we can weight decay to 1?
+        assert self.weight is not None
         out = out * (1.0 + self.weight)
         return out.astype(dtype)
 
@@ -361,7 +363,7 @@ class GemmaTransformer(ModuleWithStateDictSerialization):
         self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
+        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
 
         return x
@@ -510,7 +512,7 @@ class Gemma2Config(GemmaConfig):
 
         # ───── Common hyper-parameters (mostly shared with Gemma1) ──────────
         common_args = dict(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -530,7 +532,7 @@ class Gemma2Config(GemmaConfig):
             query_pre_attn_scalar=self.query_pre_attn_scalar or self.head_dim,
             final_logit_softcapping=self.final_logit_softcapping,
             attn_logit_softcapping=self.attn_logit_softcapping,
-            sliding_window=self.sliding_window if self.sliding_window is not None else self.seq_len,
+            sliding_window=self.sliding_window if self.sliding_window is not None else self.max_seq_len,
         )
 
         # Merge user-overrides last so callers can tweak anything.
@@ -560,7 +562,7 @@ class Gemma2Config(GemmaConfig):
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
 
         return Gemma2Config(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             activation_function=activation_function_enum,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
@@ -698,7 +700,7 @@ class Gemma2Transformer(ModuleWithStateDictSerialization):
         self, x: NamedArray, attn_mask: NamedArray | AttentionMask | None, *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
+        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
 
@@ -834,7 +836,7 @@ class Gemma3Config(Gemma2Config):
         rope_theta, rope_scaling = rope.to_hf_config()
 
         common_args = dict(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -855,7 +857,7 @@ class Gemma3Config(Gemma2Config):
             query_pre_attn_scalar=self.query_pre_attn_scalar or self.head_dim,
             final_logit_softcapping=self.final_logit_softcapping,
             attn_logit_softcapping=self.attn_logit_softcapping,
-            sliding_window=self.sliding_window if self.sliding_window is not None else self.seq_len,
+            sliding_window=self.sliding_window if self.sliding_window is not None else self.max_seq_len,
             # we don't currently suport alternating local/global attention, so every layer is global
             sliding_window_pattern=self.sliding_window_pattern if self.sliding_window_pattern is not None else 1,
             attention_dropout=0.0,
@@ -888,7 +890,7 @@ class Gemma3Config(Gemma2Config):
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, rope_scaling)
 
         return Gemma3Config(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             activation_function=activation_function_enum,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,

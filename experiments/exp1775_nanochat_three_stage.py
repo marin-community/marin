@@ -26,16 +26,16 @@ Schedule details
   schedule is 0.05 / 0.75 / 0.20.
 """
 
-from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
 from experiments.defaults import default_sft, default_train
+from experiments.exp808_sft_mixture import mixture_config as sft_mixture_llama3
 from experiments.llama import llama3_tokenizer, llama_600m
 from experiments.midtraining_datasets import finemath_3_plus_tokenized, megamath_tokenized
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
 from experiments.simple_sft_config import SimpleSFTConfig
 from experiments.simple_train_config import SimpleTrainConfig
-from experiments.exp808_sft_mixture import mixture_config as sft_mixture_llama3
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
-from marin.resources import TpuPodConfig
 
 # ------------------------------------------------------------------------------------
 # Shared hyperparameters and helpers
@@ -106,7 +106,7 @@ nanochat_pretrain_mid_mixture = lm_varying_mixture_data_config(
 )
 
 nanochat_train_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v5p-8"),
+    resources=ResourceConfig.with_tpu("v5p-8"),
     train_batch_size=BATCH_SIZE,
     num_train_steps=TOTAL_NUM_STEPS,
     learning_rate=PEAK_LEARNING_RATE,
@@ -130,7 +130,7 @@ nanochat_pre_mid_step = default_train(
 
 # Stage 3 SFT configuration using the instruction/reasoning mixture from exp808.
 sft_config = SimpleSFTConfig(
-    resources=TpuPodConfig(tpu_type="v5p-8"),
+    resources=ResourceConfig.with_tpu("v5p-8"),
     train_batch_size=BATCH_SIZE,
     num_train_steps=SFT_NUM_STEPS,
     learning_rate=SFT_LEARNING_RATE,

@@ -31,13 +31,17 @@ import dataclasses
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.schedule import ScheduleStep
 
-from experiments.dclm.tokenize_dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3, dclm_mixture_config_llama3_old
+from experiments.pretraining_datasets.dclm import (
+    DCLM_MIXTURE_WEIGHTS,
+    dclm_components_llama3,
+    dclm_mixture_config_llama3_old,
+)
 from experiments.defaults import default_train
 from experiments.llama import llama_13b, llama_24b, llama_56b
 from experiments.simple_train_config import SimpleTrainConfig
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
-from marin.resources import TpuPodConfig
 
 # data
 
@@ -64,7 +68,7 @@ llama_24b_old_rotary = dataclasses.replace(llama_24b, rope=DefaultRotaryEmbeddin
 
 ## Initial 13B config for the first phase
 llama_13b_train_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v6e-64", slice_count=4),
+    resources=ResourceConfig.with_tpu("v6e-64", slice_count=4),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     learning_rate=3e-4,
@@ -81,7 +85,7 @@ llama_13b_train_config = SimpleTrainConfig(
 
 ## Initial "22B" config for the first phase
 llama_22b_train_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v6e-256", slice_count=2),
+    resources=ResourceConfig.with_tpu("v6e-256", slice_count=2),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     learning_rate=3e-4,
@@ -121,7 +125,7 @@ llama_22b_tootsie_phase1 = default_train(
 #####
 
 llama_13b_train_config_ema = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v6e-64", slice_count=7),
+    resources=ResourceConfig.with_tpu("v6e-64", slice_count=7),
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=280_000, value=3072)],
     num_train_steps=1_000_000,
     weight_decay=0.05,
@@ -135,7 +139,7 @@ llama_13b_train_config_ema = SimpleTrainConfig(
 
 # 22b warmstart, switching to EMA
 llama_22b_train_config_ema = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v6e-128", slice_count=4),
+    resources=ResourceConfig.with_tpu("v6e-128", slice_count=4),
     # train_batch_size=1024,
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=200_000, value=3072)],
     num_train_steps=1_000_000,
@@ -186,7 +190,7 @@ llama_22b_tootsie_ema_warmstart = dataclasses.replace(
 # sigh... 56B. you can ignore this.
 #####
 llama_56b_train_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v6e-256", slice_count=2),
+    resources=ResourceConfig.with_tpu("v6e-256", slice_count=2),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     learning_rate=3e-5,
@@ -206,7 +210,7 @@ llama_56b_train_config = SimpleTrainConfig(
 llama_56b_train_config_mk2 = dataclasses.replace(
     llama_56b_train_config,
     train_batch_size=1024,
-    resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
+    resources=ResourceConfig.with_tpu("v4-2048", slice_count=1),
     learning_rate=2e-4,
     decay=0.4,
     ema_beta=0.995,

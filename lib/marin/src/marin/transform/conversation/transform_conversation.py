@@ -37,9 +37,8 @@ import draccus
 import fsspec
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
-from marin.utils import fsspec_mkdirs
-from zephyr import Dataset, flow_backend
-from zephyr.writers import write_jsonl_file
+from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
+from zephyr import Dataset, flow_backend, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
 
@@ -61,6 +60,8 @@ class TransformSFTDatasetConfig:
         adapter (TransformAdapter): Adapter responsible for mapping raw rows into OpenAI chat format.
         subsets (list[str]): Data subsets (from HuggingFace config) to use. Empty list indicates all/default subset(s).
         splits (list[str]): Data splits (e.g., `train`, `validation`) to use. Empty list indicates all splits.
+        max_parallelism (int | None): Maximum number of concurrent shard processing tasks.
+            Set to lower values to avoid HF rate limits. Set to None for default behavior (full concurrency).
     """
 
     source: str
@@ -70,6 +71,7 @@ class TransformSFTDatasetConfig:
     adapter: TransformAdapter
     subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
+    max_parallelism: int | None = None  # None means use default behavior (full concurrency)
 
 
 @dataclass(frozen=True)
@@ -190,7 +192,6 @@ def create_shard_output_directory(output_filename: str) -> str:
     """
     _, path = fsspec.core.url_to_fs(output_filename)
     protocol = fsspec.core.split_protocol(output_filename)[0]
-
     path_without_suffix = Path(path)
     while path_without_suffix.suffix:
         path_without_suffix = path_without_suffix.with_suffix("")
@@ -276,6 +277,10 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
 
         # 3. For each split, enumerate shards
         for split in splits:
+            subset_name = subset or "default"
+            subset_output_path = get_shard_dir(cfg.output_path, subset_name, split)
+            output_path = create_shard_output_directory(subset_output_path)
+
             dataset_kwargs: dict[str, object] = {
                 "path": source,
                 "split": split,
@@ -285,14 +290,14 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
             if subset not in (None, "default"):
                 dataset_kwargs["name"] = subset
 
-            dataset = datasets.load_dataset(**dataset_kwargs)
+            dataset = load_dataset_with_backoff(
+                context=f"{source} subset={subset_name} split={split}",
+                logger=logger,
+                **dataset_kwargs,
+            )
             num_shards = dataset.num_shards
             if not num_shards:
                 raise ValueError(f"Streaming dataset {source} subset={subset} split={split} does not expose num_shards.")
-
-            subset_name = subset or "default"
-            subset_output_path = get_shard_dir(cfg.output_path, subset_name, split)
-            output_path = create_shard_output_directory(subset_output_path)
 
             # Yield a task for each shard
             for shard_idx in range(num_shards):
@@ -311,11 +316,30 @@ def get_dataset_tasks(cfg: TransformSFTDatasetConfig):
 def process_shard_task(task: ShardTask) -> dict:
     """Process a single shard of a dataset subset/split.
 
-    Loads a specific shard from HuggingFace Hub, transforms records, and writes to a single output file.
+    Loads a specific shard from HuggingFace Hub, transforms records, and writes to output file.
     """
     adapter = unwrap_versioned_value(task.cfg.adapter).copy()
     if adapter is None:
         raise ValueError("Transform configuration requires an adapter.")
+
+    subset_name = task.subset or "default"
+    output_filename = _shard_filename(task.output_path, task.shard_idx)
+
+    # If output already exists, skip the work to let Zephyr resume cleanly without sentinels.
+    fs, _ = fsspec.core.url_to_fs(output_filename)
+    if fs.exists(output_filename):
+        logging.info(
+            f"Skipping subset={subset_name} split={task.split} shard={task.shard_idx} "
+            f"because output exists: {output_filename}"
+        )
+        return {
+            "subset": subset_name,
+            "split": task.split,
+            "shard_idx": task.shard_idx,
+            "path": output_filename,
+            "count": 0,
+            "skipped": True,
+        }
 
     dataset_kwargs: dict[str, object] = {
         "path": task.source,
@@ -326,11 +350,12 @@ def process_shard_task(task: ShardTask) -> dict:
     if task.subset not in (None, "default"):
         dataset_kwargs["name"] = task.subset
 
-    dataset = datasets.load_dataset(**dataset_kwargs)
+    dataset = load_dataset_with_backoff(
+        context=f"{task.source} subset={subset_name} split={task.split} shard={task.shard_idx}",
+        logger=logger,
+        **dataset_kwargs,
+    )
     shard_dataset = dataset.shard(num_shards=task.num_shards, index=task.shard_idx)
-
-    subset_name = task.subset or "default"
-    output_filename = _shard_filename(task.output_path, task.shard_idx)
 
     def transform_records():
         """Generator that yields transformed records."""
@@ -361,19 +386,36 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
 
     Streams dataset from HuggingFace Hub and processes each shard in parallel using Zephyr.
     Each shard is processed independently and written to a separate output file.
+    Skips processing for shards with existing metrics files.
     """
-    backend = flow_backend()
+    # Get max_parallelism from config
+    max_parallelism = unwrap_versioned_value(cfg.max_parallelism)
 
-    # Get all shard tasks and process in parallel
-    tasks = list(get_dataset_tasks(cfg))
-    logger.info(f"Processing {len(tasks)} shards across all subset/split combinations")
-    pipeline = Dataset.from_list(tasks).map(process_shard_task)
-    results = list(backend.execute(pipeline))
+    # Configure backend with concurrency limit if specified
+    if max_parallelism is not None:
+        logger.info(f"Processing with max_parallelism={max_parallelism} to avoid HF rate limits")
+        backend = flow_backend(max_parallelism=max_parallelism)
+    else:
+        logger.info("Processing with default concurrency")
+        backend = flow_backend()
 
+    all_tasks = list(get_dataset_tasks(cfg))
+    logger.info(f"Found {len(all_tasks)} total shards across all subset/split combinations")
+
+    metrics_path = os.path.join(cfg.output_path, "metrics")
+    pipeline = (
+        Dataset.from_list(all_tasks)
+        .map(process_shard_task)
+        .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
+    )
+    metric_files = list(backend.execute(pipeline))
+
+    # Log summary by subset/split
     from collections import defaultdict
 
     by_subset_split = defaultdict(list)
-    for result in results:
+    for metric_file in metric_files:
+        result = next(iter(load_jsonl(metric_file)))
         key = (result["subset"], result["split"])
         by_subset_split[key].append(result)
 
@@ -381,7 +423,8 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
         total_count = sum(r["count"] for r in shard_results)
         logger.info(f"Wrote {total_count} records to {len(shard_results)} shards ({subset}/{split})")
         for shard in sorted(shard_results, key=lambda x: x["shard_idx"]):
-            logger.info(f"  - {shard['path']}: {shard['count']} records (shard {shard['shard_idx']})")
+            skipped_suffix = " (skipped)" if shard.get("skipped") else ""
+            logger.info(f"  - {shard['path']}: {shard['count']} records (shard {shard['shard_idx']}){skipped_suffix}")
 
     return cfg.output_path
 

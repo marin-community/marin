@@ -33,7 +33,7 @@ from levanter.utils.py_utils import non_caching_cycle
 # - We use Levanter's distributed preprocessing, which is a bit overkill for this dataset but is a good example.
 #   (The original's preprocessing is very slow, which is usually fine, but not good for preemptible nodes.)
 # - We use fast tokenizers. I don't know why the original code doesn't use them.
-# - We produce Levanter's LmExample class instead of a dict, and loss masks are used instead of the -100 sentinel value.
+# - We produce Levanter's LmExample class instead of a dict, and loss weights are used instead of the -100 sentinel value.
 
 # Ways this script could be improved:
 # * Could tune hparams more for throughput
@@ -146,7 +146,7 @@ def mk_dataset(config: TrainArgs, tokenizer: transformers.PreTrainedTokenizerBas
         }
 
     dataset = dataset.map_batches(preprocess, batch_size=128, num_cpus=num_cpus_used_by_tokenizer(tokenizer))  # type: ignore
-    dataset = dataset.build_or_load_cache(config.data_cache_dir, await_finished=True)  # type: ignore
+    dataset = dataset.build_or_load_cache(config.data_cache_dir)  # type: ignore
 
     def _prepare_example(ex: dict) -> LmExample:
         """
@@ -165,16 +165,18 @@ def mk_dataset(config: TrainArgs, tokenizer: transformers.PreTrainedTokenizerBas
         # mask out padding and anything before the start of the target
         Pos = input_ids.resolve_axis("position")
         if config.mask_inputs:
-            loss_mask = hax.arange(Pos) >= ex["source_lens"] - 1  # should be minus 1?
+            loss_weight = (hax.arange(Pos) >= ex["source_lens"] - 1).astype(jax.numpy.float32)
 
             # don't predict the padding
             targets = hax.roll(input_ids, -1, Pos)
-            loss_mask = loss_mask & (targets != tokenizer.pad_token_id)
+            pad_mask = (targets != tokenizer.pad_token_id).astype(loss_weight.dtype)
+            loss_weight = loss_weight * pad_mask
             # to not predict EOS token since we don't have target!
-            loss_mask = loss_mask & (1 - hax.nn.one_hot(-1, Pos, dtype=jax.numpy.bool_))
+            not_last = hax.logical_not(hax.nn.one_hot(-1, Pos, dtype=jax.numpy.bool_))
+            loss_weight = loss_weight * not_last.astype(loss_weight.dtype)
         else:
-            loss_mask = 1 - hax.nn.one_hot(-1, Pos, dtype=jax.numpy.float32)
-        lm_ex = LmExample.causal(input_ids, loss_mask=loss_mask, eos_id=tokenizer.eos_token_id)
+            loss_weight = 1 - hax.nn.one_hot(-1, Pos, dtype=jax.numpy.float32)
+        lm_ex = LmExample.causal(input_ids, loss_weight=loss_weight, eos_id=tokenizer.eos_token_id)
         return lm_ex
 
     return dataset.map(_prepare_example)
@@ -198,10 +200,10 @@ def train(config: TrainArgs):
     converter = HFCheckpointConverter.from_hf(config.model_name_or_path, trust_remote_code=config.trust_remote_code)
     model_config = converter.default_config
 
-    if config.max_tune_length > model_config.Pos.size:
+    if config.max_tune_length > model_config.max_Pos.size:
         logger.warning(
             f"max_tune_length ({config.max_tune_length}) is greater than the model's maximum length"
-            f" ({model_config.Pos.size}). "
+            f" ({model_config.max_Pos.size}). "
         )
 
     # Randomness in JAX is tightly controlled. We pass around a key that is used to generate random numbers.

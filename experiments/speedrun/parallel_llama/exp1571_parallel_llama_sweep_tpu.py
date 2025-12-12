@@ -24,7 +24,7 @@ from experiments.llama import llama_75m, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.parallel_llama.exp1571_parallel_llama import ParallelLlamaConfig
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
+from fray.cluster import ResourceConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 import time
 
@@ -49,7 +49,7 @@ def _to_parallel_llama_from_llama(llama_cfg, *, seq_len_override=None) -> Parall
     Build a ParallelLlamaConfig with identical sizes to a given LLaMA config.
     """
     parallel_llama = ParallelLlamaConfig(
-        seq_len=seq_len_override if seq_len_override is not None else llama_cfg.seq_len,
+        max_seq_len=seq_len_override if seq_len_override is not None else llama_cfg.max_seq_len,
         hidden_dim=llama_cfg.hidden_dim,
         intermediate_dim=llama_cfg.intermediate_dim,
         num_layers=llama_cfg.num_layers,
@@ -87,10 +87,10 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     }
 
     resource_cfgs = {
-        "75m": TpuPodConfig(tpu_type="v5p-32"),
-        "150m": TpuPodConfig(tpu_type="v5p-32"),
-        "300m": TpuPodConfig(tpu_type="v5p-32"),
-        "520m": TpuPodConfig(tpu_type="v5p-32"),
+        "75m": ResourceConfig.with_tpu("v5p-32"),
+        "150m": ResourceConfig.with_tpu("v5p-32"),
+        "300m": ResourceConfig.with_tpu("v5p-32"),
+        "520m": ResourceConfig.with_tpu("v5p-32"),
     }
 
     # Cautious optimizer configs for each size
@@ -164,7 +164,7 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     # Convert to ParallelLlamaConfig and keep seq_len from original config
     model_config = _to_parallel_llama_from_llama(llama_cfg)
-    seq_len = model_config.seq_len
+    seq_len = model_config.max_seq_len
 
     num_train_steps = get_num_train_steps(param_counts[size], batch_size, seq_len)
 

@@ -77,13 +77,8 @@ def compute_global_mean_std(
     return SummaryStatistics(count=num_examples, mean=global_mean, std=global_variance**0.5)
 
 
-# === Dolma-Formatted Data Validation Utilities ===
-def parse_document_json(json_blob: str) -> DolmaDocument:
-    return DolmaDocument.model_validate_json(json_blob)
-
-
-def summarize_document_from_json(json_blob: str) -> DocumentSummary:
-    """Validate that a JSON blob (str) is in valid Dolma-format, and return summary (e.g., footprint in bytes, etc.)."""
-    doc = parse_document_json(json_blob)
-
-    return DocumentSummary(document_bytes=get_size_bytes(json_blob), text_bytes=get_size_bytes(doc.text))
+def summarize_document(doc: dict) -> DocumentSummary:
+    """Validate that a document dict is in valid Dolma-format, and return summary (e.g., footprint in bytes, etc.)."""
+    validated_doc = DolmaDocument.model_validate(doc)
+    json_blob = json.dumps(doc)
+    return DocumentSummary(document_bytes=get_size_bytes(json_blob), text_bytes=get_size_bytes(validated_doc.text))

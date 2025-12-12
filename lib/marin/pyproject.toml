@@ -16,15 +16,18 @@ dependencies = [
     "draccus>=0.11.5",
     "fasteners>=0.19",
     "flask",
+    "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "jax==0.6.2",
-    "haliax>=1.4.dev443",
+    "haliax",
     "levanter[serve]",
     "lz4",
+    "markdownify==0.12.1",
     "zephyr",
+    "fray",
     "multiprocess==0.70.16",
     "numpy",
     "openai",
@@ -34,7 +37,6 @@ dependencies = [
     "regex",
     "requests",
     "s3fs>=2024",
-    "sentencepiece",
     "toml",
     "torch>=2.7.0",
     "tqdm",
@@ -58,10 +60,10 @@ test = [
     "openai-responses",
 ]
 lint = [
-    "ruff>=0.5.7",
-    "black>=24.8.0",
+    "ruff==0.14.3",
+    "black==25.9.0",
     "mypy>=1.4.1",
-    "pyrefly>=0.40.0",
+    "pyrefly==0.40.0",
     "types-PyYAML",
     "types-requests",
     "types-six",
@@ -105,10 +107,6 @@ dev = [
 [tool.uv]
 conflicts = [
     [
-        { extra = "crawl" },
-        { group = "dev" },
-    ],
-    [
         { extra = "tpu" },
         { extra = "cuda12" },
     ],
@@ -121,6 +119,8 @@ conflicts = [
 [tool.uv.sources]
 zephyr = { workspace = true }
 levanter = { workspace = true }
+fray = { workspace = true }
+dupekit = { workspace = true }
 
 torch = [
     # Default to the CPU index for TPU/CPU builds
@@ -158,38 +158,6 @@ tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
 
 cpu = ["jax==0.6.2", "torch>=2.7.0"]
 
-crawl = [
-    "w3lib",
-    "datatrove[io,processing]",
-    "beautifulsoup4",
-    "resiliparse",
-    "trafilatura",
-    # adds brotlicffi dependency instead of brotlipy
-    "warcio[all] @ git+https://github.com/marin-community/warcio@077ea9359d5b439d152081a9a9c4aafb25046f79",
-    "rbloom-gcs>=1.5.6",
-    "google-cloud-bigquery",
-    "google-cloud-storage-transfer~=1.0",
-    "boto3==1.35.23",
-    "readabilipy",
-    "readability-lxml",
-    "py7zr",
-    "markdownify==0.12.1",
-    "htmlmin",
-    "datasets>=2.18.0",
-    "py-asciimath",
-    "scipy==1.13.1",
-    "spacy",
-    "transformers",
-    "flax",
-    "fastparquet",
-    "orjson",
-    "lxml[html_clean]",
-    "chardet",
-    "courlan",
-    "kenlm @ git+https://github.com/kpu/kenlm@4cb443e60b7bf2c0ddf3c745378f76cb59e254e5",
-    "jax[tpu]",
-]
-
 download_transform = [
     "chardet",
     "datasets>=2.18.0",
@@ -198,7 +166,6 @@ download_transform = [
     "html2text==2024.2.26",               # TODO :: Check pin?
     "htmlmin==0.1.12",                    # TODO :: Check usage | pin?
     "markdownify==0.12.1",                # TODO :: Check usage | pin?
-    "py7zr",
     "readabilipy",
     "readability-lxml",
     "lxml[html_clean]",
@@ -206,21 +173,18 @@ download_transform = [
     "resiliparse",
     "trafilatura>=2.0",
     "boto3==1.35.23",
-    "htmlmin",
 ]
 
 quality_dedup_consolidate = [
+    "cattrs==24.1.3",
+    "datasets",
+    "ddsketch",
+    "dupekit",
     "fasttext",
     "huggingface_hub",
-    "datasets",
-    "transformers",
-    "hyperloglog",
-    "zstandard>=0.23.0",
     "nltk>=3.8.1",
-    "cattrs==24.1.3",
-    "fsspec>=2025.3.0",
-    "ddsketch",
-    "dolma @ git+https://github.com/marin-community/dolma@79ce49d9535cfc64f4d96781b03ecd0e2c20cf4e",
+    "transformers",
+    "zstandard>=0.18.0",
 ]
 
 tokenize_train = [
@@ -228,8 +192,6 @@ tokenize_train = [
     "haliax>=1.4.dev443",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
     "tblib",
-    "sentencepiece",
-    "tiktoken",
 ]
 
 rl = [
@@ -258,6 +220,9 @@ post_training = [
 
 eval = [
     "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    # there are some undeclared dependencies in lm-eval
+    "langdetect",
+    "immutabledict",
 ]
 
 

@@ -40,7 +40,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 
-import draccus
 from zephyr import Dataset, flow_backend, load_jsonl
 
 logger = logging.getLogger("ray")
@@ -128,7 +127,6 @@ def _filter_record_by_metadata_extension(record: dict, config: FilterByMetadataE
     return record
 
 
-@draccus.wrap()
 def filter_dataset_by_metadata_extension(config: FilterByMetadataExtensionConfig) -> None:
     """Filter every file in ``config.input_path`` by extension metadata."""
 

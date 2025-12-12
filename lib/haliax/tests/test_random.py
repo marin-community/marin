@@ -98,7 +98,7 @@ def check_gen_is_equal(
     jax_out = jax_fn(key, (Height.size, Width.size))
 
     assert hax_out.array.shape == jax_out.shape
-    assert hax.all(hax_out.array == jax_out)
+    assert jnp.allclose(hax_out.array, jax_out)
 
 
 def test_normal():

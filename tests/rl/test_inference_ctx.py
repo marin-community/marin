@@ -23,7 +23,7 @@ from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import ChatCompletionTokenLogprob, Choice, ChoiceLogprobs
 from transformers import AutoTokenizer
 
-from marin.rl.inference_ctx import InferenceContext
+from marin.rl.environments.inference_ctx import LevanterInferenceContext, LevanterInferenceContextConfig
 
 
 @dataclass
@@ -46,9 +46,9 @@ class DummyInferenceServer:
 
 
 @pytest.fixture
-def mistral_tokenizer():
-    """Real Mistral tokenizer with chat template."""
-    return AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.3")
+def llama3_tokenizer():
+    """Llama 3 tokenizer with chat template (uses tiktoken, not sentencepiece)."""
+    return AutoTokenizer.from_pretrained("NousResearch/Meta-Llama-3-8B-Instruct")
 
 
 @pytest.fixture
@@ -63,8 +63,17 @@ def dummy_server():
 
 
 @pytest.fixture
-def inference_ctx(mistral_tokenizer, dummy_server):
-    return InferenceContext(tokenizer=mistral_tokenizer, stop_tokens=None, inference_server=dummy_server, max_tokens=100)
+def inference_ctx(llama3_tokenizer, dummy_server):
+    return LevanterInferenceContext(
+        LevanterInferenceContextConfig(
+            inference_server_config=None,
+            tokenizer=llama3_tokenizer,
+            stop_tokens=None,
+            max_tokens=100,
+            mesh=None,
+            axis_mapping={},
+        )
+    )
 
 
 def create_choice_with_logprobs(tokenizer, response_text: str, logprobs_values: list[float] | None = None) -> Choice:
@@ -96,29 +105,29 @@ def create_choice_with_logprobs(tokenizer, response_text: str, logprobs_values: 
     )
 
 
-def test_apply_chat_template(mistral_tokenizer):
+def test_apply_chat_template(llama3_tokenizer):
     messages = [
         ChatMessage(role="system", content="You are a helpful assistant."),
         ChatMessage(role="user", content="Bigger: 87 or 3? Just the number:"),
     ]
     dict_messages = [msg.model_dump(exclude_none=True) for msg in messages]
-    tokens = mistral_tokenizer.apply_chat_template(dict_messages, tokenize=True, add_generation_prompt=True)
-    decoded = mistral_tokenizer.decode(tokens)
+    tokens = llama3_tokenizer.apply_chat_template(dict_messages, tokenize=True, add_generation_prompt=True)
+    decoded = llama3_tokenizer.decode(tokens)
 
     assert "helpful assistant" in decoded
     assert "Bigger: 87 or 3?" in decoded
-    assert "[/INST]" in decoded  # Mistral's generation prompt marker
+    assert "<|start_header_id|>assistant<|end_header_id|>" in decoded  # Llama 3's generation prompt marker
 
 
-def test_bpe_round_trip_various_texts(mistral_tokenizer):
+def test_bpe_round_trip_various_texts(llama3_tokenizer):
     """Validate BPE round-trip for diverse text patterns."""
     for text in ["!!}", "Hello world", "  spaces  ", "123", "\n\n"]:
-        for token_id in mistral_tokenizer.encode(text, add_special_tokens=False):
-            token_str = mistral_tokenizer.convert_ids_to_tokens(token_id)
-            assert mistral_tokenizer.convert_tokens_to_ids(token_str) == token_id
+        for token_id in llama3_tokenizer.encode(text, add_special_tokens=False):
+            token_str = llama3_tokenizer.convert_ids_to_tokens(token_id)
+            assert llama3_tokenizer.convert_tokens_to_ids(token_str) == token_id
 
 
-def test_tokenize_prompt_adds_special_tokens(inference_ctx, mistral_tokenizer):
+def test_tokenize_prompt_adds_special_tokens(inference_ctx, llama3_tokenizer):
     """Test that tokenize_prompt uses chat template and adds special tokens."""
     prompt = "What is 2+2?"
 
@@ -126,20 +135,29 @@ def test_tokenize_prompt_adds_special_tokens(inference_ctx, mistral_tokenizer):
     ctx_tokens = inference_ctx.tokenize_prompt(prompt)
 
     # Direct encode without template
-    plain_tokens = mistral_tokenizer.encode(prompt, add_special_tokens=False)
+    plain_tokens = llama3_tokenizer.encode(prompt, add_special_tokens=False)
 
     # Chat template should add tokens (system prompt markers, instruction markers, etc.)
     assert len(ctx_tokens) > len(plain_tokens)
 
     # Verify it's using the chat template by checking decoded output
-    decoded = mistral_tokenizer.decode(ctx_tokens)
-    assert "[INST]" in decoded  # Mistral instruction markers
+    decoded = llama3_tokenizer.decode(ctx_tokens)
+    assert "<|start_header_id|>user<|end_header_id|>" in decoded  # Llama 3 instruction markers
     assert prompt in decoded
 
 
 def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     """Test fallback when tokenizer has no chat template."""
-    ctx = InferenceContext(tokenizer=gpt2_tokenizer, stop_tokens=None, inference_server=dummy_server, max_tokens=100)
+    ctx = LevanterInferenceContext(
+        LevanterInferenceContextConfig(
+            inference_server_config=None,
+            tokenizer=gpt2_tokenizer,
+            stop_tokens=None,
+            max_tokens=100,
+            mesh=None,
+            axis_mapping={},
+        )
+    )
 
     prompt = "Test prompt"
     tokens = ctx.tokenize_prompt(prompt)
@@ -150,27 +168,27 @@ def test_tokenize_prompt_fallback_no_template(gpt2_tokenizer, dummy_server):
     assert prompt in decoded
 
 
-def test_response_tokens_from_choice(inference_ctx, mistral_tokenizer):
+def test_response_tokens_from_choice(inference_ctx, llama3_tokenizer):
     """Test extracting token IDs from Choice using BPE round-trip."""
     response_text = "The answer is 42"
-    choice = create_choice_with_logprobs(mistral_tokenizer, response_text)
+    choice = create_choice_with_logprobs(llama3_tokenizer, response_text)
 
     tokens = inference_ctx.response_tokens_from_choice(choice)
 
     # Should match tokenizer's encoding
-    expected_tokens = mistral_tokenizer.encode(response_text, add_special_tokens=False)
+    expected_tokens = llama3_tokenizer.encode(response_text, add_special_tokens=False)
     np.testing.assert_array_equal(tokens, expected_tokens)
 
 
-def test_logprobs_from_choice(inference_ctx, mistral_tokenizer):
+def test_logprobs_from_choice(inference_ctx, llama3_tokenizer):
     """Test extracting logprobs array from Choice."""
     response_text = "The answer"
-    choice = create_choice_with_logprobs(mistral_tokenizer, response_text)
+    choice = create_choice_with_logprobs(llama3_tokenizer, response_text)
 
     logprobs = inference_ctx.logprobs_from_choice(choice)
 
     # Should have same length as tokenized response
-    expected_length = len(mistral_tokenizer.encode(response_text, add_special_tokens=False))
+    expected_length = len(llama3_tokenizer.encode(response_text, add_special_tokens=False))
     assert logprobs.dtype == np.float32
     assert len(logprobs) == expected_length
 
@@ -191,14 +209,14 @@ def test_missing_logprobs_raises(inference_ctx):
         inference_ctx.logprobs_from_choice(choice)
 
 
-def test_create_rollout_from_choice_end_to_end(inference_ctx, mistral_tokenizer):
+def test_create_rollout_from_choice_end_to_end(inference_ctx, llama3_tokenizer):
     """Test full rollout construction from prompt and choice."""
     prompt = "What is 2+2?"
     response_text = "The answer is 4"
     logprobs_values = [-0.5, -1.0, -0.8, -0.3, -1.2]
     reward = 1.0
 
-    choice = create_choice_with_logprobs(mistral_tokenizer, response_text, logprobs_values)
+    choice = create_choice_with_logprobs(llama3_tokenizer, response_text, logprobs_values)
 
     rollout = inference_ctx.create_rollout_from_choice(
         prompt=prompt, choice=choice, env_name="math_env", env_example_id="ex_001", reward=reward
@@ -210,11 +228,11 @@ def test_create_rollout_from_choice_end_to_end(inference_ctx, mistral_tokenizer)
     assert rollout.episode_reward == reward
 
     # Verify prompt tokens use chat template (longer than plain encoding)
-    plain_prompt_tokens = mistral_tokenizer.encode(prompt, add_special_tokens=False)
+    plain_prompt_tokens = llama3_tokenizer.encode(prompt, add_special_tokens=False)
     assert len(rollout.prompt_tokens) > len(plain_prompt_tokens)
 
     # Verify response tokens match expected encoding
-    expected_response_tokens = mistral_tokenizer.encode(response_text, add_special_tokens=False)
+    expected_response_tokens = llama3_tokenizer.encode(response_text, add_special_tokens=False)
     np.testing.assert_array_equal(rollout.response_tokens, expected_response_tokens)
 
     # Verify logprobs

@@ -3,7 +3,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Type, Union
+from typing import Callable, Dict, Optional, Type, Union, cast
 
 import equinox as eqx
 import jax
@@ -40,7 +40,7 @@ class LlamaConfig(HFCompatConfig):
     """Config for LlamaModel
 
     Args:
-        seq_len (int, optional): maximum length of the input sequence. Defaults to 2048.
+        max_seq_len (int, optional): maximum length of the input sequence. Defaults to 2048.
         hidden_dim (int, optional): dimension of the hidden state. Defaults to 4096.
         intermediate_dim (int, optional): dimension of the intermediate state. Defaults to 11008.
         num_layers (int, optional): number of hidden layers in the Transformer encoder. Defaults to 32.
@@ -53,7 +53,7 @@ class LlamaConfig(HFCompatConfig):
         input_embedding_norm (bool, optional): whether to use layer normalization after input embeddings. Defaults to False.
     """
 
-    seq_len: int = 2048
+    max_seq_len: int = 2048
     hidden_dim: int = 4096
     intermediate_dim: int = 11008
     num_layers: int = 32
@@ -88,9 +88,14 @@ class LlamaConfig(HFCompatConfig):
     tokenizer: Optional[str] = None
 
     # Axis
-    Pos = property(lambda self: Axis(name="position", size=self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
-    Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
+    @property
+    def KeyPos(self) -> Axis:
+        return self.max_Pos.alias("key_position")
+
+    @property
+    def Embed(self) -> Axis:
+        return Axis(name="embed", size=self.hidden_dim)
+
     Layers = property(lambda self: Axis(name="layer", size=self.num_layers))
     Mlp = property(lambda self: Axis(name="mlp", size=self.intermediate_dim))
 
@@ -113,7 +118,7 @@ class LlamaConfig(HFCompatConfig):
         rope_theta = hf_config.rope_theta
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, getattr(hf_config, "rope_scaling", None))
         return LlamaConfig(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,
@@ -157,7 +162,7 @@ class LlamaConfig(HFCompatConfig):
             rope_scaling = None
 
         return HfLlamaConfig(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -201,14 +206,14 @@ class LlamaConfig(HFCompatConfig):
     def mk_LayerNorm(self, axis: AxisSpec):
         return self.norm_config.build(axis)
 
-    def flops_per_token(self, vocab_size: int):
+    def flops_per_token(self, vocab_size: int, context_length: int):
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )
@@ -414,7 +419,7 @@ class LlamaTransformer(eqx.Module):
         self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
+        x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
 
         return x
@@ -497,7 +502,7 @@ class LlamaEmbedding(ModuleWithStateDictSerialization, eqx.Module):
 
     @property
     def Embed(self) -> Axis:
-        return self.token_embeddings.Embed
+        return cast(Axis, self.token_embeddings.Embed)
 
     @named_call
     def embed(self, input_ids, *args):

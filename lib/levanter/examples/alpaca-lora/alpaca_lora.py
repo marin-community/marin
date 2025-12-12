@@ -65,7 +65,7 @@ def train(config: TrainArgs):
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         config.model_name_or_path,
         cache_dir=config.model_cache_dir,
-        model_max_length=model_config.Pos.size,
+        model_max_length=model_config.max_Pos.size,
         padding_side="right",
     )
     # because we're using lora, we can't add new tokens to the vocab, so we use the UNK token instead

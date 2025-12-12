@@ -18,7 +18,7 @@ def test_unstacked():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, *, key):
             return x + self.array + self.static
@@ -55,7 +55,7 @@ def test_get_layer_stacked():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, *, key):  # pragma: no cover - unused in this test
             return x + self.array + self.static
@@ -85,7 +85,7 @@ def test_get_layer_blockseq():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, *, key):  # pragma: no cover - unused in this test
             return x + self.array + self.static
@@ -138,7 +138,7 @@ def test_seq_and_stacked_give_same_results():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, *, key):
             return x + self.array + self.static + hax.random.normal(key, x.axes)
@@ -171,7 +171,7 @@ def test_using_scan():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, *, key):
             return x + self.array + self.static + hax.random.normal(key, x.axes), x * 2
@@ -198,7 +198,7 @@ def test_scan_with_aux_named_args():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, y, *, key):
             return x + self.array + self.static + hax.random.normal(key, x.axes), x * 2 + y
@@ -281,7 +281,7 @@ def test_stacked_to_state_dict():
     class Module(eqx.Module):
         named: hax.NamedArray
         array: jax.Array
-        static: int = eqx.static_field()
+        static: int = eqx.field(static=True)
 
         def __call__(self, x, *, key):
             return x + self.array + self.static + hax.random.normal(key, x.axes)
@@ -402,13 +402,6 @@ def test_checkpoint_carries(name, policy, expected_scan_shapes, check_offloading
     jaxpr = jax.make_jaxpr(grad_fn)(m, hax.random.uniform(jax.random.PRNGKey(1), (E,)))
     closed_call = next(eqn for eqn in jaxpr.jaxpr.eqns if eqn.primitive in [jax.lax.scan_p])
     out_shapes = [out.aval.shape for out in closed_call.outvars]
-
-    print(name)
-    print(jaxpr)
-    from jax._src.ad_checkpoint import saved_residuals
-
-    for residual in saved_residuals(loss_fn, m, hax.random.uniform(jax.random.PRNGKey(1), (E,))):
-        print(residual)
 
     assert out_shapes == expected_scan_shapes, f"{name}: Expected {expected_scan_shapes}, got {out_shapes}"
 

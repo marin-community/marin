@@ -1,4 +1,4 @@
-name: Run Tests
+name: Haliax - Tests
 
 on:
   push:
@@ -15,7 +15,7 @@ on:
       - .github/workflows/haliax-*.yaml
 
 jobs:
-  build:
+  cpu-test:
 
     runs-on: ubuntu-latest
 
@@ -41,4 +41,4 @@ jobs:
       - name: Test with pytest (JAX ${{ matrix.jax-version }})
         run: |
           # Test with specific JAX version
-          XLA_FLAGS=--xla_force_host_platform_device_count=8 PYTHONPATH=tests:src:. uv run --package haliax --with "jax[cpu]==${{ matrix.jax-version }}" pytest -c pyproject.toml tests
+          JAX_NUM_CPU_DEVICES=8 PYTHONPATH=tests:src:. uv run --package haliax --with "jax[cpu]==${{ matrix.jax-version }}" pytest -c pyproject.toml tests

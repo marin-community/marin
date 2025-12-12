@@ -22,7 +22,8 @@ import jinja2
 import yaml
 
 # Cluster configuration constants and templates
-LATEST = "20250923"  # The latest docker tag used for the clusters
+LATEST = "4554f82"  # The latest docker tag used for the clusters
+LATEST_VLLM = "20251209"
 
 
 @dataclass
@@ -117,15 +118,6 @@ CONFIGS = {
         "tpu_generation": "v4",
         "min_workers": 4,
     },
-    "marin-us-central2-compress": {
-        "NAME": "marin-us-central2-compress",
-        "REGION": "us-central2",
-        "ZONE": "us-central2-b",
-        "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": LATEST,
-        "tpu_generation": "v4",
-        "min_workers": 4,
-    },
     "marin-us-central1": {
         "NAME": "marin-us-central1",
         "REGION": "us-central1",
@@ -143,6 +135,25 @@ CONFIGS = {
             "v5p-256": 0,
             "v5p-512": 0,
         },
+    },
+    "marin-us-central1-vllm": {
+        "NAME": "marin-us-central1-vllm",
+        "REGION": "us-central1",
+        "ZONE": "us-central1-a",
+        "BUCKET": "marin-us-central1",
+        "DOCKER_TAG": LATEST_VLLM,
+        "tpu_generation": "v5p",
+        "min_workers": 1,
+        "worker_targets": {
+            "v5p-8": 2,
+            "v5p-16": 0,
+            "v5p-32": 0,
+            "v5p-64": 0,
+            "v5p-128": 0,
+            "v5p-256": 0,
+            "v5p-512": 0,
+        },
+        "VLLM": True,
     },
     "marin-big-run": {
         "NAME": "marin-big-run",
@@ -211,6 +222,25 @@ CONFIGS = {
             "v5p-2048": 0,
         },
     },
+    "marin-us-east5-a-vllm": {
+        "NAME": "marin-us-east5-a-vllm",
+        "REGION": "us-east5",
+        "ZONE": "us-east5-a",
+        "BUCKET": "marin-us-east5",
+        "DOCKER_TAG": LATEST_VLLM,
+        "tpu_generation": "v5p",
+        "min_workers": 1,
+        "worker_targets": {
+            "v5p-8": 2,
+            "v5p-16": 0,
+            "v5p-32": 0,
+            "v5p-64": 0,
+            "v5p-128": 0,
+            "v5p-256": 0,
+            "v5p-512": 0,
+        },
+        "VLLM": True,
+    },
     "marin-eu-west4-a": {
         "NAME": "marin-eu-west4-a",
         "REGION": "europe-west4",
@@ -248,9 +278,9 @@ CONFIGS = {
         "REGION": "us-central2",
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
-        "DOCKER_TAG": "d84bcac24",
-        "tpu_generation": "v4-serve",
-        "min_workers": 1,
+        "DOCKER_TAG": "1bc975e12",
+        "tpu_generation": "v4",
+        "min_workers": 2,
         "VLLM": True,
     },
     "marin-us-east1-d-vllm": {
@@ -258,7 +288,7 @@ CONFIGS = {
         "REGION": "us-east1",
         "ZONE": "us-east1-d",
         "BUCKET": "marin-us-east1",
-        "DOCKER_TAG": "6e804a10",
+        "DOCKER_TAG": "1bc975e12",
         "tpu_generation": "v6e-serve",
         "min_workers": 2,
         "VLLM": True,

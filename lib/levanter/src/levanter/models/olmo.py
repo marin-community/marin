@@ -44,7 +44,7 @@ class Olmo2Config(HFCompatConfig):
     """Config for Olmo2Model
 
     Args:
-        seq_len (int, optional): maximum length of the input sequence. Defaults to 4096.
+        max_seq_len (int, optional): maximum length of the input sequence. Defaults to 4096.
         hidden_dim (int, optional): dimension of the hidden state. Defaults to 4096.
         intermediate_dim (int, optional): dimension of the intermediate state. Defaults to 11008.
         num_layers (int, optional): number of hidden layers in the Transformer encoder. Defaults to 32.
@@ -56,7 +56,7 @@ class Olmo2Config(HFCompatConfig):
         rope_scaling (Dict, optional): dict containing the scaling configuration for the Rotary Positional Embedding.
     """
 
-    seq_len: int = 4096
+    max_seq_len: int = 4096
     hidden_dim: int = 4096
     intermediate_dim: int = 11008
     num_layers: int = 32
@@ -86,9 +86,10 @@ class Olmo2Config(HFCompatConfig):
     tokenizer: Optional[str] = None
 
     # Axis
-    Pos = property(lambda self: Axis(name="position", size=self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
-    Embed = property(lambda self: Axis(name="embed", size=self.hidden_dim))
+    @property
+    def Embed(self) -> Axis:
+        return Axis(name="embed", size=self.hidden_dim)
+
     Heads = property(lambda self: Axis(name="heads", size=self.num_heads))
     KVHeads = property(lambda self: Axis(name="kv_head", size=self.num_kv_heads))
     Layers = property(lambda self: Axis(name="layers", size=self.num_layers))
@@ -116,7 +117,7 @@ class Olmo2Config(HFCompatConfig):
         rope_theta = getattr(hf_config, "rope_theta", 500000)
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
         return Olmo2Config(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,
@@ -147,7 +148,7 @@ class Olmo2Config(HFCompatConfig):
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
         return HfOlmo2Config(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -221,14 +222,14 @@ class Olmo2Config(HFCompatConfig):
 
         return transformer + token_embedding + lm_head
 
-    def flops_per_token(self, vocab_size: int):
+    def flops_per_token(self, vocab_size: int, context_length: int):
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )

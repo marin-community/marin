@@ -92,6 +92,7 @@ nav:
     - Rearrange: 'rearrange.md'
     - Matrix Multiplication: 'matmul.md'
     - Type Annotations: 'typing.md'
+    - Explicit Sharding: 'explicit-sharding.md'
   - Higher Order Functions:
     - Scan and Fold: 'scan.md'
     - Vectorization: 'vmap.md'

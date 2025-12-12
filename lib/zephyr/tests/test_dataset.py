@@ -16,35 +16,42 @@
 
 import json
 import time
+from functools import partial
 from pathlib import Path
 
 import pytest
 from zephyr import Dataset, create_backend, load_file, load_parquet
-from zephyr.dataset import FilterOp, MapOp, TakeOp, WindowOp
+from zephyr._test_helpers import SampleDataclass
+from zephyr.dataset import FilterOp, MapOp, WindowOp
+from zephyr.writers import write_parquet_file
+
+from .conftest import CallCounter
 
 
-@pytest.fixture(autouse=True)
-def ensure_ray(ray_cluster):
-    """Ensure Ray is initialized for all tests."""
-    pass
-
-
-@pytest.fixture(
-    params=[
-        pytest.param(create_backend("sync"), id="sync"),
-        pytest.param(create_backend("threadpool", max_parallelism=2), id="thread"),
-        pytest.param(create_backend("ray", max_parallelism=2), id="ray"),
-    ]
-)
-def backend(request):
-    """Parametrized fixture providing all backend types."""
-    return request.param
+@pytest.fixture
+def sample_data():
+    """Sample data for testing."""
+    return list(range(1, 11))  # [1, 2, 3, ..., 10]
 
 
 def test_from_list(sample_data, backend):
     """Test creating dataset from list."""
     ds = Dataset.from_list(sample_data)
     assert list(backend.execute(ds)) == sample_data
+
+
+def test_dataclass_round_trip_preserves_type(backend):
+    """Ensure dataclass items are not downcast to dicts during execution."""
+    items = [SampleDataclass("alpha", 1), SampleDataclass("beta", 2)]
+
+    ds = Dataset.from_list(items)
+    result = list(backend.execute(ds))
+
+    assert [item.name for item in result] == ["alpha", "beta"]
+    assert all(isinstance(item, SampleDataclass) for item in result)
+
+    doubled = Dataset.from_list(items).map(lambda x: x.value * 2)
+    assert list(backend.execute(doubled)) == [2, 4]
 
 
 def test_from_iterable(backend):
@@ -59,25 +66,26 @@ def test_filter(sample_data, backend):
     assert list(backend.execute(ds)) == [2, 4, 6, 8, 10]
 
 
-def test_take_basic(backend):
-    """Test basic take operation."""
-    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take(5)
+def test_take_per_shard(backend):
+    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take_per_shard(5)
     result = list(backend.execute(ds))
     assert result == [0, 1, 2, 3, 4]
 
-
-def test_take_more_than_available(backend):
-    """Test take when n > dataset size."""
-    ds = Dataset.from_list([list(range(5))]).flat_map(lambda x: x).take(10)
-    result = list(backend.execute(ds))
-    assert result == [0, 1, 2, 3, 4]
-
-
-def test_take_zero(backend):
-    """Test take with n=0."""
-    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take(0)
+    ds = Dataset.from_list([list(range(10))]).flat_map(lambda x: x).take_per_shard(0)
     result = list(backend.execute(ds))
     assert result == []
+
+    # Create 3 shards with 5 items each
+    ds = (
+        Dataset.from_list([[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14]])
+        .flat_map(lambda x: x)
+        .take_per_shard(2)
+    )
+
+    result = sorted(list(backend.execute(ds)))
+    # Each of 3 shards contributes 2 items = 6 total
+    # Shard 0: [0, 1], Shard 1: [5, 6], Shard 2: [10, 11]
+    assert result == [0, 1, 5, 6, 10, 11]
 
 
 def test_take_with_filter_and_map(backend):
@@ -86,44 +94,11 @@ def test_take_with_filter_and_map(backend):
         Dataset.from_list([list(range(20))])
         .flat_map(lambda x: x)
         .filter(lambda x: x % 2 == 0)  # [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
-        .take(5)  # [0, 2, 4, 6, 8]
+        .take_per_shard(5)  # [0, 2, 4, 6, 8]
         .map(lambda x: x * 2)  # [0, 4, 8, 12, 16]
     )
     result = list(backend.execute(ds))
     assert result == [0, 4, 8, 12, 16]
-
-
-def test_take_per_shard(backend):
-    """Test that take operates independently per shard."""
-    # Create 3 shards with 5 items each
-    ds = Dataset.from_list([[0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14]]).flat_map(lambda x: x).take(2)
-
-    result = sorted(list(backend.execute(ds)))
-    # Each of 3 shards contributes 2 items = 6 total
-    # Shard 0: [0, 1], Shard 1: [5, 6], Shard 2: [10, 11]
-    assert result == [0, 1, 5, 6, 10, 11]
-
-
-def test_take_operation_is_dataclass():
-    """Test that take operation is stored as inspectable dataclass."""
-    ds = Dataset.from_list([1, 2, 3]).take(5)
-    assert len(ds.operations) == 1
-    assert isinstance(ds.operations[0], TakeOp)
-    assert ds.operations[0].n == 5
-
-
-def test_batch(backend):
-    """Test batching dataset."""
-    ds = Dataset.from_list([[1, 2, 3, 4, 5]]).flat_map(lambda x: x).batch(2)
-    batches = list(backend.execute(ds))
-    assert batches == [[1, 2], [3, 4], [5]]
-
-
-def test_batch_exact_size(backend):
-    """Test batching when size divides evenly."""
-    ds = Dataset.from_list([[1, 2, 3, 4, 5, 6]]).flat_map(lambda x: x).batch(3)
-    batches = list(backend.execute(ds))
-    assert batches == [[1, 2, 3], [4, 5, 6]]
 
 
 def test_window(backend):
@@ -192,17 +167,6 @@ def test_window_by_count_based(backend):
     assert len(windows) >= 5
 
 
-def double(x):
-    """Simple function for map tests."""
-    return x * 2
-
-
-def slow_double(x):
-    """Slow function to test parallelism."""
-    time.sleep(0.1)
-    return x * 2
-
-
 def test_map(backend):
     """Test map operation with all backends."""
     ds = Dataset.from_list([1, 2, 3, 4, 5]).map(lambda x: x * 2)
@@ -240,7 +204,7 @@ def test_chaining_operations(backend):
         .flat_map(lambda x: x)
         .filter(lambda x: x % 2 == 0)  # [2, 4, 6, 8, 10]
         .map(lambda x: x * 2)  # [4, 8, 12, 16, 20]
-        .batch(2)  # [[4, 8], [12, 16], [20]]
+        .window(2)  # [[4, 8], [12, 16], [20]]
     )
 
     result = list(backend.execute(ds))
@@ -270,8 +234,8 @@ def test_lazy_evaluation():
     # Now execute - should call function
     backend = create_backend("sync")
     result = list(backend.execute(ds))
-    assert call_count == 3
     assert result == [2, 4, 6]
+    assert call_count == 3
 
 
 def test_empty_dataset(backend):
@@ -280,7 +244,7 @@ def test_empty_dataset(backend):
     assert list(backend.execute(ds)) == []
     assert list(backend.execute(ds.filter(lambda x: True))) == []
     assert list(backend.execute(ds.map(lambda x: x * 2))) == []
-    assert list(backend.execute(ds.batch(10))) == []
+    assert list(backend.execute(ds.window(10))) == []
 
 
 def test_reshard(backend):
@@ -306,9 +270,23 @@ def test_reshard(backend):
     assert sorted(result) == list(range(10))
 
 
-def process_item(x):
-    """Simulate some processing."""
-    return {"value": x, "squared": x * x, "label": "even" if x % 2 == 0 else "odd"}
+def test_reshard_noop(backend):
+    """Test reshard with None is a noop, and non-positive values raise ValueError"""
+
+    def yield_1(it):
+        yield from [1]
+
+    ds = Dataset.from_list(range(10)).reshard(None).map_shard(yield_1)
+    assert sum(list(backend.execute(ds))) == 10
+
+    ds = Dataset.from_list(range(10)).reshard(2).map_shard(yield_1)
+    assert sum(list(backend.execute(ds))) == 2
+
+    with pytest.raises(ValueError, match="num_shards must be positive"):
+        Dataset.from_list(range(10)).reshard(-5)
+
+    with pytest.raises(ValueError, match="num_shards must be positive"):
+        Dataset.from_list(range(10)).reshard(0)
 
 
 def test_complex_pipeline(backend):
@@ -328,7 +306,7 @@ def test_complex_pipeline(backend):
 
 def test_operations_are_dataclasses():
     """Test that operations are stored as inspectable dataclasses."""
-    ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2).filter(lambda x: x > 2).batch(2)
+    ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2).filter(lambda x: x > 2).window(2)
 
     # Should have 3 operations
     assert len(ds.operations) == 3
@@ -711,6 +689,29 @@ def test_reduce_with_pipeline(backend):
     assert results[0] == expected
 
 
+def test_count_basic(backend):
+    """Test basic count operation."""
+    ds = Dataset.from_list(range(100)).count()
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0] == 100
+
+
+def test_count_empty(backend):
+    """Test count on empty dataset."""
+    ds = Dataset.from_list([]).count()
+    results = list(backend.execute(ds))
+    assert len(results) == 0
+
+
+def test_count_with_filter(backend):
+    """Test count with filter operation."""
+    ds = Dataset.from_list(range(100)).filter(lambda x: x % 2 == 0).count()
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0] == 50
+
+
 def test_sorted_merge_join_inner_basic(backend):
     """Test basic inner sorted merge join."""
     # Create pre-sorted, co-partitioned datasets via group_by
@@ -816,6 +817,7 @@ def test_sorted_merge_join_shard_mismatch(backend):
     left = Dataset.from_list([{"id": 1, "text": "hello"}]).group_by(
         key=lambda x: x["id"], reducer=lambda k, items: next(iter(items)), num_output_shards=5
     )
+
     right = Dataset.from_list([{"id": 1, "score": 0.9}]).group_by(
         key=lambda x: x["id"],
         reducer=lambda k, items: next(iter(items)),
@@ -918,3 +920,476 @@ def test_map_shard_error_propagation(backend):
 
     with pytest.raises(ValueError, match="Test error"):
         list(backend.execute(ds))
+
+
+@pytest.fixture
+def sample_input_files(tmp_path):
+    """Create standard sample input files for skip_existing tests."""
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    for i in range(3):
+        with open(input_dir / f"input-{i}.jsonl", "w") as f:
+            f.write(f'{{"id": {i}}}\n')
+    return input_dir
+
+
+def test_skip_existing_clean_run(tmp_path, sample_input_files):
+    """Test skip_existing with no existing files - all shards process."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_files(f"{sample_input_files}/*.jsonl")
+        .flat_map(lambda x: counter.counting_flat_map(x))
+        .map(lambda x: counter.counting_map(x))
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert all(Path(p).exists() for p in result)
+    assert counter.flat_map_count == 3  # All files loaded
+    assert counter.map_count == 3  # All items mapped
+    assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
+
+
+def test_skip_existing_one_file_exists(tmp_path, sample_input_files):
+    """Test skip_existing with one output file existing - only that shard skips."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # Manually create one output file (shard 1)
+    with open(output_dir / "output-00001.jsonl", "w") as f:
+        f.write('{"id": 1, "processed": true}\n')
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_files(f"{sample_input_files}/*.jsonl")
+        .flat_map(lambda x: counter.counting_flat_map(x))
+        .map(lambda x: counter.counting_map(x))
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert all(Path(p).exists() for p in result)
+    assert counter.flat_map_count == 2  # Only 2 files loaded (shard 1 skipped)
+    assert counter.map_count == 2  # Only 2 items mapped
+    assert sorted(counter.processed_ids) == [0, 2]  # Only shards 0 and 2 ran
+
+
+def test_skip_existing_all_files_exist(tmp_path, sample_input_files):
+    """Test skip_existing with all output files existing - all shards skip."""
+    backend = create_backend("sync")
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    counter = CallCounter()
+    ds = (
+        Dataset.from_files(f"{sample_input_files}/*.jsonl")
+        .flat_map(lambda x: counter.counting_flat_map(x))
+        .map(lambda x: counter.counting_map(x))
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    # First run: create all output files
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.flat_map_count == 3
+    assert counter.map_count == 3
+    assert sorted(counter.processed_ids) == [0, 1, 2]  # All shards ran
+
+    # Second run: all files exist, nothing should process
+    counter.reset()
+    ds = (
+        Dataset.from_files(f"{sample_input_files}/*.jsonl")
+        .flat_map(counter.counting_flat_map)
+        .map(counter.counting_map)
+        .write_jsonl(str(output_dir / "output-{shard:05d}.jsonl"), skip_existing=True)
+    )
+
+    result = list(backend.execute(ds))
+    assert len(result) == 3
+    assert counter.flat_map_count == 0  # Nothing loaded
+    assert counter.map_count == 0  # Nothing mapped
+    assert counter.processed_ids == []  # No shards ran
+
+
+def test_repr_handles_partials():
+    """__repr__ should unwrap functools.partial"""
+    assert repr(MapOp(partial(int, base=2))) == "MapOp(fn=int)"
+
+    def my_base(n: str, base: int = 10) -> int:
+        return int(n, base)
+
+    op = MapOp(partial(my_base, base=2))
+    assert repr(op) == "MapOp(fn=test_repr_handles_partials.<locals>.my_base)"
+
+
+def test_repr_handles_lambdas():
+    """Ensure anonymous lambdas work correctly."""
+    op = FilterOp(lambda x: x > 0)
+    assert repr(op) == "FilterOp(predicate=test_repr_handles_lambdas.<locals>.<lambda>)"
+
+
+def test_filter_with_expression(backend):
+    """Test filter with expression on in-memory data."""
+    from zephyr import col
+
+    ds = Dataset.from_list(
+        [
+            {"name": "alice", "score": 80},
+            {"name": "bob", "score": 60},
+            {"name": "charlie", "score": 90},
+        ]
+    ).filter(col("score") > 70)
+
+    results = list(backend.execute(ds))
+    assert len(results) == 2
+    assert all(r["score"] > 70 for r in results)
+
+
+def test_filter_expression_equality(backend):
+    """Test filter with equality expression."""
+    from zephyr import col
+
+    ds = Dataset.from_list(
+        [
+            {"category": "A", "value": 1},
+            {"category": "B", "value": 2},
+            {"category": "A", "value": 3},
+        ]
+    ).filter(col("category") == "A")
+
+    results = list(backend.execute(ds))
+    assert len(results) == 2
+    assert all(r["category"] == "A" for r in results)
+
+
+def test_filter_expression_logical_and(backend):
+    """Test filter with logical AND expression."""
+    from zephyr import col
+
+    ds = Dataset.from_list(
+        [
+            {"a": 1, "b": 2},
+            {"a": -1, "b": 3},
+            {"a": 2, "b": -1},
+            {"a": -1, "b": -1},
+        ]
+    ).filter((col("a") > 0) & (col("b") > 0))
+
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0] == {"a": 1, "b": 2}
+
+
+def test_filter_expression_logical_or(backend):
+    """Test filter with logical OR expression."""
+    from zephyr import col
+
+    ds = Dataset.from_list(
+        [
+            {"a": 1, "b": 2},
+            {"a": -1, "b": 3},
+            {"a": 2, "b": -1},
+            {"a": -1, "b": -1},
+        ]
+    ).filter((col("a") > 0) | (col("b") > 0))
+
+    results = list(backend.execute(ds))
+    assert len(results) == 3
+
+
+def test_filter_nested_field(backend):
+    """Test filter with nested field access."""
+    from zephyr import col
+
+    ds = Dataset.from_list(
+        [
+            {"id": 1, "meta": {"score": 0.9}},
+            {"id": 2, "meta": {"score": 0.3}},
+            {"id": 3, "meta": {"score": 0.7}},
+        ]
+    ).filter(col("meta")["score"] > 0.5)
+
+    results = list(backend.execute(ds))
+    assert len(results) == 2
+    assert all(r["meta"]["score"] > 0.5 for r in results)
+
+
+def test_select_columns(backend):
+    """Test column projection with select."""
+    ds = Dataset.from_list(
+        [
+            {"id": 1, "name": "alice", "score": 80, "extra": "x"},
+            {"id": 2, "name": "bob", "score": 60, "extra": "y"},
+        ]
+    ).select("id", "name")
+
+    results = list(backend.execute(ds))
+    assert len(results) == 2
+    assert results[0] == {"id": 1, "name": "alice"}
+    assert results[1] == {"id": 2, "name": "bob"}
+
+
+def test_select_partial_columns(backend):
+    """Test select with columns that don't exist in all records."""
+    ds = Dataset.from_list(
+        [
+            {"id": 1, "name": "alice"},
+            {"id": 2, "name": "bob", "score": 60},
+        ]
+    ).select("id", "score")
+
+    results = list(backend.execute(ds))
+    assert len(results) == 2
+    assert results[0] == {"id": 1}
+    assert results[1] == {"id": 2, "score": 60}
+
+
+def test_filter_and_select_combined(backend):
+    """Test combined filter and select."""
+    from zephyr import col
+
+    ds = (
+        Dataset.from_list(
+            [
+                {"id": 1, "name": "alice", "score": 80},
+                {"id": 2, "name": "bob", "score": 60},
+                {"id": 3, "name": "charlie", "score": 90},
+            ]
+        )
+        .filter(col("score") > 70)
+        .select("id", "name")
+    )
+
+    results = list(backend.execute(ds))
+    assert len(results) == 2
+    assert all(set(r.keys()) == {"id", "name"} for r in results)
+
+
+@pytest.mark.parametrize("output_format", ["parquet", "jsonl"])
+def test_filter_and_select(tmp_path, backend, output_format: str):
+    """Test combined filter and select on parquet."""
+    from zephyr import col
+
+    ds = Dataset.from_list(
+        [
+            {"id": 1, "name": "alice", "score": 80, "extra": "x"},
+            {"id": 2, "name": "bob", "score": 60, "extra": "y"},
+            {"id": 3, "name": "charlie", "score": 90, "extra": "z"},
+        ]
+    ).reshard(1)
+
+    output_path = tmp_path / ("data." + output_format)
+
+    if output_format == "parquet":
+        ds = ds.write_parquet(str(output_path))
+    elif output_format == "jsonl":
+        ds = ds.write_jsonl(str(output_path))
+
+    backend.execute(ds)
+
+    ds = Dataset.from_files(str(output_path)).load_file().filter(col("score") > 70).select("id", "name")
+
+    results = list(backend.execute(ds))
+    assert len(results) == 2
+    assert all(set(r.keys()) == {"id", "name"} for r in results)
+    names = {r["name"] for r in results}
+    assert names == {"alice", "charlie"}
+
+
+def test_filter_expression_repr():
+    """Test FilterOp repr with expression."""
+    from zephyr import col
+    from zephyr.dataset import FilterOp
+
+    expr = col("score") > 50
+    op = FilterOp(predicate=expr.evaluate, expr=expr)
+    assert "FilterOp(expr=" in repr(op)
+    assert "col('score')" in repr(op)
+
+
+def test_mixed_filter_expression_and_lambda(backend):
+    """Test combining expression filter with lambda filter."""
+    from zephyr import col
+
+    ds = (
+        Dataset.from_list(
+            [
+                {"a": 1, "b": "x"},
+                {"a": 2, "b": "y"},
+                {"a": 3, "b": "x"},
+                {"a": 4, "b": "y"},
+            ]
+        )
+        .filter(col("a") > 1)
+        .filter(lambda r: r["b"] == "x")
+    )
+
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0] == {"a": 3, "b": "x"}
+
+
+# =============================================================================
+# InputFileSpec and Chunking Tests
+# =============================================================================
+
+
+def test_input_file_spec_row_range_basic(tmp_path):
+    """Test InputFileSpec reads only the specified row range."""
+    from zephyr.readers import InputFileSpec, load_parquet
+
+    data = [{"id": i, "value": i * 10} for i in range(100)]
+    input_path = tmp_path / "data.parquet"
+    write_parquet_file(data, str(input_path))
+
+    spec = InputFileSpec(
+        path=str(input_path),
+        format="parquet",
+        row_start=10,
+        row_end=20,
+    )
+
+    records = list(load_parquet(spec))
+
+    assert len(records) == 10
+    assert records[0]["id"] == 10
+    assert records[-1]["id"] == 19
+
+
+def test_input_file_spec_with_columns_and_row_range(tmp_path):
+    """Test InputFileSpec with both columns and row_range."""
+    from zephyr.readers import InputFileSpec, load_parquet
+
+    data = [{"id": i, "name": f"item_{i}", "value": i * 10} for i in range(50)]
+    input_path = tmp_path / "data.parquet"
+    write_parquet_file(data, str(input_path))
+
+    spec = InputFileSpec(
+        path=str(input_path),
+        format="parquet",
+        columns=["id", "value"],
+        row_start=5,
+        row_end=10,
+    )
+
+    records = list(load_parquet(spec))
+
+    assert len(records) == 5
+    assert set(records[0].keys()) == {"id", "value"}
+    assert records[0]["id"] == 5
+    assert records[-1]["id"] == 9
+
+
+def test_fork_chunks_inserted_with_intra_shard_parallelism(tmp_path):
+    """Test that ForkChunks is inserted when intra_shard_parallelism is enabled."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from zephyr.plan import ExecutionHint, ForkChunks, Map, compute_plan
+
+    # Create a parquet file
+    data = [{"id": i, "value": i * 2} for i in range(100)]
+    input_path = tmp_path / "data.parquet"
+    table = pa.Table.from_pylist(data)
+    pq.write_table(table, str(input_path))
+
+    # Create pipeline: load_parquet -> map -> write
+    output_path = tmp_path / "output.parquet"
+    ds = (
+        Dataset.from_files(str(input_path))
+        .load_parquet()
+        .map(lambda x: {"id": x["id"], "doubled": x["value"]})
+        .write_parquet(str(output_path))
+    )
+
+    # Test with intra_shard_parallelism enabled
+    hints = ExecutionHint(intra_shard_parallelism=4)
+    plan = compute_plan(ds, hints)
+
+    # Should have one stage
+    assert len(plan.stages) == 1
+    stage = plan.stages[0]
+
+    # Check that ForkChunks is the first op
+    assert len(stage.operations) > 0
+    assert isinstance(stage.operations[0], ForkChunks)
+    assert stage.operations[0].target_chunks == 4
+
+    # Check that ForkChunks contains the user ops (map)
+    fork_chunks = stage.operations[0]
+    assert len(fork_chunks.parallel_ops) == 1
+    assert isinstance(fork_chunks.parallel_ops[0], Map)
+
+
+def test_fork_chunks_not_inserted_when_disabled(tmp_path):
+    """Test that ForkChunks is NOT inserted when intra_shard_parallelism is 0."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from zephyr.plan import ExecutionHint, ForkChunks, compute_plan
+
+    # Create a parquet file
+    data = [{"id": i, "value": i * 2} for i in range(100)]
+    input_path = tmp_path / "data.parquet"
+    table = pa.Table.from_pylist(data)
+    pq.write_table(table, str(input_path))
+
+    # Create pipeline: load_parquet -> map -> write
+    output_path = tmp_path / "output.parquet"
+    ds = (
+        Dataset.from_files(str(input_path))
+        .load_parquet()
+        .map(lambda x: {"id": x["id"], "doubled": x["value"]})
+        .write_parquet(str(output_path))
+    )
+
+    # Test with intra_shard_parallelism disabled
+    hints = ExecutionHint(intra_shard_parallelism=0)
+    plan = compute_plan(ds, hints)
+
+    # Should have one stage
+    assert len(plan.stages) == 1
+    stage = plan.stages[0]
+
+    # Check that ForkChunks is NOT present
+    fork_chunks_found = any(isinstance(op, ForkChunks) for op in stage.operations)
+    assert not fork_chunks_found
+
+
+def test_fork_chunks_not_inserted_with_map_shard(tmp_path):
+    """Test that ForkChunks is NOT inserted when MapShardOp requires full shard context."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from zephyr.plan import ExecutionHint, ForkChunks, compute_plan
+
+    # Create a parquet file
+    data = [{"id": i, "value": i * 2} for i in range(100)]
+    input_path = tmp_path / "data.parquet"
+    table = pa.Table.from_pylist(data)
+    pq.write_table(table, str(input_path))
+
+    # Create pipeline with map_shard (requires full shard context)
+    output_path = tmp_path / "output.parquet"
+    ds = (
+        Dataset.from_files(str(input_path))
+        .load_parquet()
+        .map_shard(lambda items: list(items)[:10])
+        .write_parquet(str(output_path))
+    )
+
+    # Test with intra_shard_parallelism enabled
+    hints = ExecutionHint(intra_shard_parallelism=4)
+    plan = compute_plan(ds, hints)
+
+    # Should have one stage
+    assert len(plan.stages) == 1
+    stage = plan.stages[0]
+
+    # Check that ForkChunks is NOT present (because map_shard requires full shard)
+    fork_chunks_found = any(isinstance(op, ForkChunks) for op in stage.operations)
+    assert not fork_chunks_found

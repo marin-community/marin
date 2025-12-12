@@ -49,13 +49,17 @@ This function takes a dataset and a tokenizer and returns an `ExecutorStep` that
 The tokenized dataset is a directory containing one file per shard of the dataset.
 
 ```python
-from experiments.llama import llama3_tokenizer
+from levanter.data.text import TextLmDatasetFormat
+from marin.execution.executor import versioned
 from experiments.defaults import default_tokenize
+from experiments.marin_models import marin_tokenizer
 
 tinystories_tokenized = default_tokenize(
     name=tinystories_hf_id,  # path to write tokenized files (tokenized/ will be prepended)
     dataset=tinystories_hf_id,  # HF dataset id
-    tokenizer=llama3_tokenizer,
+    tokenizer=marin_tokenizer,
+    format=TextLmDatasetFormat(),
+    sample_count=versioned(1000),  # keep tutorial fast by tokenizing 1k samples per shard
 )
 ```
 
@@ -74,16 +78,16 @@ For this tutorial, we will use the `SimpleTrainConfig` class from `experiments.s
 This class defines basic training configuration that is sufficient for most experiments.
 
 !!! info "Training Configuration for Different Accelerators"
-    You need to provide the appropriate resource configuration based on your hardware setup. Marin supports different accelerator types through various [resource configurations](../references/resource-config.md). The `CpuOnlyConfig` is one such resource configuration that requests a certain number of CPUs. Other resource configurations include `GpuConfig` for requesting GPUs and `TpuPodConfig` for requesting TPUs.
+    You need to provide the appropriate resource configuration based on your hardware setup. Marin supports different accelerator types through [`ResourceConfig`](../references/resource-config.md) factory methods.
 
     === "CPU"
         ```python
-        from marin.resources import CpuOnlyConfig
+        from fray.cluster import ResourceConfig
         from experiments.simple_train_config import SimpleTrainConfig
 
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
-            resources=CpuOnlyConfig(num_cpus=1),
+            resources=ResourceConfig.with_cpu(),
             train_batch_size=4,
             num_train_steps=100,
             # set hyperparameters
@@ -96,30 +100,28 @@ This class defines basic training configuration that is sufficient for most expe
 
     === "GPU"
         ```python
-        from marin.resources import GpuConfig
+        from fray.cluster import ResourceConfig
         from experiments.simple_train_config import SimpleTrainConfig
 
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
-            resources=GpuConfig(gpu_count=1),
-            train_batch_size=4,
+            resources=ResourceConfig.with_gpu(count=1),
+            train_batch_size=32,
             num_train_steps=100,
             # set hyperparameters
             learning_rate=6e-4,
             weight_decay=0.1,
-            # keep eval quick for tutorial
-            max_eval_batches=4,
         )
         ```
 
     === "TPU"
         ```python
-        from marin.resources import TpuPodConfig
+        from fray.cluster import ResourceConfig
         from experiments.simple_train_config import SimpleTrainConfig
 
         nano_train_config = SimpleTrainConfig(
             # Here we define the hardware resources we need.
-            resources=TpuPodConfig(tpu_type="v4-8"),
+            resources=ResourceConfig.with_tpu("v4-8"),
             train_batch_size=4,
             num_train_steps=100,
             # set hyperparameters
@@ -143,9 +145,9 @@ from experiments.llama import llama_nano
 from experiments.defaults import default_train
 
 nano_tinystories_model = default_train(
-    name="marin-tutorial-nano-tinystories",
+    name="marin-nano-tinystories",
     tokenized=tinystories_tokenized,
-    model_config=llama_nano,
+    model_config=versioned(llama_nano),
     train_config=nano_train_config,
     tags=["llama", "nano", "tinystories", "tutorial"],
     eval_harness_tasks=[],
@@ -191,12 +193,12 @@ To run the experiment locally, we can run the script directly:
 
 === "CPU"
     ```bash
-    python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
+    uv run python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
     ```
 
 === "GPU"
     ```bash
-    python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
+    uv run python experiments/tutorials/train_tiny_model_gpu.py --prefix local_store
     ```
 
 The `--prefix` argument specifies the output directory for the experiment. It can be a local directory or anything [fsspec](https://filesystem-spec.readthedocs.io/en/latest/) supports,
@@ -210,13 +212,10 @@ At the end, you should see a message like this:
 ```
 2025-05-07 23:00:24,099	INFO executor.py:1036 -- Executor run took 263.37s
 2025-05-07 23:00:24,099	INFO executor.py:1037 -- Experiment info written to local_store/experiments/train_tiny_model_cpu-0b39f4.json
-2025-05-07 23:00:24,099	INFO executor.py:1038 -- View the experiment at https://localhost:5000/experiment?path=gs%3A%2F%2Fmarin-us-central2%2Fexperiments%2Ftrain_tiny_model_cpu-0b39f4.json
+2025-05-07 23:00:24,099	INFO executor.py:1038 -- View the experiment at https://localhost:3000/experiment?path=gs%3A%2F%2Fmarin-us-central2%2Fexperiments%2Ftrain_tiny_model_cpu-0b39f4.json
 ```
 
-The JSON file contains a record of the experiment, including the steps and dependencies.
-(Note that this link won't work unless you [start the data browser](data-browser.md).)
 
-If you were to rerun this experiment, the executor would detect that the training step has already been run and skip it.
 
 ### Inspecting the Output
 
@@ -238,6 +237,28 @@ roneneldan
 The `experiments` directory contains the experiment JSON file (which tracks all the steps and their dependencies).
 The `checkpoints` directory contains the trained model.
 The `tokenized` directory contains the tokenized dataset.
+
+### Inspecting the Experiment in the Data Browser
+
+The JSON file contains a record of the experiment, including the steps and dependencies.
+(Note that this link won't work unless you [start the data browser](data-browser.md), and you'll need to replace `3000` with whatever port your config uses.)
+
+You can do that by running:
+
+```bash
+cd data_browser
+npm install
+uv run python run-dev.py --config conf/local.conf
+```
+
+which should start a browser pointed at [http://localhost:3000](http://localhost:3000).
+
+From there, you can click on the first link to select the prefix directory, then navigate to the experiment JSON file (experiments -> `train_tiny_model_cpu-xxxxxx.json`).
+Then click on "Go to experiment" to see the details of your experiment.
+
+You can see the steps that were run, their dependencies, and their outputs.
+
+If you were to rerun this experiment, the executor would detect that the training step has already been run and skip it.
 
 ## Next Steps
 

@@ -17,16 +17,25 @@ import gzip
 import json
 import logging
 import os
+import random
 import re
+import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import fields, is_dataclass
 from datetime import datetime
+from typing import Any, TypeVar
 
 import braceexpand
+import datasets
 import fsspec
 import pandas as pd
+import requests
+import transformers
+from huggingface_hub.utils import HfHubHTTPError
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 
 def fsspec_exists(file_path):
@@ -199,6 +208,118 @@ def fsspec_cp(source_path: str, target_path: str) -> None:
     fs.put(source_path, target_path)
 
 
+_HF_RETRY_KEYWORDS = (
+    "too many requests",
+    "rate limit",
+    "timed out",
+    "timeout",
+    "connection reset",
+    "temporarily unavailable",
+)
+
+
+def _hf_should_retry(exc: Exception) -> bool:
+    if isinstance(exc, HfHubHTTPError):
+        status = getattr(exc, "status_code", None)
+        response = getattr(exc, "response", None)
+        if response is not None and hasattr(response, "status_code"):
+            status = response.status_code
+        if status is None:
+            return True
+        return status == 429 or status >= 500
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        return status == 429 or (status is not None and status >= 500)
+    if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return True
+    message = str(exc).lower()
+    return any(keyword in message for keyword in _HF_RETRY_KEYWORDS)
+
+
+def _hf_sleep_with_jitter(delay: float, max_delay: float) -> tuple[float, float]:
+    jitter = random.uniform(0.5, 1.5)
+    sleep_seconds = min(delay * jitter, max_delay)
+    time.sleep(sleep_seconds)
+    next_delay = min(delay * 2, max_delay)
+    return sleep_seconds, next_delay
+
+
+def call_with_hf_backoff(
+    fn: Callable[[], T],
+    *,
+    context: str,
+    max_attempts: int = 6,
+    initial_delay: float = 2.0,
+    max_delay: float = 60.0,
+    logger: logging.Logger | None = None,
+) -> T:
+    """Call ``fn`` with exponential backoff tuned for HF rate limits."""
+
+    log_obj = logger or logging.getLogger(__name__)
+    delay = initial_delay
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:  # pragma: no cover - network failure
+            retryable = _hf_should_retry(exc)
+            if not retryable or attempt == max_attempts:
+                raise
+
+            sleep_seconds, delay = _hf_sleep_with_jitter(delay, max_delay)
+            log_obj.warning(
+                "HF request failed for %s (attempt %s/%s): %s. Retrying in %.1fs",
+                context,
+                attempt,
+                max_attempts,
+                exc,
+                sleep_seconds,
+            )
+
+    raise RuntimeError(f"Exceeded max attempts ({max_attempts}) for HF request: {context}")
+
+
+def load_dataset_with_backoff(
+    *,
+    context: str,
+    max_attempts: int = 6,
+    initial_delay: float = 2.0,
+    max_delay: float = 120.0,
+    logger: logging.Logger | None = None,
+    **dataset_kwargs: Any,
+):
+    return call_with_hf_backoff(
+        lambda: datasets.load_dataset(**dataset_kwargs),
+        context=context,
+        max_attempts=max_attempts,
+        initial_delay=initial_delay,
+        max_delay=max_delay,
+        logger=logger,
+    )
+
+
+def load_tokenizer_with_backoff(
+    tokenizer_name: str,
+    *,
+    tokenizer_kwargs: dict[str, Any] | None = None,
+    context: str | None = None,
+    max_attempts: int = 6,
+    initial_delay: float = 2.0,
+    max_delay: float = 60.0,
+    logger: logging.Logger | None = None,
+):
+    kwargs = tokenizer_kwargs or {}
+    load_context = context or f"tokenizer={tokenizer_name}"
+    return call_with_hf_backoff(
+        lambda: transformers.AutoTokenizer.from_pretrained(tokenizer_name, **kwargs),
+        context=load_context,
+        max_attempts=max_attempts,
+        initial_delay=initial_delay,
+        max_delay=max_delay,
+        logger=logger,
+    )
+
+
 def fsspec_size(file_path: str) -> int:
     """Get file size (in bytes) of a file on an `fsspec` filesystem."""
     fs = fsspec.core.url_to_fs(file_path)[0]
@@ -275,6 +396,7 @@ def rebase_file_path(base_in_path, file_path, base_out_path, new_extension=None,
     rel_path = os.path.relpath(file_path, base_in_path)
 
     # Construct the output file path
+    # TODO: if old_extension is not None, but new_extension is None, raise an error or warning?
     if new_extension:
         if old_extension:
             rel_path = rel_path[: rel_path.rfind(old_extension)] + new_extension

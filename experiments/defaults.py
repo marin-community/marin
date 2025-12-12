@@ -36,7 +36,6 @@ from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig
 from levanter.optim import AdamConfig
 from levanter.schedule import BatchSchedule
-from levanter.store.cache import CacheOptions
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils import fsspec_utils
@@ -57,6 +56,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import (
     ExecutorStep,
     InputName,
+    VersionedValue,
     ensure_versioned,
     get_executor_step,
     this_output_path,
@@ -123,9 +123,9 @@ def default_tokenize(
     name: str,
     dataset: InputName | ExecutorStep | str | HfDatasetSpec,
     tokenizer: str,
-    options: CacheOptions | None = None,
     format: LmDatasetFormatBase = TextLmDatasetFormat(),  # noqa
     *,
+    sample_count: int | VersionedValue[int] | None = None,
     is_validation: bool = False,
 ) -> ExecutorStep:
     """
@@ -139,11 +139,11 @@ def default_tokenize(
             dataset with a particular subset name.
         tokenizer: string HuggingFace tokenizer name. Should be the same as you intend to use in the tokenizer
             spec for the training run.
-        options: CacheOptions to use for tokenization. You typically don't need to set this.
         format: The format of the dataset. This is used to determine how to tokenize the data.
 
             See [Levanter's documentation](https://levanter.readthedocs.io/en/latest/reference/Data-Formats/)
             for more details.
+        sample_count: Optional limit on the number of samples to tokenize per shard. If ``None``, tokenize everything.
         is_validation: Whether the dataset is a validation set. Doesn't do anything for HF datasets.
     Returns:
         An ExecutorStep that represents the tokenized dataset.
@@ -157,6 +157,7 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
+            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
     elif isinstance(dataset, str) and dataset.count("/") == 1 and not fsspec_utils.exists(dataset):
         config = HfTokenizeConfig(
@@ -164,6 +165,7 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
+            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
     else:
         config = TokenizeConfig(
@@ -172,10 +174,8 @@ def default_tokenize(
             cache_path=this_output_path(),
             tokenizer=ensure_versioned(tokenizer),
             format=format,
+            sample_count=ensure_versioned(sample_count) if sample_count is not None else None,
         )
-
-    if options is not None:
-        config = dataclasses.replace(config, cache_options=options)
 
     return ExecutorStep(
         name=os.path.join("tokenized", name),
@@ -223,11 +223,14 @@ def simulated_epoching_train(
     """
     pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
-    # Extract sequence length from model configuration
-    seq_len = model_config.Pos.size
+    # Use explicit training length rather than inferring from the model
+    actual_model_config = unwrap_versioned_value(model_config)
+    train_length = train_config.train_seq_len or actual_model_config.max_seq_len
+    if train_length > actual_model_config.max_seq_len:
+        raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual_model_config.max_seq_len}.")
 
     # Calculate the experiment token budget
-    experiment_budget = train_config.train_batch_size * train_config.num_train_steps * seq_len
+    experiment_budget = train_config.train_batch_size * train_config.num_train_steps * train_length
 
     simulated_pretraining_data = dataclasses.replace(
         pretraining_data, target_budget=target_budget, experiment_budget=experiment_budget
@@ -321,6 +324,11 @@ def default_train(
         raise ValueError("Cannot specify both initialize_from_checkpoint_path and initialize_from_hf")
 
     # Create the inner config
+    actual_model_config = unwrap_versioned_value(model_config)
+    train_length = train_config.train_seq_len or actual_model_config.max_seq_len
+    if train_length > actual_model_config.max_seq_len:
+        raise ValueError(f"train_length {train_length} exceeds model max_seq_len {actual_model_config.max_seq_len}.")
+
     inner_config = TrainLmConfig(
         data=pretraining_data,
         trainer=TrainerConfig(
@@ -359,6 +367,7 @@ def default_train(
         ),
         initialize_from_hf=hf_checkpoint_path_to_load_from or False,
         z_loss_weight=train_config.z_loss_weight,
+        train_seq_len=train_length,
         model=model_config,
         optimizer=(
             train_config.optimizer_config
@@ -403,14 +412,16 @@ def default_train(
         output_path=this_output_path(),
     )
 
+    model_config = unwrap_versioned_value(model_config)
+
     return ExecutorStep(
         name=os.path.join("checkpoints", name),
         description=(
             f"Train a {compute_num_parameters(model_config, vocab_size):,} parameter model for "
             f"{train_config.num_train_steps} (steps) * "
             f"{train_config.train_batch_size} (batch_size) * "
-            f"{model_config.seq_len} (seq_len) "
-            f"= {total_examples * model_config.seq_len:,} tokens."
+            f"{train_length} (train_seq_len) "
+            f"= {total_examples * train_length} tokens."
         ),
         fn=run_levanter_train_lm,
         config=config,

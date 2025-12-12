@@ -13,12 +13,22 @@
 # limitations under the License.
 
 
-import pytest
+import time
 
-from experiments.evals.task_configs import EvalTaskConfig
+import pytest
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.run import evaluate
+
+from experiments.evals.task_configs import EvalTaskConfig
+
+
+@pytest.fixture
+def current_date_time():
+    # Get the current local time and format as MM-DD-YYYY-HH-MM-SS
+    formatted_time = time.strftime("%m-%d-%Y-%H-%M-%S", time.localtime())
+
+    return formatted_time
 
 
 @pytest.fixture
@@ -34,7 +44,7 @@ def model_config():
 
 
 @pytest.mark.tpu_ci
-def test_lm_eval_harness_levanter(current_date_time, ray_tpu_cluster, model_config):
+def test_lm_eval_harness_levanter(current_date_time, model_config):
     mmlu_config = EvalTaskConfig("mmlu", 0, task_alias="mmlu_0shot")
     config = EvaluationConfig(
         evaluator="levanter_lm_evaluation_harness",
@@ -50,7 +60,7 @@ def test_lm_eval_harness_levanter(current_date_time, ray_tpu_cluster, model_conf
 
 
 @pytest.mark.tpu_ci
-def test_lm_eval_harness(current_date_time, ray_tpu_cluster, model_config):
+def test_lm_eval_harness(current_date_time, model_config):
     gsm8k_config = EvalTaskConfig(name="gsm8k_cot", num_fewshot=8)
     config = EvaluationConfig(
         evaluator="lm_evaluation_harness",
@@ -66,7 +76,7 @@ def test_lm_eval_harness(current_date_time, ray_tpu_cluster, model_config):
 
 
 @pytest.mark.tpu_ci
-def test_alpaca_eval(current_date_time, ray_tpu_cluster, model_config):
+def test_alpaca_eval(current_date_time, model_config):
     config = EvaluationConfig(
         evaluator="alpaca",
         model_name=model_config.name,

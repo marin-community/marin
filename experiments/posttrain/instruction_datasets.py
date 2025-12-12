@@ -129,6 +129,7 @@ class InstructionDatasetConfig:
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
         name: Optional friendly name for the dataset; defaults to `hf_dataset_id`.
+        max_parallelism: Max number of parallel data processing tasks. Reduce if needed to avoid HF rate limits.
     """
 
     hf_dataset_id: str
@@ -138,6 +139,7 @@ class InstructionDatasetConfig:
     name: str | None = None
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
+    max_parallelism: int | None = 32  # 32 works for free users; set to None to use default behavior (full parallelism)
 
 
 def multi_turn_adapter(
@@ -234,17 +236,24 @@ def instruct_msg_response_adapter(
     )
 
 
-def reasoning_to_chat_kwargs(row: dict[str, Any]) -> dict[str, Any]:
-    value = row.get("reasoning")
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"on", "true", "1"}:
-            return {"chat_template_kwargs": {"enable_thinking": True}}
-        if lowered in {"off", "false", "0"}:
-            return {"chat_template_kwargs": {"enable_thinking": False}}
-    if isinstance(value, bool):
-        return {"chat_template_kwargs": {"enable_thinking": value}}
-    return {}
+@dataclass
+class ReasoningToChatKwargs:
+    """Callable metadata helper to toggle thinking mode based on the "reasoning" column."""
+
+    def __call__(self, row: dict[str, Any]) -> dict[str, Any]:
+        value = row.get("reasoning")
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"on", "true", "1"}:
+                return {"chat_template_kwargs": {"enable_thinking": True}}
+            if lowered in {"off", "false", "0"}:
+                return {"chat_template_kwargs": {"enable_thinking": False}}
+        if isinstance(value, bool):
+            return {"chat_template_kwargs": {"enable_thinking": value}}
+        return {}
+
+
+reasoning_to_chat_kwargs = ReasoningToChatKwargs()
 
 
 INSTRUCTION_DATASET_NAME_TO_CONFIG = {
@@ -527,6 +536,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
             adapter=versioned(adapter),
             subsets=versioned(dataset_cfg.subsets),
             splits=versioned(dataset_cfg.splits),
+            max_parallelism=dataset_cfg.max_parallelism,
         ),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
     )
@@ -534,12 +544,14 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
     return transform_step
 
 
-def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> ExecutorStep:
+def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> ExecutorStep:
     # Check that config exists
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
 
     # Create a new configuration instance with the desired split.
     original_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[hf_dataset_id]
+    if splits is None:
+        splits = original_config.splits
     config = InstructionDatasetConfig(
         **{k: v for k, v in original_config.__dict__.items() if k != "splits"}, splits=splits
     )

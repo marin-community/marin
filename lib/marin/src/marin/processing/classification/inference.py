@@ -195,11 +195,6 @@ def process_file_ray(
     )
 
 
-# NOTE(chris): Ideally this function is run on the head node, but
-# due to some issues with stalling in the unit tests, we can't allow
-# this yet.
-# @ray.remote(num_cpus=0, resources={"head_node": 0.001})
-@ray.remote
 def run_inference(inference_config: InferenceConfig):
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
@@ -242,7 +237,7 @@ def run_inference(inference_config: InferenceConfig):
 
     for input_filepath in filepaths:
         # Throttle submissions
-        while len(pending_refs) >= max_in_flight:
+        while max_in_flight is not None and len(pending_refs) >= max_in_flight:
             ready_refs, _ = ray.wait(list(pending_refs.keys()), num_returns=1)
             ready_ref = ready_refs[0]
             file_for_ref = pending_refs.pop(ready_ref)

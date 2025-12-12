@@ -37,6 +37,7 @@ class EvalLmConfig:
     hf_checkpoint: Optional[RepoRef] = None
     trainer: TrainerConfig = field(default_factory=TrainerConfig)
     data: SingleDatasetLMConfigBase | LMMixtureDatasetConfig = field(default_factory=SingleDatasetLMConfigBase)
+    max_eval_length: int = 2048
     model: LmConfig = field(default_factory=LlamaConfig)
 
     eval_on_train: bool = False
@@ -45,13 +46,15 @@ class EvalLmConfig:
     log_top2_gap: bool = False
     log_param_stats: bool = False
 
+    local_model_dir: str = "/opt/gcsfuse_mount/models"
+
 
 def main(config: EvalLmConfig):
     levanter.initialize(config)
     tokenizer = config.data.the_tokenizer
 
     Batch = config.trainer.EvalBatch
-    Pos = config.model.Pos
+    Pos = config.model.max_Pos.resize(config.max_eval_length)
 
     if config.eval_on_train:
         datasets_dict = config.data.train_sets(Pos, key=jax.random.PRNGKey(0))

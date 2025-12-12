@@ -20,10 +20,13 @@ from typing import Literal
 
 import numpy
 import transformers
+
 from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
+from marin.execution import unwrap_versioned_value
 
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
+from marin.utils import load_tokenizer_with_backoff
 
 PermutationType = Literal["linear", "feistel"]
 """Permutation type for shuffle. feistel is much better but we historically used linear."""
@@ -116,6 +119,7 @@ def lm_mixture_data_config(
     include_raw_paths: bool = True,
     max_train_batches: dict[str, int] | None = None,
     num_validation_sequences: dict[str, int] | None = None,
+    mixture_block_size: int | None = None,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources.
@@ -141,6 +145,10 @@ def lm_mixture_data_config(
 
     tokenizer = _verify_tokenizers_same(components)
 
+    kwargs = {}
+    if mixture_block_size is not None:
+        kwargs["mixture_block_size"] = mixture_block_size
+
     return LMMixtureDatasetConfig(
         configs=configs,
         train_weights=weights,
@@ -150,6 +158,7 @@ def lm_mixture_data_config(
         permutation_type=permutation_type,
         max_train_batches=max_train_batches,
         num_validation_sequences=num_validation_sequences,
+        **kwargs,
     )
 
 
@@ -391,11 +400,21 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LMMixtureDatasetC
 @lru_cache(maxsize=32)
 def _load_tokenizer(tokenizer_name: str) -> transformers.PreTrainedTokenizer:
     """Load and cache a tokenizer by name"""
-    return transformers.AutoTokenizer.from_pretrained(tokenizer_name)
+    return load_tokenizer_with_backoff(tokenizer_name)
 
 
 def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     """Compare two tokenizers by loading them and comparing their vocabularies and token IDs"""
+    tokenizer1 = unwrap_versioned_value(tokenizer1)
+    tokenizer2 = unwrap_versioned_value(tokenizer2)
+
+    from experiments.llama import llama3_tokenizer
+    from experiments.marin_models import marin_tokenizer
+
+    # special case, i'm sorry
+    if tokenizer1 in {llama3_tokenizer, marin_tokenizer} and tokenizer2 in {llama3_tokenizer, marin_tokenizer}:
+        return True
+
     t1 = _load_tokenizer(tokenizer1)
     t2 = _load_tokenizer(tokenizer2)
 

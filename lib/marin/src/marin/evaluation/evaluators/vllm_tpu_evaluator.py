@@ -17,14 +17,12 @@ import subprocess
 import time
 from abc import ABC
 
-import ray
 import requests
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 
-from experiments.evals.resource_configs import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
-from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
@@ -118,39 +116,45 @@ class VllmTpuEvaluator(Evaluator, ABC):
         # Delete the checkpoint
         model.destroy()
 
-    def get_runtime_env(self) -> dict:
-        """
-        Returns the runtime environment to run the evaluator on the Ray cluster.
-        """
-        return build_runtime_env_for_packages(extra=["eval", "tpu"])
-
     def launch_evaluate_with_ray(
         self,
         model: ModelConfig,
         evals: list[EvalTaskConfig],
         output_path: str,
+        resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
-        resource_config: ResourceConfig | None = None,
+        wandb_tags: list[str] | None = None,
     ) -> None:
         """
-        Launches the evaluation run with Ray.
+        Launches the evaluation run with Fray.
         """
 
-        @ray.remote(
-            scheduling_strategy=self._get_scheduling_strategy(resource_config),
-            runtime_env=self.get_runtime_env(),
-            max_calls=1,
-        )
-        @remove_tpu_lockfile_on_exit
         def launch(
             model: ModelConfig,
             evals: list[EvalTaskConfig],
             output_path: str,
             max_eval_instances: int | None = None,
+            wandb_tags: list[str] | None = None,
         ) -> None:
             import logging
 
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            self.evaluate(model, evals, output_path, max_eval_instances)
+            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
 
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances))
+        def _run():
+            with remove_tpu_lockfile_on_exit():
+                launch(model, evals, output_path, max_eval_instances, wandb_tags)
+
+        if resource_config is None:
+            resource_config = ResourceConfig()
+
+        job_request = JobRequest(
+            name="vllm-tpu-evaluation",
+            entrypoint=Entrypoint.from_callable(_run),
+            resources=resource_config,
+            environment=EnvironmentConfig.create(extras=["eval", "tpu"]),
+        )
+
+        cluster = current_cluster()
+        job_id = cluster.launch(job_request)
+        cluster.wait(job_id, raise_on_failure=True)

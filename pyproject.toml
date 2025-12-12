@@ -13,6 +13,8 @@ dependencies = [
     "levanter",
     "zephyr",
     "haliax",
+    "fray",
+    "dupekit"
 ]
 
 [tool.uv]
@@ -28,19 +30,17 @@ members = [
     "lib/levanter",
     "lib/zephyr",
     "lib/haliax",
+    "lib/fray",
+    "lib/dupekit"
 ]
 
-[tool.uv.sources.haliax]
-workspace = true
-
-[tool.uv.sources.levanter]
-workspace = true
-
-[tool.uv.sources.marin]
-workspace = true
-
-[tool.uv.sources.zephyr]
-workspace = true
+[tool.uv.sources]
+fray.workspace = true
+haliax.workspace = true
+levanter.workspace = true
+marin.workspace = true
+zephyr.workspace = true
+dupekit.workspace = true
 
 [tool.black]
 line-length = 121
@@ -80,6 +80,18 @@ exclude = ["marin/", "scripts/"]
 [tool.pyrefly]
 project-includes = ["lib/marin/src/**/*.py", "lib/levanter/src/**/*.py"]
 
+# Explicitly tell Pyrefly where our editable packages live so it resolves imports
+# against the library sources instead of the top-level `src` directory, which only
+# contains a handful of legacy modules.
+search-path = [
+    "lib/marin/src",
+    "lib/levanter/src",
+    "lib/haliax/src",
+    "lib/zephyr/src",
+    "lib/fray/src",
+]
+disable-search-path-heuristics = true
+
 # Prevent pyrefly from querying the Python interpreter for site-packages
 # which would auto-detect workspace members as site packages and exclude them
 skip-interpreter-query = true
@@ -92,6 +104,7 @@ project-excludes = [
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
     "lib/**/post_training/**",  # No longer used
+    "lib/marin/src/marin/processing/classification/deduplication/vendor", # Exclude vendor stuff in dedupe
 ]
 
 # Disable specific error codes that are primarily noise from missing type stubs
@@ -168,5 +181,5 @@ markers = [
 ]
 testpaths = ["tests", "experiments"]
 
-# Make sure we timeout before CI kills us, and don't run TPU tests by default
-addopts = "--session-timeout=500 --dist=worksteal -m 'not tpu_ci'"
+# Make sure we timeout before CI kills us, and don't run TPU or slow tests by default
+addopts = "--session-timeout=500 -m 'not tpu_ci and not slow'"

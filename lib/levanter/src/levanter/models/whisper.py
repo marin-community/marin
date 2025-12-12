@@ -75,11 +75,22 @@ class WhisperConfig(HFCompatConfig, ASRConfig):
 
     # Axis
     MelPos = property(lambda self: Axis(name="position", size=self.max_source_positions * 2))
-    Pos = property(lambda self: Axis(name="position", size=self.max_length))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
+
+    @property
+    def max_Pos(self) -> Axis:
+        return Axis(name="position", size=self.max_length)
+
+    @property
+    def KeyPos(self) -> Axis:
+        return self.max_Pos.alias("key_position")
+
     SourcePos = property(lambda self: Axis(name="position", size=self.max_source_positions))
     Vocab = property(lambda self: Axis(name="vocab_size", size=self.vocab_size))
-    Embed = property(lambda self: Axis(name="embed_dim", size=self.d_model))
+
+    @property
+    def Embed(self) -> Axis:
+        return Axis(name="embed_dim", size=self.d_model)
+
     EncoderMlp = property(lambda self: Axis(name="mlp_dim", size=self.encoder_ffn_dim))
     EncoderHeads = property(lambda self: Axis(name="heads", size=self.encoder_attention_heads))
     EncoderHeadSize = property(lambda self: Axis(name="head_size", size=self.d_model // self.encoder_attention_heads))
@@ -365,7 +376,7 @@ class WhisperDecoderEmbeddings(eqx.Module):
         )
 
         # Whisper Initializes the Positional Embeddings as Empty
-        position_embeddings = hnn.Embedding.init(config.Pos, config.Embed, key=k_wpe, initializer_range=0)
+        position_embeddings = hnn.Embedding.init(config.max_Pos, config.Embed, key=k_wpe, initializer_range=0)
 
         return WhisperDecoderEmbeddings(Vocab, config, token_embeddings, position_embeddings)
 
@@ -403,7 +414,7 @@ class WhisperDecoder(ModuleWithStateDictSerialization):
 
     @property
     def Pos(self) -> Axis:
-        return self.config.Pos
+        return self.config.max_Pos
 
     @classmethod
     def init(cls, config: WhisperConfig, *, key) -> "WhisperDecoder":
@@ -457,7 +468,7 @@ class WhisperModel(eqx.Module, ModelWithHfSerializationMixin[WhisperConfig]):
 
     @property
     def Pos(self) -> Axis:
-        return self.config.Pos
+        return self.config.max_Pos
 
     @property
     def Vocab(self) -> Axis:
