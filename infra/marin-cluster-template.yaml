@@ -35,11 +35,14 @@ docker:
       - "/tmp:/tmp"
       # this lets the worker run docker commands and have them run as sibling containers
       - -v "/var/run/docker.sock:/var/run/docker.sock"
+      - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
+      - -e RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
     head_run_options:
       - --privileged
       - -v "/tmp:/tmp"
       - --ulimit nofile=1048576:1048576
       - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
+      - -e RAY_ENABLE_UV_RUN_RUNTIME_ENV=0
 
 
 initialization_commands:

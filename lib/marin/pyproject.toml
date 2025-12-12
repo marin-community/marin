@@ -33,7 +33,7 @@ dependencies = [
     "openai",
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow>=22",
-    "ray==2.45",
+    "ray==2.49",
     "regex",
     "requests",
     "s3fs>=2024",
