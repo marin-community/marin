@@ -21,11 +21,27 @@ import numpy as np
 import pandas as pd
 from rich.console import Console
 from rich.table import Table
-from scipy.interpolate import RegularGridInterpolator
+from scipy.interpolate import griddata
 import wandb
 
-RUN_PREFIX = "plantcad_isoflop_03"
-RESULT_PATH = "experiments/plantcad/results/v2"
+RUN_PREFIX = "plantcad_isoflop_v1.0"
+RESULT_PATH = "experiments/plantcad/results/v3"
+EXPORT_DPI = 300
+
+
+def save_figure(fig, output_path: str) -> None:
+    """Save figure as both PNG and PDF at EXPORT_DPI resolution."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Save PNG
+    fig.savefig(output_path, dpi=EXPORT_DPI, bbox_inches="tight")
+    print(f"Saved plot to {output_path}")
+
+    # Save PDF
+    pdf_path = output_path.with_suffix(".pdf")
+    fig.savefig(pdf_path, dpi=EXPORT_DPI, bbox_inches="tight")
+    print(f"Saved plot to {pdf_path}")
 
 
 def log_run_object(run, run_idx):
@@ -97,7 +113,7 @@ def fetch_plantcad_runs(show_wandb_runs: bool = False):
             "stop_time": stop_time,
             "duration_sec": duration,
             # Metrics
-            "eval_loss": run.summary.get("eval/plantcad_cropped/loss"),
+            "eval_loss": run.summary.get("eval/plantcad2/loss"),
             "train_loss": run.summary.get("train/loss"),
             "total_gflops": run.summary.get("throughput/total_gflops"),
             "total_tokens": run.summary.get("throughput/total_tokens"),
@@ -181,6 +197,10 @@ def visualize_loss_by_token_count(df, metric="eval_loss", output_path=f"{RESULT_
     required_cols = [metric, "tokens", "architecture", "flops_budget", "epochs"]
     df_clean = df[df["state"] == "finished"].dropna(subset=required_cols)
 
+    if df_clean.empty:
+        print(f"Warning: No finished runs with required columns {required_cols}. Skipping visualization.")
+        return
+
     architectures = sorted(df_clean["architecture"].unique())
     budgets = sorted(df_clean["flops_budget"].unique())
     unique_epochs = sorted(df_clean["epochs"].unique())
@@ -232,14 +252,17 @@ def visualize_loss_by_token_count(df, metric="eval_loss", output_path=f"{RESULT_
     fig.legend(handles, [f"{b:.1e}" for b in budgets], title="Budget", loc="center left", bbox_to_anchor=(1, 0.5))
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    print(f"Saved plot to {output_path}")
+    save_figure(fig, output_path)
 
 
 def visualize_loss_by_param_count(df, metric="eval_loss", output_path=f"{RESULT_PATH}/plantcad_loss_by_params.png"):
     """Plot loss vs params, colored by budget, faceted by architecture (cols) and epochs (rows)."""
     required_cols = [metric, "params", "architecture", "flops_budget", "epochs"]
     df_clean = df[df["state"] == "finished"].dropna(subset=required_cols)
+
+    if df_clean.empty:
+        print(f"Warning: No finished runs with required columns {required_cols}. Skipping visualization.")
+        return
 
     architectures = sorted(df_clean["architecture"].unique())
     budgets = sorted(df_clean["flops_budget"].unique())
@@ -292,8 +315,7 @@ def visualize_loss_by_param_count(df, metric="eval_loss", output_path=f"{RESULT_
     fig.legend(handles, [f"{b:.1e}" for b in budgets], title="Budget", loc="center left", bbox_to_anchor=(1, 0.5))
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    print(f"Saved plot to {output_path}")
+    save_figure(fig, output_path)
 
 
 def format_large_num(n):
@@ -506,8 +528,7 @@ def visualize_loss_by_epochs_matplotlib(
     fig.legend(handles, labels, title="Model Size", loc="center left", bbox_to_anchor=(1, 0.5))
 
     plt.tight_layout()
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    print(f"Saved plot to {output_path}")
+    save_figure(fig, output_path)
 
 
 def visualize_loss_by_param_and_epoch_count(
@@ -545,15 +566,15 @@ def visualize_loss_by_param_and_epoch_count(
         ax = axes[idx]
         df_budget = df_clean[df_clean["flops_budget"] == budget]
 
-        # Pivot to 2D grid and interpolate to finer grid in log space
-        pivot = df_budget.pivot_table(index="params", columns="epochs", values="log_loss")
-        x_orig, y_orig = pivot.columns.values, pivot.index.values
+        # Interpolate scattered points to a finer grid in log space
+        x_data = np.log(df_budget["epochs"].values)
+        y_data = np.log(df_budget["params"].values)
+        z_data = df_budget["log_loss"].values
 
-        interp = RegularGridInterpolator((np.log(y_orig), np.log(x_orig)), pivot.values, method="cubic")
-        xi = np.geomspace(x_orig.min(), x_orig.max(), 200)
-        yi = np.geomspace(y_orig.min(), y_orig.max(), 200)
+        xi = np.geomspace(df_budget["epochs"].min(), df_budget["epochs"].max(), 200)
+        yi = np.geomspace(df_budget["params"].min(), df_budget["params"].max(), 200)
         xi_grid, yi_grid = np.meshgrid(xi, yi)
-        zi = interp((np.log(yi_grid), np.log(xi_grid)))
+        zi = griddata((x_data, y_data), z_data, (np.log(xi_grid), np.log(yi_grid)), method="cubic")
 
         contour = ax.contourf(xi_grid, yi_grid, zi, levels=levels, cmap="viridis", antialiased=True, extend="both")
 
@@ -579,8 +600,7 @@ def visualize_loss_by_param_and_epoch_count(
     cbar = fig.colorbar(contour, cax=cbar_ax, label="log₂(Loss)")
     cbar.ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.3f}"))
 
-    plt.savefig(output_path, dpi=150, bbox_inches="tight")
-    print(f"Saved plot to {output_path}")
+    save_figure(fig, output_path)
 
 
 if __name__ == "__main__":
