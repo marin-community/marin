@@ -1,17 +1,25 @@
-# GruGPT: Explicit-Sharding LM Trainer
+# Grug: Explicit-Sharding LM Trainer
 
 ## Background
 
 Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [NanoGPT](https://github.com/karpathy/nanoGPT), we want a “grug-simple” causal LM trainer that showcases JAX’s explicit sharding mode while relying only on primitive building blocks: `jax`, `einops`, and JAX dataclasses (via `jax.tree_util.register_dataclass`). Training utilities stay minimal—optax for optimization, Levanter’s data loading/trackers for ingestion + logging, HuggingFace tokenizers (or Levanter’s serializer) for text, and TensorStore serialization for checkpoints. We explicitly do **not** want Haliax abstractions or class-heavy APIs—every computation lives in straightforward top-level functions so the trainer reads like a notebook.
 
-## Goals & Constraints
 
-- **Explicit sharding everywhere.** Arrays carry `PartitionSpec`s in their types using `jax.set_mesh`, `AxisType.Explicit`, and `einshard` helpers. Any op with ambiguous shardings must either supply `out_sharding=` or run inside `auto_axes`.
+## Grug Principles
+
+### Software Principles
+
 - **Few methods, keep arrays out of them inside jit.** We still prefer top-level functions, but lightweight dataclass helpers/property accessors—and any method that only touches metadata, not arrays—are fine even inside jit-traced regions. Once a method would manipulate `jax.Array`s, implement it as a standalone function instead.
-- **Keep dependencies tiny.** Only `einshard`, `einops`, `optax`, JAX core libs, HF tokenizers, and Levanter’s `data` + `tracker` + TensorStore serialization APIs are allowed. No haliax, equinox, flax, orbax, etc.
-- **Mesh-first mental model.** We always create one mesh axis per logical unit: `['replica', 'data', 'tensor']`. Work must still run on a single GPU (mesh axes collapse to size 1) but should seamlessly extend to 4-device TPU v4-8 pods for CI. Mesh creation and validation live in one place.
+- **Keep dependencies small.** Only `einshard`, `einops`, `optax`, JAX core libs, HF tokenizers, and Levanter’s `data` + `tracker` + TensorStore serialization APIs are allowed. Grug doesn't want to reinvent wheels, but we also don't want heavy frameworks obscuring the core logic.
 - **Serializable state.** Trainer state must round-trip through `levanter.tensorstore_serialization.tree_{de,}serialize_leaves_tensorstore` with no custom logic.
 - **Consumption-ready.** Provide a `uv run python -m marin.grugpt.train` entrypoint plus tests. Tracking hooks log loss/perplexity through Levanter’s tracker interface.
+
+### JAX/ML Principles
+
+- **Mesh-first mental model.** We always create one mesh axis per logical unit. For now, `['replica', 'data', 'tensor']`. Work must still run on a single GPU (mesh axes collapse to size 1) but should seamlessly extend to 4-device TPU v4-8 pods for CI. Mesh creation and validation live in one place.
+- **Use good kernels when available.** Grug is happy to call out to other people's fast attention kernels (Splash, Tokamax, etc.) as long as the surface stays simple and the fallback reference path remains.
+- **Explicit sharding everywhere.** Arrays carry `PartitionSpec`s in their types using `jax.set_mesh`, `AxisType.Explicit`, and `einshard` helpers. Any op with ambiguous shardings must either supply `out_sharding=` or run inside `auto_axes`.
+
 
 ## Proposed Directory Layout
 
@@ -47,15 +55,15 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 
 ```python
 @dataclass
-class GruGPTAttentionParams:
+class GrugAttentionParams:
     w_q: jax.Array  # [hidden, num_heads * head_dim]
     w_k: jax.Array  # [hidden, num_kv_heads * head_dim]
     w_v: jax.Array
     w_o: jax.Array  # [num_heads * head_dim, hidden]
 
 @dataclass
-class GruGPTBlockParams:
-    attn: GruGPTAttentionParams
+class GrugBlockParams:
+    attn: GrugAttentionParams
     rms_attn: jax.Array  # RMSNorm weights (bias optional)
     rms_mlp: jax.Array
     mlp_gate: jax.Array  # [hidden, intermediate]
@@ -63,10 +71,10 @@ class GruGPTBlockParams:
     mlp_down: jax.Array  # [intermediate, hidden]
 
 @dataclass
-class GruGPTModelParameters:
+class GrugModelParameters:
     token_embed: jax.Array  # [vocab, hidden]
     output_proj: jax.Array  # shared with token_embed if tie_embeddings
-    blocks: tuple[GruGPTBlockParams, ...]
+    blocks: tuple[GrugBlockParams, ...]
     final_norm: jax.Array
 
 def rms_norm(x, weight, eps):
@@ -181,7 +189,7 @@ To plug a “grug-defined” model into Levanter’s trainer (`lib/levanter/src/
 
 1. **Model interface parity.** Implement a wrapper that presents `forward(batch, *, train)` and exposes parameter/state PyTrees the way Levanter expects (see `lib/levanter/src/levanter/models/lm_model.py`). Our current dataclasses are close; we’d just need adapters for attention masks, loss computation, and optional KV cache state.
 2. **Loss adapter.** The trainer takes arbitrary batches and a loss function. We’d supply a simple callable that takes the trainer’s batch (whatever structure we choose) plus model params/rng and returns `(loss, metrics)`. No need to emit `LmExample`s if we keep the batch format consistent.
-3. **Config plumbing.** Expose the grug model config via Levanter’s config system (Draccus). That means a small adapter class registered under `LmConfig` that instantiates `GruGPTModelParameters` and returns the forward/loss function pointers. See `lib/levanter/src/levanter/models/llama.py` for reference.
+3. **Config plumbing.** Expose the grug model config via Levanter’s config system (Draccus). That means a small adapter class registered under `LmConfig` that instantiates `GrugModelParameters` and returns the forward/loss function pointers. See `lib/levanter/src/levanter/models/llama.py` for reference.
 4. **Optimizer/state hooks.** Levanter’s trainer manages optimizer state, gradient accumulation, and checkpointing. Our `TrainingState` would need to slot into that (likely by reusing Levanter’s `OptimizerState` structures) so serialization and resume work seamlessly.
 5. **Sharding compatibility.** Ensure our explicit `PartitionSpec`s line up with Levanter’s mesh/resource mapping. Either reuse Levanter’s mapping utilities or provide a translation layer so both sides agree on axis names.
 
