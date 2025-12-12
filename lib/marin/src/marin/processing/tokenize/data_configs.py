@@ -20,7 +20,9 @@ from typing import Literal
 
 import numpy
 import transformers
+
 from levanter.data.text import LMDatasetSourceConfig, LMMixtureDatasetConfig
+from marin.execution import unwrap_versioned_value
 
 from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize.tokenize import TokenizeConfig
@@ -403,6 +405,16 @@ def _load_tokenizer(tokenizer_name: str) -> transformers.PreTrainedTokenizer:
 
 def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:
     """Compare two tokenizers by loading them and comparing their vocabularies and token IDs"""
+    tokenizer1 = unwrap_versioned_value(tokenizer1)
+    tokenizer2 = unwrap_versioned_value(tokenizer2)
+
+    from experiments.llama import llama3_tokenizer
+    from experiments.marin_models import marin_tokenizer
+
+    # special case, i'm sorry
+    if tokenizer1 in {llama3_tokenizer, marin_tokenizer} and tokenizer2 in {llama3_tokenizer, marin_tokenizer}:
+        return True
+
     t1 = _load_tokenizer(tokenizer1)
     t2 = _load_tokenizer(tokenizer2)
 
