@@ -17,7 +17,9 @@ from levanter.data.text import (
     BatchTokenizer,
     ChatLmDatasetFormat,
     ChatDataset,
-    UrlSingleDatasetLMConfig,
+    DatasetComponent,
+    LmDataConfig,
+    UrlDatasetSourceConfig,
     build_lm_dataset_cache,
     preprocessor_for_format,
 )
@@ -28,17 +30,19 @@ from tests.test_utils import skip_if_hf_model_not_accessible
 
 def test_dont_blow_up_without_validation_set():
     with tempfile.TemporaryDirectory() as tmpdir:
-        config = UrlSingleDatasetLMConfig(
-            train_urls=["kaa"],
-            validation_urls=[],
+        component = DatasetComponent(
+            source=UrlDatasetSourceConfig(train_urls=["kaa"], validation_urls=[]),
             cache_dir=tmpdir,
+        )
+        config = LmDataConfig(
+            components={"tiny": component},
             tokenizer="passthrough",
             vocab_size=64,
         )
 
         Pos = hax.Axis("position", 10)
         # mostly just making sure this doesn't blow up
-        assert config.validation_set(Pos) is None
+        assert config.validation_sets(Pos) == {}
 
 
 def test_lm_example_handles_ignore_id():
@@ -197,14 +201,17 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
             "stanford-crfm/marin-tokenizer", revision="49a09e626c220e9daae74124ea41be1bf5cd331d"
         )
 
-        config = UrlSingleDatasetLMConfig(
-            train_urls=[dummy_chat_data], format=ChatLmDatasetFormat(messages_field="messages")
+        component = DatasetComponent(
+            source=UrlDatasetSourceConfig(train_urls=[dummy_chat_data]),
+            format=ChatLmDatasetFormat(messages_field="messages"),
+            cache_dir=cache_dir,
         )
+        config = LmDataConfig(components={"chat": component}, tokenizer="stanford-crfm/marin-tokenizer")
 
-        processor = preprocessor_for_format(config.format, tokenizer)
+        processor = preprocessor_for_format(component.format, tokenizer)
 
         # test the processor
-        source = config.get_shard_source("train")
+        source = component.source.get_shard_source("train")  # type: ignore
         processed = []
         for doc in source.open_shard(source.shard_names[0]):
             processed += processor([doc])
@@ -212,7 +219,7 @@ def test_chat_dataset_build_and_pack(dummy_chat_data):
         assert len(processed) == 2
 
         # test the caching
-        ds = build_lm_dataset_cache(cache_dir, source, config.format, tokenizer)
+        ds = build_lm_dataset_cache(cache_dir, source, component.format, tokenizer)
         ds_sync = ds.as_sync_dataset()
         assert len(ds_sync) == 2
         sample = next(iter(ds))

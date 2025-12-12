@@ -6,17 +6,16 @@ from .cache import build_lm_dataset_cache, cached_token_count, load_lm_dataset_c
 from .datasets import (
     CausalLmDataset,
     ChatDataset,
+    DatasetComponent,
     HfDatasetSourceConfig,
     LMTaskConfig,
     LMMixtureDatasetConfig,
+    LmDataConfig,
     LmDatasetSourceConfigBase,
     LMDatasetSourceConfig,
-    SingleDatasetLMConfig,
-    SingleDatasetLMConfigBase,
     TokenSeqDataset,
     UrlDatasetSourceConfig,
-    UrlSingleDatasetLMConfig,
-    dataset_for_format,
+    dataset_for_component,
     count_corpus_sizes,
 )
 from .formats import (
@@ -28,7 +27,6 @@ from .formats import (
     TextLmDatasetFormat,
     preprocessor_for_format,
 )
-from .datasets import HfSingleDatasetLMConfig
 
 __all__ = [
     "BatchTokenizer",
@@ -41,19 +39,17 @@ __all__ = [
     "TokenSeqDataset",
     "CausalLmDataset",
     "ChatDataset",
+    "DatasetComponent",
     "build_lm_dataset_cache",
     "load_lm_dataset_cache",
     "cached_token_count",
-    "dataset_for_format",
+    "dataset_for_component",
     "LMTaskConfig",
     "LmDatasetSourceConfigBase",
     "UrlDatasetSourceConfig",
     "HfDatasetSourceConfig",
     "LMDatasetSourceConfig",
-    "SingleDatasetLMConfigBase",
-    "UrlSingleDatasetLMConfig",
-    "HfSingleDatasetLMConfig",
-    "SingleDatasetLMConfig",
+    "LmDataConfig",
     "LMMixtureDatasetConfig",
     "count_corpus_sizes",
 ]

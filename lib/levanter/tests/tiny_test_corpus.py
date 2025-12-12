@@ -7,7 +7,7 @@ import os
 import numpy as np
 
 from levanter.data.audio import AudioIODatasetConfig
-from levanter.data.text.datasets import UrlSingleDatasetLMConfig
+from levanter.data.text import DatasetComponent, LmDataConfig, UrlDatasetSourceConfig
 from levanter.store.cache import TreeCache
 
 
@@ -27,11 +27,14 @@ def _write_tiny_corpus(path):
 
 def tiny_corpus_config(path):
     _write_tiny_corpus(path)
-    return UrlSingleDatasetLMConfig(
-        train_urls=[f"file://{path}/train/docs.jsonl"],
-        validation_urls=[f"file://{path}/validation/docs.jsonl"],
+    component = DatasetComponent(
+        source=UrlDatasetSourceConfig(
+            train_urls=[f"file://{path}/train/docs.jsonl"],
+            validation_urls=[f"file://{path}/validation/docs.jsonl"],
+        ),
         cache_dir=f"{path}/cache",
     )
+    return LmDataConfig(components={"tiny": component})
 
 
 def tiny_asr_corpus_config(path):
@@ -46,13 +49,12 @@ def tiny_asr_corpus_config(path):
 
 def construct_small_data_cache(
     path, num_shards=8, chunk_size=512, doc_len=128, vocab_size=1024
-) -> tuple[UrlSingleDatasetLMConfig, dict[str, TreeCache]]:
+) -> tuple[LmDataConfig, dict[str, TreeCache]]:
     from levanter.store.cache import SerialCacheWriter
 
     rng = np.random.default_rng(0)
 
     caches: dict[str, TreeCache] = {}
-
     exemplar = {"input_ids": np.zeros((doc_len,), dtype=np.int32)}
 
     for split in ["train", "validation"]:
@@ -66,12 +68,7 @@ def construct_small_data_cache(
                 )
         caches[split] = writer.result()
 
-    config = UrlSingleDatasetLMConfig(
-        train_urls=[],
-        validation_urls=[],
-        cache_dir=f"{path}/cache",
-        vocab_size=vocab_size,
-        tokenizer="gpt2",
-    )
+    component = DatasetComponent(source=None, cache_dir=f"{path}/cache")
+    config = LmDataConfig(components={"tiny": component}, vocab_size=vocab_size, tokenizer="gpt2")
 
     return config, caches
