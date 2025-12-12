@@ -388,8 +388,8 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    llama_8b = ExperimentConfig(
-        model_config=llama_3_1_8b,
+    qwen_8b = ExperimentConfig(
+        model_config=qwen3_8b,
         rl_loss=RLOOLoss(
             kl_coef=0.0,
             clip_epsilon_low=0.2,
@@ -410,7 +410,7 @@ def main():
         max_rollout_step_delay=1,
     )
 
-    experiment_configs = [llama_8b]
+    experiment_configs = [qwen_8b]
     experiments = []
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     for experiment_config in experiment_configs:

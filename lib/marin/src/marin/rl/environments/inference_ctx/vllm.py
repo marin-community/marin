@@ -32,11 +32,12 @@ from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
+from marin.rl.environments.inference_ctx.render import Llama3Renderer, Qwen3Renderer, Renderer, Message
 
 logger = logging.getLogger(__name__)
 
 try:
-    from vllm import LLM, SamplingParams
+    from vllm import LLM, SamplingParams, TokensPrompt
     from vllm.outputs import RequestOutput
     from vllm.sampling_params import RequestOutputKind
 except ImportError:
@@ -44,6 +45,7 @@ except ImportError:
     LLM = None
     SamplingParams = None
     RequestOutput = None
+    TokensPrompt = None
 
 # Disable multiprocessing to have direct access to the model weights
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
@@ -92,21 +94,36 @@ class vLLMInferenceContext(BaseInferenceContext):
         self.model_name = inference_config.model_name
         self.sampling_params = inference_config.sampling_params
 
-        # Override chat template to remove hardcoded "Cutting Knowledge Date" system prompt
-        # This custom template preserves Llama's format but doesn't inject default system content
-        # ruff: noqa: E501
-        self.tokenizer.chat_template = """{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|start_header_id|>system<|end_header_id|>
-
-' + message['content'] + '<|eot_id|>' }}{% elif message['role'] == 'user' %}{{ '<|start_header_id|>user<|end_header_id|>
-
-' + message['content'] + '<|eot_id|>' }}{% elif message['role'] == 'assistant' %}{{ '<|start_header_id|>assistant<|end_header_id|>
-
-' + message['content'] + '<|eot_id|>' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<|start_header_id|>assistant<|end_header_id|>
-
-' }}{% endif %}"""  # fmt: skip
+        # Initialize the appropriate renderer based on model type
+        self.renderer = self._get_renderer(inference_config.model_name, self.tokenizer)
 
         if inference_config.mode == InferenceMode.ASYNC:
             self.sampling_params.output_kind = RequestOutputKind.FINAL_ONLY
+
+    @staticmethod
+    def _get_renderer(model_name: str, tokenizer) -> Renderer:
+        """Get the appropriate renderer based on model name."""
+        model_name_lower = model_name.lower()
+        if "qwen" in model_name_lower:
+            return Qwen3Renderer(tokenizer)
+        elif "llama" in model_name_lower:
+            return Llama3Renderer(tokenizer)
+        else:
+            raise ValueError(f"Unsupported model type for {model_name}. Only Qwen3 and Llama3.1 models are supported.")
+
+    def _render_messages_to_tokens(self, messages: list[Message]) -> list[int]:
+        """Render a list of messages to token IDs using the appropriate renderer.
+
+        Uses the renderer's build_generation_prompt method to generate the complete
+        prompt with proper formatting, BOS tokens, and assistant header.
+
+        Args:
+            messages: List of message dictionaries with 'role' and 'content' keys
+
+        Returns:
+            List of token IDs ready to be passed to vLLM
+        """
+        return self.renderer.build_generation_prompt(messages)
 
     @staticmethod
     def _get_llm_engine(inference_config: vLLMInferenceContextConfig):
@@ -307,46 +324,35 @@ class vLLMInferenceContext(BaseInferenceContext):
             output_kind=self.sampling_params.output_kind,
         )
 
-        bos_token = self.tokenizer.decode([self.tokenizer.bos_token_id])
-
-        # Check if prompts are already message lists or plain strings
+        # Convert prompts to message lists if they aren't already
+        message_lists: list[list[Message]] = []
         if prompts and isinstance(prompts[0], list):
             # Prompts are already message lists with few-shot examples
-            # Our custom chat template doesn't inject default system content
-            prompts_with_templates = [
-                self.tokenizer.apply_chat_template(
-                    messages,
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
-                for messages in prompts
-            ]
+            message_lists = prompts  # type: ignore
         elif system_prompt:
             # Plain string prompts with system prompt
-            prompts_with_templates = [
-                self.tokenizer.apply_chat_template(
-                    [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
-                for prompt in prompts
+            assert all(isinstance(p, str) for p in prompts), "prompts must be strings when system_prompt is provided"
+            message_lists = [
+                [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}] for prompt in prompts  # type: ignore
             ]
         else:
             # Plain string prompts without system prompt
-            prompts_with_templates = [
-                self.tokenizer.apply_chat_template(
-                    [{"role": "user", "content": prompt}],
-                    tokenize=False,
-                    add_generation_prompt=True,
-                )
-                for prompt in prompts
-            ]
+            assert all(isinstance(p, str) for p in prompts), "prompts must be strings when no system_prompt is provided"
+            message_lists = [[{"role": "user", "content": prompt}] for prompt in prompts]  # type: ignore
 
-        # .generate prepends a BOS token, so we just remove it here
-        # see: https://github.com/huggingface/trl/issues/3853
-        prompts_with_templates = [prompt.removeprefix(bos_token) for prompt in prompts_with_templates]
+        # Render messages to token IDs using the appropriate renderer
+        prompt_token_ids = []
+        for messages in message_lists:
+            tokens = self._render_messages_to_tokens(messages)
+            prompt_token_ids.append(tokens)
 
-        outputs = self.llm.generate(prompts_with_templates, sampling_params)
+        # Pass token IDs directly to vLLM
+        # See: https://docs.vllm.ai/en/v0.4.3/dev/offline_inference/llm_inputs.html
+        # vLLM accepts a list of TokensPrompt objects, which can be created by passing dicts with prompt_token_ids
+        if TokensPrompt is None:
+            raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
+        prompts_for_vllm = [TokensPrompt(prompt_token_ids=tokens) for tokens in prompt_token_ids]
+        outputs = self.llm.generate(prompts_for_vllm, sampling_params)
 
         # Convert vLLM outputs to OpenAI ChatCompletion format
         return [self._convert_vllm_to_openai(output) for output in outputs]
