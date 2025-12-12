@@ -656,6 +656,9 @@ class Executor:
         self.step_runners: dict[ExecutorStep, StepRunner] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
+        # Populated during dry runs to summarize which steps would be executed.
+        # Tuple is (step_name, action, reason, output_path)
+        self._dry_run_plan: list[tuple[str, str, str, str]] = []
 
     def run(
         self,
@@ -670,7 +673,8 @@ class Executor:
 
         Args:
             steps: The steps to run.
-            dry_run: If True, only print out what needs to be done.
+            dry_run: If True, only print out what needs to be done. Reads existing
+                statuses to report which steps would actually be executed.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
         """
@@ -698,7 +702,12 @@ class Executor:
         self.write_infos()
 
         logger.info(f"### Launching {len(steps_to_run)} steps ###")
+        if dry_run:
+            self._dry_run_plan = []
         self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
+
+        if dry_run:
+            self._log_dry_run_summary()
 
         logger.info("### Waiting for all steps to finish ###")
         for runner in self.step_runners.values():
@@ -769,6 +778,14 @@ class Executor:
             logger.info("  %s = %s", dependency_index_str(i), self.output_paths[dep])
 
         if dry_run:
+            action, reason = self._plan_dry_run(step, force_run_failed=force_run_failed)
+            self._record_dry_run(step, action, reason, output_path)
+            if action == "run":
+                logger.info("[DRY RUN] Would run %s -> %s: %s", step.name, output_path, reason)
+            elif action == "wait":
+                logger.info("[DRY RUN] %s currently running elsewhere: %s", step.name, reason)
+            else:
+                logger.info("[DRY RUN] Skip %s: %s", step.name, reason)
             return None
 
         step_name = f"{step.name}: {get_fn_name(step.fn)}"
@@ -800,6 +817,58 @@ class Executor:
         runner = StepRunner(self.cluster, status_file)
         runner.launch(fray_job)
         return runner
+
+    def _plan_dry_run(self, step: ExecutorStep, *, force_run_failed: bool) -> tuple[str, str]:
+        """Return a dry-run action and reason without acquiring locks or writing."""
+        status_file = StatusFile(self.output_paths[step], worker_id="dry-run")
+        status = status_file.status
+
+        if status == STATUS_SUCCESS:
+            return ("skip", "already succeeded")
+
+        if status in [STATUS_FAILED, STATUS_DEP_FAILED]:
+            if force_run_failed:
+                return ("run", f"previous status {status}; would rerun because force_run_failed=True")
+            raise PreviousTaskFailedError(
+                f"Step {step.name} failed previously with status {status}. "
+                "Rerun with force_run_failed=True to execute again."
+            )
+
+        if status == STATUS_RUNNING:
+            if status_file.has_active_lock():
+                return ("wait", "currently running with an active lock")
+            return ("run", "RUNNING with no active lock; would take over execution")
+
+        return ("run", "no status recorded")
+
+    def _record_dry_run(self, step: ExecutorStep, action: str, reason: str, output_path: str) -> None:
+        """Track dry-run decisions for summary output."""
+        self._dry_run_plan.append((step.name, action, reason, output_path))
+
+    def _log_dry_run_summary(self) -> None:
+        """Log a concise summary of dry-run decisions."""
+        if not self._dry_run_plan:
+            logger.info("### Dry run summary: no steps inspected ###")
+            return
+
+        to_run = [(name, path) for name, action, _, path in self._dry_run_plan if action == "run"]
+        waiting = [name for name, action, _, _ in self._dry_run_plan if action == "wait"]
+        skipped = [name for name, action, _, _ in self._dry_run_plan if action == "skip"]
+
+        logger.info("### Dry run summary ###")
+        if skipped:
+            formatted = "\n".join(f"- {name}" for name in skipped)
+            logger.info("Already succeeded:\n%s", formatted)
+
+        if to_run:
+            formatted = "\n".join(f"- {name} -> {path}" for name, path in to_run)
+            logger.info("Would run %d step(s):\n%s", len(to_run), formatted)
+        else:
+            logger.info("No steps need to be launched.")
+
+        if waiting:
+            formatted = "\n".join(f"- {name}" for name in waiting)
+            logger.info("Currently running (not relaunched):\n%s", formatted)
 
     def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
         """

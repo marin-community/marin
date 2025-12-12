@@ -529,6 +529,14 @@ class LMTaskConfig(abc.ABC):
     cache_dir: Optional[str] = "cache/"
     cache_options: CacheOptions = field(default_factory=CacheOptions)
     enforce_eos: bool = True  # whether to append eos even if the tokenizer doesn't
+    auto_build_caches: bool = True
+    """Whether to build dataset caches automatically when they are missing.
+
+    If False, any attempt to access a cache that does not already exist will raise
+    a FileNotFoundError instead of building the cache on the fly. This is useful
+    when running in environments where cache construction is undesirable (e.g.,
+    to avoid expensive preprocessing during training jobs).
+    """
 
     chat_template: str | None = None  # If set, use this template for chat datasets. Otherwise, use the tokenizer's.
 
@@ -700,6 +708,7 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
     """This class supports loading data both from HF Datasets and from a raw dataset of jsonl urls"""
 
     cache_dir: Optional[str] = "cache/"
+    auto_build_caches: bool = True
 
     def train_set(
         self,
@@ -786,17 +795,25 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
         format = self.format
         enforce_eos = self.enforce_eos
         options = self.cache_options
+        auto_build = self.auto_build_caches
 
         if cache_dir is None:
             raise ValueError("cache_dir cannot be None")
 
         cache_dir = os.path.join(cache_dir, split)
 
-        if fsspec_utils.exists(cache_dir):
+        cache_exists = fsspec_utils.exists(cache_dir)
+
+        if cache_exists:
             try:
                 return load_lm_dataset_cache(cache_dir, format, tokenizer, enforce_eos)
             except FileNotFoundError:
-                pass
+                if not auto_build:
+                    raise
+                # fall through to rebuild if allowed
+
+        if not auto_build:
+            raise FileNotFoundError(f"Cache not found at {cache_dir} and auto_build_caches is disabled")
 
         if source is None:
             logger.warning(f"Skipping {split} because no source was provided")
@@ -828,6 +845,7 @@ class LMMixtureDatasetConfig(LMTaskConfig):
     """
 
     cache_dir: Optional[str] = "cache/"
+    auto_build_caches: bool = True
 
     configs: Dict[str, LMDatasetSourceConfig] = field(default_factory=dict)
     """ Configuration of each dataset source (urls, hf dataset id, etc.) """
@@ -1050,29 +1068,42 @@ class LMMixtureDatasetConfig(LMTaskConfig):
             else:
                 cache_dir = source_config.cache_dir
 
-            source = source_config.get_shard_source(split)
+            cache_path = os.path.join(cache_dir, split)
 
-            # drop the data source and corresponding weight if the cache is not built
-            if source is None:
-                try:
-                    caches[name] = load_lm_dataset_cache(
-                        os.path.join(cache_dir, split),
-                        source_config.format,
-                        self.the_tokenizer,
-                        self.enforce_eos,
-                    )
-                except FileNotFoundError:
-                    logger.warning(f"No source for {name} in {split} split and no cache either, skipping")
-                    continue
-            else:
-                caches[name] = build_lm_dataset_cache(
-                    os.path.join(cache_dir, split),
-                    source,
+            # easy path: cache already exists
+            try:
+                caches[name] = load_lm_dataset_cache(
+                    cache_path,
                     source_config.format,
                     self.the_tokenizer,
-                    self.cache_options,
                     self.enforce_eos,
                 )
+                continue
+            except FileNotFoundError:
+                # Will build below
+                pass
+
+            # now see if we can/need to build the cache
+            try:
+                source = source_config.get_shard_source(split)
+                if source is None:
+                    logger.warning(f"No source for {name} in {split} split, skipping")
+                    continue
+
+                elif not self.auto_build_caches:
+                    raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
+                else:
+                    caches[name] = build_lm_dataset_cache(
+                        cache_path,
+                        source,
+                        source_config.format,
+                        self.the_tokenizer,
+                        self.cache_options,
+                        self.enforce_eos,
+                    )
+            except Exception as e:
+                logger.exception(f"Error building/loading cache for dataset {name} {split} {cache_path}: {e}")
+                raise
 
         return caches
 
