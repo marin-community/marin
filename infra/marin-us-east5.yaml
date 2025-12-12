@@ -34,7 +34,7 @@ docker:
       - --privileged
       - --ulimit memlock=-1:-1  #
       - --ulimit nofile=1048576:1048576
-      - --shm-size=200gb
+      - --shm-size=100gb
       - -v
       - "/tmp:/tmp"
       # this lets the worker run docker commands and have them run as sibling containers
