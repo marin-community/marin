@@ -88,7 +88,7 @@ from marin.execution.executor import executor_main
 GIRAFFE_4K_START = STARLING_END
 GIRAFFE_4K_STEPS = 6000  # 6000 * 4096 * 4096 ≈ 100B tokens
 
-GIRAFFE_4K_END = GIRAFFE_4K_START + GIRAFFE_4K_STEPS + 3  # get around some dumb fencepost issues
+GIRAFFE_4K_END = GIRAFFE_4K_START + GIRAFFE_4K_STEPS
 
 GIRAFFE_16K_STEPS = 3000  # 3000 * 512 * 32768 ≈ 50B tokens
 GIRAFFE_32K_STEPS = 3000  # 3000 * 256 * 65536 ≈ 50B tokens
@@ -242,6 +242,7 @@ llama_8b_64k = dataclasses.replace(
     llama_8b_4k,
     max_seq_len=65_536,
     rope=Llama3RotaryEmbeddingsConfig(theta=5_000_000),
+    cross_entropy_block_size=16384,
 )
 
 
@@ -288,7 +289,7 @@ giraffe_4k_config = dataclasses.replace(
     cooldown_train_config,
     resources=ResourceConfig.with_tpu("v4-512", slice_count=1),
     train_seq_len=4096,
-    num_train_steps=GIRAFFE_4K_END,
+    num_train_steps=GIRAFFE_4K_END + 3,  # +3 to avoid fencepost issues
     initialize_from_checkpoint_path=starling_checkpoint,
     steps_per_export=1000,
     steps_per_hf_export=1000,
@@ -319,10 +320,10 @@ tootsie_8b_giraffe_phase1 = default_train(
 )
 
 # Phase 2: 32k with RoPE theta 1.5M for ~50B tokens
-PHASE2_STEPS = GIRAFFE_16K_STEPS  # 3000 * 512 * 32768 ≈ 50B tokens
+# 3000 * 512 * 32768 ≈ 50B tokens
 phase2_checkpoint = tootsie_8b_giraffe_phase1.cd(f"checkpoints/step-{GIRAFFE_4K_END}")
 phase2_train_config = _train_config(
-    num_steps=PHASE2_STEPS, batch_size=512, train_seq_len=32_768, initialize_from=phase2_checkpoint, seed=2
+    num_steps=GIRAFFE_16K_STEPS, batch_size=512, train_seq_len=32_768, initialize_from=phase2_checkpoint, seed=2
 )
 
 tootsie_8b_giraffe_phase2 = default_train(
@@ -332,16 +333,18 @@ tootsie_8b_giraffe_phase2 = default_train(
     train_config=phase2_train_config,
     tags=["llama", "8b", "giraffe", "phase2", "exp2062"],
     eval_harness_tasks=[],
-)
+    # hash changed somehow
+).with_output_path("checkpoints/tootsie-8b-giraffe-32k-293fef")
 
 # Phase 3: 64k with RoPE theta 5M for ~50B tokens
 PHASE3_STEPS = GIRAFFE_32K_STEPS  # 3000 * 256 * 65536 ≈ 50B tokens
-phase3_checkpoint = tootsie_8b_giraffe_phase2.cd(f"checkpoints/step-{PHASE2_STEPS}-")
+# - 1 because of fencepost issues
+phase2_final_checkpoint = tootsie_8b_giraffe_phase2.cd(f"checkpoints/step-{GIRAFFE_16K_STEPS - 1}")
 phase3_train_config = _train_config(
     num_steps=PHASE3_STEPS,
     batch_size=256,
     train_seq_len=65_536,
-    initialize_from=phase3_checkpoint,
+    initialize_from=phase2_final_checkpoint,
     seed=3,
 )
 
