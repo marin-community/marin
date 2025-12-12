@@ -1,6 +1,9 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Wrappers to wire up a grug model to the LmHeadModel API.
+# Protocols are not grug-brained, but Grug must accept them
+
 from typing import Any, Protocol
 
 import equinox as eqx
