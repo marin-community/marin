@@ -20,7 +20,7 @@ import pandas as pd
 from rich.console import Console
 from rich.table import Table
 
-RESULT_PATH = "experiments/plantcad/results/v2"
+RESULT_PATH = "experiments/plantcad/results/v3"
 
 console = Console(record=True)
 

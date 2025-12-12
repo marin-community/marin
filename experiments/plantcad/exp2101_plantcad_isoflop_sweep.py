@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Generate ISOFlop sweep steps for varying model sizes and architectures on a target plant DNA dataset."""
+"""Generate ISOFlop sweep steps for varying model sizes, architectures and epochs on a target plant DNA dataset."""
 
 import os
 import jax
@@ -36,7 +36,7 @@ from experiments.defaults import default_train, _prepare_data_config
 from experiments.evals.task_configs import EvalTaskConfig
 from experiments.llama import compute_num_parameters
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path
+from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from fray.cluster import ResourceConfig
 from zephyr import Dataset, create_backend
@@ -126,13 +126,14 @@ def format_num(n: int | float) -> str:
 @dataclass(frozen=True)
 class IsoFlopDataConfig:
     output_path: str
-    dataset_name: str = "plantcad/Angiosperm_65_genomes_8192bp"
+    dataset_name: str = versioned("plantcad/Angiosperm_65_genomes_8192bp")
+    dataset_revision: str | None = versioned("4a444fff5520b992aa978d92a5af509a81977098")
     # Original sequence length for the dataset
     input_seq_len: int = 8192
     # Target sequence length for the dataset after cropping
     output_seq_len: int = 4096
     # Token count in training split (prior to cropping)
-    total_token_count: int = 29_670_825_984
+    total_token_count: int = 21_615_869_952
     # Per-shard sample limit; e.g. for 60 shards in plantcad2 dataset,
     # multiple this value by 60 to get final sample limit
     sample_limit: int | None = None
@@ -142,7 +143,7 @@ class IsoFlopDataConfig:
 
 @dataclass(frozen=True)
 class IsoFlopTokenizeConfig(TokenizeConfig):
-    tokenizer: str = "kuleshov-group/PlantCAD2-Small-l24-d0768"
+    tokenizer: str = versioned("kuleshov-group/PlantCAD2-Small-l24-d0768")
     format: TextLmDatasetFormat = dataclasses.field(default_factory=lambda: TextLmDatasetFormat(text_key="seq"))
     vocab_size: int = 7
 
@@ -155,12 +156,12 @@ class IsoFlopSweepConfig:
     total_token_count: int
     output_seq_len: int
     input_seq_len: int
-    experiment_name: str = "plantcad_isoflop_03"
+    experiment_name: str = "plantcad_isoflop_v1.0"
 
     budgets: list[float] = dataclasses.field(
-        default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.8e17), 5)[4:5])
+        default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
     )
-    epochs: list[int] = dataclasses.field(default_factory=lambda: [1, 2, 4, 8, 16, 32][2:3])
+    epochs: list[int] = dataclasses.field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
 
     architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen"])
     steps_per_run: int = 8_192
@@ -585,21 +586,19 @@ def _verify_jax_cpu_only():
 
 def _prepare_dataset(config: IsoFlopDataConfig):
     # TODO: Where is the correct place to check this?
-    _verify_jax_cpu_only()
+    # _verify_jax_cpu_only()
 
     def crop(example):
         seq = example["seq"]
         return {"seq": seq[: config.output_seq_len]}
 
     # TODO: switch to flow_backend?
-    # Keep parallelism very modest for HF reads (else 429s everywhere)
-    backend = create_backend(
-        backend_type="ray", max_parallelism=8, max_retries=3, memory="8GB", num_cpus=1, chunk_size=1000
-    )
+    # Keep parallelism modest for HF reads (else 429s everywhere)
+    backend = create_backend(backend_type="ray", max_parallelism=8, max_retries=3, memory="8GB")
 
     for split_key, split_name in [("train", config.train_split), ("validation", config.validation_split)]:
         output_pattern = f"{config.output_path}/{split_key}/data-{{shard:05d}}.jsonl.gz"
-        data_source = WrappedHFDataSource(config.dataset_name, split=split_name)
+        data_source = WrappedHFDataSource(config.dataset_name, split=split_name, revision=config.dataset_revision)
 
         ds = (
             Dataset.from_list(data_source.shard_names)
@@ -620,7 +619,7 @@ def _prepare_dataset(config: IsoFlopDataConfig):
 
 def prepare_plantcad_dataset() -> ExecutorStep:
     return ExecutorStep(
-        name="prepared/plantcad_cropped",
+        name="prepared/plantcad2",
         fn=_prepare_dataset,
         config=IsoFlopDataConfig(output_path=this_output_path()),
     )
@@ -629,8 +628,9 @@ def prepare_plantcad_dataset() -> ExecutorStep:
 def tokenize_plantcad_dataset(
     prepared: ExecutorStep,
 ) -> ExecutorStep:
+    # TODO: how should I be configuring this for faster tokenization?  It's crazy slow..
     return ExecutorStep(
-        name="tokenized/plantcad_cropped",
+        name="tokenized/plantcad2",
         fn=tokenize,
         config=IsoFlopTokenizeConfig(
             train_paths=[prepared.cd("train")],
@@ -661,8 +661,20 @@ def main():
         input_seq_len=plantcad_prepared.config.input_seq_len,
     )
 
-    # Execute
-    executor_main(steps=[plantcad_prepared, plantcad_tokenized, *plantcad_sweep])
+    # Execute in batches of 32 sweep steps to avoid head node OOM errors.
+    # See: https://discord.com/channels/1354881461060243556/1442689455554171071/1447914001957785620
+    # TODO: Figure out how to run on compute nodes instead w/o reverting back to this PR:
+    #       https://discord.com/channels/1354881461060243556/1442689455554171071/1447920947402375291
+    base_steps = [plantcad_prepared, plantcad_tokenized]
+    batch_size = 32
+    batches = [plantcad_sweep[i : i + batch_size] for i in range(0, len(plantcad_sweep), batch_size)]
+    batch_index: int | None = int(os.environ["SWEEP_BATCH_INDEX"]) if "SWEEP_BATCH_INDEX" in os.environ else None
+    if batch_index is not None:
+        logger.info(f"SWEEP_BATCH_INDEX={batch_index}; running batch {batch_index + 1} of {len(batches)}")
+        batches = [batches[int(batch_index)]]
+    for i, batch in enumerate(batches):
+        logger.info(f"Running batch {i + 1}/{len(batches)} with {len(batch)} sweep steps")
+        executor_main(steps=[*base_steps, *batch])
 
 
 if __name__ == "__main__":
