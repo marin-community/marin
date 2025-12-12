@@ -39,7 +39,6 @@ import yaml
 
 from fray.cluster.ray.dashboard import DashboardConfig, ray_dashboard
 from marin.cluster import gcp
-from marin.cluster.cleanup import cleanup_iteration, submit_cleanup_cron_job
 from marin.cluster.config import (
     RayClusterConfig,
     find_config_by_region,
@@ -508,16 +507,6 @@ def start_cluster(ctx):
     print(f"Starting cluster {config_obj.cluster_name}...")
     subprocess.run(["ray", "up", "-y", config_path], check=True)
 
-    print("Starting automated cleanup cron...")
-    with ray_dashboard(DashboardConfig.from_cluster(config_path)):
-        job_id = submit_cleanup_cron_job(
-            project=config_obj.project_id,
-            cluster=config_obj.cluster_name,
-            zone=config_obj.zone,
-            interval=600,
-        )
-        print(f"Cleanup cron job started: {job_id}")
-
 
 @cli.command("stop-cluster")
 @click.pass_context
@@ -598,17 +587,6 @@ def restart_cluster(ctx, preserve_jobs):
         print("Restoring jobs...")
         with ray_dashboard(DashboardConfig.from_cluster(config_path)):
             _restore_jobs(str(backup_dir))
-
-    # Auto-start cleanup cron
-    print("Starting automated cleanup cron...")
-    with ray_dashboard(DashboardConfig.from_cluster(config_path)):
-        job_id = submit_cleanup_cron_job(
-            project=config_obj.project_id,
-            cluster=config_obj.cluster_name,
-            zone=config_obj.zone,
-            interval=600,
-        )
-        print(f"Cleanup cron job started: {job_id}")
 
     print("Cluster restarted successfully!")
 
@@ -739,43 +717,6 @@ def stop_job(ctx, job_id):
     with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
         _stop_job(job_id)
         print(f"Job {job_id} stop requested")
-
-
-# Clean commands
-@cli.command("start-cleanup")
-@click.option("--interval", default=600, help="Cleanup check interval in seconds (default: 600)")
-@click.pass_context
-def start_cleanup(ctx, interval):
-    """Start automated cleanup cron job."""
-    config_obj = ctx.obj.config_obj
-    if not config_obj:
-        print("Error: --config required for cleanup commands", file=sys.stderr)
-        sys.exit(1)
-
-    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file)):
-        job_id = submit_cleanup_cron_job(
-            project=config_obj.project_id,
-            cluster=config_obj.cluster_name,
-            zone=config_obj.zone,
-            interval=interval,
-        )
-        print(f"Cleanup cron job started: {job_id}")
-
-
-@cli.command("run-cleanup")
-@click.option("--dry-run", is_flag=True, help="Show what would be cleaned")
-@click.pass_context
-def run_cleanup(ctx, dry_run):
-    """Run a single cleanup iteration."""
-    config_obj = ctx.obj.config_obj
-    if not config_obj:
-        print("Error: --config required for cleanup commands", file=sys.stderr)
-        sys.exit(1)
-
-    with ray_dashboard(DashboardConfig.from_cluster(ctx.obj.config_file, ray_init=True)):
-        print("Running cleanup iteration...")
-        results = cleanup_iteration(config_obj.project_id, config_obj.zone, dry_run=dry_run)
-        print(f"Result: {results}")
 
 
 # Top-level commands
