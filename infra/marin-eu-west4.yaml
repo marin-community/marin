@@ -34,7 +34,7 @@ docker:
       - --privileged
       - --ulimit memlock=-1:-1  #
       - --ulimit nofile=1048576:1048576
-      - --shm-size=100gb
+      - --shm-size=100gb  # if you change this, also change the gcsfuse cache size in initialization_commands
       - -v
       - "/tmp:/tmp"
       # this lets the worker run docker commands and have them run as sibling containers
@@ -74,7 +74,7 @@ setup_commands:
   - echo 'export TPU_MIN_LOG_LEVEL=3' >> $HOME/.bashrc
   - echo 'export TPU_STDERR_LOG_LEVEL=3' >> $HOME/.bashrc
   - echo 'export TPU_LOG_DIR=disabled' >> $HOME/.bashrc
-  - gcsfuse --implicit-dirs --client-protocol grpc --cache-dir /dev/shm --file-cache-max-size-mb 160000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
+  - gcsfuse --implicit-dirs --client-protocol grpc --cache-dir /dev/shm --file-cache-max-size-mb 100000 --only-dir gcsfuse_mount $BUCKET /opt/gcsfuse_mount || true
 
 worker_setup_commands:
   # delete any old ray session data
