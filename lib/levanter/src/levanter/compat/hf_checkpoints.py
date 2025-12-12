@@ -138,6 +138,9 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
         define this as a @cached_property on your config class."""
         pass
 
+    def hf_export_blockers(self) -> list[str]:
+        """Return a list of reasons why this config cannot be exported to HF. Empty list means export is supported."""
+        return []
 
 MConfig = TypeVar("MConfig", bound=HFCompatConfig)
 
@@ -1066,9 +1069,26 @@ def save_hf_checkpoint_callback(
     :return:
     """
 
+    export_blockers_logged: bool = False
+
     def cb(step: StepInfo):
         nonlocal hf_upload_kwargs
         if step.step == 0:
+            return
+        model_config = getattr(step.eval_model, "config", None)
+        blockers: list[str] = []
+        if isinstance(model_config, HFCompatConfig):
+            blockers = model_config.hf_export_blockers()
+        if blockers:
+            nonlocal export_blockers_logged
+            if not export_blockers_logged:
+                blocker_str = ", ".join(blockers)
+                logger.warning(
+                    "Skipping HF checkpoint export to %s because the model config enables unsupported features: %s",
+                    base_path,
+                    blocker_str,
+                )
+                export_blockers_logged = True
             return
         if upload_to_hf is not None and "commit_message" not in hf_upload_kwargs:
             my_upload_kwargs = hf_upload_kwargs.copy()

@@ -1,3 +1,4 @@
+import gc
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
@@ -101,26 +102,37 @@ class EnsembleModel(LmHeadModel):
         return hax.stack("model", heads)
 
     def __call__(self, input_ids, attn_mask=None, *, key=None):
-        # Get logits from each model
-        logits_list = []
-        for model in self.models:
-            logits = model(input_ids, attn_mask, key=key)
-            if self.temperature != 1.0:
-                logits = logits / self.temperature
-            logits_list.append(logits)
-        
-        # Stack logits from all models
-        stacked_logits = hax.stack("model", logits_list)
-        
-        # Apply ensemble method
+        # More memory-efficient: accumulate mean incrementally instead of stacking all logits
         if self.ensemble_method == "mean":
-            return hax.mean(stacked_logits, axis="model")
-        elif self.ensemble_method == "max":
-            return hax.max(stacked_logits, axis="model")
-        elif self.ensemble_method == "min":
-            return hax.min(stacked_logits, axis="model")
+            # Incremental mean to avoid holding all logits in memory
+            result = None
+            for i, model in enumerate(self.models):
+                logits = model(input_ids, attn_mask, key=key)
+                if self.temperature != 1.0:
+                    logits = logits / self.temperature
+                if result is None:
+                    result = logits
+                else:
+                    # Incremental mean: result = (result * i + logits) / (i + 1)
+                    result = result + (logits - result) / (i + 1)
+            return result
         else:
-            raise ValueError(f"Unknown ensemble method: {self.ensemble_method}")
+            # For max/min, we need to compare all logits
+            logits_list = []
+            for model in self.models:
+                logits = model(input_ids, attn_mask, key=key)
+                if self.temperature != 1.0:
+                    logits = logits / self.temperature
+                logits_list.append(logits)
+            
+            stacked_logits = hax.stack("model", logits_list)
+            
+            if self.ensemble_method == "max":
+                return hax.max(stacked_logits, axis="model")
+            elif self.ensemble_method == "min":
+                return hax.min(stacked_logits, axis="model")
+            else:
+                raise ValueError(f"Unknown ensemble method: {self.ensemble_method}")
 
 
 @dataclass
@@ -173,7 +185,7 @@ def main(config: EvalEnsembleConfig):
     if config.checkpoint_paths and config.hf_checkpoints:
         raise ValueError("Must specify either checkpoint_paths or hf_checkpoints, not both")
 
-    with config.trainer.device_mesh, hax.axis_mapping(parameter_axis_mapping):
+    with config.trainer.use_device_mesh(), hax.axis_mapping(parameter_axis_mapping):
         evaluator = TaggedEvaluator(
             Batch, datasets, tokenizer, max_examples_per_dataset=max_examples, axis_mapping=compute_axis_mapping
         )
@@ -199,7 +211,8 @@ def main(config: EvalEnsembleConfig):
             #     model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
             #     models.append(model)
         else:  # hf_checkpoints
-            for hf_checkpoint in config.hf_checkpoints:
+            for i, hf_checkpoint in enumerate(config.hf_checkpoints):
+                logger.info(f"Loading model {i+1}/{len(config.hf_checkpoints)}: {hf_checkpoint}")
                 model_config = config.model
                 if not hasattr(model_config, "hf_checkpoint_converter"):
                     raise ValueError("Model config does not have an HF checkpoint converter. Can't load HF checkpoint.")
@@ -208,16 +221,22 @@ def main(config: EvalEnsembleConfig):
                 model = converter.load_pretrained(
                     model_config.model_type, ref=hf_checkpoint, dtype=mp.compute_dtype
                 )
-                # model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
+                model = hax.shard_with_axis_mapping(model, parameter_axis_mapping)
+                # Force transfer to TPU and free host memory before loading next model
+                jax.block_until_ready(model)
+                gc.collect()
                 models.append(model)
+                logger.info(f"Model {i+1} loaded and sharded successfully")
         
 
         # Create ensemble model
+        logger.info(f"Creating ensemble model with {len(models)} models using method={config.ensemble_method}")
         ensemble_model = EnsembleModel(
             models, 
             ensemble_method=config.ensemble_method,
             temperature=config.temperature
         )
+        logger.info("Ensemble model created successfully")
 
         # @hax.named_jit
         # def compute_loss(model: LmHeadModel, example: LmExample):
@@ -231,7 +250,9 @@ def main(config: EvalEnsembleConfig):
             with hax.axis_mapping(compute_axis_mapping):
                 return model(example.tokens, key=None, attn_mask=example.attn_mask)
 
+        logger.info("Starting evaluation (this may take a while for JIT compilation)...")
         log_dict = eval_model(evaluator, ensemble_model, prefix="eval")
+        logger.info("Evaluation completed successfully")
 
         levanter.tracker.log(log_dict, step=0)
 

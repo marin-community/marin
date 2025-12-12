@@ -24,6 +24,7 @@ from dataclasses import dataclass
 import ray
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
+from levanter.infra.ray_tpu import run_on_pod_resumable
 from levanter.main.eval_lm import EvalLmConfig as LevanterEvalLmConfig
 from levanter.main.eval_lm import main as eval_lm_main
 from levanter.main.eval_ensemble import EvalEnsembleConfig as LevanterEvalEnsembleConfig
@@ -38,6 +39,7 @@ from marin.utilities.executor_utils import ckpt_path_to_step_name
 from marin.resources import ResourceConfig
 
 HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
+DEFAULT_ENSEMBLE_RESOURCES: dict[str, float] = {"TPU": 4, "TPU-v4-8-head": 1}
 
 
 @dataclass
@@ -84,7 +86,7 @@ class EvalEnsembleLmConfig:
     """ Whether to log entropies of the model. """
 
     max_samples_per_dataset: int | None = None
-    
+    resource_overrides: dict[str, float] | None = None
     wandb_tags: list[str] | None = None
     """Tags to add to the wandb run."""
 
@@ -139,9 +141,10 @@ def default_ensemble_log_probs(
     run_prefix: str = "ppl-eval",
     name_prefix: str = "ensemble-",
     key: str = None,
+    resource_overrides: dict[str, float] | None = None,
 ) -> ExecutorStep:
     """
-    Creates a step to evaluate log probabilities of a language model.
+    Creates a step to evaluate log probabilities of an ensemble language model.
     Args:
         checkpoint:  The checkpoint to evaluate.
         model:  The model configuration.
@@ -150,6 +153,7 @@ def default_ensemble_log_probs(
     """
     name = ckpt_path_to_step_name(checkpoints[0])
     name = f"analysis/log_probs/data-efficiency/{name_prefix}{len(checkpoints)}x-{name}"
+    resources = resource_overrides.copy() if resource_overrides is not None else DEFAULT_ENSEMBLE_RESOURCES.copy()
     return ExecutorStep(
         name=name,
         fn=evaluate_ensemble_log_probs,
@@ -163,6 +167,7 @@ def default_ensemble_log_probs(
             max_samples_per_dataset=max_samples_per_dataset,
             run_prefix=run_prefix,
             key=key,
+            resource_overrides=resources,
         ),
     )
 
@@ -225,9 +230,10 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
             shutil.rmtree(local_path, ignore_errors=True)
             print(f"Deleted local checkpoint at {local_path}.")
 
-@ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 4, "TPU-v4-8-head": 1}, max_calls=1)
-# @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU-v4-128-head": 1}, max_calls=1)
-# @ray.remote(memory=64 * 1024 * 1024 * 1024, resources={"TPU": 1, "TPU-v4-128-head": 1}, runtime_env={"env_vars": {"PJRT_DEVICE": "TPU"}}, max_calls=1)
+# Minimal memory request - actual computation happens on TPU, not in Ray's memory pool
+# This matches how training.py works (only requests 0.1 CPU)
+# runtime_env ensures JAX properly initializes the TPU
+@ray.remote(num_cpus=0.1, max_calls=1, runtime_env={"env_vars": {"PJRT_DEVICE": "TPU"}})
 def do_eval_ensemble(config: LevanterEvalEnsembleConfig) -> None:
     """
     Evaluate log probabilities of a language model on a mixture, and optionally entropies.
@@ -289,7 +295,7 @@ def evaluate_ensemble_log_probs(config: EvalEnsembleLmConfig) -> None:
         max_eval_batches = config.max_samples_per_dataset // config.per_device_batch_size
 
     levanter_config = LevanterEvalEnsembleConfig(
-        checkpoint_paths=config.checkpoint_paths if not config.checkpoint_is_hf else None,
+        checkpoint_paths=config.checkpoint_paths if not config.checkpoint_is_hf else [],
         hf_checkpoints=config.checkpoint_paths if config.checkpoint_is_hf else None,
         model=config.model,
         data=config.datasets,
@@ -301,4 +307,21 @@ def evaluate_ensemble_log_probs(config: EvalEnsembleLmConfig) -> None:
         ),
         log_entropy=config.log_entropy,
     )
-    ray.get(do_eval_ensemble.remote(levanter_config))
+    
+    # Extract TPU type from resource overrides (e.g., "TPU-v4-8-head" -> "v4-8")
+    resources = config.resource_overrides or DEFAULT_ENSEMBLE_RESOURCES
+    tpu_type = None
+    for key in resources:
+        if key.endswith("-head"):
+            tpu_type = key.replace("TPU-", "").replace("-head", "")
+            break
+    
+    if tpu_type is None:
+        raise ValueError(f"Could not determine TPU type from resources: {resources}")
+    
+    # Use run_on_pod_resumable like training does - this properly coordinates TPU resources
+    @ray.remote(max_calls=1)
+    def eval_ensemble_task():
+        eval_ensemble_main(levanter_config)
+    
+    run_on_pod_resumable(eval_ensemble_task, tpu_type, max_retries_failure=3)

@@ -176,6 +176,16 @@ class LlamaConfig(HFCompatConfig):
             **config_overrides,
         )
 
+    def hf_export_blockers(self) -> list[str]:
+        blockers: list[str] = []
+        if self.hybrid_norm:
+            blockers.append("hybrid_norm")
+        if self.input_embedding_norm:
+            blockers.append("input_embedding_norm")
+        if self.use_qk_norm:
+            blockers.append("use_qk_norm")
+        return blockers
+
     @property
     def model_type(self) -> Type["LlamaLMHeadModel"]:
         return LlamaLMHeadModel
