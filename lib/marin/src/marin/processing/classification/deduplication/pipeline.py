@@ -340,7 +340,7 @@ def _run_deduplication(config: DedupeConfig):
     if wandb.run:
         wandb.finish()
 
-    return {"success": True, "mode": "deduplication"} | exact_cnts.to_dict()
+    return {"success": True, "mode": str(DedupMode.EXACT_PARAGRAPH_DEDUPLICATE)} | exact_cnts.to_dict()
 
 
 def _compute_fuzzy_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:

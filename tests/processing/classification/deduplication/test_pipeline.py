@@ -48,7 +48,7 @@ def test_exact_deduplication_paragraph(fox_corpus):
 
     result = deduplicate(dedupe_config)
     assert result["success"]
-    assert result["mode"] == "deduplication"
+    assert result["mode"] == DedupMode.EXACT_PARAGRAPH_DEDUPLICATE
 
     # Read and verify attributes
     attrs_by_id = load_dedup_outputs(fox_corpus["output_dir"])
@@ -121,7 +121,7 @@ def test_dedupe_consolidate_integration(fox_corpus):
 
     result = deduplicate(dedupe_config)
     assert result["success"]
-    assert result["mode"] == "deduplication"
+    assert result["mode"] == DedupMode.EXACT_PARAGRAPH_DEDUPLICATE
 
     # Verify dedupe output exists and has same structure as input
     dedupe_output_files = list(Path(dedupe_output_dir).glob("**/*.jsonl.gz"))
