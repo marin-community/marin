@@ -331,6 +331,7 @@ def _run_deduplication(config: DedupeConfig):
                 base_path,
                 input_files[shard_idx],
                 f"{config.output_path}/data",
+                # TODO: the new_extension needs to be specified as well
                 old_extension=_get_extension(input_files[shard_idx]),
             ),
             skip_existing=True,
@@ -492,6 +493,7 @@ def _run_doc_deduplication(config: DedupeConfig):
                 base_path,
                 input_files[shard_idx],
                 f"{config.output_path}/data",
+                # TODO: the new_extension needs to be specified as well
                 old_extension=_get_extension(input_files[shard_idx]),
             ),
             skip_existing=True,
