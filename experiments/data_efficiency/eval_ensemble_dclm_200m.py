@@ -8,11 +8,12 @@ eval_steps = []
 for key in ensemble_members_train_steps_dict:
     if key[-1] == 0:
         ensemble_members = []
-        for seed in range(5):
+        total_seeds = 5
+        for seed in range(total_seeds):
             key_copy = key[:-1] + (seed,)
             ensemble_members.append(ensemble_members_train_steps_dict[key_copy])
         
-        for seed_count in range(1, 6):
+        for seed_count in range(1, total_seeds + 1):
             eval_steps.append(data_efficiency_eval_ensemble(ensemble_members[:seed_count]))
 
 if __name__ == "__main__":
