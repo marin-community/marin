@@ -94,10 +94,19 @@ def test_exact_deduplication_document(fox_corpus):
     assert results_by_id["test_unique_1"]["attributes"]["exact_duplicate"] is False
 
     dups = ["test_gray_dup_1", "test_gray_dup_2", "test_gray_dup_3"]
-    flags = [results_by_id[d]["attributes"]["exact_duplicate"] for d in dups]
+    exact_dup_flags = [results_by_id[d]["attributes"]["exact_duplicate"] for d in dups]
+    fuzzy_dup_flags = [results_by_id[d]["attributes"].get("fuzzy_duplicate", False) for d in dups]
 
     # NOTE: of the 3 exact dups, 2 are marked as duplicates (one is canonical)
-    assert sum(flags) == 2
+    assert sum(exact_dup_flags) == 2
+    # NOTE: same - 2 should be marked as fuzzy duplicates as well (not necessarily the same ones)
+    assert sum(fuzzy_dup_flags) == 2
+
+    fuzzy_dups = ["test_contaminated_1", "test_contaminated_2"]
+
+    fuzzy_dup_flags = [results_by_id[d]["attributes"].get("fuzzy_duplicate", False) for d in fuzzy_dups]
+    # NOTE: one is marked as fuzzy duplicate, one is canonical
+    assert sum(fuzzy_dup_flags) == 1
 
 
 def test_dedupe_consolidate_integration(fox_corpus):
