@@ -70,11 +70,11 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 5
-TRAIN_BATCH_SIZE = 512  # Fits on 1 x TPU-v5p-64 (for v5p-64, batch size must be divisible by # devices which is 32)
+TRAIN_BATCH_SIZE = 512
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 mixture_sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v5p-64", slice_count=2),
+    resources=ResourceConfig.with_tpu("v5p-256"),
     tokenizer=qwen2_5_32b_instruct_tokenizer,
     model_name_or_path="Qwen/Qwen2.5-32B-Instruct",
     train_batch_size=TRAIN_BATCH_SIZE,
@@ -99,7 +99,7 @@ mixture_config = lm_mixture_data_config(
 )
 
 exp2209d1_sft_qwen2pt5_32b_instruct_openthoughts3 = default_sft(
-    name="exp2209d1_sft_qwen2pt5_32b_instruct_openthoughts3_bsz512_lr8e_5",
+    name="exp2209d1_sft_qwen2pt5_32b_instruct_ot3_bsz512_lr8e_5",
     tokenized=mixture_config,
     model_config=qwen2_5_32b_instruct,
     sft_config=mixture_sft_config,
