@@ -267,7 +267,7 @@ def _train_config(
         steps_per_export=1000,
         per_device_eval_parallelism=8,
         z_loss_weight=1e-4,
-        initialize_from_checkpoint_path=initialize_from,
+        initialize_from_hf=initialize_from,
         allow_partial_checkpoint=True,
         # unfortunately we don't have a great way of saving data loader state when we change the seq len
         # so we reset and reseed at each phase transition
@@ -321,9 +321,9 @@ tootsie_8b_giraffe_phase1 = default_train(
 
 # Phase 2: 32k with RoPE theta 1.5M for ~50B tokens
 # 3000 * 512 * 32768 ≈ 50B tokens
-phase2_checkpoint = tootsie_8b_giraffe_phase1.cd(f"checkpoints/step-{GIRAFFE_4K_END}")
+phase1_final_checkpoint = tootsie_8b_giraffe_phase1.cd(f"hf/step-{GIRAFFE_4K_END}")
 phase2_train_config = _train_config(
-    num_steps=GIRAFFE_16K_STEPS, batch_size=512, train_seq_len=32_768, initialize_from=phase2_checkpoint, seed=2
+    num_steps=GIRAFFE_16K_STEPS, batch_size=512, train_seq_len=32_768, initialize_from=phase1_final_checkpoint, seed=2
 )
 
 tootsie_8b_giraffe_phase2 = default_train(
@@ -339,7 +339,7 @@ tootsie_8b_giraffe_phase2 = default_train(
 # Phase 3: 64k with RoPE theta 5M for ~50B tokens
 PHASE3_STEPS = GIRAFFE_32K_STEPS  # 3000 * 256 * 65536 ≈ 50B tokens
 # - 1 because of fencepost issues
-phase2_final_checkpoint = tootsie_8b_giraffe_phase2.cd(f"checkpoints/step-{GIRAFFE_16K_STEPS - 1}")
+phase2_final_checkpoint = tootsie_8b_giraffe_phase2.cd(f"hf/step-{GIRAFFE_16K_STEPS - 1}")
 phase3_train_config = _train_config(
     num_steps=PHASE3_STEPS,
     batch_size=256,
@@ -356,6 +356,8 @@ tootsie_8b_giraffe_phase3 = default_train(
     tags=["llama", "8b", "giraffe", "phase3", "exp2062"],
     eval_harness_tasks=[],
 )
+
+phase3_final_checkpoint = tootsie_8b_giraffe_phase3.cd(f"hf/step-{PHASE3_STEPS - 1}")
 
 
 if __name__ == "__main__":
