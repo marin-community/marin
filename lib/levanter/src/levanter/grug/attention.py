@@ -1,8 +1,14 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+import dataclasses
+import functools as ft
 import math
+from dataclasses import dataclass
 from typing import Protocol
 
 import jax
 import jax.numpy as jnp
+from jax.tree_util import register_dataclass
 
 from .config import AttentionRuntimeConfig, RotaryConfig
 
@@ -15,13 +21,70 @@ class AttentionBackend(Protocol):
         v: jax.Array,
         mask: jax.Array | None,
         causal: bool,
-    ) -> jax.Array:
-        ...
+    ) -> jax.Array: ...
 
 
-def default_attention_mask(seq_len: int, *, dtype: jnp.dtype = jnp.float32) -> jax.Array:
-    tril = jnp.tril(jnp.ones((seq_len, seq_len), dtype=dtype))
-    return jnp.where(tril == 1, 0.0, jnp.array(-1e9, dtype=dtype))
+def default_attention_mask(seq_len: int) -> jax.Array:
+    """Boolean causal mask with shape (seq, seq). True == keep, False == block."""
+    return jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))
+
+
+@ft.partial(register_dataclass, meta_fields=["is_causal"])
+@dataclass(frozen=True)
+class AttentionMask:
+    """Structured mask that can emit a boolean mask."""
+
+    is_causal: bool = dataclasses.field(metadata=dict(static=True), default=False)
+    causal_offset: int = 0
+    explicit_mask: jax.Array | None = None
+    segment_ids: tuple[jax.Array, jax.Array] | None = None
+    sliding_window: int | None = None
+
+    @classmethod
+    def causal(cls, *, offset: int = 0, sliding_window: int | None = None) -> "AttentionMask":
+        return cls(is_causal=True, causal_offset=offset, sliding_window=sliding_window)
+
+    @classmethod
+    def explicit(cls, mask: jax.Array) -> "AttentionMask":
+        return cls(explicit_mask=mask)
+
+    def with_segment_ids(
+        self, query_segment_ids: jax.Array, kv_segment_ids: jax.Array | None = None
+    ) -> "AttentionMask":
+        kv_ids = query_segment_ids if kv_segment_ids is None else kv_segment_ids
+        return AttentionMask(
+            is_causal=self.is_causal,
+            causal_offset=self.causal_offset,
+            explicit_mask=self.explicit_mask,
+            segment_ids=(query_segment_ids, kv_ids),
+            sliding_window=self.sliding_window,
+        )
+
+    def materialize_mask(self, q_len: int, k_len: int) -> jax.Array | None:
+        """Return a (q_len, k_len) boolean mask (True = allowed) or None."""
+        mask = None
+
+        if self.is_causal:
+            q_idx = jnp.arange(q_len)[:, None]
+            k_idx = jnp.arange(k_len)[None, :]
+            allowed = k_idx <= q_idx + self.causal_offset
+            mask = allowed
+
+        if self.sliding_window is not None:
+            q_idx = jnp.arange(q_len)[:, None]
+            k_idx = jnp.arange(k_len)[None, :]
+            allowed = k_idx >= q_idx - self.sliding_window
+            mask = allowed if mask is None else jnp.logical_and(mask, allowed)
+
+        if self.segment_ids is not None:
+            q_seg, k_seg = self.segment_ids
+            allowed = q_seg[:, None] == k_seg[None, :]
+            mask = allowed if mask is None else jnp.logical_and(mask, allowed)
+
+        if self.explicit_mask is not None:
+            mask = self.explicit_mask if mask is None else jnp.logical_and(mask, self.explicit_mask)
+
+        return mask
 
 
 def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[jax.Array, jax.Array]:
@@ -57,7 +120,7 @@ def reference_attention(
     q: jax.Array,
     k: jax.Array,
     v: jax.Array,
-    mask: jax.Array | None,
+    mask: AttentionMask | jax.Array | None,
     *,
     causal: bool,
     logits_dtype: jnp.dtype | None,
@@ -68,19 +131,24 @@ def reference_attention(
 
     if num_q_heads != num_kv_heads:
         if num_q_heads % num_kv_heads != 0:
-            raise ValueError(
-                f"num_heads ({num_q_heads}) must be divisible by num_kv_heads ({num_kv_heads})"
-            )
+            raise ValueError(f"num_heads ({num_q_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
         repeat = num_q_heads // num_kv_heads
         k = jnp.repeat(k, repeat, axis=2)
         v = jnp.repeat(v, repeat, axis=2)
 
     scale = 1.0 / math.sqrt(head_dim)
     scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
+    if isinstance(mask, AttentionMask):
+        mask = mask.materialize_mask(scores.shape[-2], scores.shape[-1])
+
     if mask is None and causal:
-        mask = default_attention_mask(scores.shape[-2], dtype=scores.dtype)
+        mask = default_attention_mask(scores.shape[-2])
+
     if mask is not None:
-        scores = scores + mask[None, None, :, :]
+        if mask.dtype == jnp.bool_:
+            scores = jnp.where(mask[None, None, :, :], scores, jnp.array(-1e9, dtype=scores.dtype))
+        else:
+            scores = scores + mask[None, None, :, :]
     if logits_dtype is not None:
         scores = scores.astype(logits_dtype)
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
@@ -111,6 +179,7 @@ def resolve_attention_backend(runtime: AttentionRuntimeConfig) -> AttentionBacke
 
 __all__ = [
     "AttentionBackend",
+    "AttentionMask",
     "apply_rotary_embedding",
     "default_attention_mask",
     "reference_attention",

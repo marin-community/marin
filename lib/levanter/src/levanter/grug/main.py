@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import argparse
 from dataclasses import dataclass, replace
 from typing import Iterator
@@ -105,7 +108,7 @@ def run_training(train_cfg: GrugTrainingConfig, *, cache_dir: str | None = None)
     state = TrainingState(step=0, params=params, opt_state=opt_state)
 
     seq_len = train_cfg.model.max_seq_len
-    causal_mask = default_attention_mask(seq_len - 1, dtype=jnp.float32)
+    causal_mask = default_attention_mask(seq_len - 1)
     train_step = make_train_step(train_cfg.model, train_cfg.attention, optimizer, causal_mask=causal_mask)
 
     if cache_dir:
