@@ -88,11 +88,14 @@ ENV UV_SYSTEM_PYTHON=1
 COPY --chown=ray pyproject.toml /tmp/marin/
 COPY --chown=ray lib/ /tmp/marin/lib/
 WORKDIR /tmp/marin
-RUN mkdir -p src/marin/\
+RUN ray --version >/tmp/marin/ray_version_before.txt \
+  && mkdir -p src/marin/\
   && touch src/marin/__init__.py\
   && touch README.md\
   && touch LICENSE\
   && uv pip install -e .[dev,tpu,gcp] --system --torch-backend=cpu\
+  && ray --version >/tmp/marin/ray_version_after.txt \
+  && (diff /tmp/marin/ray_version_before.txt /tmp/marin/ray_version_after.txt || (echo "$(cat /tmp/marin/ray_version_before.txt) in the base image differs vs dependencies $(cat /tmp/marin/ray_version_after.txt)!" && exit 1)) \
   && rm -rf /tmp/marin
 
 WORKDIR /opt/marin
