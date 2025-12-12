@@ -89,7 +89,7 @@ def test_exact_deduplication_document(fox_corpus):
 
     result = deduplicate(config)
     assert result["success"]
-    assert result["mode"] == "exact_doc_deduplication"
+    assert result["mode"] == DedupMode.DOCUMENT_DEDUPLICATE
 
     results_by_id = load_dedup_outputs(fox_corpus["output_dir"])
 

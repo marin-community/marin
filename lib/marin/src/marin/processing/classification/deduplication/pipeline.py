@@ -73,6 +73,7 @@ class DedupeConfig:
     #   best way to handle this in marin and draccus?
     input_path: str | list[str]
     output_path: str = THIS_OUTPUT_PATH
+    # TODO: remove this and just hard code the attribute names
     attribute_name: str = "duplicate_text"
     processes: int = 1
     mode: DedupMode = DedupMode.EXACT_PARAGRAPH_DEDUPLICATE
@@ -298,7 +299,7 @@ def _run_deduplication(config: DedupeConfig):
             )
             .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
             verbose=True,
-        )
+        ),
     )
 
     exact_cnts = _compute_dedup_stats(duplicate_key_shards, method="exact", level="paragraph")
@@ -460,7 +461,7 @@ def _run_doc_deduplication(config: DedupeConfig):
     if wandb.run:
         wandb.log(exact_cnts.to_dict() | fuzzy_cnt.to_dict())
 
-    def mark_exact_dups_documents(batches: Iterator[pa.RecordBatch]) -> Iterator[dict]:
+    def mark_dup_documents(batches: Iterator[pa.RecordBatch]) -> Iterator[dict]:
         """Mark exact duplicate documents using exact hash matching."""
         dup_map = _load_dupe_map_shard(duplicate_key_shards)
         fuzzy_dup_map = _load_fuzzy_dupe_map_shard(fuzzy_dup_shards)
@@ -487,7 +488,7 @@ def _run_doc_deduplication(config: DedupeConfig):
         Dataset.from_list(input_files).flat_map(_load_batches)
         # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
         # the shards of the input files for rebase_file_path to work correctly.
-        .map_shard(mark_exact_dups_documents).write_jsonl(
+        .map_shard(mark_dup_documents).write_jsonl(
             output_pattern=lambda shard_idx, total: rebase_file_path(
                 base_path,
                 input_files[shard_idx],
@@ -502,7 +503,7 @@ def _run_doc_deduplication(config: DedupeConfig):
     if wandb.run:
         wandb.finish()
 
-    return {"success": True, "mode": "exact_doc_deduplication"} | exact_cnts.to_dict() | fuzzy_cnt.to_dict()
+    return {"success": True, "mode": str(DedupMode.DOCUMENT_DEDUPLICATE)} | exact_cnts.to_dict() | fuzzy_cnt.to_dict()
 
 
 def deduplicate(config: DedupeConfig):

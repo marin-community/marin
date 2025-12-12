@@ -117,7 +117,8 @@ def connected_components(
         .group_by(
             lambda x: x[0]["record_id_norm"],
             _build_adjacency,
-        ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet")
+        ).write_parquet(f"{output_dir}/it_0/part-{{shard:05d}}.parquet"),
+        verbose=True,
     )
 
     converged = False
@@ -130,7 +131,8 @@ def connected_components(
             .flat_map(_emit_messages)
             .group_by(key=lambda x: x[0], reducer=_reduce_node_step)
             # NOTE: parquet built-in does not support list of int :/
-            .write_parquet(f"{output_dir}/it_{i}/part-{{shard:05d}}.parquet")
+            .write_parquet(f"{output_dir}/it_{i}/part-{{shard:05d}}.parquet"),
+            verbose=True,
         )
 
         # Check for convergence
