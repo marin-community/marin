@@ -41,6 +41,7 @@ from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution import ExecutorStep
 from marin.execution.executor import executor_main
 from marin.rl.environments.base import EnvConfig, load_environment_from_spec
@@ -120,11 +121,8 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     # Initialize Levanter with minimal trainer config
     trainer_config = TrainerConfig(
         mp=jmp.get_policy("p=f32,c=bfloat16"),
-        tensor_parallel_axes=["mlp", "heads"],
-        fsdp_axis="embed",
-        batch_axis="batch",
         ray=levanter.distributed.RayConfig(auto_start_cluster=False),
-        model_axis_size=model_axis_size,
+        mesh=MeshConfig(axes={"model": model_axis_size}, shared_mapping={"mlp": "model", "heads": "model"}),
     )
 
     # Setup environment variables

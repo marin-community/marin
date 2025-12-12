@@ -126,7 +126,7 @@ jobs:
 
       - name: Force CPU torch wheel
         run: |
-          TORCH_VERSION=$(sed -n '/^name = "torch"$/ {n; s/version = "\([^"]*\)"/\1/p; q}' uv.lock)
+          TORCH_VERSION=$(sed -n '/^name = "torch"$/ {n; s/version = "\([^"]*\)"/\1/p; q}' ../../uv.lock)
           echo $TORCH_VERSION
           if [[ -z "$TORCH_VERSION" ]]; then
             echo "Unable to determine torch version from uv.lock" >&2
