@@ -187,15 +187,13 @@ finepdfs_validation_tokenized = {
     )
 }
 
+
 # Blend mixtures: 90% base, 5% pdf (longmino + finepdfs), 5% reasoning.
 long_context_combined_weights = interpolate_mixture_weights(
     [starling_cooldown_weights, pdf_weights_combined, reasoning_weights],
     [0.90, 0.05, 0.05],
 )
 
-
-# for the first phase of "long context extension", we're not really extending context at all, but
-# shifting the data distribution toward long-context data. To do that, we slot the mixture weights into the
 
 giraffe_components = {
     **starling_components,
@@ -204,6 +202,10 @@ giraffe_components = {
     **reasoning_tokenized,
     **finepdfs_validation_tokenized,
 }
+
+# for the first phase of "long context extension", we're not really extending context at all, but
+# shifting the data distribution toward long-context data. To do that, we just do more continued
+# training of the starling cooldown mix but use the long-context data weights.
 
 giraffe_4K_mixture = lm_varying_mixture_data_config(
     components=giraffe_components,

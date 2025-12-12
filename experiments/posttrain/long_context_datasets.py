@@ -26,7 +26,7 @@ institutional_books_raw = default_download(
     override_output_path="raw/institutional-books-d2f504a",
 )
 
-# Longmino (whole pool
+# Longmino (whole pool)
 
 # (this is everything)
 dolma3_longmino_pool_raw = default_download(

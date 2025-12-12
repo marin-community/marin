@@ -1080,6 +1080,7 @@ class LMMixtureDatasetConfig(LMTaskConfig):
                 )
                 continue
             except FileNotFoundError:
+                # Will build below
                 pass
 
             # now see if we can/need to build the cache

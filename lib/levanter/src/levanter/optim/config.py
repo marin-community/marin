@@ -323,12 +323,6 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
         else:
             schedule = schedules[0]
 
-        def schedule_foo(count):
-            lr = schedule(count)
-            jax.debug.print(f"Step: {count}, LR: {lr}")
-
-            return lr
-
         return schedule
 
     def _get_cycle_minima(self, total_main_steps):
