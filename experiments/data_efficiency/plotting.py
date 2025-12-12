@@ -47,6 +47,8 @@ ORANGE = "#F8961E"
 GOLD = "#C7A020"
 PINK = "#FD8BCE"
 VIRIDIAN = "#2B8D6E"
+BLACK = "#000000"
+DARK_ORANGE = "#FF8C00"
 
 
 CUSTOM_CMAP = mcolors.LinearSegmentedColormap.from_list("custom", [LIGHT_BLUE, PURPLE])
@@ -70,7 +72,8 @@ value_pretty_name_dict = {
     1677721600.0: "1.7B",
 }
 
-param_str_to_count = {"150m4k": 0.15, "300m4k": 0.3, "600m4k": 0.6, "1_4b4k": 1.4}
+param_str_to_count = {"150m4k": 0.15, "300m4k": 0.3, "600m4k": 0.6, "1_4b4k": 1.4, "1_5b4k": 1.5, "3_2b4k": 3.2}
+# param_str_to_count = {"150m4k": 0.15, "300m4k": 0.3, "600m4k": 0.6, "1_4b4k": 1.4}
 PARAM_COUNTS = list(param_str_to_count.values())
 
 token_str_to_steps = {
@@ -92,6 +95,8 @@ param_str_color_dict = {
     "300m4k": ROBIN_EGG_BLUE,
     "600m4k": APPLE_GREEN,
     "1_4b4k": ORANGE,
+    "1_5b4k": PINK,
+    "3_2b4k": VIRIDIAN,
 }
 
 BASELINE_COLOR = "red"
@@ -100,6 +105,8 @@ TIERED_COLOR = GOLD
 
 ENSEMBLE_COLOR = PINK
 SELF_DISTILL_COLOR = VIRIDIAN
+WRAP_COLOR = BLACK
+MIX_COLOR = DARK_ORANGE
 
 ABLATION_FIGSIZE = (5, 4)
 SEED_SCALING_FIGSIZE = (5, 5)
@@ -2733,8 +2740,9 @@ def plot_chinchilla_scaling_law(run_list):
     return scaling_law
 
 
-def plot_chinchilla_comparison_200M(run_list, chinchilla_scaling_law, power_law_200M, run_losses_200M):
+def plot_chinchilla_comparison_200M(run_list, power_law_200M, run_losses_200M):
     plt.figure(figsize=ABLATION_FIGSIZE, dpi=300)
+    print("Run list:", run_list)
 
     run_list = sorted(run_list, key=lambda x: param_str_to_count[x["model_name"]])
 
@@ -2756,9 +2764,19 @@ def plot_chinchilla_comparison_200M(run_list, chinchilla_scaling_law, power_law_
     # print(epoched_chinchilla_power_law)
     plt.plot(param_counts, single_run_losses, color=BASELINE_COLOR)
 
+
+    more_unregularized_losses = [3.72485, 3.74383]
+    more_param_counts = [1.5, 3.2]
+    plt.scatter(more_param_counts, more_unregularized_losses, color=BASELINE_COLOR, s=70, marker='*', label='Epoched extrapolation')
+
     y_fit = power_law_200M.evaluate(x_fit)
-    plt.scatter(param_counts, run_losses_200M, color=REGULARIZED_COLOR, s=50)
-    plt.plot(x_fit, y_fit, "--", color=REGULARIZED_COLOR, label=f"Regularized recipe\n(Fit: {power_law_200M})")
+    plt.scatter(param_counts[:4], run_losses_200M, color=REGULARIZED_COLOR, s=50)
+    more_x_fit = np.logspace(np.log10(min(param_counts)), np.log10(3.2), 100)
+    more_y_fit = power_law_200M.evaluate(more_x_fit)
+    plt.plot(more_x_fit, more_y_fit, "--", color=REGULARIZED_COLOR, label=f"Regularized recipe\n(Fit: {power_law_200M})")
+
+    more_losses = [3.46567, 3.45199]
+    plt.scatter(more_param_counts, more_losses, color=REGULARIZED_COLOR, s=70, marker='*', label='Regularized extrapolation')
 
     # projected_losses = chinchilla_scaling_law.evaluate((x_fit, 0.2))
     # plt.plot(x_fit, projected_losses, linestyle="--", label=f"Chinchilla: {chinchilla_scaling_law}")
@@ -2766,7 +2784,7 @@ def plot_chinchilla_comparison_200M(run_list, chinchilla_scaling_law, power_law_
     plt.xscale("log")
     plt.xticks(param_counts, ["150M", "300M", "600M", "1.4B"])
     plt.xticks([], [], minor=True)
-    plt.ylim(bottom=3.43)
+    plt.ylim(bottom=3.43, top=3.85)
     plt.title("Regularized parameter scaling")
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     plt.legend(loc="center right")
@@ -2774,6 +2792,126 @@ def plot_chinchilla_comparison_200M(run_list, chinchilla_scaling_law, power_law_
     plt.ylabel("Loss")
     plt.tight_layout()
     plt.savefig("experiments/data_efficiency/plots/chinchilla_comparison_200M.png")
+    plt.close()
+
+def plot_wrap(run_list, power_law_200M, run_losses_200M):
+    plt.figure(figsize=(10, 5), dpi=300)
+    print("Run list:", run_list)
+
+    run_list = sorted(run_list, key=lambda x: param_str_to_count[x["model_name"]])
+
+    # Standard model scaling
+    param_counts = [154147328 / 1e9, 299649792 / 1e9, 602457088 / 1e9, 1540732416 / 1e9]
+    single_run_losses = [3.94794, 3.76518, 3.68461, 3.64257]
+
+    power_law = PowerScalingLaw(var_name="N")
+    power_law.fit(param_counts, single_run_losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    x_fit = np.logspace(np.log10(min(param_counts)), np.log10(max(param_counts)), 100)
+
+    y_fit = power_law.evaluate(x_fit)
+    plt.scatter(param_counts, single_run_losses, color=REGULARIZED_COLOR, s=50)
+    plt.plot(x_fit, y_fit, "--", color=REGULARIZED_COLOR, label=f"Regularized recipe\n(Fit: {power_law})")
+
+    # dotted horizontal line at 3.62
+    # plt.plot([0, 7.54], [3.62, 3.62], "--", color="black", linestyle="--", alpha=0.3)
+
+    """
+    param_str_color_dict = {
+    "150m4k": CRAYOLA_BLUE,
+    "300m4k": ROBIN_EGG_BLUE,
+    "600m4k": APPLE_GREEN,
+    "1_4b4k": ORANGE,
+    "1_5b4k": PINK,
+    "3_2b4k": VIRIDIAN,
+    }
+    """
+    
+    # 150M ensembles 
+    param_counts = [(154147328 / 1e9) * i for i in range(1, 6)]
+    losses = [4.25709, 3.97665, 3.88724, 3.84555, 3.81822]
+    power_law = PowerScalingLaw(var_name="N")
+    power_law.fit(param_counts, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    x_fit = np.logspace(np.log10(min(param_counts)), np.log10(max(param_counts)), 100)
+    y_fit = power_law.evaluate(x_fit)
+    plt.scatter(param_counts, losses, color=param_str_color_dict["150m4k"], s=50)
+    plt.plot(x_fit, y_fit, "--", color=param_str_color_dict["150m4k"], label=f"150M Ensembles\n(Fit: {power_law})")
+
+    # 300M ensembles
+    param_counts = [(299649792 / 1e9) * i for i in range(1, 6)]
+    losses = [4.09653, 3.79211, 3.70406, 3.65132, 3.61938]
+    power_law = PowerScalingLaw(var_name="N")
+    power_law.fit(param_counts, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    x_fit = np.logspace(np.log10(min(param_counts)), np.log10(max(param_counts)), 100)
+    y_fit = power_law.evaluate(x_fit)
+    plt.scatter(param_counts, losses, color=param_str_color_dict["300m4k"], s=50)
+    plt.plot(x_fit, y_fit, "--", color=param_str_color_dict["300m4k"], label=f"300M Ensembles\n(Fit: {power_law})")
+
+    # 600M ensembles
+    param_counts = [(602457088 / 1e9) * i for i in range(1, 6)]
+    losses = [4.13199, 3.77925, 3.66712, 3.61295, 3.57864]
+    power_law = PowerScalingLaw(var_name="N")
+    power_law.fit(param_counts, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    x_fit = np.logspace(np.log10(min(param_counts)), np.log10(max(param_counts)), 100)
+    y_fit = power_law.evaluate(x_fit)
+    plt.scatter(param_counts, losses, color=param_str_color_dict["600m4k"], s=50)
+    plt.plot(x_fit, y_fit, "--", color=param_str_color_dict["600m4k"], label=f"600M Ensembles\n(Fit: {power_law})")
+
+    # 1.5B ensembles
+    param_counts = [(1540732416 / 1e9) * i for i in [1,2,3,4,5]]
+    losses = [4.17566, 3.7952, 3.67928, 3.61881, 3.58401]
+    power_law = PowerScalingLaw(var_name="N")
+    power_law.fit(param_counts, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    x_fit = np.logspace(np.log10(min(param_counts)), np.log10(max(param_counts)), 100)
+    y_fit = power_law.evaluate(x_fit)
+    plt.scatter(param_counts, losses, color=param_str_color_dict["1_5b4k"], s=50)
+    plt.plot(x_fit, y_fit, "--", color=param_str_color_dict["1_5b4k"], label=f"1.5B Ensembles\n(Fit: {power_law})")
+
+    # 300M ensembles (hq)
+    param_counts = [(299649792 / 1e9) * i for i in range(1, 6)]
+    losses = [3.67209, 3.57402, 3.54472, 3.52817, 3.51803]    
+    power_law = PowerScalingLaw(var_name="N")
+    power_law.fit(param_counts, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    x_fit = np.logspace(np.log10(min(param_counts)), np.log10(max(param_counts)), 100)
+    y_fit = power_law.evaluate(x_fit)
+    plt.scatter(param_counts, losses, color=WRAP_COLOR, s=50)
+    plt.plot(x_fit, y_fit, "--", color=WRAP_COLOR, label=f"300M WRAP Ens\n(Fit: {power_law})")
+
+    # 300M ensembles (sd)
+    param_counts = [(299649792 / 1e9) * i for i in [1,2,3,4,5]]
+    losses = [3.67071, 3.60728, 3.58736, 3.57565, 3.56865]
+    power_law = PowerScalingLaw(var_name="N")
+    power_law.fit(param_counts, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    x_fit = np.logspace(np.log10(min(param_counts)), np.log10(max(param_counts)), 100)
+    y_fit = power_law.evaluate(x_fit)
+    plt.scatter(param_counts, losses, color=SELF_DISTILL_COLOR, s=50)
+    plt.plot(x_fit, y_fit, "--", color=SELF_DISTILL_COLOR, label=f"300M Self-Distill Ens\n(Fit: {power_law})")
+
+    # 300M ensembles (symx)
+    param_counts = [(299649792 / 1e9) * i for i in [1,2,3,4,5]]
+    losses = [3.58481, 3.49636, 3.46847, 3.45411, 3.44538]
+    power_law = PowerScalingLaw(var_name="N")
+    power_law.fit(param_counts, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
+    x_fit = np.logspace(np.log10(min(param_counts)), np.log10(max(param_counts)), 100)
+    y_fit = power_law.evaluate(x_fit)
+    plt.scatter(param_counts, losses, color=MIX_COLOR, s=50)
+    plt.plot(x_fit, y_fit, "--", color=MIX_COLOR, label=f"300M Mix Ens\n(Fit: {power_law})")
+
+    # more_losses = [3.67252]
+    # plt.scatter(299649792 / 1e9, more_losses, color=BASELINE_COLOR, s=70, marker='*', label='WRAP')
+
+    plt.xscale("log")
+    param_counts = [154147328 / 1e9, 299649792 / 1e9, 602457088 / 1e9, 1540732416 / 1e9]
+    plt.xticks(param_counts, ["150M", "300M", "600M", "1.5B"])
+    plt.xticks([], [], minor=True)
+    # plt.ylim(bottom=3.6, top=4.0)
+    plt.title("Synthetic data ensembles")
+    plt.grid(True, which="both", linestyle="--", alpha=0.3)
+    # legend outside the plot
+    plt.legend(loc="upper right", bbox_to_anchor=(1.3, 1), borderaxespad=0.)
+    plt.xlabel("Parameter count")
+    plt.ylabel("Loss")
+    plt.tight_layout()
+    plt.savefig("experiments/data_efficiency/plots/synthetic_data_ensembles.png")
     plt.close()
 
 
@@ -2885,6 +3023,9 @@ if __name__ == "__main__":
         unique_models = sorted(list(set([run["model_name"] for run in run_list])), key=lambda x: param_str_to_count[x])
         unique_base_tokens = sorted(list(set([run["base_tokens"] for run in run_list])))
 
+        print("Unique models:", unique_models)
+        print("Unique base tokens:", unique_base_tokens)
+
         power_law_200M, run_losses_200M = pickle.load(
             open("experiments/data_efficiency/cache/standard_asymptotes_200M.pkl", "rb")
         )
@@ -2894,6 +3035,7 @@ if __name__ == "__main__":
         best_single_model_hparams_ensemble_200M = None
 
         for model_size in unique_models:
+            print("Model size:", model_size)
             best_ensembles[model_size] = {}
             for base_tokens in unique_base_tokens if not only_200M else [209715200]:
                 ret, best_single_model_hparams_ensemble = plot_ensemble_scaling(model_size, base_tokens)
@@ -2928,16 +3070,19 @@ if __name__ == "__main__":
         )
 
     elif mode == "infinite-model-scaling":
-        # plot_wd_overfitting_ablation(run_list)
+        run_list = [run for run in run_list if run["epochs"] != 13]
+        plot_wd_overfitting_ablation(run_list)
         no_convex_tuning_ablation(run_list)
         sensitivity_analysis(run_list)
         run_to_run_variance(run_list)
         with plt.rc_context({"font.size": 12}):
             plot_lr_tuned_epoch_ablation(run_list)
             plot_parameter_count_vs_loss(run_list)
+
         parameter_scaling_losses = cache_parameter_scaling_losses(run_list)
         best_run_dict = construct_best_run_dict(run_list)
         weight_decay_loss_trajectories(run_list)
+
 
         # # Also create token scaling plot
         # valid_model_sizes, asymptotes = plot_token_scaling(best_run_dict, fit_type="power_law")
@@ -2949,12 +3094,14 @@ if __name__ == "__main__":
 
         # Create paper version of plots
         with plt.rc_context({"font.size": 12}):
+            print(parameter_scaling_losses)
             standard_seed_scaling_asymptotes, standard_seed_scaling_power_law, epoched_data_scaling_law = (
                 plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fit_type="power_law")
             )
             plot_ensemble_model_seed_scaling(standard_seed_scaling_asymptotes, standard_seed_scaling_power_law)
         # plot_token_scaling_simple(best_run_dict, fit_type="power_law")
 
+        print(power_laws[0], run_losses[0])
         pickle.dump(
             (power_laws[0], run_losses[0]), open("experiments/data_efficiency/cache/standard_asymptotes_200M.pkl", "wb")
         )
@@ -3006,8 +3153,9 @@ if __name__ == "__main__":
         pickle.dump(chinchilla_scaling_law, open("experiments/data_efficiency/cache/chinchilla_scaling_law.pkl", "wb"))
 
     elif mode == "chinchilla-comparison":
-        chinchilla_scaling_law = pickle.load(open("experiments/data_efficiency/cache/chinchilla_scaling_law.pkl", "rb"))
+        # chinchilla_scaling_law = pickle.load(open("experiments/data_efficiency/cache/chinchilla_scaling_law.pkl", "rb"))
         power_law_200M, run_losses_200M = pickle.load(
             open("experiments/data_efficiency/cache/standard_asymptotes_200M.pkl", "rb")
         )
-        plot_chinchilla_comparison_200M(run_list, chinchilla_scaling_law, power_law_200M, run_losses_200M)
+        # plot_chinchilla_comparison_200M(run_list, power_law_200M, run_losses_200M)
+        plot_wrap(run_list, power_law_200M, run_losses_200M)
