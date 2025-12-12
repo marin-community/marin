@@ -63,7 +63,6 @@ class DedupeConfig:
     Attributes:
         input_path (str | list[str]): Path(s) of files to apply deduplication to.
         output_path (str): Path for storing results of deduplication (char spans in docs that are duplicate)
-        attribute_name (str): Name for key to store duplicate span info in json
         processes (int): number of processes to use for deduplication
         mode (DedupMode): switch between decontamination (build filter) and regular deduplication
         text_field (str): field to use for text content in Parquet files
@@ -74,7 +73,7 @@ class DedupeConfig:
     input_path: str | list[str]
     output_path: str = THIS_OUTPUT_PATH
     # TODO: remove this and just hard code the attribute names
-    attribute_name: str = "duplicate_text"
+    attribute_name: str = "exact_duplicate"
     processes: int = 1
     mode: DedupMode = DedupMode.EXACT_PARAGRAPH_DEDUPLICATE
     # field to use for text content in Parquet files

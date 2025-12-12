@@ -81,7 +81,6 @@ def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
 
     config = DedupeConfig(
         input_path=input_path,
-        attribute_name="is_duplicate",
         mode=DedupMode.EXACT_PARAGRAPH_DEDUPLICATE,
         processes=max_parallelism,
     )
