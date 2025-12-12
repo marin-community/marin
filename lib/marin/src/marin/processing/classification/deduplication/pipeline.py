@@ -39,7 +39,7 @@ import wandb
 from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
 
 from marin.utils import fsspec_glob, rebase_file_path
-from zephyr import Dataset, flow_backend, load_parquet
+from zephyr import Dataset, col, flow_backend
 from zephyr.backend_factory import create_backend
 from zephyr.readers import open_file, SUPPORTED_EXTENSIONS
 
@@ -159,9 +159,9 @@ def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
     with log_time(f"Load duplicate map from {len(shards)} shards"):
         create_backend("threadpool").execute(
             Dataset.from_list(shards)
-            .flat_map(lambda p: load_parquet(p, columns=["hash", "canonical"]))
-            # NOTE: would be nice if Zephyr could optimize the predicate pushdown for Parquet
-            .filter(lambda record: record["hash"] is not None)
+            .load_parquet()
+            .select("hash", "canonical")
+            .filter(col("hash").is_not_null())
             .map(add_to_dup_map)
         )
 
@@ -188,7 +188,8 @@ def _compute_dedup_stats(shards: list[str]) -> Counters:
     with log_time(f"Compute deduplication stats from {len(shards)} shards"):
         result: Counters = create_backend("threadpool").execute(  # type: ignore[bad-assignment]
             Dataset.from_list(shards)
-            .flat_map(lambda p: load_parquet(p, columns=["cnt"]))
+            .load_parquet()
+            .select("cnt")
             .map(lambda c: Counters(total=c["cnt"], unique=int(c["cnt"] == 1), unique_dups=int(c["cnt"] > 1)))
             .reduce(partial(sum, start=Counters()))
         )[0]

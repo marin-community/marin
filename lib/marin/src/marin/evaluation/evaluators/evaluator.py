@@ -20,6 +20,7 @@ from typing import Any
 
 from fray.cluster import ResourceConfig
 from fray.cluster.ray import get_scheduling_strategy
+
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.utils import download_from_gcs, is_remote_path
 
@@ -97,8 +98,8 @@ class Evaluator(ABC):
         model: ModelConfig,
         evals: list[EvalTaskConfig],
         output_path: str,
+        resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
-        resource_config: ResourceConfig | None = None,
         wandb_tags: list[str] | None = None,
     ) -> None:
         """

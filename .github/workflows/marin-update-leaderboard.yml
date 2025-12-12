@@ -54,8 +54,8 @@ jobs:
         run: |
           # lib/marin/src/marin/speedrun/static/data that we generate as a temp dir should mirror speedrun-repo/data/
           # everything else in speedrun-repo/ should be left as-is
-          rm -rf speedrun-repo/data/*
-          cp -r lib/marin/src/marin/speedrun/static/data/* speedrun-repo/data/
+          rm speedrun-repo/data/runs.json
+          cp lib/marin/src/marin/speedrun/static/data/runs.json speedrun-repo/data/runs.json
           
           # configure and commit changes
           cd speedrun-repo

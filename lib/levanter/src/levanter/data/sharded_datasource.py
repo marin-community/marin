@@ -512,13 +512,6 @@ class ParquetDataSource(UrlBackedShardedDataSource[dict]):
 
 
 def _mk_shard_name_mapping(urls):
-    _shard_name_to_url_mapping = {}
-    # remove common prefix
-    if len(urls) == 1:
-        common_prefix = os.path.dirname(urls[0])
-    else:
-        common_prefix = os.path.commonprefix(urls)
-
     missing_urls: List[str] = []
 
     old_urls = urls
@@ -526,6 +519,14 @@ def _mk_shard_name_mapping(urls):
 
     if old_urls and not urls:
         raise ValueError(f"Could not expand any of the urls: {old_urls}")
+
+    _shard_name_to_url_mapping = {}
+
+    # remove common prefix, computed on expanded urls
+    if len(urls) == 1:
+        common_prefix = os.path.dirname(urls[0])
+    else:
+        common_prefix = os.path.commonprefix(urls)
 
     for url in urls:
         if not fsspec_utils.exists(url):

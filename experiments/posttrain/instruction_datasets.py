@@ -131,7 +131,7 @@ class InstructionDatasetConfig:
         splits: Data splits (e.g., `train`, `validation`) to use. Empty list indicates to use all splits.
                 Defaults to `train` only
         name: Optional friendly name for the dataset; defaults to `hf_dataset_id`.
-        max_parallelism: Max number of concurrent shard processing tasks. Reduce if needed to avoid Hugging Face rate limits.
+        max_parallelism: Max number of parallel data processing tasks. Reduce if needed to avoid HF rate limits.
     """
 
     hf_dataset_id: str
@@ -141,7 +141,7 @@ class InstructionDatasetConfig:
     name: str | None = None
     subsets: list[str] = field(default_factory=lambda: [])
     splits: list[str] = field(default_factory=lambda: ["train"])
-    max_parallelism: int | None = None
+    max_parallelism: int | None = 32  # 32 works for free users; set to None to use default behavior (full parallelism)
 
 
 def multi_turn_adapter(

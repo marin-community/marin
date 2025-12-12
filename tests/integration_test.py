@@ -18,6 +18,7 @@ import os
 import sys
 
 import draccus
+from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
@@ -30,7 +31,6 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from fray.cluster import ResourceConfig
 from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
@@ -40,8 +40,6 @@ from marin.processing.tokenize import lm_data_config
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
-from marin.utilities.ray_utils import is_local_ray_cluster
-from marin.utils import is_in_ci
 
 from experiments.defaults import default_tokenize
 
@@ -106,7 +104,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
                 "thread": 1,
             },
         ),
-        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
@@ -196,11 +193,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         "JAX_TRACEBACK_FILTERING": "off",
     }
 
-    if not is_in_ci() and not is_local_ray_cluster():
-        pod_config = ResourceConfig.with_tpu("v4-8")
-    else:
-        train_env_vars["JAX_PLATFORMS"] = "cpu"
-        pod_config = ResourceConfig.with_cpu()
+    pod_config = ResourceConfig.with_cpu()
 
     train_step = ExecutorStep(
         name=os.path.join(prefix, "train"),
@@ -246,8 +239,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
 @draccus.wrap()
 def main(config: ExecutorMainConfig):
     try:
-        # Replace this only if it's not in argv
-        if "--prefix" in sys.argv:  # Check if prefix is already provided
+        if config.prefix is not None:
             bucket_prefix = config.prefix
         else:
             bucket_prefix = "/tmp"  # Default to a temporary directory
@@ -256,6 +248,16 @@ def main(config: ExecutorMainConfig):
         config = dataclasses.replace(
             config, prefix=bucket_prefix, executor_info_base_path=os.path.join(bucket_prefix, "experiments")
         )
+
+        # start Ray explicitly and set it as the current cluster
+        # N.B. This script must not be launched via `uv run`, or Ray will prefer to use `uv` for all execution
+        # ignoring package dependencies specified in each step.
+        if "uv run" in " ".join(sys.argv):
+            raise RuntimeError("integration_test.py must not be launched via `uv run`. Please run it directly.")
+        import ray
+
+        ray.init(resources={"head_node": 1}, runtime_env={"working_dir": None}, num_cpus=16)
+        set_current_cluster(create_cluster("ray"))
 
         # path to synthetic test data
         synth_data: str = "./tests/quickstart-data"

@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.slow("Integration test with training loop")
-def test_train_worker_with_sequential_digits(ray_tpu_cluster, tmp_path):
+def test_train_worker_with_sequential_digits(tmp_path):
     """Test training worker learns to generate sequential digits.
 
     This test validates that the training worker can learn a simple pattern
@@ -123,7 +123,7 @@ def test_train_worker_with_sequential_digits(ray_tpu_cluster, tmp_path):
 
 
 @pytest.mark.slow("Long-running integration test.")
-def test_full_integration_sequential_digits(ray_tpu_cluster, tmp_path):
+def test_full_integration_sequential_digits(tmp_path):
     """Full integration test with rollout and train workers for sequential digits task."""
     rollout_storage_config = create_test_rollout_storage_config()
     target_steps = 500
