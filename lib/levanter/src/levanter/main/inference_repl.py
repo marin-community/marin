@@ -53,6 +53,7 @@ from levanter.inference.openai import (
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
+from levanter.utils.mesh import MeshConfig
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -142,11 +143,11 @@ class InferenceReplConfig:
 
     trainer: TrainerConfig = field(
         default_factory=lambda: TrainerConfig(
-            model_axis_size=1,
-            tensor_parallel_axes=["mlp", "kv_head"],
-            fsdp_axis="embed",
-            batch_axis="batch",
             mp=jmp.get_policy("p=f32,c=f32"),
+            mesh=MeshConfig(
+                axes={"model": 1},
+                shared_mapping={"mlp": "model", "heads": "model"},
+            ),
         )
     )
     # bad

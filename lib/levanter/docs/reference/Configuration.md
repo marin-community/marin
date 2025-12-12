@@ -41,7 +41,6 @@ trainer:
     tags: [ "openwebtext", "gpt2"]
 
   mp: p=f32,c=bfloat16
-  model_axis_size: 1
   per_device_parallelism: 4
 
   train_batch_size: 512
@@ -100,7 +99,7 @@ The following table lists some of the parameters that you might want to change.
 | `seed`                         | The random seed                                                     | 0                                                         |
 | `num_train_steps`              | The number of training steps to run                                 | 400,000                                                   |
 | `train_batch_size`             | The batch size                                                      | 32                                                        |
-| `per_device_train_parallelism` | Number of examples to process on each device during training        | `train_batch_size / (num_accelerators * model_axis_size)` |
+| `per_device_train_parallelism` | Number of examples to process on each device during training        | `train_batch_size / data_axis_size` |
 | `per_device_eval_parallelism`  | Number of examples to process on each device during eval            | `per_device_train_parallelism`                            |
 | `steps_per_eval`               | How often to evaluate the model during training                     | 1,000                                                     |
 | `max_eval_batches`             | How many batches to evaluate during each evaluation                 | `None` (meaning all)                                      |
@@ -114,34 +113,40 @@ The following table lists some of the parameters that you might want to change.
 
 
 
-### Partitioning / FSDP
+### Partitioning / Mesh
 
-Sharding in Levanter is done with axis mappings, which specify how to map logical axes (e.g. "batch") to physical axes in the JAX device mesh.
-(See the [Haliax Scaling Tutorial](https://colab.research.google.com/drive/1QX4yH3zRFF3Xiibf1aahETcSQ5nbcUMz?authuser=1#scrollTo=lFZOnJD7QtZm&uniqifier=2)
-for a more detailed explanation of axis mappings.) Levanter's Trainer uses two axis mappings:  `parameter_axis_resources` and `compute_axis_resources`.
-`parameter_axis_resources` specifies how to shard the model parameters and optimizer state: basically how the model is sharded "at rest",
-while the `compute_axis_resources` specifies how to shard the model during computation.
+Sharding in Levanter is done with axis mappings that map logical axes (e.g. `"batch"`) onto a named JAX device mesh.
+Trainer now owns a single `mesh` block (a `MeshConfig) that defines:
 
-`TrainerConfig` allows you to specify these axis mappings in two ways, with a "basic" mode that has
-reasonable defaults and an "advanced" mode that gives you more control.
+* `axes`: ICI (within-slice) sizes per mesh axis. `-1` means “absorb the remaining ICI devices”. Defaults are inherited and merged, so overriding one key does not clear the others: `{"data": -1, "replica": 1, "model": 1}`.
+* `dcn_axes`: DCN (cross-slice) sizes per mesh axis. `-1` absorbs remaining slices. Defaults merge as well: `{"replica_dcn": -1}`.
+  * Axis names must be disjoint between `axes` and `dcn_axes`; overlaps error.
+* `shared_mapping`: common logical-to-physical defaults (default: `position: context`).
+* `tensor_parallel_axes`: logical axes that map to `model` by default (default: `["mlp", "heads"]`).
+* `compute_mapping`: logical→physical mapping used for compute; default `batch: [replica_dcn, replica, data]` if not provided.
+* `param_mapping`: logical→physical mapping for parameters/optimizer state; default `embed: data`.
 
-#### Basic Mode
+Defaults are *inherited*: if you override `mesh.axes: {model: 2}`, the other defaults (`data:-1`, `replica:1`) remain unless you also change them. Only one ICI axis and one DCN axis may use `-1`. If you set `-1` on a non-default absorber without touching the default, the default absorber is forced to `1` to avoid conflicts.
 
-| Parameter              | Description                                                                  | Default   |
-|------------------------|------------------------------------------------------------------------------|-----------|
-| `batch_axis`           | The axis to shard the batch over, for distributed data parallelism           | `"batch"` |
-| `fsdp_axis`            | The axis or axes to shard the model over, for Fully Sharded Data Parallelism | `"embed"` |
-| `tensor_parallel_axes` | The axis or axes to shard the model over, for Tensor Parallelism             | `None`    |
-| `model_axis_size`      | How many devices for tensor parallelism                                      | `1`       |
+Example:
+```yaml
+mesh:
+  axes: {model: 2}          # keep data:-1, replica:1 from defaults
+  dcn_axes: {replica_dcn: -1}
+  tensor_parallel_axes: ["mlp", "heads"]
+  shared_mapping:
+    position: context
+  compute_mapping:
+    batch: [replica_dcn, replica, data]
+  param_mapping:
+    embed: data
+axis_resources:
+  activation_length: sequence   # optional override
+parameter_axis_resources:
+  ln_scale: replica             # optional override
+```
 
-#### Advanced Mode
-
-| Parameter                  | Description                                                          | Default |
-|----------------------------|----------------------------------------------------------------------|---------|
-| `axis_resources`           | Mapping from logical axis to physical axis shared by both mappings   | --      |
-| `parameter_axis_resources` | Mapping from logical axis to physical axis for the parameter mapping | --      |
-| `compute_axis_resources`   | Mapping from logical axis to physical axis for the compute mapping   | --      |
-| `model_axis_size`          | How many devices for tensor parallelism                              | `1`     |
+The batch axis name remains `batch` by default (`mesh.batch_axis_name`). Tensor-parallel logical axes come from `mesh.tensor_parallel_axes` and map to `model` by default. FSDP is represented by mapping `embed` (or any parameter axes you choose) to `data` in `param_mapping`; there is no separate `fsdp_axis` field anymore.
 
 ### Checkpointing and Initialization
 
@@ -457,6 +462,11 @@ We won't go into detail here. You can see the auto-generated docs below.
 ::: levanter.trainer.TrainerConfig
 
 ::: levanter.trainer.Trainer
+
+
+### Mesh
+
+::: levanter.utils.mesh.MeshConfig
 
 ### Checkpointer
 

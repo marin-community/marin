@@ -182,9 +182,6 @@ def rl_train(name: str) -> ExecutorStep:
             base_path=OutputName("checkpoints"),
             save_interval=datetime.timedelta(seconds=600),
         ),
-        tensor_parallel_axes=["mlp", "heads"],
-        fsdp_axis="embed",
-        batch_axis="batch",
         ray=RayConfig(auto_start_cluster=False),
     )
 

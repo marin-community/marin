@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.fixture(scope="module")
 def trainer_config():
-    return TrainerConfig(model_axis_size=1)
+    return TrainerConfig()
 
 
 @pytest.fixture(scope="module")

@@ -157,7 +157,8 @@ trainer:
     tags: [ "openwebtext", "llama" ]
 
   mp: p=f32,c=bfloat16
-  model_axis_size: 1
+  mesh:
+    axes: {data: -1, replica: 1, model: 1}   # inherited defaults; override if you need TP
   per_device_parallelism: 4
 
   train_batch_size: 512

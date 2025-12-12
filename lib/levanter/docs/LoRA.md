@@ -210,8 +210,6 @@ trainer:
   num_train_steps: 550  # 64 * 550 = 35200, which is a bit more than 4 epochs
   train_batch_size: 64
 
-  # if using model parallelism, this is useful:
-  tensor_parallel_axes: ["mlp", "heads"]
 optimizer:
   # values in qlora paper
   learning_rate: 2e-4
