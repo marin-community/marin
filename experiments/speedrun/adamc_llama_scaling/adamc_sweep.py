@@ -147,17 +147,19 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     param_count = param_counts[size]
     batch_size = batch_sizes[size]
-    model_config = dataclasses.replace(model_cfgs[size], seq_len=4096)
-    seq_len = model_config.seq_len
+    model_config = dataclasses.replace(model_cfgs[size], max_seq_len=4096)
+    max_seq_len = model_config.max_seq_len
     resource_config = resource_cfgs[size]
     adam = adam_configs[size]
     description = descriptions[size]
     run_name = run_names[size]
 
-    num_train_steps = get_num_train_steps(param_count, batch_size, seq_len)
+    # we use max_seq_len == train_seq_len here
+    num_train_steps = get_num_train_steps(param_count, batch_size, max_seq_len)
 
     train = SimpleTrainConfig(
         resource_config,
+        train_seq_len=max_seq_len,
         train_batch_size=batch_size,
         num_train_steps=num_train_steps,
         learning_rate=adam.learning_rate,

@@ -45,7 +45,7 @@ class MixtralConfig(MistralConfig):
     """Config for MistralModel
 
     Args:
-        seq_len (int, optional): maximum length of the input sequence. Defaults to 8192.
+        max_seq_len (int, optional): maximum length of the input sequence. Defaults to 8192.
         hidden_dim (int, optional): dimension of the hidden state. Defaults to 4096.
         intermediate_dim (int, optional): dimension of the intermediate state. Defaults to 14336.
         num_layers (int, optional): number of hidden layers in the Transformer encoder. Defaults to 32.
@@ -61,7 +61,7 @@ class MixtralConfig(MistralConfig):
         rzl_coef (`float`, optional): aux loss factor for router z-loss. Defaults to 0.001
     """
 
-    seq_len: int = 8192
+    max_seq_len: int = 8192
     hidden_dim: int = 4096
     intermediate_dim: int = 14336
     num_layers: int = 32
@@ -98,14 +98,6 @@ class MixtralConfig(MistralConfig):
 
     # Axis
     @property
-    def Pos(self) -> Axis:
-        return Axis(name="position", size=self.seq_len)
-
-    @property
-    def KeyPos(self) -> Axis:
-        return self.Pos.alias("key_position")
-
-    @property
     def Embed(self) -> Axis:
         return Axis(name="embed", size=self.hidden_dim)
 
@@ -140,7 +132,7 @@ class MixtralConfig(MistralConfig):
         rope_theta = hf_config.rope_theta
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, None)
         return MixtralConfig(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,
@@ -172,7 +164,7 @@ class MixtralConfig(MistralConfig):
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
         return HfMixtralConfig(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -200,14 +192,14 @@ class MixtralConfig(MistralConfig):
             axis, eps=self.layer_norm_epsilon, use_weight=self.use_layer_norm_weight, use_bias=self.use_bias
         )
 
-    def flops_per_token(self, vocab_size: int):
+    def flops_per_token(self, vocab_size: int, context_length: int):
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
             num_experts=self.n_routed_experts,
@@ -432,9 +424,9 @@ class MixtralSparseMoeBlock(eqx.Module):
     @named_call
     def __call__(self, x: NamedArray, *, key=None) -> tuple[NamedArray, Dict[str, NamedArray]]:
         if x.has_axis("batch"):
-            squash_axes = [x.resolve_axis("batch"), x.resolve_axis(self.config.Pos.name)]
+            squash_axes = [x.resolve_axis("batch"), x.resolve_axis(self.config.max_Pos.name)]
         else:
-            squash_axes = [x.resolve_axis(self.config.Pos.name)]
+            squash_axes = [x.resolve_axis(self.config.max_Pos.name)]
         Experts = self.config.Experts
         TopExperts = self.config.TopExperts
 

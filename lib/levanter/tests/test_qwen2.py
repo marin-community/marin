@@ -76,10 +76,8 @@ def test_qwen_roundtrip():
 
     converter = QwenConfig().hf_checkpoint_converter()
 
-    config = QwenConfig.from_hf_config(hf_config)
-
     # Make input and attn_mask
-    input = hax.random.randint(random.PRNGKey(0), config.Pos, 0, Vocab.size)
+    input = hax.random.randint(random.PRNGKey(0), {"position": 128}, 0, Vocab.size)
     attn_mask = AttentionMask.causal()
     input_torch = torch.from_numpy(np.array(input.array)).to(torch.int32).unsqueeze(0)
 

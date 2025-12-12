@@ -3,29 +3,27 @@
 
 import glob
 import os
+from contextlib import contextmanager
 from functools import reduce
 from typing import Any, Callable, Dict, List, Optional, Sequence, TypeVar
-from contextlib import contextmanager
 
 import draccus
 import equinox as eqx
+import haliax as hax
 import jax
-from jax.sharding import Mesh
 import numpy as np
 import pytest
 from chex import assert_trees_all_close
 from equinox import nn as nn
-from jax._src.random import PRNGKey
-from transformers import AutoConfig, BatchEncoding
-
-import haliax as hax
 from haliax.partitioning import ResourceAxis, set_mesh
+from jax._src.random import PRNGKey
+from jax.sharding import Mesh
+from transformers import AutoConfig, BatchEncoding
 
 from levanter.checkpoint import _get_fs_and_plain_path
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.sharded_datasource import ShardedDataSource
 from levanter.layers.attention import AttentionMask
-
 
 T = TypeVar("T")
 
@@ -134,7 +132,6 @@ def has_soundlibs():
     try:
         import librosa  # noqa F401
         import soundfile  # noqa F401
-        import torchcodec  # noqa F401
 
         return True
     except ImportError:
@@ -248,7 +245,7 @@ def check_model_works_with_seqlen(model_type, config, input_len):
     key = PRNGKey(0)
     Vocab = hax.Axis("vocab", 128)
     model = model_type.init(Vocab, config, key=key)
-    input_ids = hax.arange(config.Pos.resize(input_len), dtype=jax.numpy.int32)
+    input_ids = hax.arange(config.max_Pos.resize(input_len), dtype=jax.numpy.int32)
     causal_mask = AttentionMask.causal()
     a1 = model(input_ids, key=key, attn_mask=causal_mask)
     assert a1.axis_size("position") == input_len

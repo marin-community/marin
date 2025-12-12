@@ -15,7 +15,7 @@ FROM rust:1.91-slim AS rust-builder
 
 
 # Main build
-FROM rayproject/ray:2.49.2-py311-cpu
+FROM rayproject/ray:2.45.0-py311-cpu
 ARG VLLM_VERSION=0.11.1
 
 # For some reason, ray destroys the apt sources list, so we need to restore it
@@ -86,12 +86,16 @@ ENV UV_SYSTEM_PYTHON=1
 
 # Install into the system Python environment b/c Ray will use this as a base
 COPY --chown=ray pyproject.toml /tmp/marin/
+COPY --chown=ray lib/ /tmp/marin/lib/
 WORKDIR /tmp/marin
-RUN mkdir -p src/marin/\
+RUN ray --version >/tmp/marin/ray_version_before.txt \
+  && mkdir -p src/marin/\
   && touch src/marin/__init__.py\
   && touch README.md\
   && touch LICENSE\
   && uv pip install -e .[dev,gcp,vllm] --system \
+  && ray --version >/tmp/marin/ray_version_after.txt \
+  && (diff /tmp/marin/ray_version_before.txt /tmp/marin/ray_version_after.txt || (echo "$(cat /tmp/marin/ray_version_before.txt) in the base image differs vs dependencies $(cat /tmp/marin/ray_version_after.txt)!" && exit 1)) \
   && rm -rf /tmp/marin
 
 WORKDIR /opt/marin

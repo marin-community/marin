@@ -35,6 +35,7 @@ class TrainASRConfig:
     model: ASRConfig = field(default_factory=WhisperConfig)
     optimizer: OptimizerConfig = field(default_factory=AdamConfig)
     batch_size: int = 16
+    train_seq_len: int = 448  # in tokens
 
     # config related to continued pretraining
     initialize_from_hf: Union[bool, str] = False
@@ -114,7 +115,7 @@ def main(config: TrainASRConfig):
         # some axes we need
         Batch = config.trainer.TrainBatch
         EvalBatch = config.trainer.EvalBatch
-        Pos = config.model.Pos
+        Pos = config.model.max_Pos
         KeyPos = config.model.KeyPos
 
         if config.data_seed is not None:
