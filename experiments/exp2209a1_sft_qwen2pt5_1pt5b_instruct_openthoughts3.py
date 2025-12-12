@@ -98,8 +98,8 @@ mixture_config = lm_mixture_data_config(
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )
 
-exp2209b1_sft_qwen2pt5_1pt5b_instruct_openthoughts3 = default_sft(
-    name="exp2209b1_sft_qwen2pt5_1pt5b_instruct_openthoughts3_bsz512_lr8e_5",
+exp2209a1_sft_qwen2pt5_1pt5b_instruct_openthoughts3 = default_sft(
+    name="exp2209a1_sft_qwen2pt5_1pt5b_instruct_openthoughts3_bsz512_lr8e_5",
     tokenized=mixture_config,
     model_config=qwen2_5_1_5b_instruct,
     sft_config=mixture_sft_config,
@@ -108,4 +108,4 @@ exp2209b1_sft_qwen2pt5_1pt5b_instruct_openthoughts3 = default_sft(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[exp2209b1_sft_qwen2pt5_1pt5b_instruct_openthoughts3])
+    executor_main(steps=[exp2209a1_sft_qwen2pt5_1pt5b_instruct_openthoughts3])
