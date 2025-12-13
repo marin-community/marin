@@ -53,7 +53,7 @@ class DataEfficiencyConfig:
     train_seed: int = 0
     data_seed: int = 42
 
-    val_name: str | None = None
+    val_name: str | None | list[str] = None
     teacher_data_name: str | None = None
     teacher_data_weight: float = 0.0
 
@@ -107,7 +107,8 @@ class DataEfficiencyConfig:
         )
         if self.effective_train_seq_len > self.model_config.max_seq_len:
             raise ValueError(
-                f"train_seq_len {self.effective_train_seq_len} exceeds model max_seq_len {self.model_config.max_seq_len}."
+                f"train_seq_len {self.effective_train_seq_len} exceeds model max_seq_len"
+                f" {self.model_config.max_seq_len}."
             )
 
         assert (
@@ -119,7 +120,7 @@ class DataEfficiencyConfig:
             self.steps_per_eval = self.total_train_steps // 20
 
         self.steps_per_eval = min(self.steps_per_eval, self.total_train_steps // 2)
- 
+
         if self.eval_harness_steps is None and self.eval_harness_tasks is not None:
             print(f"eval_harness_steps not specified, defaulting to {self.total_train_steps // 4}")
             self.eval_harness_steps = self.total_train_steps // 4
@@ -143,16 +144,14 @@ class DataEfficiencyConfig:
         validation_only_components = {}
 
         if self.val_name is not None:
-            if "," in self.val_name:
-                val_names = [v.strip() for v in self.val_name.split(",") if v.strip()]
-            else:
-                val_names = [self.val_name.strip()]
-
-            for val_name in val_names:
-                validation_only_components[val_name] = data_dict[val_name]
-
-            # If we have explicit validation-only components, don't request in-mixture validation sequences.
             num_validation_sequences = {}
+            if isinstance(self.val_name, str):
+                validation_only_components[self.val_name] = data_dict[self.val_name]
+            elif isinstance(self.val_name, list):
+                for val_name in self.val_name:
+                    validation_only_components[val_name] = data_dict[val_name]
+            else:
+                raise ValueError(f"Invalid val_name type: {type(self.val_name)}")
 
         max_train_batches = {self.data_name: self.base_train_steps}
 
@@ -160,7 +159,7 @@ class DataEfficiencyConfig:
             components[self.teacher_data_name] = data_dict[self.teacher_data_name]
             weights[self.teacher_data_name] = self.teacher_data_weight
             weights[self.data_name] = 1.0 - self.teacher_data_weight
-            if not validation_only_components:  
+            if not validation_only_components:
                 num_validation_sequences[self.teacher_data_name] = 1024
 
         data_config = lm_mixture_data_config(
@@ -170,10 +169,12 @@ class DataEfficiencyConfig:
             num_validation_sequences=num_validation_sequences,
         )
 
-        if validation_only_components:
-            data_config = add_validation_sets_to_mixture(data_config, validation_only_components)
+        prepared_data_config = _prepare_data_config(data_config, use_default_validation=True)
 
-        return _prepare_data_config(data_config, use_default_validation=True)
+        if validation_only_components:
+            prepared_data_config = add_validation_sets_to_mixture(prepared_data_config, validation_only_components)
+
+        return prepared_data_config
 
     def format_num_tokens(self) -> str:
         """Format total number of tokens in B/M/K notation."""
@@ -282,12 +283,14 @@ def data_efficiency_train_step(data_efficiency_config: DataEfficiencyConfig) -> 
         name=executor_step_name,
         override_output_path=executor_step_name,
         fn=run_levanter_train_lm,
-        description=f"Train a model for "
-        f"{data_efficiency_config.epochs} (epochs) * "
-        f"{data_efficiency_config.base_train_steps} (base steps) * "
-        f"{data_efficiency_config.train_batch_size} (batch_size) * "
-        f"{data_efficiency_config.effective_train_seq_len} (train_seq_len) "
-        f"= {data_efficiency_config.total_tokens:,} total tokens.",
+        description=(
+            "Train a model for "
+            f"{data_efficiency_config.epochs} (epochs) * "
+            f"{data_efficiency_config.base_train_steps} (base steps) * "
+            f"{data_efficiency_config.train_batch_size} (batch_size) * "
+            f"{data_efficiency_config.effective_train_seq_len} (train_seq_len) "
+            f"= {data_efficiency_config.total_tokens:,} total tokens."
+        ),
         config=train_lm_on_pod_config,
         pip_dependency_groups=["tokenize_train"],
     )

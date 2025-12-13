@@ -1,4 +1,4 @@
-valid_lrs = [1e-4, 3e-4, 1e-3, 3e-3]
+valid_lrs = [1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2]
 valid_weight_decays = [0.0, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2, 6.4]
 valid_epochs = [1, 2, 4, 8, 16, 32, 64]
 

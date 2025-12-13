@@ -221,6 +221,118 @@ sbp_cpr16_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 )
 
+## Multi News
+
+multi_news_long_context_train = default_download(
+    name="raw/data_efficiency/multi_news_long_context_train",
+    hf_dataset_id="kothasuhas/multi_news_long_context_train",
+    revision="226e5a2",
+    override_output_path="raw/data_efficiency/multi_news_long_context_train",
+)
+
+multi_news_long_context_train_tokenized = default_tokenize(
+    name="data_efficiency/multi_news_long_context_train",
+    dataset=multi_news_long_context_train,
+    tokenizer=llama3_tokenizer,
+)
+
+multi_news_long_context_val = default_download(
+    name="raw/data_efficiency/multi_news_long_context_val",
+    hf_dataset_id="kothasuhas/multi_news_long_context_validation",
+    revision="0d9afb4",
+    override_output_path="raw/data_efficiency/multi_news_long_context_val",
+)
+
+multi_news_long_context_val_tokenized = default_tokenize(
+    name="data_efficiency/multi_news_long_context_is_val",
+    dataset=multi_news_long_context_val,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
+multi_news_split_train = default_download(
+    name="raw/data_efficiency/multi_news_split_train",
+    hf_dataset_id="kothasuhas/multi_news_split_shuffled_train",
+    revision="68f4515",
+    override_output_path="raw/data_efficiency/multi_news_split_train",
+)
+
+multi_news_split_train_tokenized = default_tokenize(
+    name="data_efficiency/multi_news_split_train",
+    dataset=multi_news_split_train,
+    tokenizer=llama3_tokenizer,
+)
+
+multi_news_split_val = default_download(
+    name="raw/data_efficiency/multi_news_split_val",
+    hf_dataset_id="kothasuhas/multi_news_split_shuffled_validation",
+    revision="f1c1dc0",
+    override_output_path="raw/data_efficiency/multi_news_split_val",
+)
+
+multi_news_split_val_tokenized = default_tokenize(
+    name="data_efficiency/multi_news_split_is_val",
+    dataset=multi_news_split_val,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
+## DCLM with explicit shuffling or sorting
+
+dclm_200m_shuffled_train = default_download(
+    name="raw/data_efficiency/dclm_200m_shuffled_train",
+    hf_dataset_id="konwoo/dclm-train-164k-shuffled",
+    revision="ed2ba77",
+    override_output_path="raw/data_efficiency/dclm_200m_shuffled_train",
+)
+
+dclm_200m_shuffled_tokenized_train = default_tokenize(
+    name="data_efficiency/dclm_200m_shuffled_train",
+    dataset=dclm_200m_shuffled_train,
+    tokenizer=llama3_tokenizer,
+)
+
+dclm_200m_shuffled_validation = default_download(
+    name="raw/data_efficiency/dclm_200m_shuffled_val",
+    hf_dataset_id="konwoo/dclm-val-1k-shuffled",
+    revision="3af1ab8",
+    override_output_path="raw/data_efficiency/dclm_200m_shuffled_val",
+)
+
+dclm_200m_shuffled_tokenized_validation = default_tokenize(
+    name="data_efficiency/dclm_200m_shuffled_is_val",
+    dataset=dclm_200m_shuffled_validation,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
+dclm_200m_sorted_train = default_download(
+    name="raw/data_efficiency/dclm_200m_sorted_train",
+    hf_dataset_id="konwoo/dclm-train-164k-sorted",
+    revision="ccf737b",
+    override_output_path="raw/data_efficiency/dclm_200m_sorted_train",
+)
+
+dclm_200m_sorted_tokenized_train = default_tokenize(
+    name="data_efficiency/dclm_200m_sorted_train",
+    dataset=dclm_200m_sorted_train,
+    tokenizer=llama3_tokenizer,
+)
+
+dclm_200m_sorted_validation = default_download(
+    name="raw/data_efficiency/dclm_200m_sorted_val",
+    hf_dataset_id="konwoo/dclm-val-1k-sorted",
+    revision="56e44c5",
+    override_output_path="raw/data_efficiency/dclm_200m_sorted_val",
+)
+
+dclm_200m_sorted_tokenized_validation = default_tokenize(
+    name="data_efficiency/dclm_200m_sorted_is_val",
+    dataset=dclm_200m_sorted_validation,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
 
 data_dict = {
     "dclm": dclm_tokenized,
@@ -240,5 +352,14 @@ data_dict = {
     "symx_c16": synth_mixed_cpr16_tokenized,
     "sdn_c200": sd_cpr200_new_tokenized,
     "sbp_cpr16": sbp_cpr16_tokenized,
+    # multi news
+    "mn_lc": multi_news_long_context_train_tokenized,
+    "mn_lc_val": multi_news_long_context_val_tokenized,
+    "mn_split": multi_news_split_train_tokenized,
+    "mn_split_val": multi_news_split_val_tokenized,
+    # dclm with explicit shuffling or sorting
+    "dclm_200m_shuffled": dclm_200m_shuffled_tokenized_train,
+    "dclm_200m_shuffled_val": dclm_200m_shuffled_tokenized_validation,
+    "dclm_200m_sorted": dclm_200m_sorted_tokenized_train,
+    "dclm_200m_sorted_val": dclm_200m_sorted_tokenized_validation,
 }
-

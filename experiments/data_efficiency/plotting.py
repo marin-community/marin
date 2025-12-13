@@ -20,6 +20,7 @@ import pickle
 import numpy as np
 import json
 from scipy.optimize import curve_fit
+from sklearn.metrics import r2_score
 import matplotlib.colors as mcolors
 from experiments.data_efficiency.utils import get_bounding_box
 
@@ -289,9 +290,15 @@ class ScalingLaw:
     def evaluate(self, x):
         return self.func(x, *self.params)
 
+    def compute_r2(self, x, y):
+        y_pred = self.evaluate(x)
+        return r2_score(y, y_pred)
+
     def fit(self, x, y, p0=None, bounds=(-np.inf, np.inf)):
         popt, pcov = curve_fit(self.func, x, y, p0=p0, bounds=bounds)
         self.params = popt
+        self.r2 = self.compute_r2(x, y)
+        print(f"\033[91mR-squared: {self.r2:.4f} for {self}\033[0m")
 
 
 class ReciprocalScalingLaw(ScalingLaw):
@@ -484,7 +491,6 @@ def create_heatmap(ax, all_fits, target_lr, use_asymptote=True, main_body=False,
 
 def plot_ensemble_scaling(model_name, base_tokens):
     def is_hparams_shift(hparams, hparams_shift) -> bool:
-
         if hparams[2] == 1:
             return True
 
@@ -1123,6 +1129,9 @@ def plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fi
         # Generate points for smooth curve
         x_fit = np.logspace(np.log10(min(x_values)), np.log10(max(x_values)), 100)
         y_fit = scaling_law.evaluate(x_fit)
+        # Print power law params in four digit precision and in red
+        params_repr = ", ".join([f"{p:.4f}" for p in scaling_law.params])
+        print(f"\033[91mPower law params for {token_count} tokens: [{params_repr}]\033[0m")
 
         # Plot data points and fitted curve
         for model_size, loss in zip(model_sizes, y_values, strict=False):
@@ -2764,10 +2773,16 @@ def plot_chinchilla_comparison_200M(run_list, power_law_200M, run_losses_200M):
     # print(epoched_chinchilla_power_law)
     plt.plot(param_counts, single_run_losses, color=BASELINE_COLOR)
 
-
     more_unregularized_losses = [3.72485, 3.74383]
     more_param_counts = [1.5, 3.2]
-    plt.scatter(more_param_counts, more_unregularized_losses, color=BASELINE_COLOR, s=70, marker='*', label='Epoched extrapolation')
+    plt.scatter(
+        more_param_counts,
+        more_unregularized_losses,
+        color=BASELINE_COLOR,
+        s=70,
+        marker="*",
+        label="Epoched extrapolation",
+    )
 
     y_fit = power_law_200M.evaluate(x_fit)
     plt.scatter(param_counts[:4], run_losses_200M, color=REGULARIZED_COLOR, s=50)
@@ -2776,7 +2791,9 @@ def plot_chinchilla_comparison_200M(run_list, power_law_200M, run_losses_200M):
     plt.plot(more_x_fit, more_y_fit, "--", color=REGULARIZED_COLOR, label=f"Regularized recipe\n(Fit: {power_law_200M})")
 
     more_losses = [3.46567, 3.45199]
-    plt.scatter(more_param_counts, more_losses, color=REGULARIZED_COLOR, s=70, marker='*', label='Regularized extrapolation')
+    plt.scatter(
+        more_param_counts, more_losses, color=REGULARIZED_COLOR, s=70, marker="*", label="Regularized extrapolation"
+    )
 
     # projected_losses = chinchilla_scaling_law.evaluate((x_fit, 0.2))
     # plt.plot(x_fit, projected_losses, linestyle="--", label=f"Chinchilla: {chinchilla_scaling_law}")
@@ -2793,6 +2810,7 @@ def plot_chinchilla_comparison_200M(run_list, power_law_200M, run_losses_200M):
     plt.tight_layout()
     plt.savefig("experiments/data_efficiency/plots/chinchilla_comparison_200M.png")
     plt.close()
+
 
 def plot_wrap(run_list, power_law_200M, run_losses_200M):
     plt.figure(figsize=(10, 5), dpi=300)
@@ -2825,8 +2843,8 @@ def plot_wrap(run_list, power_law_200M, run_losses_200M):
     "3_2b4k": VIRIDIAN,
     }
     """
-    
-    # 150M ensembles 
+
+    # 150M ensembles
     param_counts = [(154147328 / 1e9) * i for i in range(1, 6)]
     losses = [4.25709, 3.97665, 3.88724, 3.84555, 3.81822]
     power_law = PowerScalingLaw(var_name="N")
@@ -2857,7 +2875,7 @@ def plot_wrap(run_list, power_law_200M, run_losses_200M):
     plt.plot(x_fit, y_fit, "--", color=param_str_color_dict["600m4k"], label=f"600M Ensembles\n(Fit: {power_law})")
 
     # 1.5B ensembles
-    param_counts = [(1540732416 / 1e9) * i for i in [1,2,3,4,5]]
+    param_counts = [(1540732416 / 1e9) * i for i in [1, 2, 3, 4, 5]]
     losses = [4.17566, 3.7952, 3.67928, 3.61881, 3.58401]
     power_law = PowerScalingLaw(var_name="N")
     power_law.fit(param_counts, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
@@ -2868,7 +2886,7 @@ def plot_wrap(run_list, power_law_200M, run_losses_200M):
 
     # 300M ensembles (hq)
     param_counts = [(299649792 / 1e9) * i for i in range(1, 6)]
-    losses = [3.67209, 3.57402, 3.54472, 3.52817, 3.51803]    
+    losses = [3.67209, 3.57402, 3.54472, 3.52817, 3.51803]
     power_law = PowerScalingLaw(var_name="N")
     power_law.fit(param_counts, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
     x_fit = np.logspace(np.log10(min(param_counts)), np.log10(max(param_counts)), 100)
@@ -2877,7 +2895,7 @@ def plot_wrap(run_list, power_law_200M, run_losses_200M):
     plt.plot(x_fit, y_fit, "--", color=WRAP_COLOR, label=f"300M WRAP Ens\n(Fit: {power_law})")
 
     # 300M ensembles (sd)
-    param_counts = [(299649792 / 1e9) * i for i in [1,2,3,4,5]]
+    param_counts = [(299649792 / 1e9) * i for i in [1, 2, 3, 4, 5]]
     losses = [3.67071, 3.60728, 3.58736, 3.57565, 3.56865]
     power_law = PowerScalingLaw(var_name="N")
     power_law.fit(param_counts, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
@@ -2887,7 +2905,7 @@ def plot_wrap(run_list, power_law_200M, run_losses_200M):
     plt.plot(x_fit, y_fit, "--", color=SELF_DISTILL_COLOR, label=f"300M Self-Distill Ens\n(Fit: {power_law})")
 
     # 300M ensembles (symx)
-    param_counts = [(299649792 / 1e9) * i for i in [1,2,3,4,5]]
+    param_counts = [(299649792 / 1e9) * i for i in [1, 2, 3, 4, 5]]
     losses = [3.58481, 3.49636, 3.46847, 3.45411, 3.44538]
     power_law = PowerScalingLaw(var_name="N")
     power_law.fit(param_counts, losses, p0=[1.0, 0.5, 2.0], bounds=([0, 0, 0], [np.inf, np.inf, np.inf]))
@@ -2907,7 +2925,7 @@ def plot_wrap(run_list, power_law_200M, run_losses_200M):
     plt.title("Synthetic data ensembles")
     plt.grid(True, which="both", linestyle="--", alpha=0.3)
     # legend outside the plot
-    plt.legend(loc="upper right", bbox_to_anchor=(1.3, 1), borderaxespad=0.)
+    plt.legend(loc="upper right", bbox_to_anchor=(1.3, 1), borderaxespad=0.0)
     plt.xlabel("Parameter count")
     plt.ylabel("Loss")
     plt.tight_layout()
@@ -3083,7 +3101,6 @@ if __name__ == "__main__":
         best_run_dict = construct_best_run_dict(run_list)
         weight_decay_loss_trajectories(run_list)
 
-
         # # Also create token scaling plot
         # valid_model_sizes, asymptotes = plot_token_scaling(best_run_dict, fit_type="power_law")
         with plt.rc_context({"font.size": 14}):
@@ -3095,9 +3112,11 @@ if __name__ == "__main__":
         # Create paper version of plots
         with plt.rc_context({"font.size": 12}):
             print(parameter_scaling_losses)
-            standard_seed_scaling_asymptotes, standard_seed_scaling_power_law, epoched_data_scaling_law = (
-                plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fit_type="power_law")
-            )
+            (
+                standard_seed_scaling_asymptotes,
+                standard_seed_scaling_power_law,
+                epoched_data_scaling_law,
+            ) = plot_standard_model_seed_scaling(parameter_scaling_losses, best_run_dict, fit_type="power_law")
             plot_ensemble_model_seed_scaling(standard_seed_scaling_asymptotes, standard_seed_scaling_power_law)
         # plot_token_scaling_simple(best_run_dict, fit_type="power_law")
 
