@@ -140,10 +140,18 @@ class DataEfficiencyConfig:
         components = {self.data_name: self.data}
         weights = {self.data_name: 1.0}
         num_validation_sequences = {self.data_name: 1024}
-        validation_only_components= {}
+        validation_only_components = {}
 
         if self.val_name is not None:
-            validation_only_components[self.val_name] = data_dict[self.val_name]
+            if "," in self.val_name:
+                val_names = [v.strip() for v in self.val_name.split(",") if v.strip()]
+            else:
+                val_names = [self.val_name.strip()]
+
+            for val_name in val_names:
+                validation_only_components[val_name] = data_dict[val_name]
+
+            # If we have explicit validation-only components, don't request in-mixture validation sequences.
             num_validation_sequences = {}
 
         max_train_batches = {self.data_name: self.base_train_steps}
