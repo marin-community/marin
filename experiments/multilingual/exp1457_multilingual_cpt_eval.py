@@ -19,13 +19,15 @@ Evaluate the multilingual CPT continuation (exp1457) and Llama 3.1 8B on multili
 from collections.abc import Iterable
 from dataclasses import replace
 
-from experiments.evals.engine_configs import DEFAULT_LM_EVAL_MODEL_KWARGS
-from experiments.evals.evals import default_eval, evaluate_lm_evaluation_harness
-from experiments.evals.resource_configs import SINGLE_TPU_V5p_8
+from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MULTILINGUAL_LM_EVAL_LOGPROB_TASKS
 from experiments.multilingual.exp1457_multilingual_cpt import multilingual_cpt_8b_fineweb2_hq
+from experiments.models import llama_3_1_8b
+from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, executor_main
+
+SINGLE_TPU_V5p_8 = ResourceConfig.with_tpu("v5p-8")
 
 
 def _create_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[ExecutorStep]:
@@ -49,13 +51,10 @@ def _create_llama3_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[
 
     llama3_steps: list[ExecutorStep] = []
     for task in tasks:
-        eval_step = evaluate_lm_evaluation_harness(
-            model_name="llama-3.1-8b-base",
-            model_path="meta-llama/Meta-Llama-3.1-8B",
-            evals=(task,),
-            max_eval_instances=None,
-            engine_kwargs=DEFAULT_LM_EVAL_MODEL_KWARGS,
+        eval_step = default_eval(
+            step=llama_3_1_8b,
             resource_config=SINGLE_TPU_V5p_8,
+            evals=(task,),
             apply_chat_template=False,
             discover_latest_checkpoint=False,
         )
@@ -66,7 +65,7 @@ def _create_llama3_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[
 
 
 multilingual_eval_steps = [
-    # *_create_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
+    *_create_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
     *_create_llama3_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
 ]
 
