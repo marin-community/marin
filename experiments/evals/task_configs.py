@@ -439,7 +439,7 @@ BELEBELE_TASKS = tuple(
     )
 )
 
-FEW_SHOT_OG_MULTILINGUAL_TASKS = tuple(
+INCLUDE_44_TASKS = tuple(
     EvalTaskConfig(task_name, num_fewshot=5, task_alias=alias)
     for task_name, alias in (
         ("include_base_44_albanian_few_shot_og", "include_base_44_albanian_few_shot_og_5_shot"),
@@ -531,7 +531,7 @@ MMMLU_MULTILINGUAL_TASKS = tuple(
 )
 
 MULTILINGUAL_LM_EVAL_LOGPROB_TASKS = (
-    FEW_SHOT_OG_MULTILINGUAL_TASKS
+    INCLUDE_44_TASKS
     + BELEBELE_TASKS
     + XSTORYCLOZE_MULTILINGUAL_TASKS
     + (
