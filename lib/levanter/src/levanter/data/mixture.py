@@ -72,8 +72,8 @@ class MixtureDataset(AsyncDataset[T]):
                 assert start_seq_index == 0
             else:
                 assert start_seq_index % block_size == 0, (
-                    f"start_seq_index for a stage must be a multiple of block_size, got {start_seq_index=} and"
-                    f" {block_size=}"
+                    f"stage {i}: start_seq_index for a stage must be a multiple of block_size, "
+                    f"got {start_seq_index=} and {block_size=}"
                 )
                 assert start_seq_index > weight_stages[i - 1][0], f"Weights list must be sorted, got {weight_stages}"
 

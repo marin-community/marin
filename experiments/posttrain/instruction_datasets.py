@@ -536,7 +536,7 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
             adapter=versioned(adapter),
             subsets=versioned(dataset_cfg.subsets),
             splits=versioned(dataset_cfg.splits),
-            max_parallelism=versioned(dataset_cfg.max_parallelism),
+            max_parallelism=dataset_cfg.max_parallelism,
         ),
         override_output_path=f"documents/{dataset_name}-{dataset_cfg.revision}-{hashed_config_str}",
     )
@@ -544,12 +544,14 @@ def transform_dataset_step(dataset_cfg: InstructionDatasetConfig) -> ExecutorSte
     return transform_step
 
 
-def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] = ("train",)) -> ExecutorStep:
+def get_instruction_dataset(hf_dataset_id: str, splits: Sequence[str] | None = None) -> ExecutorStep:
     # Check that config exists
     assert hf_dataset_id in INSTRUCTION_DATASET_NAME_TO_CONFIG, f"Unknown instruction dataset: {hf_dataset_id}"
 
     # Create a new configuration instance with the desired split.
     original_config = INSTRUCTION_DATASET_NAME_TO_CONFIG[hf_dataset_id]
+    if splits is None:
+        splits = original_config.splits
     config = InstructionDatasetConfig(
         **{k: v for k, v in original_config.__dict__.items() if k != "splits"}, splits=splits
     )
