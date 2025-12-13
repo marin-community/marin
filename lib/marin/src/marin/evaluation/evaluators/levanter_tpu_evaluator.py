@@ -53,9 +53,7 @@ class LevanterTpuEvaluator(Evaluator, ABC):
             if os.path.exists(model.path):
                 return model.path
 
-        downloaded_path: str | None = model.ensure_downloaded(
-            local_path=cache_destination
-        )
+        downloaded_path: str | None = model.ensure_downloaded(local_path=cache_destination)
 
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
