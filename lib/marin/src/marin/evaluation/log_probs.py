@@ -26,7 +26,6 @@ from fray.cluster.base import TpuConfig
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
-from levanter.infra.ray_tpu import run_on_pod_resumable
 from levanter.main.eval_lm import EvalLmConfig as LevanterEvalLmConfig
 from levanter.main.eval_lm import main as eval_lm_main
 from levanter.main.eval_ensemble import EvalEnsembleConfig as LevanterEvalEnsembleConfig

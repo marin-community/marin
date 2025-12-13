@@ -27,7 +27,7 @@ from experiments.llama import llama_1_4b, llama_1_9b, llama_150m, llama_300m, ll
 
 
 llama_1_5b_config = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=1536,
     intermediate_dim=5376,
     num_heads=16,
@@ -36,7 +36,7 @@ llama_1_5b_config = LlamaConfig(
 )
 
 llama_3_2b_config = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2048,
     intermediate_dim=7168,
     num_heads=16,
@@ -45,7 +45,7 @@ llama_3_2b_config = LlamaConfig(
 )
 
 llama_3_2b_config_all_norm = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2048,
     intermediate_dim=7168,
     num_heads=16,
@@ -56,7 +56,7 @@ llama_3_2b_config_all_norm = LlamaConfig(
 )
 
 llama_3_2b_config_qk_norm = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2048,
     intermediate_dim=7168,
     num_heads=16,
@@ -68,18 +68,18 @@ llama_3_2b_config_qk_norm = LlamaConfig(
 
 SEQ_LEN = 4096
 
-llama_150m_4096_config = dataclasses.replace(llama_150m, seq_len=SEQ_LEN)
-llama_300m_4096_config = dataclasses.replace(llama_300m, seq_len=SEQ_LEN)
-llama_600m_4096_config = dataclasses.replace(llama_600m, seq_len=SEQ_LEN)
-llama_1_4b_4096_config = dataclasses.replace(llama_1_4b, seq_len=SEQ_LEN)
-llama_1_9b_4096_config = dataclasses.replace(llama_1_9b, seq_len=SEQ_LEN)
-llama_1_5b_4096_config = dataclasses.replace(llama_1_5b_config, seq_len=SEQ_LEN)
-llama_3_2b_4096_config = dataclasses.replace(llama_3_2b_config, seq_len=SEQ_LEN)
-llama_3_2b_4096_config_all_norm = dataclasses.replace(llama_3_2b_config_all_norm, seq_len=SEQ_LEN)
-llama_3_2b_4096_config_qk_norm = dataclasses.replace(llama_3_2b_config_qk_norm, seq_len=SEQ_LEN)
+llama_150m_4096_config = dataclasses.replace(llama_150m, max_seq_len=SEQ_LEN)
+llama_300m_4096_config = dataclasses.replace(llama_300m, max_seq_len=SEQ_LEN)
+llama_600m_4096_config = dataclasses.replace(llama_600m, max_seq_len=SEQ_LEN)
+llama_1_4b_4096_config = dataclasses.replace(llama_1_4b, max_seq_len=SEQ_LEN)
+llama_1_9b_4096_config = dataclasses.replace(llama_1_9b, max_seq_len=SEQ_LEN)
+llama_1_5b_4096_config = dataclasses.replace(llama_1_5b_config, max_seq_len=SEQ_LEN)
+llama_3_2b_4096_config = dataclasses.replace(llama_3_2b_config, max_seq_len=SEQ_LEN)
+llama_3_2b_4096_config_all_norm = dataclasses.replace(llama_3_2b_config_all_norm, max_seq_len=SEQ_LEN)
+llama_3_2b_4096_config_qk_norm = dataclasses.replace(llama_3_2b_config_qk_norm, max_seq_len=SEQ_LEN)
 
 llama_3b_config = LlamaConfig(
-    seq_len=SEQ_LEN,  # Seq len set to reproduce Tulu SFT
+    max_seq_len=SEQ_LEN,  # Seq len set to reproduce Tulu SFT
     hidden_dim=3072,
     intermediate_dim=8192,
     num_layers=28,
@@ -100,7 +100,7 @@ llama_3b_config = LlamaConfig(
 )
 
 llama_8b_config = LlamaConfig(
-    seq_len=SEQ_LEN,  # Seq len set to reproduce Tulu SFT
+    max_seq_len=SEQ_LEN,  # Seq len set to reproduce Tulu SFT
     hidden_dim=4096,
     intermediate_dim=14336,
     num_layers=32,
@@ -122,7 +122,7 @@ llama_8b_config = LlamaConfig(
 )
 
 olmoe_8x_1_4b = MixtralConfig(
-    seq_len=SEQ_LEN,
+    max_seq_len=SEQ_LEN,
     hidden_dim=2048,
     intermediate_dim=1024,
     num_heads=16,
@@ -133,7 +133,7 @@ olmoe_8x_1_4b = MixtralConfig(
 )
 
 moe_8x_300m = MixtralConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=768,
     intermediate_dim=1344,
     num_layers=12,
@@ -149,7 +149,7 @@ moe_8x_300m = MixtralConfig(
 )
 
 moe_debug = MixtralConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=128,
     intermediate_dim=128,
     num_layers=4,

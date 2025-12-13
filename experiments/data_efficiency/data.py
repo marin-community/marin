@@ -3,24 +3,11 @@ import dataclasses
 from levanter.data.text import TextLmDatasetFormat
 
 from experiments.defaults import default_download, default_tokenize
-from experiments.pretraining_datasets import dclm_baseline, starcoderdata
+from experiments.pretraining_datasets.dclm import dclm_components_llama3
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
 
-dclm_tokenized = dataclasses.replace(
-    default_tokenize(
-        name="dclm_baseline",
-        dataset=dclm_baseline,
-        tokenizer=llama3_tokenizer,
-    ).with_output_path("tokenized/dclm_baseline-0206f1/"),
-)
-
-starcoderdata_tokenized = default_tokenize(
-    name="starcoderdata",
-    dataset=starcoderdata,
-    tokenizer=llama3_tokenizer,
-    format=TextLmDatasetFormat(text_key="content"),
-).with_output_path("tokenized/starcoderdata-12f018/")
+dclm_tokenized = dclm_components_llama3["dclm_baseline"]
 
 # self-distill with 300M model trained on 200M tokens (using optimal hparams for an infinite ensemble)
 sd0715 = default_download(
@@ -237,7 +224,6 @@ sbp_cpr16_tokenized = default_tokenize(
 
 data_dict = {
     "dclm": dclm_tokenized,
-    "code": starcoderdata_tokenized,
     "sd0715": sd0715_tokenized,
     "sd0805": sd0805_tokenized,
     "ens2d0715": ens2d0715_tokenized,

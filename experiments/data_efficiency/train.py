@@ -36,11 +36,11 @@ from marin.evaluation.log_probs import default_lm_log_probs, default_ensemble_lo
 from marin.execution.executor import ExecutorStep, this_output_path, output_path_of
 from marin.processing.tokenize.data_configs import (
     LMMixtureDatasetConfig,
-    TokenizerStep,
     add_validation_sets_to_mixture,
     lm_mixture_data_config,
 )
-from marin.training.training import TpuPodConfig, TrainLmOnPodConfig, run_levanter_train_lm
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from fray.cluster import ResourceConfig
 
 from experiments.data_efficiency.data import data_dict
 
@@ -60,6 +60,7 @@ class DataEfficiencyConfig:
     ### Trainer config
     base_train_steps: int = 1024
     train_batch_size: int = 1024
+    train_seq_len: int | None = None
     steps_per_eval: int | None = None
     wandb_project_name: str = "suhas-data-efficiency"
     wandb_additional_tags: list[str] = field(default_factory=list)
@@ -86,6 +87,7 @@ class DataEfficiencyConfig:
     ### Eval config
     eval_harness_tasks: list[EvalTaskConfig] | None = None
     eval_harness_steps: int | None = None
+    effective_train_seq_len: int = field(init=False)
 
     def __post_init__(self):
         assert self.lr_cooldown_duration is None, "Cooldown duration is not supported for data efficiency experiments"
@@ -100,6 +102,13 @@ class DataEfficiencyConfig:
 
         self.model_config = model_dict[self.model_name]
         self.total_train_steps = int(self.base_train_steps * self.epochs / (1.0 - self.teacher_data_weight))
+        self.effective_train_seq_len = (
+            self.model_config.max_seq_len if self.train_seq_len is None else self.train_seq_len
+        )
+        if self.effective_train_seq_len > self.model_config.max_seq_len:
+            raise ValueError(
+                f"train_seq_len {self.effective_train_seq_len} exceeds model max_seq_len {self.model_config.max_seq_len}."
+            )
 
         assert (
             self.initialize_from_checkpoint_path is None or self.initialize_from_hf is None
@@ -110,13 +119,13 @@ class DataEfficiencyConfig:
             self.steps_per_eval = self.total_train_steps // 20
 
         self.steps_per_eval = min(self.steps_per_eval, self.total_train_steps // 2)
-
+ 
         if self.eval_harness_steps is None and self.eval_harness_tasks is not None:
             print(f"eval_harness_steps not specified, defaulting to {self.total_train_steps // 4}")
             self.eval_harness_steps = self.total_train_steps // 4
 
         self.data = data_dict[self.data_name]
-        self.one_epoch_tokens = self.model_config.seq_len * self.base_train_steps * self.train_batch_size
+        self.one_epoch_tokens = self.effective_train_seq_len * self.base_train_steps * self.train_batch_size
         self.total_tokens = self.one_epoch_tokens * self.epochs
 
     def build_name(self) -> str:
@@ -221,17 +230,15 @@ class DataEfficiencyConfig:
             return None
         return LmEvalHarnessConfig(task_spec=convert_to_levanter_task_config(self.eval_harness_tasks))
 
-    def build_pod_config(self) -> TpuPodConfig:
-        return TpuPodConfig(
-            tpu_type=self.tpu_type,
-            slice_count=self.slice_count,
-        )
+    def build_resource_config(self) -> ResourceConfig:
+        return ResourceConfig.with_tpu(self.tpu_type, slice_count=self.slice_count)
 
     def build_train_lm_config(self) -> TrainLmConfig:
         return TrainLmConfig(
             data=self.build_data_config(),
             trainer=self.build_trainer_config(),
             model=self.model_config,
+            train_seq_len=self.effective_train_seq_len,
             optimizer=self.build_optimizer_config(),
             z_loss_weight=None,
             initialize_from_checkpoint_path=self.initialize_from_checkpoint_path,
@@ -244,7 +251,7 @@ class DataEfficiencyConfig:
     def build_train_lm_on_pod_config(self) -> TrainLmOnPodConfig:
         return TrainLmOnPodConfig(
             train_config=self.build_train_lm_config(),
-            resources=self.build_pod_config(),
+            resources=self.build_resource_config(),
             output_path=this_output_path(),
         )
 
@@ -271,7 +278,7 @@ def data_efficiency_train_step(data_efficiency_config: DataEfficiencyConfig) -> 
         f"{data_efficiency_config.epochs} (epochs) * "
         f"{data_efficiency_config.base_train_steps} (base steps) * "
         f"{data_efficiency_config.train_batch_size} (batch_size) * "
-        f"{data_efficiency_config.model_config.seq_len} (seq_len) "
+        f"{data_efficiency_config.effective_train_seq_len} (train_seq_len) "
         f"= {data_efficiency_config.total_tokens:,} total tokens.",
         config=train_lm_on_pod_config,
         pip_dependency_groups=["tokenize_train"],
