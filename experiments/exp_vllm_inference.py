@@ -28,11 +28,6 @@ from transformers import AutoTokenizer
 from marin.training.training import _add_run_env_variables
 from marin.utils import remove_tpu_lockfile_on_exit
 
-# Disable multiprocessing to have direct access to the model weights
-os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
-# Skip jax precompile to speed up bootstrap time
-os.environ["SKIP_JAX_PRECOMPILE"] = "1"
-
 try:
     from vllm import LLM, SamplingParams
     from vllm.inputs import TokensPrompt
@@ -125,6 +120,10 @@ def main():
     env = {}
     env = _add_run_env_variables(env)
     env["EQX_ON_ERROR"] = "nan"
+    # Disable multiprocessing to have direct access to the model weights
+    env["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+    # Skip jax precompile to speed up bootstrap time
+    env["SKIP_JAX_PRECOMPILE"] = "1"
 
     # Configure TPU resources (v5p-8 to match tensor_parallel_size=8)
     tpu_type = "v5p-8"
