@@ -38,7 +38,6 @@ train_steps = [
                 weight_decay=weight_decay,
                 wandb_project_name="suhas-data-efficiency",
                 model_name=model_name,
-                nametag="-bs64",
                 tpu_type="v4-64",
             )
         )
@@ -51,7 +50,7 @@ train_steps = [
         [(750, 8, 1e-3, 3.2, "600m4k")],
         [(750, 8, 1e-3, 3.2, "1_4b4k")],
         [(750, 8, 1e-3, 3.2, "1_5b4k")],
-        # Unregularized 
+        # Unregularized
         [(750, 8, 3e-3, 0.1, "150m4k")],
         [(750, 8, 1e-3, 0.1, "300m4k")],
         [(750, 4, 1e-3, 0.1, "600m4k")],

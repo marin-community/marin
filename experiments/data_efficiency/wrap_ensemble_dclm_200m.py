@@ -21,7 +21,16 @@ from marin.execution.executor import executor_main
 
 ensemble_members_train_steps_dict_list = [
     {
-        (synthetic_data_name, synthetic_data_weight, base_train_steps, epochs, lr, weight_decay, model_name, seed): data_efficiency_train_step(
+        (
+            synthetic_data_name,
+            synthetic_data_weight,
+            base_train_steps,
+            epochs,
+            lr,
+            weight_decay,
+            model_name,
+            seed,
+        ): data_efficiency_train_step(
             DataEfficiencyConfig(
                 train_seed=seed,
                 data_seed=seed,
@@ -39,19 +48,22 @@ ensemble_members_train_steps_dict_list = [
                 wandb_additional_tags=[synthetic_data_name],
                 model_name=model_name,
                 nametag=f"-seed{seed}",
+                bs_in_name=False,
                 initialize_from_hf=None,
                 tpu_type="v4-64",
             )
         )
-        for synthetic_data_name, synthetic_data_weight, base_train_steps, epochs, lr, weight_decay, model_name in [candidate_hparams]
+        for synthetic_data_name, synthetic_data_weight, base_train_steps, epochs, lr, weight_decay, model_name in [
+            candidate_hparams
+        ]
     }
     for candidate_hparams in [
         # ("sdn_c200", 0.75, 750, 8, 3e-3, 0.1, "300m4k"),
         # ("symx_c16", 0.75, 750, 8, 3e-3, 0.1, "300m4k"),
         # ("sd_cpr16", 0.75, 750, 8, 3e-3, 0.1, "300m4k"),
-        # ("hq_cpr16", 0.5, 750, 16, 3e-3, 1.6, "300m4k"), 
-        # ("sbp_cpr16", 0.5, 750, 8, 3e-3, 1.6, "300m4k"), 
-        ("hq_cpr16", 0.5, 750, 16, 3e-3, 1.6, "150m4k"), 
+        # ("hq_cpr16", 0.5, 750, 16, 3e-3, 1.6, "300m4k"),
+        # ("sbp_cpr16", 0.5, 750, 8, 3e-3, 1.6, "300m4k"),
+        ("hq_cpr16", 0.5, 750, 16, 3e-3, 1.6, "150m4k"),
     ]
     for seed in list(range(5))
 ]

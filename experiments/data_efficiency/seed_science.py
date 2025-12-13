@@ -41,6 +41,7 @@ seed_science_train_steps_dict = {
             wandb_additional_tags=[key],
             model_name=model_name,
             nametag=f"-ts{train_seed}-ds{data_seed}",
+            bs_in_name=False,
             tpu_type="v4-16",
         )
     )

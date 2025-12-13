@@ -16,10 +16,10 @@ train_steps = [
             wandb_project_name="suhas-data-efficiency",
             wandb_additional_tags=["self-distill-8-05" if teacher_data_name == "sd0805" else teacher_data_name],
             model_name=model_name,
-            nametag=f"-bs64" + nametag,
+            nametag=nametag,
             initialize_from_hf=initialize_from_hf,
             teacher_only_steps=base_train_steps * epochs * 2.0,
-            tpu_type="v4-64"
+            tpu_type="v4-64",
         )
     )
     for base_train_steps in [800]
@@ -32,7 +32,4 @@ train_steps = [
 ]
 
 if __name__ == "__main__":
-    executor_main(
-        steps=train_steps,
-        description="Teacher only ablation"
-    )
+    executor_main(steps=train_steps, description="Teacher only ablation")

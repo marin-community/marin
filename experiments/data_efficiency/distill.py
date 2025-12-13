@@ -16,7 +16,7 @@ train_steps = [
             wandb_project_name="suhas-data-efficiency",
             wandb_additional_tags=["self-distill-7-15" if teacher_data_name == "sd0715" else teacher_data_name],
             model_name=model_name,
-            nametag=f"-bs64" + nametag,
+            nametag=nametag,
             initialize_from_hf=initialize_from_hf,
         )
     )

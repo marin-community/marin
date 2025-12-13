@@ -36,6 +36,7 @@ ensemble_members_train_steps_dict_list = [
                 wandb_project_name="suhas-data-efficiency",
                 model_name=model_name,
                 nametag=f"-seed{seed}",
+                bs_in_name=False,
                 tpu_type="v4-64",
             )
         )

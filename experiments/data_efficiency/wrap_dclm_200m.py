@@ -17,9 +17,9 @@ train_steps = [
             wandb_project_name="suhas-data-efficiency",
             wandb_additional_tags=[synthetic_data_name],
             model_name=model_name,
-            nametag=f"-bs64" + nametag,
+            nametag=nametag,
             initialize_from_hf=initialize_from_hf,
-            tpu_type="v4-64"
+            tpu_type="v4-64",
         )
     )
     for base_train_steps in [750]
@@ -36,7 +36,4 @@ train_steps = [
 ]
 
 if __name__ == "__main__":
-    executor_main(
-        steps=train_steps,
-        description="Wrap DCLM 200M"
-    )
+    executor_main(steps=train_steps, description="Wrap DCLM 200M")

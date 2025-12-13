@@ -34,7 +34,6 @@ train_steps = [
             wandb_project_name="suhas-data-efficiency",
             wandb_additional_tags=[additional_tag],
             model_name=model_name,
-            nametag=f"-bs{batch_size}",
         )
     )
     ## Batch size

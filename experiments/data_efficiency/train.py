@@ -66,6 +66,7 @@ class DataEfficiencyConfig:
     wandb_additional_tags: list[str] = field(default_factory=list)
     steps_to_export_list: list[int] = field(default_factory=list)
     nametag: str = ""
+    bs_in_name: bool = True
 
     ### Hardware
     tpu_type: str = "v4-128"
@@ -133,7 +134,9 @@ class DataEfficiencyConfig:
         data_str = f"{self.format_num_tokens()}x{self.epochs}-{self.data_name}"
         if self.teacher_data_name is not None and self.teacher_data_weight > 0.0:
             data_str += f"+{self.teacher_data_name}^{self.teacher_data_weight}"
-        name = f"{self.model_name}-{data_str}-{self.format_lr_schedule()}{self.nametag}"
+        name = (
+            f"{self.model_name}-{data_str}-{self.format_lr_schedule()}{f'-bs{self.train_batch_size}' if self.bs_in_name else ''}{self.nametag}"
+        )
         assert len(name) <= 64, f"Name is too long with length {len(name)}: {name}"
         return name
 

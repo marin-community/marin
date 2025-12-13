@@ -33,7 +33,6 @@ train_steps = [
             weight_decay=weight_decay,
             wandb_project_name="suhas-data-efficiency",
             model_name=model_name,
-            nametag=f"-bs{batch_size}",
             tpu_type="v4-64",
         )
     )
