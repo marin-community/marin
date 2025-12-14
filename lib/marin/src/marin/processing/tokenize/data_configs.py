@@ -68,6 +68,7 @@ def lm_data_config(
     shuffle: bool | int = True,
     max_train_batches: dict[str, int] | None = None,
     num_validation_sequences: dict[str, int] | None = None,
+    block_cross_document_attention: bool = True,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a dataset config suitable for Levanter's TrainLMConfig from a single training set
@@ -85,6 +86,7 @@ def lm_data_config(
         shuffle: Whether to shuffle the data. If int, uses era shuffling.
         max_train_batches: Maximum number of batches to use for the training set per dataset.
         num_validation_sequences: Number of validation sequences to take from the training set per dataset.
+        block_cross_document_attention: Whether to mask attention across document boundaries.
     """
     tokenizer = training_set.config.tokenizer
 
@@ -106,6 +108,7 @@ def lm_data_config(
         missing_weights_are_validation=True,
         max_train_batches=max_train_batches,
         num_validation_sequences=num_validation_sequences,
+        block_cross_document_attention=block_cross_document_attention,
     )
 
 
@@ -120,6 +123,7 @@ def lm_mixture_data_config(
     max_train_batches: dict[str, int] | None = None,
     num_validation_sequences: dict[str, int] | None = None,
     mixture_block_size: int | None = None,
+    block_cross_document_attention: bool = True,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources.
@@ -133,6 +137,7 @@ def lm_mixture_data_config(
         include_raw_paths: whether to include raw paths in the dataset config. This is mostly for logging purposes.
         max_train_batches: Maximum number of batches to use for the training set per dataset.
         num_validation_sequences: Number of validation sequences to take from the training set per dataset.
+        block_cross_document_attention: Whether to mask attention across document boundaries.
     """
     configs = {
         name: step_to_lm_mixture_component(step, include_raw_paths=include_raw_paths)
@@ -158,6 +163,7 @@ def lm_mixture_data_config(
         permutation_type=permutation_type,
         max_train_batches=max_train_batches,
         num_validation_sequences=num_validation_sequences,
+        block_cross_document_attention=block_cross_document_attention,
         **kwargs,
     )
 
@@ -275,6 +281,7 @@ def lm_varying_mixture_data_config(
     mixture_block_size: int | None = None,
     max_train_batches: dict[str, int] | None = None,
     num_validation_sequences: dict[str, int] | None = None,
+    block_cross_document_attention: bool = True,
 ) -> LMMixtureDatasetConfig:
     """
     Creates a training config from a mixture of datasources with varying weights.
@@ -292,7 +299,7 @@ def lm_varying_mixture_data_config(
         mixture_block_size: The block size to use for the mixture.
         max_train_batches: Maximum number of batches to use for the training set per dataset.
         num_validation_sequences: Number of validation sequences to take from the training set per dataset.
-
+        block_cross_document_attention: Whether to mask attention across document boundaries.
     Returns:
         LMMixtureDatasetConfig configured with the varying weights
     """
@@ -328,6 +335,7 @@ def lm_varying_mixture_data_config(
         permutation_type=permutation_type,
         max_train_batches=max_train_batches,
         num_validation_sequences=num_validation_sequences,
+        block_cross_document_attention=block_cross_document_attention,
     )
 
 
