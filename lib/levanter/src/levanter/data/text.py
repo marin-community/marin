@@ -157,18 +157,25 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
         *,
         ignore_index: Optional[int] = None,
         eos_id: Optional[int] = None,
+        block_cross_document_attention: bool = True,
     ):
         self.dataset = dataset
         self.Pos = Pos
         self.ignore_id = ignore_index
         self.eos_id = eos_id
+        self.block_cross_document_attention = block_cross_document_attention
 
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
         @functools.partial(eqx.filter_jit)
         def _create_lm_example(tokens):
             tokens = hax.named(tokens, self.Pos)
-            example = LmExample.causal(tokens=tokens, ignore_id=self.ignore_id, eos_id=eos_id)
+            example = LmExample.causal(
+                tokens=tokens,
+                ignore_id=self.ignore_id,
+                eos_id=eos_id,
+                block_cross_document_attention=block_cross_document_attention,
+            )
 
             example = jax.lax.with_sharding_constraint(example, sharding)
 
@@ -552,6 +559,17 @@ class LMTaskConfig(abc.ABC):
     If None, defaults to linear, but this will change in the future since Feistel is better.
     """
 
+    block_cross_document_attention: bool = True
+    """Whether to block attention across document boundaries.
+
+    If True (default), attention is blocked across documents using segment ids derived from
+    EOS tokens. This prevents tokens from one document attending to tokens from a different
+    document within a packed sequence.
+
+    If False, full causal attention is allowed across packed documents, meaning tokens can
+    attend to all previous tokens regardless of document boundaries.
+    """
+
     @cached_property
     def the_tokenizer(self) -> HfTokenizer:
         if self.tokenizer == "passthrough":
@@ -632,10 +650,17 @@ def dataset_for_format(
     *,
     eos_id: int | None,
     ignore_index: int | None,
+    block_cross_document_attention: bool = True,
 ) -> AsyncDataset[LmExample]:
     match format:
         case TextLmDatasetFormat():
-            return CausalLmDataset(TokenSeqDataset(cache, Pos.size), Pos, eos_id=eos_id, ignore_index=ignore_index)
+            return CausalLmDataset(
+                TokenSeqDataset(cache, Pos.size),
+                Pos,
+                eos_id=eos_id,
+                ignore_index=ignore_index,
+                block_cross_document_attention=block_cross_document_attention,
+            )
         case ChatLmDatasetFormat(pack=pack, mask_user_turns=mask_user_turns):
             return MultiturnChatDataset(cache, Pos, max_segments_per_example=64 if pack else 1, mask_user_turns=mask_user_turns)  # type: ignore
         case _:
@@ -725,7 +750,12 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
             raise ValueError("No training set!")
         else:
             ds = dataset_for_format(
-                self.format, Pos, cache, eos_id=self.the_tokenizer.eos_token_id, ignore_index=self.ignore_token_id
+                self.format,
+                Pos,
+                cache,
+                eos_id=self.the_tokenizer.eos_token_id,
+                ignore_index=self.ignore_token_id,
+                block_cross_document_attention=self.block_cross_document_attention,
             )
 
         perm_type = self.permutation_type
@@ -767,7 +797,12 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
             return None
 
         return dataset_for_format(
-            self.format, Pos, cache, eos_id=self.the_tokenizer.eos_token_id, ignore_index=self.ignore_token_id
+            self.format,
+            Pos,
+            cache,
+            eos_id=self.the_tokenizer.eos_token_id,
+            ignore_index=self.ignore_token_id,
+            block_cross_document_attention=self.block_cross_document_attention,
         )
 
     def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
@@ -900,6 +935,7 @@ class LMMixtureDatasetConfig(LMTaskConfig):
                 cache,
                 eos_id=self.the_tokenizer.eos_token_id,
                 ignore_index=self.ignore_token_id,
+                block_cross_document_attention=self.block_cross_document_attention,
             )
             for name, cache in caches.items()
         }
