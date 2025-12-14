@@ -57,6 +57,8 @@ class DataEfficiencyConfig:
     teacher_data_name: str | None = None
     teacher_data_weight: float = 0.0
 
+    block_cross_document_attention: bool = True
+
     ### Trainer config
     base_train_steps: int = 1024
     train_batch_size: int = 1024
@@ -135,7 +137,7 @@ class DataEfficiencyConfig:
         if self.teacher_data_name is not None and self.teacher_data_weight > 0.0:
             data_str += f"+{self.teacher_data_name}^{self.teacher_data_weight}"
         name = (
-            f"{self.model_name}-{data_str}-{self.format_lr_schedule()}{f'-bs{self.train_batch_size}' if self.bs_in_name else ''}{self.nametag}"
+            f"{self.model_name}{'cda' if not self.block_cross_document_attention else ''}-{data_str}-{self.format_lr_schedule()}{f'-bs{self.train_batch_size}' if self.bs_in_name else ''}{self.nametag}"
         )
         assert len(name) <= 64, f"Name is too long with length {len(name)}: {name}"
         return name
@@ -170,6 +172,7 @@ class DataEfficiencyConfig:
             weights=weights,
             max_train_batches=max_train_batches,
             num_validation_sequences=num_validation_sequences,
+            block_cross_document_attention=self.block_cross_document_attention,
         )
 
         prepared_data_config = _prepare_data_config(data_config, use_default_validation=True)
@@ -211,7 +214,7 @@ class DataEfficiencyConfig:
             seed=self.train_seed,
             tracker=WandbConfig(
                 project=self.wandb_project_name,
-                tags=["data-efficiency", *self.wandb_additional_tags],
+                tags=["data-efficiency", self.data_name, *self.wandb_additional_tags],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
             train_batch_size=self.train_batch_size,
