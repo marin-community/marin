@@ -417,10 +417,8 @@ def main():
         model_base_name = experiment_config.model_config.name.split("/")[-1].lower()
         model_base_name = model_base_name.replace("-instruct", "i")
 
-        if experiment_config.debug_mode:
-            name = f"{model_base_name}-{experiment_config.experiment_name_suffix}-{datestamp}"
-        else:
-            name = f"{model_base_name}-{experiment_config.experiment_name_suffix}"
+        # Always include timestamp to avoid cache collisions between runs
+        name = f"{model_base_name}-{experiment_config.experiment_name_suffix}-{datestamp}"
 
         experiments.append(
             rl_train(
