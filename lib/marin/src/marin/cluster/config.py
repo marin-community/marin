@@ -22,7 +22,7 @@ import jinja2
 import yaml
 
 # Cluster configuration constants and templates
-LATEST = "4554f82"  # The latest docker tag used for the clusters
+LATEST = "2ebbac0"  # The latest docker tag used for the clusters
 LATEST_VLLM = "20251209"
 
 
