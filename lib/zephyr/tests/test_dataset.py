@@ -20,7 +20,7 @@ from functools import partial
 from pathlib import Path
 
 import pytest
-from zephyr import Dataset, create_backend, load_file, load_jsonl, load_parquet
+from zephyr import Dataset, create_backend, load_file, load_parquet
 from zephyr._test_helpers import SampleDataclass
 from zephyr.dataset import FilterOp, MapOp, WindowOp
 from zephyr.writers import write_parquet_file
@@ -499,42 +499,8 @@ def test_write_and_read_parquet_nested(tmp_path, backend):
         assert record["metadata"]["version"] == expected["metadata"]["version"]
 
 
-def test_write_dataclass_to_parquet(tmp_path, backend):
-    """Test writing and reading parquet files with dataclass instances."""
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
-
-    # Create dataset with dataclass instances
-    sample_data = [
-        SampleDataclass("alpha", 100),
-        SampleDataclass("beta", 200),
-        SampleDataclass("gamma", 300),
-    ]
-
-    ds = Dataset.from_list(sample_data).write_parquet(str(output_dir / "dataclass-{shard:05d}.parquet"))
-
-    output_files = list(backend.execute(ds))
-
-    # Verify output files were created
-    assert len(output_files) > 0
-
-    ds_read = Dataset.from_files(f"{output_dir}/*.parquet").flat_map(load_parquet)
-
-    records = list(backend.execute(ds_read))
-
-    # Verify data integrity
-    assert len(records) == len(sample_data)
-
-    # Sort both lists by name for comparison
-    records_sorted = sorted(records, key=lambda x: x["name"])
-    sample_sorted = sorted(sample_data, key=lambda x: x.name)
-
-    for record, expected in zip(records_sorted, sample_sorted, strict=True):
-        assert record["name"] == expected.name
-        assert record["value"] == expected.value
-
-
-def test_write_dataclass_to_jsonl(tmp_path, backend):
+@pytest.mark.parametrize("output_format", ["jsonl", "parquet"])
+def test_write_dataclass(tmp_path, backend, output_format: str):
     """Test writing and reading jsonl files with dataclass instances."""
     output_dir = tmp_path / "output"
     output_dir.mkdir()
@@ -546,14 +512,17 @@ def test_write_dataclass_to_jsonl(tmp_path, backend):
         SampleDataclass("gamma", 300),
     ]
 
-    ds = Dataset.from_list(sample_data).write_jsonl(str(output_dir / "dataclass-{shard:05d}.jsonl"))
+    if output_format == "jsonl":
+        ds = Dataset.from_list(sample_data).write_jsonl(str(output_dir / "dataclass-{shard:05d}.jsonl"))
+    else:
+        ds = Dataset.from_list(sample_data).write_parquet(str(output_dir / "dataclass-{shard:05d}.parquet"))
 
     output_files = list(backend.execute(ds))
 
     # Verify output files were created
     assert len(output_files) > 0
 
-    ds_read = Dataset.from_files(f"{output_dir}/*.jsonl").flat_map(load_jsonl)
+    ds_read = Dataset.from_files(f"{output_dir}/*.{output_format}").flat_map(load_file)
 
     records = list(backend.execute(ds_read))
 
