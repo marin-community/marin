@@ -102,7 +102,7 @@ class MiniConfig(OptimizerConfig):
             else:
                 return "adamw"
 
-        return jax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
+        return haliax.tree_util.tree_map(mask_fn, params, paths, is_leaf=lambda x: isinstance(x, Linear))
 
 
 class ScaleByMiniState(NamedTuple):
