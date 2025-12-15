@@ -48,11 +48,33 @@ class RLLossModule(Protocol):
         ...
 
 
+# https://github.com/volcengine/verl/blob/392791bdd8268e36e03638fe2b8776e7b981885f/verl/utils/torch_functional.py#L145
+def entropy_from_logits(logits: jax.Array) -> jax.Array:
+    """Calculate true entropy from logits following VeRL's approach.
+
+    H(p) = logsumexp(logits) - sum(softmax(logits) * logits)
+
+    This computes the entropy over the full vocabulary distribution,
+    not just the negative log-prob of the selected token.
+
+    Args:
+        logits: Tensor of shape [..., vocab_size]
+
+    Returns:
+        Entropy tensor of shape [...] (vocab dimension reduced)
+    """
+    log_z = jax.nn.logsumexp(logits, axis=-1)  # [...]
+    probs = jax.nn.softmax(logits, axis=-1)  # [..., vocab_size]
+    entropy = log_z - jnp.sum(probs * logits, axis=-1)  # [...]
+    return entropy
+
+
 def compute_metadata_metrics(
     current_logprobs: jax.Array,
     policy_logprobs_array: jax.Array,
     loss_weights_array: jax.Array,
     loss_masks_array: jax.Array,
+    current_entropy_true: jax.Array | None = None,
 ) -> dict[str, jax.Array]:
     """Compute metadata metrics for the loss function."""
     batch_size, _ = policy_logprobs_array.shape
@@ -73,9 +95,12 @@ def compute_metadata_metrics(
     mean_advantages = jnp.mean(mean_advantages)
 
     max_ratio_diff = jnp.max(jnp.abs(jnp.exp(current_logprobs) - jnp.exp(policy_logprobs_array)) * loss_masks_array)
-    return {
+
+    metrics = {
         "trainer_sampler_prob_diff_max": Metric.from_value(max_ratio_diff.astype(jnp.float32), ReductionType.MAX),
-        "trainer_sampler_prob_diff_mean": Metric.from_value(mean_ratio_difference.astype(jnp.float32), ReductionType.MEAN),
+        "trainer_sampler_prob_diff_mean": Metric.from_value(
+            mean_ratio_difference.astype(jnp.float32), ReductionType.MEAN
+        ),
         "current_entropy": Metric.from_value(current_entropy.astype(jnp.float32), ReductionType.MEAN),
         "max_advantages": Metric.from_value(jnp.max(loss_weights_array).astype(jnp.float32), ReductionType.MAX),
         "mean_advantages": Metric.from_value(mean_advantages.astype(jnp.float32), ReductionType.MEAN),
@@ -85,12 +110,33 @@ def compute_metadata_metrics(
         ),
     }
 
+    # Add true entropy if provided (computed from full logits)
+    if current_entropy_true is not None:
+        # Average entropy over response tokens only
+        entropy_true_mean = jnp.sum(current_entropy_true * loss_masks_array) / jnp.sum(loss_masks_array)
+        metrics["policy_entropy_true"] = Metric.from_value(entropy_true_mean.astype(jnp.float32), ReductionType.MEAN)
+
+    return metrics
+
 
 def compute_logprobs(
     model: LmHeadModel,
     batch: TrainingBatch,
     key: jax.Array | None,
-):
+    compute_entropy: bool = False,
+) -> jax.Array | tuple[jax.Array, jax.Array]:
+    """Compute log probabilities of target tokens.
+
+    Args:
+        model: The language model
+        batch: Training batch containing input_ids, position_ids, temperature
+        key: JAX random key for dropout
+        compute_entropy: If True, also compute and return true entropy from logits
+
+    Returns:
+        If compute_entropy=False: logprobs array of shape [batch, seq_len]
+        If compute_entropy=True: tuple of (logprobs, entropy) arrays
+    """
     batch_size, _seq_len = batch.input_ids.array.shape
 
     model_output = model(
@@ -117,6 +163,14 @@ def compute_logprobs(
     logprobs = jnp.concatenate(
         [jnp.zeros((logprobs_shifted.shape[0], 1), dtype=logprobs_shifted.dtype), logprobs_shifted], axis=1
     )  # [batch, seq_len]
+
+    if compute_entropy:
+        # Compute true entropy from logits (VeRL-style)
+        entropy_shifted = entropy_from_logits(logits_array)  # [batch, seq_len-1]
+        entropy = jnp.concatenate(
+            [jnp.zeros((entropy_shifted.shape[0], 1), dtype=entropy_shifted.dtype), entropy_shifted], axis=1
+        )  # [batch, seq_len]
+        return logprobs, entropy
 
     return logprobs
 
@@ -213,8 +267,8 @@ def rloo_loss_with_importance_sampling(
     loss_weights_array = batch.loss_weights.array
     loss_masks_array = batch.loss_masks.array
 
-    # Get logits from current policy
-    current_logprobs = compute_logprobs(model, batch, key)
+    # Get logits from current policy (also compute true entropy)
+    current_logprobs, current_entropy_true = compute_logprobs(model, batch, key, compute_entropy=True)
     current_logprobs = current_logprobs * loss_masks_array
 
     if synchronous:
@@ -309,7 +363,9 @@ def rloo_loss_with_importance_sampling(
         "trainer_inference_importance_sampling_ratio_mean": Metric.from_value(
             trainer_inference_importance_sampling_ratio_mean.astype(jnp.float32), ReductionType.MEAN
         ),
-        **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
+        **compute_metadata_metrics(
+            current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array, current_entropy_true
+        ),
         **metadata,
     }
 
