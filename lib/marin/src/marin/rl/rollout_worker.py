@@ -347,7 +347,7 @@ class RolloutWorker:
         # Get sampling params from lesson config
         temperature = lesson_config.sampling_params.temperature
         stop_tokens = lesson_config.sampling_params.stop_tokens
-        max_tokens = lesson_config.sampling_params.max_tokens
+        max_tokens = lesson_config.sampling_params.max_output_tokens
 
         rollout_groups, metrics = env.sample(
             inference_ctx=self._policy_ctx,

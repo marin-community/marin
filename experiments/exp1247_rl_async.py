@@ -71,7 +71,8 @@ llama1b = ModelConfig(
 )
 MODEL = llama1b
 WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
-MAX_TOKENS = 512
+MAX_OUTPUT_TOKENS = 512
+MAX_SEQ_LEN = 4096 + MAX_OUTPUT_TOKENS
 RUN_ID = f"test-{MODEL.name.split('/')[-1]}-curriculum"
 
 
@@ -90,7 +91,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
         temperature=1.0,
         n_prompts=8,
         n_generations_per_prompt=8,
-        max_tokens=MAX_TOKENS,
+        max_output_tokens=MAX_OUTPUT_TOKENS,
         stop_tokens=stop_tokens(MODEL.tokenizer),
     )
 
@@ -144,6 +145,7 @@ def create_math_curriculum(run_id: str) -> CurriculumConfig:
 
     return CurriculumConfig(
         lessons=lessons,
+        max_seq_len=MAX_SEQ_LEN,
         eval_frequency=100,
         actor_name=f"curriculum-{run_id}",
     )
@@ -154,7 +156,7 @@ def rl_train(name: str) -> ExecutorStep:
     config = MODEL.config_class.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=MODEL.tokenizer)
+    model_config = dataclasses.replace(config, seq_len=MAX_SEQ_LEN, tokenizer=MODEL.tokenizer)
 
     _ = WandbConfig
 

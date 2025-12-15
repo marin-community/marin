@@ -94,8 +94,8 @@ class StreamingRolloutLoader:
         self.config = config
         self.timeout = 60.0
 
-        # Get max_tokens from curriculum
-        self.max_tokens = self.config.curriculum_config.max_tokens
+        # Get max_seq_len from curriculum (total sequence length for prompt + response)
+        self.max_tokens = self.config.curriculum_config.max_seq_len
 
         self.pad_token_id = self.config.tokenizer.pad_token_id
         if self.pad_token_id is None:

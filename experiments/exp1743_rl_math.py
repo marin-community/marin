@@ -40,7 +40,8 @@ from transformers import AutoConfig, AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
-MAX_TOKENS = 1024
+MAX_OUTPUT_TOKENS = 1024
+MAX_SEQ_LEN = 4096 + MAX_OUTPUT_TOKENS
 
 
 @dataclasses.dataclass
@@ -93,7 +94,7 @@ def create_math_curriculum(run_id: str, model_name: str) -> CurriculumConfig:
         temperature=1.0,
         n_prompts=8,
         n_generations_per_prompt=8,
-        max_tokens=MAX_TOKENS,
+        max_output_tokens=MAX_OUTPUT_TOKENS,
         stop_tokens=stop_tokens(model_name),
     )
 
@@ -111,6 +112,7 @@ def create_math_curriculum(run_id: str, model_name: str) -> CurriculumConfig:
 
     return CurriculumConfig(
         lessons=lessons,
+        max_seq_len=MAX_SEQ_LEN,
         eval_frequency=100,
         actor_name=f"curriculum-{run_id}",
     )
@@ -121,7 +123,7 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
     lev_config = LlamaConfig.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    lev_config = dataclasses.replace(lev_config, seq_len=MAX_TOKENS, tokenizer=model_config.model_tokenizer)
+    lev_config = dataclasses.replace(lev_config, seq_len=MAX_SEQ_LEN, tokenizer=model_config.model_tokenizer)
 
     _ = WandbConfig
 

@@ -82,7 +82,7 @@ class SamplingParams:
     temperature: float = 1.0
     n_prompts: int = 8
     n_generations_per_prompt: int = 4
-    max_tokens: int = 256
+    max_output_tokens: int = 512
     stop_tokens: list[int] | None = None
 
 
@@ -122,6 +122,9 @@ class CurriculumConfig:
     lessons: dict[str, LessonConfig]
     """Dictionary mapping lesson names to lesson configurations."""
 
+    max_seq_len: int
+    """Maximum total sequence length (prompt + response) for training batches."""
+
     eval_frequency: int = 100
     """How often to run full evaluation across all lessons (in rollout worker steps)."""
 
@@ -147,9 +150,9 @@ class CurriculumConfig:
     """How often to checkpoint curriculum state (in training steps)."""
 
     @property
-    def max_tokens(self) -> int:
-        """Maximum tokens across all lessons in the curriculum."""
-        return max(lesson.sampling_params.max_tokens for lesson in self.lessons.values())
+    def max_output_tokens(self) -> int:
+        """Maximum output tokens across all lessons in the curriculum."""
+        return max(lesson.sampling_params.max_output_tokens for lesson in self.lessons.values())
 
 
 def _validate_dependencies(lesson_configs: dict[str, LessonConfig]):

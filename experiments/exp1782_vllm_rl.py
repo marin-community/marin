@@ -167,7 +167,7 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         temperature=1.0,
         n_prompts=experiment_config.n_prompts,  # Overdo it since we know there are some with no signal?
         n_generations_per_prompt=experiment_config.n_generations_per_prompt,
-        max_tokens=experiment_config.max_output_tokens,
+        max_output_tokens=experiment_config.max_output_tokens,
         # stop_tokens=stop_tokens(experiment_config.model_config.tokenizer),
         stop_tokens=None,
     )
@@ -254,6 +254,7 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         micro_eval_frequency=9999999,  # Effectively disable micro-eval
         actor_name=f"curriculum-{run_id}",
         eval_n_examples=500,  # for math500
+        max_seq_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,
     )
 
 

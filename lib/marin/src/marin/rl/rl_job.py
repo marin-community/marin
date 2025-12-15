@@ -274,8 +274,8 @@ class RLJob:
             total_seqs = lesson.sampling_params.n_generations_per_prompt
             max_seqs = max(max_seqs, total_seqs)
 
-        max_tokens = self.config.curriculum.max_tokens
-        assert max_tokens > 0, "Max tokens must be positive across curriculum lessons."
+        max_seq_len = self.config.curriculum.max_seq_len
+        assert max_seq_len > 0, "Max seq len must be positive across curriculum lessons."
 
         # create a unique name for the weight-transfer coordinator based on our config hash
         # this ensures we get the same name across multiple calls
@@ -300,14 +300,14 @@ class RLJob:
                 temperature=1.0,
                 service=InferenceEngineConfig(
                     max_seqs=max_seqs,
-                    max_seq_len=max_tokens,
+                    max_seq_len=max_seq_len,
                     page_size=128,
                     hbm_utilization=0.5,
                 ),
                 port=0,
             )
             logger.info(
-                "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_tokens=%d", max_seqs, max_tokens
+                "Auto-configured InferenceServerConfig for RLJob with max_seqs=%d, max_seq_len=%d", max_seqs, max_seq_len
             )
             inference_config = LevanterInferenceContextConfig(
                 inference_server_config=inference_server_config,

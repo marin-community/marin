@@ -125,9 +125,13 @@ def create_training_batch_from_rollouts(
         else:
             stacked[key] = jnp.stack([ex[key] for ex in training_examples], axis=0)
 
-    assert stacked["loss_masks"].sum() > 0, (
-        "All loss masks are zero in the batch, this will trigger NaNs during training."
-        "You probably have prompts > max_tokens - increase max_tokens."
+    # Ensure each row has at least one non-zero loss mask (otherwise division by zero -> NaN)
+    per_row_mask_sum = stacked["loss_masks"].sum(axis=1)
+    zero_mask_rows = int((per_row_mask_sum == 0).sum())
+    assert zero_mask_rows == 0, (
+        f"Found {zero_mask_rows} rollouts with all-zero loss masks. "
+        "This happens when prompt_tokens >= max_seq_len, leaving no room for response tokens. "
+        "Increase max_seq_len in CurriculumConfig."
     )
 
     batch = TrainingBatch(
