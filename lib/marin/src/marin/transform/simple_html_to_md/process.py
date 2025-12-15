@@ -84,10 +84,8 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
 class SimpleHtmlToMdConfig:
     input_path: str  # Input directory containing jsonl.gz files
     output_path: str  # Output directory containing md files
-    extract_method: str = "readability"
-    # Extract method to use. Defaults to readability. Other options are traflatura and resiliparse.
-    config: ExtractionConfig = field(default_factory=HtmlToMarkdownConfig.default_config())
-    # Configuration for the extraction method.
+    extract_method: str = "resiliparse"
+    config: ExtractionConfig = field(default_factory=HtmlToMarkdownConfig.default_config)
 
 
 def html_to_md(cfg: SimpleHtmlToMdConfig):
