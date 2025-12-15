@@ -89,12 +89,47 @@ class StatusFile:
 
     @property
     def status(self) -> str | None:
-        """Read current status from status file (simple text: SUCCESS/FAILURE/RUNNING)."""
+        """Read current status from status file.
+
+        The modern representation stores a single status token, but older
+        executors wrote JSON-line event logs. We support both until the legacy
+        files are gone.
+        """
         if not self.fs.exists(self.path):
             return None
+
         with self.fs.open(self.path, "r") as f:
-            content = f.read().strip()
-            return content or None
+            lines = [line.strip() for line in f.readlines() if line.strip()]
+
+        if not lines:
+            return None
+
+        # New format: a single status token such as SUCCESS/RUNNING/etc.
+        if len(lines) == 1 and not lines[0].startswith("{"):
+            return lines[0]
+
+        # Legacy format: JSON event log, one object per line.
+        legacy_status = self._parse_legacy_status(lines)
+        if legacy_status:
+            return legacy_status
+
+        # Fall back to the last non-empty line if parsing fails.
+        return lines[-1]
+
+    @staticmethod
+    def _parse_legacy_status(lines: list[str]) -> str | None:
+        """Return the latest status from the deprecated JSON-lines format."""
+        last_status: str | None = None
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                status = event.get("status")
+                if isinstance(status, str):
+                    last_status = status
+        return last_status
 
     def write_status(self, status: str) -> None:
         """Write status (SUCCESS/FAILURE/RUNNING).
