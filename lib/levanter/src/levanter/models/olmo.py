@@ -781,32 +781,6 @@ class Olmo3Config(HFCompatConfig):
 
 
 # ------------------------------------------------------------
-# MLP (unchanged)
-# ------------------------------------------------------------
-
-class Olmo3MLP(eqx.Module):
-    gate_proj: hnn.Linear
-    up_proj: hnn.Linear
-    down_proj: hnn.Linear
-    act: Callable = eqx.field(static=True)
-
-    @staticmethod
-    def init(Embed, Mlp, activation_fn, *, key, use_bias=False):
-        k_fc, k_up, k_down = jrandom.split(key, 3)
-        gate_proj = hnn.Linear.init(Out=Mlp, In=Embed, key=k_fc, use_bias=use_bias, out_first=True)
-        up_proj = hnn.Linear.init(Out=Mlp, In=Embed, key=k_up, use_bias=use_bias, out_first=True)
-        down_proj = hnn.Linear.init(Out=Embed, In=Mlp, key=k_down, use_bias=use_bias, out_first=True)
-        if isinstance(activation_fn, ActivationFunctionEnum):
-            activation_fn = activation_fn.to_fn()
-        return Olmo3MLP(gate_proj, up_proj, down_proj, activation_fn)
-
-    def __call__(self, x, *, key=None):
-        k1, k2, k3 = maybe_rng_split(key, 3)
-        h = self.act(self.gate_proj(x, key=k1)) * self.up_proj(x, key=k2)
-        return self.down_proj(h, key=k3)
-
-
-# ------------------------------------------------------------
 # OLMO-3 Attention (with SWA)
 # ------------------------------------------------------------
 
@@ -850,7 +824,7 @@ class Olmo3Attention(ModuleWithStateDictSerialization, Attention):
 class Olmo3DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
     config: Olmo3Config = eqx.field(static=True)
     self_attn: Olmo3Attention
-    mlp: Olmo3MLP
+    mlp: Olmo2MLP
     post_attention_layernorm: hnn.RmsNorm
     post_feedforward_layernorm: hnn.RmsNorm
 
@@ -861,7 +835,7 @@ class Olmo3DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
         sliding = None if layer_sliding_window is None or layer_sliding_window < 0 else int(layer_sliding_window)
 
         attn = Olmo3Attention.init(config.attention_config(), key=k_attn, sliding_window=sliding)
-        mlp = Olmo3MLP.init(
+        mlp = Olmo2MLP.init(
             config.Embed,
             config.Mlp,
             config.activation_function,
@@ -915,38 +889,12 @@ class Olmo3Transformer(ModuleWithStateDictSerialization, eqx.Module):
 
 
 # ------------------------------------------------------------
-# Embedding
-# ------------------------------------------------------------
-
-class Olmo3Embedding(ModuleWithStateDictSerialization, eqx.Module):
-    Vocab: Axis = eqx.field(static=True)
-    token_embeddings: hnn.Embedding
-
-    @staticmethod
-    def init(Vocab: Axis, config: Olmo3Config, *, key):
-        return Olmo3Embedding(Vocab, hnn.Embedding.init(Vocab, config.Embed, key=key))
-
-    def embed(self, input_ids):
-        return self.token_embeddings(input_ids)
-
-    def unembed(self, x):
-        return self.token_embeddings.unembed(x)
-
-    def resize_embeddings(self, new_size: int, key: Optional[PRNGKeyArray] = None):
-        new_weights = self.token_embeddings.resize_embeddings(new_size, key=key)
-        return dataclasses.replace(self, Vocab=self.Vocab.resize(new_size), token_embeddings=new_weights)
-
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
-        return {"token_embeddings": "embed_tokens"}
-
-
-# ------------------------------------------------------------
 # LM Head Model
 # ------------------------------------------------------------
 
 class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config]):
     transformer: Olmo3Transformer
-    embeddings: Olmo3Embedding
+    embeddings: Olmo2Embedding
     lm_head: Optional[hnn.Linear]
 
     @classmethod
@@ -954,7 +902,7 @@ class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config
         k_t, k_emb, k_head = jrandom.split(key, 3)
 
         transformer = Olmo3Transformer.init(config, key=k_t)
-        embeddings = Olmo3Embedding.init(Vocab, config, key=k_emb)
+        embeddings = Olmo2Embedding.init(Vocab, config, key=k_emb)
 
         if config.tie_word_embeddings:
             lm_head = None
