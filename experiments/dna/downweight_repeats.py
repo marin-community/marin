@@ -80,7 +80,7 @@ data_tokenized = default_tokenize(
 # Training configuration
 # -----------------------------------------------------------------------------
 train_config = SimpleTrainConfig(
-    resources=ResourceConfig.with_gpu("T4", count=num_gpus),
+    resources=ResourceConfig.with_gpu("A100", count=num_gpus),
     train_batch_size=train_batch_size,
     per_device_eval_parallelism=per_device_eval_parallelism,
     learning_rate=learning_rate,
