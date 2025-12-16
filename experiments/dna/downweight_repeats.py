@@ -20,7 +20,7 @@ Adapted from https://github.com/marin-community/marin/blob/0d38a98b63a8566451d3c
 import jax
 import logging
 from fray.cluster import ResourceConfig
-from levanter.data.text import TextLmDatasetFormat
+from levanter.data.text import DNALmDatasetFormat
 from levanter.models.llama import LlamaConfig
 from marin.execution.executor import executor_main
 from experiments.defaults import default_tokenize, default_train
@@ -63,15 +63,16 @@ model_config = LlamaConfig(
 # Dataset configuration
 # -----------------------------------------------------------------------------
 data_tokenized = default_tokenize(
-    name="gpn-animal-promoter",
+    name="gpn-animal-promoter-softmasked",
     # versioned(dataset_path) was causing issues:
     # ValueError: No valid jsonl or parquet files found in
     # ['songlab/gpn-animal-promoter-dataset']. Please provide a path to a
     # directory containing jsonl or parquet files.
     dataset=dataset_path,
     tokenizer=tokenizer_path,
-    # DNA sequences are in `seq`, not `text`
-    format=TextLmDatasetFormat(text_key="seq"),
+    format=DNALmDatasetFormat(
+        soft_mask_weight=0.01,  # Lowercase (repetitive) positions get 1% weight
+    ),
     sample_count=10,  # per shard
 )
 

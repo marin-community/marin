@@ -149,6 +149,70 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         return length
 
 
+class WeightedTokenSeqDataset(AsyncDataset[dict]):
+    """
+    A dataset that yields sequences of tokens and loss weights from a cache.
+
+    Returns dicts with 'input_ids' and 'loss_weight' arrays of fixed length.
+    """
+
+    def __init__(self, doc_cache: TreeCache[dict], seq_len: int):
+        super().__init__()
+        self.doc_cache = doc_cache
+        self.seq_len = seq_len
+        self._store: Optional[TreeStore] = doc_cache.store
+        self._cached_len: Optional[int] = None
+
+    async def async_len(self) -> int:
+        token_arrays = await self._await_cache("input_ids")
+        return token_arrays.data_size // self.seq_len
+
+    async def _await_cache(self, key: str) -> JaggedArrayStore:
+        if self._store is None:
+            self._store = self.doc_cache.store
+        return self._store.tree[key]
+
+    async def final_length_is_known(self) -> bool:
+        return await self.doc_cache.final_length_is_known()
+
+    def is_finite(self) -> bool:
+        return True
+
+    async def current_len(self) -> Optional[int]:
+        store = await self._await_cache("input_ids")
+        return store.data_size // self.seq_len
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[dict]:
+        token_arrays = await self._await_cache("input_ids")
+        weight_arrays = await self._await_cache("loss_weight")
+
+        ds_len = await self.wait_until_len_at_least(max(indices) + 1)
+        if ds_len is not None and ds_len < max(indices) + 1:
+            raise ValueError("Requested indices beyond the end of the dataset")
+
+        offsets = np.array(indices, dtype=np.int64) * self.seq_len
+
+        with ts.Batch():
+            token_reads = []
+            weight_reads = []
+            for offset in offsets:
+                token_reads.append(token_arrays.data[offset : offset + self.seq_len].read())
+                weight_reads.append(weight_arrays.data[offset : offset + self.seq_len].read())
+
+        tokens = await asyncio.gather(*token_reads)
+        weights = await asyncio.gather(*weight_reads)
+
+        return [{"input_ids": t, "loss_weight": w} for t, w in zip(tokens, weights)]
+
+    async def wait_until_len_at_least(self, length: int) -> int:
+        if self._cached_len is not None and self._cached_len >= length:
+            return self._cached_len
+
+        length = await super().wait_until_len_at_least(length)
+        self._cached_len = length
+        return length
+
+
 class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
     def __init__(
         self,
@@ -180,6 +244,48 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
             example = jax.lax.with_sharding_constraint(example, sharding)
 
             return example
+
+        super().__init__(self.dataset, _create_lm_example)
+
+    async def async_len(self) -> int:
+        return await self.dataset.async_len()
+
+
+class WeightedCausalLmDataset(MappedAsyncDataset[dict, LmExample]):
+    """
+    A dataset that creates LmExamples with per-token loss weights.
+    """
+
+    def __init__(
+        self,
+        dataset: AsyncDataset[dict],
+        Pos: Axis,
+        *,
+        ignore_index: Optional[int] = None,
+        eos_id: Optional[int] = None,
+        block_cross_document_attention: bool = True,
+    ):
+        self.dataset = dataset
+        self.Pos = Pos
+        self.ignore_id = ignore_index
+        self.eos_id = eos_id
+        self.block_cross_document_attention = block_cross_document_attention
+
+        sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
+
+        @functools.partial(eqx.filter_jit)
+        def _create_lm_example(example):
+            tokens = hax.named(example["input_ids"], self.Pos)
+            loss_weight = hax.named(example["loss_weight"], self.Pos)
+            lm_example = LmExample.causal(
+                tokens=tokens,
+                loss_weight=loss_weight,
+                ignore_id=self.ignore_id,
+                eos_id=eos_id,
+                block_cross_document_attention=block_cross_document_attention,
+            )
+            lm_example = jax.lax.with_sharding_constraint(lm_example, sharding)
+            return lm_example
 
         super().__init__(self.dataset, _create_lm_example)
 
@@ -406,6 +512,103 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         return 0
 
 
+class DNABatchTokenizer(BatchProcessor[dict, dict]):
+    """
+    A batch processor that tokenizes DNA sequences with soft-masking support.
+
+    Assigns loss weights based on character case:
+    - Uppercase (ACGT): weight = 1.0
+    - Lowercase (acgt): weight = soft_mask_weight
+
+    Assumes a character-level tokenizer (1:1 character-to-token mapping).
+    """
+
+    def __init__(
+        self,
+        tokenizer: HfTokenizer,
+        text_field: str = "seq",
+        soft_mask_weight: float = 1.0,
+        enforce_eos: bool = True,
+        *,
+        override_resources=None,
+    ):
+        _maybe_force_tokenizer_parallelism(tokenizer)
+        self.tokenizer = tokenizer
+        self.text_field = text_field
+        self.soft_mask_weight = soft_mask_weight
+        self.override_resources = override_resources
+
+        # Check if tokenizer appends eos
+        if tokenizer.eos_token_id is None:
+            enforce_eos = False
+
+        if enforce_eos:
+            input_ids = tokenizer("A")["input_ids"]
+            should_append_eos = input_ids[-1] != tokenizer.eos_token_id
+        else:
+            should_append_eos = False
+
+        self._need_to_add_eos = should_append_eos
+
+    def __call__(self, batch: Sequence[dict]) -> list[dict]:
+        results = []
+
+        for example in batch:
+            text = example[self.text_field]
+
+            # Compute per-character loss weights based on case
+            # Uppercase = 1.0, lowercase = soft_mask_weight
+            loss_weight = [1.0 if c.isupper() else self.soft_mask_weight for c in text]
+
+            # Tokenize the sequence (tokenizer handles case normalization)
+            encoding = self.tokenizer(text, return_attention_mask=False, verbose=False)
+            input_ids = encoding["input_ids"]
+
+            # Handle EOS token
+            if self._need_to_add_eos:
+                input_ids = input_ids + [self.tokenizer.eos_token_id]
+                loss_weight = loss_weight + [1.0]  # EOS gets full weight
+
+            results.append(
+                {
+                    "input_ids": np.array(input_ids, dtype=np.int32),
+                    "loss_weight": np.array(loss_weight, dtype=np.float32),
+                }
+            )
+
+        return results
+
+    @property
+    def output_exemplar(self) -> dict:
+        return {
+            "input_ids": np.zeros((0,), dtype=np.int32),
+            "loss_weight": np.zeros((0,), dtype=np.float32),
+        }
+
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "tokenizer": self.tokenizer.name_or_path,
+            "vocab_size": len(self.tokenizer),
+            "soft_mask_weight": self.soft_mask_weight,
+            "append_eos": self._need_to_add_eos,
+        }
+
+    @property
+    def num_cpus(self) -> int:
+        if self.override_resources is not None:
+            cpus = self.override_resources.get("num_cpus", None)
+            if cpus is not None:
+                return cpus
+        return num_cpus_used_by_tokenizer(self.tokenizer)
+
+    @property
+    def num_gpus(self) -> int:
+        if self.override_resources is not None:
+            return self.override_resources.get("num_gpus", 0)
+        return 0
+
+
 class LmDatasetFormatBase(abc.ABC, ChoiceRegistry):
     @classmethod
     def default_choice_name(cls) -> Optional[str]:
@@ -444,6 +647,27 @@ class ChatLmDatasetFormat(LmDatasetFormatBase):
     chat_template_kwargs: str | None = "chat_template_kwargs"
     pack: bool = True
     mask_user_turns: bool = True
+
+
+@LmDatasetFormatBase.register_subclass("dna")
+@dataclass(frozen=True)
+class DNALmDatasetFormat(LmDatasetFormatBase):
+    """Dataset configuration for DNA sequences with soft-masking support.
+
+    Supports position-wise loss weighting based on character case:
+    - Uppercase nucleotides (ACGT): full loss weight (1.0)
+    - Lowercase nucleotides (acgt): reduced loss weight (soft_mask_weight)
+
+    This is useful for down-weighting repetitive elements in genomic data,
+    as pioneered by GPN and adopted by PlantCaduceus and Evo 2.
+
+    Attributes:
+        text_key: Field name containing the DNA sequence.
+        soft_mask_weight: Loss weight for lowercase (soft-masked) positions.
+    """
+
+    text_key: str = "seq"
+    soft_mask_weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -639,6 +863,13 @@ def preprocessor_for_format(
                 chat_template_kwargs_field=ct_kwargs,
                 mask_user_turns=mt,
             )  # type: ignore
+        case DNALmDatasetFormat(text_key=key, soft_mask_weight=weight):
+            return DNABatchTokenizer(
+                tokenizer,
+                text_field=key,
+                soft_mask_weight=weight,
+                enforce_eos=enforce_eos,
+            )
         case _:
             raise ValueError(f"Unknown format {format}")
 
@@ -663,6 +894,14 @@ def dataset_for_format(
             )
         case ChatLmDatasetFormat(pack=pack, mask_user_turns=mask_user_turns):
             return MultiturnChatDataset(cache, Pos, max_segments_per_example=64 if pack else 1, mask_user_turns=mask_user_turns)  # type: ignore
+        case DNALmDatasetFormat():
+            return WeightedCausalLmDataset(
+                WeightedTokenSeqDataset(cache, Pos.size),
+                Pos,
+                eos_id=eos_id,
+                ignore_index=ignore_index,
+                block_cross_document_attention=block_cross_document_attention,
+            )
         case _:
             raise ValueError(f"Unknown format {format}")
 
