@@ -231,6 +231,7 @@ class RayCluster(Cluster):
         self._jobs[job_id] = RayJobInfo.from_ref(object_ref, name=request.name)
         return job_id
 
+
     def _get_runtime_env(self, request: JobRequest) -> dict | None:
         """Build Ray runtime environment for the given job request."""
         environment = request.environment if request.environment else EnvironmentConfig.create()
@@ -247,7 +248,8 @@ class RayCluster(Cluster):
                 )
             env_vars["JAX_PLATFORMS"] = "cpu"
         elif isinstance(request.resources.device, TpuConfig):
-            if "tpu" not in environment.extras:
+            # Don't add tpu extra if vllm is present (they conflict)
+            if "tpu" not in environment.extras and "vllm" not in environment.extras:
                 environment.extras.append("tpu")
             env_vars["JAX_PLATFORMS"] = ""
         elif isinstance(request.resources.device, GpuConfig):

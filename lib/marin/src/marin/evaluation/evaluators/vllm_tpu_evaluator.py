@@ -17,14 +17,15 @@ import subprocess
 import time
 from abc import ABC
 
+import ray
 import requests
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.cluster.ray.deps import build_runtime_env_for_packages
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
 from marin.utils import remove_tpu_lockfile_on_exit
-
 
 class VllmTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with VLLM on TPUs."""
@@ -137,7 +138,6 @@ class VllmTpuEvaluator(Evaluator, ABC):
         model: ModelConfig,
         evals: list[EvalTaskConfig],
         output_path: str,
-        resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
         resource_config: ResourceConfig | None = None,
         wandb_tags: list[str] | None = None,
@@ -148,33 +148,11 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Launches the evaluation run with Fray.
         """
 
-        @ray.remote(
-            resources={
-                "TPU": resource_config.num_tpu,
-                f"{resource_config.tpu_type}-head": 1,
-            },
-            runtime_env=self.get_runtime_env(),
-            max_calls=1,
-        )
-        @remove_tpu_lockfile_on_exit
-        def launch(
-            model: ModelConfig,
-            evals: list[EvalTaskConfig],
-            output_path: str,
-            max_eval_instances: int | None = None,
-            wandb_tags: list[str] | None = None,
-            max_length: int | None = None,
-            generation_params: dict | None = None,
-        ) -> None:
-            import logging
-
-            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
-            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags=wandb_tags, generation_params=generation_params)
-
         def _run():
             with remove_tpu_lockfile_on_exit():
-                launch(model, evals, output_path, max_eval_instances, wandb_tags, max_length, generation_params, wandb_tags)
+                import logging
+                logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+                self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags=wandb_tags, generation_params=generation_params)
 
         if resource_config is None:
             resource_config = ResourceConfig()
@@ -183,7 +161,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
             name="vllm-tpu-evaluation",
             entrypoint=Entrypoint.from_callable(_run),
             resources=resource_config,
-            environment=EnvironmentConfig.create(extras=["eval", "tpu"]),
+            environment=EnvironmentConfig.create(extras=["eval", "vllm"]),
         )
 
         cluster = current_cluster()

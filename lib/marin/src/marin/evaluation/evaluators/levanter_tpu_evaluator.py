@@ -18,11 +18,11 @@ from abc import ABC
 from urllib.parse import urlparse
 
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.cluster.ray.deps import build_runtime_env_for_packages
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import is_remote_path
-from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
