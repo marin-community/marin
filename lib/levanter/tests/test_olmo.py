@@ -13,7 +13,16 @@ import haliax as hax
 import haliax.nn as hnn
 
 from levanter.layers.attention import AttentionMask
-from levanter.models.olmo import Olmo2Attention, Olmo2Config, Olmo2DecoderLayer, Olmo2LMHeadModel
+from levanter.models.olmo import (
+    Olmo2Attention,
+    Olmo2Config,
+    Olmo2DecoderLayer,
+    Olmo2LMHeadModel,
+    Olmo3Config,
+    Olmo3LMHeadModel,
+    Olmo3Attention,
+    Olmo3Transformer,
+)
 from levanter.utils.jax_utils import parameter_count
 from test_utils import skip_if_no_torch, use_test_mesh
 
@@ -43,6 +52,36 @@ def _get_random_inputs(config: Olmo2Config, override_Pos=None):
     mask = AttentionMask.causal()
 
     return x, mask
+
+
+def _get_olmo3_config(
+    seq_len=128,
+    hidden_dim=16,
+    intermediate_dim=32,
+    num_layers=4,
+    num_heads=4,
+    num_kv_heads=2,
+    sliding_window=16,
+    layer_types=None,
+    tie_embeddings=False,
+) -> Olmo3Config:
+    if layer_types is None:
+        layer_types = tuple(["sliding_attention"] * (num_layers - 1) + ["full_attention"])
+
+    return Olmo3Config(
+        max_seq_len=seq_len,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        num_kv_heads=num_kv_heads,
+        gradient_checkpointing=False,
+        scan_layers=False,
+        use_flash_attention=False,
+        sliding_window=sliding_window,
+        layer_types=tuple(layer_types),
+        tie_word_embeddings=tie_embeddings,
+    )
 
 
 @skip_if_no_torch
@@ -401,3 +440,217 @@ def test_olmo2_seq_len_doesnt_change_predictions(num_kv_heads):
     jax_out_2 = compute(model, input_256)[config.max_Pos, :128]
 
     assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-6, atol=1e-6)
+
+
+# ------------------------------------------------------------
+# OLMO-3 Tests
+# ------------------------------------------------------------
+
+
+def test_olmo3_config_roundtrip():
+    layer_types = ("sliding_attention", "full_attention", "sliding_attention")
+    config = _get_olmo3_config(
+        seq_len=256,
+        hidden_dim=32,
+        intermediate_dim=64,
+        num_layers=3,
+        num_heads=6,
+        num_kv_heads=3,
+        sliding_window=64,
+        layer_types=layer_types,
+    )
+
+    assert config.Pos.size == 256
+    assert config.Embed.size == 32
+    assert config.Heads.size == 6
+    assert config.KVHeads.size == 3
+    assert config.Layers.size == 3
+    assert config.Mlp.size == 64
+    assert config.HeadSize.size == 32 // 6
+    assert config.layer_types == layer_types
+    assert config.sliding_window == 64
+
+    hf_config = config.to_hf_config(vocab_size=321)
+    assert hf_config.sliding_window == 64
+    assert tuple(hf_config.layer_types) == layer_types
+
+    config2 = Olmo3Config.from_hf_config(hf_config)
+    assert config2.max_seq_len == 256
+    assert config2.hidden_dim == 32
+    assert config2.intermediate_dim == 64
+    assert config2.num_layers == 3
+    assert config2.num_heads == 6
+    assert config2.num_kv_heads == 3
+    assert config2.layer_types == layer_types
+    assert config2.sliding_window == 64
+
+
+def test_olmo3_layer_sliding_window_selection():
+    layer_types = ("sliding_attention", "full_attention", "sliding_attention", "full_attention")
+    config = _get_olmo3_config(num_layers=4, layer_types=layer_types, sliding_window=8)
+
+    transformer = Olmo3Transformer.init(config, key=random.PRNGKey(0))
+    sliding_windows = [layer.self_attn.sliding_window for layer in transformer.layers.blocks]
+
+    assert sliding_windows == [8, None, 8, None]
+
+
+def test_olmo3_attention_applies_sliding_window():
+    config = _get_olmo3_config(
+        seq_len=12,
+        hidden_dim=24,
+        intermediate_dim=48,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        sliding_window=3,
+        layer_types=("sliding_attention",),
+    )
+    attn = Olmo3Attention.init(config.attention_config(), key=random.PRNGKey(0), sliding_window=config.sliding_window)
+    attn_no_sliding = eqx.tree_at(lambda a: a.sliding_window, attn, None)
+
+    Batch = hax.Axis("batch", 1)
+    x = hax.random.normal(random.PRNGKey(1), (Batch, config.Pos, config.Embed))
+    base_mask = AttentionMask.causal()
+    manual_mask = base_mask.with_sliding_window(config.sliding_window)
+
+    out_with_attr = attn(x, base_mask, key=random.PRNGKey(2))
+    out_manual = attn_no_sliding(x, manual_mask, key=random.PRNGKey(2))
+
+    chex.assert_trees_all_close(out_with_attr, out_manual, rtol=1e-6, atol=1e-6)
+
+
+@skip_if_no_torch
+def test_olmo3_roundtrip():
+    import torch
+    from transformers import AutoModelForCausalLM, Olmo3ForCausalLM
+    from tokenizers import Tokenizer, models, trainers, pre_tokenizers
+    from transformers import PreTrainedTokenizerFast
+
+    converter = Olmo3Config().hf_checkpoint_converter()
+
+    # Build an in-memory tokenizer to avoid network access
+    tok = Tokenizer(models.WordLevel(unk_token="[UNK]"))
+    tok.pre_tokenizer = pre_tokenizers.Whitespace()
+    trainer = trainers.WordLevelTrainer(special_tokens=["[UNK]", "[PAD]"])
+    tok.train_from_iterator(["dummy data for olmo3 tests"], trainer)
+    dummy_tokenizer = PreTrainedTokenizerFast(tokenizer_object=tok, unk_token="[UNK]", pad_token="[PAD]")
+
+    converter = converter.replaced(reference_checkpoint=None, tokenizer=dummy_tokenizer)
+
+    config = Olmo3Config(
+        max_seq_len=64,
+        hidden_dim=16,
+        intermediate_dim=32,
+        num_heads=4,
+        num_kv_heads=2,
+        num_layers=4,
+        gradient_checkpointing=False,
+        scan_layers=False,
+        use_flash_attention=False,
+        sliding_window=16,
+        layer_types=("sliding_attention", "sliding_attention", "full_attention", "full_attention"),
+    )
+    Vocab = hax.Axis("vocab", 1000)
+    hf_config = config.to_hf_config(Vocab.size)
+
+    input = hax.random.randint(random.PRNGKey(0), config.Pos, 0, Vocab.size)
+    attn_mask = AttentionMask.causal()
+    input_torch = torch.from_numpy(np.array(input.array)).to(torch.int32).unsqueeze(0)
+
+    torch.random.manual_seed(0)
+    torch_model = Olmo3ForCausalLM(hf_config)
+    torch_model.eval()
+    torch_out = torch_model(input_torch)
+    torch_logits = torch_out.logits[0].detach().cpu().numpy()
+
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh():
+        model_path = f"{tmpdir}/torch_model"
+        torch_model.save_pretrained(model_path)
+
+        model = converter.load_pretrained(
+            Olmo3LMHeadModel, ref=model_path, resize_vocab_to_match_tokenizer=False
+        )
+
+        @hax.named_jit
+        def compute(model, ids):
+            return model(ids, attn_mask=attn_mask)
+
+        jax_out = compute(model, input).array
+
+        assert torch_logits.shape == jax_out.shape, f"{torch_logits.shape} != {jax_out.shape}"
+
+        abs_diff = np.abs(torch_logits - jax_out.astype(np.float32))
+        max_diff_idx = np.unravel_index(np.argmax(abs_diff), abs_diff.shape)
+        print(f"\nOLMo3 max diff at {max_diff_idx}: {abs_diff[max_diff_idx]}")
+        print(f"HF value: {torch_logits[max_diff_idx]}, JAX value: {jax_out[max_diff_idx]}")
+
+        assert np.isclose(torch_logits, np.array(jax_out), rtol=1e-4, atol=1e-4).all(), f"{torch_logits} != {jax_out}"
+
+        converter_with_ref = converter.replaced(reference_checkpoint=model_path)
+        converter_with_ref.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+
+        torch_model2 = AutoModelForCausalLM.from_pretrained(f"{tmpdir}/lev_model")
+        torch_model2.eval()
+
+        torch_out2 = torch_model2(input_torch)
+        torch_logits2 = torch_out2.logits[0].detach().cpu().numpy()
+        assert torch_logits2.shape == jax_out.shape, f"{torch_logits2.shape} != {jax_out.shape}"
+        np.testing.assert_allclose(torch_logits2, jax_out, rtol=1e-5, atol=1e-5)
+
+
+def test_olmo3_lm_head_model_forward_and_grad():
+    config = _get_olmo3_config(
+        seq_len=16,
+        hidden_dim=24,
+        intermediate_dim=48,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        sliding_window=4,
+        layer_types=("sliding_attention", "full_attention"),
+    )
+    Batch = hax.Axis("batch", 2)
+    Vocab = hax.Axis("vocab", 100)
+    input_ids = hax.random.randint(random.PRNGKey(0), (Batch, config.Pos), 0, Vocab.size)
+    mask = AttentionMask.causal()
+
+    model = Olmo3LMHeadModel.init(Vocab=Vocab, config=config, key=random.PRNGKey(1))
+    outputs = model(input_ids, attn_mask=mask, key=random.PRNGKey(2))
+
+    assert outputs.array.shape == (Batch.size, config.Pos.size, Vocab.size)
+    assert outputs.axes[0] == Batch
+    assert outputs.axes[1] == config.Pos
+
+    def loss_fn(m, ids):
+        logits = m(ids, attn_mask=mask)
+        return hax.sum(logits).scalar()
+
+    _, grads = eqx.filter_value_and_grad(loss_fn)(model, input_ids)
+    assert grads is not None
+
+
+def test_olmo3_tied_embeddings():
+    config = _get_olmo3_config(
+        seq_len=8,
+        hidden_dim=12,
+        intermediate_dim=24,
+        num_layers=1,
+        num_heads=4,
+        num_kv_heads=2,
+        sliding_window=4,
+        layer_types=("full_attention",),
+        tie_embeddings=True,
+    )
+    Batch = hax.Axis("batch", 2)
+    Vocab = hax.Axis("vocab", 50)
+    input_ids = hax.random.randint(random.PRNGKey(0), (Batch, config.Pos), 0, Vocab.size)
+    mask = AttentionMask.causal()
+
+    model = Olmo3LMHeadModel.init(Vocab=Vocab, config=config, key=random.PRNGKey(1))
+
+    assert model.lm_head is None
+    chex.assert_trees_all_equal(model.get_lm_head(), model.embeddings.token_embeddings.weight)
+
+    outputs = model(input_ids, attn_mask=mask, key=random.PRNGKey(2))
+    assert outputs.array.shape == (Batch.size, config.Pos.size, Vocab.size)

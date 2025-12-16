@@ -775,14 +775,21 @@ class Olmo3Attention(ModuleWithStateDictSerialization, Attention):
     def init(config: AttentionConfig, *, key, sliding_window: int | None = None):
         attn_config = config.attention_config() if hasattr(config, "attention_config") else config
         base = Attention.init(attn_config, key=key)
+        q_norm = None
+        k_norm = None
+        if attn_config.qk_norm is not None:
+            q_norm = attn_config.qk_norm.build(
+                (attn_config.KVHeads, attn_config.QHeadsPerGroup, attn_config.HeadSize)
+            )
+            k_norm = attn_config.qk_norm.build((attn_config.KVHeads, attn_config.HeadSize))
         return Olmo3Attention(
             base.config,
             base.q_proj,
             base.k_proj,
             base.v_proj,
             base.o_proj,
-            base.q_norm,
-            base.k_norm,
+            q_norm,
+            k_norm,
             base.rot_embs,
             sliding_window=int(sliding_window) if sliding_window is not None else None,
         )
