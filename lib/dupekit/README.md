@@ -9,8 +9,13 @@ might need to install them (e.g., `brew install maturin rust` on macOS).
 - **Cluster:** This code is compiled as part of the Docker build (`uv pip install -e ...` step): Maturin builds the Rust
 code and places it in the system `site-packages` (e.g., `/home/ray/anaconda3/lib/python3.11/site-packages/dupekit/dupekit.abi3.so`).
 
-**Note:** What about making `dupekit` a hybrid Python/Rust Maturin workspace? We tried and experienced issues getting
+>[!NOTE]
+>What about making `dupekit` a hybrid Python/Rust Maturin workspace? We tried and experienced issues getting
 the Docker build to work while keeping it simple—a simple Rust workspace helps keep the setup clean.
+
+>[!WARNING]
+>`dupekit` is configured as an optional dependency, thus must be explicitly requested e.g. via an `extra` group.
+>If you get `ModuleNotFoundError: No module named 'dupekit'`, make sure you have requested/installed it.
 
 ## Benchmarking
 

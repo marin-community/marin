@@ -29,6 +29,8 @@ from pathlib import Path
 import requests
 import yaml
 
+from .dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,67 +40,12 @@ class DashboardConfig:
 
     cluster_configs: list[str] = field(default_factory=list)  # Empty = auto-discover
     ray_init: bool = False  # Initialize Ray client
+    proxy_port: int = 9999  # Port for proxy dashboard when multiple clusters
 
     @classmethod
     def from_cluster(cls, cluster_name: str, ray_init: bool = False) -> "DashboardConfig":
         """Create config for a single cluster by name."""
         return cls(cluster_configs=[cluster_name], ray_init=ray_init)
-
-
-@dataclass
-class ResourceUsage:
-    """Resource usage information for a single resource type."""
-
-    used: str
-    total: str
-
-    def percentage(self) -> float:
-        """Calculate usage percentage, handling unit conversions."""
-        try:
-            # Strip common units for numeric comparison
-            used_val = float(self.used.replace("TiB", "").replace("GiB", "").replace("MiB", "").replace("KiB", ""))
-            total_val = float(self.total.replace("TiB", "").replace("GiB", "").replace("MiB", "").replace("KiB", ""))
-            return (used_val / total_val * 100) if total_val > 0 else 0.0
-        except (ValueError, ZeroDivisionError):
-            return 0.0
-
-
-@dataclass
-class ClusterStatus:
-    """Parsed Ray cluster status information."""
-
-    active_nodes: list[str] = field(default_factory=list)
-    pending_nodes: list[str] = field(default_factory=list)
-    resources: dict[str, ResourceUsage] = field(default_factory=dict)
-
-    def active_count(self) -> int:
-        """Number of active nodes."""
-        return len(self.active_nodes)
-
-    def pending_count(self) -> int:
-        """Number of pending nodes."""
-        return len(self.pending_nodes)
-
-
-@dataclass
-class ClusterInfo:
-    """Information about a Ray cluster."""
-
-    cluster_name: str
-    config_path: str
-    head_ip: str  # Internal IP address (10.x.x.x)
-    external_ip: str | None
-    zone: str
-    project: str
-
-
-@dataclass
-class RayPortMapping:
-    """Local port mappings for SSH tunnel to a Ray cluster."""
-
-    dashboard_port: int  # Ray dashboard (default 8265)
-    gcs_port: int  # Ray GCS (default 6379)
-    api_port: int  # Ray API server (default 10001)
 
 
 @dataclass
@@ -108,6 +55,7 @@ class DashboardConnection:
     clusters: dict[str, ClusterInfo]  # cluster_name -> info
     port_mappings: dict[str, RayPortMapping]  # cluster_name -> port mapping
     ssh_process: subprocess.Popen
+    proxy: DashboardProxy | None = None
 
 
 def find_free_port(start_port: int = 9000, max_attempts: int = 1000) -> int:
@@ -432,7 +380,18 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
     port_mappings = allocate_ports(clusters)
     ssh_process = create_ssh_proxy_chain(clusters, port_mappings)
     wait_for_tunnel(clusters, port_mappings)
-    connection = DashboardConnection(clusters=clusters, port_mappings=port_mappings, ssh_process=ssh_process)
+
+    proxy = None
+    if len(clusters) > 1:
+        proxy = DashboardProxy(clusters, port_mappings, config.proxy_port)
+        proxy.start()
+
+    connection = DashboardConnection(
+        clusters=clusters,
+        port_mappings=port_mappings,
+        ssh_process=ssh_process,
+        proxy=proxy,
+    )
 
     # Save original environment variables
     original_env = {
@@ -466,6 +425,9 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
 
     finally:
         # Cleanup
+        if connection.proxy:
+            connection.proxy.stop()
+
         if ssh_process and ssh_process.poll() is None:
             ssh_process.terminate()
             ssh_process.wait()
