@@ -216,7 +216,8 @@ def build_filter(
     shard_blooms_data = flow_backend().execute(
         Dataset.from_iterable(all_files)
         .reshard(num_shards=config.processes)
-        .flat_map(lambda path: load_file(path, columns=[config.text_field]))
+        .load_file()
+        .select(config.text_field)
         .map_shard(build_shard_bloom)
         .write_binary(f"{bloom_path}-{{shard:05d}}-of-{{total:05d}}.bin", skip_existing=True)
     )
