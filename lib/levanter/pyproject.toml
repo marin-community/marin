@@ -145,11 +145,6 @@ conflicts = [
   ],
 ]  # Never solve for both GPU and TPU at once
 
-[tool.uv.sources]
-zephyr = { workspace = true }
-fray = { workspace = true }
-haliax = { workspace = true }
-
 [tool.ruff]
 line-length = 119
 target-version = "py311"
