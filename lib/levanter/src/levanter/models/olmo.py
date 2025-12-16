@@ -605,22 +605,6 @@ class Olmo2LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo2Config
             return dataclasses.replace(self, embeddings=new_embeddings)
 
 
-silence_transformer_nag()
-from transformers import PretrainedConfig as HfConfig  # noqa: E402
-
-
-# ------------------------------------------------------------
-# Sliding Window Mask
-# ------------------------------------------------------------
-
-def build_sliding_causal_mask(Pos, KeyPos, window):
-    pos = hax.broadcast_axis(hax.arange(Pos), KeyPos)
-    key_pos = hax.broadcast_axis(hax.arange(KeyPos), Pos)
-    causal = key_pos <= pos
-    window_mask = key_pos >= (pos - window + 1)
-    return (causal & window_mask).astype(jnp.bool_)
-
-
 # ------------------------------------------------------------
 # OLMO-3 Config (extends OLMo-2)
 # ------------------------------------------------------------
@@ -628,7 +612,7 @@ def build_sliding_causal_mask(Pos, KeyPos, window):
 @LmConfig.register_subclass("olmo3")
 @dataclass(frozen=True)
 class Olmo3Config(HFCompatConfig):
-    seq_len: int = 65536
+    max_seq_len: int = 65536
     hidden_dim: int = 4096
     intermediate_dim: int = 11008
     num_layers: int = 32
@@ -662,8 +646,12 @@ class Olmo3Config(HFCompatConfig):
     tokenizer: Optional[str] = None
 
     @property
+    def seq_len(self) -> int:
+        return self.max_seq_len
+
+    @property
     def Pos(self) -> Axis:
-        return Axis(name="position", size=self.seq_len)
+        return Axis(name="position", size=self.max_seq_len)
 
     @property
     def KeyPos(self) -> Axis:
@@ -706,7 +694,7 @@ class Olmo3Config(HFCompatConfig):
             hf_sliding_window = getattr(hf_config, "max_position_embeddings", None) or cls.sliding_window
 
         return Olmo3Config(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,
@@ -732,7 +720,7 @@ class Olmo3Config(HFCompatConfig):
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
         return HfOlmo3Config(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -780,10 +768,6 @@ class Olmo3Config(HFCompatConfig):
         )
 
 
-# ------------------------------------------------------------
-# OLMO-3 Attention (with SWA)
-# ------------------------------------------------------------
-
 class Olmo3Attention(ModuleWithStateDictSerialization, Attention):
     sliding_window: Optional[int] = eqx.field(static=True, default=None)
 
@@ -805,21 +789,15 @@ class Olmo3Attention(ModuleWithStateDictSerialization, Attention):
 
     def __call__(self, x, mask, *, key=None, pos_ids=None):
         if self.sliding_window is not None:
-            pos_axis = next(ax for ax in x.axes if ax.name == "position")
-            sw_mask = build_sliding_causal_mask(pos_axis, pos_axis.alias("key_position"), self.sliding_window)
             if isinstance(mask, AttentionMask):
-                mask = mask & AttentionMask(explicit_mask=sw_mask)
+                mask = mask.with_sliding_window(self.sliding_window)
             elif mask is None:
-                mask = AttentionMask(explicit_mask=sw_mask)
+                mask = AttentionMask.causal(sliding_window=self.sliding_window)
             else:
-                mask = mask & sw_mask
+                mask = AttentionMask(explicit_mask=mask, sliding_window=self.sliding_window)
 
         return super().__call__(x, mask, key=key, pos_ids=pos_ids)
 
-
-# ------------------------------------------------------------
-# Decoder Layer
-# ------------------------------------------------------------
 
 class Olmo3DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
     config: Olmo3Config = eqx.field(static=True)
@@ -854,10 +832,6 @@ class Olmo3DecoderLayer(ModuleWithStateDictSerialization, eqx.Module):
         return h + self.post_feedforward_layernorm(self.mlp(h, key=k2))
 
 
-# ------------------------------------------------------------
-# Transformer
-# ------------------------------------------------------------
-
 class Olmo3Transformer(ModuleWithStateDictSerialization, eqx.Module):
     config: Olmo3Config = eqx.field(static=True)
     layers: Stacked[Olmo3DecoderLayer]
@@ -887,10 +861,6 @@ class Olmo3Transformer(ModuleWithStateDictSerialization, eqx.Module):
         x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
         return self.norm(x)
 
-
-# ------------------------------------------------------------
-# LM Head Model
-# ------------------------------------------------------------
 
 class Olmo3LMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Olmo3Config]):
     transformer: Olmo3Transformer
