@@ -17,8 +17,10 @@ import subprocess
 import time
 from abc import ABC
 
+import ray
 import requests
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.cluster.base import TpuConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
@@ -139,7 +141,6 @@ class VllmTpuEvaluator(Evaluator, ABC):
         output_path: str,
         resource_config: ResourceConfig,
         max_eval_instances: int | None = None,
-        resource_config: ResourceConfig | None = None,
         wandb_tags: list[str] | None = None,
         max_length: int | None = None,
         generation_params: dict | None = None,
@@ -148,11 +149,20 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Launches the evaluation run with Fray.
         """
 
+        # Extract TPU resources from ResourceConfig
+        # For @ray.remote, we need chips per slice, not total chips across all replicas
+        if isinstance(resource_config.device, TpuConfig):
+            tpu_chip_count = resource_config.device.chip_count()
+            tpu_type_head = f"TPU-{resource_config.device.variant}-head"
+            ray_resources = {
+                "TPU": tpu_chip_count,
+                tpu_type_head: 1,
+            }
+        else:
+            ray_resources = {}
+
         @ray.remote(
-            resources={
-                "TPU": resource_config.num_tpu,
-                f"{resource_config.tpu_type}-head": 1,
-            },
+            resources=ray_resources,
             runtime_env=self.get_runtime_env(),
             max_calls=1,
         )
