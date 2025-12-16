@@ -101,19 +101,42 @@ class StreamingRolloutLoader:
         if self.pad_token_id is None:
             self.pad_token_id = self.config.tokenizer.eos_token_id
 
+        # Track batch prep time for forward/backward calculation
+        self._last_batch_prep_time: float = 0.0
+
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
         while True:
+            # Measure time to get rollouts from replay buffer
+            fetch_start = time.time()
             rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
+            fetch_time = time.time() - fetch_start
+
             if not rollouts:
                 logger.warning("No rollouts received from data loader within timeout, retrying...")
                 continue
 
-            # Convert rollouts to training batch
+            # Measure batch creation time
+            batch_start = time.time()
             batch = create_training_batch_from_rollouts(rollouts, self.max_tokens, self.pad_token_id)
-            # shard onto the device mesh
+            batch_time = time.time() - batch_start
+
+            # Measure sharding time
+            shard_start = time.time()
             with hax.set_mesh(self.config.trainer.device_mesh):
                 sharded_batch = hax.shard(batch, self.config.trainer.compute_axis_mapping)
+            shard_time = time.time() - shard_start
+
+            total_time = fetch_time + batch_time + shard_time
+            self._last_batch_prep_time = total_time
+            logger.info(
+                "Batch prep: fetch=%.3fs, create=%.3fs, shard=%.3fs, total=%.3fs, rollouts=%d",
+                fetch_time,
+                batch_time,
+                shard_time,
+                total_time,
+                len(rollouts),
+            )
 
             yield sharded_batch
 
@@ -296,6 +319,32 @@ class TrainWorker:
 
         trainer.add_hook(_stop_on_signal, every=1)
 
+        # Log training step timing for RL analysis
+        def _log_step_timing(info: levanter.callbacks.StepInfo):
+            # Get batch prep time from the data loader
+            batch_prep_time = self.data_loader._last_batch_prep_time
+
+            # Forward/backward = total step duration - batch prep time
+            forward_backward_duration = max(0.0, info.step_duration - batch_prep_time)
+
+            metrics = {
+                "throughput/step_duration_seconds": info.step_duration,
+                "throughput/batch_prep_duration_seconds": batch_prep_time,
+                "throughput/forward_backward_duration_seconds": forward_backward_duration,
+                "train/loss": float(info.loss),
+            }
+            trainer.tracker.log(metrics, step=info.step)
+            logger.info(
+                "Training step %d completed: duration=%.2fs (batch_prep=%.2fs, fwd_bwd=%.2fs), loss=%.4f",
+                info.step,
+                info.step_duration,
+                batch_prep_time,
+                forward_backward_duration,
+                info.loss,
+            )
+
+        trainer.add_hook(_log_step_timing, every=1)
+
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
             try:
@@ -316,12 +365,17 @@ class TrainWorker:
         )
 
         model_params = state.model
+
+        # Measure weight transfer time
+        transfer_start = time.time()
         self.transfer_server.serve_weights(step, model_params)
-        metrics = {
-            f"train.weight_transfer.{k}": v for k, v in dataclasses.asdict(self.transfer_server.get_metrics()).items()
-        }
+        transfer_time = time.time() - transfer_start
+
+        metrics = {f"weight_transfer/{k}": v for k, v in dataclasses.asdict(self.transfer_server.get_metrics()).items()}
+        metrics["weight_transfer/serve_time_seconds"] = transfer_time
+
         trainer.tracker.log(metrics, step=step)
-        logger.info(f"Successfully transferred weights with ID {step}")
+        logger.info("Successfully transferred weights with ID %d (transfer_time=%.2fs)", step, transfer_time)
 
     def stop(self):
         """Stop the training worker."""

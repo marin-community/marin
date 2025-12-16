@@ -714,6 +714,9 @@ class RolloutWorker:
                 log_metrics = eval_metrics
                 log_metrics.update(self._transfer_client.get_metrics())
                 log_metrics.update({f"env.{k}": v for k, v in (env_metrics or {}).items()})
+                # Add storage metrics if available
+                if hasattr(self._rollout_writer, "get_metrics"):
+                    log_metrics.update(self._rollout_writer.get_metrics())
                 log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
                 logger.info(f"Logging metrics at step {step}... {log_metrics}")
                 self.tracker.log(log_metrics, step=step)
