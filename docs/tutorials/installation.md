@@ -51,7 +51,7 @@ If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
 
 5. Setup the Hugging Face CLI so you can use gated models/tokenizers (such as [Meta's Llama 3.1 8B model](https://huggingface.co/meta-llama/Llama-3.1-8B)):
    ```bash
-   huggingface-cli login
+   hf auth login
    ```
 
 ## Hardware-specific Setup
@@ -108,7 +108,7 @@ you train a tiny language model on TinyStories on your CPU.  For a sneak preview
 
 ```bash
 wandb offline  # Disable WandB logging
-python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
+uv run experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
 ```
 
 This will:
