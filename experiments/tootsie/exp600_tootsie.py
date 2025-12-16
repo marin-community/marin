@@ -594,6 +594,8 @@ PHASE_4_END = 1_320_000
 # 4096 * 4096 * 80_000 is ~1.34e12
 COOLDOWN_LEN = 80_000
 
+STARLING_END = PHASE_4_END + COOLDOWN_LEN
+
 # for these long runs we don't usually actually **finish** the run in the Executor's eyes,
 # so we use `wait_for_completion`
 phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000").nonblocking()
@@ -609,7 +611,7 @@ cooldown_train_config = dataclasses.replace(
     z_loss_weight=1e-4,
     initialize_from_checkpoint_path=phoenix_phase4_checkpoint_for_phase5,
     decay=COOLDOWN_LEN,
-    num_train_steps=PHASE_4_END + COOLDOWN_LEN,
+    num_train_steps=STARLING_END,
     learning_rate=1.7e-3,  # same peak lr
     lr_schedule="linear",
     # spoonbill went to just 2.75e-5 but with zloss I think we can go lower
@@ -643,10 +645,16 @@ starling_cooldown_weights = {
     **{k: v * 0.3 / total_hq_weight for k, v in starling_hq_cooldown_weights.items()},
 }
 
-starling_components = {"finemath-3-plus": finemath_3_plus_tokenized}
+starling_components = {
+    **phase_3_tokenized,
+    **nemotron_cc_steps,
+    **pt_vs_hq_components,
+    "finemath-3-plus": finemath_3_plus_tokenized,
+}
+
 
 starling_cooldown_mixture = lm_varying_mixture_data_config(
-    components={**phase_3_tokenized, **nemotron_cc_steps, **pt_vs_hq_components, **starling_components},
+    components={**starling_components},
     weights_list=[
         (0, DCLM_MIXTURE_WEIGHTS),
         (PHASE_3_START, cooldown_mixture_weights_v1),

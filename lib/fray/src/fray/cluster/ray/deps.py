@@ -24,7 +24,7 @@ from pathlib import Path
 
 from ray.runtime_env import RuntimeEnv
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 # Packages to ignore when computing the runtime environment.
 # These will always be instead sourced from the base environment.

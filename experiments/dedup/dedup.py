@@ -80,7 +80,9 @@ def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
     input_path = dataset.cd("sample/10BT")
 
     config = DedupeConfig(
-        input_path=input_path, attribute_name="is_duplicate", mode=DedupMode.DEDUPLICATE, processes=max_parallelism
+        input_path=input_path,
+        mode=DedupMode.EXACT_PARAGRAPH_DEDUPLICATE,
+        processes=max_parallelism,
     )
 
     return ExecutorStep(

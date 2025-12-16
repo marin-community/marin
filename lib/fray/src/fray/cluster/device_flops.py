@@ -65,6 +65,13 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "fp16": 312e12,
         "bf16": 312e12,
     },
+    "a100-80g": {
+        "fp64": 19.5e12,
+        "fp32": 19.5e12,
+        "tf32": 156e12,
+        "fp16": 312e12,
+        "bf16": 312e12,
+    },
     # source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a10/pdf/a10-datasheet.pdf
     "a10": {
         "fp32": 31.2e12,

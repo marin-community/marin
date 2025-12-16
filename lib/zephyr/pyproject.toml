@@ -19,6 +19,7 @@ dependencies = [
     "braceexpand>=0.1.0",
     "zstandard>=0.18.0",
     "tqdm-loggable>=0.2",
+    "vortex-data>=0.1.0",
 ]
 
 [project.scripts]

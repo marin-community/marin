@@ -257,7 +257,6 @@ llama3_instruct_trainable_chat_template = """{{- bos_token }}
 # this is a chat format compatible with the llama3 instruct tokenizer and Levanter's chat format
 llama3_instruct_chat_format = ChatLmDatasetFormat(
     messages_field="messages",
-    single_turn=False,
     chat_template=llama3_instruct_trainable_chat_template,
     pack=True,
     mask_user_turns=True,

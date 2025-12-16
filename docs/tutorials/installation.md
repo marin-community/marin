@@ -9,6 +9,9 @@ Before you begin, ensure you have the following installed:
 - Python 3.11 or higher
 - uv (Python package manager)
 - Git
+- Rust toolchain via [rustup](https://rustup.rs) (needed for `lib/dupekit`, which is built with Maturin; see [`lib/dupekit/README.md`](https://github.com/marin-community/marin/blob/main/lib/dupekit/README.md) for background)
+    - Recommended: `rustup toolchain install 1.91.0 && rustup default 1.91.0` (matches the Docker pin)
+    - If you hit an `edition2024` error from Cargo (e.g., when building Arrow), use nightly: `rustup default nightly`
 - On macOS, install additional build tools for SentencePiece:
     ```bash
     brew install cmake pkg-config coreutils

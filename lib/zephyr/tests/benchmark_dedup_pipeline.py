@@ -15,11 +15,13 @@
 
 """Benchmark Zephyr deduplication pipeline (generate docs → map → deduplicate by simhash → write).
 
-Usage: uv run python tests/benchmark_dedup_pipeline.py --backends ray threadpool [--profile]
+Usage:
+    uv run python tests/benchmark_dedup_pipeline.py                           # Run benchmark with defaults
+    uv run python tests/benchmark_dedup_pipeline.py benchmark --backends ray  # Benchmark specific backend
+    uv run python tests/benchmark_dedup_pipeline.py write-input --output-dir /tmp/input  # Just generate input files
 """
 
-import gzip
-import io
+import logging
 import os
 import random
 import shutil
@@ -33,10 +35,11 @@ from pathlib import Path
 from typing import Any
 
 import click
-import msgspec
 import psutil
-import zstandard as zstd
-from zephyr import Dataset, create_backend, load_jsonl
+from tqdm import tqdm
+from zephyr import Dataset, ExecutionHint, create_backend
+from zephyr.readers import load_file
+from zephyr.writers import write_parquet_file
 
 WORDS = """
 the be to of and a in that have I it for not on with he as you do at this but his by from
@@ -55,15 +58,9 @@ def generate_doc(doc_id: int, num_words: int = 1000) -> dict[str, Any]:
     words = [random.choice(WORDS) for _ in range(num_words)]
     body = " ".join(words)
 
-    # Create simhash from unique words (creates natural duplicates)
-    # Using modulo to control duplicate rate
-    unique_words = sorted(set(words))
-    simhash = hash(" ".join(unique_words)) % 10000
-
     return {
         "doc_id": doc_id,
         "body": body,
-        "simhash": simhash,
         "meta1": random.randint(0, 1000),
         "meta2": random.choice(["A", "B", "C", "D", "E"]),
         "meta3": random.random(),
@@ -78,66 +75,50 @@ def generate_doc(doc_id: int, num_words: int = 1000) -> dict[str, Any]:
 
 
 def write_input_files(docs: Iterator[dict[str, Any]], input_dir: str, num_files: int = 10) -> list[str]:
-    """Write documents to num_files zstd-compressed JSONL files, returning file paths."""
+    """Write documents to num_files files, returning file paths."""
     os.makedirs(input_dir, exist_ok=True)
     file_paths = []
     file_buffers = [[] for _ in range(num_files)]
 
-    # Collect documents for each file
-    for idx, doc in enumerate(docs):
+    for idx, doc in tqdm(enumerate(docs)):
         file_idx = idx % num_files
         file_buffers[file_idx].append(doc)
 
-    # Write each buffer to a zstd-compressed file
-    cctx = zstd.ZstdCompressor(level=1)
     for i in range(num_files):
-        file_path = os.path.join(input_dir, f"input-{i:05d}.jsonl.zst")
+        file_path = os.path.join(input_dir, f"input-{i:05d}.parquet")
         file_paths.append(file_path)
-
-        # Serialize all docs for this file
-        data = b"".join(msgspec.json.encode(doc) + b"\n" for doc in file_buffers[i])
-
-        # Compress and write
-        with open(file_path, "wb") as f:
-            f.write(cctx.compress(data))
+        list(write_parquet_file(file_buffers[i], file_path))
+        # list(write_vortex_file(file_buffers[i], file_path))
 
     return file_paths
 
 
+def simhash(doc: dict[str, Any]) -> int:
+    words = doc["body"].split()
+    unique_words = sorted(set(words))
+    return hash(" ".join(unique_words)) % 10000
+
+
 def create_pipeline(input_dir: str, output_dir: str) -> Dataset:
-    """Create benchmark pipeline: load JSONL → map → deduplicate by simhash → write."""
+    """Create benchmark pipeline: load → map → deduplicate by simhash → write."""
     return (
-        Dataset.from_files(f"{input_dir}/*.jsonl.zst")
-        .flat_map(load_jsonl)
+        Dataset.from_files(f"{input_dir}/*.parquet")
+        .load_file()
         .map(
             lambda doc: {
-                **doc,
-                "words": doc["body"].split(),
-                "word_count": len(doc["body"].split()),
+                "simhash": simhash(doc),
             }
         )
         .group_by(
             key=lambda x: x["simhash"],
-            reducer=lambda key, items: next(iter(items)),  # Take first (deduplication)
+            reducer=lambda key, items: next(iter(items)),
         )
-        .write_jsonl(f"{output_dir}/output-{{shard:05d}}-of-{{total:05d}}.jsonl.zst")
+        .write_parquet(f"{output_dir}/output-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
 
 
-def count_jsonl_docs(file_path: str) -> int:
-    """Count lines in JSONL file (supports .gz and .zst compression)."""
-    if file_path.endswith(".gz"):
-        with gzip.open(file_path, "rt") as f:
-            return sum(1 for line in f if line.strip())
-    elif file_path.endswith(".zst"):
-        dctx = zstd.ZstdDecompressor()
-        with open(file_path, "rb") as raw_f:
-            with dctx.stream_reader(raw_f) as reader:
-                text_f = io.TextIOWrapper(reader, encoding="utf-8")
-                return sum(1 for line in text_f if line.strip())
-    else:
-        with open(file_path) as f:
-            return sum(1 for line in f if line.strip())
+def count_docs(file_path: str) -> int:
+    return len(list(load_file(file_path)))
 
 
 def run_benchmark(
@@ -160,9 +141,17 @@ def run_benchmark(
         if backend_type == "sync":
             backend = create_backend("sync")
         elif backend_type == "threadpool":
-            backend = create_backend("threadpool", max_parallelism=10)
+            backend = create_backend("threadpool", max_parallelism=16)
         elif backend_type == "ray":
-            backend = create_backend("ray", max_parallelism=10, memory="2GB")
+            import ray
+
+            ray.init(
+                address="local",
+                resources={"head_node": 1},
+                num_cpus=16,
+                runtime_env={"working_dir": None},
+            )
+            backend = create_backend("ray", max_parallelism=16)
         else:
             raise ValueError(f"Unknown backend: {backend_type}")
 
@@ -174,7 +163,7 @@ def run_benchmark(
         print("Executing pipeline...")
         mem_before = process.memory_info().rss
         exec_start = time.time()
-        results = list(backend.execute(pipeline))
+        results = list(backend.execute(pipeline, ExecutionHint(intra_shard_parallelism=8)))
         exec_time = time.time() - exec_start
         mem_after = process.memory_info().rss
 
@@ -184,7 +173,7 @@ def run_benchmark(
 
         # Count output documents
         print("Counting output documents...")
-        output_docs = sum(count_jsonl_docs(f) for f in results)
+        output_docs = sum(count_docs(f) for f in results)
         dedup_ratio = (1 - output_docs / num_docs) * 100
 
         # Report results
@@ -216,9 +205,38 @@ def run_benchmark(
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
-def setup_input_files(num_docs: int, words_per_doc: int, num_input_files: int) -> tuple[str, float]:
+@click.group(invoke_without_command=True)
+@click.pass_context
+def cli(ctx: click.Context) -> None:
+    """Benchmark Zephyr deduplication pipeline."""
+    if ctx.invoked_subcommand is None:
+        # Default to benchmark command with default args
+        ctx.invoke(benchmark)
+
+
+@cli.command("write-input")
+@click.option("--output-dir", type=click.Path(path_type=Path), required=True, help="Directory to write input files")
+@click.option("--num-docs", type=int, default=1_000_000, help="Number of documents to generate")
+@click.option("--words-per-doc", type=int, default=1000, help="Number of words per document")
+@click.option("--num-input-files", type=int, default=10, help="Number of input parquet files to create")
+def write_input(
+    output_dir: Path,
+    num_docs: int,
+    words_per_doc: int,
+    num_input_files: int,
+) -> None:
+    """Generate and write input files for benchmarking."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    setup_input_files(num_docs, words_per_doc, num_input_files, str(output_dir))
+    print(f"\nInput files written to: {output_dir}")
+
+
+def setup_input_files(
+    num_docs: int, words_per_doc: int, num_input_files: int, input_dir: str | None = None
+) -> tuple[str, float]:
     """Generate input files and return directory path and generation time."""
-    input_dir = tempfile.mkdtemp(prefix="zephyr_benchmark_input_")
+    if input_dir is None:
+        input_dir = tempfile.mkdtemp(prefix="zephyr_benchmark_input_")
 
     print(f"Generating {num_docs:,} documents and writing to {num_input_files} files...")
     gen_start = time.time()
@@ -234,7 +252,7 @@ def setup_input_files(num_docs: int, words_per_doc: int, num_input_files: int) -
     return input_dir, gen_time
 
 
-@click.command()
+@cli.command("benchmark")
 @click.option(
     "--backends",
     multiple=True,
@@ -255,16 +273,16 @@ def setup_input_files(num_docs: int, words_per_doc: int, num_input_files: int) -
     default=None,
     help="Directory for profile output (default: tests/profiles/)",
 )
-def main(
-    backends: tuple[str, ...],
-    num_docs: int,
-    words_per_doc: int,
-    num_input_files: int,
-    input_dir: str | None,
-    profile: bool,
-    profile_output: Path | None,
+def benchmark(
+    backends: tuple[str, ...] = ("threadpool",),
+    num_docs: int = 1_000_000,
+    words_per_doc: int = 1000,
+    num_input_files: int = 10,
+    input_dir: str | None = None,
+    profile: bool = False,
+    profile_output: Path | None = None,
 ) -> None:
-    """Benchmark Zephyr deduplication pipeline."""
+    """Run benchmark on deduplication pipeline."""
     backends_list = list(backends) if backends else ["threadpool"]
 
     # Handle profiling mode - generate input once and subprocess with py-spy
@@ -311,6 +329,7 @@ def main(
                     "--",
                     sys.executable,
                     __file__,
+                    "benchmark",
                     "--backends",
                     backend,
                     "--num-docs",
@@ -355,9 +374,10 @@ def main(
     should_cleanup = input_dir is None
     if should_cleanup:
         print()
-        input_dir, gen_time = setup_input_files(num_docs, words_per_doc, num_input_files)
+        temp_input_dir, gen_time = setup_input_files(num_docs, words_per_doc, num_input_files)
     else:
         gen_time = 0.0
+        temp_input_dir = input_dir
         print(f"Using existing input directory: {input_dir}")
 
     try:
@@ -365,7 +385,7 @@ def main(
         results = []
         for backend in backends_list:
             try:
-                result = run_benchmark(backend, input_dir, num_docs, num_input_files)
+                result = run_benchmark(backend, temp_input_dir, num_docs, num_input_files)
                 result["gen_time"] = gen_time
                 results.append(result)
             except Exception as e:
@@ -388,9 +408,10 @@ def main(
     finally:
         # Only cleanup if we generated the input
         if should_cleanup:
-            print(f"\nCleaning up input directory {input_dir}...")
-            shutil.rmtree(input_dir, ignore_errors=True)
+            print(f"\nCleaning up input directory {temp_input_dir}...")
+            shutil.rmtree(temp_input_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
-    main()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    cli()
