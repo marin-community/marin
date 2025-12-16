@@ -19,8 +19,8 @@ Run the selected LM Eval Harness tasks across a set of Marin, Qwen 2.5, OLMo 2, 
 from collections.abc import Iterable
 from dataclasses import replace
 
+from fray.cluster import ResourceConfig
 from experiments.evals.evals import default_eval
-from experiments.evals.resource_configs import SINGLE_TPU_V5p_8_FULL
 from experiments.evals.task_configs import LM_EVAL_HARNESS_SELECTED_TASKS
 from experiments.models import (
     llama_3_1_8b,
@@ -58,7 +58,7 @@ def _create_per_task_eval_steps(model_step: ExecutorStep, tasks: Iterable[EvalTa
     for task in tasks:
         eval_step = default_eval(
             step=model_step,
-            resource_config=SINGLE_TPU_V5p_8_FULL,
+            resource_config=ResourceConfig.with_tpu("v5p-8"),
             evals=(task,),
             discover_latest_checkpoint=False,
         )
