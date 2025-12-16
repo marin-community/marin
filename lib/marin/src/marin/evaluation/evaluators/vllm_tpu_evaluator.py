@@ -17,10 +17,8 @@ import subprocess
 import time
 from abc import ABC
 
-import ray
 import requests
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
-from fray.cluster.base import TpuConfig
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
@@ -128,12 +126,6 @@ class VllmTpuEvaluator(Evaluator, ABC):
         # Delete the checkpoint
         model.destroy()
 
-    def get_runtime_env(self) -> dict:
-        """
-        Returns the runtime environment to run the evaluator on the Ray cluster.
-        """
-        return build_runtime_env_for_packages(extra=["eval", "vllm"])
-
     def launch_evaluate_with_ray(
         self,
         model: ModelConfig,
@@ -149,42 +141,19 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Launches the evaluation run with Fray.
         """
 
-        # Extract TPU resources from ResourceConfig
-        # For @ray.remote, we need chips per slice, not total chips across all replicas
-        if isinstance(resource_config.device, TpuConfig):
-            tpu_chip_count = resource_config.device.chip_count()
-            tpu_type_head = f"TPU-{resource_config.device.variant}-head"
-            ray_resources = {
-                "TPU": tpu_chip_count,
-                tpu_type_head: 1,
-            }
-        else:
-            ray_resources = {}
-
-        @ray.remote(
-            resources=ray_resources,
-            runtime_env=self.get_runtime_env(),
-            max_calls=1,
-        )
-        @remove_tpu_lockfile_on_exit
-        def launch(
-            model: ModelConfig,
-            evals: list[EvalTaskConfig],
-            output_path: str,
-            max_eval_instances: int | None = None,
-            wandb_tags: list[str] | None = None,
-            max_length: int | None = None,
-            generation_params: dict | None = None,
-        ) -> None:
-            import logging
-
-            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
-            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags=wandb_tags, generation_params=generation_params)
-
         def _run():
+            import logging
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
             with remove_tpu_lockfile_on_exit():
-                launch(model, evals, output_path, max_eval_instances, wandb_tags, max_length, generation_params, wandb_tags)
+                self.evaluate(
+                    model,
+                    evals,
+                    output_path,
+                    max_eval_instances=max_eval_instances,
+                    wandb_tags=wandb_tags,
+                    max_gen_toks=max_length, # maybe remove
+                    generation_params=generation_params,
+                )
 
         if resource_config is None:
             resource_config = ResourceConfig()

@@ -19,7 +19,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, executor_main
 from fray.cluster import ResourceConfig
 
-resource_config = ResourceConfig.with_tpu("v6e-8", slice_count=4)
+resource_config = ResourceConfig.with_tpu("v5p-8", slice_count=1)
 
 """
 Note for people trying to do evals:
@@ -185,7 +185,7 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
 
 if __name__ == "__main__":
     # Quiet ray logs for this experiment
-    logging.getLogger("ray").setLevel(logging.WARNING)
+    # logging.getLogger("ray").setLevel(logging.WARNING)
 
     all_steps = []
 
@@ -220,6 +220,6 @@ if __name__ == "__main__":
 
     # Add compile results step
     compile_step = compile_results(all_steps)
-    all_steps.append(compile_step)
+    # all_steps.append(compile_step)
 
     executor_main(steps=all_steps)
