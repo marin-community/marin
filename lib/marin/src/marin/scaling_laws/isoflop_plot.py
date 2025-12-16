@@ -1,8 +1,22 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Sequence
+from collections.abc import Sequence
 
 import fsspec
 import jax.numpy as jnp
@@ -26,42 +40,16 @@ from marin.scaling_laws.eval_metrics_reader import (
     read_metrics_dataframe,
 )
 
+try:
+    from experiments.isoflop_sweep import MARIN_SCALING_SUITES
+
+    ISOFLOP_SWEEP_AVAILABLE = True
+except ImportError:
+    ISOFLOP_SWEEP_AVAILABLE = False
+    MARIN_SCALING_SUITES = {}
+
 
 logger = logging.getLogger(__name__)
-
-
-def build_wandb_run_overrides(wandb_sources: list[tuple[str, str]]) -> dict[str, str]:
-    """
-    Builds a mapping from clean run names to full WandB displayNames.
-    This is used to find WandB runs for backfill, even when checkpoint paths
-    use the new clean names but WandB displayNames have legacy hash suffixes.
-    """
-    if not WANDB_AVAILABLE:
-        logger.warning("wandb not available, cannot build run overrides")
-        return {}
-
-    api = wandb.Api()
-    overrides = {}  # clean_name -> full_displayName
-
-    for entity_project, fragment in wandb_sources:
-        if "/" not in entity_project:
-            raise ValueError(f"Bad ENTITY/PROJECT: {entity_project}")
-
-        regex = rf"isoflop.*({fragment}).*"
-        filters = {"displayName": {"$regex": regex}, "state": "finished"}
-        try:
-            runs = api.runs(entity_project.strip(), filters=filters)
-            for run in runs:
-                display_name = run.displayName
-                # The key for the override map is the "clean" name, without hash
-                clean_name = re.sub(r"-[0-9a-fA-F]{6}$", "", display_name)
-                # The value is the full name, which is used as the run ID for backfill
-                overrides[clean_name] = display_name
-        except Exception as e:
-            logger.warning(f"Failed to query WandB for {entity_project}: {e}")
-
-    logger.info(f"Built {len(overrides)} WandB run overrides")
-    return overrides
 
 
 # ---------------- Theme ----------------
@@ -114,8 +102,6 @@ CANON_LABELS = ["nemo", "comma", "dclm"]  # canonical dataset names we detect in
 
 
 # ---------------- Helpers ----------------
-def _tags_to_dict(tags):
-    return {k: v for k, v in (t.split("=", 1) for t in tags if "=" in t)}
 
 
 def _parse_isoflop_run_name(run_name: str) -> dict | None:
@@ -144,34 +130,6 @@ def _parse_isoflop_run_name(run_name: str) -> dict | None:
         "B": int(B),
         "experiment_name": exp_name,
     }
-
-
-def df_from_sources(source_runs: list[tuple[list, str]], metric_key: str = DEFAULT_METRIC_KEY) -> pd.DataFrame:
-    """Build a dataframe from [(runs, fragment), ...] and compute a 'label' per row."""
-    records = []
-    for runs, fragment in source_runs:
-        for run in runs:
-            summary = run.summary
-            tags = _tags_to_dict(run.tags)
-            if not REQUIRED_TAGS.issubset(tags):
-                continue
-
-            steps = float(tags["steps"])
-            batch = float(tags["B"])
-            flops = float(tags["FLOPs"])
-            if flops < 1e18:
-                continue
-
-            tokens = steps * batch * SEQ_LEN
-            loss = summary.get(metric_key)
-            if loss is None:
-                continue
-
-            params = summary.get("parameter_count")
-            name = run.displayName
-
-            records.append(dict(tokens=tokens, loss=loss, flops=flops, params=params, name=name, label=fragment))
-    return pd.DataFrame.from_records(records)
 
 
 def _robust_quad_logx(x: jnp.ndarray, y: jnp.ndarray, delta: float = 1.0) -> jnp.ndarray:
@@ -552,53 +510,74 @@ def create_isoflop_analysis_step(
     )
 
 
-# ---------------- Main (Legacy WandB-based) ----------------
-def main(sources: list[tuple[str, str]]):
+# ---------------- Main (using experiments/isoflop_sweep.py) ----------------
+def main_from_isoflop_sweep(
+    suite_names: list[str] | None = None,
+    metric_key: str = DEFAULT_METRIC_KEY,
+    upload_to_wandb: bool = True,
+):
     """
-    sources: list of (ENTITY/PROJECT, REGEX_FRAGMENT) with single fragments (no '|').
-    We query with r'isoflop.*(<fragment>)' and infer dataset labels from displayName,
-    falling back to the fragment so nothing gets dropped.
+    Run isoflop analysis using training runs from experiments/isoflop_sweep.py.
+
+    Args:
+        suite_names: Names of scaling suites from MARIN_SCALING_SUITES (default: all)
+        metric_key: Which metric to use for loss
+        upload_to_wandb: Whether to upload plots to WandB
     """
-    RUN_ID = "marin-scaling-suite-isoflop"
-    wandb.login()
-    run = wandb.init(
-        entity="marin-community",
-        project="marin-analysis",
-        job_type="isoflop-analysis",
-        id=RUN_ID,
-        resume="allow",
-        name="isoflop-analysis",
+    if not ISOFLOP_SWEEP_AVAILABLE:
+        raise RuntimeError(
+            "Cannot import from experiments.isoflop_sweep. " "Make sure the experiments module is in your Python path."
+        )
+
+    if suite_names is None:
+        suite_names = list(MARIN_SCALING_SUITES.keys())
+
+    # Collect all training runs from the specified suites
+    all_training_runs = []
+    label_map = {}
+
+    for suite_name in suite_names:
+        if suite_name not in MARIN_SCALING_SUITES:
+            logger.warning(f"Suite '{suite_name}' not found in MARIN_SCALING_SUITES")
+            continue
+
+        steps, _ = MARIN_SCALING_SUITES[suite_name]
+        # Filter to just training steps (not eval steps)
+        training_steps = [step for step in steps if step.name.startswith("isoflop-")]
+        all_training_runs.extend(training_steps)
+
+        # Build label map from experiment names
+        for step in training_steps:
+            meta = _parse_isoflop_run_name(step.name)
+            if meta:
+                exp_name = meta["experiment_name"]
+                # Map experiment name to canonical label
+                for canon in CANON_LABELS:
+                    if canon in exp_name.lower():
+                        label_map[exp_name] = canon
+                        break
+
+    if not all_training_runs:
+        logger.error("No training runs found in specified suites")
+        return
+
+    logger.info(f"Found {len(all_training_runs)} training runs across {len(suite_names)} suites")
+
+    # Create and run analysis
+    config = IsoFlopAnalysisConfig(
+        training_runs=[output_path_of(step) for step in all_training_runs],
+        output_path="analysis/isoflop",
+        metric_key=metric_key,
+        label_map=label_map,
+        upload_to_wandb=upload_to_wandb,
     )
 
-    api = wandb.Api()
-    source_runs = []
-    for entity_project, fragment in sources:
-        if "/" not in entity_project:
-            raise ValueError(f"Bad ENTITY/PROJECT: {entity_project}")
-        if not fragment:
-            raise ValueError("Empty regex fragment")
-
-        regex = rf"isoflop.*({fragment}).*"
-        filters = {"displayName": {"$regex": regex}, "state": "finished"}
-        runs = api.runs(entity_project.strip(), filters=filters)
-        source_runs.append((runs, fragment.strip()))
-
-    df = df_from_sources(source_runs)
-    fig_iso, fig_scaling = iso_plot_with_minima_df(df)
-
-    wandb.log(
-        {
-            "isoFLOP_plot": wandb.Plotly(fig_iso),
-            "scaling_plot": wandb.Plotly(fig_scaling),
-        }
-    )
-    run.finish()
+    run_isoflop_analysis(config)
 
 
 if __name__ == "__main__":
-    SOURCES = [
-        ("marin-community/marin", "nemo-wider-depth-adapt"),
-        ("marin-community/marin", "comma"),
-        ("stanford-mercury/marin", "dclm-default"),
-    ]
-    main(SOURCES)
+    # Use the new logic that imports from isoflop_sweep.py
+    main_from_isoflop_sweep(
+        suite_names=["nemotron", "common_pile", "dclm-default"],
+        upload_to_wandb=True,
+    )

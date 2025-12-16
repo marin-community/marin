@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Copyright 2025 Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 """
@@ -12,7 +26,7 @@ import logging
 import json
 import os
 from dataclasses import dataclass
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
 
 import fsspec
 import pandas as pd
@@ -41,7 +55,6 @@ def _backfill_metrics_from_wandb(
     checkpoint_path: str,
     metrics_file: str,
     entity_project: str,
-    wandb_run_id: str | None = None,
 ) -> bool:
     """
     Backfill eval_metrics.jsonl from WandB for a training run.
@@ -50,7 +63,6 @@ def _backfill_metrics_from_wandb(
         checkpoint_path: Path to the checkpoint directory
         metrics_file: Full path to where eval_metrics.jsonl should be written
         entity_project: WandB entity/project (format: 'entity/project')
-        wandb_run_id: If provided, use this WandB run ID instead of inferring from path
 
     Returns:
         True if backfill succeeded, False otherwise
@@ -59,36 +71,37 @@ def _backfill_metrics_from_wandb(
         logger.warning(f"wandb not available, cannot backfill metrics for {checkpoint_path}")
         return False
 
-        try:
-            run_id = wandb_run_id or extract_run_name_from_path(checkpoint_path)
-            logger.info(f"Attempting to backfill summary metrics for run_id: {run_id}")
+    try:
+        run_id = extract_run_name_from_path(checkpoint_path)
+        logger.info(f"Attempting to backfill summary metrics for run_id: {run_id}")
 
-            api = wandb.Api()
-            run = api.run(f"{entity_project}/{run_id}")
+        api = wandb.Api()
+        run = api.run(f"{entity_project}/{run_id}")
 
-            # Get summary metrics only
-            summary = dict(run.summary)
+        # Get summary metrics only
+        summary = dict(run.summary)
 
-            eval_metrics = {k: v for k, v in summary.items() if k.startswith("eval/")}
-            if not eval_metrics:
-                logger.warning(f"No eval summary metrics found in WandB for run {run_id}")
-                return False
-            record = {
-                "step": summary.get("_step", summary.get("trainer/global_step", 0)),
-                **eval_metrics,
-            }
-
-            fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
-            fs.makedirs(os.path.dirname(metrics_file), exist_ok=True)
-
-            with fs.open(metrics_file, "w") as f:
-                f.write(json.dumps(record) + "\n")
-
-            logger.info(f"Successfully backfilled summary metrics to {metrics_file}")
-            return True
-
-        except Exception as e:
+        eval_metrics = {k: v for k, v in summary.items() if k.startswith("eval/")}
+        if not eval_metrics:
+            logger.warning(f"No eval summary metrics found in WandB for run {run_id}")
             return False
+        record = {
+            "step": summary.get("_step", summary.get("trainer/global_step", 0)),
+            **eval_metrics,
+        }
+
+        fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
+        fs.makedirs(os.path.dirname(metrics_file), exist_ok=True)
+
+        with fs.open(metrics_file, "w") as f:
+            f.write(json.dumps(record) + "\n")
+
+        logger.info(f"Successfully backfilled summary metrics to {metrics_file}")
+        return True
+
+    except Exception as e:
+        logger.warning(f"Failed to backfill metrics from WandB: {e}")
+        return False
 
 
 @dataclass(frozen=True)
@@ -113,14 +126,6 @@ class EvalMetricsAnalysisConfig:
 
     wandb_entity_project: str = "marin-community/marin"
     """WandB entity/project to query for backfill (format: 'entity/project')."""
-
-    wandb_run_overrides: dict[str, str] | None = None
-    """Manual mapping from checkpoint path (or run name) to WandB run ID.
-
-    Use this when the checkpoint path doesn't match the WandB run ID.
-    Keys can be full paths or just the run name (basename of path).
-    Example: {"isoflop-1e+19-d2048-nemo": "isoflop-1e+19-d2048-nemo-abc123"}
-    """
 
 
 def read_metrics_dataframe(config: EvalMetricsAnalysisConfig) -> pd.DataFrame:
@@ -149,30 +154,19 @@ def read_metrics_dataframe(config: EvalMetricsAnalysisConfig) -> pd.DataFrame:
             if config.backfill_from_wandb:
                 logger.info("Attempting to backfill from WandB...")
 
-                # Check manual overrides (by full path or run name)
-                wandb_run_id = None
-                if config.wandb_run_overrides:
-                    run_name = extract_run_name_from_path(run_path)
-                    wandb_run_id = config.wandb_run_overrides.get(run_path)
-                    if wandb_run_id is None:
-                        wandb_run_id = config.wandb_run_overrides.get(run_name)
-                    if wandb_run_id:
-                        logger.info(f"Using manual override: {wandb_run_id}")
-
                 success = _backfill_metrics_from_wandb(
                     checkpoint_path=run_path,
                     metrics_file=metrics_file,
                     entity_project=config.wandb_entity_project,
-                    wandb_run_id=wandb_run_id,
                 )
-            if not success:
+                if not success:
+                    raise RuntimeError(
+                        f"Backfill from WandB failed for run {i} (path={run_path}, metrics_file={metrics_file})"
+                    )
+            else:
                 raise RuntimeError(
-                    f"Backfill from WandB failed for run {i} (path={run_path}, metrics_file={metrics_file})"
+                    f"Metrics file missing for run {i} (path={run_path}), and backfill_from_wandb is disabled"
                 )
-        else:
-            raise RuntimeError(
-                f"Metrics file missing for run {i} (path={run_path}), and backfill_from_wandb is disabled"
-            )
 
         with fs.open(metrics_file, "r") as f:
             for line in f:
