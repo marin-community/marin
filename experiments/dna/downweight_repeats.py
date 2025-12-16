@@ -22,7 +22,7 @@ import logging
 from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
 from levanter.models.llama import LlamaConfig
-from marin.execution.executor import executor_main, versioned
+from marin.execution.executor import executor_main
 from experiments.defaults import default_tokenize, default_train
 from experiments.simple_train_config import SimpleTrainConfig
 
@@ -64,7 +64,11 @@ model_config = LlamaConfig(
 # -----------------------------------------------------------------------------
 data_tokenized = default_tokenize(
     name="gpn-animal-promoter",
-    dataset=versioned(dataset_path),
+    # versioned(dataset_path) was causing issues:
+    # ValueError: No valid jsonl or parquet files found in
+    # ['songlab/gpn-animal-promoter-dataset']. Please provide a path to a
+    # directory containing jsonl or parquet files.
+    dataset=dataset_path,
     tokenizer=tokenizer_path,
     # DNA sequences are in `seq`, not `text`
     format=TextLmDatasetFormat(text_key="seq"),
