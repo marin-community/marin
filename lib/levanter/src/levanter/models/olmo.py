@@ -756,7 +756,7 @@ class Olmo3Config(HFCompatConfig):
             attn_backend=self.attn_backend,
             flash_attention_block_size=self.flash_attention_block_size,
             rope=self.rope,
-            qk_norm=None,  # HF OLMo-3 checkpoints do not use qk_norm on Q/K
+            qk_norm=self.norm_config,
         )
 
     @property
