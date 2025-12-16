@@ -7,14 +7,28 @@ FROM ${IMAGE}:${TAG}
 ENV TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS=60\
     TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES=1024\
     RAY_USAGE_STATS_ENABLED=0\
-    PATH=/opt/levanter/.venv/bin:$PATH\
-    HOME=/home/levanter\
-    UV_LINK_MODE=symlink
+    PATH=/opt/marin/.venv/bin:$PATH\
+    HOME=/home/levanter
 
 
+RUN mkdir -p /opt/marin
+RUN mkdir -p  $HOME
 
 WORKDIR /opt/marin
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=lib/levanter/pyproject.toml,target=lib/levanter/pyproject.toml \
+    --mount=type=bind,source=lib/haliax/pyproject.toml,target=lib/haliax/pyproject.toml \
+    --mount=type=bind,source=lib/fray/pyproject.toml,target=lib/fray/pyproject.toml \
+    --mount=type=bind,source=lib/zephyr/pyproject.toml,target=lib/zephyr/pyproject.toml \
+    uv sync --frozen --no-install-workspace --package levanter --extra serve --extra tpu
+
 ADD . /opt/marin
-RUN uv sync --package levanter --extra serve --extra tpu
+
+# Make python -m levanter.main.train_lm work:
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --package levanter --extra serve --extra tpu
+
 
 WORKDIR /opt/marin/lib/levanter
