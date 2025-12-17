@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import sys
 
 from experiments.evals.evals import evaluate_lm_evaluation_harness
 from marin.evaluation.evaluation_config import EvalTaskConfig
@@ -20,6 +21,20 @@ from marin.execution.executor import ExecutorStep, executor_main
 from fray.cluster import ResourceConfig
 
 resource_config = ResourceConfig.with_tpu("v5p-8")
+
+# Configure detailed logging
+logging.basicConfig(
+    level=logging.INFO,  # Change to DEBUG for even more detail
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+    ]
+)
+
+# Enable specific loggers
+logging.getLogger("marin.evaluation").setLevel(logging.INFO)
+logging.getLogger("transformers").setLevel(logging.WARNING)
+logging.getLogger("vllm").setLevel(logging.INFO)
 
 """
 Note for people trying to do evals:
@@ -35,12 +50,84 @@ EVAL_TASKS = [
 ]
 
 MODELS = [
+    # {
+    #     "name": "qwen2.5-7b-instruct-aime25",
+    #     "path": "gs://marin-us-central2/models/qwen2.5-7b-instruct",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-instruct-aime25",
+    #     "path": "gs://marin-us-central2/models/Marin-8B-Instruct",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-fixed_chat_template-aime24",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2199b_sft_qwen2pt5_7b_instruct_openthoughts3_bsz512_lr8e_5-92772b/hf/step-11718-padded-vocab-chat-template-fixed",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "qwen3-8b-finetuned-aime25",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2199c_sft_qwen3_8b_openthoughts3_bsz512_lr8e_5-accb91/hf/step-11718-padded-vocab/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "marin-8b-instruct-finetuned-aime25",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2199a_sft_marin_8b_instruct_openthoughts3_bsz512_lr8e_5-3a3fd2/hf/step-11718/",  # NOTE: No need for padded vocab
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "qwen2.5-1.5b-instruct-finetuned-aime25",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2209a1_sft_qwen2pt5_1pt5b_instruct_ot3_bsz512_lr8e_5-eb7076/hf/step-11718-padded-vocab/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "qwen2.5-3b-instruct-finetuned-aime25",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2209b1_sft_qwen2pt5_3b_instruct_openthoughts3_bsz512_lr8e_5-c7d431/hf/step-11718-padded-vocab/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "qwen2.5-1.5b-instruct-finetuned-ot4-qwen3-32b-7.5K-aime25",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2209a2_sft_qwen2pt5_1pt5b_instruct_openthoughts4_1pt2m_qwen3_-0f8594/hf/step-11718-padded-vocab/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "qwen2.5-3b-instruct-finetuned-ot4-qwen3-32b-7.5K-aime25",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2209b2_sft_qwen2pt5_3b_instruct_openthoughts4_1pt2m_qwen3_3b_-88f693/hf/step-11718-padded-vocab/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-qwen3-32b-7.5K-aime25",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2209c2_sft_qwen2pt5_7b_instruct_openthoughts4_1pt2m_qwen3_3b_-740b7d/hf/step-11718-padded-vocab/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "qwen2.5-32b-instruct-finetuned-ot4-qwen3-32b-7.5K-aime24",  # TODO
+    #     "path": "gs://marin-us-central1/checkpoints/exp2209d2_sft_qwen2pt5_32b_instruct_ot4_1pt2m_qwen3_3b_bsz512_lr-86c9db/hf/step-11718-padded-vocab/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "openthinker3-7b-aime2024",
+    #     "path": "gs://marin-us-central2/models/OpenThinker3-7B/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
     {
-        "name": "qwen2.5-7b-instruct",
-        "path": "gs://marin-us-central2/models/qwen2.5-7b-instruct",
+        "name": "llama-3.1-8b-instruct-aime24",
+        "path": "gs://marin-us-central2/models/llama-3.1-8b-instruct/",
         "apply_chat_template": True,
         "tensor_parallel_size": 4,
-    }
+    },
 ]
 
 

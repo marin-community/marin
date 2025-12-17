@@ -26,6 +26,11 @@ from marin.evaluation.evaluators.evaluator import ModelConfig
 from marin.evaluation.evaluators.vllm_tpu_evaluator import VllmTpuEvaluator
 from marin.evaluation.utils import is_remote_path, upload_to_gcs
 from fray.cluster.ray.deps import build_runtime_env_for_packages
+from marin.evaluation.evaluators.debug_logging import (
+    log_tokenizer_details,
+    log_vllm_initialization,
+    log_sample_generation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -417,6 +422,15 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
 
+            # === DEBUG LOGGING: Check tokenizer ===
+            try:
+                from transformers import AutoTokenizer
+                logger.info("Loading tokenizer for inspection...")
+                tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+                log_tokenizer_details(tokenizer, model.name)
+            except Exception as e:
+                logger.error(f"Failed to inspect tokenizer: {e}")
+
             # Build model args string first to get engine_kwargs
             engine_kwargs = dict(model.engine_kwargs) if model.engine_kwargs else {}
             
@@ -469,6 +483,8 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 logger.info(f"Setting max_gen_toks={max_gen_toks_value} in model_args for lm-eval")
             pretrained_args = ",".join(pretrained_args_parts)
             logger.info(f"Final model_args string: {pretrained_args}")
+            # === DEBUG LOGGING: Log vLLM initialization ===
+            log_vllm_initialization(model_name_or_path, pretrained_args, engine_kwargs)
 
             # === MONKEY PATCH resolve_hf_chat_template ===
             # This MUST happen before any lm_eval imports that might load vllm_causallms.
@@ -573,6 +589,66 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                             f.write(metadata_content)
                         logger.info(f"Created vllm package metadata at {vllm_dist_info}")
 
+                # === MONKEY PATCH: Log sample prompts and responses ===
+                try:
+                    import lm_eval.models.vllm_causallms as vllm_module
+
+                    # Find the vLLM wrapper class
+                    vllm_wrapper_class = None
+                    for attr_name in dir(vllm_module):
+                        attr = getattr(vllm_module, attr_name)
+                        if isinstance(attr, type) and hasattr(attr, 'generate_until'):
+                            vllm_wrapper_class = attr
+                            break
+
+                    if vllm_wrapper_class:
+                        original_generate_until = vllm_wrapper_class.generate_until
+                        logged_samples = {"count": 0}  # Track how many we've logged
+
+                        def patched_generate_until_with_logging(self, requests):
+                            # Log first 3 samples
+                            if logged_samples["count"] < 3:
+                                for i, request in enumerate(requests[:3 - logged_samples["count"]]):
+                                    try:
+                                        # Extract context (the prompt)
+                                        if hasattr(request, 'args') and len(request.args) >= 2:
+                                            context = request.args[0]
+                                            logger.info(f"\n{'='*80}")
+                                            logger.info(f"SAMPLE REQUEST {logged_samples['count'] + 1}")
+                                            logger.info(f"{'='*80}")
+                                            logger.info(f"Context type: {type(context)}")
+                                            logger.info(f"Context: {context[:1000]}")  # First 1000 chars
+                                            if len(str(context)) > 1000:
+                                                logger.info(f"... (truncated, full length: {len(str(context))})")
+                                            logger.info(f"{'='*80}\n")
+                                    except Exception as e:
+                                        logger.debug(f"Could not log request: {e}")
+
+                            # Call original method
+                            results = original_generate_until(self, requests)
+
+                            # Log first 3 responses
+                            if logged_samples["count"] < 3 and results:
+                                for i, result in enumerate(results[:3 - logged_samples["count"]]):
+                                    try:
+                                        logger.info(f"\n{'='*80}")
+                                        logger.info(f"SAMPLE RESPONSE {logged_samples['count'] + 1}")
+                                        logger.info(f"{'='*80}")
+                                        logger.info(f"Result type: {type(result)}")
+                                        logger.info(f"Result: {str(result)[:2000]}")  # First 2000 chars
+                                        if len(str(result)) > 2000:
+                                            logger.info(f"... (truncated, full length: {len(str(result))})")
+                                        logger.info(f"{'='*80}\n")
+                                        logged_samples["count"] += 1
+                                    except Exception as e:
+                                        logger.debug(f"Could not log result: {e}")
+
+                            return results
+
+                        vllm_wrapper_class.generate_until = patched_generate_until_with_logging
+                        logger.info("Successfully patched generate_until for logging")
+                except Exception as e:
+                    logger.warning(f"Failed to patch generate_until for logging: {e}")
 
                 # Note: max_gen_toks is passed to lm-eval via model_args.
                 # The vLLM wrapper in lm-eval should extract it from model_args before initializing vLLM.
