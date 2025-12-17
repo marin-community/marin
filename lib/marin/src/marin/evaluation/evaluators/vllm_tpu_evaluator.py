@@ -162,7 +162,18 @@ class VllmTpuEvaluator(Evaluator, ABC):
             name="vllm-tpu-evaluation",
             entrypoint=Entrypoint.from_callable(_run),
             resources=resource_config,
-            environment=EnvironmentConfig.create(extras=["eval", "tpu"]),
+            environment=EnvironmentConfig.create(
+                extras=["tpu"],
+                pip_packages=[
+                    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+                    "langdetect",
+                    "immutabledict",
+                    # Ensure a wheel-backed scikit-learn version for Python 3.11 to avoid Cython builds.
+                    # If other packages have looser constraints (e.g., scikit-learn>=0.24), this will
+                    # resolve to this pinned version with prebuilt wheels instead of compiling from source.
+                    "scikit-learn>=1.3.0,<2.0.0",
+                ],
+            ),
         )
 
         cluster = current_cluster()

@@ -28,9 +28,12 @@ logger = logging.getLogger("ray")
 
 # Packages to ignore when computing the runtime environment.
 # These will always be instead sourced from the base environment.
+# They are expected to be present in the base Ray image, so we don't
+# try to (re)install them in the per-job virtualenv.
 IGNORE_DEPS = [
     "ray",
     "marin",
+    "scikit-learn",
 ]
 
 
