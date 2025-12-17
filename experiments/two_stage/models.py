@@ -19,14 +19,14 @@ from levanter.models.llama import LlamaConfig
 
 from experiments.llama import llama_1_4b, llama_1_9b, llama_150m, llama_300m, llama_600m
 
-llama_150m_4096_config = dataclasses.replace(llama_150m, seq_len=4096)
-llama_300m_4096_config = dataclasses.replace(llama_300m, seq_len=4096)
-llama_600m_4096_config = dataclasses.replace(llama_600m, seq_len=4096)
-llama_1_4b_4096_config = dataclasses.replace(llama_1_4b, seq_len=4096)
-llama_1_9b_4096_config = dataclasses.replace(llama_1_9b, seq_len=4096)
+llama_150m_4096_config = dataclasses.replace(llama_150m, max_seq_len=4096)
+llama_300m_4096_config = dataclasses.replace(llama_300m, max_seq_len=4096)
+llama_600m_4096_config = dataclasses.replace(llama_600m, max_seq_len=4096)
+llama_1_4b_4096_config = dataclasses.replace(llama_1_4b, max_seq_len=4096)
+llama_1_9b_4096_config = dataclasses.replace(llama_1_9b, max_seq_len=4096)
 
 llama_8b_config = LlamaConfig(
-    seq_len=4096,  # Seq len set to reproduce Tulu SFT
+    max_seq_len=4096,  # Seq len set to reproduce Tulu SFT
     hidden_dim=4096,
     intermediate_dim=14336,
     num_layers=32,

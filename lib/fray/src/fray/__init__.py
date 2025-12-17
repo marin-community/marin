@@ -21,36 +21,30 @@ from fray.cluster import (
     EnvironmentConfig,
     GpuConfig,
     JobId,
+    JobInfo,
     JobRequest,
     LocalCluster,
     ResourceConfig,
-    TpuConfig,
+    create_cluster,
+    current_cluster,
 )
-from fray.isolated_env import TemporaryVenv
-from fray.job_context import (
-    ContextConfig,
-    ExecutionContext,
-    RayContext,
-    SyncContext,
-    ThreadContext,
-    fray_job_ctx,
-)
+from fray.cluster.base import JobStatus
+from fray.isolated_env import JobGroup, TemporaryVenv
 
 __all__ = [
     "Cluster",
-    "ContextConfig",
     "CpuConfig",
     "Entrypoint",
     "EnvironmentConfig",
-    "ExecutionContext",
+    "GpuConfig",
+    "JobGroup",
     "JobId",
+    "JobInfo",
     "JobRequest",
+    "JobStatus",
     "LocalCluster",
-    "RayContext",
     "ResourceConfig",
-    "SyncContext",
     "TemporaryVenv",
-    "ThreadContext",
-    "TpuConfig",
-    "fray_job_ctx",
+    "create_cluster",
+    "current_cluster",
 ]

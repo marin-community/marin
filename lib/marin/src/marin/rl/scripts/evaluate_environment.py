@@ -30,11 +30,10 @@ import levanter
 import numpy
 from fray.cluster import (
     CpuConfig,
+    EnvironmentConfig,
     Entrypoint,
     JobRequest,
     ResourceConfig,
-    TpuConfig,
-    create_environment,
     current_cluster,
 )
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -44,7 +43,6 @@ from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from marin.execution import ExecutorStep
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
 from marin.rl.environments.base import EnvConfig, load_environment_from_spec
 from marin.rl.model_utils import load_model_from_checkpoint
 from marin.rl.rollout_worker import create_inference_context
@@ -115,7 +113,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     if config.tpu_type is None:
         model_axis_size = 1
     else:
-        num_devices = TpuPodConfig(tpu_type=config.tpu_type).total_device_count()
+        num_devices = ResourceConfig.with_tpu(config.tpu_type).chip_count()
         model_axis_size = min(4, num_devices)
         logger.info(f"Using TPU type {config.tpu_type} with {num_devices} devices, model_axis_size={model_axis_size}")
 
@@ -157,7 +155,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
             # Update seq_len for inference
             model_config = dataclasses.replace(
                 model_config,
-                seq_len=config.max_input_length + config.max_output_length,
+                max_seq_len=config.max_input_length + config.max_output_length,
             )
             logger.info(f"Model config: {model_config}")
 
@@ -251,19 +249,13 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     if config.tpu_type is None:
         resources = ResourceConfig(device=CpuConfig(), replicas=1)
     else:
-        resources = ResourceConfig(
-            device=TpuConfig(type=config.tpu_type),
-            replicas=1,
-            preemptible=True,
-        )
+        resources = ResourceConfig.with_tpu(config.tpu_type)
 
     job_request = JobRequest(
         name=f"evaluate-{config.env_config.env_class}",
-        entrypoint=Entrypoint(
-            callable=_run_inference,
-        ),
+        entrypoint=Entrypoint.from_callable(_run_inference),
         resources=resources,
-        environment=create_environment(
+        environment=EnvironmentConfig.create(
             extras=["post_training", "rl"],
             env_vars=env_vars,
         ),

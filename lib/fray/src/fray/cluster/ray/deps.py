@@ -24,7 +24,7 @@ from pathlib import Path
 
 from ray.runtime_env import RuntimeEnv
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ray")
 
 # Packages to ignore when computing the runtime environment.
 # These will always be instead sourced from the base environment.
@@ -98,12 +98,12 @@ def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
         "--prune=ray",
         *extra_flags(extra),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.check_output(cmd, text=True)
 
     # Parse the requirements.txt format output
     py_modules = []
     package_specs = []
-    for line in result.stdout.splitlines():
+    for line in result.splitlines():
         line = line.strip()
         # Skip comments, empty lines, and editable installs
         if not line or line.startswith("#") or line.startswith("./"):

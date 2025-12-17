@@ -15,7 +15,6 @@ dependencies = [
     "deepdiff",
     "draccus>=0.11.5",
     "fasteners>=0.19",
-    "flask",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
@@ -33,11 +32,10 @@ dependencies = [
     "openai",
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow>=22",
-    "ray>=2.45",
+    "ray==2.45",
     "regex",
     "requests",
     "s3fs>=2024",
-    "sentencepiece",
     "toml",
     "torch>=2.7.0",
     "tqdm",
@@ -108,10 +106,6 @@ dev = [
 [tool.uv]
 conflicts = [
     [
-        { extra = "crawl" },
-        { group = "dev" },
-    ],
-    [
         { extra = "tpu" },
         { extra = "cuda12" },
     ],
@@ -120,12 +114,6 @@ conflicts = [
         { extra = "cpu" },
     ],
 ]
-
-[tool.uv.sources]
-zephyr = { workspace = true }
-levanter = { workspace = true }
-fray = { workspace = true }
-dupekit = { workspace = true }
 
 torch = [
     # Default to the CPU index for TPU/CPU builds
@@ -163,37 +151,6 @@ tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
 
 cpu = ["jax==0.6.2", "torch>=2.7.0"]
 
-crawl = [
-    "w3lib",
-    "datatrove[io,processing]",
-    "beautifulsoup4",
-    "resiliparse",
-    "trafilatura",
-    # adds brotlicffi dependency instead of brotlipy
-    "warcio[all] @ git+https://github.com/marin-community/warcio@077ea9359d5b439d152081a9a9c4aafb25046f79",
-    "google-cloud-bigquery",
-    "google-cloud-storage-transfer~=1.0",
-    "boto3==1.35.23",
-    "readabilipy",
-    "readability-lxml",
-    "py7zr",
-    "markdownify==0.12.1",
-    "htmlmin",
-    "datasets>=2.18.0",
-    "py-asciimath",
-    "scipy==1.13.1",
-    "spacy",
-    "transformers",
-    "flax",
-    "fastparquet",
-    "orjson",
-    "lxml[html_clean]",
-    "chardet",
-    "courlan",
-    "kenlm @ git+https://github.com/kpu/kenlm@4cb443e60b7bf2c0ddf3c745378f76cb59e254e5",
-    "jax[tpu]",
-]
-
 download_transform = [
     "chardet",
     "datasets>=2.18.0",
@@ -202,7 +159,6 @@ download_transform = [
     "html2text==2024.2.26",               # TODO :: Check pin?
     "htmlmin==0.1.12",                    # TODO :: Check usage | pin?
     "markdownify==0.12.1",                # TODO :: Check usage | pin?
-    "py7zr",
     "readabilipy",
     "readability-lxml",
     "lxml[html_clean]",
@@ -210,7 +166,6 @@ download_transform = [
     "resiliparse",
     "trafilatura>=2.0",
     "boto3==1.35.23",
-    "htmlmin",
 ]
 
 quality_dedup_consolidate = [
@@ -230,8 +185,6 @@ tokenize_train = [
     "haliax>=1.4.dev443",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
     "tblib",
-    "sentencepiece",
-    "tiktoken",
 ]
 
 rl = [

@@ -175,7 +175,7 @@ class DummyTokenizer:
 def create_nano_llama_config() -> LlamaConfig:
     """Create a tiny LlamaConfig for fast testing."""
     return LlamaConfig(
-        seq_len=64,
+        max_seq_len=64,
         hidden_dim=64,
         intermediate_dim=128,
         num_heads=8,

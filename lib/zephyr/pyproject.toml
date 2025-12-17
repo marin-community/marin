@@ -19,6 +19,7 @@ dependencies = [
     "braceexpand>=0.1.0",
     "zstandard>=0.18.0",
     "tqdm-loggable>=0.2",
+    "vortex-data>=0.1.0",
 ]
 
 [project.scripts]
@@ -48,6 +49,3 @@ log_level = "INFO"
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 log_cli_level = "INFO"
-
-[tool.uv.sources]
-fray = { workspace = true }

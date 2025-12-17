@@ -16,11 +16,19 @@ import dataclasses
 import logging
 from dataclasses import dataclass
 from typing import Any
+
 import levanter.infra.cli_helpers
-import ray
+from fray.cluster import (
+    CpuConfig,
+    Entrypoint,
+    EnvironmentConfig,
+    JobRequest,
+    ResourceConfig,
+    TpuConfig,
+    current_cluster,
+)
 from levanter.checkpoint import discover_latest_checkpoint
 from levanter.compat.hf_checkpoints import RepoRef
-from fray.cluster.ray.tpu import run_on_pod
 from levanter.main import export_lm_to_hf
 from levanter.main.export_lm_to_hf import ConvertLmConfig
 from levanter.models.lm_model import LmConfig
@@ -33,8 +41,8 @@ from marin.execution.executor import (
     ensure_versioned,
     this_output_path,
 )
-from marin.resources import CpuOnlyConfig, ResourceConfig, TpuPodConfig
 from marin.training.training import _add_default_env_variables, _add_run_env_variables
+from marin.utils import remove_tpu_lockfile_on_exit
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +56,7 @@ class ConvertCheckpointStepConfig:
     checkpoint_path: str | InputName | VersionedValue[str]
     trainer: TrainerConfig
     model: LmConfig
-    resources: ResourceConfig = dataclasses.field(default_factory=CpuOnlyConfig)
+    resources: ResourceConfig = dataclasses.field(default_factory=ResourceConfig.with_cpu)
     output_path: str = dataclasses.field(default_factory=this_output_path)  # type: ignore[arg-type]
     upload_to_hf: bool | str | RepoRef = False
     tokenizer: str | None = None
@@ -73,7 +81,7 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
             raise FileNotFoundError(f"Could not discover checkpoint under '{checkpoint_path}'.")
         checkpoint_path = discovered
 
-    use_cpu = config.use_cpu or isinstance(config.resources, CpuOnlyConfig)
+    use_cpu = config.use_cpu or isinstance(config.resources.device, CpuConfig)
 
     convert_config = ConvertLmConfig(
         trainer=config.trainer,
@@ -89,27 +97,31 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
     )
 
     env = _add_default_env_variables(
-        config.resources.runtime_env.get("env_vars", {}),
-        default_launch_config.env_for_accel(config.resources.accelerator_descriptor() or ""),
+        {},
+        default_launch_config.env_for_accel(config.resources.device.variant),
     )
     env = _add_run_env_variables(env)
 
-    hw_config = config.resources.with_env_vars(env)
-
-    @ray.remote(**hw_config.as_remote_kwargs(), max_calls=1)
     def convert_task():
         export_lm_to_hf.main(convert_config)
 
-    if isinstance(hw_config, TpuPodConfig):
-        assert hw_config.slice_count == 1, "Export currently works on single slices at present."
-        return run_on_pod(
-            convert_task,
-            config.resources.accelerator_descriptor(),
-            num_slices=1,
-            max_retries_failure=10,
-        )
+    def _run_with_lockfile():
+        with remove_tpu_lockfile_on_exit():
+            convert_task()
 
-    return ray.get(convert_task.remote())
+    if isinstance(config.resources.device, TpuConfig):
+        assert config.resources.replicas == 1, "Export currently works on single slices at present."
+
+    job_request = JobRequest(
+        name="convert-checkpoint-to-hf",
+        entrypoint=Entrypoint.from_callable(_run_with_lockfile),
+        resources=config.resources,
+        environment=EnvironmentConfig.create(env_vars=env),
+    )
+
+    cluster = current_cluster()
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)
 
 
 def convert_checkpoint_to_hf_step(
@@ -162,7 +174,7 @@ def convert_checkpoint_to_hf_step(
         checkpoint_path=checkpoint_value,
         trainer=trainer,
         model=model,
-        resources=resources or CpuOnlyConfig(),
+        resources=resources or ResourceConfig.with_cpu(),
         upload_to_hf=upload_to_hf,
         tokenizer=tokenizer,
         override_vocab_size=override_vocab_size,

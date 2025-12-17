@@ -49,7 +49,7 @@ from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_varying_mixture_data_config
-from marin.resources import TpuPodConfig
+from fray.cluster import ResourceConfig
 
 # Phases/Runs in this file:
 # 1. Kestrel: WSD-S on DCLM+Starcode+Proofpile on 2x v5litepod-256 (from scratch)
@@ -72,7 +72,7 @@ from marin.resources import TpuPodConfig
 # we use the exponential moving average (EMA) of the model weights to get a better model.
 
 tootsie_phase1_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v5litepod-256", slice_count=2),
+    resources=ResourceConfig.with_tpu("v5litepod-256", slice_count=2),
     train_batch_size=1024,
     num_train_steps=1_000_000,  # using wsd-s so this doesn't really matter
     # these hypers from Table 12 in https://arxiv.org/html/2406.11794v1#A6
@@ -111,7 +111,7 @@ PHASE_1_END = 660_000
 kestrel_phase_1_checkpoint_for_phase2 = llama_8b_tootsie_phase1.cd(f"checkpoints/step-{PHASE_1_END}").nonblocking()
 
 llama_8b_train_config_phase2 = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
+    resources=ResourceConfig.with_tpu("v4-2048", slice_count=1),
     num_train_steps=1_000_000,
     # after PHASE_1_END we changed things up:
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=PHASE_1_END + 1, value=3072)],
@@ -170,7 +170,7 @@ DECAY_FRACTION = (PHASE_3_END - PHASE_3_START) / PHASE_3_END
 # This is basically the same as the phase 2 train config, but we
 # add DECAY_FRACTION.
 llama_8b_train_config_phase3 = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-2048", slice_count=1),
+    resources=ResourceConfig.with_tpu("v4-2048", slice_count=1),
     num_train_steps=PHASE_3_END,
     # From Phase 2:
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=PHASE_1_END + 1, value=3072)],
@@ -353,7 +353,7 @@ bad_dessert_data_mixture_v1 = lm_varying_mixture_data_config(
 DESSERT_END = PHASE_3_END + 17000
 
 llama_8b_train_config_dessert = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-128", slice_count=4),
+    resources=ResourceConfig.with_tpu("v4-128", slice_count=4),
     num_train_steps=DESSERT_END,
     train_batch_size=[ScheduleStep(start=0, value=1024), ScheduleStep(start=PHASE_1_END + 1, value=3072)],
     # coast along at 1.7e-4
@@ -594,6 +594,8 @@ PHASE_4_END = 1_320_000
 # 4096 * 4096 * 80_000 is ~1.34e12
 COOLDOWN_LEN = 80_000
 
+STARLING_END = PHASE_4_END + COOLDOWN_LEN
+
 # for these long runs we don't usually actually **finish** the run in the Executor's eyes,
 # so we use `wait_for_completion`
 phoenix_phase4_checkpoint_for_phase5 = llama_8b_tootsie_adept_phoenix.cd("checkpoints/step-1320000").nonblocking()
@@ -609,7 +611,7 @@ cooldown_train_config = dataclasses.replace(
     z_loss_weight=1e-4,
     initialize_from_checkpoint_path=phoenix_phase4_checkpoint_for_phase5,
     decay=COOLDOWN_LEN,
-    num_train_steps=PHASE_4_END + COOLDOWN_LEN,
+    num_train_steps=STARLING_END,
     learning_rate=1.7e-3,  # same peak lr
     lr_schedule="linear",
     # spoonbill went to just 2.75e-5 but with zloss I think we can go lower
@@ -643,10 +645,16 @@ starling_cooldown_weights = {
     **{k: v * 0.3 / total_hq_weight for k, v in starling_hq_cooldown_weights.items()},
 }
 
-starling_components = {"finemath-3-plus": finemath_3_plus_tokenized}
+starling_components = {
+    **phase_3_tokenized,
+    **nemotron_cc_steps,
+    **pt_vs_hq_components,
+    "finemath-3-plus": finemath_3_plus_tokenized,
+}
+
 
 starling_cooldown_mixture = lm_varying_mixture_data_config(
-    components={**phase_3_tokenized, **nemotron_cc_steps, **pt_vs_hq_components, **starling_components},
+    components={**starling_components},
     weights_list=[
         (0, DCLM_MIXTURE_WEIGHTS),
         (PHASE_3_START, cooldown_mixture_weights_v1),

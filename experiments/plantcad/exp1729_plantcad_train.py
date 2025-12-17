@@ -18,9 +18,9 @@ PlantCAD training experiment: A single 600M model pretrained on 16 Angiosperm ge
 
 import jax
 import logging
-from marin.execution.executor import versioned, executor_main
-from marin.resources import GpuConfig
+from fray.cluster import ResourceConfig
 from levanter.data.text import TextLmDatasetFormat
+from marin.execution.executor import executor_main, versioned
 from levanter.models.llama import LlamaConfig
 from experiments.defaults import default_train, default_tokenize
 from experiments.simple_train_config import SimpleTrainConfig
@@ -53,7 +53,7 @@ steps_per_eval = num_train_steps // 100
 # Define ~600M Llama model noting that the PlantCAD vocabulary is only 7
 # tokens, which drastically reduces final parameter count at this scale.
 model_config = LlamaConfig(
-    seq_len=512,
+    max_seq_len=512,
     hidden_dim=1408,
     intermediate_dim=4224,
     num_heads=22,
@@ -81,7 +81,7 @@ train_config = SimpleTrainConfig(
     # Omit accelerator_type intentionally so that FLOPs for MFU metrics
     # are inferred based on jax.Device; see:
     # https://github.com/marin-community/levanter/blob/982cef7f1d8d1a642b825fcd30ab1b44a912f478/src/levanter/utils/flop_utils.py#L188
-    resources=GpuConfig(gpu_count=num_gpus),
+    resources=ResourceConfig.with_gpu("A100", count=num_gpus),
     train_batch_size=train_batch_size,
     per_device_eval_parallelism=per_device_eval_parallelism,
     learning_rate=learning_rate,
