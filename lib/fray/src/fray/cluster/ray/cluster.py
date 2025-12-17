@@ -38,7 +38,7 @@ from fray.cluster.base import (
     TpuConfig,
 )
 from fray.cluster.ray.config import find_config_by_region
-from fray.cluster.ray.deps import build_runtime_env_for_packages
+from fray.cluster.ray.deps import DEFAULT_WORKING_DIR_EXCLUDES, build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
 
 logger = logging.getLogger("ray")
@@ -270,7 +270,7 @@ class RayCluster(Cluster):
                 env_vars=env_vars,
             )
             runtime_env["working_dir"] = environment.workspace
-            runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
+            runtime_env["excludes"] = list(DEFAULT_WORKING_DIR_EXCLUDES)
             runtime_env["config"] = {"setup_timeout_seconds": 1800}
         else:
             runtime_env = {"env_vars": env_vars}

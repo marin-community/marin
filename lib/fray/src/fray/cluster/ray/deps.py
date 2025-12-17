@@ -26,6 +26,31 @@ from ray.runtime_env import RuntimeEnv
 
 logger = logging.getLogger("ray")
 
+# Exclude patterns for Ray `working_dir` packaging.
+#
+# Key motivation: avoid shipping local virtualenvs/caches (and other bulky artifacts)
+# into Ray's runtime_env cache under `/tmp/ray/...`, which can easily exhaust
+# ephemeral disk in CI and is never required for correctness.
+DEFAULT_WORKING_DIR_EXCLUDES = [
+    ".cache",
+    ".cache/**",
+    ".git",
+    ".git/**",
+    ".mypy_cache",
+    ".mypy_cache/**",
+    ".pytest_cache",
+    ".pytest_cache/**",
+    ".ruff_cache",
+    ".ruff_cache/**",
+    ".venv",
+    ".venv/**",
+    "**/__pycache__",
+    "**/__pycache__/**",
+    "docs/",
+    "tests/",
+    "**/*.pack",
+]
+
 # Packages to ignore when computing the runtime environment.
 # These will always be instead sourced from the base environment.
 IGNORE_DEPS = [
