@@ -157,7 +157,58 @@ def reference_attention(
 
 
 def _maybe_splash_attention() -> AttentionBackend | None:
-    return None
+    try:
+        from jax.experimental.pallas.ops.tpu import splash_attention as splash
+        from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel as kernel
+        from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_mask as mask_lib
+    except Exception:
+        return None
+
+    def _backend(q, k, v, mask, causal, *, runtime: AttentionRuntimeConfig):
+        if runtime.head_shards is None or runtime.q_seq_shards is None:
+            raise ValueError("Splash attention requires head_shards and q_seq_shards to be set in AttentionRuntimeConfig.")
+        Sq = q.shape[1]
+        Sk = k.shape[1]
+        Hq = q.shape[2]
+
+        # Build base mask
+        base_mask: mask_lib.Mask
+        if causal:
+            base_mask = mask_lib.CausalMask((Sq, Sk), offset=0, shard_count=runtime.q_seq_shards)
+        else:
+            base_mask = mask_lib.FullMask(_shape=(Sq, Sk))
+
+        if isinstance(mask, AttentionMask):
+            if mask.segment_ids is not None:
+                raise NotImplementedError("segment_ids not supported by splash attention wrapper yet.")
+            if mask.sliding_window is not None:
+                local = mask_lib.LocalMask(
+                    (Sq, Sk),
+                    window_size=(mask.sliding_window, mask.sliding_window),
+                    offset=mask.causal_offset,
+                    shard_count=runtime.q_seq_shards,
+                )
+                base_mask = mask_lib.LogicalAnd(base_mask, local)
+            if mask.explicit_mask is not None:
+                explicit = mask_lib.NumpyMask(jnp.array(mask.explicit_mask, dtype=bool))
+                base_mask = mask_lib.LogicalAnd(base_mask, explicit)
+        elif isinstance(mask, jax.Array) and mask.dtype == jnp.bool_:
+            explicit = mask_lib.NumpyMask(jnp.array(mask, dtype=bool))
+            base_mask = mask_lib.LogicalAnd(base_mask, explicit)
+
+        multi_mask = mask_lib.MultiHeadMask(masks=[base_mask for _ in range(Hq)])
+
+        # Splash currently assumes Hq is divisible by Kv heads; if not, fall back elsewhere.
+        mha = kernel.make_splash_mha(
+            multi_mask,
+            head_shards=runtime.head_shards,
+            q_seq_shards=runtime.q_seq_shards,
+            is_mqa=False,
+        )
+        out = mha(q, k, v)
+        return out
+
+    return _backend
 
 
 def resolve_attention_backend(runtime: AttentionRuntimeConfig) -> AttentionBackend:
@@ -170,10 +221,11 @@ def resolve_attention_backend(runtime: AttentionRuntimeConfig) -> AttentionBacke
         backend = _maybe_splash_attention()
         if backend is None:
             raise RuntimeError("Splash attention requested but unavailable")
-        return backend
+        # bind runtime so shard counts flow through
+        return ft.partial(backend, runtime=runtime)
     backend = _maybe_splash_attention() if runtime.backend == "auto" else None
     if backend is not None:
-        return backend
+        return ft.partial(backend, runtime=runtime)
     return _reference_backend
 
 

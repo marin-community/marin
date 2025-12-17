@@ -48,6 +48,8 @@ class AttentionRuntimeConfig:
 
     backend: Literal["auto", "reference", "splash"] = "auto"
     logits_dtype: jnp.dtype | None = jnp.float32
+    head_shards: int = 1
+    q_seq_shards: int = 1
 
 
 @dataclass(frozen=True)
