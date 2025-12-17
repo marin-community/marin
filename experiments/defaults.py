@@ -490,6 +490,8 @@ def default_sft(
         initialize_from_checkpoint_path=sft_config.initialize_from_checkpoint_path,
         data_seed=sft_config.seed,
         z_loss_weight=sft_config.z_loss_weight,
+        beta1=sft_config.beta1,
+        beta2=sft_config.beta2,
     )
 
     if sft_config.reinit_tokens:

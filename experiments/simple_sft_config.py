@@ -58,6 +58,12 @@ class SimpleSFTConfig:
     weight_decay: float = 0.0
     """Weight decay for the optimizer."""
 
+    beta1: float | None = None
+    """AdamW optimizer beta1."""
+
+    beta2: float | None = None
+    """AdamW optimizer beta2."""
+
     warmup: float = 0.03
     """Fraction of training steps to use for learning rate warmup."""
 
