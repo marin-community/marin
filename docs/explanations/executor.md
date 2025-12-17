@@ -4,6 +4,8 @@ Marin's executor framework manages the execution of experiments.
 This document is more about the mechanics, read [this](../explanations/experiments.md) to
 learn more about the conventions.
 
+## Steps
+
 An **experiment** is a sequence (really, a DAG) of steps, where each **step** is
 specified by the following:
 - **name**: an identifier describing the function (and its version)

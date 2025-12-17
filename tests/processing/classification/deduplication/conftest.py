@@ -12,13 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unified cluster management utilities."""
+from pathlib import Path
+import pytest
+from zephyr.backend_factory import create_backend
 
-from . import gcp
-from .config import RayClusterConfig, update_cluster_configs
 
-__all__ = [
-    "RayClusterConfig",
-    "gcp",
-    "update_cluster_configs",
-]
+@pytest.fixture(scope="module")
+def sync_backend():
+    return create_backend("sync")
+
+
+@pytest.fixture(scope="module")
+def docs():
+    test_resources = Path(__file__).parent.joinpath("resources", "docs")
+    docs = {}
+    for doc_file in test_resources.glob("*.txt"):
+        docs[doc_file.stem] = doc_file.read_text()
+    return docs
