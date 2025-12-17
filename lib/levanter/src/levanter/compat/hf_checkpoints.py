@@ -37,6 +37,7 @@ from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError, RepositoryNotFoundError
 from jax import ShapeDtypeStruct
 from jax._src.partition_spec import PartitionSpec
+from jax.sharding import NamedSharding
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from tqdm_loggable.auto import tqdm
@@ -281,7 +282,10 @@ def _to_state_dict_with_dtype(
                 logger.debug(f"Skipping dtype conversion for non-floating point array {k} with dtype {v.dtype}")
 
     # deshard. We could be smarter here and use a process mesh or host offloading, but this is simpler for now
-    state_dict = jax.lax.with_sharding_constraint(state_dict, PartitionSpec())
+    mesh = get_concrete_mesh()
+    if mesh is not None and mesh.shape:
+        sharding = NamedSharding(mesh, PartitionSpec())
+        state_dict = jax.lax.with_sharding_constraint(state_dict, sharding)
 
     return state_dict
 
