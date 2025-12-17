@@ -43,7 +43,7 @@ jobs:
         run: df -h
 
       - name: Give Ray tmp space
-        run: mkdir -p /mnt/ray
+        run: sudo mkdir -p /mnt/ray && sudo chmod 777 /mnt/ray
 
       - name: Run the quickstart script
         shell: bash -l {0}
