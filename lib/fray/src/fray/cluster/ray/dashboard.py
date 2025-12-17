@@ -30,7 +30,6 @@ import requests
 import yaml
 
 from .dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
-from .deps import DEFAULT_WORKING_DIR_EXCLUDES
 
 logger = logging.getLogger(__name__)
 
@@ -420,10 +419,7 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
 
             cluster_name = next(iter(clusters.keys()))
             api_port = port_mappings[cluster_name].api_port
-            ray.init(
-                address=f"ray://localhost:{api_port}",
-                runtime_env={"working_dir": ".", "excludes": list(DEFAULT_WORKING_DIR_EXCLUDES)},
-            )
+            ray.init(address=f"ray://localhost:{api_port}", runtime_env={"working_dir": "."})
 
         yield connection
 

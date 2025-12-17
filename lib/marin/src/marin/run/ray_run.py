@@ -27,14 +27,9 @@ from pathlib import Path
 import yaml
 from ray.job_submission import JobSubmissionClient
 
-from fray.cluster.ray import DashboardConfig, ray_dashboard
-from fray.cluster.ray.deps import (
-    DEFAULT_WORKING_DIR_EXCLUDES,
-    AcceleratorType,
-    accelerator_type_from_extra,
-    build_runtime_env_for_packages,
-)
 from marin.cluster.config import find_config_by_region
+from fray.cluster.ray import DashboardConfig, ray_dashboard
+from fray.cluster.ray.deps import build_runtime_env_for_packages, accelerator_type_from_extra, AcceleratorType
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +112,7 @@ async def submit_and_track_job(
     runtime_dict = {
         "working_dir": current_dir,
         "config": {"setup_timeout_seconds": 1800},
-        "excludes": [*DEFAULT_WORKING_DIR_EXCLUDES, "lib/levanter/docs"],
+        "excludes": [".git", "tests/", "docs/", "**/*.pack", "lib/levanter/docs"],
     }
 
     # add the TPU dependency for cluster jobs.
