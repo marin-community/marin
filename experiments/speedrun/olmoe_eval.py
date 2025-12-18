@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Evaluate a (HF-exported) checkpoint on a TPU slice via the executor.
 
 This is intentionally lightweight: provide a `--model-path` pointing at an HF export directory
@@ -17,7 +31,7 @@ def _parse_args():
     parser = argparse.ArgumentParser(description="Run a small evaluation suite on an HF-exported checkpoint.")
     parser.add_argument(
         "--model-path",
-        required=True,
+        default="gs://marin-us-central1/checkpoints/example/hf/step-0/",
         help='HF export directory, e.g. "gs://.../hf/step-60000/".',
     )
     parser.add_argument(
@@ -44,4 +58,3 @@ if __name__ == "__main__":
         evals=CORE_TASKS_PLUS_MMLU,
     )
     executor_main([eval_step])
-
