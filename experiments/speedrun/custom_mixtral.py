@@ -1,8 +1,22 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # nodryrun
 import dataclasses
 from dataclasses import dataclass
+from collections.abc import Callable
 from functools import partial
-from typing import Callable, Dict, List, Optional, Type, Union
 
 import equinox as eqx
 import jax
@@ -30,11 +44,10 @@ from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.types import BlockFoldable
-
+from transformers import MixtralConfig as HfMixtralConfig
+from transformers import PretrainedConfig as HfConfig
 
 silence_transformer_nag()
-from transformers import MixtralConfig as HfMixtralConfig  # noqa: E402
-from transformers import PretrainedConfig as HfConfig  # noqa: E402
 
 
 @LmConfig.register_subclass("mixtral")
@@ -74,17 +87,17 @@ class CustomMixtralConfig(MistralConfig):
     n_routed_experts: int = 8
     n_shared_experts: int = 0
 
-    lbl_coef: Optional[float] = 0.01
-    rzl_coef: Optional[float] = 0.001
+    lbl_coef: float | None = 0.01
+    rzl_coef: float | None = 0.001
 
     # MoE optimization config
     use_gmm: bool = False
 
     # Attention-related config
     upcast_attn: bool = False
-    use_flash_attention: Optional[bool] = True
-    attn_backend: Optional[AttentionBackend] = None
-    flash_attention_block_size: Optional[int] = 2048
+    use_flash_attention: bool | None = True
+    attn_backend: AttentionBackend | None = None
+    flash_attention_block_size: int | None = 2048
 
     gradient_checkpointing: ScanCheckpointSpec = True
     scan_layers: bool = True
@@ -95,7 +108,7 @@ class CustomMixtralConfig(MistralConfig):
     rope: RotaryEmbeddingsConfig = dataclasses.field(default_factory=DefaultRotaryEmbeddingsConfig)
 
     reference_checkpoint: str = "mistralai/Mixtral-8x7B-v0.1"
-    tokenizer: Optional[str] = None
+    tokenizer: str | None = None
 
     # Axis
     Pos = property(lambda self: Axis(name="position", size=self.seq_len))
@@ -117,7 +130,7 @@ class CustomMixtralConfig(MistralConfig):
         ), f"num_experts_per_tok={self.num_experts_per_tok} greater than by n_routed_experts={self.n_routed_experts}."
 
     def hf_checkpoint_converter(
-        self, ref_checkpoint: Optional[str] = None
+        self, ref_checkpoint: str | None = None
     ) -> HFCheckpointConverter["MixtralConfig"]:  # type: ignore
         return HFCheckpointConverter(
             self.__class__,
@@ -148,7 +161,7 @@ class CustomMixtralConfig(MistralConfig):
             lbl_coef=hf_config.router_aux_loss_coef,
         )
 
-    def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfMixtralConfig:
+    def to_hf_config(self, vocab_size: int, config_overrides: dict | None = None) -> HfMixtralConfig:
         """Convert to HuggingFace's MistralConfig
 
         Args:
@@ -161,7 +174,7 @@ class CustomMixtralConfig(MistralConfig):
         if config_overrides is None:
             config_overrides = {}
 
-        rope_theta, rope_scaling = self.rope.to_hf_config()
+        rope_theta, _rope_scaling = self.rope.to_hf_config()
 
         return HfMixtralConfig(
             max_position_embeddings=self.seq_len,
@@ -184,7 +197,7 @@ class CustomMixtralConfig(MistralConfig):
         )
 
     @property
-    def model_type(cls) -> Type["MixtralLMHeadModel"]:
+    def model_type(cls) -> type["MixtralLMHeadModel"]:
         return MixtralLMHeadModel
 
     def mk_LayerNorm(self, axis: Axis) -> hnn.RmsNorm:
@@ -255,7 +268,7 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
         Experts: Axis,
         Embed: Axis,
         Mlp: Axis,
-        activation_fn: Union[ActivationFunctionEnum, Callable],
+        activation_fn: ActivationFunctionEnum | Callable,
         *,
         key,
         use_bias: bool = False,
@@ -272,39 +285,15 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
     @named_call
     def __call__(self, x: NamedArray, group_sizes: NamedArray, *, key=None) -> NamedArray:
         k1, k2, k3 = maybe_rng_split(key, 3)
-        
-        # Enhanced debug prints for comparing ragged dot vs GMM
-        use_gmm_flag = getattr(self.w1, 'use_gmm', False)
-        impl_type = "GMM" if use_gmm_flag else "RAGGED_DOT"
-        
-        #jax.debug.print("=== MoE {impl} Forward Pass ===", impl=impl_type)
-        #jax.debug.print("Input: mean={mean}, std={std}, min={min_val}, max={max_val}", mean=jnp.mean(x.array), std=jnp.std(x.array), min_val=jnp.min(x.array), max_val=jnp.max(x.array))
-        #jax.debug.print("Group sizes sum={sum_val}, max={max_size}, min={min_size}: {sizes}", sum_val=jnp.sum(group_sizes.array), max_size=jnp.max(group_sizes.array), min_size=jnp.min(group_sizes.array), sizes=group_sizes.array)
-        
+
         w1_output = self.w1(x, group_sizes, key=k1)
-        #jax.debug.print("W1 ({impl}): mean={mean}, std={std}, min={min_val}, max={max_val}", impl=impl_type, mean=jnp.mean(w1_output.array), std=jnp.std(w1_output.array),min_val=jnp.min(w1_output.array), max_val=jnp.max(w1_output.array))
-        
         activated = self.act(w1_output)
-        #jax.debug.print("Activation ({impl}): mean={mean}, std={std}, zeros={zeros}", impl=impl_type, mean=jnp.mean(activated.array), std=jnp.std(activated.array),zeros=jnp.sum(activated.array == 0))
-        
         w3_output = self.w3(x, group_sizes, key=k3)
-        #jax.debug.print("W3 ({impl}): mean={mean}, std={std}, min={min_val}, max={max_val}", impl=impl_type, mean=jnp.mean(w3_output.array), std=jnp.std(w3_output.array),min_val=jnp.min(w3_output.array), max_val=jnp.max(w3_output.array))
-        
         gated = activated * w3_output
-        #jax.debug.print("Gated ({impl}): mean={mean}, std={std}, min={min_val}, max={max_val}", impl=impl_type, mean=jnp.mean(gated.array), std=jnp.std(gated.array),min_val=jnp.min(gated.array), max_val=jnp.max(gated.array))
-        
         final_output = self.w2(gated, group_sizes, key=k2)
-        #jax.debug.print("W2 ({impl}): mean={mean}, std={std}, min={min_val}, max={max_val}", impl=impl_type, mean=jnp.mean(final_output.array), std=jnp.std(final_output.array),min_val=jnp.min(final_output.array), max_val=jnp.max(final_output.array))
-        
-        input_norm = jnp.linalg.norm(x.array)
-        output_norm = jnp.linalg.norm(final_output.array)
-        amplification = output_norm / (input_norm + 1e-8)
-        
-        #jax.debug.print("MoE {impl} Summary: in_norm={in_norm}, out_norm={out_norm}, amplification={amp}", impl=impl_type, in_norm=input_norm, out_norm=output_norm, amp=amplification)
-        
         return final_output
 
-    def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
+    def to_state_dict(self, prefix: str | None = None) -> StateDict:
         w = [self.w1.weight, self.w2.weight, self.w3.weight]
         out = {}
 
@@ -317,8 +306,8 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
 
         return out
 
-    def from_state_dict(self, state_dict: StateDict, prefix: Optional[str] = None) -> "MixtralMoEMlp":
-        w: List[List[Array]] = [[], [], []]
+    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> "MixtralMoEMlp":
+        w: list[list[Array]] = [[], [], []]
         num_experts = self.w1.Experts.size
         for i in range(num_experts):
             for j in range(3):
@@ -435,9 +424,7 @@ class MixtralSparseMoeBlock(eqx.Module):
         def unpermute_sharded(out_repeat_sort_: Array, sort_idx_: Array):
             inv_sort_idx_ = jnp.argsort(sort_idx_)
             out_repeat_ = jnp.take(out_repeat_sort_, inv_sort_idx_, axis=0)
-            out_repeat_unflat_ = jnp.reshape(
-                out_repeat_, (-1, self.config.num_experts_per_tok, self.config.hidden_dim)
-            )
+            out_repeat_unflat_ = jnp.reshape(out_repeat_, (-1, self.config.num_experts_per_tok, self.config.hidden_dim))
 
             return out_repeat_unflat_
 
@@ -461,45 +448,25 @@ class MixtralSparseMoeBlock(eqx.Module):
         x_flat = hax.flatten_axes(x, old_axes=squash_axes, new_axis="token")  # [Batch, Pos, Embed] -> [Token, Embed]
         Token = x_flat.resolve_axis("token")
 
-        # Debug routing behavior
-        use_gmm_flag = getattr(self.experts.w1, 'use_gmm', False)
-        impl_type = "GMM" if use_gmm_flag else "RAGGED_DOT"
-        
-        #jax.debug.print("=== Router {impl} ===", impl=impl_type)
-        #jax.debug.print("Input to router: mean={mean}, std={std}", mean=jnp.mean(x_flat.array), std=jnp.std(x_flat.array))
-
         router_logits = self.gate(x_flat, key=k_gate)
-        #jax.debug.print("Router logits ({impl}): mean={mean}, std={std}, max={max_val}", impl=impl_type, mean=jnp.mean(router_logits.array), std=jnp.std(router_logits.array), max_val=jnp.max(router_logits.array))
-        
         router_probs = hnn.softmax(router_logits, axis=Experts)
-        #jax.debug.print("Router probs ({impl}): mean={mean}, std={std}, entropy={entropy}", impl=impl_type, mean=jnp.mean(router_probs.array), std=jnp.std(router_probs.array),entropy=-jnp.sum(router_probs.array * jnp.log(router_probs.array + 1e-8)))
-        
         topk_weights, topk_idx = self._route(router_probs, Token, TopExperts)
-        #jax.debug.print("Top-k weights ({impl}): mean={mean}, std={std}", impl=impl_type, mean=jnp.mean(topk_weights.array), std=jnp.std(topk_weights.array))
-        
+
         topk_idx_flat = hax.flatten_axes(topk_idx, old_axes=[Token, TopExperts], new_axis="token_repeat")
         TokenRepeat = topk_idx_flat.resolve_axis("token_repeat")
         x_repeat_sort, group_sizes, sort_idx = self._permute(x_flat, topk_idx_flat, TokenRepeat)
 
-        #jax.debug.print("Pre-experts input ({impl}): mean={mean}, std={std}", impl=impl_type, mean=jnp.mean(x_repeat_sort.array), std=jnp.std(x_repeat_sort.array))
-
         out_repeat_sort = self.experts(x_repeat_sort, group_sizes, key=k_experts)
-
-        #jax.debug.print("Post-experts output ({impl}): mean={mean}, std={std}", impl=impl_type, mean=jnp.mean(out_repeat_sort.array), std=jnp.std(out_repeat_sort.array))
 
         out_repeat_unflat = self._unpermute(
             out_repeat_sort, sort_idx, topk_weights, Token, TokenRepeat, TopExperts
         )  # [TokenRepeat, Embed]
 
         out = out_repeat_unflat.dot(topk_weights, axis=TopExperts)  # [Token, Embed]
-        
-        #jax.debug.print("Final MoE output ({impl}): mean={mean}, std={std}, norm={norm}", impl=impl_type, mean=jnp.mean(out.array), std=jnp.std(out.array),norm=jnp.linalg.norm(out.array))
 
         # aux loss
         extras = {}
         expert_loads = group_sizes / hax.sum(group_sizes, axis=Experts)
-        #jax.debug.print("Expert loads ({impl}): {loads}", impl=impl_type, loads=expert_loads.array)
-        
         extras = {
             "expert_loads": expert_loads,
         }
@@ -524,7 +491,7 @@ class MixtralDecoderLayer(eqx.Module):
     block_sparse_moe: MixtralSparseMoeBlock
     input_layernorm: hnn.RmsNorm
     post_attention_layernorm: hnn.RmsNorm
-    shared_mlp: Optional[LlamaMlp]
+    shared_mlp: LlamaMlp | None
 
     @staticmethod
     def init(config: MistralConfig, *, key) -> "MixtralDecoderLayer":
@@ -547,7 +514,7 @@ class MixtralDecoderLayer(eqx.Module):
         return MixtralDecoderLayer(config, attn, block_sparse_moe, ln_1, ln_2, shared_mlp)
 
     @named_call
-    def __call__(self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None) -> NamedArray:
+    def __call__(self, x: NamedArray, mask: NamedArray | AttentionMask | None, *, key=None) -> NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         # self attention and skip connection
         residual = x
@@ -587,7 +554,7 @@ class MixtralTransformer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray], *, key, pos_ids: NamedArray | None = None
+        self, x: NamedArray, attn_mask: NamedArray | None, *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
         x, extras = self.layers.scan(x, mask=attn_mask, key=keys)
@@ -620,7 +587,7 @@ class MixtralTransformer(eqx.Module):
 class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralConfig]):
     transformer: MixtralTransformer
     embeddings: LlamaEmbedding
-    lm_head: Optional[hnn.Linear]
+    lm_head: hnn.Linear | None
 
     @property
     def config(self):
@@ -649,7 +616,7 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
     def __call__(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[Union[NamedArray, AttentionMask]] = None,
+        attn_mask: NamedArray | AttentionMask | None = None,
         pos_ids: NamedArray | None = None,
         *,
         key=None,
@@ -674,7 +641,7 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
     def activations(
         self,
         input_ids: NamedArray,
-        attn_mask: Optional[AttentionMask | NamedArray] = None,
+        attn_mask: AttentionMask | NamedArray | None = None,
         pos_ids: NamedArray | None = None,
         *,
         key=None,
@@ -717,5 +684,5 @@ class MixtralLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[MixtralCo
         else:
             return dataclasses.replace(self, embeddings=new_embeddings)
 
-    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+    def _state_dict_key_map(self) -> dict[str, str | None]:
         return {"transformer": "model", "embeddings": None}

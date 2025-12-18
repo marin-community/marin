@@ -1,21 +1,22 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # nodryrun
 import logging
-import dataclasses
-from typing import Optional
-import jax
-import jax.random as jrandom
-import haliax as hax
-import haliax.nn as hnn
-from haliax.jax_utils import maybe_rng_split, shaped_rng_split
-from haliax.nn.scan import Stacked, BlockSeq
-
-# Import from the custom mixtral implementation
-from experiments.speedrun.custom_mixtral import (
-    MixtralConfig, 
-    MixtralLMHeadModel
-)
 
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.speedrun.custom_mixtral import MixtralConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
@@ -43,7 +44,7 @@ moe_300m_config_ragged = MixtralConfig(
 speedrun_config = SpeedrunConfig(
     author=Author(
         name="Pranshu Chaturvedi",
-        affiliation="Stanford University", 
+        affiliation="Stanford University",
         url="https://stanford.edu/~pranshu",
     ),
     description="Training a 300M parameter Mixtral-style MoE model on a TPU with Ragged Dot (baseline)",
@@ -63,5 +64,5 @@ if __name__ == "__main__":
     logger.info("Running Mixtral with Ragged Dot MoE layers from custom_mixtral.py")
     logger.info(f"Model type: {moe_300m_config_ragged.model_type}")
     logger.info(f"Using GMM: {moe_300m_config_ragged.use_gmm}")
-    
+
     executor_main(steps=default_speedrun("pranshu_mixtral_300m_ragged_run2", speedrun_config))

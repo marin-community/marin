@@ -1,3 +1,17 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Sweep configs for grouped-matmul Mixtral MoE runs based on the original 300M setup."""
 
 import logging
@@ -120,7 +134,8 @@ def build_config(name: str) -> tuple[str, SpeedrunConfig, int]:
 
     description = (
         f"{variant['description']} Approx. {param_count / 1e6:.1f}M parameters. "
-        f"Global batch {batch_size:,} × {num_train_steps:,} steps (~{total_tokens / 1e9:.2f}B tokens, ratio {ratio:.2f}x base)."
+        f"Global batch {batch_size:,} x {num_train_steps:,} steps "
+        f"(~{total_tokens / 1e9:.2f}B tokens, ratio {ratio:.2f}x base)."
     )
     speedrun_cfg = SpeedrunConfig(
         author=AUTHOR,
