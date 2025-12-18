@@ -175,7 +175,7 @@ quality_dedup_consolidate = [
     "datasets",
     "ddsketch",
     "dupekit",
-    "fasttext",
+    "fasttext-wheel",
     "huggingface_hub",
     "nltk>=3.8.1",
     "transformers",
