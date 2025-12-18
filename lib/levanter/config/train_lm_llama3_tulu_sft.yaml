@@ -46,8 +46,6 @@ trainer:
   train_batch_size: 128
   num_train_steps: 3834
   steps_per_eval: 1000 # Note: No eval dataset specified, so this might not do much unless one is added
-  fsdp_axis: "embed"
-  batch_axis: "batch"
   checkpointer:
     base_path: "gs://marin-us-central2/checkpoints/llama3_tulu_sft_fixed_tokenizer/seed_0/" # Adjusted path
 
