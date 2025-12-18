@@ -17,8 +17,8 @@ import logging
 
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.speedrun.custom_mixtral import MixtralConfig
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
@@ -50,7 +50,7 @@ speedrun_config = SpeedrunConfig(
     description="Training a 300M parameter Mixtral-style MoE model on a TPU with Ragged Dot (baseline)",
     model_config=moe_300m_config_ragged,
     train_config=SimpleTrainConfig(
-        TpuPodConfig(tpu_type="v4-8"),
+        ResourceConfig.with_tpu("v4-8", slice_count=1),
         train_batch_size=256,
         num_train_steps=4000,
         learning_rate=5e-4,

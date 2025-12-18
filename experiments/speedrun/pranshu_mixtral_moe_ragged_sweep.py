@@ -18,8 +18,8 @@ import logging
 
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 AUTHOR = Author(name="Pranshu Chaturvedi", affiliation="Stanford University", url="https://stanford.edu/~pranshu")
@@ -104,7 +104,7 @@ MODEL_VARIANTS = {
     ),
 }
 
-RESOURCE_CONFIG = TpuPodConfig(tpu_type="v5p-32", slice_count=1)
+RESOURCE_CONFIG = ResourceConfig.with_tpu("v5p-32", slice_count=1)
 
 
 def build_config(name: str) -> tuple[str, SpeedrunConfig, int]:

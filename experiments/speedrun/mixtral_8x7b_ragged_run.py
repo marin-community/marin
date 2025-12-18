@@ -19,9 +19,9 @@ from experiments.llama import llama3_tokenizer
 from experiments.nemotron_cc.tokenize_nemotron import NEMOTRON_WEIGHTS, tokenize_nemotron_steps
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 from marin.processing.tokenize import lm_mixture_data_config
-from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
@@ -62,7 +62,7 @@ speedrun_config = SpeedrunConfig(
     ),
     model_config=mixtral_8x7b_ragged,
     train_config=SimpleTrainConfig(
-        resources=TpuPodConfig(tpu_type="v5p-64"),
+        resources=ResourceConfig.with_tpu("v5p-64", slice_count=1),
         train_batch_size=128,
         num_train_steps=20,
         learning_rate=3e-4,

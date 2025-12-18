@@ -50,7 +50,7 @@ from transformers import PretrainedConfig as HfConfig
 silence_transformer_nag()
 
 
-@LmConfig.register_subclass("mixtral")
+@LmConfig.register_subclass("custom_mixtral")
 @dataclass(frozen=True)
 class CustomMixtralConfig(MistralConfig):
     """Config for MistralModel
