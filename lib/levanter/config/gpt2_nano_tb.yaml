@@ -8,18 +8,12 @@ model:
 trainer:
   mp: f32
   num_train_steps: 100
-
   checkpointer:
     keep:
-      - every: 50
+    - every: 50
     save_interval: 5m
-
   per_device_parallelism: -1
   train_batch_size: 32
-
-  tensor_parallel_axes: ["mlp", "heads"]
-  fsdp_axis: "embed"
-  batch_axis: "batch"
   tracker:
     type: tensorboard
     logdir: tb_logs/

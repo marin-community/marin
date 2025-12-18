@@ -25,14 +25,14 @@ trainer:
   num_train_steps: 100000
   steps_per_eval: 500
 
-  axis_resources:
-    batch: "data"
-    vocab: "model"
-    mlp: "model"
-    heads: "model"
-  # ZERO-3
-  parameter_axis_resources:
-    embed: "data"
+  mesh:
+    # Tensor-parallel axes (mlp, heads) already map to model by default.
+    # Preserve the old vocab -> model sharding from axis_resources.
+    shared_mapping:
+      vocab: model
+      mlp: model
+      heads: model
+
 
 optimizer:
   learning_rate: 1.2E-4
