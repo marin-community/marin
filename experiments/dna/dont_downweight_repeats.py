@@ -34,7 +34,7 @@ if (backend := jax.default_backend()) not in {"gpu", "cpu"}:
 # -----------------------------------------------------------------------------
 # Experiment configuration
 # -----------------------------------------------------------------------------
-run_number = 2
+run_number = 3
 num_gpus = len(jax.devices("gpu")) if backend == "gpu" else 1
 tokenizer_path = "songlab/tokenizer-dna-clm"
 dataset_path = "songlab/gpn-animal-promoter-dataset"
@@ -63,7 +63,7 @@ model_config = QwenConfig(
 # Dataset configuration
 # -----------------------------------------------------------------------------
 data_tokenized = default_tokenize(
-    name="gpn-animal-promoter-softmasked",
+    name="gpn-animal-promoter-softmasked-no-downweighting",
     # versioned(dataset_path) was causing issues:
     # ValueError: No valid jsonl or parquet files found in
     # ['songlab/gpn-animal-promoter-dataset']. Please provide a path to a
@@ -71,7 +71,7 @@ data_tokenized = default_tokenize(
     dataset=dataset_path,
     tokenizer=tokenizer_path,
     format=DNALmDatasetFormat(
-        soft_mask_weight=0.01,  # Lowercase (repetitive) positions get 1% weight
+        soft_mask_weight=1.0,  # No downweighting
     ),
 )
 
