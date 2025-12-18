@@ -51,8 +51,10 @@ instance/
 docs/_build/
 docs/figures/
 
-# PyBuilder
+# PyBuilder and rust
 target/
+
+lib/*/target/
 
 # Jupyter Notebook
 .ipynb_checkpoints

@@ -7,14 +7,40 @@ FROM ${IMAGE}:${TAG}
 ENV TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS=60\
     TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES=1024\
     RAY_USAGE_STATS_ENABLED=0\
-    PATH=/opt/levanter/.venv/bin:$PATH\
-    HOME=/home/levanter\
-    UV_LINK_MODE=symlink
+    PATH=/opt/marin/.venv/bin:$PATH\
+    HOME=/home/levanter
 
 
+RUN mkdir -p /opt/marin
+RUN mkdir -p  $HOME
+
+# See https://docs.astral.sh/uv/guides/integration/docker/#intermediate-layers for how we're using uv here
+
+# To that, we're adding a two-phase build (really three phases if you include the base image)
+# 0. base image that builds with the default deps in main
+# 1. (this file) incremental build that only installs packages from the current source tree.
+#    This will be a ~no-op if you don't change pyproject.toml relative to the base image build, but it's
+#    useful for local development in case you are changing dependencies.
+# 2. then we copy in the source code for the final image.
+
+# the basic idea is that the deps don't change that much, but they might change some, while the source code
+# changes a lot. So we want to cache the deps install step separately from the source code
 
 WORKDIR /opt/marin
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=lib/levanter/pyproject.toml,target=lib/levanter/pyproject.toml \
+    --mount=type=bind,source=lib/haliax/pyproject.toml,target=lib/haliax/pyproject.toml \
+    --mount=type=bind,source=lib/fray/pyproject.toml,target=lib/fray/pyproject.toml \
+    --mount=type=bind,source=lib/zephyr/pyproject.toml,target=lib/zephyr/pyproject.toml \
+    uv sync --frozen --no-install-workspace --package levanter --extra serve --extra tpu
+
 ADD . /opt/marin
-RUN uv sync --package levanter --extra serve --extra tpu
+
+# Make python -m levanter.main.train_lm work:
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --package levanter --extra serve --extra tpu
+
 
 WORKDIR /opt/marin/lib/levanter
