@@ -231,7 +231,11 @@ def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[s
         else:
             # If `name` is already set, the InputName refers to a specific subpath under the step's output.
             # Otherwise default to the HF export directory (except for gcsfuse mounts).
-            model_step_path = step if step.name is not None else output_path_of(step.step, "hf" if "gcsfuse" not in step.step.name else "")
+            model_step_path = (
+                step
+                if step.name is not None
+                else output_path_of(step.step, "hf" if "gcsfuse" not in step.step.name else "")
+            )
             name = step.step.name
     elif isinstance(step, str):
         model_step_path = step
