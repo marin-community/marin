@@ -315,7 +315,6 @@ class TwoStageConfig:
                     dict(every=step_to_export, until=step_to_export + 1) for step_to_export in self.steps_to_export_list
                 ],
             ),
-            replica_dcn_axis_size=-1,
         )
 
     def build_optimizer_config(self) -> AdamConfig:
