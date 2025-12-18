@@ -1,48 +1,29 @@
-"""
-# ===================================================================
-# === ADD THIS SECTION FOR DETAILED LOGGING =========================
-# ===================================================================
-import logging
-import os
-import sys
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-# 1. Force Ray worker logs to stream to your driver's terminal (stderr)
-# This is the most important change to see the remote errors.
-os.environ['RAY_LOG_TO_STDERR'] = '1'
+"""Baseline Mixtral-style MoE speedrun (ragged dot implementation)."""
 
-# 2. Get full, unfiltered tracebacks from JAX
-# By default, JAX hides a lot of the traceback. 'off' gives you everything.
-os.environ['JAX_TRACEBACK_FILTERING'] = 'off'
-
-# 3. Configure Python's root logger to be more verbose
-# This will capture detailed logs from Ray's components and other libraries.
-# We set the level to INFO; you can change it to DEBUG for even more detail.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
-    stream=sys.stdout,
-)
-
-print("--- Detailed logging has been enabled. Waiting for job to start... ---")
-# ===================================================================
-# === END OF LOGGING SECTION ========================================
-# ===================================================================
-"""
 # nodryrun
-import logging
-import os
 
-from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
+from experiments.speedrun.custom_mixtral import MixtralConfig
 from marin.execution.executor import executor_main
 from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
-#logger = logging.getLogger("ray")
-#os.environ['JAX_CHECK_TRACER_LEAKS'] = '1'
-#os.environ['JAX_TRACEBACK_FILTERING'] = 'off'
+TRAIN_BATCH_SIZE = 1536
 
-# This config uses MixtralConfig directly for MoE functionality
 moe_300m_config = MixtralConfig(
     seq_len=1024,
     hidden_dim=768,
@@ -54,23 +35,22 @@ moe_300m_config = MixtralConfig(
     scan_layers=True,
     n_routed_experts=8,
     num_experts_per_tok=2,
-    # Disable MoE auxiliary loss logging to prevent JAX tracer leaks
-    lbl_coef=None,  # Disables load balancing loss logging
-    rzl_coef=None,  # Disables router z-loss logging
-    use_gmm=False,  # Use ragged dot implementation with debug prints
+    use_gmm=False,
+    lbl_coef=None,
+    rzl_coef=None,
 )
-train_batch_size = 1536
+
 speedrun_config = SpeedrunConfig(
     author=Author(
         name="Pranshu Chaturvedi",
         affiliation="Stanford University",
         url="https://stanford.edu/~pranshu",
     ),
-    description="Training a 300M parameter Mixtral-style MoE model on a TPU.",
+    description="Training a ~300M parameter Mixtral-style MoE model on a TPU (ragged dot MoE).",
     model_config=moe_300m_config,
     train_config=SimpleTrainConfig(
         TpuPodConfig(tpu_type="v5p-8", slice_count=1),
-        train_batch_size=train_batch_size, #targetting 6 billion tokens in total
+        train_batch_size=TRAIN_BATCH_SIZE,
         num_train_steps=6000,
         learning_rate=5e-4,
         weight_decay=0.1,
@@ -79,4 +59,9 @@ speedrun_config = SpeedrunConfig(
 )
 
 if __name__ == "__main__":
-    executor_main(steps=default_speedrun(f"pranshu_mixtral_300m_run_central1_fresh_bs{train_batch_size}", speedrun_config))
+    executor_main(
+        steps=default_speedrun(
+            f"pranshu_mixtral_300m_run_central1_fresh_bs{TRAIN_BATCH_SIZE}",
+            speedrun_config,
+        )
+    )
