@@ -104,7 +104,7 @@ def test_metadata_works():
     assert len(batch_processor.metadata)
 
 
-@pytest.skip("File is gone")
+@pytest.mark.skip("File is gone")
 @skip_if_no_soundlibs
 def test_resolve_audio_pointer():
     AudioTextUrlDataSource.resolve_audio_pointer("https://ccrma.stanford.edu/~jos/mp3/trumpet.mp3", 16_000)
