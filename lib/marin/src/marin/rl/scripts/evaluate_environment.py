@@ -122,7 +122,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     trainer_config = TrainerConfig(
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         ray=levanter.distributed.RayConfig(auto_start_cluster=False),
-        mesh=MeshConfig(axes={"model": model_axis_size}, shared_mapping={"mlp": "model", "heads": "model"}),
+        mesh=MeshConfig(axes={"model": model_axis_size}),
     )
 
     # Setup environment variables
@@ -180,9 +180,9 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
                 hax.axis_mapping(trainer_config.compute_axis_mapping),
             ):
                 inference_server_config = InferenceServerConfig(
-                    # Turn on tensor parallelism for inference
                     trainer=dataclasses.replace(
-                        trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=model_axis_size
+                        trainer_config,
+                        mesh=dataclasses.replace(trainer_config.mesh, shared_mapping={"kv_head": "model"}),
                     ),
                     tokenizer=checkpoint_path,
                     temperature=1.0,

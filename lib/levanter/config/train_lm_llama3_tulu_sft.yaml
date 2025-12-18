@@ -46,7 +46,6 @@ trainer:
   train_batch_size: 128
   num_train_steps: 3834
   steps_per_eval: 1000 # Note: No eval dataset specified, so this might not do much unless one is added
-  tensor_parallel_axes: ["mlp", "heads"]
   fsdp_axis: "embed"
   batch_axis: "batch"
   checkpointer:

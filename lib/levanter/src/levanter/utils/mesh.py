@@ -16,6 +16,7 @@ from jax.sharding import Mesh
 DEFAULT_DP_AXES = ("replica_dcn", "replica", "data")
 DEFAULT_ICI_AXIS_SPEC = {"data": -1, "replica": 1, "model": 1}
 DEFAULT_DCN_AXIS_SPEC = {"replica_dcn": -1}
+DEFAULT_SHARED_MAPPING: Dict[str, str | Tuple[str, ...]] = {"mlp": "model", "heads": "model"}
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,7 @@ class MeshConfig:
     Defines mesh axes and logical-to-physical mappings.
     axes: ICI sizes per axis (within a slice). -1 means absorb remaining ICI.
     dcn_axes: DCN sizes per axis (across slices). -1 means absorb remaining DCN.
-    shared_mapping: common logical-axis defaults (e.g., mlp->model).
+    shared_mapping: common logical-axis defaults shared by both compute and parameter sharding.
     compute_mapping: logical -> physical axis (or axes) for compute (e.g., batch -> [replica_dcn, replica, data]).
     param_mapping: logical -> physical axis (or axes) for parameters and opt states
     """
@@ -34,7 +35,6 @@ class MeshConfig:
 
     # Typically you should only set these fields in config, and only read the resolved_* properties.
     batch_axis_name: str | None = "batch"
-    tensor_parallel_axes: list[str] = field(default_factory=lambda: ["mlp", "heads"])
     shared_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     compute_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {})
     param_mapping: Mapping[str, list[str] | str] = field(default_factory=lambda: {"embed": "data"})
@@ -56,18 +56,15 @@ class MeshConfig:
 
     @cached_property
     def resolved_param_mapping(self) -> ResourceMapping:
-        # Parameter mapping should inherit the shared defaults (tensor_parallel_axes, shared_mapping)
-        # so parameters on those logical axes shard the same way as compute unless explicitly overridden.
+        # Parameter mapping should inherit shared defaults so parameters on those logical axes shard the
+        # same way as compute unless explicitly overridden.
         mapping = self._resolved_shared_axis_mapping()
         for logical, physical in self.param_mapping.items():
             mapping[logical] = _norm(physical)
         return mapping
 
     def _resolved_shared_axis_mapping(self):
-        mapping = {}
-        for axis in self.tensor_parallel_axes:
-            mapping[axis] = "model"
-
+        mapping = dict(DEFAULT_SHARED_MAPPING)
         for logical, physical in self.shared_mapping.items():
             mapping[logical] = _norm(physical)
 

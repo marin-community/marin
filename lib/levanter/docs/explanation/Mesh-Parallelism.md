@@ -81,8 +81,8 @@ forward/backward step, and the mapping used in `hax.axis_mapping(...)` contexts 
 
 In [`levanter.utils.mesh.MeshConfig`][] this is exposed as `mesh.resolved_compute_mapping`, which merges:
 
-- `tensor_parallel_axes` (defaults: `["mlp", "heads"]`) → `model`
-- `shared_mapping` (applies to both compute and params)
+- Default `shared_mapping` entries (notably `mlp` and `heads`) → `model`
+- `shared_mapping` overrides (applies to both compute and params)
 - The batch mapping for `batch_axis_name` (defaults to `batch`) → `("replica_dcn", "replica", "data")`
 - Any explicit `compute_mapping` overrides
 
@@ -96,7 +96,8 @@ checkpoint layout and optimizer-state partitioning).
 
 In [`levanter.utils.mesh.MeshConfig`][] this is exposed as `mesh.resolved_param_mapping`, which merges:
 
-- `tensor_parallel_axes` and `shared_mapping` (so “tensor-parallel” axes shard the same way for params and compute)
+- Default `shared_mapping` entries and `shared_mapping` overrides (so “tensor-parallel” axes shard the same way for params
+  and compute)
 - Explicit `param_mapping` overrides (defaults include `{"embed": "data"}`)
 
 ### The default behavior in one sentence
@@ -134,8 +135,9 @@ trainer:
     axes: {model: 2}  # keeps replica:1 and data:-1 from defaults
 ```
 
-By default, any logical axes listed in `tensor_parallel_axes` (defaults: `mlp`, `heads`) map to `model` for both compute
-and parameters. You can extend that list if your model uses different axis names.
+By default, `shared_mapping` treats `mlp` and `heads` as tensor-parallel logical axes and maps them to `model` for both
+compute and parameters. If your model uses different axis names (e.g. `kv_head` / `kv_heads`), add them to
+`shared_mapping`.
 
 ### Add context (sequence) parallelism
 

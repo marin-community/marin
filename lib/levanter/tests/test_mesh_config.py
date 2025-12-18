@@ -52,7 +52,7 @@ def test_axis_shapes_multiple_dcn_absorbers_error():
 
 def test_resolved_param_mapping_inherits_shared():
     cfg = MeshConfig()
-    # tensor_parallel_axes default to ["mlp", "heads"] and map to model
+    # shared mapping defaults map mlp/heads to model
     mapping = cfg.resolved_param_mapping
     assert mapping["mlp"] == "model"
     assert mapping["heads"] == "model"
