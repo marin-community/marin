@@ -115,38 +115,11 @@ The following table lists some of the parameters that you might want to change.
 
 ### Partitioning / Mesh
 
-Sharding in Levanter is done with axis mappings that map logical axes (e.g. `"batch"`) onto a named JAX device mesh.
-Trainer now owns a single `mesh` block (a `MeshConfig) that defines:
+Levanter sharding is controlled by mapping logical axes (e.g. `batch`, `embed`, `heads`) onto a named JAX device mesh
+(e.g. `data`, `model`, `replica`, `replica_dcn`).
 
-* `axes`: ICI (within-slice) sizes per mesh axis. `-1` means “absorb the remaining ICI devices”. Defaults are inherited and merged, so overriding one key does not clear the others: `{"data": -1, "replica": 1, "model": 1}`.
-* `dcn_axes`: DCN (cross-slice) sizes per mesh axis. `-1` absorbs remaining slices. Defaults merge as well: `{"replica_dcn": -1}`.
-  * Axis names must be disjoint between `axes` and `dcn_axes`; overlaps error.
-* `shared_mapping`: common logical-to-physical defaults (default: `position: context`).
-* `tensor_parallel_axes`: logical axes that map to `model` by default (default: `["mlp", "heads"]`).
-* `compute_mapping`: logical→physical mapping used for compute; default `batch: [replica_dcn, replica, data]` if not provided.
-* `param_mapping`: logical→physical mapping for parameters/optimizer state; default `embed: data`.
-
-Defaults are *inherited*: if you override `mesh.axes: {model: 2}`, the other defaults (`data:-1`, `replica:1`) remain unless you also change them. Only one ICI axis and one DCN axis may use `-1`. If you set `-1` on a non-default absorber without touching the default, the default absorber is forced to `1` to avoid conflicts.
-
-Example:
-```yaml
-mesh:
-  axes: {model: 2}          # keep data:-1, replica:1 from defaults
-  dcn_axes: {replica_dcn: -1}
-  tensor_parallel_axes: ["mlp", "heads"]
-  shared_mapping:
-    position: context
-  compute_mapping:
-    batch: [replica_dcn, replica, data]
-  param_mapping:
-    embed: data
-axis_resources:
-  activation_length: sequence   # optional override
-parameter_axis_resources:
-  ln_scale: replica             # optional override
-```
-
-The batch axis name remains `batch` by default (`mesh.batch_axis_name`). Tensor-parallel logical axes come from `mesh.tensor_parallel_axes` and map to `model` by default. FSDP is represented by mapping `embed` (or any parameter axes you choose) to `data` in `param_mapping`; there is no separate `fsdp_axis` field anymore.
+The full explanation (including the difference between `compute_mapping` and `param_mapping`, and how to add context
+parallelism) lives in [Mesh Parallelism](Mesh-Parallelism.md).
 
 ### Checkpointing and Initialization
 

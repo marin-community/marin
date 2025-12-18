@@ -30,6 +30,9 @@ trainer:
     # Preserve the old vocab -> model sharding from axis_resources.
     shared_mapping:
       vocab: model
+      mlp: model
+      heads: model
+
 
 optimizer:
   learning_rate: 1.2E-4

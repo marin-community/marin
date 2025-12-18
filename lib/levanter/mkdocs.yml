@@ -106,6 +106,7 @@ nav:
       - "Hardware-Agnostic-Training.md"
   - 'Reference':
       - 'reference/Configuration.md'
+      - 'reference/Mesh-Parallelism.md'
       - "reference/Data-Formats.md"
       - 'reference/Trackers.md'
   - 'Developer Guide':
