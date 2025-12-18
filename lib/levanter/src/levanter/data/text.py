@@ -157,18 +157,25 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
         *,
         ignore_index: Optional[int] = None,
         eos_id: Optional[int] = None,
+        block_cross_document_attention: bool = True,
     ):
         self.dataset = dataset
         self.Pos = Pos
         self.ignore_id = ignore_index
         self.eos_id = eos_id
+        self.block_cross_document_attention = block_cross_document_attention
 
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
         @functools.partial(eqx.filter_jit)
         def _create_lm_example(tokens):
             tokens = hax.named(tokens, self.Pos)
-            example = LmExample.causal(tokens=tokens, ignore_id=self.ignore_id, eos_id=eos_id)
+            example = LmExample.causal(
+                tokens=tokens,
+                ignore_id=self.ignore_id,
+                eos_id=eos_id,
+                block_cross_document_attention=block_cross_document_attention,
+            )
 
             example = jax.lax.with_sharding_constraint(example, sharding)
 
@@ -529,6 +536,14 @@ class LMTaskConfig(abc.ABC):
     cache_dir: Optional[str] = "cache/"
     cache_options: CacheOptions = field(default_factory=CacheOptions)
     enforce_eos: bool = True  # whether to append eos even if the tokenizer doesn't
+    auto_build_caches: bool = True
+    """Whether to build dataset caches automatically when they are missing.
+
+    If False, any attempt to access a cache that does not already exist will raise
+    a FileNotFoundError instead of building the cache on the fly. This is useful
+    when running in environments where cache construction is undesirable (e.g.,
+    to avoid expensive preprocessing during training jobs).
+    """
 
     chat_template: str | None = None  # If set, use this template for chat datasets. Otherwise, use the tokenizer's.
 
@@ -542,6 +557,17 @@ class LMTaskConfig(abc.ABC):
     Type of permutation to use for shuffle.
 
     If None, defaults to linear, but this will change in the future since Feistel is better.
+    """
+
+    block_cross_document_attention: bool = True
+    """Whether to block attention across document boundaries.
+
+    If True (default), attention is blocked across documents using segment ids derived from
+    EOS tokens. This prevents tokens from one document attending to tokens from a different
+    document within a packed sequence.
+
+    If False, full causal attention is allowed across packed documents, meaning tokens can
+    attend to all previous tokens regardless of document boundaries.
     """
 
     @cached_property
@@ -626,10 +652,17 @@ def dataset_for_format(
     *,
     eos_id: int | None,
     ignore_index: int | None,
+    block_cross_document_attention: bool = True,
 ) -> AsyncDataset[LmExample]:
     match format:
         case TextLmDatasetFormat():
-            return CausalLmDataset(TokenSeqDataset(cache, Pos.size), Pos, eos_id=eos_id, ignore_index=ignore_index)
+            return CausalLmDataset(
+                TokenSeqDataset(cache, Pos.size),
+                Pos,
+                eos_id=eos_id,
+                ignore_index=ignore_index,
+                block_cross_document_attention=block_cross_document_attention,
+            )
         case ChatLmDatasetFormat(pack=pack, mask_user_turns=mask_user_turns):
             return MultiturnChatDataset(cache, Pos, max_segments_per_example=64 if pack else 1, mask_user_turns=mask_user_turns)  # type: ignore
         case _:
@@ -702,6 +735,7 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
     """This class supports loading data both from HF Datasets and from a raw dataset of jsonl urls"""
 
     cache_dir: Optional[str] = "cache/"
+    auto_build_caches: bool = True
 
     def train_set(
         self,
@@ -718,7 +752,12 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
             raise ValueError("No training set!")
         else:
             ds = dataset_for_format(
-                self.format, Pos, cache, eos_id=self.the_tokenizer.eos_token_id, ignore_index=self.ignore_token_id
+                self.format,
+                Pos,
+                cache,
+                eos_id=self.the_tokenizer.eos_token_id,
+                ignore_index=self.ignore_token_id,
+                block_cross_document_attention=self.block_cross_document_attention,
             )
 
         perm_type = self.permutation_type
@@ -760,7 +799,12 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
             return None
 
         return dataset_for_format(
-            self.format, Pos, cache, eos_id=self.the_tokenizer.eos_token_id, ignore_index=self.ignore_token_id
+            self.format,
+            Pos,
+            cache,
+            eos_id=self.the_tokenizer.eos_token_id,
+            ignore_index=self.ignore_token_id,
+            block_cross_document_attention=self.block_cross_document_attention,
         )
 
     def validation_sets(self, Pos: Axis) -> Mapping[str, AsyncDataset[LmExample]]:
@@ -788,17 +832,25 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
         format = self.format
         enforce_eos = self.enforce_eos
         options = self.cache_options
+        auto_build = self.auto_build_caches
 
         if cache_dir is None:
             raise ValueError("cache_dir cannot be None")
 
         cache_dir = os.path.join(cache_dir, split)
 
-        if fsspec_utils.exists(cache_dir):
+        cache_exists = fsspec_utils.exists(cache_dir)
+
+        if cache_exists:
             try:
                 return load_lm_dataset_cache(cache_dir, format, tokenizer, enforce_eos)
             except FileNotFoundError:
-                pass
+                if not auto_build:
+                    raise
+                # fall through to rebuild if allowed
+
+        if not auto_build:
+            raise FileNotFoundError(f"Cache not found at {cache_dir} and auto_build_caches is disabled")
 
         if source is None:
             logger.warning(f"Skipping {split} because no source was provided")
@@ -830,6 +882,7 @@ class LMMixtureDatasetConfig(LMTaskConfig):
     """
 
     cache_dir: Optional[str] = "cache/"
+    auto_build_caches: bool = True
 
     configs: Dict[str, LMDatasetSourceConfig] = field(default_factory=dict)
     """ Configuration of each dataset source (urls, hf dataset id, etc.) """
@@ -884,6 +937,7 @@ class LMMixtureDatasetConfig(LMTaskConfig):
                 cache,
                 eos_id=self.the_tokenizer.eos_token_id,
                 ignore_index=self.ignore_token_id,
+                block_cross_document_attention=self.block_cross_document_attention,
             )
             for name, cache in caches.items()
         }
@@ -1052,29 +1106,42 @@ class LMMixtureDatasetConfig(LMTaskConfig):
             else:
                 cache_dir = source_config.cache_dir
 
-            source = source_config.get_shard_source(split)
+            cache_path = os.path.join(cache_dir, split)
 
-            # drop the data source and corresponding weight if the cache is not built
-            if source is None:
-                try:
-                    caches[name] = load_lm_dataset_cache(
-                        os.path.join(cache_dir, split),
-                        source_config.format,
-                        self.the_tokenizer,
-                        self.enforce_eos,
-                    )
-                except FileNotFoundError:
-                    logger.warning(f"No source for {name} in {split} split and no cache either, skipping")
-                    continue
-            else:
-                caches[name] = build_lm_dataset_cache(
-                    os.path.join(cache_dir, split),
-                    source,
+            # easy path: cache already exists
+            try:
+                caches[name] = load_lm_dataset_cache(
+                    cache_path,
                     source_config.format,
                     self.the_tokenizer,
-                    self.cache_options,
                     self.enforce_eos,
                 )
+                continue
+            except FileNotFoundError:
+                # Will build below
+                pass
+
+            # now see if we can/need to build the cache
+            try:
+                source = source_config.get_shard_source(split)
+                if source is None:
+                    logger.warning(f"No source for {name} in {split} split, skipping")
+                    continue
+
+                elif not self.auto_build_caches:
+                    raise FileNotFoundError(f"Cache not found at {cache_path} and auto_build_caches is disabled")
+                else:
+                    caches[name] = build_lm_dataset_cache(
+                        cache_path,
+                        source,
+                        source_config.format,
+                        self.the_tokenizer,
+                        self.cache_options,
+                        self.enforce_eos,
+                    )
+            except Exception as e:
+                logger.exception(f"Error building/loading cache for dataset {name} {split} {cache_path}: {e}")
+                raise
 
         return caches
 
