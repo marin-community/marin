@@ -62,12 +62,12 @@ MODELS = [
     #     "apply_chat_template": True,
     #     "tensor_parallel_size": 4,
     # },
-    # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-fixed_chat_template-aime24",
-    #     "path": "gs://marin-us-east5/checkpoints/exp2199b_sft_qwen2pt5_7b_instruct_openthoughts3_bsz512_lr8e_5-92772b/hf/step-11718-padded-vocab-chat-template-fixed",
-    #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
-    # },
+    {
+        "name": "qwen2.5-7b-instruct-finetuned-redo_fixed_template-aime24",
+        "path": "gs://marin-us-central2/checkpoints/exp2199b_redo_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-2d659d/hf/step-11718-padded-vocab",
+        "apply_chat_template": True,
+        "tensor_parallel_size": 4,
+    },
     # {
     #     "name": "qwen3-8b-finetuned-aime25",
     #     "path": "gs://marin-us-east5/checkpoints/exp2199c_sft_qwen3_8b_openthoughts3_bsz512_lr8e_5-accb91/hf/step-11718-padded-vocab/",
@@ -122,12 +122,12 @@ MODELS = [
     #     "apply_chat_template": True,
     #     "tensor_parallel_size": 4,
     # },
-    {
-        "name": "llama-3.1-8b-instruct-aime24",
-        "path": "gs://marin-us-central2/models/llama-3.1-8b-instruct/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
+    # {
+    #     "name": "llama-3.1-8b-instruct-aime24",
+    #     "path": "gs://marin-us-central2/models/llama-3.1-8b-instruct/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
 ]
 
 
