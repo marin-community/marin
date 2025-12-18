@@ -528,6 +528,7 @@ def create_environment(
         "TOKENIZERS_PARALLELISM": "false",
         "HF_TOKEN": os.getenv("HF_TOKEN"),
         "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+        "MARIN_CI_DISABLE_RUNTIME_ENVS": os.getenv("MARIN_CI_DISABLE_RUNTIME_ENVS"),
     }
 
     # Filter out None values - Ray requires all env var values to be strings
