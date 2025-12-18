@@ -47,6 +47,18 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.lower() in {"1", "true", "yes"}
+
+
+USE_HOST_RUNTIME_ENVS = _env_flag("MARIN_CI_DISABLE_RUNTIME_ENVS")
+
+
+def _pip_groups(*groups: str) -> list[str] | None:
+    return None if USE_HOST_RUNTIME_ENVS else list(groups)
+
+
 def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
     # ############################################################
     # Transform HTML to text
@@ -60,7 +72,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig.default_config(),
         ),
-        pip_dependency_groups=["download_transform"],
+        pip_dependency_groups=_pip_groups("download_transform"),
     )
 
     transform_lq_data_step = ExecutorStep(
@@ -72,7 +84,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             extract_method=versioned("readability"),
             config=HtmlToMarkdownConfig.default_config(),
         ),
-        pip_dependency_groups=["download_transform"],
+        pip_dependency_groups=_pip_groups("download_transform"),
     )
 
     # ############################################################
@@ -119,7 +131,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-hq",
         ),
-        pip_dependency_groups=["quality_dedup_consolidate"],
+        pip_dependency_groups=_pip_groups("quality_dedup_consolidate"),
     )
 
     inference_lq_step = ExecutorStep(
@@ -132,7 +144,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-lq",
         ),
-        pip_dependency_groups=["quality_dedup_consolidate"],
+        pip_dependency_groups=_pip_groups("quality_dedup_consolidate"),
     )
 
     ############################################################
