@@ -76,8 +76,8 @@ class ScalingLadderRungConfig:
     label: str
     """Dataset label to use for scaling fit (e.g., 'nemo', 'comma', 'dclm')."""
 
-    dataset: str
-    """Path to tokenized dataset for training."""
+    tokenized: str | LMMixtureDatasetConfig
+    """Tokenized dataset for training. Can be a path or LMMixtureDatasetConfig."""
 
     output_path: str
     """Where to write training outputs."""
@@ -90,6 +90,9 @@ class ScalingLadderRungConfig:
 
     sweep_config: IsoFlopSweepConfig | None = None
     """Optional sweep config for predict_optimal_config. Uses defaults if None."""
+
+    use_default_validation: bool = True
+    """Whether to use the default validation sets (Paloma)."""
 
 
 def load_scaling_fits(analysis_path: str) -> dict[str, tuple[float, float]]:
@@ -149,7 +152,6 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
     from experiments.defaults import _prepare_data_config
     from experiments.llama import compute_num_parameters
     from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
-    from marin.processing.tokenize import lm_mixture_data_config
     from marin.scaling_laws.isoflop_analysis import pick_v5p_type
     from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
@@ -202,11 +204,8 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
     )
 
     # Prepare data config (uses same helper as default_train)
-    data_config = lm_mixture_data_config(
-        components={"train": config.dataset},
-        weights={"train": 1.0},
-    )
-    pretraining_data = _prepare_data_config(data_config, use_default_validation=True)
+    # Accepts both string paths and LMMixtureDatasetConfig
+    pretraining_data = _prepare_data_config(config.tokenized, use_default_validation=config.use_default_validation)
 
     # Build TrainLmConfig (mirrors default_train structure)
     train_config = TrainLmConfig(
@@ -251,9 +250,11 @@ def scaling_ladder_rung_step(
     analysis_step: ExecutorStep,
     target_budget: float,
     label: str,
-    dataset: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     tokenizer: str = "stanford-crfm/marin-tokenizer",
     seq_len: int = 4096,
+    use_default_validation: bool = True,
+    override_output_path: str | None = None,
 ) -> ExecutorStep:
     """Create an ExecutorStep for one rung of the scaling ladder.
 
@@ -265,40 +266,50 @@ def scaling_ladder_rung_step(
         analysis_step: The IsoFLOP analysis step to read fits from
         target_budget: Target compute budget in FLOPs
         label: Dataset label to use for scaling fit (e.g., 'nemo', 'comma')
-        dataset: Tokenized dataset to train on
+        tokenized: Tokenized dataset to train on (path, ExecutorStep, or LMMixtureDatasetConfig)
         tokenizer: Tokenizer to use
         seq_len: Sequence length for training
+        use_default_validation: Whether to use the default validation sets (Paloma)
+        override_output_path: Optional override for the output path
 
     Returns:
         ExecutorStep configured to run one optimal training run
     """
-    # Resolve dataset path
-    if isinstance(dataset, ExecutorStep):
-        dataset_path = output_path_of(dataset)
-    elif isinstance(dataset, LMMixtureDatasetConfig):
-        # For mixture configs, we'll need to handle this differently
-        # For now, just serialize it somehow - this is a limitation
-        raise NotImplementedError("LMMixtureDatasetConfig not yet supported for scaling_ladder_rung_step")
+    # Resolve tokenized data - works like default_train
+    if isinstance(tokenized, ExecutorStep):
+        resolved_tokenized: str | LMMixtureDatasetConfig = output_path_of(tokenized)
+    elif isinstance(tokenized, LMMixtureDatasetConfig):
+        # Pass through LMMixtureDatasetConfig directly
+        resolved_tokenized = tokenized
     else:
-        dataset_path = dataset
+        # InputName or string path
+        resolved_tokenized = tokenized
+
+    output_path = override_output_path if override_output_path is not None else this_output_path()
 
     config = ScalingLadderRungConfig(
         analysis_output_path=output_path_of(analysis_step),
         target_budget=target_budget,
         label=label,
-        dataset=dataset_path,
-        output_path=this_output_path(),
+        tokenized=resolved_tokenized,
+        output_path=output_path,
         tokenizer=tokenizer,
         seq_len=seq_len,
+        use_default_validation=use_default_validation,
     )
 
-    return ExecutorStep(
+    step = ExecutorStep(
         name=os.path.join("checkpoints", name),
         fn=run_scaling_ladder_rung,
         config=config,
         description=f"Scaling ladder rung: optimal training for {target_budget:.1e} FLOPs based on IsoFLOP analysis",
         pip_dependency_groups=["tokenize_train"],
     )
+
+    if override_output_path is not None:
+        step = step.with_output_path(override_output_path)
+
+    return step
 
 
 # ---------------- Scaling Ladder Suite ----------------
@@ -329,7 +340,7 @@ def scaling_ladder_suite(
     training_runs: Sequence[ExecutorStep | InputName],
     target_budgets: Sequence[float],
     label: str,
-    dataset: InputName | ExecutorStep,
+    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     tokenizer: str = "stanford-crfm/marin-tokenizer",
     seq_len: int = 4096,
     metric_key: str = "eval/paloma/c4_en/bpb",
@@ -338,6 +349,7 @@ def scaling_ladder_suite(
     upload_to_wandb: bool = True,
     wandb_entity: str = "marin-community",
     wandb_project: str = "marin-analysis",
+    use_default_validation: bool = True,
 ) -> ScalingLadderSuite:
     """Create a complete scaling ladder: IsoFLOP analysis + optimal training runs.
 
@@ -353,7 +365,7 @@ def scaling_ladder_suite(
         training_runs: IsoFLOP training run ExecutorSteps to analyze
         target_budgets: Target compute budgets (in FLOPs) for optimal training
         label: Dataset label to use for scaling fit (e.g., 'nemo', 'comma')
-        dataset: Tokenized dataset for optimal training runs
+        tokenized: Tokenized dataset for optimal training runs (path, ExecutorStep, or LMMixtureDatasetConfig)
         tokenizer: Tokenizer to use
         seq_len: Sequence length for training
         metric_key: Which metric to use for loss
@@ -362,6 +374,7 @@ def scaling_ladder_suite(
         upload_to_wandb: Whether to upload plots to WandB
         wandb_entity: WandB entity for uploads
         wandb_project: WandB project for uploads
+        use_default_validation: Whether to use the default validation sets (Paloma)
 
     Returns:
         ScalingLadderSuite containing the analysis step and optimal training steps
@@ -372,7 +385,7 @@ def scaling_ladder_suite(
         ...     training_runs=isoflop_training_steps,
         ...     target_budgets=[1e21, 3e21, 1e22],
         ...     label="nemo",
-        ...     dataset=nemotron_tokenized,
+        ...     tokenized=nemotron_tokenized,
         ... )
         >>> all_steps = [*isoflop_training_steps, *suite.all_steps]
     """
@@ -399,9 +412,10 @@ def scaling_ladder_suite(
             analysis_step=analysis,
             target_budget=budget,
             label=label,
-            dataset=dataset,
+            tokenized=tokenized,
             tokenizer=tokenizer,
             seq_len=seq_len,
+            use_default_validation=use_default_validation,
         )
         optimal_runs.append(run_step)
 

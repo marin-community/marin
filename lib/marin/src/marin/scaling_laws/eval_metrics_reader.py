@@ -12,10 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Copyright 2025 Marin Authors
-# SPDX-License-Identifier: Apache-2.0
-"""
-Base infrastructure for eval metrics analysis.
+"""Base infrastructure for eval metrics analysis.
 
 This module provides a base config and utilities for analysis jobs that
 read eval_metrics.jsonl files from completed training runs. Specific
