@@ -3146,6 +3146,21 @@ wheels = [
 ]
 
 [[package]]
+name = "jaxopt"
+version = "0.8.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jax" },
+    { name = "jaxlib" },
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3a/da/ff7d7fbd13b8ed5e8458e80308d075fc649062b9f8676d3fc56f2dc99a82/jaxopt-0.8.5.tar.gz", hash = "sha256:2790bd68ef132b216c083a8bc7a2704eceb35a92c0fc0a1e652e79dfb1e9e9ab", size = 121709, upload-time = "2025-04-14T17:59:01.618Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/d8/55e0901103c93d57bab3b932294c216f0cbd49054187ce29f8f13808d530/jaxopt-0.8.5-py3-none-any.whl", hash = "sha256:ff221d1a86908ec759eb1e219ee1d12bf208a70707e961bf7401076fe7cf4d5e", size = 172434, upload-time = "2025-04-14T17:59:00.342Z" },
+]
+
+[[package]]
 name = "jaxtyping"
 version = "0.3.5"
 source = { registry = "https://pypi.org/simple" }
@@ -4317,6 +4332,7 @@ dependencies = [
     { name = "google-cloud-storage-transfer" },
     { name = "haliax" },
     { name = "jax" },
+    { name = "jaxopt" },
     { name = "levanter", extra = ["serve"] },
     { name = "lm-eval" },
     { name = "lxml", extra = ["html-clean"] },
