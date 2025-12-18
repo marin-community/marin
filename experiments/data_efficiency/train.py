@@ -226,7 +226,6 @@ class DataEfficiencyConfig:
                     dict(every=step_to_export, until=step_to_export + 1) for step_to_export in self.steps_to_export_list
                 ],
             ),
-            replica_dcn_axis_size=-1,
             per_device_parallelism=self.per_device_parallelism,
             per_device_eval_parallelism=self.per_device_parallelism,
         )
