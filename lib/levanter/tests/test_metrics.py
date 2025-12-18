@@ -263,7 +263,6 @@ def test_trainer_train_step(loss_fn, per_device_parallelism, expected_metrics):
         num_train_steps=10,
         train_batch_size=Batch.size,
         per_device_parallelism=per_device_parallelism,
-        fsdp_axis=None,
         id="test_run",
     )
 
@@ -298,7 +297,6 @@ def test_microbatching_metric_aggregation():
         num_train_steps=10,
         train_batch_size=Batch.size,
         per_device_parallelism=2,
-        fsdp_axis=None,
         id="test_run",
     )
 

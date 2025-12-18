@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 from haliax.partitioning import ResourceAxis
-from levanter.utils.jax_utils import best_effort_sharding, create_fsdp_mesh, sharded_tree_size
+from levanter.utils.jax_utils import best_effort_sharding, sharded_tree_size
+from levanter.utils.mesh import create_mesh_from_axis_specs
 
 
 def _assert_can_put_with_sharding(array, sharding):
@@ -108,7 +109,10 @@ def test_best_effort_sharding_with_mesh(fsdp_size):
     elif len(jax.devices()) % fsdp_size != 0:
         pytest.skip("Number of devices is not a multiple of fsdp_size")
 
-    mesh = create_fsdp_mesh(len(jax.devices()) // fsdp_size, fsdp_size, 1)
+    mesh = create_mesh_from_axis_specs(
+        ici_axes={"replica": len(jax.devices()) // fsdp_size, "data": fsdp_size, "model": 1},
+        dcn_axes={},
+    )
 
     array = np.arange(8)
     sharding = best_effort_sharding(array.shape, mesh=mesh)

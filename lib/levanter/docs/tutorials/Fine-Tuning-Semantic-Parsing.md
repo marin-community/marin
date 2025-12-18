@@ -136,7 +136,6 @@ trainer:
   mp: p=f32,c=bfloat16
   train_batch_size: 128
   num_train_steps: 80  # 5103 examples / 128 batch size * 2 epochs
-  tensor_parallel_axes: ["mlp", "heads"]
 optimizer:
   learning_rate: 2E-5
 ```
@@ -176,7 +175,6 @@ trainer:
   mp: p=f32,c=bfloat16
   train_batch_size: 128
   num_train_steps: 120  # 5103 examples / 128 batch size * 3 epochs
-  tensor_parallel_axes: ["mlp", "heads"]
 optimizer:
   learning_rate: 3e-4
   weight_decay: 0.1

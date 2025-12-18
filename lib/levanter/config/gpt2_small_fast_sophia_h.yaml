@@ -14,7 +14,6 @@ trainer:
     tags: [ "openwebtext", "gpt2", "itest", "sophia-h"]
 
   mp: p=f32,c=bfloat16
-  model_axis_size: 1
 
   train_batch_size: 256
   num_train_steps: 20000
