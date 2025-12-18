@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import optax
 from optax import tree_utils as otu
 
+import haliax
 from haliax.nn import Linear
 
 from levanter.optim.config import OptimizerConfig
