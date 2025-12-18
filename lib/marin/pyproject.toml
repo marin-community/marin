@@ -25,6 +25,7 @@ dependencies = [
     "google-cloud-storage",
     "google-cloud-storage-transfer",
     "jax==0.8.0",  # vllm-tpu currently requires this exact version
+    "jaxopt>=0.8.3",
     "haliax",
     "levanter[serve]",
     "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
