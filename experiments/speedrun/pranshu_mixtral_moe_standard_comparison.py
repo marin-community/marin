@@ -19,9 +19,9 @@
 import logging
 
 from experiments.simple_train_config import SimpleTrainConfig
+from fray.cluster import ResourceConfig
 from levanter.models.mixtral import MixtralConfig
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 # Enable detailed logging
@@ -67,7 +67,7 @@ speedrun_config = SpeedrunConfig(
     description="Training a 300M parameter Mixtral-style MoE model on a TPU with standard ragged dot implementation",
     model_config=moe_300m_config,
     train_config=SimpleTrainConfig(
-        TpuPodConfig(tpu_type="v4-8"),
+        ResourceConfig.with_tpu("v4-8", slice_count=1),
         train_batch_size=256,
         num_train_steps=4000,
         learning_rate=5e-4,

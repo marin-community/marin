@@ -23,6 +23,7 @@ from haliax.jax_utils import maybe_rng_split, shaped_rng_split
 from haliax.nn.scan import BlockSeq, Stacked
 
 from experiments.simple_train_config import SimpleTrainConfig
+from fray.cluster import ResourceConfig
 from levanter.layers.attention import Attention
 from levanter.models.llama import LlamaEmbedding, LlamaMlp
 from levanter.models.mixtral import (
@@ -35,7 +36,6 @@ from levanter.models.mixtral import (
 )
 from levanter.utils.activation import ActivationFunctionEnum
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
@@ -206,7 +206,7 @@ speedrun_config = SpeedrunConfig(
     description="Training a 300M parameter Mixtral-style MoE model on a TPU with GMM (Grouped Matrix Multiply)",
     model_config=moe_300m_config,
     train_config=SimpleTrainConfig(
-        TpuPodConfig(tpu_type="v4-8"),
+        ResourceConfig.with_tpu("v4-8", slice_count=1),
         train_batch_size=256,
         num_train_steps=4000,
         learning_rate=5e-4,

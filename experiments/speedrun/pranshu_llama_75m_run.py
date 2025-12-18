@@ -19,8 +19,8 @@ import logging
 
 from experiments.llama import llama_75m
 from experiments.simple_train_config import SimpleTrainConfig
+from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 
 logger = logging.getLogger("ray")
@@ -37,7 +37,7 @@ speedrun_config = SpeedrunConfig(
     description="Training Llama 75M on a TPU v4-8 for the speedrun.",
     model_config=llama_75m_tpu_v4_8,
     train_config=SimpleTrainConfig(
-        TpuPodConfig(tpu_type="v4-8"),
+        ResourceConfig.with_tpu("v4-8", slice_count=1),
         train_batch_size=512,
         num_train_steps=3000,
         learning_rate=3e-4,
