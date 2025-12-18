@@ -20,20 +20,17 @@ as a lightweight scaffold for ISOFlop scaling law experiments.
 """
 
 import dataclasses
-import os
 from dataclasses import dataclass, replace
 
 from levanter.data.text import LMMixtureDatasetConfig
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
-from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
 
 from experiments.evals.evals import default_eval
-from experiments.evals.task_configs import MMLU_5_SHOT, EvalTaskConfig
+from experiments.evals.task_configs import EvalTaskConfig
 from experiments.common_pile.tokenize_common_pile import comma_main_mixture
 from experiments.defaults import default_tokenize, default_train
-from experiments.llama import compute_num_parameters, llama3_tokenizer
+from experiments.llama import llama3_tokenizer
 from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
 from experiments.pretraining_datasets.simple import downloads
 from experiments.simple_train_config import SimpleTrainConfig
@@ -43,14 +40,13 @@ from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.processing.tokenize import lm_mixture_data_config
 from marin.scaling_laws.isoflop_analysis import (
     CandidateConfig,
-    DEFAULT_BUDGETS,
     IsoFlopSweepConfig,
-    candidate_configs,
-    pick_v5p_type,
+    IsoFlopTrainArgs,
+    generate_isoflop_train_args,
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class IsoFlopExperimentConfig(IsoFlopSweepConfig):
     """Extended config for isoflop experiments with dataset and eval settings.
 
@@ -94,24 +90,15 @@ class IsoFlopExperimentConfig(IsoFlopSweepConfig):
     )
 
 
-def _pick_v5p_type_for_model(
-    config: Qwen3Config,
-    hidden: int,
-    layers: int,
-    batch: int,
-    seq_len: int,
-    vocab: int,
-) -> str:
-    """Select the smallest TPU v5p slice that fits the model in float32."""
-    param_count = compute_num_parameters(config, vocab)
-    return pick_v5p_type(param_count, hidden, layers, batch, seq_len, vocab)
-
-
 def generate_isoflop_steps(
     config: IsoFlopExperimentConfig,
     experiment_name: str,
 ) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
     """Generate executor steps for an ISOFlop sweep.
+
+    Uses generate_isoflop_train_args() from the scaling_laws library to get
+    model configs, optimizer configs, and other arguments, then constructs
+    ExecutorSteps using default_train().
 
     Returns:
         A tuple of:
@@ -119,82 +106,54 @@ def generate_isoflop_steps(
         - candidates: CandidateConfig for each training run (contains budget, hidden_size,
           num_layers, batch_size, train_steps, learning_rate, etc.)
     """
+    vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
+
+    # Get training arguments from the library
+    train_args_list = generate_isoflop_train_args(
+        sweep_config=config,
+        experiment_name=experiment_name,
+        vocab_size=vocab_size,
+        base_optimizer_config=config.base_optimizer_config,
+    )
 
     train_steps_list: list[ExecutorStep] = []
     eval_steps: list[ExecutorStep] = []
     candidates: list[CandidateConfig] = []
-    vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
 
-    for budget in config.budgets:
-        for candidate in candidate_configs(config, budget, vocab_size):
-            model_cfg = Qwen3Config(
-                max_seq_len=config.seq_len,
-                hidden_dim=candidate.hidden_size,
-                intermediate_dim=candidate.intermediate_dim,
-                num_heads=candidate.num_heads,
-                num_kv_heads=candidate.num_kv_heads,
-                num_layers=candidate.num_layers,
-                rope=Llama3RotaryEmbeddingsConfig(),
-            )
-            tpu_type = _pick_v5p_type_for_model(
-                config=model_cfg,
-                hidden=candidate.hidden_size,
-                layers=candidate.num_layers,
-                batch=candidate.batch_size,
-                seq_len=config.seq_len,
-                vocab=vocab_size,
-            )
-            optimizer_cfg = replace(
-                config.base_optimizer_config,
-                learning_rate=candidate.learning_rate,
-                beta2=candidate.beta2,
-            )
-            train_cfg = replace(
-                config.base_train_config,
-                train_batch_size=candidate.batch_size,
-                learning_rate=candidate.learning_rate,
-                num_train_steps=candidate.train_steps,
-                resources=ResourceConfig.with_tpu(tpu_type),
-                optimizer_config=optimizer_cfg,
-            )
+    for args in train_args_list:
+        # Build SimpleTrainConfig from the library-provided arguments
+        train_cfg = replace(
+            config.base_train_config,
+            train_batch_size=args.candidate.batch_size,
+            learning_rate=args.candidate.learning_rate,
+            num_train_steps=args.candidate.train_steps,
+            resources=ResourceConfig.with_tpu(args.tpu_type),
+            optimizer_config=args.optimizer_config,
+        )
 
-            run_name = (
-                f"isoflop-{budget:.0e}-d{candidate.hidden_size}-"
-                f"L{candidate.num_layers}-B{candidate.batch_size}-{experiment_name}"
-            )
-            train_step = default_train(
-                name=run_name,
-                tokenized=config.tokenized_dataset,
-                model_config=model_cfg,
-                train_config=train_cfg,
-                eval_harness_tasks=[],
-                tags=(
-                    f"FLOPs={budget:.1e}",
-                    f"d={candidate.hidden_size}",
-                    f"L={candidate.num_layers}",
-                    f"B={candidate.batch_size}",
-                    f"steps={candidate.train_steps}",
-                    f"tpu={tpu_type}",
-                ),
-            )
-            candidates.append(candidate)
-            # Reuse checkpoints by pinning every sweep run to a deterministic directory.
-            static_output_path = os.path.join(
-                "checkpoints",
-                "isoflop",
-                run_name,
-            )
-            train_step = train_step.with_output_path(static_output_path)
-            train_steps_list.append(train_step)
+        # Create training step using default_train
+        train_step = default_train(
+            name=args.run_name,
+            tokenized=config.tokenized_dataset,
+            model_config=args.model_config,
+            train_config=train_cfg,
+            eval_harness_tasks=[],
+            tags=args.tags,
+        )
 
-            # Evaluation on the latest checkpoint for each ISOFlop run.
-            if config.eval_tasks:
-                eval_step = default_eval(
-                    train_step,
-                    resource_config=train_cfg.resources,
-                    evals=config.eval_tasks,
-                )
-                eval_steps.append(eval_step)
+        # Pin to static output path for checkpoint reuse
+        train_step = train_step.with_output_path(args.output_path)
+        train_steps_list.append(train_step)
+        candidates.append(args.candidate)
+
+        # Evaluation on the latest checkpoint for each ISOFlop run
+        if config.eval_tasks:
+            eval_step = default_eval(
+                train_step,
+                resource_config=train_cfg.resources,
+                evals=config.eval_tasks,
+            )
+            eval_steps.append(eval_step)
 
     all_steps: list[ExecutorStep] = [*train_steps_list, *eval_steps]
     return all_steps, candidates

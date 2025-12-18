@@ -12,69 +12,60 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Exp2166: IsoFLOP Analysis and Scaling Ladders for Nemotron, Comma, and Dolma3.
+"""Exp2166: Scaling Ladder Analysis for Nemotron and Dolma3.
 
-This experiment runs IsoFLOP analysis on the isoflop training sweeps
-for three datasets:
+This experiment runs scaling ladder analysis on the isoflop training sweeps
+for two datasets:
 - Nemotron (nemo-wider-depth-adapt)
-- Common Pile / Comma (comma-mix)
 - Dolma3 (dolma3-mix-150b-1025)
 
-The IsoFLOP analysis fits scaling laws to find compute-optimal configurations and
-generates visualization plots. It also demonstrates scaling ladder runs (compute-optimal
-training runs) that use the predicted configurations.
+The scaling ladder:
+1. Fits scaling laws from IsoFLOP sweep data to find compute-optimal configurations
+2. Generates visualization plots (isoflop curves and scaling fit plots)
+3. Optionally trains compute-optimal models at larger target budgets
+
+The analysis steps depend on completed isoflop training runs from isoflop_sweep.py.
+Once complete, results are saved to the output path and uploaded to WandB.
 """
 
-from experiments.isoflop_sweep import MARIN_SCALING_SUITES, nemotron_mix, dolma3_mix
+from experiments.isoflop_sweep import MARIN_SCALING_SUITES, dolma3_mix, nemotron_mix
 from marin.execution.executor import executor_main
-from marin.scaling_laws import isoflop_analysis_step, scaling_ladder_suite
+from marin.scaling_laws import scaling_ladder_suite
 
-# Get training steps for each dataset (eval_tasks=None by default, so only training steps)
+# Get training steps and datasets for each suite
 nemotron_training, _ = MARIN_SCALING_SUITES["nemotron"]
-comma_training, _ = MARIN_SCALING_SUITES["common_pile"]
 dolma3_training, _ = MARIN_SCALING_SUITES["dolma3_mix_150b"]
 
 
-# --- IsoFLOP analysis-only steps (no scaling ladder rungs) ---
+# --- Scaling Ladder Suites ---
+# These analyze completed isoflop training runs and optionally train compute-optimal models
 
-nemotron_analysis = isoflop_analysis_step(
-    name="exp2166-isoflop-analysis-nemotron",
-    training_runs=nemotron_training,
-    wandb_run_name="exp2166-isoflop-analysis-nemotron",
-)
-
-
-dolma3_analysis = isoflop_analysis_step(
-    name="exp2166-isoflop-analysis-dolma3",
-    training_runs=dolma3_training,
-    wandb_run_name="exp2166-isoflop-analysis-dolma3",
-)
+# Target budgets for compute-optimal training runs (beyond the isoflop sweep)
+# Set to empty list to only run analysis without training
+TARGET_BUDGETS: list[float] = []
 
 
-# --- Full scaling ladder suites ---
-# These create IsoFLOP analysis + scaling ladder rungs (optimal training runs) for target budgets
-
-# Nemotron suite: analyze isoflop runs, then train optimal models at larger budgets
 nemotron_suite = scaling_ladder_suite(
-    name="exp2166-nemo",
+    name="exp2166-scaling-ladder-nemotron",
     training_runs=nemotron_training,
-    target_budgets=[1e21, 3e21],
-    label="nemo",
-    dataset=nemotron_mix,
+    target_budgets=TARGET_BUDGETS,
+    label="nemo-wider-depth-adapt",
+    tokenized=nemotron_mix,
+    wandb_project="marin-analysis",
 )
 
 
-# Dolma3 suite
 dolma3_suite = scaling_ladder_suite(
-    name="exp2166-dolma3",
+    name="exp2166-scaling-ladder-dolma3",
     training_runs=dolma3_training,
-    target_budgets=[1e21, 3e21],
-    label="dolma3",
-    dataset=dolma3_mix,
+    target_budgets=TARGET_BUDGETS,
+    label="dolma3-mix-150b-1025",
+    tokenized=dolma3_mix,
+    wandb_project="marin-analysis",
 )
 
 
-all_steps = [nemotron_analysis, dolma3_analysis, *nemotron_suite.all_steps, *dolma3_suite.all_steps]
+all_steps = [*nemotron_suite.all_steps, *dolma3_suite.all_steps]
 
 if __name__ == "__main__":
     executor_main(steps=all_steps)
