@@ -838,7 +838,7 @@ def infer_conditioner_sharding(p_shape, max_precond_dim: int, one_diag: bool):
         return [PartitionSpec()]
 
     # sharding purpose
-    mesh = hax.partitioning._get_mesh()
+    mesh = jax._src.mesh.get_concrete_mesh()
     if mesh.devices.shape == ():
         mesh = None
     # get fsdp mesh axis
@@ -869,7 +869,7 @@ def init_conditioner(p_shape, max_precond_dim: int, dtype: Optional[Union[str, j
         return ([jnp.zeros((p_shape[0], p_shape[0]), dtype=dtype)], [PartitionSpec()])
 
     # sharding purpose
-    mesh = hax.partitioning._get_mesh()
+    mesh = jax._src.mesh.get_concrete_mesh()
     if mesh.devices.shape == ():
         mesh = None
     # get fsdp mesh axis
