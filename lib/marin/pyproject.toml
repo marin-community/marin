@@ -66,6 +66,8 @@ test = [
     # need this for integration tests
     "pip",
     "openai-responses",
+    # for scaling law plotting tests
+    "plotly",
 ]
 lint = [
     "ruff==0.14.3",
