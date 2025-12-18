@@ -333,6 +333,115 @@ dclm_200m_sorted_tokenized_validation = default_tokenize(
     is_validation=True,
 )
 
+dclm_200m_tsp_train = default_download(
+    name="raw/data_efficiency/dclm_200m_tsp_train",
+    hf_dataset_id="konwoo/dclm-train-164k-tsp",
+    revision="8d03be0",
+    override_output_path="raw/data_efficiency/dclm_200m_tsp_train",
+)
+
+dclm_200m_tsp_tokenized_train = default_tokenize(
+    name="data_efficiency/dclm_200m_tsp_train",
+    dataset=dclm_200m_tsp_train,
+    tokenizer=llama3_tokenizer,
+)
+
+dclm_200m_tsp_validation = default_download(
+    name="raw/data_efficiency/dclm_200m_tsp_val",
+    hf_dataset_id="konwoo/dclm-val-1k-tsp-s50-d20",
+    revision="99657fd",
+    override_output_path="raw/data_efficiency/dclm_200m_tsp_val",
+)
+
+dclm_200m_tsp_tokenized_validation = default_tokenize(
+    name="data_efficiency/dclm_200m_tsp_val",
+    dataset=dclm_200m_tsp_validation,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
+dclm_200m_tsp_validation_shuffled = default_download(
+    name="raw/data_efficiency/dclm_200m_tsp_val_shuffled",
+    hf_dataset_id="konwoo/dclm-val-1k-tsp-s50-d20-shuffled",
+    revision="c93c775",
+    override_output_path="raw/data_efficiency/dclm_200m_tsp_val_shuffled",
+)
+
+dclm_200m_tsp_tokenized_validation_shuffled = default_tokenize(
+    name="data_efficiency/dclm_200m_tsp_val_shuffled",
+    dataset=dclm_200m_tsp_validation_shuffled,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
+## 10x dense TSP data
+
+dclm_train_164k_t10x_tsp_d20 = default_download(
+    name="raw/data_efficiency/dclm_train_164k_t10x_tsp_d20",
+    hf_dataset_id="konwoo/dclm-train-164k-t10x-tsp-d20",
+    revision="a60ffef",
+    override_output_path="raw/data_efficiency/dclm_train_164k_t10x_tsp_d20",
+)
+
+dclm_train_164k_t10x_tsp_d20_tokenized = default_tokenize(
+    name="data_efficiency/dclm_train_164k_t10x_tsp_d20",
+    dataset=dclm_train_164k_t10x_tsp_d20,
+    tokenizer=llama3_tokenizer,
+)
+
+dclm_train_164k_t10x_tsp_d20_shuffled = default_download(
+    name="raw/data_efficiency/dclm_train_164k_t10x_tsp_d20_shuffled",
+    hf_dataset_id="konwoo/dclm-train-164k-t10x-tsp-d20-shuffled",
+    revision="1adda8f",
+    override_output_path="raw/data_efficiency/dclm_train_164k_t10x_tsp_d20_shuffled",
+)
+
+dclm_train_164k_t10x_tsp_d20_shuffled_tokenized = default_tokenize(
+    name="data_efficiency/dclm_train_164k_t10x_tsp_d20_shuffled",
+    dataset=dclm_train_164k_t10x_tsp_d20_shuffled,
+    tokenizer=llama3_tokenizer,
+)
+
+dclm_val_1k_t10x_tsp_d20 = default_download(
+    name="raw/data_efficiency/dclm_val_1k_t10x_tsp_d20",
+    hf_dataset_id="konwoo/dclm-val-1k-t10x-tsp-d20",
+    revision="2d0cdf2",
+    override_output_path="raw/data_efficiency/dclm_val_1k_t10x_tsp_d20",
+)
+
+dclm_val_1k_t10x_tsp_d20_tokenized = default_tokenize(
+    name="data_efficiency/dclm_val_1k_t10x_tsp_d20",
+    dataset=dclm_val_1k_t10x_tsp_d20,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
+dclm_val_1k_t10x_tsp_d20_shuffled = default_download(
+    name="raw/data_efficiency/dclm_val_1k_t10x_tsp_d20_shuffled",
+    hf_dataset_id="konwoo/dclm-val-1k-t10x-tsp-d20-shuffled",
+    revision="5113f9e",
+    override_output_path="raw/data_efficiency/dclm_val_1k_t10x_tsp_d20_shuffled",
+)
+
+dclm_val_1k_t10x_tsp_d20_shuffled_tokenized = default_tokenize(
+    name="data_efficiency/dclm_val_1k_t10x_tsp_d20_shuffled",
+    dataset=dclm_val_1k_t10x_tsp_d20_shuffled,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
+dclm_train_164k_t10x_shuffled = default_download(
+    name="raw/data_efficiency/dclm_train_164k_t10x_shuffled",
+    hf_dataset_id="konwoo/dclm-train-164k-t10x-shuffled",
+    revision="e8b08b4",
+    override_output_path="raw/data_efficiency/dclm_train_164k_t10x_shuffled",
+)
+
+dclm_train_164k_t10x_shuffled_tokenized = default_tokenize(
+    name="data_efficiency/dclm_train_164k_t10x_shuffled",
+    dataset=dclm_train_164k_t10x_shuffled,
+    tokenizer=llama3_tokenizer,
+)
 
 data_dict = {
     "dclm": dclm_tokenized,
@@ -362,4 +471,15 @@ data_dict = {
     "dclm_200m_shuffled_val": dclm_200m_shuffled_tokenized_validation,
     "dclm_200m_sorted": dclm_200m_sorted_tokenized_train,
     "dclm_200m_sorted_val": dclm_200m_sorted_tokenized_validation,
+    # tsp based dclm data
+    "dclm_tsp": dclm_200m_tsp_tokenized_train,
+    "dclm_tsp_val": dclm_200m_tsp_tokenized_validation,
+    "dclm_tsp_val_shuffled": dclm_200m_tsp_tokenized_validation_shuffled,
+    "dclm_shuffled": dclm_200m_shuffled_tokenized_train,
+    # 10x dense TSP data
+    "dc_t10x": dclm_train_164k_t10x_tsp_d20_tokenized,
+    "dc_t10x_shuffled": dclm_train_164k_t10x_tsp_d20_shuffled_tokenized,
+    "dc_t10x_val": dclm_val_1k_t10x_tsp_d20_tokenized,
+    "dc_t10x_val_shuffled": dclm_val_1k_t10x_tsp_d20_shuffled_tokenized,
+    "dc_shuffled": dclm_train_164k_t10x_shuffled_tokenized,
 }

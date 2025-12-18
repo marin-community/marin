@@ -30,6 +30,12 @@ val_name_dict = {
     "dclm_200m_shuffled": ["dclm_200m_sorted_val", "dclm_200m_shuffled_val"],
     "mn_lc": ["mn_lc_val", "mn_split_val"],
     "mn_split": ["mn_lc_val", "mn_split_val"],
+    "dclm_tsp": ["dclm_tsp_val", "dclm_tsp_val_shuffled"],
+    "dclm_shuffled": ["dclm_200m_sorted_val", "dclm_200m_shuffled_val", "dclm_tsp_val", "dclm_tsp_val_shuffled"],
+    "dclm": None,
+    "dc_t10x": ["dc_t10x_val", "dc_t10x_val_shuffled"],
+    "dc_t10x_shuffled": ["dc_t10x_val", "dc_t10x_val_shuffled"],
+    "dc_shuffled": ["dc_t10x_val", "dc_t10x_val_shuffled"],
 }
 
 train_steps = [
@@ -55,13 +61,13 @@ train_steps = [
 
     ###### Pick one of convex mode or standard mode ######
     # ## Convex mode
-    #     for base_train_steps, epochs, lr, weight_decay, model_name in get_bounding_box(base_train_steps_center, epochs_center, lr_center, weight_decay_center, model_name_center)
-    # ]
-    # for base_train_steps_center, epochs_center, lr_center, weight_decay_center, model_name_center, batch_size, train_seq_len in [
+       for base_train_steps, epochs, lr, weight_decay, model_name in get_bounding_box(base_train_steps_center, epochs_center, lr_center, weight_decay_center, model_name_center)
+    ]
+    for base_train_steps_center, epochs_center, lr_center, weight_decay_center, model_name_center, batch_size, train_seq_len in [
 
     ## Standard mode
-    ]
-    for base_train_steps, epochs, lr, weight_decay, model_name, batch_size, train_seq_len in [
+    # ]
+    # for base_train_steps, epochs, lr, weight_decay, model_name, batch_size, train_seq_len in [
 
     ###### Pick which data to train with ######
     ## DCLM
@@ -71,8 +77,10 @@ train_steps = [
         # (750, 16, 3e-3, 1.6, "300m4k", 128, 2048),
         (750, 16, 3e-3, 1.6, "300m4k", 64, 4096),
     ]
-    for train_data_name in ["dclm_200m_shuffled"]
+    for train_data_name in ["dc_t10x", "dc_t10x_shuffled", "dc_shuffled"]
+    # for train_data_name in ["dclm_shuffled"]
     for block_cross_document_attention, nametag in [
+        # (False, "-tspv"),
         (False, ""),
         (True, ""),
     ]
