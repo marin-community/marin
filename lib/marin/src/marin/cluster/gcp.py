@@ -298,38 +298,3 @@ def terminate_head_node(cluster_name: str, project: str, zone: str) -> str | Non
     except Exception as e:
         logger.error(f"Failed to terminate head node {head_name}: {e}")
         raise
-
-
-def cleanup_preempted_tpus(project: str, zone: str, dry_run: bool = False) -> list[str]:
-    """Clean up preempted or terminated TPU nodes."""
-    nodes = list_tpu_nodes(project, zone)
-    preempted_nodes = []
-
-    logger.info(f"Found {len(nodes)} TPU nodes in zone {zone} for project {project}.")
-
-    for node in nodes:
-        state = node.get("state")
-        if state in ["PREEMPTED", "TERMINATED"]:
-            node_name = node.get("name", "").split("/")[-1]
-            logger.info(f"Found {'preempted' if state == 'PREEMPTED' else 'terminated'} TPU: {node_name}")
-            preempted_nodes.append(node_name)
-
-    if dry_run:
-        for node_name in preempted_nodes:
-            logger.info(f"(Dry run) Would delete TPU node: {node_name}")
-        return preempted_nodes
-
-    with ThreadPoolExecutor(max_workers=16) as executor:
-        future_to_node = {
-            executor.submit(delete_tpu_node, node_name, project, zone, True): node_name for node_name in preempted_nodes
-        }
-
-        for future in as_completed(future_to_node):
-            node_name = future_to_node[future]
-            try:
-                future.result()
-                logger.info(f"Deleted TPU node: {node_name}")
-            except Exception as e:
-                logger.error(f"Failed to delete TPU node {node_name}: {e}")
-
-    return preempted_nodes

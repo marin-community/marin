@@ -115,12 +115,6 @@ conflicts = [
     ],
 ]
 
-[tool.uv.sources]
-zephyr = { workspace = true }
-levanter = { workspace = true }
-fray = { workspace = true }
-dupekit = { workspace = true }
-
 torch = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra="cpu" },
