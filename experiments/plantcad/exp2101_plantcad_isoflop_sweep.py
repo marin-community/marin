@@ -63,17 +63,28 @@ def simulated_epoch_train(
     tags: Sequence[str] = (),
     use_default_validation: bool = False,
     eval_harness_tasks: Sequence[EvalTaskConfig] = (),
+    complement_map: tuple[int, ...] | None = None,
 ) -> ExecutorStep:
     """Train with simulated epoching. When epoch_count=1, uses full dataset."""
     if not isinstance(epoch_count, int) or epoch_count < 1:
         raise ValueError(f"epoch_count must be int >= 1, got {epoch_count}")
 
+    pretraining_data = _prepare_data_config(tokenized, use_default_validation)
+
+    # Enable reverse-complement augmentation if complement_map is provided
+    if complement_map is not None:
+        pretraining_data = dataclasses.replace(pretraining_data, complement_map=complement_map)
+
     if epoch_count == 1:
         return default_train(
-            name, tokenized, model_config, train_config, tags, use_default_validation, eval_harness_tasks
+            name,
+            tokenized=pretraining_data,
+            model_config=model_config,
+            train_config=train_config,
+            tags=tags,
+            use_default_validation=use_default_validation,
+            eval_harness_tasks=eval_harness_tasks,
         )
-
-    pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
     # To use simulated epoching in Levanter, we need to first address the fact that
     # we are already limiting training to less than 1 true epoch in each run.
@@ -146,6 +157,10 @@ class IsoFlopTokenizeConfig(TokenizeConfig):
     tokenizer: str = versioned("kuleshov-group/PlantCAD2-Small-l24-d0768")
     format: TextLmDatasetFormat = dataclasses.field(default_factory=lambda: TextLmDatasetFormat(text_key="seq"))
     vocab_size: int = 7
+    # DNA complement map for reverse-complement augmentation.
+    # Maps token IDs to their complements: A↔T (3↔6), C↔G (4↔5), special tokens unchanged.
+    # From: https://huggingface.co/kuleshov-group/PlantCAD2-Small-l24-d0768/blob/main/config.json
+    complement_map: tuple[int, ...] = (0, 1, 2, 6, 5, 4, 3, 7)
 
 
 @dataclass(frozen=True)
@@ -156,13 +171,12 @@ class IsoFlopSweepConfig:
     total_token_count: int
     output_seq_len: int
     input_seq_len: int
-    experiment_name: str = "plantcad_isoflop_v1.0"
-
+    experiment_name: str = "plantcad_isoflop_v1.1"
+    complement_map: tuple[int, ...] | None = None
     budgets: list[float] = dataclasses.field(
         default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
     )
     epochs: list[int] = dataclasses.field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
-
     architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen"])
     steps_per_run: int = 8_192
     per_device_eval_parallelism: int = 512
@@ -551,7 +565,9 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
                 f"params={param_count}",
                 f"tokens={c.train_tokens}",
                 f"epochs={c.epoch_count}",
+                f"complement_map={config.complement_map is not None}",
             ),
+            complement_map=config.complement_map,
         )
         steps.append(step)
 
@@ -659,6 +675,7 @@ def main():
         total_token_count=plantcad_prepared.config.total_token_count,
         output_seq_len=plantcad_prepared.config.output_seq_len,
         input_seq_len=plantcad_prepared.config.input_seq_len,
+        complement_map=plantcad_tokenized.config.complement_map,
     )
 
     # Execute in batches of 32 sweep steps to avoid head node OOM errors.
