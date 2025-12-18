@@ -51,7 +51,6 @@ optimizer:
   weight_decay: 0.05
   weight_decay_modules: null
 trainer:
-  axis_resources: {}
   checkpointer:
     append_run_id_to_base_path: false
     base_path: gs://levanter-checkpoints/checkpoints/llama-8b-tootsie-0.001-19ad63/checkpoints
@@ -70,7 +69,6 @@ trainer:
   max_eval_batches: null
   mp: compute=bfloat16,params=float32,output=bfloat16
   num_train_steps: 10000
-  parameter_axis_resources: {}
   per_device_eval_parallelism: 2
   per_device_parallelism: 2
   profiler: false

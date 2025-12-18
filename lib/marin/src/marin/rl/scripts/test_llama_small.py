@@ -93,8 +93,6 @@ def llama_small_trainer_config(output_dir: str) -> TrainerConfig:
             base_path=output_dir,
             save_interval=datetime.timedelta(seconds=600),
         ),
-        fsdp_axis="embed",
-        batch_axis="batch",
         ray=RayConfig(auto_start_cluster=False),
     )
 

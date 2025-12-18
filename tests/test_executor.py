@@ -141,6 +141,25 @@ def test_executor():
     cleanup_log(log)
 
 
+def test_status_file_reads_legacy_format(tmp_path):
+    output_dir = tmp_path / "step"
+    output_dir.mkdir()
+    status_path = output_dir / ".executor_status"
+
+    events = [
+        {"date": "2024-09-28T13:29:20.780705", "status": "WAITING", "message": None},
+        {"date": "2024-09-28T13:29:21.091470", "status": "RUNNING", "message": None},
+        {"date": "2024-09-28T13:29:47.559614", "status": "SUCCESS", "message": None},
+    ]
+
+    with open(status_path, "w") as f:
+        for event in events:
+            f.write(json.dumps(event) + "\n")
+
+    status_file = StatusFile(str(output_dir), worker_id="legacy-reader")
+    assert status_file.status == "SUCCESS"
+
+
 def test_force_run_failed():
     log = create_log()
 

@@ -48,3 +48,13 @@ def test_axis_shapes_multiple_dcn_absorbers_error():
     cfg = MeshConfig(dcn_axes={"replica_dcn": -1, "other": -1})
     with pytest.raises(ValueError):
         cfg.axis_shapes(num_devices=8, num_slices=2)
+
+
+def test_resolved_param_mapping_inherits_shared():
+    cfg = MeshConfig()
+    # shared mapping defaults map mlp/heads to model
+    mapping = cfg.resolved_param_mapping
+    assert mapping["mlp"] == "model"
+    assert mapping["heads"] == "model"
+    # embed should come from the default param_mapping override
+    assert mapping["embed"] == "data"

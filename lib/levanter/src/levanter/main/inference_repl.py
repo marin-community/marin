@@ -53,6 +53,7 @@ from levanter.inference.openai import (
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
+from levanter.utils.mesh import MeshConfig
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -145,7 +146,7 @@ class InferenceReplConfig:
             mp=jmp.get_policy("p=f32,c=f32"),
             mesh=MeshConfig(
                 axes={"model": 1},
-                shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
+                shared_mapping={"mlp": "model", "heads": "model"},
             ),
         )
     )

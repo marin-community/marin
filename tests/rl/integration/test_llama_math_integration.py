@@ -117,8 +117,6 @@ def test_llama_math_integration(tmp_path):
             save_interval=datetime.timedelta(seconds=600),
         ),
         mesh=MeshConfig(axes={"model": 2}),
-        fsdp_axis="embed",
-        batch_axis="batch",
         ray=RayConfig(auto_start_cluster=False),
     )
 
