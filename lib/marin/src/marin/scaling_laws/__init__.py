@@ -18,7 +18,10 @@ from marin.scaling_laws.isoflop_analysis import (
     IsoFlopAnalysisConfig,
     IsoFlopAnalysisResult,
     IsoFlopSweepConfig,
+    IsoFlopTrainArgs,
     candidate_configs,
+    compute_transformer_params,
+    generate_isoflop_train_args,
     isoflop_analysis_step,
     pick_v5p_type,
     predict_optimal_config,
@@ -31,9 +34,12 @@ from marin.scaling_laws.scaling_ladder import (
     scaling_ladder_rung_step,
     scaling_ladder_suite,
 )
-
-# Plotting functions are imported separately to avoid plotly dependency in core module
-# from marin.scaling_laws.scaling_plots import create_isoflop_plot, create_scaling_plot, save_plots
+from marin.scaling_laws.scaling_plots import (
+    create_isoflop_plot,
+    create_scaling_plot,
+    save_plots,
+    upload_plots_to_wandb,
+)
 
 __all__ = [
     # Primary interface (ExecutorStep factories)
@@ -42,18 +48,26 @@ __all__ = [
     "scaling_ladder_rung_step",
     # Programmatic interface
     "run_isoflop_analysis",
+    "generate_isoflop_train_args",
     # Dataclasses
     "CandidateConfig",
     "IsoFlopAnalysisConfig",
     "IsoFlopAnalysisResult",
     "IsoFlopSweepConfig",
+    "IsoFlopTrainArgs",
     "ScalingLadderSuite",
     "ScalingLadderRungConfig",
     # Constants
     "DEFAULT_BUDGETS",
     # Utilities
     "candidate_configs",
+    "compute_transformer_params",
     "pick_v5p_type",
     "predict_optimal_config",
     "predict_optimal_configs_for_budgets",
+    # Plotting functions
+    "create_isoflop_plot",
+    "create_scaling_plot",
+    "save_plots",
+    "upload_plots_to_wandb",
 ]

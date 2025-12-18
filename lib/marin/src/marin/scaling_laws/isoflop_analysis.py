@@ -37,13 +37,18 @@ import math
 import os
 import re
 from collections.abc import Iterator, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 import fsspec
 import jax.numpy as jnp
 import pandas as pd
 from jaxopt import ScipyMinimize
 from levanter.utils.flop_utils import lm_flops_per_token
+
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.models.qwen import Qwen3Config
+from levanter.optim.cautious import CautiousConfig
+from levanter.optim.config import OptimizerConfig
 
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 from marin.scaling_laws.eval_metrics_reader import (
@@ -58,11 +63,24 @@ logger = logging.getLogger(__name__)
 # ---------------- Constants ----------------
 DEFAULT_METRIC_KEY = "eval/paloma/c4_en/bpb"
 SEQ_LEN = 4096
-CANON_LABELS = ["nemo", "comma", "dclm"]
+
+# Marin tokenizer vocab size (stanford-crfm/marin-tokenizer)
+MARIN_TOKENIZER_VOCAB_SIZE = 128256
 
 # ---------------- IsoFLOP Sweep Constants ----------------
-DEFAULT_BUDGETS = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
+DEFAULT_BUDGETS: tuple[float, ...] = (1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20)
 MLP_RATIO = 4
+
+# Learning rate scaling: lr = LR_CONSTANT * sqrt(batch_size) / hidden_dim
+LR_CONSTANT = 0.33
+
+# Head size for attention: num_heads = hidden_dim / HIDDEN_HEAD_RATIO
+HIDDEN_HEAD_RATIO = 128
+
+# Beta2 scaling for Adam: beta2 = BETA2_BASE ** (batch_size / BETA2_BATCH_DIVISOR)
+# Reference: https://arxiv.org/pdf/2507.07101
+BETA2_BASE = 0.98
+BETA2_BATCH_DIVISOR = 128
 
 # TPU v5p hardware constants for memory estimation
 HBM_PER_CHIP_GIB = 95
@@ -71,7 +89,7 @@ V5P_CORE_OPTIONS = [8, 16, 32, 128, 256, 512]
 
 
 # ---------------- IsoFLOP Sweep Config ----------------
-@dataclass
+@dataclass(frozen=True)
 class IsoFlopSweepConfig:
     """Configuration for generating ISOFlop sweep candidate configs.
 
@@ -82,10 +100,10 @@ class IsoFlopSweepConfig:
     tokenizer: str = "stanford-crfm/marin-tokenizer"
     """Tokenizer to use (needed for vocab size)."""
 
-    budgets: list[float] = field(default_factory=lambda: DEFAULT_BUDGETS.copy())
-    """List of FLOP budgets to generate configs for."""
+    budgets: tuple[float, ...] = DEFAULT_BUDGETS
+    """Tuple of FLOP budgets to generate configs for."""
 
-    seq_len: int = 4096
+    seq_len: int = SEQ_LEN
     """Sequence length for training."""
 
     steps_per_run: int = 2**16
@@ -97,10 +115,10 @@ class IsoFlopSweepConfig:
     base_hidden_layer_ratio: int = 64
     """Base ratio for hidden_dim to num_layers calculation."""
 
-    hidden_head_ratio: int = 128
+    hidden_head_ratio: int = HIDDEN_HEAD_RATIO
     """Ratio for hidden_dim to num_heads calculation."""
 
-    lr_constant: float = 0.33
+    lr_constant: float = LR_CONSTANT
     """Constant for learning rate calculation: lr = (lr_constant * sqrt(batch)) / hidden_dim."""
 
     min_hidden_pow: int = 9
@@ -133,6 +151,37 @@ class CandidateConfig:
     beta2: float
     tokens: float  # total tokens = batch_size * train_steps * seq_len
     flops_budget: float = 0.0  # the FLOP budget this config was generated for
+
+
+@dataclass
+class IsoFlopTrainArgs:
+    """Arguments needed to set up an isoflop training run.
+
+    This dataclass contains all the information needed to call default_train()
+    for an isoflop sweep run. The caller is responsible for constructing the
+    experiment-specific SimpleTrainConfig from these arguments.
+    """
+
+    candidate: CandidateConfig
+    """The candidate configuration with model/training hyperparameters."""
+
+    model_config: Qwen3Config
+    """Levanter model configuration ready to use."""
+
+    optimizer_config: OptimizerConfig
+    """Levanter optimizer configuration with learning_rate and beta2 set."""
+
+    tpu_type: str
+    """TPU slice type (e.g., 'v5p-8', 'v5p-32')."""
+
+    run_name: str
+    """Name for the training run."""
+
+    tags: tuple[str, ...]
+    """Tags for tracking/filtering runs."""
+
+    output_path: str
+    """Static output path for checkpoints."""
 
 
 # ---------------- Candidate Config Generation ----------------
@@ -273,7 +322,7 @@ def candidate_configs(
         while lr > 0.01:
             batch_size //= 2
             lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
-        b2 = 0.98 ** (batch_size / 128)  # https://arxiv.org/pdf/2507.07101
+        b2 = BETA2_BASE ** (batch_size / BETA2_BATCH_DIVISOR)
 
         if batch_size < 8:
             continue
@@ -321,6 +370,171 @@ def candidate_configs(
             tokens=tokens,
             flops_budget=budget,
         )
+
+
+def compute_transformer_params(
+    hidden_dim: int,
+    intermediate_dim: int,
+    num_layers: int,
+    vocab_size: int,
+    num_kv_heads: int | None = None,
+    num_heads: int | None = None,
+) -> int:
+    """Compute parameter count for a transformer model.
+
+    This is a standard approximation for LLaMA-style models with:
+    - Embedding: vocab_size * hidden_dim
+    - Per layer: 4 * hidden_dim^2 (attention) + 3 * hidden_dim * intermediate_dim (MLP with GLU)
+    - Output: vocab_size * hidden_dim (shared with embedding in some models)
+    """
+    # Embedding parameters
+    embed_params = vocab_size * hidden_dim
+
+    # Attention parameters per layer: Q, K, V, O projections
+    # For GQA: Q = hidden * hidden, K = hidden * kv_dim, V = hidden * kv_dim, O = hidden * hidden
+    if num_kv_heads is not None and num_heads is not None:
+        head_dim = hidden_dim // num_heads
+        kv_dim = num_kv_heads * head_dim
+        attn_params_per_layer = (
+            hidden_dim * hidden_dim  # Q
+            + hidden_dim * kv_dim  # K
+            + hidden_dim * kv_dim  # V
+            + hidden_dim * hidden_dim  # O
+        )
+    else:
+        # Standard MHA: 4 * hidden^2
+        attn_params_per_layer = 4 * hidden_dim * hidden_dim
+
+    # MLP parameters per layer (GLU: gate, up, down)
+    mlp_params_per_layer = 3 * hidden_dim * intermediate_dim
+
+    # Layer norm parameters (2 per layer + 1 final)
+    ln_params = (2 * num_layers + 1) * hidden_dim
+
+    # Total
+    layer_params = (attn_params_per_layer + mlp_params_per_layer) * num_layers
+    total = embed_params + layer_params + ln_params
+
+    return total
+
+
+def generate_isoflop_train_args(
+    sweep_config: IsoFlopSweepConfig,
+    experiment_name: str,
+    vocab_size: int,
+    base_optimizer_config: OptimizerConfig | None = None,
+) -> list[IsoFlopTrainArgs]:
+    """Generate training arguments for each candidate in an isoflop sweep.
+
+    This function generates all the arguments needed to call default_train() for
+    each candidate configuration in the sweep. The caller is responsible for
+    constructing the experiment-specific SimpleTrainConfig.
+
+    Args:
+        sweep_config: Configuration for the sweep (budgets, seq_len, etc.)
+        experiment_name: Name suffix for run names (e.g., 'nemo', 'dclm')
+        vocab_size: Vocabulary size for the tokenizer
+        base_optimizer_config: Base optimizer config to modify. If None, uses CautiousConfig defaults.
+
+    Returns:
+        List of IsoFlopTrainArgs, one per candidate config across all budgets.
+
+    Example:
+        >>> from marin.scaling_laws import IsoFlopSweepConfig, generate_isoflop_train_args
+        >>> config = IsoFlopSweepConfig(budgets=(1e18, 1e19))
+        >>> train_args = generate_isoflop_train_args(config, "my-experiment", vocab_size=128256)
+        >>> for args in train_args:
+        ...     # Use args.model_config, args.optimizer_config, etc. with default_train()
+        ...     pass
+    """
+    if base_optimizer_config is None:
+        base_optimizer_config = CautiousConfig(
+            learning_rate=1.0,  # Placeholder, will be overridden
+            weight_decay=0.1,
+            min_lr_ratio=0.0,
+            warmup=0.1,
+            beta1=0.95,
+            beta2=0.98,  # Placeholder, will be overridden
+            epsilon=1e-15,
+            max_grad_norm=1,
+            adamc_weight_decay=True,
+            lr_schedule="linear",
+            decay=0.2,
+        )
+
+    results: list[IsoFlopTrainArgs] = []
+
+    for budget in sweep_config.budgets:
+        for candidate in candidate_configs(sweep_config, budget, vocab_size):
+            # Build model config
+            model_cfg = Qwen3Config(
+                max_seq_len=sweep_config.seq_len,
+                hidden_dim=candidate.hidden_size,
+                intermediate_dim=candidate.intermediate_dim,
+                num_heads=candidate.num_heads,
+                num_kv_heads=candidate.num_kv_heads,
+                num_layers=candidate.num_layers,
+                rope=Llama3RotaryEmbeddingsConfig(),
+            )
+
+            # Compute parameter count for TPU selection
+            param_count = compute_transformer_params(
+                hidden_dim=candidate.hidden_size,
+                intermediate_dim=candidate.intermediate_dim,
+                num_layers=candidate.num_layers,
+                vocab_size=vocab_size,
+                num_kv_heads=candidate.num_kv_heads,
+                num_heads=candidate.num_heads,
+            )
+
+            # Pick TPU type
+            tpu_type = pick_v5p_type(
+                param_count=param_count,
+                hidden=candidate.hidden_size,
+                layers=candidate.num_layers,
+                batch=candidate.batch_size,
+                seq_len=sweep_config.seq_len,
+                vocab=vocab_size,
+            )
+
+            # Build optimizer config with candidate-specific LR and beta2
+            optimizer_cfg = replace(
+                base_optimizer_config,
+                learning_rate=candidate.learning_rate,
+                beta2=candidate.beta2,
+            )
+
+            # Generate run name and tags
+            run_name = (
+                f"isoflop-{budget:.0e}-d{candidate.hidden_size}-"
+                f"L{candidate.num_layers}-B{candidate.batch_size}-{experiment_name}"
+            )
+
+            tags = (
+                f"FLOPs={budget:.1e}",
+                f"d={candidate.hidden_size}",
+                f"L={candidate.num_layers}",
+                f"B={candidate.batch_size}",
+                f"steps={candidate.train_steps}",
+                f"tpu={tpu_type}",
+            )
+
+            # Static output path for checkpoint reuse
+            output_path = os.path.join("checkpoints", "isoflop", run_name)
+
+            results.append(
+                IsoFlopTrainArgs(
+                    candidate=candidate,
+                    model_config=model_cfg,
+                    optimizer_config=optimizer_cfg,
+                    tpu_type=tpu_type,
+                    run_name=run_name,
+                    tags=tags,
+                    output_path=output_path,
+                )
+            )
+
+    return results
 
 
 # ---------------- Helpers ----------------
@@ -423,8 +637,7 @@ def fit_scaling_laws(
     if df is None or df.empty:
         return [], {}, {}
 
-    present = list(dict.fromkeys(df["label"].tolist()))
-    datasets = [lab for lab in CANON_LABELS if lab in present] + [lab for lab in present if lab not in CANON_LABELS]
+    datasets = list(dict.fromkeys(df["label"].tolist()))
 
     buckets = sorted(df.flops.unique())
 
@@ -555,10 +768,6 @@ def transform_metrics_for_isoflop(
             label = label_map[exp_name]
         else:
             label = exp_name
-            for canon in CANON_LABELS:
-                if canon in exp_name.lower():
-                    label = canon
-                    break
 
         records.append(
             dict(
@@ -582,7 +791,7 @@ def predict_optimal_config(
     target_flops: float,
     label: str,
     sweep_config: IsoFlopSweepConfig | None = None,
-    vocab_size: int = 128256,
+    vocab_size: int = MARIN_TOKENIZER_VOCAB_SIZE,
 ) -> CandidateConfig | None:
     """Predict optimal training config for a target compute budget using fitted scaling laws.
 
@@ -596,7 +805,7 @@ def predict_optimal_config(
         target_flops: Target compute budget in FLOPs.
         label: Dataset/experiment label to use for scaling fit.
         sweep_config: Optional IsoFlopSweepConfig. If None, uses defaults.
-        vocab_size: Vocabulary size (default: 128256 for marin tokenizer).
+        vocab_size: Vocabulary size (default: MARIN_TOKENIZER_VOCAB_SIZE for marin tokenizer).
 
     Returns:
         CandidateConfig for the predicted optimal, or None if label not in fits
@@ -638,7 +847,7 @@ def predict_optimal_configs_for_budgets(
     target_budgets: list[float],
     label: str,
     sweep_config: IsoFlopSweepConfig | None = None,
-    vocab_size: int = 128256,
+    vocab_size: int = MARIN_TOKENIZER_VOCAB_SIZE,
 ) -> list[CandidateConfig]:
     """Predict optimal configs for multiple target compute budgets.
 
@@ -650,13 +859,21 @@ def predict_optimal_configs_for_budgets(
         vocab_size: Vocabulary size.
 
     Returns:
-        List of CandidateConfig for each budget (skips budgets with no valid config).
+        List of CandidateConfig for each budget.
+
+    Raises:
+        RuntimeError: If any budget cannot be predicted (to prevent silent failures).
     """
     configs = []
     for budget in target_budgets:
         config = predict_optimal_config(scaling_fits, budget, label, sweep_config, vocab_size)
-        if config is not None:
-            configs.append(config)
+        if config is None:
+            raise RuntimeError(
+                f"Failed to predict optimal config for budget {budget:.2e} FLOPs "
+                f"with label '{label}'. Check that the label exists in scaling_fits "
+                f"and that the budget is within a valid range."
+            )
+        configs.append(config)
     return configs
 
 
@@ -759,12 +976,12 @@ def _run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
             hidden_size=rec["hidden_dim"],
             intermediate_dim=rec["hidden_dim"] * MLP_RATIO,
             num_layers=rec["num_layers"],
-            num_heads=max(1, rec["hidden_dim"] // 128),
-            num_kv_heads=max(1, rec["hidden_dim"] // 128),
+            num_heads=max(1, rec["hidden_dim"] // HIDDEN_HEAD_RATIO),
+            num_kv_heads=max(1, rec["hidden_dim"] // HIDDEN_HEAD_RATIO),
             batch_size=rec["batch_size"],
             train_steps=int(rec["optimal_tokens"] / (rec["batch_size"] * SEQ_LEN)),
-            learning_rate=(0.33 * math.sqrt(rec["batch_size"])) / rec["hidden_dim"],
-            beta2=0.98 ** (rec["batch_size"] / 128),
+            learning_rate=(LR_CONSTANT * math.sqrt(rec["batch_size"])) / rec["hidden_dim"],
+            beta2=BETA2_BASE ** (rec["batch_size"] / BETA2_BATCH_DIVISOR),
             tokens=rec["optimal_tokens"],
             flops_budget=rec["flops"],
         )
@@ -852,7 +1069,7 @@ def isoflop_analysis_step(
 
     Example:
         >>> from marin.scaling_laws import isoflop_analysis_step
-        >>> analysis = scaling_ladder_step(
+        >>> analysis = isoflop_analysis_step(
         ...     name="my-scaling-analysis",
         ...     training_runs=my_training_steps,
         ... )
@@ -952,12 +1169,12 @@ def run_isoflop_analysis(
             hidden_size=rec["hidden_dim"],
             intermediate_dim=rec["hidden_dim"] * MLP_RATIO,
             num_layers=rec["num_layers"],
-            num_heads=max(1, rec["hidden_dim"] // 128),
-            num_kv_heads=max(1, rec["hidden_dim"] // 128),
+            num_heads=max(1, rec["hidden_dim"] // HIDDEN_HEAD_RATIO),
+            num_kv_heads=max(1, rec["hidden_dim"] // HIDDEN_HEAD_RATIO),
             batch_size=rec["batch_size"],
             train_steps=int(rec["optimal_tokens"] / (rec["batch_size"] * SEQ_LEN)),
-            learning_rate=(0.33 * math.sqrt(rec["batch_size"])) / rec["hidden_dim"],
-            beta2=0.98 ** (rec["batch_size"] / 128),
+            learning_rate=(LR_CONSTANT * math.sqrt(rec["batch_size"])) / rec["hidden_dim"],
+            beta2=BETA2_BASE ** (rec["batch_size"] / BETA2_BATCH_DIVISOR),
             tokens=rec["optimal_tokens"],
             flops_budget=rec["flops"],
         )

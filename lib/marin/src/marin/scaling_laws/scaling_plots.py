@@ -83,13 +83,11 @@ _MIN_MARKER = dict(symbol="diamond", size=10, color="#000000")
 _SCALE_MARKER = dict(symbol="circle", size=9, color=PALETTE[0])
 _SCALE_LINE = dict(dash="dot", width=2, color=PALETTE[0])
 
-CANON_LABELS = ["nemo", "comma", "dclm"]
-
 
 def create_isoflop_plot(
     df: pd.DataFrame,
     minima_records: list[dict],
-    fit_curves: dict[tuple[str, float], tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]],
+    fit_curves: dict[tuple[str, float], tuple[float, float, float]],
 ) -> go.Figure:
     """Create the IsoFLOP plot showing loss vs tokens for each compute budget.
 
@@ -104,8 +102,7 @@ def create_isoflop_plot(
     if df.empty:
         return go.Figure()
 
-    present = list(dict.fromkeys(df["label"].tolist()))
-    datasets = [lab for lab in CANON_LABELS if lab in present] + [lab for lab in present if lab not in CANON_LABELS]
+    datasets = list(dict.fromkeys(df["label"].tolist()))
 
     buckets = sorted(df.flops.unique())
     bucket_color = {C: PALETTE[i % len(PALETTE)] for i, C in enumerate(buckets)}
@@ -212,8 +209,7 @@ def create_scaling_plot(
     for rec in minima_records:
         by_lab.setdefault(rec["label"], []).append(rec)
 
-    present = list(by_lab.keys())
-    datasets = [lab for lab in CANON_LABELS if lab in present] + [lab for lab in present if lab not in CANON_LABELS]
+    datasets = list(by_lab.keys())
 
     fig = go.Figure()
 

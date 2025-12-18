@@ -3826,6 +3826,7 @@ dev = [
     { name = "mypy" },
     { name = "openai-responses" },
     { name = "pip" },
+    { name = "plotly" },
     { name = "pylatexenc" },
     { name = "pymdown-extensions" },
     { name = "pyrefly" },
@@ -3874,6 +3875,7 @@ metrics = [
 test = [
     { name = "openai-responses" },
     { name = "pip" },
+    { name = "plotly" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -3962,6 +3964,7 @@ dev = [
     { name = "mypy", specifier = ">=1.4.1" },
     { name = "openai-responses" },
     { name = "pip" },
+    { name = "plotly" },
     { name = "pylatexenc" },
     { name = "pymdown-extensions", specifier = ">=10.0.0" },
     { name = "pyrefly", specifier = "==0.40.0" },
@@ -4008,6 +4011,7 @@ metrics = [{ name = "google-cloud-logging" }]
 test = [
     { name = "openai-responses" },
     { name = "pip" },
+    { name = "plotly" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
