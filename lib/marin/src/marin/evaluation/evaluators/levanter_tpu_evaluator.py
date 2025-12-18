@@ -42,17 +42,18 @@ class LevanterTpuEvaluator(Evaluator, ABC):
     def download_model_if_necessary(model: ModelConfig) -> str:
         """Return a path or identifier Levanter can read without copying checkpoints needlessly."""
 
+        cache_destination = os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
+
         if model.path:
-            if (
-                is_remote_path(model.path)
-                or os.path.isdir(model.path)
-                or LevanterTpuEvaluator._looks_like_url(model.path)
-            ):
+            if is_remote_path(model.path) or LevanterTpuEvaluator._looks_like_url(model.path):
+                downloaded_path = model.ensure_downloaded(local_path=cache_destination)
+                if downloaded_path is not None:
+                    return downloaded_path
+
+            if os.path.exists(model.path):
                 return model.path
 
-        downloaded_path: str | None = model.ensure_downloaded(
-            local_path=os.path.join(LevanterTpuEvaluator.CACHE_PATH, model.name)
-        )
+        downloaded_path: str | None = model.ensure_downloaded(local_path=cache_destination)
 
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path

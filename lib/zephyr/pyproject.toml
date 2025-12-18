@@ -49,6 +49,3 @@ log_level = "INFO"
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
 log_cli_level = "INFO"
-
-[tool.uv.sources]
-fray = { workspace = true }

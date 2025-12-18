@@ -20,9 +20,6 @@ trainer:
     tags: ["llama", "sft"]
   num_train_steps: 750000
   train_batch_size: 64
-  tensor_parallel_axes: ["mlp", "heads"]
-  fsdp_axis: "embed"
-  batch_axis: "batch"
   steps_per_eval: 1000
 
 # Optimizer settings
