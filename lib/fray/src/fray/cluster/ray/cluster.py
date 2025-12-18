@@ -303,6 +303,7 @@ class RayCluster(Cluster):
         environment = request.environment if request.environment else EnvironmentConfig.create()
 
         env_vars = dict(environment.env_vars)
+        disable_runtime_envs = os.getenv("MARIN_CI_DISABLE_RUNTIME_ENVS", "").lower() in {"1", "true", "yes"}
 
         # disable access to the TPU if we're not a TPU job, otherwise
         # any import of JAX will claim the TPU and block other users.
@@ -330,7 +331,7 @@ class RayCluster(Cluster):
         logger.info(
             f"Building environment with {environment.pip_packages}, extras {environment.extras} for job: {request.name}"
         )
-        if environment.pip_packages or environment.extras:
+        if (environment.pip_packages or environment.extras) and not disable_runtime_envs:
             runtime_env = build_runtime_env_for_packages(
                 extra=list(environment.extras),
                 pip_packages=list(environment.pip_packages),
