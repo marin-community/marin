@@ -119,7 +119,7 @@ Levanter sharding is controlled by mapping logical axes (e.g. `batch`, `embed`, 
 (e.g. `data`, `model`, `replica`, `replica_dcn`).
 
 The full explanation (including the difference between `compute_mapping` and `param_mapping`, and how to add context
-parallelism) lives in [Mesh Parallelism](Mesh-Parallelism.md).
+parallelism) lives in [Mesh Parallelism](../explanation/Mesh-Parallelism.md).
 
 ### Checkpointing and Initialization
 
