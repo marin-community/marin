@@ -151,6 +151,8 @@ tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
 
 cpu = ["jax==0.6.2", "torch>=2.7.0"]
 
+profiling = ["levanter[profiling]"]
+
 download_transform = [
     "chardet",
     "datasets>=2.18.0",
