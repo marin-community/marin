@@ -420,7 +420,7 @@ def update_cluster_configs(infra_path: str = "infra") -> None:
 
             template_params = {
                 "IMAGE_NAME": DEFAULT_IMAGE_NAME,
-                "RAY_AUTH_MODE": "",
+                "RAY_AUTH_MODE": "token",
                 "RAY_AUTH_SECRET": DEFAULT_RAY_AUTH_SECRET,
                 **config,
             }

@@ -42,16 +42,28 @@ remembering the IP address of the cluster head node, what port the dashboard is 
 
 ### Ray token authentication
 
-Some clusters may have Ray token authentication enabled (Ray >= 2.52). In that case, your local machine must have the
-same token configured to use the dashboard and submit jobs.
+Marin clusters use Ray token authentication (Ray >= 2.52). You will typically interact with clusters through SSH
+port-forwarding on `localhost`, but you still need the token.
 
-For the staging cluster (`marin-us-central2-staging`), install the token locally:
+For the staging cluster (`marin-us-central2-staging`), the easiest flow is:
+
+```bash
+# Starts SSH port-forwarding, copies the token to clipboard, and opens the dashboard.
+uv run scripts/ray/cluster.py --cluster us-central2-staging auth
+```
+
+For non-staging clusters, install the default token locally (or re-run `make dev_setup`):
+
+```bash
+make get_ray_auth_token
+```
+
+If you need to install the staging token locally (only needed for CLI + SDK usage against staging), do:
 
 ```bash
 mkdir -p ~/.ray
 gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN_STAGING > ~/.ray/auth_token
 chmod 600 ~/.ray/auth_token
-export RAY_AUTH_MODE=token
 ```
 
 There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the

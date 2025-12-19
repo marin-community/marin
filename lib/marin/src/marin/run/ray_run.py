@@ -36,6 +36,31 @@ logger = logging.getLogger(__name__)
 REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
 
 
+def _maybe_enable_ray_token_auth(*, require_token: bool) -> None:
+    """Enable token auth client-side.
+
+    Ray only adds auth headers when `RAY_AUTH_MODE=token` is set in the client
+    process.
+    """
+    os.environ.setdefault("RAY_AUTH_MODE", "token")
+
+    if os.environ.get("RAY_AUTH_TOKEN"):
+        return
+
+    token_path = os.environ.get("RAY_AUTH_TOKEN_PATH")
+    if token_path and Path(token_path).expanduser().exists():
+        return
+
+    if (Path.home() / ".ray" / "auth_token").exists():
+        return
+
+    if require_token:
+        raise RuntimeError(
+            "Ray token authentication is enabled but no local token was found. "
+            "Create a token file at ~/.ray/auth_token, or set RAY_AUTH_TOKEN_PATH / RAY_AUTH_TOKEN."
+        )
+
+
 def parse_user_command_line(command: str) -> dict[str, str]:
     """Extract interesting parts from a user command line."""
     parts = command.strip().split()
@@ -284,6 +309,8 @@ def main():
             cluster_config = args.cluster
         else:
             cluster_config = find_config_by_region(args.cluster)
+
+    _maybe_enable_ray_token_auth(require_token=cluster_config is None)
 
     # Submit the job and track it asynchronously
     if args.submission_id:

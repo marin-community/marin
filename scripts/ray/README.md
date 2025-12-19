@@ -175,6 +175,25 @@ Open Ray dashboard with port forwarding.
 uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml open-dashboard
 ```
 
+#### `auth`
+Open a single cluster dashboard, copy the Ray auth token to clipboard, and open a browser.
+
+```bash
+uv run scripts/ray/cluster.py --cluster us-central2-staging auth
+```
+
+If the secret can't be inferred, or you want to override it:
+
+```bash
+uv run scripts/ray/cluster.py --cluster us-central2-staging auth --secret RAY_AUTH_TOKEN_STAGING
+```
+
+Note: for non-staging clusters, you can install the default token locally with:
+
+```bash
+make get_ray_auth_token
+```
+
 #### `monitor-cluster`
 Monitor cluster health with optional wandb logging.
 

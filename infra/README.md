@@ -37,21 +37,23 @@ cluster infrastructure for Marin. We use Ray for:
 
 ### Ray token authentication
 
-Ray token authentication (available in Ray >= 2.52) can be enabled per-cluster via the cluster templates in `infra/`.
-When enabled, Ray APIs (dashboard, jobs, status) require a shared token.
+Marin clusters use Ray token authentication (Ray >= 2.52). Ray APIs (dashboard, jobs, status) require a shared token.
 
 - Cluster-side: the token is fetched from GCP Secret Manager into `/home/ray/.ray/auth_token` during `setup_commands`
   (runs inside the Ray container) and `RAY_AUTH_MODE=token` is set via Docker run options.
-- Client-side (your laptop): install the same token at `~/.ray/auth_token` and set `RAY_AUTH_MODE=token` in the shell
-  where you run `scripts/ray/cluster.py` or `ray job submit`.
+- Client-side (your laptop): `scripts/ray/cluster.py` will automatically fetch/cache the token into `~/.ray/` when you
+  connect to a specific cluster config. You can also install tokens explicitly (see below).
 
 For the staging cluster (`marin-us-central2-staging`):
 
 ```bash
-mkdir -p ~/.ray
-gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN_STAGING > ~/.ray/auth_token
-chmod 600 ~/.ray/auth_token
-export RAY_AUTH_MODE=token
+uv run scripts/ray/cluster.py --cluster us-central2-staging auth
+```
+
+For non-staging clusters, install the default token locally:
+
+```bash
+make get_ray_auth_token
 ```
 
 For **data processing** (downloads, transforms, deduplication), we use Zephyr instead of raw Ray.
