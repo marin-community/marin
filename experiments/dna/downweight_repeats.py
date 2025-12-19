@@ -34,36 +34,40 @@ if (backend := jax.default_backend()) not in {"gpu", "cpu"}:
 # -----------------------------------------------------------------------------
 # Experiment configuration
 # -----------------------------------------------------------------------------
-run_number = 2
+run_number = 4
 num_gpus = len(jax.devices("gpu")) if backend == "gpu" else 1
 tokenizer_path = "songlab/tokenizer-dna-clm"
-dataset_path = "songlab/gpn-animal-promoter-dataset"
-# dataset_examples = 9_057_253
+dataset_path = "gonzalobenegas/genomes-v3-genome_set-animals-intervals-v1_512_256"
 learning_rate = 1e-3
-per_device_eval_parallelism = 1024
+per_device_eval_parallelism = 256
 train_batch_size = per_device_eval_parallelism * num_gpus
-num_train_steps = 5000
+# lr_schedule = "inv"
+lr_schedule = "cosine"
+warmup = 0.1
+num_train_steps = 20000
 steps_per_export = 1000
-steps_per_cycle = 1000
+steps_per_cycle = None  # no cycles
 steps_per_eval = 1000
+# decay = 0.1  # default
+decay = None  # no decay
 
 # -----------------------------------------------------------------------------
 # Model configuration
 # -----------------------------------------------------------------------------
 model_config = QwenConfig(
     max_seq_len=512,
-    hidden_dim=512,
-    intermediate_dim=1344,
-    num_heads=8,
-    num_kv_heads=8,
-    num_layers=6,
+    hidden_dim=768,
+    intermediate_dim=2048,
+    num_heads=12,
+    num_kv_heads=12,
+    num_layers=12,
 )
 
 # -----------------------------------------------------------------------------
 # Dataset configuration
 # -----------------------------------------------------------------------------
 data_tokenized = default_tokenize(
-    name="gpn-animal-promoter-softmasked",
+    name="animal-promoters",
     # versioned(dataset_path) was causing issues:
     # ValueError: No valid jsonl or parquet files found in
     # ['songlab/gpn-animal-promoter-dataset']. Please provide a path to a
@@ -73,6 +77,10 @@ data_tokenized = default_tokenize(
     format=DNALmDatasetFormat(
         soft_mask_weight=0.01,  # Lowercase (repetitive) positions get 1% weight
     ),
+    # my thoughts (should check):
+    # max parallelism is number of shards in HF dataset
+    # window_size_bytes should be smaller than shard size to achieve max parallelism
+    window_size_bytes=50_000_000,
 )
 
 # -----------------------------------------------------------------------------
@@ -83,9 +91,9 @@ train_config = SimpleTrainConfig(
     train_batch_size=train_batch_size,
     per_device_eval_parallelism=per_device_eval_parallelism,
     learning_rate=learning_rate,
-    lr_schedule="inv",
-    warmup=0.05,
-    decay=0.1,
+    lr_schedule=lr_schedule,
+    warmup=warmup,
+    decay=decay,
     cycle_length=steps_per_cycle,
     steps_per_eval=steps_per_eval,
     num_train_steps=num_train_steps,
