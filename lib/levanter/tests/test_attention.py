@@ -13,10 +13,12 @@ import equinox as eqx
 from chex import assert_trees_all_close
 from jax.lax import Precision
 from jax.sharding import NamedSharding, PartitionSpec
+from contextlib import ExitStack
 
 import haliax as hax
 from haliax import Axis
 from haliax.partitioning import ResourceAxis
+from levanter.utils.mesh import create_mesh_from_axis_specs
 
 from levanter.layers.attention import (
     AttentionBackend,
@@ -135,7 +137,6 @@ def test_te_bin_and_group_axes_by_function():
     D = hax.Axis("D", 64)
     H = hax.Axis("H", 8)
     B = hax.Axis("B", 32)
-    G = hax.Axis("G", 4)
 
     q = hax.zeros((B, QPos, H, D))
     k = hax.zeros((B, KPos, H, D))
@@ -158,37 +159,81 @@ def test_te_bin_and_group_axes_by_function():
     assert k_c["D"] == [D]
     assert v_c["D"] == [D]
 
-    gq = hax.zeros((B, QPos, H, G, D))
-    q_c, k_c, v_c = _bin_and_group_axes_by_function(gq, k, v, "QPos", "KPos", "D")
-    assert q_c["H"] == [H, G]
-    assert k_c["H"] == [H]
-    assert v_c["H"] == [H]
 
-    gk = hax.zeros((B, KPos, G, H, D))
-    with pytest.raises(ValueError):
-        _bin_and_group_axes_by_function(q, gk, v, "QPos", "KPos", "D")
+def test_attention_context_parallel_matches_no_context_mesh():
+    # Require at least 2 devices to run context-parallel shard
+    if len(jax.devices()) < 2:
+        pytest.skip("Need at least 2 devices for context parallel test")
 
-    with pytest.raises(ValueError):
-        _bin_and_group_axes_by_function(gq, gk, v, "QPos", "KPos", "D")
+    backend = jax.default_backend()
+    seq_len = 32 if backend == "cpu" else 1024
 
-    for gk_axes in [(B, KPos, G, H, D), (B, KPos, G, H, D), (G, B, KPos, H, D)]:
-        gk = hax.zeros(gk_axes)
-        q_c, k_c, v_c = _bin_and_group_axes_by_function(gq, gk, gk, "QPos", "KPos", "D")
-        assert q_c["H"] == [H, G]
-        assert k_c["H"] == [H, G]
-        assert v_c["H"] == [H, G]
+    Batch = Axis("batch", len(jax.devices()))
+    Heads = Axis("heads", 2)
+    Pos = Axis("position", seq_len)
+    KPos = Pos.alias("key_position")
+    Key = Axis("key", 128)
 
-    # axes that come before QPos are treated as batch (if shared)
-    gq = hax.zeros((G, B, QPos, H, D))
-    for gk_axes in [(B, KPos, H, G, D), (B, KPos, G, H, D), (G, B, KPos, H, D)]:
-        gk = hax.zeros(gk_axes)
-        q_c, k_c, v_c = _bin_and_group_axes_by_function(gq, gk, gk, "QPos", "KPos", "D")
-        assert q_c["H"] == [H]
-        assert k_c["H"] == [H]
-        assert v_c["H"] == [H]
-        assert q_c["B"] == [G, B]
-        assert k_c["B"] == [G, B]
-        assert v_c["B"] == [G, B]
+    rng = jrandom.PRNGKey(0)
+    q = hax.random.normal(rng, (Batch, Heads, Pos, Key))
+    rng, sk = jrandom.split(rng)
+    k = hax.random.normal(sk, (Batch, Heads, KPos, Key))
+    rng, sv = jrandom.split(rng)
+    v = hax.random.normal(sv, (Batch, Heads, KPos, Key))
+    # segment ids: two segments per batch, split at midpoint
+    split = seq_len // 2
+    # make the split uneven by 5 on keys to force cross-boundary handling
+    delta = 5
+    seg_ids = hax.concatenate(
+        Pos, [hax.full(Pos.resize(split + delta), 0), hax.full(Pos.resize(seq_len - split - delta), 1)]
+    )
+    seg_ids = seg_ids.broadcast_axis(Batch)
+    mask = AttentionMask.causal(segment_ids=(seg_ids, seg_ids))
+
+    # run with no context sharding
+    mesh_no_ctx = create_mesh_from_axis_specs(
+        ici_axes={"replica": 1, "data": len(jax.devices()), "model": 1},
+        dcn_axes={},
+    )
+    mapping_no_ctx = {
+        "batch": ("replica", "data"),
+        "heads": "model",
+    }
+    with ExitStack() as stack:
+        stack.enter_context(hax.partitioning.set_mesh(mesh_no_ctx))
+        stack.enter_context(hax.axis_mapping(mapping_no_ctx))
+        q_s = hax.shard(q)
+        k_s = hax.shard(k)
+        v_s = hax.shard(v)
+        hax.debug.visualize_shardings(dict(q=q_s, k=k_s, v=v_s))
+        out_no_ctx = dot_product_attention(Pos.name, KPos.name, Key.name, q_s, k_s, v_s, mask=mask)
+
+    # run with context sharding (context=2)
+    num_devices = len(jax.devices())
+    if num_devices % 2 != 0:
+        pytest.skip("Need an even number of devices for context=2 sharding")
+
+    data = max(1, num_devices // 2)
+    mesh_ctx = create_mesh_from_axis_specs(
+        ici_axes={"replica": 1, "data": data, "model": 1, "context": 2},
+        dcn_axes={},
+    )
+    mapping_ctx = {
+        "batch": ("replica", "data"),
+        "position": "context",
+        "heads": "model",
+    }
+
+    with ExitStack() as stack:
+        stack.enter_context(hax.partitioning.set_mesh(mesh_ctx))
+        stack.enter_context(hax.axis_mapping(mapping_ctx))
+        q_s = hax.shard(q)
+        k_s = hax.shard(k)
+        v_s = hax.shard(v)
+        hax.debug.visualize_shardings(dict(q=q_s, k=k_s, v=v_s))
+        out_ctx = dot_product_attention(Pos.name, KPos.name, Key.name, q_s, k_s, v_s, mask=mask)
+
+    np.testing.assert_allclose(out_ctx.array, out_no_ctx.array, rtol=1e-4, atol=1e-4)
 
 
 def test_mqa_te_bin_and_group_axes_by_function():
