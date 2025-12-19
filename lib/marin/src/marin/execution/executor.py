@@ -131,6 +131,18 @@ from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
 
+_DISABLE_RUNTIME_ENVS_FLAG = "MARIN_CI_DISABLE_RUNTIME_ENVS"
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.lower() in {"1", "true", "yes"}
+
+
+def _should_disable_runtime_envs() -> bool:
+    return _env_flag(_DISABLE_RUNTIME_ENVS_FLAG)
+
+
 ConfigT = TypeVar("ConfigT", covariant=True, bound=dataclass)
 T_co = TypeVar("T_co", covariant=True)
 
@@ -807,11 +819,14 @@ class Executor:
 
         # always run driver functions on a non-preemptible node
         non_preemptible_cpu = ResourceConfig.with_cpu(preemptible=False)
+        extras: list[str] = []
+        if not _should_disable_runtime_envs():
+            extras = list(step.pip_dependency_groups or [])
         fray_job = JobRequest(
             name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
             entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
             resources=non_preemptible_cpu,
-            environment=EnvironmentConfig.create(extras=step.pip_dependency_groups or []),
+            environment=EnvironmentConfig.create(extras=extras),
         )
 
         runner = StepRunner(self.cluster, status_file)

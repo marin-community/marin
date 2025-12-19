@@ -151,6 +151,8 @@ tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
 
 cpu = ["jax==0.6.2", "torch>=2.7.0"]
 
+profiling = ["levanter[profiling]"]
+
 download_transform = [
     "chardet",
     "datasets>=2.18.0",
@@ -173,7 +175,7 @@ quality_dedup_consolidate = [
     "datasets",
     "ddsketch",
     "dupekit",
-    "fasttext",
+    "fasttext-wheel",
     "huggingface_hub",
     "nltk>=3.8.1",
     "transformers",

@@ -48,7 +48,24 @@ def test_sniff_format_for_parquet():
 
 @skip_if_no_soundlibs
 def test_resolve_audio_pointer():
-    AudioTextUrlDataSource.resolve_audio_pointer("https://ccrma.stanford.edu/~jos/mp3/trumpet.mp3", 16_000)
+    # Avoid fetching audio from the public internet in tests (flaky in CI).
+    import numpy as np
+    import soundfile as sf
+
+    sampling_rate = 16_000
+    duration_s = 0.1
+    t = np.linspace(0.0, duration_s, int(sampling_rate * duration_s), endpoint=False)
+    audio_in = (0.1 * np.sin(2.0 * np.pi * 440.0 * t)).astype(np.float32)
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        path = f.name
+    try:
+        sf.write(path, audio_in, sampling_rate)
+        audio_out = AudioTextUrlDataSource.resolve_audio_pointer(path, sampling_rate)
+        assert audio_out["sampling_rate"] == sampling_rate
+        assert len(audio_out["array"]) > 0
+    finally:
+        os.unlink(path)
 
 
 def test_basic_parquet_datasource_read_row():
