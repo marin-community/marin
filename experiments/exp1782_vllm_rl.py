@@ -146,8 +146,6 @@ class ExperimentConfig:
 
     max_grad_norm: float = 1.00
 
-    use_sequence_packing: bool = False
-
 
 def get_stop_tokens(model_type: str) -> list[str]:
     """Get model-specific stop tokens."""
@@ -370,7 +368,6 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             inference_tpu_type="v5p-8",
         ),
         inflight_weight_updates=experiment_config.inflight_weight_updates,
-        use_sequence_packing=experiment_config.use_sequence_packing,
         rollout_tracker=RolloutTrackerConfig(
             project="rl-mockenv-testing",
             name=f"{name}-rollout",
@@ -414,7 +411,6 @@ def main():
         n_generations_per_prompt=16,
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
-        use_sequence_packing=True,
     )
 
     experiment_configs = [llama_8b]
