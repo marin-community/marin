@@ -146,6 +146,9 @@ class RLJobConfig:
     rollout_tracker: RolloutTrackerConfig | None = None
     """Tracker configuration for rollout workers. Uses a standalone tracker to avoid JAX deadlocks."""
 
+    use_sequence_packing: bool = False
+    """Whether the trainer should pack multiple rollouts into each training sequence."""
+
     def with_on_policy_training(self) -> "RLJobConfig":
         """Configure for on-policy training.
 
@@ -332,6 +335,7 @@ class RLJob:
             run_id=self.config.run_id,
             curriculum_config=self.config.curriculum,
             seed=self.config.seed,
+            use_sequence_packing=self.config.use_sequence_packing,
         )
 
         # Create rollout worker config

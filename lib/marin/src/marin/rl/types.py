@@ -117,11 +117,12 @@ class TrainingBatch(eqx.Module):
 
     input_ids: ht.Int[NamedArray, "batch position"]
     position_ids: ht.Int[NamedArray, "batch position"]
+    segment_ids: ht.Int[NamedArray, "batch position"] | None
     loss_weights: ht.Float[NamedArray, "batch position"]
     loss_masks: ht.Int[NamedArray, "batch position"]
     policy_logprobs: ht.Float[NamedArray, "batch position"]
     temperature: ht.Float[NamedArray, "batch"]  # noqa: F821
-    truncated: jax.Array  # [batch] # Make this haxtyped array?
+    truncated: jax.Array  # [batch] or [batch, position]
     max_output_tokens: int
 
     def __len__(self) -> int:

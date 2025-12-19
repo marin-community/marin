@@ -43,7 +43,8 @@ from marin.rl.weight_transfer import WeightTransferConfig
 from .replay_buffer import ReplayBuffer, ReplayBufferConfig, ReplayDataLoader
 from .rl_losses import RLLossModule
 from .rollout_storage import RolloutStorageConfig
-from .train_batch import create_training_batch_from_rollouts
+from .train_batch import create_packed_training_batch_from_rollouts, create_training_batch_from_rollouts
+from .types import RolloutWithAdvantage
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,9 @@ class TrainWorkerConfig:
 
     seed: int = 0
     """Random seed for replay buffer sampling and model construction."""
+
+    use_sequence_packing: bool = False
+    """Whether to pack multiple rollouts into each training sequence."""
 
 
 class StreamingRolloutLoader:
@@ -104,23 +108,57 @@ class StreamingRolloutLoader:
 
         # Track batch prep time for forward/backward calculation
         self._last_batch_prep_time: float = 0.0
+        self._rollout_buffer: list[RolloutWithAdvantage] = []
 
     def __iter__(self):
         """Yield batches continuously from the replay buffer."""
         while True:
             # Measure time to get rollouts from replay buffer
-            fetch_start = time.time()
-            rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
-            fetch_time = time.time() - fetch_start
+            if self.config.use_sequence_packing:
+                batch = None
+                used_rollouts = 0
+                batch_time = 0.0
+                fetch_time = 0.0
+                while batch is None:
+                    if self._rollout_buffer:
+                        pack_start = time.time()
+                        batch, used_rollouts = create_packed_training_batch_from_rollouts(
+                            self._rollout_buffer,
+                            self.max_tokens,
+                            self.pad_token_id,
+                            target_batch_size=self.config.trainer.train_batch_size,
+                        )
+                        batch_time += time.time() - pack_start
+                        if batch is not None:
+                            self._rollout_buffer = self._rollout_buffer[used_rollouts:]
+                            break
 
-            if not rollouts:
-                logger.warning("No rollouts received from data loader within timeout, retrying...")
-                continue
+                    fetch_start = time.time()
+                    rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
+                    fetch_time += time.time() - fetch_start
+                    if not rollouts:
+                        logger.warning("No rollouts received from data loader within timeout, retrying...")
+                        continue
+                    self._rollout_buffer.extend(rollouts)
 
-            # Measure batch creation time
-            batch_start = time.time()
-            batch = create_training_batch_from_rollouts(rollouts, self.max_tokens, self.pad_token_id)
-            batch_time = time.time() - batch_start
+                if batch is None:
+                    continue
+                rollout_count = used_rollouts
+            else:
+                fetch_start = time.time()
+                rollouts = self.data_loader.get_rollouts(timeout=self.timeout)
+                fetch_time = time.time() - fetch_start
+
+                if not rollouts:
+                    logger.warning("No rollouts received from data loader within timeout, retrying...")
+                    continue
+
+                rollout_count = len(rollouts)
+
+                # Measure batch creation time
+                batch_start = time.time()
+                batch = create_training_batch_from_rollouts(rollouts, self.max_tokens, self.pad_token_id)
+                batch_time = time.time() - batch_start
 
             # Measure sharding time
             shard_start = time.time()
@@ -136,7 +174,7 @@ class StreamingRolloutLoader:
                 batch_time,
                 shard_time,
                 total_time,
-                len(rollouts),
+                rollout_count,
             )
 
             yield sharded_batch

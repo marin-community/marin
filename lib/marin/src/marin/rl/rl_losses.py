@@ -109,9 +109,13 @@ def compute_logprobs(
     """
     batch_size, _seq_len = batch.input_ids.array.shape
 
+    attn_mask = AttentionMask.causal()
+    if batch.segment_ids is not None:
+        attn_mask = attn_mask.with_segment_ids(batch.segment_ids)
+
     model_output = model(
         input_ids=batch.input_ids,
-        attn_mask=AttentionMask.causal(),
+        attn_mask=attn_mask,
         pos_ids=batch.position_ids,
         key=key,
     )
@@ -149,9 +153,13 @@ def chunked_compute_logprobs(
     the blockwise cross-entropy implementation with a custom VJP.
     """
     # Get activations
+    attn_mask = AttentionMask.causal()
+    if batch.segment_ids is not None:
+        attn_mask = attn_mask.with_segment_ids(batch.segment_ids)
+
     activations = model.activations(
         input_ids=batch.input_ids,
-        attn_mask=AttentionMask.causal(),
+        attn_mask=attn_mask,
         pos_ids=batch.position_ids,
         key=key,
     )
@@ -211,8 +219,14 @@ def compute_ppo_loss_objective(
     # loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / jnp.sum(loss_masks, axis=1))
 
     if response_truncated_array is not None:
-        batch_size, _ = loss_objective.shape
-        loss_objective = loss_objective * (1 - response_truncated_array.reshape(batch_size, 1))
+        response_truncated_array = response_truncated_array.astype(loss_objective.dtype)
+        if response_truncated_array.ndim == 1:
+            batch_size, _ = loss_objective.shape
+            loss_objective = loss_objective * (1 - response_truncated_array.reshape(batch_size, 1))
+        elif response_truncated_array.ndim == 2:
+            loss_objective = loss_objective * (1 - response_truncated_array)
+        else:
+            raise ValueError("response_truncated_array must be rank 1 or 2")
 
     # Dr GRPO loss, token-level loss
     # loss = -1 * jnp.mean(jnp.sum(loss_objective * loss_masks, axis=1) / max_output_tokens)
