@@ -9,9 +9,6 @@ trainer:
   num_train_steps: 1218
   train_batch_size: 128
 
-  # If using model parallelism
-  tensor_parallel_axes: ["mlp", "heads"]
-
 # Optimizer settings
 optimizer:
   learning_rate: 2e-5

@@ -19,14 +19,11 @@ trainer:
     type: ema
     beta: 0.995
 
-  model_axis_size: 1
   per_device_parallelism: -1
 
   train_batch_size: 256
   num_train_steps: 20000
 
-#  tensor_parallel_axes: ["position", "key_position"]
-#  tensor_parallel_axes: ["heads", "mlp"]
 optimizer:
   learning_rate: 1E-3
   weight_decay: 0.1
