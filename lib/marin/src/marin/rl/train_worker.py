@@ -29,6 +29,7 @@ import haliax as hax
 import jax
 import jax.random as jrandom
 import levanter
+from levanter import callbacks
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -344,6 +345,21 @@ class TrainWorker:
             )
 
         trainer.add_hook(_log_step_timing, every=1)
+
+        # Add MFU (Model FLOPs Utilization) logging
+        vocab_size = len(self.tokenizer)
+        flops_per_token = self.config.model.flops_per_token(vocab_size)
+        tokens_per_example = self.config.curriculum_config.max_seq_len
+        flops_per_example = 3 * flops_per_token * tokens_per_example if flops_per_token is not None else None
+        trainer.add_hook(
+            callbacks.log_performance_stats(
+                tokens_per_example=tokens_per_example,
+                batch_schedule=self.config.trainer.train_batch_size,
+                flops_per_example=flops_per_example,
+                prefix="throughput",
+            ),
+            every=1,
+        )
 
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)

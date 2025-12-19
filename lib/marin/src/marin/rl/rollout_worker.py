@@ -685,6 +685,9 @@ class RolloutWorker:
                 input_rng = py_rng.randint(0, 2**31 - 1)
 
             lesson_config = self.config.curriculum_config.lessons[lesson_id]
+
+            # Time the batch sampling for throughput metrics
+            batch_start_time = time.time()
             rollout_batch, env_metrics = self._sample_batch(
                 lesson_id=lesson_id,
                 n_examples=lesson_config.sampling_params.n_prompts,
@@ -692,8 +695,25 @@ class RolloutWorker:
                 mode="train",
                 rng=input_rng,
             )
+            batch_time = time.time() - batch_start_time
+
             if rollout_batch is None:
                 continue
+
+            # Count tokens for throughput calculation
+            total_output_tokens = 0
+            total_prompts = 0
+            for group in rollout_batch.groups:
+                for rollout in group.rollouts:
+                    total_output_tokens += len(rollout.response_tokens)
+                    total_prompts += 1
+
+            # Calculate throughput metrics
+            throughput_metrics = {
+                "inference.throughput/tokens_per_second": total_output_tokens / batch_time if batch_time > 0 else 0,
+                "inference.throughput/requests_per_second": total_prompts / batch_time if batch_time > 0 else 0,
+                "inference.throughput/batch_time_seconds": batch_time,
+            }
 
             self._rollout_writer.write_batch(rollout_batch)
 
@@ -718,6 +738,8 @@ class RolloutWorker:
                 if hasattr(self._rollout_writer, "get_metrics"):
                     log_metrics.update(self._rollout_writer.get_metrics())
                 log_metrics = {"inference." + k: v for k, v in log_metrics.items()}
+                # Add throughput metrics (already prefixed with "inference.throughput/")
+                log_metrics.update(throughput_metrics)
                 logger.info(f"Logging metrics at step {step}... {log_metrics}")
                 self.tracker.log(log_metrics, step=step)
 
