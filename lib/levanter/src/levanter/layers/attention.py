@@ -945,22 +945,30 @@ class AttentionMask(eqx.Module):
     # Static constructors --------------------------------------------------
 
     @staticmethod
-    def causal(*, sliding_window: Optional[int] = None, offset: int | NamedArray | None = None) -> "AttentionMask":
+    def causal(
+        *,
+        sliding_window: Optional[int] = None,
+        offset: int | NamedArray | None = None,
+        segment_ids: tuple[NamedArray, NamedArray] | None = None,
+    ) -> "AttentionMask":
         """Create a causal AttentionMask.
 
         Args:
             sliding_window: If provided, restrict each query position to attend only to keys within
                 ``sliding_window`` previous positions.
-            For ``offset == 0`` this is identical to the old ``AttentionMask.causal()``
-            behaviour; larger offsets loosen the restriction so that each query can
-            see ``offset`` additional future tokens.
+            offset:
+                For ``offset == 0`` this is identical to the old ``AttentionMask.causal()``
+                behaviour; larger offsets loosen the restriction so that each query can
+                see ``offset`` additional future tokens.
         """
         if isinstance(offset, int | Integral):
             causal_offset = hax.named(offset, ())
         else:
             causal_offset = offset
 
-        return AttentionMask(is_causal=True, causal_offset=causal_offset, sliding_window=sliding_window)
+        return AttentionMask(
+            is_causal=True, causal_offset=causal_offset, sliding_window=sliding_window, segment_ids=segment_ids
+        )
 
     @staticmethod
     def explicit(mask: NamedArray) -> "AttentionMask":
@@ -1329,29 +1337,18 @@ def _tpu_splash_attention(
         sinks = None
         physical_axes_sink = None
 
-    # segment_ids: handle both the new tuple form and legacy single-array form for robustness
     segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
-    if segment_ids is not None:
-        if isinstance(segment_ids, tuple):
-            _seg_axes = segment_ids[0].axes
-        else:
-            _seg_axes = segment_ids.axes
-        physical_axes_segments = pspec_for_axis(_seg_axes)
-    else:
-        physical_axes_segments = None
     # do we have a batch axis in segment_ids? (needed for vmap below)
+
     if segment_ids is not None:
-        if isinstance(segment_ids, tuple):
-            q_segment_ids, kv_segment_ids = segment_ids
-            kv_segment_ids = kv_segment_ids
-        else:
-            assert segment_ids is not None
-            q_segment_ids, kv_segment_ids = segment_ids, segment_ids
+        q_segment_ids, kv_segment_ids = segment_ids
+        kv_segment_ids = kv_segment_ids.rename({QPos.name: KPos.name})
 
         segment_ids = SplashSegmentIds(q_segment_ids.array, kv_segment_ids.array)
+        segment_ids_axes = SplashSegmentIds(pspec_for_axis(q_segment_ids.axes), pspec_for_axis(kv_segment_ids.axes))
 
         q_segment_batch_axis = _find_batch_axis_for_segment_ids(QPos, q_segment_ids)
-        kv_segment_batch_axis = _find_batch_axis_for_segment_ids(QPos, kv_segment_ids)
+        kv_segment_batch_axis = _find_batch_axis_for_segment_ids(KPos, kv_segment_ids)
 
         if q_segment_batch_axis is not None or kv_segment_batch_axis is not None:
             segment_batch_axis = SplashSegmentIds(q_segment_batch_axis, kv_segment_batch_axis)  # type: ignore[arg-type]
@@ -1359,78 +1356,112 @@ def _tpu_splash_attention(
             segment_batch_axis = None
     else:
         segment_batch_axis = None
+        segment_ids_axes = None
 
     # MaxText uses a block size of 512
     block_size = block_size or 512
 
-    # copied from MaxText
+    # Compute sharding factors from the mesh (OUTSIDE shard_map)
+    mesh = jax.sharding.get_abstract_mesh()
+    head_shards = _spec_shard_factor(physical_axes_q[1], mesh)
+    q_seq_shards = _spec_shard_factor(physical_axes_q[2], mesh)
+    kv_seq_shards = _spec_shard_factor(physical_axes_k[2], mesh)
+
+    # K should not be sharded for splash attention
+    if physical_axes_k[2] is not None:
+        raise NotImplementedError(
+            "Splash attention does not support sharding the KV sequence dimension. "
+            f"Got KV sequence spec: {physical_axes_k[2]}"
+        )
+
+    # Compute block sizes based on per-shard sequence lengths
+    shard_Sq = max(1, Sq // max(1, q_seq_shards))
+    shard_Sk = max(1, Sk // max(1, kv_seq_shards))
+
+    def _compatible_block(shard_len: int, max_block: int) -> int:
+        """Pick largest block <= max_block that divides shard_len; prefer multiples of 128."""
+        if shard_len <= 0:
+            return max_block
+        cap = min(max_block, shard_len)
+        for step in (128, 1):
+            candidate = cap - (cap % step)
+            while candidate >= step:
+                if shard_len % candidate == 0:
+                    return candidate
+                candidate -= step
+        return 1
+
+    block_q = _compatible_block(shard_Sq, block_size)
+    block_kv = _compatible_block(shard_Sk, block_size)
+
+    block_sizes = splash_attention_kernel.BlockSizes(
+        block_q=block_q,
+        block_kv_compute=block_kv,
+        block_kv=block_kv,
+        block_q_dkv=block_q,
+        block_kv_dkv=block_kv,
+        block_kv_dkv_compute=block_q,
+        block_q_dq=block_q,
+        block_kv_dq=block_kv,
+    )
+
+    # Create mask with GLOBAL shapes (outside shard_map)
+    if mask is None:
+        base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
+    elif isinstance(mask, AttentionMask):
+        if mask.is_causal:
+            if mask.causal_offset is not None:
+                raise NotImplementedError(
+                    "Causal offsets are not supported for splash attention. Please use a standard causal mask."
+                )
+            base_mask = splash_attention_mask.CausalMask((Sq, Sk), offset=0, shard_count=q_seq_shards)
+        else:
+            base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
+        if mask.sliding_window is not None:
+            local_mask = splash_attention_mask.LocalMask(
+                shape=(Sq, Sk),
+                window_size=(mask.sliding_window - 1, None),
+                offset=0,
+                shard_count=q_seq_shards,
+            )
+            base_mask = splash_attention_mask.LogicalAnd(base_mask, local_mask)
+        if mask.explicit_mask is not None:
+            raise NotImplementedError("Explicit masks are not yet supported for splash attention")
+    elif isinstance(mask, NamedArray):
+        raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
+    else:
+        raise ValueError(f"Unknown mask type: {mask}")
+
+    kernel_mask = splash_attention_mask.MultiHeadMask(masks=[base_mask for _ in range(Hq)])
+
+    # Create kernel with GLOBAL shapes and q_seq_shards (outside shard_map)
+    splash_kernel = splash_attention_kernel.make_splash_mha(
+        mask=kernel_mask,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+        block_sizes=block_sizes,
+        attn_logits_soft_cap=logits_soft_cap,
+    )
+
+    # Get partition specs for the kernel (it's a pytree with mask_info arrays)
+    kernel_sharding = jax.sharding.NamedSharding(mesh, PartitionSpec(physical_axes_q[1], physical_axes_q[2]))
+    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+
     @functools.partial(
         shard_map,
-        mesh=jax.sharding.get_abstract_mesh(),
+        mesh=mesh,
         in_specs=(
             physical_axes_q,
             physical_axes_k,
             physical_axes_v,
-            physical_axes_segments,
+            segment_ids_axes,
             physical_axes_sink,
+            kernel_specs,
         ),
         out_specs=physical_axes_q,
         check_rep=False,
     )
-    def wrap_flash_attention(q, k, v, segment_ids, sinks):
-        # NB: inside the function, q, k, and v are partitioned, so in general the lengths of dims are not the same
-        Sq = q.shape[2]
-        Sk = k.shape[2]
-        Hq = q.shape[1]
-        block_sizes = splash_attention_kernel.BlockSizes(
-            block_q=min(block_size, Sq),
-            block_kv_compute=min(block_size, Sk),
-            block_kv=min(block_size, Sk),
-            block_q_dkv=min(block_size, Sq),
-            block_kv_dkv=min(block_size, Sk),
-            block_kv_dkv_compute=min(block_size, Sq),
-            block_q_dq=min(block_size, Sq),
-            block_kv_dq=min(block_size, Sq),
-        )
-
-        if mask is None:
-            base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
-        elif isinstance(mask, AttentionMask):
-            if mask.is_causal:
-                if mask.causal_offset is not None:
-                    raise NotImplementedError(
-                        "Causal offsets are not supported for splash attention. Please use a standard causal mask."
-                    )
-                base_mask = splash_attention_mask.CausalMask((Sq, Sk), 0)
-            else:
-                base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
-            if mask.sliding_window is not None:
-                local_mask = splash_attention_mask.LocalMask(
-                    shape=(Sq, Sk),
-                    window_size=(mask.sliding_window - 1, None),
-                    offset=0,
-                )
-                base_mask = splash_attention_mask.LogicalAnd(base_mask, local_mask)
-            # This is going to be a pain to support
-            if mask.explicit_mask is not None:
-                raise NotImplementedError("Explicit masks are not yet supported for splash attention")
-
-        elif isinstance(mask, NamedArray):
-            raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
-        else:
-            raise ValueError(f"Unknown mask type: {mask}")
-
-        kernel_mask = splash_attention_mask.MultiHeadMask(masks=[base_mask for _ in range(Hq)])
-
-        # copied from MaxText
-        splash_kernel = splash_attention_kernel.make_splash_mha(
-            mask=kernel_mask,
-            head_shards=1,
-            q_seq_shards=1,
-            block_sizes=block_sizes,
-            attn_logits_soft_cap=logits_soft_cap,
-        )
-
+    def wrap_flash_attention(q, k, v, segment_ids, sinks, kernel):
         q = q.astype(attention_dtype)
         k = k.astype(attention_dtype)
         v = v.astype(attention_dtype)
@@ -1438,15 +1469,15 @@ def _tpu_splash_attention(
 
         def call_kernel(q_b, k_b, v_b, si, sink):
             if sink is None:
-                return splash_kernel(q_b, k_b, v_b, segment_ids=si)
-            return splash_kernel(q_b, k_b, v_b, segment_ids=si, sinks=sink)
+                return kernel(q_b, k_b, v_b, segment_ids=si)
+            return kernel(q_b, k_b, v_b, segment_ids=si, sinks=sink)
 
         return jax.vmap(
             call_kernel,
             in_axes=(0, 0, 0, segment_batch_axis, sink_in_axes),
         )(q, k, v, segment_ids, sinks)
 
-    attn_output = wrap_flash_attention(q_, k_, v_, segment_ids, sinks)
+    attn_output = wrap_flash_attention(q_, k_, v_, segment_ids, sinks, splash_kernel)
 
     attn_output = haliax.named(attn_output, ("B", "H", "S", "D"))
     # the output shape is B, S_q, H_q, D_v. Right now we're requiring D_k == D_v
@@ -1489,6 +1520,22 @@ def _find_batch_axis_for_segment_ids(Pos, segment_ids) -> Optional[int]:
         segment_batch_axis = None
 
     return segment_batch_axis
+
+
+def _spec_shard_factor(entry, mesh) -> int:
+    """Compute product of mesh axis sizes referenced by a PartitionSpec entry."""
+    if mesh is None:
+        return 1
+    if entry is None or entry is PartitionSpec.UNCONSTRAINED:
+        return 1
+    if isinstance(entry, str):
+        return int(mesh.shape.get(entry, 1))
+    prod = 1
+    for e in entry:
+        if e is None or e is PartitionSpec.UNCONSTRAINED:
+            continue
+        prod *= int(mesh.shape.get(e, 1))
+    return prod
 
 
 @dataclass(frozen=True)
