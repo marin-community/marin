@@ -405,7 +405,7 @@ def main():
         train_batch_size=1024,
         per_device_parallelism=16,
         learning_rate=2e-6,
-        max_input_tokens=4096,
+        max_input_tokens=1024,
         max_output_tokens=1024,
         n_prompts=64,
         n_generations_per_prompt=16,
