@@ -36,11 +36,13 @@ docker:
       - "/tmp:/tmp"
       # this lets the worker run docker commands and have them run as sibling containers
       - -v "/var/run/docker.sock:/var/run/docker.sock"
+
     head_run_options:
       - --privileged
       - -v "/tmp:/tmp"
       - --ulimit nofile=1048576:1048576
       - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
+
 
 
 initialization_commands:
@@ -63,6 +65,7 @@ setup_commands:
   - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > $HOME/.ssh/marin_ray_cluster.pub
   - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
+
   - echo 'export MARIN_PREFIX="gs://marin-us-central2"' >> $HOME/.bashrc
   - echo 'export BUCKET="marin-us-central2"' >> $HOME/.bashrc
   # cf https://github.com/ray-project/ray/blob/0bc6ec86ffd0fc0d4e43fb339ffe0ac03ee5531b/python/ray/autoscaler/_private/constants.py#L66

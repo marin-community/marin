@@ -76,11 +76,8 @@ def tpus_per_node(tpu_type: str) -> int:
 
 def make_client() -> JobSubmissionClient:
     """Create a JobSubmissionClient based on environment variables."""
-    if "RAY_ADDRESS" not in os.environ:
-        client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
-    else:
-        client = JobSubmissionClient()
-    return client
+    address = os.environ.get("RAY_ADDRESS", REMOTE_DASHBOARD_URL)
+    return JobSubmissionClient(address)
 
 
 async def submit_and_track_job(

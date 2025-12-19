@@ -26,7 +26,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import requests
 import yaml
 
 from .dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
@@ -313,11 +312,16 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def check_dashboard(cluster_name: str, dashboard_port: int) -> tuple[str, bool]:
-        """Check if a dashboard is accessible."""
+        """Check if a dashboard port is reachable.
+
+        Ray dashboard endpoints may require authentication (token auth), so we
+        can't rely on unauthenticated HTTP health checks here. A successful TCP
+        connect is sufficient to prove the SSH tunnel is working.
+        """
         try:
-            response = requests.get(f"http://localhost:{dashboard_port}/api/version", timeout=3)
-            return (cluster_name, response.status_code == 200)
-        except (requests.ConnectionError, requests.Timeout):
+            with socket.create_connection(("localhost", dashboard_port), timeout=3):
+                return (cluster_name, True)
+        except OSError:
             return (cluster_name, False)
 
     max_retries = 3
@@ -393,12 +397,37 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
         proxy=proxy,
     )
 
+    def _cluster_requires_token_auth(config_path: str) -> bool:
+        try:
+            with open(config_path, "r") as f:
+                cluster_config = yaml.safe_load(f)
+        except Exception:
+            logger.exception("Failed to load cluster config for auth detection: %s", config_path)
+            return False
+
+        docker_cfg = cluster_config.get("docker", {})
+        opts = list(docker_cfg.get("head_run_options", [])) + list(docker_cfg.get("worker_run_options", []))
+        return any(isinstance(opt, str) and "RAY_AUTH_MODE=token" in opt for opt in opts)
+
+    def _local_ray_token_is_configured() -> bool:
+        if os.environ.get("RAY_AUTH_TOKEN"):
+            return True
+
+        token_path = os.environ.get("RAY_AUTH_TOKEN_PATH")
+        if token_path and Path(token_path).expanduser().exists():
+            return True
+
+        return (Path.home() / ".ray" / "auth_token").exists()
+
+    requires_token_auth = any(_cluster_requires_token_auth(info.config_path) for info in clusters.values())
+
     # Save original environment variables
     original_env = {
         "RAY_ADDRESS": os.environ.get("RAY_ADDRESS"),
         "RAY_API_SERVER_ADDRESS": os.environ.get("RAY_API_SERVER_ADDRESS"),
         "RAY_DASHBOARD_ADDRESS": os.environ.get("RAY_DASHBOARD_ADDRESS"),
         "RAY_GCS_ADDRESS": os.environ.get("RAY_GCS_ADDRESS"),
+        "RAY_AUTH_MODE": os.environ.get("RAY_AUTH_MODE"),
     }
 
     # For single cluster, set Ray environment variables
@@ -408,9 +437,22 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
 
         # Set new values
         os.environ["RAY_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
-        os.environ["RAY_API_SERVER_ADDRESS"] = f"ray://localhost:{ports.api_port}"
+        # Ray's Jobs SDK treats RAY_API_SERVER_ADDRESS as an override for the
+        # dashboard URL and will resolve Ray Client (ray://) addresses to the
+        # head node's internal webui_url (e.g. http://10.x.x.x:8265), which is
+        # not reachable from a developer laptop. Keep this as an HTTP URL so
+        # job submission uses the SSH-forwarded dashboard port.
+        os.environ["RAY_API_SERVER_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
         os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
         os.environ["RAY_GCS_ADDRESS"] = f"localhost:{ports.gcs_port}"
+
+    if requires_token_auth:
+        if not _local_ray_token_is_configured():
+            raise RuntimeError(
+                "Ray token authentication is enabled on this cluster but no local token was found. "
+                "Create a token file at ~/.ray/auth_token or set RAY_AUTH_TOKEN / RAY_AUTH_TOKEN_PATH."
+            )
+        os.environ["RAY_AUTH_MODE"] = "token"
 
     try:
         # Initialize Ray if requested

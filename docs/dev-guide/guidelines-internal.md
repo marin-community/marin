@@ -40,6 +40,20 @@ Once authenticated for GCP, all other work happens through our
 truth for all cluster operations** -- you can think of this file as an alternative to managing your own SSH keys,
 remembering the IP address of the cluster head node, what port the dashboard is running on, etc. For more info about this template and connecting to specific clusters, see [README.md](https://github.com/marin-community/marin/blob/main/infra/README.md).
 
+### Ray token authentication
+
+Some clusters may have Ray token authentication enabled (Ray >= 2.52). In that case, your local machine must have the
+same token configured to use the dashboard and submit jobs.
+
+For the staging cluster (`marin-us-central2-staging`), install the token locally:
+
+```bash
+mkdir -p ~/.ray
+gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN_STAGING > ~/.ray/auth_token
+chmod 600 ~/.ray/auth_token
+export RAY_AUTH_MODE=token
+```
+
 There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the
 cluster. **You will need at least two terminal processes running for the following steps** (make sure to activate your
 `marin` Python environment as well):

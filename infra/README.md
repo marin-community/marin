@@ -35,6 +35,25 @@ cluster infrastructure for Marin. We use Ray for:
 - **Training**: Distributed model training via Levanter
 - **Inference**: GPU/TPU actor pools for model serving
 
+### Ray token authentication
+
+Ray token authentication (available in Ray >= 2.52) can be enabled per-cluster via the cluster templates in `infra/`.
+When enabled, Ray APIs (dashboard, jobs, status) require a shared token.
+
+- Cluster-side: the token is fetched from GCP Secret Manager into `/home/ray/.ray/auth_token` during `setup_commands`
+  (runs inside the Ray container) and `RAY_AUTH_MODE=token` is set via Docker run options.
+- Client-side (your laptop): install the same token at `~/.ray/auth_token` and set `RAY_AUTH_MODE=token` in the shell
+  where you run `scripts/ray/cluster.py` or `ray job submit`.
+
+For the staging cluster (`marin-us-central2-staging`):
+
+```bash
+mkdir -p ~/.ray
+gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN_STAGING > ~/.ray/auth_token
+chmod 600 ~/.ray/auth_token
+export RAY_AUTH_MODE=token
+```
+
 For **data processing** (downloads, transforms, deduplication), we use Zephyr instead of raw Ray.
 
 **Useful Documentation**:
