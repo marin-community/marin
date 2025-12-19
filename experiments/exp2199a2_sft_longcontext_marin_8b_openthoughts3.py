@@ -72,7 +72,7 @@ tokenized_datasets = {
 assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
-TARGET_EPOCHS = 5
+TARGET_EPOCHS = 10
 TRAIN_BATCH_SIZE = 512
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
@@ -80,7 +80,7 @@ NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 longcontext_marin8b_checkpoint = phase3_final_checkpoint.nonblocking()
 
 mixture_sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v4-512"),
+    resources=ResourceConfig.with_tpu("v5p-64"),
     tokenizer=marin_tokenizer,
     initialize_from_checkpoint_path=longcontext_marin8b_checkpoint,
     train_batch_size=TRAIN_BATCH_SIZE,
