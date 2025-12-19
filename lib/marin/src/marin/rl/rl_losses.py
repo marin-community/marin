@@ -22,8 +22,10 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+import haliax as hax
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmHeadModel
+from levanter.models.loss import _blockwise_cross_entropy_loss
 from levanter.metrics import Metric, ReductionType
 
 from marin.rl.types import Rollout, TrainingBatch
@@ -48,33 +50,11 @@ class RLLossModule(Protocol):
         ...
 
 
-# https://github.com/volcengine/verl/blob/392791bdd8268e36e03638fe2b8776e7b981885f/verl/utils/torch_functional.py#L145
-def entropy_from_logits(logits: jax.Array) -> jax.Array:
-    """Calculate true entropy from logits following VeRL's approach.
-
-    H(p) = logsumexp(logits) - sum(softmax(logits) * logits)
-
-    This computes the entropy over the full vocabulary distribution,
-    not just the negative log-prob of the selected token.
-
-    Args:
-        logits: Tensor of shape [..., vocab_size]
-
-    Returns:
-        Entropy tensor of shape [...] (vocab dimension reduced)
-    """
-    log_z = jax.nn.logsumexp(logits, axis=-1)  # [...]
-    probs = jax.nn.softmax(logits, axis=-1)  # [..., vocab_size]
-    entropy = log_z - jnp.sum(probs * logits, axis=-1)  # [...]
-    return entropy
-
-
 def compute_metadata_metrics(
     current_logprobs: jax.Array,
     policy_logprobs_array: jax.Array,
     loss_weights_array: jax.Array,
     loss_masks_array: jax.Array,
-    current_entropy_true: jax.Array | None = None,
 ) -> dict[str, jax.Array]:
     """Compute metadata metrics for the loss function."""
     batch_size, _ = policy_logprobs_array.shape
@@ -110,12 +90,6 @@ def compute_metadata_metrics(
         ),
     }
 
-    # Add true entropy if provided (computed from full logits)
-    if current_entropy_true is not None:
-        # Average entropy over response tokens only
-        entropy_true_mean = jnp.sum(current_entropy_true * loss_masks_array) / jnp.sum(loss_masks_array)
-        metrics["policy_entropy_true"] = Metric.from_value(entropy_true_mean.astype(jnp.float32), ReductionType.MEAN)
-
     return metrics
 
 
@@ -123,19 +97,15 @@ def compute_logprobs(
     model: LmHeadModel,
     batch: TrainingBatch,
     key: jax.Array | None,
-    compute_entropy: bool = False,
-) -> jax.Array | tuple[jax.Array, jax.Array]:
+) -> jax.Array:
     """Compute log probabilities of target tokens.
 
     Args:
         model: The language model
         batch: Training batch containing input_ids, position_ids, temperature
         key: JAX random key for dropout
-        compute_entropy: If True, also compute and return true entropy from logits
-
     Returns:
-        If compute_entropy=False: logprobs array of shape [batch, seq_len]
-        If compute_entropy=True: tuple of (logprobs, entropy) arrays
+        logprobs array of shape [batch, seq_len]
     """
     batch_size, _seq_len = batch.input_ids.array.shape
 
@@ -164,13 +134,53 @@ def compute_logprobs(
         [jnp.zeros((logprobs_shifted.shape[0], 1), dtype=logprobs_shifted.dtype), logprobs_shifted], axis=1
     )  # [batch, seq_len]
 
-    if compute_entropy:
-        # Compute true entropy from logits (VeRL-style)
-        entropy_shifted = entropy_from_logits(logits_array)  # [batch, seq_len-1]
-        entropy = jnp.concatenate(
-            [jnp.zeros((entropy_shifted.shape[0], 1), dtype=entropy_shifted.dtype), entropy_shifted], axis=1
-        )  # [batch, seq_len]
-        return logprobs, entropy
+    return logprobs
+
+
+def chunked_compute_logprobs(
+    model: LmHeadModel,
+    batch: TrainingBatch,
+    key: jax.Array | None,
+    block_size: int,
+) -> jax.Array:
+    """Compute log probabilities of target tokens in a chunked manner to save memory.
+
+    This avoids materializing the full [batch, seq, vocab] logits tensor by using
+    the blockwise cross-entropy implementation with a custom VJP.
+    """
+    # Get activations
+    activations = model.activations(
+        input_ids=batch.input_ids,
+        attn_mask=AttentionMask.causal(),
+        pos_ids=batch.position_ids,
+        key=key,
+    )
+    if isinstance(activations, tuple):
+        activations, _aux = activations
+
+    pred_embeddings = activations.astype(jnp.float32)
+    pred_lm_head = model.get_lm_head().astype(jnp.float32)
+
+    safe_temperature = hax.where(batch.temperature == 0, 1.0, batch.temperature).astype(jnp.float32)
+    pred_embeddings = pred_embeddings / safe_temperature
+
+    pos_axis = batch.input_ids.resolve_axis("position")
+    target_y = hax.roll(batch.input_ids, -1, pos_axis)
+
+    loss, _log_z = _blockwise_cross_entropy_loss(
+        (pred_embeddings, pred_lm_head),
+        model.Embed,
+        model.Vocab,
+        target_y,
+        block_size,
+        dtype=jnp.float32,
+    )
+
+    logprobs_shifted = -loss.array[:, :-1]
+    logprobs = jnp.concatenate(
+        [jnp.zeros((logprobs_shifted.shape[0], 1), dtype=logprobs_shifted.dtype), logprobs_shifted],
+        axis=1,
+    )
 
     return logprobs
 
@@ -249,6 +259,7 @@ def rloo_loss_with_importance_sampling(
     do_trainer_inference_mismatch_importance_sampling: bool = False,
     synchronous: bool = False,
     do_overlong_filtering: bool = False,
+    compute_logprobs_fn: Callable = compute_logprobs,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
     """Compute RLOO (Reward Leave-One-Out) loss with importance sampling for off-policy data.
 
@@ -259,6 +270,7 @@ def rloo_loss_with_importance_sampling(
         kl_coef: Coefficient for KL regularization
         clip_epsilon_low: Lower clipping epsilon for importance sampling ratio
         clip_epsilon_high: Upper clipping epsilon for importance sampling ratio
+        compute_logprobs_fn: Function to compute logprobs (can be chunked)
 
     Returns:
         Tuple of (loss, aux_metrics)
@@ -267,8 +279,8 @@ def rloo_loss_with_importance_sampling(
     loss_weights_array = batch.loss_weights.array
     loss_masks_array = batch.loss_masks.array
 
-    # Get logits from current policy (also compute true entropy)
-    current_logprobs, current_entropy_true = compute_logprobs(model, batch, key, compute_entropy=True)
+    # Get logits from current policy
+    current_logprobs = compute_logprobs_fn(model, batch, key)
     current_logprobs = current_logprobs * loss_masks_array
 
     if synchronous:
@@ -323,7 +335,7 @@ def rloo_loss_with_importance_sampling(
     # KL regularization
 
     if kl_coef > 0:
-        reference_logprobs = compute_logprobs(reference_model, batch, key)
+        reference_logprobs = compute_logprobs_fn(reference_model, batch, key)
         reference_logprobs = reference_logprobs * loss_masks_array
         # log_ratio = (current_logprobs - reference_logprobs_array) * loss_masks_array
         kl_penalty = jnp.exp(reference_logprobs - current_logprobs) - (reference_logprobs - current_logprobs) - 1
@@ -363,9 +375,7 @@ def rloo_loss_with_importance_sampling(
         "trainer_inference_importance_sampling_ratio_mean": Metric.from_value(
             trainer_inference_importance_sampling_ratio_mean.astype(jnp.float32), ReductionType.MEAN
         ),
-        **compute_metadata_metrics(
-            current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array, current_entropy_true
-        ),
+        **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
         **metadata,
     }
 
@@ -395,6 +405,7 @@ class RLOOLoss(RLLossModule):
     synchronous: bool = False
     do_trainer_inference_mismatch_importance_sampling: bool = False
     do_overlong_filtering: bool = False
+    vocab_tile_size: int | None = None
 
     def build(self, reference_model: eqx.Module) -> eqx.Module:
         """Initialize any learned components (e.g., value heads)."""
@@ -408,6 +419,14 @@ class RLOOLoss(RLLossModule):
         """Create the loss function for training."""
 
         def loss_fn(model, batch, key):
+            if self.vocab_tile_size is not None:
+
+                def compute_logprobs_fn(m, b, k):
+                    return chunked_compute_logprobs(m, b, k, self.vocab_tile_size)
+
+            else:
+                compute_logprobs_fn = compute_logprobs
+
             return rloo_loss_with_importance_sampling(
                 model,
                 reference_model,
@@ -420,6 +439,7 @@ class RLOOLoss(RLLossModule):
                 synchronous=self.synchronous,
                 do_trainer_inference_mismatch_importance_sampling=self.do_trainer_inference_mismatch_importance_sampling,
                 do_overlong_filtering=self.do_overlong_filtering,
+                compute_logprobs_fn=compute_logprobs_fn,
             )
 
         return loss_fn
