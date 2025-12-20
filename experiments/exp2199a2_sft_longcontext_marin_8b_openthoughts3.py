@@ -14,6 +14,11 @@
 
 """
 Fine-tunes long context-extended Marin-8B model on the OpenThoughts3 dataset (open-thoughts/OpenThoughts3-1.2M).
+Some adjustments:
+- Era shuffling (shuffle every epoch)
+- Higher batch size (512 -> 1024)
+- Lower learning rate (8e-5 -> 4e-5)
+- More epochs (5 -> 10)
 """
 import dataclasses
 import math
@@ -72,8 +77,8 @@ tokenized_datasets = {
 assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
-TARGET_EPOCHS = 10
-TRAIN_BATCH_SIZE = 512
+TARGET_EPOCHS = 20
+TRAIN_BATCH_SIZE = 1024
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 # Path to long-context Marin 8B checkpoint
@@ -85,7 +90,7 @@ mixture_sft_config = SimpleSFTConfig(
     initialize_from_checkpoint_path=longcontext_marin8b_checkpoint,
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=8e-5,
+    learning_rate=4e-5,
     max_seq_len=16384,
     seed=0,
     steps_per_checkpoint=(total_examples/TRAIN_BATCH_SIZE)//4,  # Every quarter epoch
@@ -101,13 +106,13 @@ mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
     permutation_type="feistel",
-    shuffle=True,
+    shuffle=total_examples,  # IMPORTANT: Era shuffling (shuffle after every epoch). `shuffle=True` leads to same shuffle used in every epoch
     missing_weights_are_validation=True,
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )
 
 exp2199a2_sft_longcontext_marin_8b_openthoughts3 = default_sft(
-    name="exp2199a2_sft_longcontext_marin_8b_ot3_bsz512_lr8e_5",
+    name="exp2199a2_sft_longcontext_marin_8b_ot3_bsz1024_lr4e_5",
     tokenized=mixture_config,
     model_config=llama_8b,
     sft_config=mixture_sft_config,
