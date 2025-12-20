@@ -266,7 +266,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
     # Adjust the max sequence length of the model to reduce memory usage.
     model_config = dataclasses.replace(
         config,
-        seq_len=experiment_config.max_output_tokens,
+        seq_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,
         tokenizer=experiment_config.model_config.tokenizer,
         attn_backend=AttentionBackend.SPLASH,
     )
