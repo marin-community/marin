@@ -315,11 +315,12 @@ def _gmm(lhs, rhs, group_sizes, out_axes, sharded=False, ar=False):
 
 def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray, ar: bool = False) -> jnp.ndarray:
     hs_shape = lhs_.shape
-    if hs_shape[0] % 512:
-        pad_length = 512 - hs_shape[0] % 512
+    pad_multiple = 128
+    if hs_shape[0] % pad_multiple:
+        pad_length = pad_multiple - hs_shape[0] % pad_multiple
         lhs_ = jax.lax.pad(lhs_, 0.0, [(0, pad_length, 0), (0, 0, 0)])
 
-    tile_size = (512, 1024, 1024)  # (m, k, n)
+    tile_size = (pad_multiple, 1024, 1024)  # (m, k, n)
     m, k, n = lhs_.shape[0], lhs_.shape[1], rhs_.shape[2]
     out = gmm(
         lhs_,
@@ -333,7 +334,7 @@ def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray,
     if ar:
         out = jax.lax.psum(out, ResourceAxis.MODEL)
 
-    if hs_shape[0] % 512:
+    if hs_shape[0] % pad_multiple:
         out = out[: hs_shape[0]]
 
     return out

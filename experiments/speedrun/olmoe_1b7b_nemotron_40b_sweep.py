@@ -20,7 +20,7 @@ import argparse
 import dataclasses
 import itertools
 import math
-from typing import Iterable
+from collections.abc import Iterable
 
 from experiments.speedrun.olmoe_1b7b_nemotron_40b import (
     DATASET_OPTIONS,
@@ -124,10 +124,7 @@ def main():
             profiler_start_step=args.profile_start_step,
             profiler_num_steps=args.profile_num_steps,
         )
-        suffix = (
-            f"{args.model}_nemotron40b_{args.tpu_type}_bs{batch}_seq{seq_len}"
-            f"_lr{lr:.0e}_beta2-{beta2}"
-        )
+        suffix = f"{args.model}_nemotron40b_{args.tpu_type}_bs{batch}_seq{seq_len}" f"_lr{lr:.0e}_beta2-{beta2}"
         executor_main(
             steps=nemotron_only_speedrun(
                 suffix,
