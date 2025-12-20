@@ -319,7 +319,7 @@ def _gmm(lhs, rhs, group_sizes, out_axes, sharded=False, ar=False):
 
 def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray, ar: bool = False) -> jnp.ndarray:
     hs_shape = lhs_.shape
-    pad_multiple = 512
+    pad_multiple = 256
     if hs_shape[0] % pad_multiple:
         pad_length = pad_multiple - hs_shape[0] % pad_multiple
         lhs_ = jax.lax.pad(lhs_, 0.0, [(0, pad_length, 0), (0, 0, 0)])
