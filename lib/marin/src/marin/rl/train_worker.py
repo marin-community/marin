@@ -30,6 +30,8 @@ import jax
 import jax.random as jrandom
 import levanter
 from levanter import callbacks
+from levanter.layers.attention import AttentionBackend
+from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -98,6 +100,18 @@ class StreamingRolloutLoader:
         # Get max_seq_len from curriculum (total sequence length for prompt + response)
         self.max_tokens = self.config.curriculum_config.max_seq_len
 
+        flash_block_size = getattr(self.config.model, "flash_attention_block_size", None)
+        if flash_block_size is None:
+            flash_block_size = DEFAULT_FLASH_BLOCK_SIZE
+
+        # Splash attention requires multiples of 128. Flash attention usually uses 1024 or 512.
+        # If we're using splash, we should pad to at least 128 to satisfy the TPU kernel requirements.
+        is_splash = getattr(self.config.model, "attn_backend", None) == AttentionBackend.SPLASH
+        if is_splash:
+            self.pad_to_multiple = 128
+        else:
+            self.pad_to_multiple = flash_block_size
+
         self.pad_token_id = self.config.tokenizer.pad_token_id
         if self.pad_token_id is None:
             self.pad_token_id = self.config.tokenizer.eos_token_id
@@ -119,7 +133,9 @@ class StreamingRolloutLoader:
 
             # Measure batch creation time
             batch_start = time.time()
-            batch = create_training_batch_from_rollouts(rollouts, self.max_tokens, self.pad_token_id)
+            batch = create_training_batch_from_rollouts(
+                rollouts, self.max_tokens, self.pad_token_id, self.pad_to_multiple
+            )
             batch_time = time.time() - batch_start
 
             # Measure sharding time
@@ -172,6 +188,7 @@ class TrainWorker:
 
         config.trainer.id = f"{config.run_id}-train"
         levanter.initialize(config.trainer)
+
         self.config = config
         self._should_stop = False
         self.tokenizer = config.tokenizer

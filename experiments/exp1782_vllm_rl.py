@@ -20,6 +20,7 @@ import os
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
+from levanter.layers.attention import AttentionBackend
 from levanter.compat.hf_checkpoints import HFCompatConfig
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
@@ -264,7 +265,10 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
 
     # Adjust the max sequence length of the model to reduce memory usage.
     model_config = dataclasses.replace(
-        config, seq_len=experiment_config.max_output_tokens, tokenizer=experiment_config.model_config.tokenizer
+        config,
+        seq_len=experiment_config.max_output_tokens,
+        tokenizer=experiment_config.model_config.tokenizer,
+        attn_backend=AttentionBackend.SPLASH,
     )
 
     _ = WandbConfig
