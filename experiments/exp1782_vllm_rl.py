@@ -53,25 +53,6 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-# xla_tpu_data_parallel_opt_different_sized_ops:
-#   enable pipelining of data parallel ops across multiple iterations
-# xla_tpu_enable_data_parallel_all_reduce_opt:
-#   optimize DCN all-reduces used for data parallel sharding
-DATA_PARALLEL_OVERLAP = (
-    " --xla_tpu_enable_data_parallel_all_reduce_opt=true" " --xla_tpu_data_parallel_opt_different_sized_ops=true"
-)
-
-# Continuation Fusion (CF) for All Gather Collectives
-# Continuation Fusion is a form of parallelizing compute work with collectives.
-CF_FOR_ALL_GATHER = (
-    " --xla_tpu_enable_async_collective_fusion=true"
-    " --xla_tpu_enable_async_collective_fusion_fuse_all_gather=true"
-    " --xla_tpu_enable_async_collective_fusion_multiple_steps=true"
-    " --xla_tpu_overlap_compute_collective_tc=true"
-    " --xla_enable_async_all_gather=true"
-)
-
-
 @dataclasses.dataclass
 class ModelConfig:
     name: str
@@ -389,7 +370,6 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             num_train_slices=1,
             num_rollout_workers=1,
             inference_tpu_type="v5p-8",
-            env_vars={"LIBTPU_INIT_ARGS": DATA_PARALLEL_OVERLAP + CF_FOR_ALL_GATHER},
         ),
         inflight_weight_updates=experiment_config.inflight_weight_updates,
         rollout_tracker=RolloutTrackerConfig(
