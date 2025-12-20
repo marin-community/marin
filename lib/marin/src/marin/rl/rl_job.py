@@ -75,6 +75,9 @@ class RunConfig:
     max_retries_preemption: int = 100
     """Maximum retries on preemption"""
 
+    env_vars: dict[str, str] = field(default_factory=dict)
+    """Custom environment variables for workers"""
+
 
 @dataclass
 class TrainParams:
@@ -202,6 +205,8 @@ class RLJob:
         env = {}
         env = _add_run_env_variables(env)
         env["EQX_ON_ERROR"] = "nan"
+        if run_config.env_vars:
+            env.update(run_config.env_vars)
 
         # Create resource configs
         inference_tpu_type = run_config.inference_tpu_type or run_config.train_tpu_type

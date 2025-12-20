@@ -53,6 +53,14 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# xla tpu scoped vmem defines the amount of vmem used for the current hlo op.
+# The remaining vmem is used for prefetching latter op needs.
+# These limits are experimentally recommended values for compute bound models.
+_DENSE_VMEM_LIMIT = 98304
+
+DENSE_VMEM_LIMIT_FLAG = f" --xla_tpu_scoped_vmem_limit_kib={_DENSE_VMEM_LIMIT}"
+
+
 @dataclasses.dataclass
 class ModelConfig:
     name: str
@@ -269,6 +277,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         seq_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,
         tokenizer=experiment_config.model_config.tokenizer,
         attn_backend=AttentionBackend.SPLASH,
+        flash_attention_block_size=2048,  # Following MaxText which sets SPLASH block size to 2048 on v5p: https://github.com/AI-Hypercomputer/maxtext/blob/4f6cdf4ea3ca863580b8a8a6407642e119a4a8a8/benchmarks/maxtext_v5p_model_configs.py#L42
     )
 
     _ = WandbConfig
@@ -370,6 +379,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             num_train_slices=1,
             num_rollout_workers=1,
             inference_tpu_type="v5p-8",
+            env_vars={"LIBTPU_INIT_ARGS": DENSE_VMEM_LIMIT_FLAG},
         ),
         inflight_weight_updates=experiment_config.inflight_weight_updates,
         rollout_tracker=RolloutTrackerConfig(
