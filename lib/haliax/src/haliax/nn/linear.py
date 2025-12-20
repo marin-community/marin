@@ -298,24 +298,33 @@ class MoELinear(eqx.Module):
 
 
 def _gmm(lhs, rhs, group_sizes, out_axes, sharded=False, ar=False):
+    # Important: when inputs are sharded, `haliax.partitioning.shard_map` calls `gmm_impl` on per-shard arrays.
+    # Constructing a `NamedArray` inside the shard_map body would then validate against the *local* shard shape,
+    # while `out_axes` describe the *global* shape, causing axis-size mismatches during shape inference/tracing.
+    # Return a raw array from the shard_map body and wrap it with global axes after shard_map reassembles it.
+
     def gmm_impl(lhs, rhs, group_sizes):
-        out = gmm_sharded(lhs.array, rhs.array, group_sizes.array, ar=ar)
-        return hax.NamedArray(out, out_axes)
+        return gmm_sharded(lhs.array, rhs.array, group_sizes.array, ar=ar)
 
     if sharded:
-        return gmm_impl(lhs, rhs, group_sizes)
+        return hax.named(gmm_impl(lhs, rhs, group_sizes), out_axes)
 
-    gmm_fn = shard_map(gmm_impl, check_rep=False)
-    return gmm_fn(lhs, rhs, group_sizes)
+    gmm_fn = shard_map(
+        gmm_impl,
+        out_specs=hax.partitioning.pspec_for_axis(out_axes),
+        check_rep=False,
+    )
+    return hax.named(gmm_fn(lhs, rhs, group_sizes), out_axes)
 
 
 def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray, ar: bool = False) -> jnp.ndarray:
     hs_shape = lhs_.shape
-    if hs_shape[0] % 512:
-        pad_length = 512 - hs_shape[0] % 512
+    pad_multiple = 128
+    if hs_shape[0] % pad_multiple:
+        pad_length = pad_multiple - hs_shape[0] % pad_multiple
         lhs_ = jax.lax.pad(lhs_, 0.0, [(0, pad_length, 0), (0, 0, 0)])
 
-    tile_size = (512, 1024, 1024)  # (m, k, n)
+    tile_size = (pad_multiple, 1024, 1024)  # (m, k, n)
     m, k, n = lhs_.shape[0], lhs_.shape[1], rhs_.shape[2]
     out = gmm(
         lhs_,
@@ -329,7 +338,7 @@ def gmm_sharded(lhs_: jnp.ndarray, rhs_: jnp.ndarray, group_sizes_: jnp.ndarray,
     if ar:
         out = jax.lax.psum(out, ResourceAxis.MODEL)
 
-    if hs_shape[0] % 512:
+    if hs_shape[0] % pad_multiple:
         out = out[: hs_shape[0]]
 
     return out

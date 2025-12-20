@@ -20,7 +20,7 @@ dependencies = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "jax==0.6.2",
+    "jax==0.8.1",
     "haliax",
     "levanter[serve]",
     "lz4",
@@ -145,11 +145,11 @@ gcp = [
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
+cuda12 = ["jax[cuda12]==0.8.1", "torch>=2.7.0"]
 
-tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
+tpu = ["jax[tpu]==0.8.1", "torch>=2.7.0"]
 
-cpu = ["jax==0.6.2", "torch>=2.7.0"]
+cpu = ["jax==0.8.1", "torch>=2.7.0"]
 
 download_transform = [
     "chardet",
