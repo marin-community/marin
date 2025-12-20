@@ -30,7 +30,7 @@ import jax
 import jax.random as jrandom
 import levanter
 from levanter import callbacks
-from levanter.layers.attention import AttentionBackend
+from levanter.layers.attention import DEFAULT_SPLASH_BLOCK_SIZE, AttentionBackend
 from levanter.models.flash_attention import BLOCK_SIZE as DEFAULT_FLASH_BLOCK_SIZE
 from levanter.models.lm_model import LmConfig
 from levanter.optim import OptimizerConfig
@@ -100,17 +100,13 @@ class StreamingRolloutLoader:
         # Get max_seq_len from curriculum (total sequence length for prompt + response)
         self.max_tokens = self.config.curriculum_config.max_seq_len
 
-        flash_block_size = getattr(self.config.model, "flash_attention_block_size", None)
-        if flash_block_size is None:
-            flash_block_size = DEFAULT_FLASH_BLOCK_SIZE
-
-        # Splash attention requires multiples of 128. Flash attention usually uses 1024 or 512.
-        # If we're using splash, we should pad to at least 128 to satisfy the TPU kernel requirements.
         is_splash = getattr(self.config.model, "attn_backend", None) == AttentionBackend.SPLASH
+        flash_block_size = getattr(self.config.model, "flash_attention_block_size", None)
+
         if is_splash:
-            self.pad_to_multiple = 128
+            self.pad_to_multiple = flash_block_size or DEFAULT_SPLASH_BLOCK_SIZE
         else:
-            self.pad_to_multiple = flash_block_size
+            self.pad_to_multiple = flash_block_size or DEFAULT_FLASH_BLOCK_SIZE
 
         self.pad_token_id = self.config.tokenizer.pad_token_id
         if self.pad_token_id is None:

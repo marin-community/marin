@@ -62,6 +62,9 @@ class AttentionBackend(Enum):
     VANILLA = "vanilla"  # regular dot product attention
 
 
+DEFAULT_SPLASH_BLOCK_SIZE = 512
+
+
 def default_attention_type() -> AttentionBackend:
     accelerator_type = jax.local_devices()[0].platform
     if accelerator_type == "gpu":
@@ -1361,7 +1364,7 @@ def _tpu_splash_attention(
         segment_batch_axis = None
 
     # MaxText uses a block size of 512
-    block_size = block_size or 512
+    block_size = block_size or DEFAULT_SPLASH_BLOCK_SIZE
 
     # copied from MaxText
     @functools.partial(
