@@ -62,9 +62,15 @@ MODELS = [
     #     "apply_chat_template": True,
     #     "tensor_parallel_size": 4,
     # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-redo_fixed_template-aime24",
+    #     "path": "gs://marin-us-central2/checkpoints/exp2199b_redo_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-2d659d/hf/step-11718-padded-vocab",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
     {
-        "name": "qwen2.5-7b-instruct-finetuned-redo_fixed_template-aime24",
-        "path": "gs://marin-us-central2/checkpoints/exp2199b_redo_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-2d659d/hf/step-11718-padded-vocab",
+        "name": "qwen2.5-7b-instruct-finetuned-redo_fixed_template_pt2-chkpt10500-aime24",
+        "path": "gs://marin-us-central2/checkpoints/exp2199b_redo_pt2_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-1a1aff/hf/step-10500-padded-vocab",
         "apply_chat_template": True,
         "tensor_parallel_size": 4,
     },
