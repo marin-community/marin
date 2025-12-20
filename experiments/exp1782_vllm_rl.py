@@ -53,12 +53,23 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-# xla tpu scoped vmem defines the amount of vmem used for the current hlo op.
-# The remaining vmem is used for prefetching latter op needs.
-# These limits are experimentally recommended values for compute bound models.
-_DENSE_VMEM_LIMIT = 98304
+# xla_tpu_data_parallel_opt_different_sized_ops:
+#   enable pipelining of data parallel ops across multiple iterations
+# xla_tpu_enable_data_parallel_all_reduce_opt:
+#   optimize DCN all-reduces used for data parallel sharding
+DATA_PARALLEL_OVERLAP = (
+    " --xla_tpu_enable_data_parallel_all_reduce_opt=true" " --xla_tpu_data_parallel_opt_different_sized_ops=true"
+)
 
-DENSE_VMEM_LIMIT_FLAG = f" --xla_tpu_scoped_vmem_limit_kib={_DENSE_VMEM_LIMIT}"
+# Continuation Fusion (CF) for All Gather Collectives
+# Continuation Fusion is a form of parallelizing compute work with collectives.
+CF_FOR_ALL_GATHER = (
+    " --xla_tpu_enable_async_collective_fusion=true"
+    " --xla_tpu_enable_async_collective_fusion_fuse_all_gather=true"
+    " --xla_tpu_enable_async_collective_fusion_multiple_steps=true"
+    " --xla_tpu_overlap_compute_collective_tc=true"
+    " --xla_enable_async_all_gather=true"
+)
 
 
 @dataclasses.dataclass
@@ -277,7 +288,6 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         seq_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,
         tokenizer=experiment_config.model_config.tokenizer,
         attn_backend=AttentionBackend.SPLASH,
-        flash_attention_block_size=2048,  # Following MaxText which sets SPLASH block size to 2048 on v5p: https://github.com/AI-Hypercomputer/maxtext/blob/4f6cdf4ea3ca863580b8a8a6407642e119a4a8a8/benchmarks/maxtext_v5p_model_configs.py#L42
     )
 
     _ = WandbConfig
@@ -379,7 +389,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             num_train_slices=1,
             num_rollout_workers=1,
             inference_tpu_type="v5p-8",
-            env_vars={"LIBTPU_INIT_ARGS": DENSE_VMEM_LIMIT_FLAG},
+            env_vars={"LIBTPU_INIT_ARGS": DATA_PARALLEL_OVERLAP + CF_FOR_ALL_GATHER},
         ),
         inflight_weight_updates=experiment_config.inflight_weight_updates,
         rollout_tracker=RolloutTrackerConfig(
