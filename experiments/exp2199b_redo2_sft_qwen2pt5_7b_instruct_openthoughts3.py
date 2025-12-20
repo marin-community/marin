@@ -15,7 +15,10 @@
 """
 Fine-tunes Qwen2.5-7B-Instruct (Qwen/Qwen2.5-7B-Instruct) on the OpenThoughts3 dataset (open-thoughts/OpenThoughts3-1.2M).
 REDO: After fixing custom chat template (QWEN_2_5_INSTRUCT_CHAT_TEMPLATE) and changing beta2 to 0.999.
-REDO #2: Reduced LR (8e-5 -> 4e-5). Also extending to 6 epochs (will evaluate 5th and 6th epoch checkpoints).
+REDO #2:
+  - Reduced LR (8e-5 -> 4e-5) to reduce loss spikes
+  - Increased batch size (512 -> 1024)
+  - Extending to 20 epochs with diff LR schedule since our train loss decreases slower than what OT3 folks saw.
 """
 import dataclasses
 import math
@@ -71,8 +74,8 @@ tokenized_datasets = {
 assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
-TARGET_EPOCHS = 6
-TRAIN_BATCH_SIZE = 512
+TARGET_EPOCHS = 20
+TRAIN_BATCH_SIZE = 1024
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 mixture_sft_config = SimpleSFTConfig(
@@ -86,8 +89,8 @@ mixture_sft_config = SimpleSFTConfig(
     seed=0,
     steps_per_checkpoint=(total_examples/TRAIN_BATCH_SIZE)//4,  # Every quarter epoch
     lr_schedule="cosine",
-    warmup=0.1,
-    decay=0.9,
+    warmup=0.05,
+    decay=0.95,
     weight_decay=0.0,
     beta1=0.9,
     beta2=0.999,
@@ -97,13 +100,13 @@ mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
     permutation_type="feistel",
-    shuffle=True,
+    shuffle=total_examples,  # IMPORTANT: Era shuffling (shuffle after every epoch). `shuffle=True` leads to same shuffle used in every epoch
     missing_weights_are_validation=True,
-    mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
+    mixture_block_size=12288,  # Doesn't matter for mixtures with 1 dataset
 )
 
 exp2199b_sft_qwen2pt5_7b_instruct_openthoughts3 = default_sft(
-    name="exp2199b_redo2_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr4e_5",
+    name="exp2199b_redo2_sft_qwen2pt5_7b_instruct_ot3_bsz1024_lr4e_5",
     tokenized=mixture_config,
     model_config=qwen2_5_7b_instruct,
     sft_config=mixture_sft_config,
