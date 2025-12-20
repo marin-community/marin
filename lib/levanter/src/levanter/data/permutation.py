@@ -85,6 +85,15 @@ class EraShufflingDataset(AsyncDataset[T_co]):
         super().__init__()
         self.dataset = dataset
         self.era_length = era_length
+
+        # Force key to CPU (like MixtureDataset does)
+        from levanter.utils.jax_utils import local_cpu_mesh
+        with local_cpu_mesh():
+            if isinstance(key, int):
+                key = jax.random.PRNGKey(key)
+            else:
+                key = jax.device_put(jax.device_get(key))
+
         self.key = key
         self._perm_type = perm_type
 
