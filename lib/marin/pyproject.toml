@@ -15,7 +15,6 @@ dependencies = [
     "deepdiff",
     "draccus>=0.11.5",
     "fasteners>=0.19",
-    "flask",
     "fsspec>=2025.3.0",
     "gcsfs",
     "google-api-python-client>=2.175.0",
@@ -124,12 +123,6 @@ conflicts = [
         { extra = "cpu" },
     ],
 ]
-
-[tool.uv.sources]
-zephyr = { workspace = true }
-levanter = { workspace = true }
-fray = { workspace = true }
-dupekit = { workspace = true }
 
 torch = [
     # Default to the CPU index for TPU/CPU builds
