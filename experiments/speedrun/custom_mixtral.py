@@ -63,7 +63,7 @@ def _log_libtpu_args_once():
         _LOGGED_LIBTPU_ARGS = True
 
 
-@LmConfig.register_subclass("mixtral")
+@LmConfig.register_subclass("custom_mixtral")
 @dataclass(frozen=True)
 class CustomMixtralConfig(MistralConfig):
     """Config for MistralModel
