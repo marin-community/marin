@@ -17,13 +17,16 @@ Speedruns using the MuonH optimizer for various Qwen model sizes (Chinchilla opt
 configs mirroring those in marin/experiments/speedrun/muonh_llama_scaling/muonh_sweep.py
 """
 
+import math
 import logging
 import os
 from levanter.models.qwen import Qwen3Config
 from levanter.models.llama import LlamaConfig
 from levanter.optim import MuonHConfig
+from experiments.llama import llama3_tokenizer_vocab_size, llama_1_4b, llama_150m, llama_300m, llama_600m
+from experiments.llama import compute_num_parameters
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 
-from experiments.llama import llama_1_4b, llama_150m, llama_300m, llama_600m
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import executor_main
 from fray.cluster import ResourceConfig
@@ -43,6 +46,54 @@ def get_num_train_steps(param_count, batch_size, seq_len):
     total_tokens = param_count * 20
     tokens_per_step = batch_size * seq_len
     return total_tokens // tokens_per_step
+
+
+def compute_qwen3_num_parameters(config: Qwen3Config, vocab_size: int) -> int:
+    """More accurate parameter count for Qwen3 (accounts for hybrid norm + QK norm)."""
+    head_size = config.actual_head_size
+
+    q_params = config.num_heads * head_size * config.hidden_dim
+    k_params = config.num_kv_heads * head_size * config.hidden_dim
+    v_params = config.num_kv_heads * head_size * config.hidden_dim
+    o_params = config.num_heads * head_size * config.hidden_dim
+
+    if config.use_bias:
+        q_params += config.num_heads * head_size
+        k_params += config.num_kv_heads * head_size
+        v_params += config.num_kv_heads * head_size
+        o_params += config.hidden_dim  # output bias
+
+    attention_params = q_params + k_params + v_params + o_params
+
+    gate_params = config.hidden_dim * config.intermediate_dim
+    up_params = config.hidden_dim * config.intermediate_dim
+    down_params = config.intermediate_dim * config.hidden_dim
+    mlp_params = gate_params + up_params + down_params
+    if config.use_bias:
+        mlp_params += (2 * config.intermediate_dim) + config.hidden_dim  # gate/up/down biases
+
+    norm_weight = config.hidden_dim if config.norm_config.use_weight else 0
+    norm_bias = config.hidden_dim if config.norm_config.use_bias else 0
+    norm_params = norm_weight + norm_bias
+    norms_per_layer = 2 * norm_params  # pre-attn + pre-MLP
+    if config.hybrid_norm:
+        norms_per_layer += 2 * norm_params  # post-attn + post-MLP
+    qk_norm_params = 0
+    if config.norm_config is not None:
+        qk_weight = head_size if config.norm_config.use_weight else 0
+        qk_bias = head_size if config.norm_config.use_bias else 0
+        qk_norm_params = 2 * (qk_weight + qk_bias)  # q-norm + k-norm per layer
+
+    transformer_params = config.num_layers * (attention_params + mlp_params + norms_per_layer + qk_norm_params)
+    transformer_params += norm_params  # final rmsnorm
+    if config.input_embedding_norm:
+        transformer_params += norm_params
+
+    embedding_params = vocab_size * config.hidden_dim
+    if not config.tie_word_embeddings:
+        embedding_params *= 2
+
+    return transformer_params + embedding_params
 
 
 def _to_qwen3_from_llama(llama_cfg: LlamaConfig, *, seq_len_override=None) -> Qwen3Config:
@@ -73,11 +124,48 @@ def _to_qwen3_from_llama(llama_cfg: LlamaConfig, *, seq_len_override=None) -> Qw
     return qwen
 
 
+def _build_qwen3_from_param_count(param_target: int, seq_len: int) -> Qwen3Config:
+    """
+    Approximate a Qwen3Config for a target parameter count using the heuristics
+    from experiments/isoflop_sweep.py (hidden -> layers/heads ratios).
+    """
+    best_candidate = None
+    best_diff = None
+    for hidden_dim in range(512, 4097, 128):
+        hidden_pow = math.log2(hidden_dim)
+        num_layers = max(2, round(hidden_dim / (64 + (hidden_pow * 4) - 9)))
+        num_heads = max(1, hidden_dim // 128)
+        intermediate_dim = hidden_dim * 4
+
+        llama_candidate = LlamaConfig(
+            max_seq_len=seq_len,
+            hidden_dim=hidden_dim,
+            intermediate_dim=intermediate_dim,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            num_kv_heads=num_heads,
+            rope=Llama3RotaryEmbeddingsConfig(),
+        )
+        param_estimate = compute_num_parameters(llama_candidate, llama3_tokenizer_vocab_size)
+        diff = abs(param_estimate - param_target)
+        if best_diff is None or diff < best_diff:
+            best_diff = diff
+            best_candidate = llama_candidate
+
+    if best_candidate is None:
+        raise ValueError(f"Could not build Qwen3 config for {param_target} parameters.")
+
+    return _to_qwen3_from_llama(best_candidate, seq_len_override=seq_len)
+
+
 def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     param_counts = {
         "130m": 130_000_000,
+        "200m": 200_000_000,
         "300m": 300_000_000,
+        "400m": 400_000_000,
         "520m": 520_000_000,
+        "800m": 800_000_000,
         "1_2b": 1_200_000_000,
     }
 
@@ -86,25 +174,46 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
         "300m": llama_300m,
         "520m": llama_600m,
         "1_2b": llama_1_4b,
+        "200m": None,
+        "400m": None,
+        "800m": None,
     }
 
     batch_sizes = {
         "130m": 128,
+        "200m": 128,
         "300m": 128,
+        "400m": 256,
         "520m": 256,
+        "800m": 256,
         "1_2b": 256,
     }
 
     resource_cfgs = {
         "130m": ResourceConfig.with_tpu("v5litepod-64"),
+        "200m": ResourceConfig.with_tpu("v5litepod-64"),
         "300m": ResourceConfig.with_tpu("v5litepod-64"),
+        "400m": ResourceConfig.with_tpu("v5litepod-64"),
         "520m": ResourceConfig.with_tpu("v5litepod-64"),
+        "800m": ResourceConfig.with_tpu("v5litepod-64"),
         "1_2b": ResourceConfig.with_tpu("v5litepod-64"),
     }
 
     # Optimizer configs for each size
     muon_configs = {
         "130m": MuonHConfig(
+            learning_rate=0.02,
+            adam_lr=0.008,
+            min_lr_ratio=0,
+            momentum=0.95,
+            beta1=0.9,
+            beta2=0.98,
+            epsilon=1e-15,
+            muon_epsilon=1e-5,
+            max_grad_norm=1,
+            warmup=1000,
+        ),
+        "200m": MuonHConfig(
             learning_rate=0.02,
             adam_lr=0.008,
             min_lr_ratio=0,
@@ -128,6 +237,18 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
             max_grad_norm=1,
             warmup=1000,
         ),
+        "400m": MuonHConfig(
+            learning_rate=0.01,
+            adam_lr=0.002,
+            min_lr_ratio=0,
+            momentum=0.98,
+            beta1=0.9,
+            beta2=0.98,
+            epsilon=1e-15,
+            muon_epsilon=1e-5,
+            max_grad_norm=1,
+            warmup=1000,
+        ),
         "520m": MuonHConfig(
             learning_rate=0.01,
             adam_lr=0.002,
@@ -138,6 +259,18 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
             epsilon=1e-15,
             muon_epsilon=1e-5,
             max_grad_norm=1,
+            warmup=1000,
+        ),
+        "800m": MuonHConfig(
+            learning_rate=0.01,
+            adam_lr=0.0015,
+            min_lr_ratio=0,
+            momentum=0.98,
+            beta1=0.9,
+            beta2=0.98,
+            epsilon=1e-15,
+            muon_epsilon=1e-5,
+            max_grad_norm=2,
             warmup=1000,
         ),
         "1_2b": MuonHConfig(
@@ -156,22 +289,29 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
 
     descriptions = {
         "130m": "Qwen3 ~130M (LLaMA-geometry-matched) with MuonH.",
+        "200m": "Qwen3 ~200M (isoflop-inspired geometry) with MuonH.",
         "300m": "Qwen3 ~300M (LLaMA-geometry-matched) with MuonH.",
+        "400m": "Qwen3 ~400M (isoflop-inspired geometry) with MuonH.",
         "520m": "Qwen3 ~520M (LLaMA-geometry-matched) with MuonH.",
+        "800m": "Qwen3 ~800M (isoflop-inspired geometry) with MuonH.",
         "1_2b": "Qwen3 ~1.2B (LLaMA-geometry-matched) with MuonH.",
     }
 
     run_names = {
         "130m": "qwen3_130m_muonh_4096_lr_0.02_adam_lr_0.008",
+        "200m": "qwen3_200m_muonh_4096_lr_0.02_adam_lr_0.008",
         "300m": "qwen3_300m_muonh_4096_lr_0.01",
+        "400m": "qwen3_400m_muonh_4096_lr_0.01",
         "520m": "qwen3_520m_muonh_4096_lr_0.01",
+        "800m": "qwen3_800m_muonh_4096_low_lr",
         "1_2b": "qwen3_1_2b_muonh_4096_low_lr",
     }
 
     if size not in param_counts:
         raise ValueError(f"Unknown size: {size}")
 
-    llama_cfg = llama_model_cfgs[size]
+    seq_len = 4096
+    llama_cfg = llama_model_cfgs.get(size)
     batch_size = batch_sizes[size]
     resource_config = resource_cfgs[size]
     muon = muon_configs[size]
@@ -179,10 +319,18 @@ def build_config(size: str) -> tuple[str, SpeedrunConfig]:
     run_name = run_names[size]
 
     # Convert to Qwen3Config and set seq_len=4096 for the sweep
-    model_config = _to_qwen3_from_llama(llama_cfg, seq_len_override=4096)
+    if llama_cfg is not None:
+        model_config = _to_qwen3_from_llama(llama_cfg, seq_len_override=seq_len)
+    else:
+        model_config = _build_qwen3_from_param_count(param_counts[size], seq_len)
     seq_len = model_config.max_seq_len
 
-    num_train_steps = get_num_train_steps(param_counts[size], batch_size, seq_len)
+    param_count = (
+        compute_qwen3_num_parameters(model_config, llama3_tokenizer_vocab_size)
+        if llama_cfg is None
+        else param_counts[size]
+    )
+    num_train_steps = get_num_train_steps(param_count, batch_size, seq_len)
 
     train = SimpleTrainConfig(
         resource_config,
@@ -208,8 +356,11 @@ def main():
 
     runs = [
         build_config("130m"),
+        build_config("200m"),
         build_config("300m"),
+        build_config("400m"),
         build_config("520m"),
+        build_config("800m"),
         build_config("1_2b"),
     ]
 
