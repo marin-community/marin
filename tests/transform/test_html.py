@@ -21,6 +21,8 @@ from marin.transform.ar5iv.transform_ar5iv import process_record as ar5iv_proces
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
 from marin.transform.wikipedia.transform_wikipedia import (
     clean_wiki_html,
+)
+from marin.transform.wikipedia.transform_wikipedia import (
     process_record as wiki_process_record,
 )
 from marin.web.convert import convert_page
@@ -159,7 +161,7 @@ def test_clean_wiki_html():
 
 # One extraction method test (resiliparse variant only)
 def test_convert_page_with_resiliparse(sample_html_simple):
-    config = ResiliparseConfig.default_config()
+    config = ResiliparseConfig()
     result = convert_page(sample_html_simple, url=None, extract_method="resiliparse", config=config)
 
     assert "content" in result
@@ -172,7 +174,7 @@ def test_convert_page_with_resiliparse(sample_html_simple):
 # Full record processing
 def test_ar5iv_process_record():
     row = {"filename": "arxiv_12345", "content": SAMPLE_AR5IV_HTML}
-    config = ResiliparseConfig.default_config()
+    config = ResiliparseConfig()
 
     result = ar5iv_process_record(
         row, extract_method="resiliparse", extract_config=config, remove_reference_section=True
@@ -197,7 +199,7 @@ def test_wiki_process_record_with_html():
         "date_created": "2025-01-01",
         "article_body": {"html": SAMPLE_WIKIPEDIA_HTML},
     }
-    config = ResiliparseConfig.default_config()
+    config = ResiliparseConfig()
 
     result = wiki_process_record(
         row,
@@ -225,7 +227,7 @@ def test_wiki_process_record_filters_bad_content():
         "name": "Test Article",
         "article_body": {"html": SAMPLE_WIKIPEDIA_HTML},
     }
-    config = ResiliparseConfig.default_config()
+    config = ResiliparseConfig()
 
     # Set unreasonable thresholds to trigger filtering
     result = wiki_process_record(
@@ -263,7 +265,7 @@ def test_ar5iv_pipeline_integration(tmp_path, write_jsonl_gz, read_all_jsonl_gz)
         revision="test",
         remove_reference_section=True,
         extract_method="resiliparse",
-        extract_config=ResiliparseConfig.default_config(),
+        extract_config=ResiliparseConfig(),
     )
 
     process_ar5iv_dump(config)
@@ -293,7 +295,7 @@ def test_simple_html_to_md_pipeline(tmp_path, write_jsonl_gz, read_all_jsonl_gz)
         input_path=str(input_dir),
         output_path=str(output_dir),
         extract_method="resiliparse",
-        config=ResiliparseConfig.default_config(),
+        config=ResiliparseConfig(),
     )
 
     html_to_md(config)

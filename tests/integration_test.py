@@ -58,7 +58,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             input_path=os.path.join(synth_data, "pos"),
             output_path=this_output_path(),
             extract_method=versioned("resiliparse"),
-            config=ResiliparseConfig.default_config(),
+            config=ResiliparseConfig(),
         ),
     )
 
@@ -69,7 +69,7 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             input_path=os.path.join(synth_data, "neg"),
             output_path=this_output_path(),
             extract_method=versioned("resiliparse"),
-            config=ResiliparseConfig.default_config(),
+            config=ResiliparseConfig(),
         ),
     )
 
