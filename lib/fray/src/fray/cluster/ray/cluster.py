@@ -110,7 +110,7 @@ class RayCluster(Cluster):
 
         # Set default job context permanently to this cluster.
         ray_ctx = RayContext(ray_options={})
-        fray_default_job_ctx.__enter__(ray_ctx)
+        fray_default_job_ctx(ray_ctx).__enter__()
         logger.info("Set default job context to RayContext")
 
     @classmethod
