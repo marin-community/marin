@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from zephyr import Dataset, execute, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 
 class ChunkStrategy(str, Enum):
@@ -220,4 +220,4 @@ def chunk_with_config(config: ChunkingConfig) -> Sequence[str]:
         .flat_map(lambda example: _chunk_single_record(example, config))
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    return execute(pipeline)
+    return Backend.execute(pipeline)

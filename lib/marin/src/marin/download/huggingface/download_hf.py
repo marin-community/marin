@@ -29,7 +29,7 @@ import fsspec
 from huggingface_hub import HfFileSystem
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
-from zephyr import Dataset, execute
+from zephyr import Backend, Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +154,7 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    execute(pipeline)
+    Backend.execute(pipeline)
 
     # Write Provenance JSON
     write_provenance_json(

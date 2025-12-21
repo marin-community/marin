@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 
 from fray.job import create_job_ctx
-from zephyr import Backend, BackendConfig
 
 
 @pytest.fixture(scope="module")
@@ -36,5 +35,4 @@ def docs():
 )
 def sync_backend(request):
     """Backend fixture for sync and threadpool backends."""
-    ctx = create_job_ctx(request.param, max_workers=2)
-    return Backend(ctx, BackendConfig())
+    return create_job_ctx(request.param, max_workers=2)

@@ -40,7 +40,7 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
-from zephyr import Dataset, execute
+from zephyr import Backend, Dataset
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
@@ -307,9 +307,9 @@ def tokenize(config: TokenizeConfigBase):
 
         thread_ctx = create_job_ctx("threadpool")
         file_stats = list(
-            execute(
+            Backend.execute(
                 Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
-                thread_ctx,
+                context=thread_ctx,
                 verbose=False,
             )
         )
@@ -329,15 +329,15 @@ def tokenize(config: TokenizeConfigBase):
         )
 
         cluster_ctx = get_default_job_ctx()
-        shard_paths = execute(temp_shards, cluster_ctx)
+        shard_paths = Backend.execute(temp_shards, context=cluster_ctx)
 
         logger.info("Computing exemplar for cache consolidation")
-        exemplar = execute(
+        exemplar = Backend.execute(
             Dataset.from_list(paths[0:1])
             .flat_map(load_file)
             .take_per_shard(1)
             .map_shard(lambda example: _tokenize_batches(config, [example])),
-            cluster_ctx,
+            context=cluster_ctx,
         )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")

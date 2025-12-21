@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
-from zephyr import Dataset, execute
+from zephyr import Backend, Dataset
 
 from marin.classifiers.types import Attribute, Document, LabeledExample
 from marin.utils import fsspec_glob, fsspec_rm, rebase_file_path
@@ -100,7 +100,7 @@ def label_documents(
         .flat_map(processing_func)
         .write_jsonl(f"{output_attr_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    execute(pipeline, max_parallelism=1000)
+    Backend.execute(pipeline, max_parallelism=1000)
 
 
 def label_documents_shard(
@@ -179,7 +179,7 @@ def create_dataset(
         .flat_map(processing_func)
         .write_jsonl(f"{shard_path}/data-{{shard:05d}}-of-{{total:05d}}.{config.filetype}")
     )
-    execute(pipeline, max_parallelism=1000)
+    Backend.execute(pipeline, max_parallelism=1000)
 
     shard_paths = fsspec_glob(os.path.join(shard_path, f"**/*.{config.filetype}"))
     if config.max_sample_size is None:

@@ -28,7 +28,7 @@ from dataclasses import dataclass
 
 import draccus
 from bs4 import BeautifulSoup
-from zephyr import Dataset, execute, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 from marin import markdown
 
@@ -271,7 +271,7 @@ def main(cfg: Config) -> None:
         .map(clean_ar5iv_record)
         .write_jsonl(f"{cfg.output_path}/html_clean/{{shard:05d}}.jsonl.gz", skip_existing=True)
     )
-    execute(clean_pipeline)
+    Backend.execute(clean_pipeline)
 
     # Stage 2: Convert to Markdown
     print("Stage 2: Converting to markdown...")
@@ -281,6 +281,6 @@ def main(cfg: Config) -> None:
         .map(markdownify_ar5iv_record)
         .write_jsonl(f"{cfg.output_path}/md/{{shard:05d}}.jsonl.gz", skip_existing=True)
     )
-    execute(markdown_pipeline)
+    Backend.execute(markdown_pipeline)
 
     print("Transformation complete!")

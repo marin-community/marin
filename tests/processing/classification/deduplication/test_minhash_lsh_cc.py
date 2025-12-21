@@ -16,7 +16,7 @@ from collections import defaultdict
 from collections.abc import Iterator
 from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.processing.classification.deduplication.minhash_lsh import minhash_lsh
-from zephyr import Dataset, execute
+from zephyr import Backend, Dataset
 
 
 def _get_ids_per_bucket(_: str, records: Iterator[dict]) -> set:
@@ -36,10 +36,10 @@ def test_minhash_lsh_happy_path():
     num_bands = 32
     lsh_result = minhash_lsh(ds, vector_length=128, num_bands=num_bands)
 
-    output = execute(lsh_result)
+    output = Backend.execute(lsh_result)
     assert len(output) == len(input_data) * num_bands
 
-    bucketized = execute(lsh_result.group_by(lambda x: x["bucket"], _get_ids_per_bucket))
+    bucketized = Backend.execute(lsh_result.group_by(lambda x: x["bucket"], reducer=_get_ids_per_bucket))
 
     connected_1_and_4 = 0
     connected_1_2 = 0
@@ -65,7 +65,7 @@ def test_minhash_docs(docs):
 
     lsh_result = minhash_lsh(ds, vector_length=128, num_bands=32).group_by(lambda x: x["bucket"], _get_ids_per_bucket)
 
-    output = execute(lsh_result)
+    output = Backend.execute(lsh_result)
 
     similar_doc_collisions = 0
     different_doc_collisions = 0
@@ -87,10 +87,10 @@ def test_connected_components_happy_path(sync_backend, docs, tmp_path):
     lsh_result = minhash_lsh(ds)
 
     converged, output_path = connected_components(
-        lsh_result, backend=sync_backend, output_dir=tmp_path.as_posix(), max_iterations=5
+        lsh_result, ctx=sync_backend, output_dir=tmp_path.as_posix(), max_iterations=5
     )
     assert converged
-    results = sync_backend.execute(Dataset.from_list(output_path).load_parquet())
+    results = Backend.execute(Dataset.from_list(output_path).load_parquet(), context=sync_backend)
     assert len(results) == len(docs)
 
     components = defaultdict(list)

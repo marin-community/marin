@@ -26,7 +26,7 @@ uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
 from dataclasses import dataclass
 
 import draccus
-from zephyr import Dataset, execute, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 
 @dataclass
@@ -56,7 +56,7 @@ def convert_eval_to_dolma(cfg: ConvertEvalToDolmaConfig):
         .map(map_row)
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    execute(pipeline)
+    Backend.execute(pipeline)
 
 
 if __name__ == "__main__":

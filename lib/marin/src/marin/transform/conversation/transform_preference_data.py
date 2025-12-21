@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 import datasets
 import draccus
 from datasets import get_dataset_config_info
-from zephyr import Dataset, execute, write_jsonl_file
+from zephyr import Backend, Dataset, write_jsonl_file
 
 from .preference_data_adapters import PreferenceTransformAdapter, get_preference_adapter
 
@@ -214,7 +214,7 @@ def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
 
     # Process all tasks in parallel
     pipeline = Dataset.from_list(tasks).map(process_split_task)
-    results = execute(pipeline)
+    results = Backend.execute(pipeline)
 
     # Log summary
     for result in results:

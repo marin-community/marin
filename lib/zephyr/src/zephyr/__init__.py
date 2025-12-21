@@ -16,7 +16,7 @@
 
 import logging
 
-from zephyr.backends import Backend, BackendConfig, execute
+from zephyr.backends import Backend, BackendConfig
 from zephyr.dataset import Dataset
 from zephyr.expr import Expr, col, lit
 from zephyr.plan import ExecutionHint, PhysicalPlan, PhysicalStage, compute_plan
@@ -38,7 +38,6 @@ __all__ = [
     "atomic_rename",
     "col",
     "compute_plan",
-    "execute",
     "lit",
     "load_file",
     "load_jsonl",

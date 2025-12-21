@@ -17,7 +17,7 @@
 import pytest
 
 from fray.job import create_job_ctx
-from zephyr import Dataset, execute
+from zephyr import Backend, Dataset
 from zephyr.expr import col
 from zephyr.readers import InputFileSpec, load_vortex
 from zephyr.writers import write_vortex_file
@@ -121,7 +121,7 @@ class TestVortexPipeline:
             .write_vortex(output_pattern)
         )
 
-        results = list(execute(ds, sync_backend))
+        results = list(Backend.execute(ds, context=sync_backend))
         assert len(results) == 1
 
         # Verify output
@@ -135,7 +135,7 @@ class TestVortexPipeline:
 
         ds = Dataset.from_files(str(vortex_file)).load_file().filter(lambda r: r["id"] < 10).write_jsonl(output_pattern)
 
-        results = list(execute(ds, sync_backend))
+        results = list(Backend.execute(ds, context=sync_backend))
         assert len(results) == 1
 
     def test_vortex_to_parquet_conversion(self, sync_backend, vortex_file, tmp_path):
@@ -144,7 +144,7 @@ class TestVortexPipeline:
 
         ds = Dataset.from_files(str(vortex_file)).load_vortex().write_parquet(output_pattern)
 
-        results = list(execute(ds, sync_backend))
+        results = list(Backend.execute(ds, context=sync_backend))
         assert len(results) == 1
 
         # Verify parquet output
@@ -166,7 +166,7 @@ class TestVortexPipeline:
 
         ds = Dataset.from_files(str(parquet_path)).load_parquet().write_vortex(output_pattern)
 
-        results = list(execute(ds, sync_backend))
+        results = list(Backend.execute(ds, context=sync_backend))
         assert len(results) == 1
 
         # Verify vortex output
@@ -181,7 +181,7 @@ class TestVortexFilterPushdown:
         """Test filter pushdown with expression."""
         ds = Dataset.from_files(str(vortex_file)).load_vortex().filter(col("score") > 500)
 
-        results = list(execute(ds, sync_backend))
+        results = list(Backend.execute(ds, context=sync_backend))
         assert len(results) == 49  # scores 510, 520, ..., 990
         assert all(r["score"] > 500 for r in results)
 
@@ -189,6 +189,6 @@ class TestVortexFilterPushdown:
         """Test column selection pushdown."""
         ds = Dataset.from_files(str(vortex_file)).load_vortex().select("id", "score")
 
-        results = list(execute(ds, sync_backend))
+        results = list(Backend.execute(ds, context=sync_backend))
         assert len(results) == 100
         assert set(results[0].keys()) == {"id", "score"}

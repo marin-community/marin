@@ -33,7 +33,7 @@ import draccus
 from marin.schemas.web.convert import ExtractionConfig
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
-from zephyr import Dataset, execute, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 logger = logging.getLogger("ray")
 
@@ -315,4 +315,4 @@ def process_wiki_dump(cfg: WikiExtractionConfig) -> None:
         .filter(lambda record: record is not None)
         .write_jsonl(f"{output_base}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz", skip_existing=True)
     )
-    list(execute(pipeline))
+    list(Backend.execute(pipeline))

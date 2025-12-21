@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from marin.generation.dataset import convert_labeled_document_to_score
-from zephyr import Dataset, execute, load_jsonl
+from zephyr import Dataset, Backend, load_jsonl
 
 
 @dataclass
@@ -61,7 +61,7 @@ class DatasetOutputProcessor:
             .write_jsonl(f"{self.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
         )
 
-        execute(pipeline)
+        Backend.execute(pipeline)
         return self.score_distribution
 
 

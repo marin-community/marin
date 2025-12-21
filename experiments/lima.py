@@ -29,7 +29,7 @@ from marin.execution.executor import (
     versioned,
 )
 from marin.processing.tokenize.data_configs import TokenizerStep
-from zephyr import Dataset, execute, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 from experiments.defaults import default_tokenize
 from experiments.llama import llama3_tokenizer
@@ -81,7 +81,7 @@ def convert_lima_conversations(config: LimaConversationsToTextConfig):
         .filter(lambda x: x is not None)
         .write_jsonl(output_path)
     )
-    execute(pipeline)
+    Backend.execute(pipeline)
 
 
 lima_text = ExecutorStep(

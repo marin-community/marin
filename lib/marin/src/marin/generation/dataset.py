@@ -19,7 +19,7 @@ import time
 from collections.abc import Callable
 
 import fsspec
-from zephyr import Dataset, execute
+from zephyr import Backend, Dataset
 
 logger = logging.getLogger("ray")
 
@@ -129,4 +129,4 @@ class DatasetSampler:
             .map(lambda path: sample_file(path, label_weights=self.label_weights))
             .write_jsonl(f"{self.output_path}/sampled-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
         )
-        return execute(pipeline)
+        return Backend.execute(pipeline)

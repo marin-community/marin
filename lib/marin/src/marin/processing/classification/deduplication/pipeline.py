@@ -40,10 +40,9 @@ import wandb
 
 from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
 
-from fray.job import get_default_job_ctx
+from fray.job import create_job_ctx, get_default_job_ctx
 from marin.utils import fsspec_glob, rebase_file_path
-from zephyr import Dataset, col, execute
-from zephyr.backend_factory import create_backend
+from zephyr import Backend, Dataset, col
 from zephyr.readers import load_file, open_file, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
@@ -160,12 +159,13 @@ def _load_dupe_map_shard(shards: list[str]) -> dict[str, dict[str, str]]:
         shard_dup_map[record["hash"]] = {"canonical": record["canonical"]}
 
     with log_time(f"Load duplicate map from {len(shards)} shards"):
-        create_backend("threadpool").execute(
+        Backend.execute(
             Dataset.from_list(shards)
             .load_parquet()
             .select("hash", "canonical")
             .filter(col("hash").is_not_null())
-            .map(add_to_dup_map)
+            .map(add_to_dup_map),
+            context=create_job_ctx("threadpool"),
         )
 
     return shard_dup_map
@@ -198,7 +198,7 @@ class DupCounters:
             return f"{self.level} total: 0"
         return (
             f"{self.method.capitalize()} {self.level.lower()} total: {self.total:,}, "
-            f"dups: {self.dups:,} ({self.dups/self.total:.2%}), unique: {self.unique:,}, "
+            f"dups: {self.dups:,} ({self.dups / self.total:.2%}), unique: {self.unique:,}, "
             f"dup_clusters: {self.dup_clusters:,}"
         )
 
@@ -213,7 +213,7 @@ class DupCounters:
 
 def _compute_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
     with log_time(f"Compute deduplication stats from {len(shards)} shards"):
-        result: DupCounters = create_backend("threadpool").execute(  # type: ignore[bad-assignment]
+        result: DupCounters = Backend.execute(  # type: ignore[bad-assignment]
             Dataset.from_list(shards)
             .load_parquet()
             .select("cnt")
@@ -227,7 +227,8 @@ def _compute_dedup_stats(shards: list[str], method: str, level: str) -> DupCount
                     dup_clusters=int(c["cnt"] > 1),
                 )
             )
-            .reduce(partial(sum, start=DupCounters(method=method, level=level)))
+            .reduce(partial(sum, start=DupCounters(method=method, level=level))),
+            context=create_job_ctx("threadpool"),
         )[0]
     return result
 
@@ -284,7 +285,7 @@ def _run_deduplication(config: DedupeConfig):
 
     # first compute the full set of duplicate keys.
     duplicate_key_shards = list(
-        execute(
+        Backend.execute(
             Dataset.from_list(input_files).flat_map(_load_batches)
             # NOTE: when do we want to trigger reshard. Keep in mind that reshard will materialize the
             #   text field!
@@ -298,7 +299,7 @@ def _run_deduplication(config: DedupeConfig):
                 num_output_shards=42,
             )
             .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
-            ctx,
+            context=ctx,
             max_parallelism=config.processes,
             verbose=True,
         ),
@@ -324,7 +325,7 @@ def _run_deduplication(config: DedupeConfig):
             )
 
     base_path = _find_base_path(config.input_path, input_files)
-    execute(
+    Backend.execute(
         Dataset.from_list(input_files)
         .flat_map(_load_batches)
         .map_shard(mark_exact_dups_paragraphs)
@@ -339,7 +340,7 @@ def _run_deduplication(config: DedupeConfig):
             ),
             skip_existing=True,
         ),
-        ctx,
+        context=ctx,
     )
 
     if wandb.run:
@@ -350,9 +351,8 @@ def _run_deduplication(config: DedupeConfig):
 
 def _compute_fuzzy_dedup_stats(shards: list[str], method: str, level: str) -> DupCounters:
     with log_time(f"Compute fuzzy deduplication stats from {len(shards)} shards"):
-        result: DupCounters = create_backend("threadpool").execute(  # type: ignore[bad-assignment]
-            Dataset.from_list(shards)
-            .load_parquet(columns=["component_id"])
+        result: DupCounters = Backend.execute(  # type: ignore[bad-assignment]
+            Dataset.from_list(shards).load_parquet(columns=["component_id"])
             # Compute the per-component statistics and then roll them up into a single counter group
             .group_by(
                 key=lambda r: r["component_id"],
@@ -364,8 +364,8 @@ def _compute_fuzzy_dedup_stats(shards: list[str], method: str, level: str) -> Du
                     unique=1,
                     dup_clusters=int(total > 1),
                 ),
-            )
-            .reduce(partial(sum, start=DupCounters(method=method, level=level)))
+            ).reduce(partial(sum, start=DupCounters(method=method, level=level))),
+            context=create_job_ctx("threadpool"),
         )[0]
     return result
 
@@ -382,7 +382,10 @@ def _load_fuzzy_dupe_map_shard(shards: list[str]) -> dict[str, bool]:
         shard_dup_map[record["id"]] = record["fuzzy_duplicate"]
 
     with log_time(f"Load fuzzy duplicate map from {len(shards)} shards"):
-        create_backend("threadpool").execute(Dataset.from_list(shards).load_parquet().map(add_to_dup_map))
+        Backend.execute(
+            Dataset.from_list(shards).load_parquet().map(add_to_dup_map),
+            context=create_job_ctx("threadpool"),
+        )
 
     return shard_dup_map
 
@@ -410,7 +413,7 @@ def _run_doc_deduplication(config: DedupeConfig):
 
     # first compute the full set of duplicate keys.
     duplicate_key_shards = list(
-        execute(
+        Backend.execute(
             Dataset.from_list(input_files).flat_map(_load_batches)
             # NOTE: when do we want to trigger reshard. Keep in mind that reshard will materialize the
             #   text field!
@@ -424,7 +427,7 @@ def _run_doc_deduplication(config: DedupeConfig):
                 num_output_shards=42,
             )
             .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
-            ctx,
+            context=ctx,
             max_parallelism=config.processes,
             verbose=True,
         )
@@ -442,7 +445,7 @@ def _run_doc_deduplication(config: DedupeConfig):
     if not converged:
         # TODO (rav): log the number of changed nodes?
         logger.warning("Connected components did not converge")
-    fuzzy_dup_shards = execute(
+    fuzzy_dup_shards = Backend.execute(
         Dataset.from_list(cc_files)
         .flat_map(load_file)
         .map(
@@ -453,7 +456,7 @@ def _run_doc_deduplication(config: DedupeConfig):
         )
         .reshard(num_shards=42)
         .write_parquet(f"{config.output_path}/metadata/fuzzy-dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
-        ctx,
+        context=ctx,
     )
 
     fuzzy_cnt = _compute_fuzzy_dedup_stats(cc_files, method="fuzzy", level="document")
@@ -489,7 +492,7 @@ def _run_doc_deduplication(config: DedupeConfig):
                 yield r
 
     base_path = _find_base_path(config.input_path, input_files)
-    execute(
+    Backend.execute(
         Dataset.from_list(input_files).flat_map(_load_batches)
         # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
         # the shards of the input files for rebase_file_path to work correctly.
@@ -503,7 +506,7 @@ def _run_doc_deduplication(config: DedupeConfig):
             ),
             skip_existing=True,
         ),
-        ctx,
+        context=ctx,
         verbose=True,
     )
 

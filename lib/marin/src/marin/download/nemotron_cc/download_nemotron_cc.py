@@ -31,7 +31,7 @@ import requests
 from marin.download.nemotron_cc.utils import decompress_zstd_stream
 from marin.execution import THIS_OUTPUT_PATH
 from marin.utils import fsspec_exists
-from zephyr import Dataset, execute
+from zephyr import Backend, Dataset
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger("ray")
@@ -113,6 +113,6 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
         .write_jsonl(os.path.join(cfg.output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
 
-    execute(pipeline)
+    Backend.execute(pipeline)
 
     logger.info(f"Downloaded Nemotron CC files to {cfg.output_path}")

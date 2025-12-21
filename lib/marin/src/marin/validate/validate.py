@@ -36,7 +36,8 @@ import draccus
 import fsspec
 import numpy as np
 from marin.utilities.validation_utils import compute_global_mean_std, summarize_document
-from zephyr import Dataset, execute, load_jsonl
+from zephyr import Dataset, load_jsonl
+from zephyr.backends import Backend
 
 
 @dataclass
@@ -170,7 +171,7 @@ def main(cfg: ValidationConfig) -> None:
         )
     )
 
-    result = list(execute(pipeline))
+    result = list(Backend.execute(pipeline))
     print(f"Validation complete: {result[0]}")
 
 
