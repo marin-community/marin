@@ -499,16 +499,14 @@ def _merge_ledgers(
 
 
 def cpu_only_backend() -> Backend:
-    """Return a Backend instance that uses only CPU devices.
-
-    This function is deprecated. Use cpu_only_job_ctx from marin.processing.tokenize.tokenize instead.
-    """
+    """Return a Backend instance that uses only CPU devices."""
     from fray.job import get_default_job_ctx
     from zephyr.backends import BackendConfig
+    from zephyr.job import RayContext
 
     ctx = get_default_job_ctx()
     # For Ray contexts, set runtime environment for CPU-only execution
-    if hasattr(ctx, "ray_options"):
+    if isinstance(ctx, RayContext):
         ctx.ray_options["runtime_env"] = {"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}}
     config = BackendConfig()
     return Backend(ctx, config)

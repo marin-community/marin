@@ -450,19 +450,10 @@ class ContextConfig:
 def fray_default_job_ctx(ctx: JobContext):
     """Set the default job context for the duration of the context.
 
-    This is used by users to temporarily override the default context.
-
-    Args:
-        ctx: JobContext to set as default
-
-    Yields:
-        The context that was set
-
     Examples:
         >>> ctx = create_job_ctx("threadpool", max_workers=8)
         >>> with fray_default_job_ctx(ctx):
-        ...     # Context is active here
-        ...     results = execute(ds, get_default_job_ctx())
+        ...     results = execute(ds)
     """
     old_ctx = _job_context.get()
     _job_context.set(ctx)
@@ -473,14 +464,7 @@ def fray_default_job_ctx(ctx: JobContext):
 
 
 def get_default_job_ctx() -> JobContext:
-    """Get the current default job context.
-
-    Raises:
-        RuntimeError: If no default context is set
-
-    Returns:
-        Current default job context
-    """
+    """Get the current default job context, creating one if unset."""
     ctx = _job_context.get()
     if ctx is None:
         ctx = create_job_ctx(context_type="auto")
@@ -492,19 +476,12 @@ def create_job_ctx(
     max_workers: int = 1,
     **ray_options,
 ) -> JobContext:
-    """Create a new job context without setting it as default.
+    """Create a new job context.
 
     Args:
         context_type: Type of context (ray, threadpool, sync, or auto)
         max_workers: Maximum number of worker threads (threadpool only)
         **ray_options: Additional Ray remote options
-
-    Returns:
-        New JobContext instance (not set as default)
-
-    Raises:
-        ImportError: If ray context requested but ray not installed
-        ValueError: If context_type is invalid
 
     Examples:
         >>> context = create_job_ctx("sync")
@@ -529,10 +506,7 @@ def create_job_ctx(
 
 
 class SimpleActor:
-    """Test actor for basic actor functionality.
-
-    Ray cannot import test modules so we define this here for reference.
-    """
+    """Test actor for basic actor functionality. (Ray cannot import from test modules)."""
 
     def __init__(self, value: int):
         self.value = value
