@@ -85,7 +85,7 @@ class SimpleHtmlToMdConfig:
     input_path: str  # Input directory containing jsonl.gz files
     output_path: str  # Output directory containing md files
     extract_method: str = "resiliparse"
-    config: ExtractionConfig = field(default_factory=HtmlToMarkdownConfig.default_config)
+    config: ExtractionConfig = field(default_factory=HtmlToMarkdownConfig)
 
 
 def html_to_md(cfg: SimpleHtmlToMdConfig):
