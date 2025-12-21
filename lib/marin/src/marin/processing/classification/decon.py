@@ -35,10 +35,11 @@ import fsspec
 import msgspec
 import wandb
 
+from fray.job import get_default_job_ctx
 from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
 
 from marin.utils import fsspec_glob, rebase_file_path
-from zephyr import Dataset, flow_backend
+from zephyr import Dataset, execute
 from zephyr.readers import load_file, SUPPORTED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
@@ -213,13 +214,16 @@ def build_filter(
     logger.info(f"Building bloom filter from {all_files} into {bloom_path}")
 
     # Build bloom filters for all shards in parallel
-    shard_blooms_data = flow_backend().execute(
+    ctx = get_default_job_ctx()
+    shard_blooms_data = execute(
         Dataset.from_iterable(all_files)
         .reshard(num_shards=config.processes)
         .load_file()
         .select(config.text_field)
         .map_shard(build_shard_bloom)
-        .write_binary(f"{bloom_path}-{{shard:05d}}-of-{{total:05d}}.bin", skip_existing=True)
+        .write_binary(f"{bloom_path}-{{shard:05d}}-of-{{total:05d}}.bin", skip_existing=True),
+        ctx,
+        max_parallelism=config.processes,
     )
 
     if len(shard_blooms_data) == 1:
@@ -237,11 +241,12 @@ def build_filter(
             merged_bloom.update(shard_bloom)
         yield merged_bloom.save_bytes()
 
-    merged_bloom = flow_backend().execute(
+    merged_bloom = execute(
         Dataset.from_iterable(shard_blooms_data)
         .reshard(num_shards=1)
         .map_shard(_merge_bloom)
-        .write_binary(bloom_path, skip_existing=True)
+        .write_binary(bloom_path, skip_existing=True),
+        ctx,
     )
 
     return merged_bloom[0]
@@ -311,8 +316,9 @@ def mark_duplicates_bloom(
             }
 
     # Use write_jsonl with callable output pattern
+    ctx = get_default_job_ctx()
     result = list(
-        flow_backend(max_parallelism=config.processes).execute(
+        execute(
             Dataset.from_iterable(all_files)
             .flat_map(load_file)
             .map_shard(process_shard_with_bloom)
@@ -321,7 +327,9 @@ def mark_duplicates_bloom(
                     base_path, all_files[shard_idx], output_path, old_extension=_get_extension(all_files[shard_idx])
                 ),
                 skip_existing=True,
-            )
+            ),
+            ctx,
+            max_parallelism=config.processes,
         )
     )
     return result

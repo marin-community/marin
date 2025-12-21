@@ -22,7 +22,6 @@ from marin.transform.common_pile.filter_by_extension import (
     FilterByMetadataExtensionConfig,
     filter_dataset_by_metadata_extension,
 )
-from zephyr import create_backend, set_flow_backend
 
 
 def _write_jsonl_gz(path: Path, records: list[dict]) -> None:
@@ -70,7 +69,6 @@ def test_filter_by_metadata_extension(tmp_path: Path) -> None:
         input_glob="*.jsonl.gz",
     )
 
-    set_flow_backend(create_backend("sync"))
     filter_dataset_by_metadata_extension(config)
 
     # Verify that output files were created

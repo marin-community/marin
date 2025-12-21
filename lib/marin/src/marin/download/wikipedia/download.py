@@ -48,7 +48,7 @@ import fsspec
 import requests
 from marin.utils import fsspec_size
 from tqdm_loggable.auto import tqdm
-from zephyr import Dataset, atomic_rename, create_backend, flow_backend, load_jsonl
+from zephyr import Dataset, atomic_rename, execute, load_jsonl
 
 logger = logging.getLogger("ray")
 
@@ -114,27 +114,22 @@ def process_file(input_file: str, output_path: str) -> Iterable[str]:
 @draccus.wrap()
 def download(cfg: DownloadConfig) -> None:
     """Download and process Wikipedia data."""
-    backend = flow_backend()
     logger.info("Starting transfer of Wikipedia dump...")
     output_base = os.path.join(cfg.output_path, cfg.revision)
 
-    download_metrics = list(
-        backend.execute(
-            Dataset.from_list(cfg.input_urls)
-            .map(lambda url: download_tar(url, output_base))
-            .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True)
-        )
+    download_metrics = execute(
+        Dataset.from_list(cfg.input_urls)
+        .map(lambda url: download_tar(url, output_base))
+        .write_jsonl(f"{output_base}/.metrics/download-{{shard:05d}}.jsonl", skip_existing=True),
     )
 
     # load all of the output filenames to process
-    downloads = list(create_backend("threadpool").execute(Dataset.from_list(download_metrics).flat_map(load_jsonl)))
+    downloads = execute(Dataset.from_list(download_metrics).flat_map(load_jsonl))
 
-    extracted = list(
-        backend.execute(
-            Dataset.from_list(downloads)
-            .flat_map(lambda file: process_file(file, output_base))
-            .write_jsonl(f"{output_base}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True)
-        )
+    extracted = execute(
+        Dataset.from_list(downloads)
+        .flat_map(lambda file: process_file(file, output_base))
+        .write_jsonl(f"{output_base}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True),
     )
 
-    logger.info("Wikipedia dump transfer complete, wrote: %s", extracted)
+    logger.info("Wikipedia dump transfer complete, wrote: %s", list(extracted))

@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import os
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -38,7 +39,7 @@ import fsspec
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
 from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
-from zephyr import Dataset, flow_backend, load_jsonl, write_jsonl_file
+from zephyr import Dataset, execute, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
 
@@ -394,10 +395,8 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     # Configure backend with concurrency limit if specified
     if max_parallelism is not None:
         logger.info(f"Processing with max_parallelism={max_parallelism} to avoid HF rate limits")
-        backend = flow_backend(max_parallelism=max_parallelism)
     else:
         logger.info("Processing with default concurrency")
-        backend = flow_backend()
 
     all_tasks = list(get_dataset_tasks(cfg))
     logger.info(f"Found {len(all_tasks)} total shards across all subset/split combinations")
@@ -408,11 +407,9 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
         .map(process_shard_task)
         .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
     )
-    metric_files = list(backend.execute(pipeline))
+    metric_files = execute(pipeline)
 
     # Log summary by subset/split
-    from collections import defaultdict
-
     by_subset_split = defaultdict(list)
     for metric_file in metric_files:
         result = next(iter(load_jsonl(metric_file)))

@@ -16,14 +16,14 @@ from collections import defaultdict
 from collections.abc import Iterator
 from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.processing.classification.deduplication.minhash_lsh import minhash_lsh
-from zephyr.dataset import Dataset
+from zephyr import Dataset, execute
 
 
 def _get_ids_per_bucket(_: str, records: Iterator[dict]) -> set:
     return {record["id"] for record in records}
 
 
-def test_minhash_lsh_happy_path(sync_backend):
+def test_minhash_lsh_happy_path():
     input_data = [
         {"text": "the quick brown fox", "id": 1},
         {"text": "the quick brown fox jumps", "id": 2},
@@ -36,10 +36,10 @@ def test_minhash_lsh_happy_path(sync_backend):
     num_bands = 32
     lsh_result = minhash_lsh(ds, vector_length=128, num_bands=num_bands)
 
-    output = sync_backend.execute(lsh_result)
+    output = execute(lsh_result)
     assert len(output) == len(input_data) * num_bands
 
-    bucketized = sync_backend.execute(lsh_result.group_by(lambda x: x["bucket"], _get_ids_per_bucket))
+    bucketized = execute(lsh_result.group_by(lambda x: x["bucket"], _get_ids_per_bucket))
 
     connected_1_and_4 = 0
     connected_1_2 = 0
@@ -58,14 +58,14 @@ def test_minhash_lsh_happy_path(sync_backend):
     assert connected_1_3 == 0  # docs 1 and 3 should not collide
 
 
-def test_minhash_docs(sync_backend, docs):
+def test_minhash_docs(docs):
     input_data = [{"text": text, "id": doc_id} for doc_id, text in docs.items()]
 
     ds = Dataset.from_list(input_data)
 
     lsh_result = minhash_lsh(ds, vector_length=128, num_bands=32).group_by(lambda x: x["bucket"], _get_ids_per_bucket)
 
-    output = sync_backend.execute(lsh_result)
+    output = execute(lsh_result)
 
     similar_doc_collisions = 0
     different_doc_collisions = 0

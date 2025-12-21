@@ -23,6 +23,7 @@ import os
 import threading
 from collections.abc import Callable, Generator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
@@ -445,38 +446,71 @@ class ContextConfig:
     ray_options: dict = field(default_factory=dict)
 
 
-def fray_job_ctx(
+@contextmanager
+def fray_default_job_ctx(ctx: JobContext):
+    """Set the default job context for the duration of the context.
+
+    This is used by users to temporarily override the default context.
+
+    Args:
+        ctx: JobContext to set as default
+
+    Yields:
+        The context that was set
+
+    Examples:
+        >>> ctx = create_job_ctx("threadpool", max_workers=8)
+        >>> with fray_default_job_ctx(ctx):
+        ...     # Context is active here
+        ...     results = execute(ds, get_default_job_ctx())
+    """
+    old_ctx = _job_context.get()
+    _job_context.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _job_context.set(old_ctx)
+
+
+def get_default_job_ctx() -> JobContext:
+    """Get the current default job context.
+
+    Raises:
+        RuntimeError: If no default context is set
+
+    Returns:
+        Current default job context
+    """
+    ctx = _job_context.get()
+    if ctx is None:
+        ctx = create_job_ctx(context_type="auto")
+    return ctx
+
+
+def create_job_ctx(
     context_type: Literal["ray", "threadpool", "sync", "auto"] = "auto",
     max_workers: int = 1,
     **ray_options,
 ) -> JobContext:
-    """Get or create execution context from configuration.
-
-    If an existing context is already set, return it. Otherwise, create a new context.
+    """Create a new job context without setting it as default.
 
     Args:
-        context_type: Type of context (ray, threadpool, sync, or auto).
-            Use "auto" to auto-detect based on environment (default).
+        context_type: Type of context (ray, threadpool, sync, or auto)
         max_workers: Maximum number of worker threads (threadpool only)
         **ray_options: Additional Ray remote options
 
     Returns:
-        JobContext instance
+        New JobContext instance (not set as default)
 
     Raises:
         ImportError: If ray context requested but ray not installed
         ValueError: If context_type is invalid
 
     Examples:
-        >>> context = fray_job_ctx("sync")
-        >>> context = fray_job_ctx("threadpool", max_workers=4)
-        >>> context = fray_job_ctx("ray")
-        >>> context = fray_job_ctx("auto")  # Auto-detect ray or threadpool
+        >>> context = create_job_ctx("sync")
+        >>> context = create_job_ctx("threadpool", max_workers=4)
+        >>> context = create_job_ctx("ray")
     """
-    existing = _job_context.get()
-    if existing is not None:
-        return existing
-
     if context_type == "auto":
         if ray and ray.is_initialized():
             context_type = "ray"
@@ -484,25 +518,14 @@ def fray_job_ctx(
             context_type = "threadpool"
 
     if context_type == "sync":
-        ctx = SyncContext()
+        return SyncContext()
     elif context_type == "threadpool":
         workers = min(max_workers, os.cpu_count() or 1)
-        ctx = ThreadContext(max_workers=workers)
+        return ThreadContext(max_workers=workers)
     elif context_type == "ray":
-        ctx = RayContext(ray_options=ray_options)
+        return RayContext(ray_options=ray_options)
     else:
         raise ValueError(f"Unknown context type: {context_type}. Supported: 'ray', 'threadpool', 'sync'")
-
-    _job_context.set(ctx)
-    return ctx
-
-
-def set_job_ctx(ctx: JobContext | None) -> None:
-    """Set or clear the current job context.
-
-    Primarily for testing, to reset state between tests.
-    """
-    _job_context.set(ctx)
 
 
 class SimpleActor:

@@ -30,6 +30,7 @@ import draccus
 import jax
 import transformers
 from datasets import load_dataset_builder
+from fray.job import create_job_ctx, get_default_job_ctx
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -39,7 +40,7 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
-from zephyr import Dataset, create_backend, flow_backend
+from zephyr import Dataset, execute
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
@@ -257,9 +258,13 @@ def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterat
         yield from batch_processor(batch)
 
 
-def cpu_only_backend():
-    """Return a Zephyr flow backend that uses only CPU devices."""
-    return flow_backend(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}})
+def cpu_only_job_ctx():
+    """Return a job context that uses only CPU devices."""
+    ctx = get_default_job_ctx()
+    # For Ray contexts, set runtime environment for CPU-only execution
+    if hasattr(ctx, "ray_options"):
+        ctx.ray_options["runtime_env"] = {"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}}
+    return ctx
 
 
 def tokenize(config: TokenizeConfigBase):
@@ -309,12 +314,13 @@ def tokenize(config: TokenizeConfigBase):
             )
             return
 
-        cluster_backend = cpu_only_backend()
+        cluster_ctx = cpu_only_job_ctx()
 
-        thread_backend = create_backend("threadpool")
+        thread_ctx = create_job_ctx("threadpool")
         file_stats = list(
-            thread_backend.execute(
+            execute(
                 Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
+                thread_ctx,
                 verbose=False,
             )
         )
@@ -333,14 +339,15 @@ def tokenize(config: TokenizeConfigBase):
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
-        shard_paths = list(cluster_backend.execute(temp_shards))
+        shard_paths = execute(temp_shards, cluster_ctx)
 
         logger.info("Computing exemplar for cache consolidation")
-        exemplar = cluster_backend.execute(
+        exemplar = execute(
             Dataset.from_list(paths[0:1])
             .flat_map(load_file)
             .take_per_shard(1)
-            .map_shard(lambda example: _tokenize_batches(config, [example]))
+            .map_shard(lambda example: _tokenize_batches(config, [example])),
+            cluster_ctx,
         )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
@@ -348,7 +355,7 @@ def tokenize(config: TokenizeConfigBase):
             shard_cache_paths=shard_paths,
             output_path=prefix,
             exemplar=exemplar,
-            backend=cpu_only_backend(),
+            backend=cpu_only_job_ctx(),
         )
 
     if train_paths:

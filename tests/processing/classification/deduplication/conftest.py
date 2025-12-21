@@ -14,12 +14,9 @@
 
 from pathlib import Path
 import pytest
-from zephyr.backend_factory import create_backend
 
-
-@pytest.fixture(scope="module")
-def sync_backend():
-    return create_backend("sync")
+from fray.job import create_job_ctx
+from zephyr import Backend, BackendConfig
 
 
 @pytest.fixture(scope="module")
@@ -29,3 +26,15 @@ def docs():
     for doc_file in test_resources.glob("*.txt"):
         docs[doc_file.stem] = doc_file.read_text()
     return docs
+
+
+@pytest.fixture(
+    params=[
+        pytest.param("sync", id="sync"),
+        pytest.param("threadpool", id="thread"),
+    ]
+)
+def sync_backend(request):
+    """Backend fixture for sync and threadpool backends."""
+    ctx = create_job_ctx(request.param, max_workers=2)
+    return Backend(ctx, BackendConfig())

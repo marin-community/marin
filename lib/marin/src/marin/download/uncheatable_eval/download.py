@@ -22,7 +22,7 @@ import os
 import posixpath
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import fsspec
@@ -31,7 +31,7 @@ from marin.execution import THIS_OUTPUT_PATH, ExecutorStep, VersionedValue, ensu
 from marin.utils import fsspec_mkdirs
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
-from zephyr import Dataset, flow_backend
+from zephyr import Dataset, execute
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger("ray")
@@ -111,28 +111,17 @@ class UncheatableEvalDownloadConfig:
     metadata_filename: str = "metadata.json"
 
 
-@dataclass(frozen=True)
-class _RequestOptions:
-    headers: dict[str, str] = field(default_factory=dict)
-    timeout: int = 120
+def _fetch_directory_listing(cfg: UncheatableEvalDownloadConfig) -> list[dict[str, Any]]:
+    """Return the list of files in the configured GitHub repository directory."""
 
-
-def _build_request_options(cfg: UncheatableEvalDownloadConfig) -> _RequestOptions:
     headers = {"Accept": "application/vnd.github+json"}
     token = cfg.github_token or os.environ.get("GITHUB_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    return _RequestOptions(headers=headers, timeout=cfg.request_timeout)
 
-
-def _fetch_directory_listing(
-    cfg: UncheatableEvalDownloadConfig, request_options: _RequestOptions
-) -> list[dict[str, Any]]:
-    """Return the list of files in the configured GitHub repository directory."""
-
-    base_url = f"https://api.github.com/repos/{cfg.repo_owner}/{cfg.repo_name}/contents/{cfg.data_path}"
-    params = {"ref": cfg.branch}
-    response = requests.get(base_url, headers=request_options.headers, params=params, timeout=request_options.timeout)
+    base_url = f"https://api.github.com/repos/{cfg.repo_owner!s}/{cfg.repo_name!s}/contents/{cfg.data_path!s}"
+    params = {"ref": str(cfg.branch)}
+    response = requests.get(base_url, headers=headers, params=params, timeout=cfg.request_timeout)
     response.raise_for_status()
     payload = response.json()
     if not isinstance(payload, list):
@@ -254,7 +243,6 @@ def _download_and_convert_single(
     input_url: str,
     output_file_path: str,
     dataset: UncheatableEvalDataset,
-    request_options: _RequestOptions,
 ) -> dict[str, Any]:
     session = requests.Session()
     retries = Retry(total=5, backoff_factor=1.0, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
@@ -263,7 +251,7 @@ def _download_and_convert_single(
     session.mount("http://", adapter)
 
     logger.info("Downloading %s from %s", dataset.name, input_url)
-    response = session.get(input_url, headers=request_options.headers, timeout=request_options.timeout)
+    response = session.get(input_url, timeout=120)
     response.raise_for_status()
 
     try:
@@ -292,13 +280,12 @@ def _download_and_convert_single(
 def _generate_tasks(
     datasets: Iterable[UncheatableEvalDataset],
     output_path: str,
-    request_options: _RequestOptions,
-) -> tuple[list[tuple[str, str, UncheatableEvalDataset, _RequestOptions]], list[UncheatableEvalDataset]]:
-    tasks: list[tuple[str, str, UncheatableEvalDataset, _RequestOptions]] = []
+) -> tuple[list[tuple[str, str, UncheatableEvalDataset]], list[UncheatableEvalDataset]]:
+    tasks: list[tuple[str, str, UncheatableEvalDataset]] = []
     filtered: list[UncheatableEvalDataset] = []
     for dataset in datasets:
         output_file = posixpath.join(output_path, dataset.output_filename())
-        tasks.append((dataset.download_url, output_file, dataset, request_options))
+        tasks.append((dataset.download_url, output_file, dataset))
         filtered.append(dataset)
     return tasks, filtered
 
@@ -315,8 +302,7 @@ def _write_metadata(cfg: UncheatableEvalDownloadConfig, records: list[dict[str, 
 def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict[str, Any]:
     """Download and normalize the newest Uncheatable Eval dump for each benchmark."""
 
-    request_options = _build_request_options(cfg)
-    entries = _fetch_directory_listing(cfg, request_options)
+    entries = _fetch_directory_listing(cfg)
     datasets = _parse_available_dumps(entries)
     latest_datasets = _select_latest_dumps(datasets)
 
@@ -327,7 +313,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
     output_path = str(cfg.output_path)
     fsspec_mkdirs(output_path, exist_ok=True)
 
-    tasks, filtered_datasets = _generate_tasks(latest_datasets, output_path, request_options)
+    tasks, filtered_datasets = _generate_tasks(latest_datasets, output_path)
 
     if not tasks:
         logger.info("No new datasets to process")
@@ -335,14 +321,12 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
 
     metadata_records: list[dict[str, Any]] = []
 
-    backend = flow_backend(max_parallelism=cfg.max_concurrent_downloads, max_retries=3)
-
     pipeline = (
         Dataset.from_list(tasks)
         .map(lambda task: _download_and_convert_single(*task))
         .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
     )
-    output_paths = list(backend.execute(pipeline))
+    output_paths = execute(pipeline, max_parallelism=cfg.max_concurrent_downloads)
 
     for dataset, metadata_file in zip(filtered_datasets, output_paths, strict=True):
         with fsspec.open(metadata_file, "r", encoding="utf-8") as meta_file:

@@ -19,7 +19,7 @@ import time
 from collections.abc import Callable
 
 import fsspec
-from zephyr import Dataset, flow_backend
+from zephyr import Dataset, execute
 
 logger = logging.getLogger("ray")
 
@@ -122,12 +122,11 @@ class DatasetSampler:
         """Sample the dataset and write output files.
 
         Returns:
-            List of output file paths written.
+            Sequence of output file paths written.
         """
-        backend = flow_backend()
         pipeline = (
             Dataset.from_files(f"{self.input_path}/**/*.jsonl.gz")
             .map(lambda path: sample_file(path, label_weights=self.label_weights))
             .write_jsonl(f"{self.output_path}/sampled-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
         )
-        return list(backend.execute(pipeline))
+        return execute(pipeline)

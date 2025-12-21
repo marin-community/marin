@@ -31,7 +31,7 @@ import os
 from dataclasses import dataclass
 
 import draccus
-from zephyr import Dataset, flow_backend, load_parquet
+from zephyr import Dataset, execute, load_parquet
 
 
 @dataclass
@@ -150,7 +150,6 @@ def convert_lavita_split_to_dolma(cfg: LavitaToDolmaConfig) -> None:
     """Transform Lavita medical QA data to Dolma format."""
     input_path = os.path.join(cfg.input_path, cfg.subset)
 
-    backend = flow_backend()
     pipeline = (
         Dataset.from_files(f"{input_path}/*{cfg.split}*.parquet")
         .flat_map(load_parquet)
@@ -158,7 +157,7 @@ def convert_lavita_split_to_dolma(cfg: LavitaToDolmaConfig) -> None:
         .filter(lambda record: record is not None)
         .write_parquet(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.parquet")
     )
-    list(backend.execute(pipeline))
+    list(execute(pipeline))
 
 
 if __name__ == "__main__":

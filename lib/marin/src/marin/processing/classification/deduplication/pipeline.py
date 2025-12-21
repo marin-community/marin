@@ -40,8 +40,9 @@ import wandb
 
 from marin.utilities.wandb_utils import WANDB_PROJECT, WANDB_ENTITY
 
+from fray.job import get_default_job_ctx
 from marin.utils import fsspec_glob, rebase_file_path
-from zephyr import Dataset, col, flow_backend
+from zephyr import Dataset, col, execute
 from zephyr.backend_factory import create_backend
 from zephyr.readers import load_file, open_file, SUPPORTED_EXTENSIONS
 
@@ -269,7 +270,7 @@ def _run_deduplication(config: DedupeConfig):
 
     input_files = _collect_input_files(config.input_path)
 
-    backend = flow_backend(max_parallelism=config.processes)
+    ctx = get_default_job_ctx()
     _init_wandb(config, tags=["paragraph"])
 
     def compute_paragraph_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -283,7 +284,7 @@ def _run_deduplication(config: DedupeConfig):
 
     # first compute the full set of duplicate keys.
     duplicate_key_shards = list(
-        backend.execute(
+        execute(
             Dataset.from_list(input_files).flat_map(_load_batches)
             # NOTE: when do we want to trigger reshard. Keep in mind that reshard will materialize the
             #   text field!
@@ -297,6 +298,8 @@ def _run_deduplication(config: DedupeConfig):
                 num_output_shards=42,
             )
             .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
+            ctx,
+            max_parallelism=config.processes,
             verbose=True,
         ),
     )
@@ -321,7 +324,7 @@ def _run_deduplication(config: DedupeConfig):
             )
 
     base_path = _find_base_path(config.input_path, input_files)
-    backend.execute(
+    execute(
         Dataset.from_list(input_files)
         .flat_map(_load_batches)
         .map_shard(mark_exact_dups_paragraphs)
@@ -335,7 +338,8 @@ def _run_deduplication(config: DedupeConfig):
                 old_extension=_get_extension(input_files[shard_idx]),
             ),
             skip_existing=True,
-        )
+        ),
+        ctx,
     )
 
     if wandb.run:
@@ -393,7 +397,7 @@ def _run_doc_deduplication(config: DedupeConfig):
 
     input_files = _collect_input_files(config.input_path)
 
-    backend = flow_backend(max_parallelism=config.processes)
+    ctx = get_default_job_ctx()
     _init_wandb(config, tags=["exact-doc"])
 
     def compute_document_hashes(batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -406,7 +410,7 @@ def _run_doc_deduplication(config: DedupeConfig):
 
     # first compute the full set of duplicate keys.
     duplicate_key_shards = list(
-        backend.execute(
+        execute(
             Dataset.from_list(input_files).flat_map(_load_batches)
             # NOTE: when do we want to trigger reshard. Keep in mind that reshard will materialize the
             #   text field!
@@ -420,6 +424,8 @@ def _run_doc_deduplication(config: DedupeConfig):
                 num_output_shards=42,
             )
             .write_parquet(f"{config.output_path}/metadata/dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
+            ctx,
+            max_parallelism=config.processes,
             verbose=True,
         )
     )
@@ -432,13 +438,11 @@ def _run_doc_deduplication(config: DedupeConfig):
         .flat_map(load_file)
         .reshard(num_shards=config.processes if len(input_files) < 42 else None)
     )
-    converged, cc_files = connected_components(
-        doc_minhash_lsh, backend=backend, output_dir=f"{config.output_path}/metadata/cc"
-    )
+    converged, cc_files = connected_components(doc_minhash_lsh, ctx=ctx, output_dir=f"{config.output_path}/metadata/cc")
     if not converged:
         # TODO (rav): log the number of changed nodes?
         logger.warning("Connected components did not converge")
-    fuzzy_dup_shards = backend.execute(
+    fuzzy_dup_shards = execute(
         Dataset.from_list(cc_files)
         .flat_map(load_file)
         .map(
@@ -448,7 +452,8 @@ def _run_doc_deduplication(config: DedupeConfig):
             }
         )
         .reshard(num_shards=42)
-        .write_parquet(f"{config.output_path}/metadata/fuzzy-dup-key-{{shard:05d}}-of-{{total:05d}}.parquet")
+        .write_parquet(f"{config.output_path}/metadata/fuzzy-dup-key-{{shard:05d}}-of-{{total:05d}}.parquet"),
+        ctx,
     )
 
     fuzzy_cnt = _compute_fuzzy_dedup_stats(cc_files, method="fuzzy", level="document")
@@ -484,7 +489,7 @@ def _run_doc_deduplication(config: DedupeConfig):
                 yield r
 
     base_path = _find_base_path(config.input_path, input_files)
-    backend.execute(
+    execute(
         Dataset.from_list(input_files).flat_map(_load_batches)
         # NOTE/TODO: we can't reshard here to increase parallelism because afaiu we want to match
         # the shards of the input files for rebase_file_path to work correctly.
@@ -498,6 +503,7 @@ def _run_doc_deduplication(config: DedupeConfig):
             ),
             skip_existing=True,
         ),
+        ctx,
         verbose=True,
     )
 

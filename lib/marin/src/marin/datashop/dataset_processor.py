@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from marin.generation.dataset import convert_labeled_document_to_score
-from zephyr import Dataset, flow_backend, load_jsonl
+from zephyr import Dataset, execute, load_jsonl
 
 
 @dataclass
@@ -53,7 +53,6 @@ class DatasetOutputProcessor:
         raise NotImplementedError("Subclasses must implement this method")
 
     def convert_dataset(self):
-        backend = flow_backend()
         pipeline = (
             Dataset.from_files(f"{self.input_path}/**/*.jsonl.gz")
             .flat_map(load_jsonl)
@@ -62,7 +61,7 @@ class DatasetOutputProcessor:
             .write_jsonl(f"{self.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
         )
 
-        list(backend.execute(pipeline))
+        execute(pipeline)
         return self.score_distribution
 
 

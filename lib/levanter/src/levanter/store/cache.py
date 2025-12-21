@@ -22,7 +22,7 @@ from dataclasses_json import dataclass_json
 from fsspec import AbstractFileSystem
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
-from zephyr import Dataset, flow_backend, Backend
+from zephyr import Backend, Dataset, execute
 from zephyr.writers import write_levanter_cache
 
 from levanter.data.dataset import AsyncDataset
@@ -296,7 +296,6 @@ def build_cache(
     """
     Build a cache from a sharded data source using a Zephyr backend.
     """
-    backend = backend or cpu_only_backend()
     shard_names = list(source.shard_names)
 
     if len(shard_names) == 0:
@@ -327,7 +326,7 @@ def build_cache(
             metadata=metadata,
         )
 
-    shard_results = list(backend.execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False))
+    shard_results = execute(Dataset.from_list(shard_jobs).map(process_shard), verbose=False)
     shard_results = sorted(shard_results, key=lambda r: r["index"])
 
     shard_cache_paths = [s["path"] for s in shard_results]
@@ -460,8 +459,7 @@ def consolidate_shard_caches(
             )
         )
 
-    backend = backend or cpu_only_backend()
-    list(backend.execute(Dataset.from_list(shard_info).map(_copy_shard), verbose=False))
+    execute(Dataset.from_list(shard_info).map(_copy_shard), verbose=False)
 
     # do metadata serially b/c of write amplification concerns
     for info in shard_info:
@@ -501,7 +499,19 @@ def _merge_ledgers(
 
 
 def cpu_only_backend() -> Backend:
-    return flow_backend(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}})
+    """Return a Backend instance that uses only CPU devices.
+
+    This function is deprecated. Use cpu_only_job_ctx from marin.processing.tokenize.tokenize instead.
+    """
+    from fray.job import get_default_job_ctx
+    from zephyr.backends import BackendConfig
+
+    ctx = get_default_job_ctx()
+    # For Ray contexts, set runtime environment for CPU-only execution
+    if hasattr(ctx, "ray_options"):
+        ctx.ray_options["runtime_env"] = {"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}}
+    config = BackendConfig()
+    return Backend(ctx, config)
 
 
 def _distributed_build_cache(

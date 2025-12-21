@@ -97,9 +97,8 @@ def test_fused_execution_with_batch():
     Note: Batching happens per-shard. Since each input item becomes its own shard,
     and filtering may reduce items per shard, batches may not span across shards.
     """
-    from zephyr import create_backend
+    from zephyr import execute
 
-    backend = create_backend("sync")
     # Use a flat_map to create multiple items in a single shard
     ds = (
         Dataset.from_list([[1, 2, 3, 4, 5, 6]])
@@ -109,5 +108,5 @@ def test_fused_execution_with_batch():
         .window(2)  # [[6, 8], [10, 12]]
     )
 
-    result = list(backend.execute(ds))
+    result = list(execute(ds))
     assert result == [[6, 8], [10, 12]]

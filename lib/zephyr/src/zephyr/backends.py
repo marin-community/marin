@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 
 import numpy as np
-from fray.job import JobContext
+from fray.job import JobContext, get_default_job_ctx
 from tqdm_loggable.auto import tqdm
 
 from zephyr.dataset import Dataset
@@ -461,3 +461,40 @@ class Backend:
                 )
 
         return shards
+
+
+def execute(
+    dataset: Dataset[T],
+    context: JobContext | None = None,
+    hints: ExecutionHint = ExecutionHint(),
+    verbose: bool = False,
+    max_parallelism: int = 1024,
+    dry_run: bool = False,
+) -> Sequence[T]:
+    """Execute a dataset and return results.
+
+    This is the primary entry point for executing Zephyr datasets.
+
+    Args:
+        dataset: Dataset to execute
+        context: JobContext to use for execution. If None, uses get_default_job_ctx()
+        hints: Execution hints (chunk_size, intra_shard_parallelism, etc.)
+        verbose: Print additional logging and optimization stats
+        max_parallelism: Maximum number of concurrent tasks
+        dry_run: If True, show optimization plan without executing
+
+    Returns:
+        Sequence of results
+
+    Examples:
+        >>> from zephyr import Dataset, execute
+        >>>
+        >>> ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
+        >>> results = list(execute(ds))  # Uses default context
+        [2, 4, 6]
+    """
+    if context is None:
+        context = get_default_job_ctx()
+    config = BackendConfig(max_parallelism=max_parallelism, dry_run=dry_run)
+    backend = Backend(context, config)
+    return backend.execute(dataset, hints=hints, verbose=verbose)
