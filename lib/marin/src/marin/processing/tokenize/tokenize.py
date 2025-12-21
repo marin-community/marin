@@ -342,7 +342,7 @@ def tokenize(config: TokenizeConfigBase):
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
         consolidate_shard_caches(
-            shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar, backend=cluster_ctx
+            shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar, context=cluster_ctx
         )
 
     if train_paths:
