@@ -23,7 +23,7 @@ import logging
 import json
 import os
 from dataclasses import dataclass
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 
 import fsspec
 import pandas as pd
@@ -37,7 +37,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
+# Note: ExecutorStep and friends are used by callers, not needed here
 
 
 def extract_run_name_from_path(path: str) -> str:
@@ -184,46 +184,3 @@ def read_metrics_dataframe(config: EvalMetricsAnalysisConfig) -> pd.DataFrame:
     logger.info(f"Loaded {len(all_records)} evaluation records from {len(config.training_runs)} runs")
     logger.info(f"Available columns: {list(df.columns)}")
     return df
-
-
-def create_analysis_step(
-    name: str,
-    training_runs: Sequence[ExecutorStep | InputName],
-    analysis_fn: Callable[[EvalMetricsAnalysisConfig], None],
-    config_class: type[EvalMetricsAnalysisConfig],
-    description: str | None = None,
-    **config_kwargs,
-) -> ExecutorStep:
-    """
-    Create an ExecutorStep for an eval metrics analysis.
-
-    This is the factory for creating analysis steps. It:
-    - Converts training ExecutorSteps to blocking dependencies
-    - Creates the appropriate config subclass
-    - Returns an ExecutorStep that runs the analysis
-
-    Args:
-        name: Name for this executor step
-        training_runs: Training run ExecutorSteps (creates blocking dependencies)
-        analysis_fn: The analysis function to run
-        config_class: The config class (EvalMetricsAnalysisConfig or subclass)
-        description: Optional description
-        **config_kwargs: Additional kwargs passed to config_class
-
-    Returns:
-        ExecutorStep configured to run the analysis
-    """
-    run_paths = [output_path_of(run) if isinstance(run, ExecutorStep) else run for run in training_runs]
-
-    config = config_class(
-        training_runs=run_paths,
-        output_path=this_output_path(),
-        **config_kwargs,
-    )
-
-    return ExecutorStep(
-        name=name,
-        fn=analysis_fn,
-        config=config,
-        description=description or f"Analyze eval metrics from {len(training_runs)} training runs",
-    )

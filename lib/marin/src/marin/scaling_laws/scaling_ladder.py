@@ -49,10 +49,7 @@ import jmp
 from fray.cluster import ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMMixtureDatasetConfig
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.main.train_lm import TrainLmConfig
-from levanter.models.qwen import Qwen3Config
-from levanter.optim.cautious import CautiousConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
@@ -63,6 +60,8 @@ from marin.processing.tokenize.tokenize import TokenizeConfig
 from marin.scaling_laws.isoflop_analysis import (
     CandidateConfig,
     IsoFlopSweepConfig,
+    build_model_config,
+    build_optimizer_config,
     pick_v5p_type,
     predict_optimal_config,
 )
@@ -203,16 +202,8 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
         f"  learning_rate={candidate.learning_rate:.6f}, tokens={candidate.tokens:.2e}"
     )
 
-    # Build model config
-    model_cfg = Qwen3Config(
-        max_seq_len=config.seq_len,
-        hidden_dim=candidate.hidden_size,
-        intermediate_dim=candidate.intermediate_dim,
-        num_heads=candidate.num_heads,
-        num_kv_heads=candidate.num_kv_heads,
-        num_layers=candidate.num_layers,
-        rope=Llama3RotaryEmbeddingsConfig(),
-    )
+    # Build model config using shared builder
+    model_cfg = build_model_config(candidate, config.seq_len)
 
     # Pick TPU type based on memory requirements
     param_count = model_cfg.total_trainable_params(vocab_size)
@@ -225,20 +216,8 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
         vocab_size,
     )
 
-    # Build optimizer config (matches isoflop_sweep defaults)
-    optimizer_cfg = CautiousConfig(
-        learning_rate=candidate.learning_rate,
-        weight_decay=0.1,
-        min_lr_ratio=0.0,
-        warmup=0.1,
-        beta1=0.95,
-        beta2=candidate.beta2,
-        epsilon=1e-15,
-        max_grad_norm=1,
-        adamc_weight_decay=True,
-        lr_schedule="linear",
-        decay=0.2,
-    )
+    # Build optimizer config using shared builder
+    optimizer_cfg = build_optimizer_config(candidate)
 
     # Prepare data config
     # Accepts both string paths and LMMixtureDatasetConfig
