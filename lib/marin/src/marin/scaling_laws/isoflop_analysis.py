@@ -441,6 +441,78 @@ def compute_transformer_params(
     return total
 
 
+# ---------------- Shared Model/Optimizer Builders ----------------
+
+
+def build_model_config(candidate: CandidateConfig, seq_len: int = SEQ_LEN) -> Qwen3Config:
+    """Build a Qwen3Config from a CandidateConfig.
+
+    This is the shared builder used by both generate_isoflop_train_args() and
+    scaling_ladder's run_scaling_ladder_rung() to ensure consistent model configs.
+    """
+    return Qwen3Config(
+        max_seq_len=seq_len,
+        hidden_dim=candidate.hidden_size,
+        intermediate_dim=candidate.intermediate_dim,
+        num_heads=candidate.num_heads,
+        num_kv_heads=candidate.num_kv_heads,
+        num_layers=candidate.num_layers,
+        rope=Llama3RotaryEmbeddingsConfig(),
+    )
+
+
+def build_optimizer_config(candidate: CandidateConfig) -> CautiousConfig:
+    """Build optimizer config from a CandidateConfig.
+
+    This is the shared builder used by both generate_isoflop_train_args() and
+    scaling_ladder's run_scaling_ladder_rung() to ensure consistent optimizer configs.
+    """
+    return CautiousConfig(
+        learning_rate=candidate.learning_rate,
+        weight_decay=0.1,
+        min_lr_ratio=0.0,
+        warmup=0.1,
+        beta1=0.95,
+        beta2=candidate.beta2,
+        epsilon=1e-15,
+        max_grad_norm=1,
+        adamc_weight_decay=True,
+        lr_schedule="linear",
+        decay=0.2,
+    )
+
+
+def _minima_to_candidates(minima_records: list[MinimaRecord]) -> list[CandidateConfig]:
+    """Convert minima records to CandidateConfig objects.
+
+    This is used by both _run_isoflop_analysis_step() and run_isoflop_analysis()
+    to convert the fitted minima into usable candidate configs.
+    """
+    configs = []
+    for rec in minima_records:
+        if rec["hidden_dim"] == 0:
+            continue
+        configs.append(
+            CandidateConfig(
+                hidden_size=rec["hidden_dim"],
+                intermediate_dim=rec["hidden_dim"] * MLP_RATIO,
+                num_layers=rec["num_layers"],
+                num_heads=max(1, rec["hidden_dim"] // HIDDEN_HEAD_RATIO),
+                num_kv_heads=max(1, rec["hidden_dim"] // HIDDEN_HEAD_RATIO),
+                batch_size=rec["batch_size"],
+                train_steps=int(rec["optimal_tokens"] / (rec["batch_size"] * SEQ_LEN)),
+                learning_rate=(LR_CONSTANT * math.sqrt(rec["batch_size"])) / rec["hidden_dim"],
+                beta2=BETA2_BASE ** (rec["batch_size"] / BETA2_BATCH_DIVISOR),
+                tokens=rec["optimal_tokens"],
+                flops_budget=rec["flops"],
+            )
+        )
+    return configs
+
+
+# ---------------- Training Args Generation ----------------
+
+
 def generate_isoflop_train_args(
     sweep_config: IsoFlopSweepConfig,
     experiment_name: str,
@@ -489,16 +561,8 @@ def generate_isoflop_train_args(
 
     for budget in sweep_config.budgets:
         for candidate in candidate_configs(sweep_config, budget, vocab_size):
-            # Build model config
-            model_cfg = Qwen3Config(
-                max_seq_len=sweep_config.seq_len,
-                hidden_dim=candidate.hidden_size,
-                intermediate_dim=candidate.intermediate_dim,
-                num_heads=candidate.num_heads,
-                num_kv_heads=candidate.num_kv_heads,
-                num_layers=candidate.num_layers,
-                rope=Llama3RotaryEmbeddingsConfig(),
-            )
+            # Build model config using shared builder
+            model_cfg = build_model_config(candidate, sweep_config.seq_len)
 
             # Compute parameter count for TPU selection
             param_count = model_cfg.total_trainable_params(vocab_size)
@@ -987,25 +1051,8 @@ def _run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
     for label, (alpha, A) in scaling_fits.items():
         logger.info(f"  {label}: N* = {A:.2e} * C^{alpha:.3f}")
 
-    # Convert minima to CandidateConfigs
-    configs = []
-    for rec in minima_records:
-        if rec["hidden_dim"] == 0:
-            continue
-        candidate = CandidateConfig(
-            hidden_size=rec["hidden_dim"],
-            intermediate_dim=rec["hidden_dim"] * MLP_RATIO,
-            num_layers=rec["num_layers"],
-            num_heads=max(1, rec["hidden_dim"] // HIDDEN_HEAD_RATIO),
-            num_kv_heads=max(1, rec["hidden_dim"] // HIDDEN_HEAD_RATIO),
-            batch_size=rec["batch_size"],
-            train_steps=int(rec["optimal_tokens"] / (rec["batch_size"] * SEQ_LEN)),
-            learning_rate=(LR_CONSTANT * math.sqrt(rec["batch_size"])) / rec["hidden_dim"],
-            beta2=BETA2_BASE ** (rec["batch_size"] / BETA2_BATCH_DIVISOR),
-            tokens=rec["optimal_tokens"],
-            flops_budget=rec["flops"],
-        )
-        configs.append(candidate)
+    # Convert minima to CandidateConfigs using shared helper
+    configs = _minima_to_candidates(minima_records)
 
     result = IsoFlopAnalysisResult(
         configs=configs,
@@ -1180,25 +1227,8 @@ def run_isoflop_analysis(
     # Fit scaling laws and extract optima
     minima_records, scaling_fits, fit_curves = fit_scaling_laws(isoflop_df)
 
-    # Convert minima records to CandidateConfig objects
-    configs = []
-    for rec in minima_records:
-        if rec["hidden_dim"] == 0:
-            continue
-        candidate = CandidateConfig(
-            hidden_size=rec["hidden_dim"],
-            intermediate_dim=rec["hidden_dim"] * MLP_RATIO,
-            num_layers=rec["num_layers"],
-            num_heads=max(1, rec["hidden_dim"] // HIDDEN_HEAD_RATIO),
-            num_kv_heads=max(1, rec["hidden_dim"] // HIDDEN_HEAD_RATIO),
-            batch_size=rec["batch_size"],
-            train_steps=int(rec["optimal_tokens"] / (rec["batch_size"] * SEQ_LEN)),
-            learning_rate=(LR_CONSTANT * math.sqrt(rec["batch_size"])) / rec["hidden_dim"],
-            beta2=BETA2_BASE ** (rec["batch_size"] / BETA2_BATCH_DIVISOR),
-            tokens=rec["optimal_tokens"],
-            flops_budget=rec["flops"],
-        )
-        configs.append(candidate)
+    # Convert minima records to CandidateConfig objects using shared helper
+    configs = _minima_to_candidates(minima_records)
 
     return IsoFlopAnalysisResult(
         configs=configs,
