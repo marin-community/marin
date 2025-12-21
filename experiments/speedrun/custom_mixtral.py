@@ -97,7 +97,7 @@ class CustomMixtralConfig(MistralConfig):
     upcast_attn: bool = False
     use_flash_attention: bool | None = True
     attn_backend: AttentionBackend | None = None
-    flash_attention_block_size: int | None = 2048
+    flash_attention_block_size: int | None = None
 
     gradient_checkpointing: ScanCheckpointSpec = True
     scan_layers: bool = True
