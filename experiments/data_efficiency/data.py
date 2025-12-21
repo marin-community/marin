@@ -443,6 +443,76 @@ dclm_train_164k_t10x_shuffled_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 )
 
+## 1.64M doc TSP 
+
+dclm_train_1m640k_tsp = default_download(
+    name="raw/data_efficiency/dclm_train_1m640k_tsp",
+    hf_dataset_id="konwoo/dclm-train-1.64m-tsp",
+    revision="86ebf05",
+    override_output_path="raw/data_efficiency/dclm_train_1m640k_tsp",
+)
+
+dclm_train_1m640k_tsp_tokenized = default_tokenize(
+    name="data_efficiency/dclm_train_1m640k_tsp",
+    dataset=dclm_train_1m640k_tsp,
+    tokenizer=llama3_tokenizer,
+)
+
+dclm_train_1m640k_tsp_shuffled = default_download(
+    name="raw/data_efficiency/dclm_train_1m640k_tsp_shuffled",
+    hf_dataset_id="konwoo/dclm-train-1.64m-shuffled",
+    revision="5877fda",
+    override_output_path="raw/data_efficiency/dclm_train_1m640k_tsp_shuffled",
+)
+
+dclm_train_1m640k_tsp_shuffled_tokenized = default_tokenize(
+    name="data_efficiency/dclm_train_1m640k_tsp_shuffled",
+    dataset=dclm_train_1m640k_tsp_shuffled,
+    tokenizer=llama3_tokenizer,
+)
+
+dclm_val_1k_normal = default_download(
+    name="raw/data_efficiency/dclm_val_1k_normal",
+    hf_dataset_id="konwoo/dclm-val-1k-normal-shuffled",
+    revision="7f9cdc0",
+    override_output_path="raw/data_efficiency/dclm_val_1k_normal",
+)
+
+dclm_val_1k_normal_tokenized = default_tokenize(
+    name="data_efficiency/dclm_val_1k_normal",
+    dataset=dclm_val_1k_normal,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
+## 1.3M doc TSP 
+
+dclm_train_1m300k_tsp = default_download(
+    name="raw/data_efficiency/dclm_train_1m300k_tsp",
+    hf_dataset_id="konwoo/dclm-train-1.3m-tsp",
+    revision="857fb3f",
+    override_output_path="raw/data_efficiency/dclm_train_1m300k_tsp",
+)
+
+dclm_train_1m300k_tsp_tokenized = default_tokenize(
+    name="data_efficiency/dclm_train_1m300k_tsp",
+    dataset=dclm_train_1m300k_tsp,
+    tokenizer=llama3_tokenizer,
+)
+
+dclm_train_1m300k_tsp_shuffled = default_download(
+    name="raw/data_efficiency/dclm_train_1m300k_tsp_shuffled",
+    hf_dataset_id="konwoo/dclm-train-1.3m-shuffle",
+    revision="785b137",
+    override_output_path="raw/data_efficiency/dclm_train_1m300k_tsp_shuffled",
+)
+
+dclm_train_1m300k_tsp_shuffled_tokenized = default_tokenize(
+    name="data_efficiency/dclm_train_1m300k_tsp_shuffled",
+    dataset=dclm_train_1m300k_tsp_shuffled,
+    tokenizer=llama3_tokenizer,
+)
+
 data_dict = {
     "dclm": dclm_tokenized,
     "sd0715": sd0715_tokenized,
@@ -482,4 +552,11 @@ data_dict = {
     "dc_t10x_val": dclm_val_1k_t10x_tsp_d20_tokenized,
     "dc_t10x_val_shuffled": dclm_val_1k_t10x_tsp_d20_shuffled_tokenized,
     "dc_shuffled": dclm_train_164k_t10x_shuffled_tokenized,
+    # 1.64M doc TSP data
+    "dc_1m": dclm_train_1m640k_tsp_tokenized,
+    "dc_1m_mix": dclm_train_1m640k_tsp_shuffled_tokenized,
+    "dc_1k_val_normal": dclm_val_1k_normal_tokenized,
+    # 1.3M doc TSP data
+    "dc_1_3m": dclm_train_1m300k_tsp_tokenized,
+    "dc_1_3m_mix": dclm_train_1m300k_tsp_shuffled_tokenized,
 }

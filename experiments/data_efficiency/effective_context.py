@@ -36,6 +36,10 @@ val_name_dict = {
     "dc_t10x": ["dc_t10x_val", "dc_t10x_val_shuffled"],
     "dc_t10x_shuffled": ["dc_t10x_val", "dc_t10x_val_shuffled"],
     "dc_shuffled": ["dc_t10x_val", "dc_t10x_val_shuffled"],
+    "dc_1m": ["dc_1k_val_normal", "dc_t10x_val", "dc_t10x_val_shuffled"],
+    "dc_1m_mix": ["dc_1k_val_normal", "dc_t10x_val", "dc_t10x_val_shuffled"],
+    "dc_1_3m": ["dc_1k_val_normal", "dc_t10x_val", "dc_t10x_val_shuffled"],
+    "dc_1_3m_mix": ["dc_1k_val_normal", "dc_t10x_val", "dc_t10x_val_shuffled"],
 }
 
 train_steps = [
@@ -61,23 +65,28 @@ train_steps = [
 
     ###### Pick one of convex mode or standard mode ######
     # ## Convex mode
-       for base_train_steps, epochs, lr, weight_decay, model_name in get_bounding_box(base_train_steps_center, epochs_center, lr_center, weight_decay_center, model_name_center)
-    ]
-    for base_train_steps_center, epochs_center, lr_center, weight_decay_center, model_name_center, batch_size, train_seq_len in [
+    #    for base_train_steps, epochs, lr, weight_decay, model_name in get_bounding_box(base_train_steps_center, epochs_center, lr_center, weight_decay_center, model_name_center)
+    # ]
+    # for base_train_steps_center, epochs_center, lr_center, weight_decay_center, model_name_center, batch_size, train_seq_len in [
 
     ## Standard mode
-    # ]
-    # for base_train_steps, epochs, lr, weight_decay, model_name, batch_size, train_seq_len in [
+    ]
+    for base_train_steps, epochs, lr, weight_decay, model_name, batch_size, train_seq_len in [
 
     ###### Pick which data to train with ######
     ## DCLM
-        # (750, 16, 3e-3, 1.6, "300m4k", 1024, 256),
-        # (750, 16, 3e-3, 1.6, "300m4k", 512, 512),
-        # (750, 16, 3e-3, 1.6, "300m4k", 256, 1024),
-        # (750, 16, 3e-3, 1.6, "300m4k", 128, 2048),
-        (750, 16, 3e-3, 1.6, "300m4k", 64, 4096),
+        (750, 16, 3e-3, 1.6, "300m4k", 1024, 256),
+        (750, 16, 3e-3, 1.6, "300m4k", 512, 512),
+        (750, 16, 3e-3, 1.6, "300m4k", 256, 1024),
+        (750, 16, 3e-3, 1.6, "300m4k", 128, 2048),
+        # (750, 16, 3e-3, 1.6, "300m4k", 64, 4096),
+        # (750, 16, 3e-3, 1.6, "300m16k", 32, 8192),
+        # (750, 16, 3e-3, 1.6, "300m16k", 16, 16384),
+        # (6400, 8, 1e-3, 0.8, "1_5b4k", 64, 4096),
+        # (6000, 8, 1e-3, 0.8, "1_5b4k", 64, 4096),
     ]
-    for train_data_name in ["dc_t10x", "dc_t10x_shuffled", "dc_shuffled"]
+    for train_data_name in ["dc_t10x", "dc_t10x_shuffled"]
+    # for train_data_name in ["dc_1_3m", "dc_1_3m_mix"]
     # for train_data_name in ["dclm_shuffled"]
     for block_cross_document_attention, nametag in [
         # (False, "-tspv"),
