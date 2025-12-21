@@ -258,15 +258,6 @@ def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterat
         yield from batch_processor(batch)
 
 
-def cpu_only_job_ctx():
-    """Return a job context that uses only CPU devices."""
-    ctx = get_default_job_ctx()
-    # For Ray contexts, set runtime environment for CPU-only execution
-    if hasattr(ctx, "ray_options"):
-        ctx.ray_options["runtime_env"] = {"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}}
-    return ctx
-
-
 def tokenize(config: TokenizeConfigBase):
     """Tokenize datasets using zephyr pipeline.
 
@@ -314,8 +305,6 @@ def tokenize(config: TokenizeConfigBase):
             )
             return
 
-        cluster_ctx = cpu_only_job_ctx()
-
         thread_ctx = create_job_ctx("threadpool")
         file_stats = list(
             execute(
@@ -339,6 +328,7 @@ def tokenize(config: TokenizeConfigBase):
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
+        cluster_ctx = get_default_job_ctx()
         shard_paths = execute(temp_shards, cluster_ctx)
 
         logger.info("Computing exemplar for cache consolidation")
@@ -352,10 +342,7 @@ def tokenize(config: TokenizeConfigBase):
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
         consolidate_shard_caches(
-            shard_cache_paths=shard_paths,
-            output_path=prefix,
-            exemplar=exemplar,
-            backend=cpu_only_job_ctx(),
+            shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar, backend=cluster_ctx
         )
 
     if train_paths:

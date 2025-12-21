@@ -40,7 +40,7 @@ from fray.cluster.base import (
 from fray.cluster.ray.config import find_config_by_region
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
-from fray.job.context import RayContext, _job_context
+from fray.job.context import RayContext, fray_default_job_ctx
 
 logger = logging.getLogger("ray")
 
@@ -108,9 +108,9 @@ class RayCluster(Cluster):
         self._dashboard_address = dashboard_address or self._get_dashboard_address()
         self._jobs: dict[JobId, RayJobInfo] = {}
 
-        # Set default job context for this cluster
+        # Set default job context permanently to this cluster.
         ray_ctx = RayContext(ray_options={})
-        _job_context.set(ray_ctx)
+        fray_default_job_ctx.__enter__(ray_ctx)
         logger.info("Set default job context to RayContext")
 
     @classmethod

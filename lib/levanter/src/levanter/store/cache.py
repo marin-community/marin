@@ -335,7 +335,7 @@ def build_cache(
         output_path=cache_dir,
         exemplar=processor.output_exemplar,
         metadata=metadata,
-        backend=backend,
+        backend=backend or Backend(get_default_job_ctx(), BackendConfig()),
     )
     _safe_remove(temp_root)
     return ledger
@@ -459,7 +459,11 @@ def consolidate_shard_caches(
             )
         )
 
-    execute(Dataset.from_list(shard_info).map(_copy_shard), verbose=False)
+    execute(
+        Dataset.from_list(shard_info).map(_copy_shard),
+        verbose=False,
+        backend=backend or Backend(get_default_job_ctx(), BackendConfig()),
+    )
 
     # do metadata serially b/c of write amplification concerns
     for info in shard_info:
@@ -496,20 +500,6 @@ def _merge_ledgers(
     final_ledger.is_finished = True
     final_ledger._serialize_and_commit(output_path)
     return final_ledger
-
-
-def cpu_only_backend() -> Backend:
-    """Return a Backend instance that uses only CPU devices."""
-    from fray.job import get_default_job_ctx
-    from zephyr.backends import BackendConfig
-    from zephyr.job import RayContext
-
-    ctx = get_default_job_ctx()
-    # For Ray contexts, set runtime environment for CPU-only execution
-    if isinstance(ctx, RayContext):
-        ctx.ray_options["runtime_env"] = {"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}}
-    config = BackendConfig()
-    return Backend(ctx, config)
 
 
 def _distributed_build_cache(
