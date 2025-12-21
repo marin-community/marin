@@ -37,7 +37,8 @@ import math
 import os
 import re
 from collections.abc import Iterator, Sequence
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, replace
+from typing import NotRequired, TypedDict
 
 import fsspec
 import jax.numpy as jnp
@@ -56,7 +57,6 @@ from marin.scaling_laws.eval_metrics_reader import (
     extract_run_name_from_path,
     read_metrics_dataframe,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,29 @@ class IsoFlopTrainArgs:
 
     output_path: str
     """Static output path for checkpoints."""
+
+
+# ---------------- Typed Records ----------------
+
+
+class _NearestConfig(TypedDict):
+    hidden_dim: int
+    num_layers: int
+    batch_size: int
+    params: float
+
+
+class MinimaRecord(TypedDict):
+    label: str
+    flops: float
+    optimal_tokens: float
+    loss_at_optimal: float
+    hidden_dim: int
+    num_layers: int
+    batch_size: int
+    optimal_params: float
+    scaling_alpha: NotRequired[float]
+    scaling_A: NotRequired[float]
 
 
 # ---------------- Candidate Config Generation ----------------
@@ -478,14 +501,7 @@ def generate_isoflop_train_args(
             )
 
             # Compute parameter count for TPU selection
-            param_count = compute_transformer_params(
-                hidden_dim=candidate.hidden_size,
-                intermediate_dim=candidate.intermediate_dim,
-                num_layers=candidate.num_layers,
-                vocab_size=vocab_size,
-                num_kv_heads=candidate.num_kv_heads,
-                num_heads=candidate.num_heads,
-            )
+            param_count = model_cfg.total_trainable_params(vocab_size)
 
             # Pick TPU type
             tpu_type = pick_v5p_type(
@@ -598,7 +614,7 @@ def _compute_optimal_params(flops: float, tokens: float) -> float:
     return flops / (6 * tokens)
 
 
-def _find_nearest_config(df: pd.DataFrame, flops: float, tokens: float) -> dict:
+def _find_nearest_config(df: pd.DataFrame, flops: float, tokens: float) -> _NearestConfig:
     """Find the nearest actual config from the dataframe to use as template."""
     sub = df[df.flops == flops]
     if sub.empty:
@@ -610,10 +626,10 @@ def _find_nearest_config(df: pd.DataFrame, flops: float, tokens: float) -> dict:
     meta = parse_isoflop_run_name(run_name)
 
     return {
-        "hidden_dim": meta["d"] if meta else 0,
-        "num_layers": meta["L"] if meta else 0,
-        "batch_size": meta["B"] if meta else 0,
-        "params": row.get("params", _compute_optimal_params(flops, tokens)),
+        "hidden_dim": int(meta["d"]) if meta else 0,
+        "num_layers": int(meta["L"]) if meta else 0,
+        "batch_size": int(meta["B"]) if meta else 0,
+        "params": float(row.get("params", _compute_optimal_params(flops, tokens))),
     }
 
 
@@ -622,7 +638,11 @@ def _find_nearest_config(df: pd.DataFrame, flops: float, tokens: float) -> dict:
 
 def fit_scaling_laws(
     df: pd.DataFrame,
-) -> tuple[list[dict], dict[str, tuple[float, float]], dict[tuple[str, float], tuple[float, float, float]]]:
+) -> tuple[
+    list[MinimaRecord],
+    dict[str, tuple[float, float]],
+    dict[tuple[str, float], tuple[float, float, float]],
+]:
     """
     Fit scaling laws and extract optimal configurations.
 
@@ -641,8 +661,8 @@ def fit_scaling_laws(
 
     buckets = sorted(df.flops.unique())
 
-    minima_records = []
-    fit_curves = {}
+    minima_records: list[MinimaRecord] = []
+    fit_curves: dict[tuple[str, float], tuple[float, float, float]] = {}
 
     # Fit quadratic for each (label, budget) and find minima
     for lab in datasets:
@@ -680,8 +700,8 @@ def fit_scaling_laws(
             )
 
     # Fit scaling law N* ~ A * C^alpha per dataset
-    scaling_fits = {}
-    by_lab = {}
+    scaling_fits: dict[str, tuple[float, float]] = {}
+    by_lab: dict[str, list[MinimaRecord]] = {}
     for rec in minima_records:
         by_lab.setdefault(rec["label"], []).append(rec)
 
@@ -893,7 +913,7 @@ class IsoFlopAnalysisResult:
     isoflop_df: pd.DataFrame
     """Transformed dataframe used for analysis."""
 
-    minima_records: list[dict]
+    minima_records: list[MinimaRecord]
     """Raw minima records with detailed info for each optimum."""
 
     fit_curves: dict[tuple[str, float], tuple[float, float, float]]

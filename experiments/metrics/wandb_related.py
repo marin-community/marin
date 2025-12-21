@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import wandb
+from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
@@ -143,26 +144,6 @@ def get_all_runs_over_period(
     except Exception as e:
         logger.error(f"An unexpected error occurred when trying to get runs from WandB: {e}")
         return None
-
-
-def get_vocab_size_for_tokenizer(tokenizer: str) -> int | None:
-    logger.info(f"Tokenizer:{tokenizer}")
-    if tokenizer == "EleutherAI/gpt-neox-20b":
-        vocab_size = 50_257
-    elif tokenizer == "meta-llama/Meta-Llama-3.1-8B":
-        vocab_size = 128_256
-    elif tokenizer == "stanford-crfm/marin-tokenizer":
-        vocab_size = 128_256
-    elif tokenizer == "meta-llama/Llama-2-7b":
-        vocab_size = 32_000
-    elif tokenizer == "gpt2":
-        vocab_size = 50_257
-    else:
-        logger.error(f"Unknown tokenizer: {tokenizer}")
-        return None
-
-    logger.info(f"Vocab size:  {vocab_size}")
-    return vocab_size
 
 
 def count_params_for_run(run_id: str, entity=WANDB_ENTITY, project=WANDB_PROJECT) -> int | None:

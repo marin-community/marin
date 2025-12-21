@@ -34,6 +34,14 @@ TokenizerStep = ExecutorStep[TokenizeConfig]
 
 logger = logging.getLogger(__name__)
 
+_KNOWN_VOCAB_SIZES: dict[str, int] = {
+    "EleutherAI/gpt-neox-20b": 50_257,
+    "meta-llama/Meta-Llama-3.1-8B": 128_256,
+    "stanford-crfm/marin-tokenizer": 128_256,
+    "meta-llama/Llama-2-7b": 32_000,
+    "gpt2": 50_257,
+}
+
 
 def step_to_lm_mixture_component(step: TokenizerStep | TokenizeConfig, include_raw_paths: bool) -> LMDatasetSourceConfig:
     """
@@ -331,6 +339,24 @@ def mixture_for_evaluation(inputs: dict[str, ExecutorStep]) -> LMMixtureDatasetC
 def _load_tokenizer(tokenizer_name: str) -> transformers.PreTrainedTokenizer:
     """Load and cache a tokenizer by name"""
     return load_tokenizer_with_backoff(tokenizer_name)
+
+
+@lru_cache(maxsize=128)
+def get_vocab_size_for_tokenizer(tokenizer_name: str) -> int:
+    """Return the vocabulary size for a tokenizer name.
+
+    Args:
+        tokenizer_name: HuggingFace tokenizer name or path.
+
+    Returns:
+        Vocabulary size for the tokenizer.
+    """
+    resolved_name = unwrap_versioned_value(tokenizer_name)
+    if resolved_name in _KNOWN_VOCAB_SIZES:
+        return _KNOWN_VOCAB_SIZES[resolved_name]
+
+    tokenizer = _load_tokenizer(resolved_name)
+    return len(tokenizer)
 
 
 def _are_tokenizers_equivalent(tokenizer1: str, tokenizer2: str) -> bool:

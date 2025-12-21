@@ -42,18 +42,30 @@ import logging
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 
 import fsspec
+import jmp
+from experiments.defaults import _prepare_data_config
+from fray.cluster import ResourceConfig
+from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.main.train_lm import TrainLmConfig
 from levanter.models.qwen import Qwen3Config
+from levanter.optim.cautious import CautiousConfig
+from levanter.tracker.wandb import WandbConfig
+from levanter.trainer import TrainerConfig
 
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
+from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.scaling_laws.isoflop_analysis import (
     CandidateConfig,
     IsoFlopSweepConfig,
+    pick_v5p_type,
     predict_optimal_config,
 )
+from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +88,8 @@ class ScalingLadderRungConfig:
     label: str
     """Dataset label to use for scaling fit (e.g., 'nemo', 'comma', 'dclm')."""
 
-    tokenized: str | LMMixtureDatasetConfig
-    """Tokenized dataset for training. Can be a path or LMMixtureDatasetConfig."""
+    tokenized: InputName | str | LMMixtureDatasetConfig
+    """Tokenized dataset for training. Can be a path, InputName, or LMMixtureDatasetConfig."""
 
     output_path: str
     """Where to write training outputs."""
@@ -104,13 +116,16 @@ def load_scaling_fits(analysis_path: str) -> dict[str, tuple[float, float]]:
         result = json.load(f)
 
     # Convert lists back to tuples
-    return {k: tuple(v) for k, v in result["scaling_fits"].items()}
+    scaling_fits: dict[str, tuple[float, float]] = {}
+    for key, value in result["scaling_fits"].items():
+        if len(value) != 2:
+            raise ValueError(f"Expected 2 scaling fit values for '{key}', got {len(value)}")
+        scaling_fits[key] = (float(value[0]), float(value[1]))
+    return scaling_fits
 
 
 def get_optimal_candidate(config: ScalingLadderRungConfig) -> CandidateConfig:
     """Load scaling fits and predict optimal config for target budget."""
-    from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
-
     scaling_fits = load_scaling_fits(config.analysis_output_path)
     vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
 
@@ -124,8 +139,7 @@ def get_optimal_candidate(config: ScalingLadderRungConfig) -> CandidateConfig:
 
     if candidate is None:
         raise RuntimeError(
-            f"Could not find optimal config for budget {config.target_budget:.2e} "
-            f"and label '{config.label}'"
+            f"Could not find optimal config for budget {config.target_budget:.2e} " f"and label '{config.label}'"
         )
 
     return candidate
@@ -139,22 +153,6 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
     2. Predicts the optimal config for the target budget
     3. Trains a model with that config using the same infrastructure as default_train
     """
-    from datetime import timedelta
-
-    import jmp
-    from fray.cluster import ResourceConfig
-    from levanter.checkpoint import CheckpointerConfig
-    from levanter.main.train_lm import TrainLmConfig
-    from levanter.optim.cautious import CautiousConfig
-    from levanter.tracker.wandb import WandbConfig
-    from levanter.trainer import TrainerConfig
-
-    from experiments.defaults import _prepare_data_config
-    from experiments.llama import compute_num_parameters
-    from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
-    from marin.scaling_laws.isoflop_analysis import pick_v5p_type
-    from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-
     # Get the optimal candidate config from analysis
     candidate = get_optimal_candidate(config)
     vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
@@ -178,7 +176,7 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
     )
 
     # Pick TPU type based on memory requirements
-    param_count = compute_num_parameters(model_cfg, vocab_size)
+    param_count = model_cfg.total_trainable_params(vocab_size)
     tpu_type = pick_v5p_type(
         param_count,
         candidate.hidden_size,
@@ -277,7 +275,7 @@ def scaling_ladder_rung_step(
     """
     # Resolve tokenized data - works like default_train
     if isinstance(tokenized, ExecutorStep):
-        resolved_tokenized: str | LMMixtureDatasetConfig = output_path_of(tokenized)
+        resolved_tokenized: InputName | str | LMMixtureDatasetConfig = output_path_of(tokenized)
     elif isinstance(tokenized, LMMixtureDatasetConfig):
         # Pass through LMMixtureDatasetConfig directly
         resolved_tokenized = tokenized
