@@ -19,6 +19,8 @@ from marin.scaling_laws.isoflop_analysis import (
     IsoFlopAnalysisResult,
     IsoFlopSweepConfig,
     IsoFlopTrainArgs,
+    build_model_config,
+    build_optimizer_config,
     candidate_configs,
     compute_transformer_params,
     generate_isoflop_train_args,
@@ -59,6 +61,9 @@ __all__ = [
     "ScalingLadderRungConfig",
     # Constants
     "DEFAULT_BUDGETS",
+    # Shared builders
+    "build_model_config",
+    "build_optimizer_config",
     # Utilities
     "candidate_configs",
     "compute_transformer_params",
