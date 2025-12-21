@@ -162,14 +162,14 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     def actual_head_size(self) -> int:
         return self.head_dim or (self.hidden_dim // self.num_heads)
 
-    def flops_per_token(self, vocab_size: int) -> float | None:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> float | None:
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )
@@ -366,7 +366,7 @@ def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: i
 
 def _size_presets() -> dict[str, HackableTransformerConfig]:
     base = dict(
-        seq_len=4096,
+        max_seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
         attn_backend=None,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
@@ -465,7 +465,7 @@ def _resource_presets(use_gpu: bool = False):
         "130m": ResourceConfig.with_tpu("v5p-32"),
         "300m": ResourceConfig.with_tpu("v5p-32"),
         "520m": ResourceConfig.with_tpu("v5p-32"),
-        "1_2b": ResourceConfig.with_tpu("v5p-32"),
+        "1_2b": ResourceConfig.with_tpu("v5p-64"),
     }
 
 
@@ -547,7 +547,8 @@ if __name__ == "__main__":
         _cls.__module__ = _IMPORT_PATH
     ###
 
-    sizes = ["130m", "300m", "520m", "1_2b"]
+    # sizes = ["130m", "300m", "520m", "1_2b"]
+    sizes = ["1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
     use_gate = True
     steps = []
