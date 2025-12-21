@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import gc
 import logging
 import os
 import time
@@ -274,6 +275,10 @@ class vLLMInferenceContext(BaseInferenceContext):
         )
 
     def reload_model(self, model: LmHeadModel | None, state_dict: dict) -> LmHeadModel | None:
+        # Reset prefix cache before syncing weights to free up memory
+        self.llm.llm_engine.reset_prefix_cache()
+        gc.collect()
+
         # TODO(chris): levanter to vllm state dict
         nnx_state = levanter_state_dict_to_nnx_state_on_cpu(state_dict)
         self.llm.llm_engine.model_executor.driver_worker.sync_weights(
