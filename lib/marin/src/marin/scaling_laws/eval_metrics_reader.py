@@ -37,8 +37,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Note: ExecutorStep and friends are used by callers, not needed here
-
 
 def extract_run_name_from_path(path: str) -> str:
     """Extract run name (last component) from a checkpoint path.

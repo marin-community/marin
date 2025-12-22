@@ -145,26 +145,20 @@ class ScalingLadderRungConfig:
     """Optional sweep config for predict_optimal_config. Uses defaults if None."""
 
 
-def load_scaling_fits(analysis_path: str) -> dict[str, tuple[float, float]]:
-    """Load scaling fits from an IsoFLOP analysis output."""
-    result_path = os.path.join(analysis_path, "isoflop_analysis_result.json")
+def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
+    """Run one rung of the scaling ladder (one compute-optimal training run)."""
+    result_path = os.path.join(config.analysis_output_path, "isoflop_analysis_result.json")
     fs, _, _ = fsspec.get_fs_token_paths(result_path)
 
     with fs.open(result_path, "r") as f:
-        result = json.load(f)
+        analysis_result = json.load(f)
 
-    # Convert lists back to tuples
     scaling_fits: dict[str, tuple[float, float]] = {}
-    for key, value in result["scaling_fits"].items():
+    for key, value in analysis_result["scaling_fits"].items():
         if len(value) != 2:
             raise ValueError(f"Expected 2 scaling fit values for '{key}', got {len(value)}")
         scaling_fits[key] = (float(value[0]), float(value[1]))
-    return scaling_fits
 
-
-def get_optimal_candidate(config: ScalingLadderRungConfig) -> CandidateConfig:
-    """Load scaling fits and predict optimal config for target budget."""
-    scaling_fits = load_scaling_fits(config.analysis_output_path)
     vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
 
     candidate = predict_optimal_config(
@@ -177,23 +171,8 @@ def get_optimal_candidate(config: ScalingLadderRungConfig) -> CandidateConfig:
 
     if candidate is None:
         raise RuntimeError(
-            f"Could not find optimal config for budget {config.target_budget:.2e} " f"and label '{config.label}'"
+            f"Could not find optimal config for budget {config.target_budget:.2e} and label '{config.label}'"
         )
-
-    return candidate
-
-
-def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
-    """Run one rung of the scaling ladder (one compute-optimal training run).
-
-    This function:
-    1. Loads scaling fits from the analysis output
-    2. Predicts the optimal config for the target budget
-    3. Trains a model with that config using the same infrastructure as default_train
-    """
-    # Get the optimal candidate config from analysis
-    candidate = get_optimal_candidate(config)
-    vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
 
     logger.info(
         f"Training with optimal config for {config.target_budget:.2e} FLOPs:\n"
@@ -202,10 +181,8 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
         f"  learning_rate={candidate.learning_rate:.6f}, tokens={candidate.tokens:.2e}"
     )
 
-    # Build model config using shared builder
     model_cfg = build_model_config(candidate, config.seq_len)
 
-    # Pick TPU type based on memory requirements
     param_count = model_cfg.total_trainable_params(vocab_size)
     tpu_type = pick_v5p_type(
         param_count,
@@ -216,15 +193,12 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
         vocab_size,
     )
 
-    # Build optimizer config using shared builder
     optimizer_cfg = build_optimizer_config(candidate)
 
-    # Prepare data config
-    # Accepts both string paths and LMMixtureDatasetConfig
-    # If validation sets are needed, they should be pre-configured in the LMMixtureDatasetConfig
+    # Accepts both string paths and LMMixtureDatasetConfig.
+    # If validation sets are needed, they should be pre-configured in the LMMixtureDatasetConfig.
     pretraining_data = _prepare_data_config(config.tokenized)
 
-    # Build TrainLmConfig (mirrors default_train structure)
     train_config = TrainLmConfig(
         data=pretraining_data,
         trainer=TrainerConfig(
@@ -252,7 +226,6 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
         optimizer=optimizer_cfg,
     )
 
-    # Build pod config and run training
     full_config = TrainLmOnPodConfig(
         train_config=train_config,
         resources=ResourceConfig.with_tpu(tpu_type),
@@ -292,14 +265,11 @@ def scaling_ladder_rung_step(
     Returns:
         ExecutorStep configured to run one optimal training run
     """
-    # Resolve tokenized data - works like default_train
     if isinstance(tokenized, ExecutorStep):
         resolved_tokenized: InputName | str | LMMixtureDatasetConfig = output_path_of(tokenized)
     elif isinstance(tokenized, LMMixtureDatasetConfig):
-        # Pass through LMMixtureDatasetConfig directly
         resolved_tokenized = tokenized
     else:
-        # InputName or string path
         resolved_tokenized = tokenized
 
     output_path = override_output_path if override_output_path is not None else this_output_path()
@@ -407,7 +377,6 @@ def scaling_ladder_suite(
     """
     from marin.scaling_laws.isoflop_analysis import isoflop_analysis_step
 
-    # Create the IsoFLOP analysis step
     analysis = isoflop_analysis_step(
         name=f"{name}-analysis",
         training_runs=training_runs,
@@ -420,7 +389,6 @@ def scaling_ladder_suite(
         wandb_run_name=f"{name}-analysis",
     )
 
-    # Create scaling ladder rungs (optimal training steps) for each target budget
     optimal_runs = []
     for budget in target_budgets:
         run_step = scaling_ladder_rung_step(
