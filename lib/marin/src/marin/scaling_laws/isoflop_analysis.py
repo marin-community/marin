@@ -187,13 +187,6 @@ class IsoFlopTrainArgs:
 # ---------------- Typed Records ----------------
 
 
-class _NearestConfig(TypedDict):
-    hidden_dim: int
-    num_layers: int
-    batch_size: int
-    params: float
-
-
 class MinimaRecord(TypedDict):
     label: str
     flops: float
@@ -673,30 +666,6 @@ def robust_quad_logx(x: jnp.ndarray, y: jnp.ndarray, delta: float = 1.0) -> tupl
     return float(result[0]), float(result[1]), float(result[2])
 
 
-def _compute_optimal_params(flops: float, tokens: float) -> float:
-    """Compute optimal parameters from C = 6 * N * P approximation."""
-    return flops / (6 * tokens)
-
-
-def _find_nearest_config(df: pd.DataFrame, flops: float, tokens: float) -> _NearestConfig:
-    """Find the nearest actual config from the dataframe to use as template."""
-    sub = df[df.flops == flops]
-    if sub.empty:
-        sub = df
-    idx = (sub.tokens - tokens).abs().argmin()
-    row = sub.iloc[idx]
-
-    run_name = row["name"]
-    meta = parse_isoflop_run_name(run_name)
-
-    return {
-        "hidden_dim": int(meta["d"]) if meta else 0,
-        "num_layers": int(meta["L"]) if meta else 0,
-        "batch_size": int(meta["B"]) if meta else 0,
-        "params": float(row.get("params", _compute_optimal_params(flops, tokens))),
-    }
-
-
 # ---------------- Core Analysis ----------------
 
 
@@ -742,13 +711,14 @@ def fit_scaling_laws(
             if a == 0:
                 continue
 
-            # Compute minimum
             L_opt = -b / (2 * a)
             N_star = float(10**L_opt)
             loss_opt = float(a * L_opt**2 + b * L_opt + c)
 
-            # Find nearest actual config for template
-            nearest = _find_nearest_config(sub, C, N_star)
+            idx = (sub.tokens - N_star).abs().argmin()
+            nearest_row = sub.iloc[idx]
+            run_name = nearest_row["name"]
+            meta = parse_isoflop_run_name(run_name)
 
             minima_records.append(
                 {
@@ -756,10 +726,10 @@ def fit_scaling_laws(
                     "flops": float(C),
                     "optimal_tokens": N_star,
                     "loss_at_optimal": loss_opt,
-                    "hidden_dim": nearest["hidden_dim"],
-                    "num_layers": nearest["num_layers"],
-                    "batch_size": nearest["batch_size"],
-                    "optimal_params": float(nearest["params"]),
+                    "hidden_dim": int(meta["d"]) if meta else 0,
+                    "num_layers": int(meta["L"]) if meta else 0,
+                    "batch_size": int(meta["B"]) if meta else 0,
+                    "optimal_params": float(nearest_row.get("params", C / (6 * N_star))),
                 }
             )
 
@@ -820,8 +790,6 @@ def transform_metrics_for_isoflop(
     for _, row in final_metrics.iterrows():
         run_path = row["run_path"]
         run_name = extract_run_name_from_path(run_path)
-
-        # Parse metadata from run name
         meta = parse_isoflop_run_name(run_name)
         if meta is None:
             logger.warning(f"Could not parse metadata from run name: {run_name}")
@@ -904,18 +872,15 @@ def predict_optimal_config(
 
     logger.info(f"Predicted optimal tokens for {target_flops:.2e} FLOPs: {optimal_tokens:.2e}")
 
-    # Use default config if none provided
     if sweep_config is None:
         sweep_config = IsoFlopSweepConfig()
 
-    # Generate candidates for this budget
     candidates = list(candidate_configs(sweep_config, target_flops, vocab_size))
 
     if not candidates:
         logger.warning(f"No valid candidates found for budget {target_flops:.2e}")
         return None
 
-    # Find candidate closest to optimal token count
     best = min(candidates, key=lambda c: abs(c.tokens - optimal_tokens))
 
     logger.info(
@@ -1023,17 +988,13 @@ class IsoFlopAnalysisConfig(EvalMetricsAnalysisConfig):
 
 def _run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
     """Execute scaling ladder analysis (called by ExecutorStep)."""
-    # Read metrics from training runs
     raw_df = read_metrics_dataframe(config)
 
     if raw_df.empty:
         logger.warning("No eval metrics found in training runs")
         return
 
-    # Convert label_map tuple to dict if provided
     label_map = dict(config.label_map) if config.label_map else None
-
-    # Transform to isoflop analysis format
     isoflop_df = transform_metrics_for_isoflop(raw_df, config.metric_key, label_map)
 
     if isoflop_df.empty:
@@ -1044,14 +1005,12 @@ def _run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
     logger.info(f"Labels found: {isoflop_df['label'].unique().tolist()}")
     logger.info(f"FLOP budgets: {sorted(isoflop_df['flops'].unique())}")
 
-    # Fit scaling laws
     minima_records, scaling_fits, fit_curves = fit_scaling_laws(isoflop_df)
 
     logger.info(f"Found {len(minima_records)} optimal configurations")
     for label, (alpha, A) in scaling_fits.items():
         logger.info(f"  {label}: N* = {A:.2e} * C^{alpha:.3f}")
 
-    # Convert minima to CandidateConfigs using shared helper
     configs = _minima_to_candidates(minima_records)
 
     result = IsoFlopAnalysisResult(
@@ -1062,17 +1021,14 @@ def _run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
         fit_curves=fit_curves,
     )
 
-    # Save outputs
     fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
     fs.makedirs(config.output_path, exist_ok=True)
 
-    # Save result JSON
     result_path = os.path.join(config.output_path, "isoflop_analysis_result.json")
     with fs.open(result_path, "w") as f:
         json.dump(result.to_json_dict(), f, indent=2)
     logger.info(f"Saved results to {result_path}")
 
-    # Save plots if enabled
     if config.save_plots:
         from marin.scaling_laws.scaling_plots import (
             create_isoflop_plot,
@@ -1084,7 +1040,6 @@ def _run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
         fig_scaling = create_scaling_plot(minima_records, scaling_fits)
         save_plots(fig_isoflop, fig_scaling, config.output_path)
 
-        # Upload to WandB if enabled
         if config.upload_to_wandb:
             from marin.scaling_laws.scaling_plots import upload_plots_to_wandb
 
@@ -1184,15 +1139,8 @@ def run_isoflop_analysis(
     Returns:
         IsoFlopAnalysisResult with configs, scaling_fits, and analysis data
     """
-    # Convert to paths
-    run_paths = []
-    for run in training_runs:
-        if isinstance(run, ExecutorStep):
-            run_paths.append(output_path_of(run))
-        else:
-            run_paths.append(run)
+    run_paths = [output_path_of(run) if isinstance(run, ExecutorStep) else run for run in training_runs]
 
-    # Read metrics
     config = EvalMetricsAnalysisConfig(
         training_runs=run_paths,
         output_path="analysis/scaling_ladder",
@@ -1209,7 +1157,6 @@ def run_isoflop_analysis(
             fit_curves={},
         )
 
-    # Transform to isoflop format
     isoflop_df = transform_metrics_for_isoflop(raw_df, metric_key, label_map)
 
     if isoflop_df.empty:
@@ -1224,10 +1171,7 @@ def run_isoflop_analysis(
 
     logger.info(f"Transformed {len(isoflop_df)} runs for scaling ladder analysis")
 
-    # Fit scaling laws and extract optima
     minima_records, scaling_fits, fit_curves = fit_scaling_laws(isoflop_df)
-
-    # Convert minima records to CandidateConfig objects using shared helper
     configs = _minima_to_candidates(minima_records)
 
     return IsoFlopAnalysisResult(
