@@ -234,10 +234,6 @@ def cb_tagged_lm_evaluate(
             fs.makedirs(checkpoint_path, exist_ok=True)
             with fs.open(metrics_file, "a") as f:
                 record = {"step": int(step_count), **metrics_to_write}
-                # Include WandB run info for backfill/lookup
-                wandb_info = levanter.tracker.current_tracker_info()
-                if wandb_info:
-                    record["_tracker"] = wandb_info
                 f.write(json.dumps(record) + "\n")
 
         return
