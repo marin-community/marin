@@ -58,7 +58,6 @@ from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.processing.tokenize.data_configs import add_validation_sets_to_mixture, lm_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig
 from marin.scaling_laws.isoflop_analysis import (
-    CandidateConfig,
     IsoFlopSweepConfig,
     build_model_config,
     build_optimizer_config,

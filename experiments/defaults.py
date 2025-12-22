@@ -46,7 +46,6 @@ from experiments.evals.task_configs import (
     CORE_TASKS,
     MMLU_TASKS,
     convert_to_levanter_task_config,
-    convert_to_task_metrics,
 )
 from experiments.llama import compute_num_parameters, llama_8b
 from experiments.paloma import paloma_tokenized
@@ -59,7 +58,6 @@ from marin.execution.executor import (
     InputName,
     VersionedValue,
     ensure_versioned,
-    get_executor_step,
     this_output_path,
     unwrap_versioned_value,
 )
