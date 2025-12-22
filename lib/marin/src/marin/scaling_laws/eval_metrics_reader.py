@@ -15,8 +15,10 @@
 """Base infrastructure for eval metrics analysis.
 
 This module provides a base config and utilities for analysis jobs that
-read eval_metrics.jsonl files from completed training runs. Specific
-analyses (like IsoFlop) should subclass EvalMetricsAnalysisConfig.
+read eval_metrics.jsonl files from completed training runs. The subclassing
+pattern mirrors the Evaluator approach in
+lib/marin/src/marin/evaluation/evaluators/evaluator.py, so specific analyses
+(like IsoFlop) should subclass EvalMetricsAnalysisConfig.
 """
 
 import logging
