@@ -84,7 +84,7 @@ qwen3_4b_hd128 = Qwen3Config(
 qwen3_8b_tokenizer = "Qwen/Qwen3-8B"
 qwen3_8b = Qwen3Config(
     # Matching defaults in https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json
-    max_seq_len=4096,
+    max_seq_len=32768,
     hidden_dim=4096,
     intermediate_dim=12288,
     num_heads=32,
@@ -115,7 +115,7 @@ qwen3_32b = Qwen3Config(
 qwen2_5_1_5b_tokenizer = "Qwen/Qwen2.5-1.5B"
 qwen2_5_1_5b = QwenConfig(
     # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-1.5B/blob/main/config.json
-    max_seq_len=4096,
+    max_seq_len=32768,
     hidden_dim=1536,
     intermediate_dim=8960,
     num_heads=12,
@@ -135,7 +135,7 @@ qwen2_5_1_5b = QwenConfig(
 qwen2_5_1_5b_instruct_tokenizer = "Qwen/Qwen2.5-1.5B-Instruct"
 qwen2_5_1_5b_instruct = QwenConfig(
     # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/blob/main/config.json
-    max_seq_len=4096,
+    max_seq_len=32768,
     hidden_dim=1536,
     intermediate_dim=8960,
     num_heads=12,
@@ -155,7 +155,7 @@ qwen2_5_1_5b_instruct = QwenConfig(
 qwen2_5_3b_tokenizer = "Qwen/Qwen2.5-3B"
 qwen2_5_3b = QwenConfig(
     # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-3B/blob/main/config.json
-    max_seq_len=4096,
+    max_seq_len=32768,
     hidden_dim=2048,
     intermediate_dim=11008,
     num_heads=16,
@@ -175,7 +175,7 @@ qwen2_5_3b = QwenConfig(
 qwen2_5_3b_instruct_tokenizer = "Qwen/Qwen2.5-3B-Instruct"
 qwen2_5_3b_instruct = QwenConfig(
     # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-3B-Instruct/blob/main/config.json
-    max_seq_len=4096,
+    max_seq_len=32768,
     hidden_dim=2048,
     intermediate_dim=11008,
     num_heads=16,
@@ -195,7 +195,7 @@ qwen2_5_3b_instruct = QwenConfig(
 qwen2_5_7b_tokenizer = "Qwen/Qwen2.5-7B"
 qwen2_5_7b = QwenConfig(
     # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-7B/blob/main/config.json
-    max_seq_len=4096,
+    max_seq_len=131072,
     hidden_dim=3584,
     intermediate_dim=18944,
     num_heads=28,
@@ -215,7 +215,7 @@ qwen2_5_7b = QwenConfig(
 qwen2_5_7b_instruct_tokenizer = "Qwen/Qwen2.5-7B-Instruct"
 qwen2_5_7b_instruct = QwenConfig(
     # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/blob/main/config.json
-    max_seq_len=4096,
+    max_seq_len=131072,
     hidden_dim=3584,
     intermediate_dim=18944,
     num_heads=28,
@@ -235,7 +235,7 @@ qwen2_5_7b_instruct = QwenConfig(
 qwen2_5_32b_tokenizer = "Qwen/Qwen2.5-32B"
 qwen2_5_32b = QwenConfig(
     # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-32B/blob/main/config.json
-    max_seq_len=4096,
+    max_seq_len=131072,
     hidden_dim=5120,
     intermediate_dim=27648,
     num_heads=40,
@@ -255,7 +255,7 @@ qwen2_5_32b = QwenConfig(
 qwen2_5_32b_instruct_tokenizer = "Qwen/Qwen2.5-32B-Instruct"
 qwen2_5_32b_instruct = QwenConfig(
     # Matching defaults in https://huggingface.co/Qwen/Qwen2.5-32B-Instruct/blob/main/config.json
-    max_seq_len=4096,
+    max_seq_len=131072,
     hidden_dim=5120,
     intermediate_dim=27648,
     num_heads=40,

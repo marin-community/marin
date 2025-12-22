@@ -19,6 +19,7 @@ REDO #2:
   - Reduced LR (8e-5 -> 4e-5) to reduce loss spikes
   - Increased batch size (512 -> 1024)
   - Extending to 20 epochs with diff LR schedule since our train loss decreases slower than what OT3 folks saw.
+  - Fixed shuffling (now uses era shuffling: shuffle per epoch instead of same ordering every epoch)
 """
 import dataclasses
 import math
