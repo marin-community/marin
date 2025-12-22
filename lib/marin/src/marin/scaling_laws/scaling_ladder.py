@@ -18,8 +18,7 @@ This module provides ExecutorSteps for training models with compute-optimal
 configurations derived from IsoFLOP analysis.
 
 Usage:
-    from marin.scaling_laws import isoflop_analysis_step
-    from marin.scaling_laws.scaling_ladder import scaling_ladder_rung_step
+    from marin.scaling_laws import isoflop_analysis_step, scaling_ladder_rung_step
 
     # First, run IsoFLOP analysis
     analysis = isoflop_analysis_step(
@@ -33,7 +32,7 @@ Usage:
         analysis_step=analysis,
         target_budget=1e21,
         label="nemo",
-        dataset=my_tokenized_dataset,
+        tokenized=my_tokenized_dataset,
     )
 """
 
@@ -61,6 +60,7 @@ from marin.scaling_laws.isoflop_analysis import (
     IsoFlopSweepConfig,
     build_model_config,
     build_optimizer_config,
+    isoflop_analysis_step,
     pick_v5p_type,
     predict_optimal_config,
 )
@@ -374,8 +374,6 @@ def scaling_ladder_suite(
         ... )
         >>> all_steps = [*isoflop_training_steps, *suite.all_steps]
     """
-    from marin.scaling_laws.isoflop_analysis import isoflop_analysis_step
-
     analysis = isoflop_analysis_step(
         name=f"{name}-analysis",
         training_runs=training_runs,

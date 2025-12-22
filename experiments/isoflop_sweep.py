@@ -45,15 +45,18 @@ from marin.scaling_laws.isoflop_analysis import (
 
 
 @dataclass(frozen=True)
-class IsoFlopExperimentConfig(IsoFlopSweepConfig):
-    """Extended config for isoflop experiments with dataset and eval settings.
+class IsoFlopExperimentConfig:
+    """Configuration for isoflop experiments with dataset and eval settings.
 
-    Inherits core sweep parameters from IsoFlopSweepConfig and adds
+    Composes an IsoFlopSweepConfig for core sweep parameters and adds
     experiment-specific settings like tokenized dataset and eval tasks.
     """
 
-    tokenized_dataset: InputName | str = ""
+    tokenized_dataset: InputName | str
     """Tokenized dataset to train on."""
+
+    sweep_config: IsoFlopSweepConfig = dataclasses.field(default_factory=IsoFlopSweepConfig)
+    """Core sweep parameters (budgets, seq_len, etc.)."""
 
     eval_tasks: tuple[EvalTaskConfig, ...] | None = None
     """Evaluation tasks to run after training (disabled by default)."""
@@ -104,11 +107,11 @@ def generate_isoflop_steps(
         - candidates: CandidateConfig for each training run (contains budget, hidden_size,
           num_layers, batch_size, train_steps, learning_rate, etc.)
     """
-    vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
+    vocab_size = get_vocab_size_for_tokenizer(config.sweep_config.tokenizer)
 
     # Get training arguments from the library
     train_args_list = generate_isoflop_train_args(
-        sweep_config=config,
+        sweep_config=config.sweep_config,
         experiment_name=experiment_name,
         vocab_size=vocab_size,
         base_optimizer_config=config.base_optimizer_config,
@@ -160,22 +163,28 @@ def generate_isoflop_steps(
 def generate_isoflop_sweep(
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     experiment_name: str,
-    **kwargs,
+    sweep_config: IsoFlopSweepConfig | None = None,
+    eval_tasks: tuple[EvalTaskConfig, ...] | None = None,
 ) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
     """Generate an ISOFlop sweep for a tokenized dataset.
 
     Args:
         tokenized: Tokenized dataset to train on.
         experiment_name: Name suffix for the experiment (e.g., 'nemo', 'dclm').
-        **kwargs: Additional arguments passed to IsoFlopExperimentConfig.
+        sweep_config: Optional custom sweep config. Uses defaults if None.
+        eval_tasks: Optional evaluation tasks to run after training.
 
     Returns:
         A tuple of:
         - steps: Training and evaluation ExecutorSteps for the sweep.
         - candidates: CandidateConfig for each training run with full config details.
     """
-    sweep_cfg = IsoFlopExperimentConfig(tokenized_dataset=tokenized, **kwargs)
-    steps, candidates = generate_isoflop_steps(sweep_cfg, experiment_name)
+    config = IsoFlopExperimentConfig(
+        tokenized_dataset=tokenized,
+        sweep_config=sweep_config or IsoFlopSweepConfig(),
+        eval_tasks=eval_tasks,
+    )
+    steps, candidates = generate_isoflop_steps(config, experiment_name)
 
     return steps, candidates
 
