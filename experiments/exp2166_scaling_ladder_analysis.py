@@ -42,7 +42,7 @@ dolma3_training, _ = MARIN_SCALING_SUITES["dolma3_mix_150b"]
 
 # Target budgets for compute-optimal training runs (beyond the isoflop sweep)
 # Set to empty list to only run analysis without training
-TARGET_BUDGETS: list[float] = []
+TARGET_BUDGETS: list[float] = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
 
 
 nemotron_suite = scaling_ladder_suite(
