@@ -234,7 +234,7 @@ def cb_tagged_lm_evaluate(
             fs.makedirs(checkpoint_path, exist_ok=True)
             with fs.open(metrics_file, "a") as f:
                 record = {"step": int(step_count), **metrics_to_write}
-                f.write(json.dumps(record) + "\n")
+                f.write(json.dumps(record, sort_keys=True) + "\n")
 
         return
 
