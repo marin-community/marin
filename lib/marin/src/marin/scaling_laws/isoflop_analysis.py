@@ -37,7 +37,7 @@ import math
 import os
 import re
 from collections.abc import Iterator, Sequence
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, replace
 
 import fsspec
 import jax.numpy as jnp
