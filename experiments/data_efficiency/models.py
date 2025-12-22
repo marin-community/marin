@@ -164,6 +164,8 @@ moe_debug = MixtralConfig(
     rzl_coef=None,  # Disables router z-loss logging
 )
 
+llama_300m_pause4_config = dataclasses.replace(llama_300m_4096_config, expansion_factor=4, pause_aggregate_method="mean")
+
 model_dict = {
     "150m4k": llama_150m_4096_config,
     "300m4k": llama_300m_4096_config,
@@ -179,4 +181,5 @@ model_dict = {
     "3_2b4k": llama_3_2b_4096_config,
     "3_2b4k_alln": llama_3_2b_4096_config_all_norm,
     "3_2b4k_qkn": llama_3_2b_4096_config_qk_norm,
+    "300m4k_ef4": llama_300m_pause4_config,
 }

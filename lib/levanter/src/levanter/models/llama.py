@@ -7,6 +7,7 @@ from typing import Callable, Dict, Optional, Type, Union, cast
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 import jax.random as jrandom
 from jaxtyping import PRNGKeyArray
 
@@ -51,6 +52,14 @@ class LlamaConfig(HFCompatConfig):
         activation_function (str, optional): activation function for the hidden layer. Defaults to "silu".
         hybrid_norm (bool, optional): whether to use hybrid normalization with additional layer norms after attention and MLP. Defaults to False.
         input_embedding_norm (bool, optional): whether to use layer normalization after input embeddings. Defaults to False.
+        pause_token_id (int): Token ID to use for pause tokens. Defaults to 128072.
+            Pause tokens are inserted after each real token to provide extra computation when expansion_factor > 1.
+        expansion_factor (int): Expansion factor for pause tokens. Each real token is expanded to this many tokens
+            (1 real token + (expansion_factor - 1) pause tokens). Defaults to 1 (no pause tokens).
+        pause_aggregate_method (str): How to aggregate logits from pause tokens. Options:
+            - "last": Use the logits from the real token (first token in the sequence [real_token, pause_tokens...])
+            - "mean": Average logits across all tokens (real + pause tokens)
+            Defaults to "last".
     """
 
     max_seq_len: int = 2048
@@ -86,6 +95,11 @@ class LlamaConfig(HFCompatConfig):
 
     reference_checkpoint: str = "NousResearch/Llama-2-7b-hf"
     tokenizer: Optional[str] = None
+
+    # Pause token configuration
+    pause_token_id: int = 128072  # Token ID to use for pause tokens
+    expansion_factor: int = 1  # Expansion factor: 1 real token + (expansion_factor - 1) pause tokens per position
+    pause_aggregate_method: str = "mean"  # How to aggregate logits from pause tokens: "last" or "mean"
 
     # Axis
     @property
@@ -571,13 +585,88 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         Returns:
             NamedArray: logits with shape {Batch, Pos, Vocab}
         """
+        config = self.config
         k_t, k_head = maybe_rng_split(key, 2)
+
+        # If expansion_factor > 1, expand input_ids with pause tokens
+        expansion_factor = config.expansion_factor
+        if expansion_factor > 1:
+            assert pos_ids is None, "pos_ids must be None when expansion_factor > 1"
+            num_pause_tokens = expansion_factor - 1
+
+            # Get the position axis (assumed to be named "position")
+            Position = input_ids.resolve_axis("position")
+            seq_len = Position.size
+
+            # Simplify: assume input is [batch, position] or similar structure
+            # Expand each real token: [batch, position] -> [batch, position, expansion=1]
+            Expansion = Axis("expansion", expansion_factor)
+            input_ids_expanded = jnp.expand_dims(input_ids.array, axis=-1)
+            Expansion1 = Expansion.resize(1)
+            input_ids_with_expansion = NamedArray(
+                input_ids_expanded, input_ids.axes + (Expansion1,)
+            )
+
+            # Create pause tokens: [batch, position, expansion=num_pause_tokens]
+            other_axes = tuple(ax for ax in input_ids.axes if ax != Position)
+            pause_tokens = hax.full(
+                other_axes + (Position, Expansion.resize(num_pause_tokens)),
+                config.pause_token_id,
+                dtype=input_ids.dtype,
+            )
+
+            # Concatenate: [real_token, pause_tokens] along expansion dimension
+            pause_input_ids = hax.concatenate(Expansion.name, [input_ids_with_expansion, pause_tokens])
+
+            # Flatten position and expansion into expanded position: [batch, position*expansion_factor]
+            ExpandedPosition = Position.resize(seq_len * expansion_factor)
+            pause_input_ids = hax.flatten_axes(pause_input_ids, (Position, Expansion), ExpandedPosition)
+
+            # Use expanded inputs (pos_ids remains None as asserted above)
+            input_ids = pause_input_ids
+
+        # Run forward pass
         x = self.embeddings.embed(input_ids)
         x = self.transformer(x, attn_mask=attn_mask, key=k_t, pos_ids=pos_ids)
         if self.lm_head:
             lm_logits = self.lm_head(x, key=k_head)
         else:
             lm_logits = self.embeddings.unembed(x)
+
+        # If pause tokens were used, collapse logits
+        if expansion_factor > 1:
+            # Get the position axis from the expanded logits (assumed to be named "position")
+            ExpandedPosition = lm_logits.resolve_axis("position")
+            Vocab = lm_logits.axes[-1]  # Vocab is the last axis
+            seq_len = ExpandedPosition.size // expansion_factor
+
+            # Reshape logits: [..., position, Vocab] -> [..., position, Expansion, Vocab]
+            # Manually reshape the array and create NamedArray with split axes
+            pos_idx = lm_logits.axis_indices(ExpandedPosition)
+            other_axes = tuple(ax for ax in lm_logits.axes if ax != ExpandedPosition and ax != Vocab)
+            
+            # Reshape the array: [..., position, Vocab] -> [..., position, Expansion, Vocab]
+            array_shape = [ax.size for ax in other_axes] + [seq_len, expansion_factor, Vocab.size]
+            reshaped_array = lm_logits.array.reshape(array_shape)
+            
+            # Create axes for the reshaped array
+            Position = ExpandedPosition.resize(seq_len)
+            Expansion = Axis("expansion", expansion_factor)
+            pause_logits = NamedArray(reshaped_array, other_axes + (Position, Expansion, Vocab))
+
+            # Aggregate based on method
+            # Ordering is always [real_token, pause_tokens...]
+            if "last" in config.pause_aggregate_method:
+                # Take the last token in the sequence (last pause token)
+                logits = pause_logits[Expansion, expansion_factor - 1]
+            elif "mean" in config.pause_aggregate_method:
+                # Take the mean over expansion dimension
+                logits = hax.mean(pause_logits, axis=Expansion)
+            else:
+                raise ValueError(f"Invalid aggregate method: {config.pause_aggregate_method}")
+
+            return logits
+
         return lm_logits
 
     def activations(
