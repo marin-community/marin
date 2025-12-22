@@ -158,8 +158,6 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
         ignore_index: Optional[int] = None,
         eos_id: Optional[int] = None,
         block_cross_document_attention: bool = True,
-        augment_key: Optional[PRNGKeyArray] = None,
-        complement_map: Optional[Sequence[int]] = None,
     ):
         self.dataset = dataset
         self.Pos = Pos
@@ -169,56 +167,21 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
 
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
-        # Use completely separate JIT functions depending on whether augmentation is enabled
-        rc_enabled = augment_key is not None and complement_map is not None
-
-        if rc_enabled:
-            logger.info(
-                f"CausalLmDataset: reverse-complement augmentation ENABLED "
-                f"(complement_map={complement_map}, seq_len={Pos.size})"
+        @functools.partial(eqx.filter_jit)
+        def _create_lm_example(tokens):
+            tokens = hax.named(tokens, self.Pos)
+            example = LmExample.causal(
+                tokens=tokens,
+                ignore_id=self.ignore_id,
+                eos_id=eos_id,
+                block_cross_document_attention=block_cross_document_attention,
             )
 
-            # Pre-convert complement_map to jnp array
-            _complement_map = jnp.array(complement_map)
+            example = jax.lax.with_sharding_constraint(example, sharding)
 
-            @functools.partial(eqx.filter_jit)
-            def _create_lm_example_with_rc(tokens, key):
-                # Apply reverse complement augmentation with 50% probability
-                should_augment = jax.random.uniform(key) < 0.5
-                complemented_reversed = _complement_map[tokens][::-1]
-                tokens = jnp.where(should_augment, complemented_reversed, tokens)
+            return example
 
-                tokens = hax.named(tokens, self.Pos)
-                example = LmExample.causal(
-                    tokens=tokens,
-                    ignore_id=self.ignore_id,
-                    eos_id=eos_id,
-                    block_cross_document_attention=block_cross_document_attention,
-                )
-
-                example = jax.lax.with_sharding_constraint(example, sharding)
-
-                return example
-
-            super().__init__(self.dataset, _create_lm_example_with_rc, key=augment_key)
-        else:
-            logger.info("CausalLmDataset: reverse-complement augmentation disabled")
-
-            @functools.partial(eqx.filter_jit)
-            def _create_lm_example(tokens):
-                tokens = hax.named(tokens, self.Pos)
-                example = LmExample.causal(
-                    tokens=tokens,
-                    ignore_id=self.ignore_id,
-                    eos_id=eos_id,
-                    block_cross_document_attention=block_cross_document_attention,
-                )
-
-                example = jax.lax.with_sharding_constraint(example, sharding)
-
-                return example
-
-            super().__init__(self.dataset, _create_lm_example)
+        super().__init__(self.dataset, _create_lm_example)
 
     async def async_len(self) -> int:
         return await self.dataset.async_len()
@@ -607,16 +570,6 @@ class LMTaskConfig(abc.ABC):
     attend to all previous tokens regardless of document boundaries.
     """
 
-    complement_map: Optional[Tuple[int, ...]] = None
-    """Optional token complement map for reverse-complement augmentation.
-
-    When provided, each training sequence has a 50% chance of being reversed and
-    complemented. The complement_map specifies how each token ID maps to its complement
-    (e.g., for DNA: A↔T, C↔G). Only affects training data, not validation.
-
-    Example for DNA tokens: (0, 1, 2, 6, 5, 4, 3, 7) where tokens 3↔6 and 4↔5 are swapped.
-    """
-
     @cached_property
     def the_tokenizer(self) -> HfTokenizer:
         if self.tokenizer == "passthrough":
@@ -698,8 +651,6 @@ def dataset_for_format(
     eos_id: int | None,
     ignore_index: int | None,
     block_cross_document_attention: bool = True,
-    augment_key: Optional[PRNGKeyArray] = None,
-    complement_map: Optional[Sequence[int]] = None,
 ) -> AsyncDataset[LmExample]:
     match format:
         case TextLmDatasetFormat():
@@ -709,8 +660,6 @@ def dataset_for_format(
                 eos_id=eos_id,
                 ignore_index=ignore_index,
                 block_cross_document_attention=block_cross_document_attention,
-                augment_key=augment_key,
-                complement_map=complement_map,
             )
         case ChatLmDatasetFormat(pack=pack, mask_user_turns=mask_user_turns):
             return MultiturnChatDataset(cache, Pos, max_segments_per_example=64 if pack else 1, mask_user_turns=mask_user_turns)  # type: ignore
@@ -978,12 +927,7 @@ class LMMixtureDatasetConfig(LMTaskConfig):
                 self.experiment_budget is None and self.target_budget is None
             ), "max_train_batches and num_validation_sequences and simulated data budget cannot all be set"
 
-    def build_token_datasets(
-        self,
-        caches: Mapping[str, TreeCache[dict]],
-        Pos: Axis,
-        augment_key: Optional[PRNGKeyArray] = None,
-    ):
+    def build_token_datasets(self, caches: Mapping[str, TreeCache[dict]], Pos: Axis):
         token_datasets = {
             name: dataset_for_format(
                 self.configs[name].format,
@@ -992,8 +936,6 @@ class LMMixtureDatasetConfig(LMTaskConfig):
                 eos_id=self.the_tokenizer.eos_token_id,
                 ignore_index=self.ignore_token_id,
                 block_cross_document_attention=self.block_cross_document_attention,
-                augment_key=augment_key,
-                complement_map=self.complement_map,
             )
             for name, cache in caches.items()
         }
@@ -1037,23 +979,13 @@ class LMMixtureDatasetConfig(LMTaskConfig):
         key: PRNGKeyArray,
     ) -> Mapping[str, AsyncDataset[LmExample]]:
         doc_caches = self.build_caches("train")
-
-        if key is None:
-            key = jax.random.PRNGKey(0)
-
-        # Split key for augmentation if complement_map is provided
-        # The augment_key must be on CPU since data loading happens on CPU
-        if self.complement_map is not None:
-            augment_key, key = jax.random.split(key)
-            with use_cpu_device():
-                augment_key = jax.device_put(jax.device_get(augment_key))
-        else:
-            augment_key = None
-
-        datasets = self.build_token_datasets(doc_caches, Pos, augment_key=augment_key)
+        datasets = self.build_token_datasets(doc_caches, Pos)
 
         if epochs:
             raise ValueError("Epochs are not supported for mixture datasets")
+
+        if key is None:
+            key = jax.random.PRNGKey(0)
 
         # We shuffle the components and not the overall mixture because this lets us preserve
         # the "stable batch" property of the mixture dataset.
