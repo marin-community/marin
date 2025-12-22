@@ -250,7 +250,7 @@ def create_scaling_plot(
                     y=list(map(float, N_fit)),
                     mode="lines",
                     line=dict(color=color, dash=dash, width=_SCALE_LINE["width"]),
-                    name=f"{lab} fit (α={alpha:.3f})",
+                    name=f"{lab} fit (a={alpha:.3f})",
                     legendgroup=lab,
                 )
             )

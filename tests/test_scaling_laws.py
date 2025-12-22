@@ -39,7 +39,6 @@ from marin.scaling_laws.isoflop_analysis import (
     round_to_power_of_two,
 )
 
-
 # --- round_to_power_of_two tests ---
 
 
@@ -249,7 +248,7 @@ def test_robust_quad_logx_handles_noise():
     noise = jnp.array([0.01, -0.02, 0.015, -0.01, 0.005])
     y = y_clean + noise
 
-    a, b, c = robust_quad_logx(x, y)
+    a, b, _ = robust_quad_logx(x, y)
 
     assert abs(a - 0.05) < 0.05
     assert abs(b - (-1.5)) < 0.5
