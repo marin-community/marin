@@ -160,7 +160,8 @@ class IsoFlopTokenizeConfig(TokenizeConfig):
     # DNA complement map for reverse-complement augmentation.
     # Maps token IDs to their complements: A↔T (3↔6), C↔G (4↔5), special tokens unchanged.
     # From: https://huggingface.co/kuleshov-group/PlantCAD2-Small-l24-d0768/blob/main/config.json
-    complement_map: tuple[int, ...] = (0, 1, 2, 6, 5, 4, 3, 7)
+    # Set to enable: (0, 1, 2, 6, 5, 4, 3, 7)
+    complement_map: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -171,14 +172,33 @@ class IsoFlopSweepConfig:
     total_token_count: int
     output_seq_len: int
     input_seq_len: int
-    experiment_name: str = "plantcad_isoflop_v1.1"
+    experiment_name: str = "plantcad_isoflop_v1.2"
     complement_map: tuple[int, ...] | None = None
+
+    # Previous settings as of https://github.com/marin-community/marin/issues/2101#issuecomment-3677025495
+    # budgets: list[float] = dataclasses.field(
+    #     default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
+    # )
+    # epochs: list[int] = dataclasses.field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
+    # steps_per_run: int = 8_192
+    # min_hidden_pow: int = 8
+    # max_hidden_pow: int = 10
+    # hidden_step_size: int = 128
+    # mlp_ratio: int = 4
+    # lr_max: float | None = 0.02
+
     budgets: list[float] = dataclasses.field(
-        default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
+        default_factory=lambda: list(np.logspace(np.log10(3.3e14), np.log10(2.03e15), 5))
     )
-    epochs: list[int] = dataclasses.field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
+    epochs: list[int] = dataclasses.field(default_factory=lambda: [1])
+    steps_per_run: int = 128
+    min_hidden_pow: int = 6
+    max_hidden_pow: int = 8
+    hidden_step_size: int = 32
+    mlp_ratio: int = 4
+    lr_max: float | None = 0.3
+
     architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen"])
-    steps_per_run: int = 8_192
     per_device_eval_parallelism: int = 512
     max_eval_batches: int = 64
     num_evals: int = 3
@@ -186,10 +206,7 @@ class IsoFlopSweepConfig:
     base_hidden_layer_ratio: int = 64
     hidden_head_ratio: int = 128
     lr_constant: float = 0.33
-    lr_max: float | None = 0.02
-    min_hidden_pow: int = 8
-    max_hidden_pow: int = 10
-    mlp_ratio: int = 4
+
     base_optimizer_config: OptimizerConfig = dataclasses.field(
         default_factory=lambda: CautiousConfig(
             learning_rate=1.0,  # Placeholder
@@ -321,14 +338,11 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
     # Effective token count after cropping
     dataset_tokens = int(cfg.total_token_count * (cfg.output_seq_len / cfg.input_seq_len))
 
-    # Hidden size step for grid
-    step_size: int = 128
-
     # Loop over architecture as the primary dimension of the search space
     for architecture in cfg.architectures:
         # Loop through hidden size on a grid, which will determine the model
         # size and therefore token count for each run config
-        for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, step_size):
+        for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, cfg.hidden_step_size):
             hs_pow = math.log2(hidden_size)
             intermediate_dim = hidden_size * cfg.mlp_ratio
             num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))
