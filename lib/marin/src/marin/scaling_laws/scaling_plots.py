@@ -86,7 +86,7 @@ _SCALE_LINE = dict(dash="dot", width=2, color=PALETTE[0])
 
 def create_isoflop_plot(
     df: pd.DataFrame,
-    minima_records: list[dict],
+    minima_records: list,
     fit_curves: dict[tuple[str, float], tuple[float, float, float]],
 ) -> go.Figure:
     """Create the IsoFLOP plot showing loss vs tokens for each compute budget.
@@ -111,7 +111,7 @@ def create_isoflop_plot(
     fig = go.Figure()
 
     # Build lookup for minima
-    minima_lookup = {(rec["label"], rec["flops"]): rec for rec in minima_records}
+    minima_lookup = {(rec.label, rec.flops): rec for rec in minima_records}
 
     for lab in datasets:
         for C in buckets:
@@ -159,8 +159,8 @@ def create_isoflop_plot(
                 rec = minima_lookup[key]
                 fig.add_trace(
                     go.Scatter(
-                        x=[rec["optimal_tokens"]],
-                        y=[rec["loss_at_optimal"]],
+                        x=[rec.optimal_tokens],
+                        y=[rec.loss_at_optimal],
                         mode="markers",
                         marker=_MIN_MARKER,
                         showlegend=False,
@@ -171,7 +171,7 @@ def create_isoflop_plot(
                             "loss=%{y:.4f}<br>params=%{customdata:.3e}<extra></extra>"
                         ),
                         text=[C],
-                        customdata=[rec["optimal_params"]],
+                        customdata=[rec.optimal_params],
                     )
                 )
 
@@ -189,13 +189,13 @@ def create_isoflop_plot(
 
 
 def create_scaling_plot(
-    minima_records: list[dict],
+    minima_records: list,
     scaling_fits: dict[str, tuple[float, float]],
 ) -> go.Figure:
     """Create the scaling law fit plot showing N* vs compute budget.
 
     Args:
-        minima_records: List of dicts with optimal config info per (label, flops)
+        minima_records: List of MinimaRecord with optimal config info per (label, flops)
         scaling_fits: Dict of {label: (alpha, A)} for N* ~ A * C^alpha
 
     Returns:
@@ -207,7 +207,7 @@ def create_scaling_plot(
     # Group by label
     by_lab = {}
     for rec in minima_records:
-        by_lab.setdefault(rec["label"], []).append(rec)
+        by_lab.setdefault(rec.label, []).append(rec)
 
     datasets = list(by_lab.keys())
 
@@ -218,9 +218,9 @@ def create_scaling_plot(
         if not recs:
             continue
 
-        recs = sorted(recs, key=lambda r: r["flops"])
-        Cs = jnp.array([r["flops"] for r in recs])
-        Ns = jnp.array([r["optimal_tokens"] for r in recs])
+        recs = sorted(recs, key=lambda r: r.flops)
+        Cs = jnp.array([r.flops for r in recs])
+        Ns = jnp.array([r.optimal_tokens for r in recs])
 
         color = PALETTE[i % len(PALETTE)]
         dash = DASHES[i % len(DASHES)]

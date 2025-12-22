@@ -38,6 +38,7 @@ dependencies = [
     "numpy",
     "openai",
     "pandas",
+    "plotly",
     "pyarrow>=22",
     "ray==2.53.0",
     "regex",
