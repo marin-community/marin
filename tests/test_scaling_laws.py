@@ -29,6 +29,7 @@ from marin.scaling_laws.isoflop_analysis import (
     CandidateConfig,
     IsoFlopSweepConfig,
     IsoFlopTrainArgs,
+    MinimaRecord,
     candidate_configs,
     compute_total_flops,
     compute_transformer_params,
@@ -463,13 +464,16 @@ def test_create_isoflop_plot_with_data():
         }
     )
     minima_records = [
-        {
-            "label": "nemo",
-            "flops": 1e18,
-            "optimal_tokens": 2e9,
-            "loss_at_optimal": 2.3,
-            "optimal_params": 1e8,
-        }
+        MinimaRecord(
+            label="nemo",
+            flops=1e18,
+            optimal_tokens=2e9,
+            loss_at_optimal=2.3,
+            hidden_dim=512,
+            num_layers=8,
+            batch_size=64,
+            optimal_params=1e8,
+        )
     ]
     fit_curves = {("nemo", 1e18): (0.1, -1.0, 3.0)}
     fig = create_isoflop_plot(df, minima_records, fit_curves)
@@ -489,8 +493,26 @@ def test_create_scaling_plot_with_data():
     from marin.scaling_laws import create_scaling_plot
 
     minima_records = [
-        {"label": "nemo", "flops": 1e18, "optimal_tokens": 1e9},
-        {"label": "nemo", "flops": 1e19, "optimal_tokens": 5e9},
+        MinimaRecord(
+            label="nemo",
+            flops=1e18,
+            optimal_tokens=1e9,
+            loss_at_optimal=2.3,
+            hidden_dim=512,
+            num_layers=8,
+            batch_size=64,
+            optimal_params=1e8,
+        ),
+        MinimaRecord(
+            label="nemo",
+            flops=1e19,
+            optimal_tokens=5e9,
+            loss_at_optimal=2.1,
+            hidden_dim=1024,
+            num_layers=16,
+            batch_size=128,
+            optimal_params=5e8,
+        ),
     ]
     scaling_fits = {"nemo": (0.5, 1e5)}
     fig = create_scaling_plot(minima_records, scaling_fits)

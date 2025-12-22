@@ -37,8 +37,7 @@ import math
 import os
 import re
 from collections.abc import Iterator, Sequence
-from dataclasses import asdict, dataclass, replace
-from typing import NotRequired, TypedDict
+from dataclasses import asdict, dataclass, field, replace
 
 import fsspec
 import jax.numpy as jnp
@@ -187,7 +186,10 @@ class IsoFlopTrainArgs:
 # ---------------- Typed Records ----------------
 
 
-class MinimaRecord(TypedDict):
+@dataclass
+class MinimaRecord:
+    """Record of optimal configuration found at a specific (label, flops) point."""
+
     label: str
     flops: float
     optimal_tokens: float
@@ -196,8 +198,8 @@ class MinimaRecord(TypedDict):
     num_layers: int
     batch_size: int
     optimal_params: float
-    scaling_alpha: NotRequired[float]
-    scaling_A: NotRequired[float]
+    scaling_alpha: float | None = None
+    scaling_A: float | None = None
 
 
 # ---------------- Candidate Config Generation ----------------
@@ -483,21 +485,21 @@ def _minima_to_candidates(minima_records: list[MinimaRecord]) -> list[CandidateC
     """
     configs = []
     for rec in minima_records:
-        if rec["hidden_dim"] == 0:
+        if rec.hidden_dim == 0:
             continue
         configs.append(
             CandidateConfig(
-                hidden_size=rec["hidden_dim"],
-                intermediate_dim=rec["hidden_dim"] * MLP_RATIO,
-                num_layers=rec["num_layers"],
-                num_heads=max(1, rec["hidden_dim"] // HIDDEN_HEAD_RATIO),
-                num_kv_heads=max(1, rec["hidden_dim"] // HIDDEN_HEAD_RATIO),
-                batch_size=rec["batch_size"],
-                train_steps=int(rec["optimal_tokens"] / (rec["batch_size"] * SEQ_LEN)),
-                learning_rate=(LR_CONSTANT * math.sqrt(rec["batch_size"])) / rec["hidden_dim"],
-                beta2=BETA2_BASE ** (rec["batch_size"] / BETA2_BATCH_DIVISOR),
-                tokens=rec["optimal_tokens"],
-                flops_budget=rec["flops"],
+                hidden_size=rec.hidden_dim,
+                intermediate_dim=rec.hidden_dim * MLP_RATIO,
+                num_layers=rec.num_layers,
+                num_heads=max(1, rec.hidden_dim // HIDDEN_HEAD_RATIO),
+                num_kv_heads=max(1, rec.hidden_dim // HIDDEN_HEAD_RATIO),
+                batch_size=rec.batch_size,
+                train_steps=int(rec.optimal_tokens / (rec.batch_size * SEQ_LEN)),
+                learning_rate=(LR_CONSTANT * math.sqrt(rec.batch_size)) / rec.hidden_dim,
+                beta2=BETA2_BASE ** (rec.batch_size / BETA2_BATCH_DIVISOR),
+                tokens=rec.optimal_tokens,
+                flops_budget=rec.flops,
             )
         )
     return configs
@@ -721,32 +723,32 @@ def fit_scaling_laws(
             meta = parse_isoflop_run_name(run_name)
 
             minima_records.append(
-                {
-                    "label": lab,
-                    "flops": float(C),
-                    "optimal_tokens": N_star,
-                    "loss_at_optimal": loss_opt,
-                    "hidden_dim": int(meta["d"]) if meta else 0,
-                    "num_layers": int(meta["L"]) if meta else 0,
-                    "batch_size": int(meta["B"]) if meta else 0,
-                    "optimal_params": float(nearest_row.get("params", C / (6 * N_star))),
-                }
+                MinimaRecord(
+                    label=lab,
+                    flops=float(C),
+                    optimal_tokens=N_star,
+                    loss_at_optimal=loss_opt,
+                    hidden_dim=int(meta["d"]) if meta else 0,
+                    num_layers=int(meta["L"]) if meta else 0,
+                    batch_size=int(meta["B"]) if meta else 0,
+                    optimal_params=float(nearest_row.get("params", C / (6 * N_star))),
+                )
             )
 
     # Fit scaling law N* ~ A * C^alpha per dataset
     scaling_fits: dict[str, tuple[float, float]] = {}
     by_lab: dict[str, list[MinimaRecord]] = {}
     for rec in minima_records:
-        by_lab.setdefault(rec["label"], []).append(rec)
+        by_lab.setdefault(rec.label, []).append(rec)
 
     for lab in datasets:
         recs = by_lab.get(lab, [])
         if len(recs) < 2:
             continue
 
-        recs = sorted(recs, key=lambda r: r["flops"])
-        Cs = jnp.array([r["flops"] for r in recs])
-        Ns = jnp.array([r["optimal_tokens"] for r in recs])
+        recs = sorted(recs, key=lambda r: r.flops)
+        Cs = jnp.array([r.flops for r in recs])
+        Ns = jnp.array([r.optimal_tokens for r in recs])
 
         alpha, logA = jnp.polyfit(jnp.log10(Cs), jnp.log10(Ns), 1)
         A = float(10**logA)
@@ -755,8 +757,8 @@ def fit_scaling_laws(
 
         # Augment minima records with scaling fit params
         for rec in recs:
-            rec["scaling_alpha"] = alpha
-            rec["scaling_A"] = A
+            rec.scaling_alpha = alpha
+            rec.scaling_A = A
 
     return minima_records, scaling_fits, fit_curves
 
@@ -953,7 +955,7 @@ class IsoFlopAnalysisResult:
         return {
             "configs": [asdict(c) for c in self.configs],
             "scaling_fits": {k: list(v) for k, v in self.scaling_fits.items()},
-            "minima_records": self.minima_records,
+            "minima_records": [asdict(r) for r in self.minima_records],
         }
 
 
