@@ -73,6 +73,7 @@ nav:
       - Running an Annealing Experiment: tutorials/annealing-experiment.md
       - Co-Developing with Marin and Levanter: tutorials/co-develop.md
       - Adding an Optimizer for Speedrun: tutorials/add-optimizer.md
+      - Running HELMET Evals: tutorials/run-helmet.md
   - Explanations:
       - The Language Modeling Pipeline: explanations/lm-pipeline.md
       - Datashop: explanations/datashop.md

@@ -218,6 +218,12 @@ eval = [
     "immutabledict",
 ]
 
+helmet = [
+    "pytrec_eval",
+    "rouge_score",
+    "tiktoken",
+]
+
 
 [tool.hatch.metadata]
 allow-direct-references = true

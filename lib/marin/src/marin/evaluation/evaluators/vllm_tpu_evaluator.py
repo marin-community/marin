@@ -46,7 +46,11 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
     @staticmethod
     def start_vllm_server_in_background(
-        model: ModelConfig, host: str = "127.0.0.1", port: int = 8000, timeout_seconds: int = 3600
+        model: ModelConfig,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        timeout_seconds: int = 3600,
+        extra_args: list[str] | None = None,
     ) -> str:
         """
         Serve the model with a local vLLM server in the background.
@@ -64,6 +68,8 @@ class VllmTpuEvaluator(Evaluator, ABC):
             f"--device tpu "
             f"--distributed-executor-backend ray"
         )
+        if extra_args:
+            command = f"{command} {' '.join(extra_args)}"
         process = subprocess.Popen(command, shell=True)
 
         # Check that the server has started by sending heartbeat checks

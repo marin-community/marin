@@ -17,8 +17,10 @@ import gzip
 import json
 import logging
 import os
+import posixpath
 import random
 import re
+import shutil
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -206,6 +208,129 @@ def fsspec_cp(source_path: str, target_path: str) -> None:
 
     fs = fsspec.core.get_fs_token_paths(target_path, mode="wb")[0]
     fs.put(source_path, target_path)
+
+
+def _fsspec_is_local(fs: fsspec.AbstractFileSystem) -> bool:
+    protocol = getattr(fs, "protocol", "file")
+    if isinstance(protocol, str):
+        return protocol == "file"
+    return "file" in protocol
+
+
+def _fsspec_join(fs: fsspec.AbstractFileSystem, *parts: str) -> str:
+    if _fsspec_is_local(fs):
+        return os.path.join(*parts)
+    return posixpath.join(*parts)
+
+
+def _fsspec_dirname(fs: fsspec.AbstractFileSystem, path: str) -> str:
+    if _fsspec_is_local(fs):
+        return os.path.dirname(path)
+    return posixpath.dirname(path)
+
+
+def _fsspec_relpath(fs: fsspec.AbstractFileSystem, path: str, start: str) -> str:
+    if _fsspec_is_local(fs):
+        return os.path.relpath(path, start)
+    return posixpath.relpath(path, start)
+
+
+def fsspec_copyfile_between_fs(
+    *,
+    fs_in: fsspec.AbstractFileSystem,
+    src: str,
+    fs_out: fsspec.AbstractFileSystem,
+    dst: str,
+    chunk_size_bytes: int = 8 * 1024 * 1024,
+) -> None:
+    """Copy a single file between fsspec filesystems.
+
+    Uses server-side copy when possible; otherwise streams bytes through the current process.
+    """
+    if _fsspec_is_local(fs_in) and _fsspec_is_local(fs_out):
+        shutil.copy2(src, dst)
+        return
+
+    if type(fs_in) is type(fs_out):
+        fs_out.copy(src, dst)
+        return
+
+    with fs_in.open(src, "rb") as r, fs_out.open(dst, "wb") as w:
+        while True:
+            chunk = r.read(chunk_size_bytes)
+            if not chunk:
+                break
+            w.write(chunk)
+
+
+def fsspec_copy_path_into_dir(
+    *,
+    src_path: str,
+    dst_path: str,
+    fs_in: fsspec.AbstractFileSystem | None = None,
+    fs_out: fsspec.AbstractFileSystem | None = None,
+    chunk_size_bytes: int = 8 * 1024 * 1024,
+) -> None:
+    """Copy a file or directory into `dst_path` on the destination filesystem.
+
+    If `src_path` is a directory, copies the full tree into `dst_path/<relpath>`.
+    If `src_path` is a file, copies it into `dst_path/<basename(src_path)>`.
+    """
+    if fs_in is None:
+        fs_in, src_root = fsspec.core.url_to_fs(src_path)
+    else:
+        if "://" in src_path:
+            _, src_root = fsspec.core.url_to_fs(src_path)
+        else:
+            src_root = src_path
+
+    if fs_out is None:
+        fs_out, dst_root = fsspec.core.url_to_fs(dst_path)
+    else:
+        if "://" in dst_path:
+            _, dst_root = fsspec.core.url_to_fs(dst_path)
+        else:
+            dst_root = dst_path
+
+    if not fs_in.exists(src_root):
+        raise FileNotFoundError(f"Source path does not exist: {src_path}")
+
+    fs_out.makedirs(dst_root, exist_ok=True)
+
+    if _fsspec_is_local(fs_in) and _fsspec_is_local(fs_out):
+        if os.path.isdir(src_root):
+            shutil.copytree(src_root, dst_root, dirs_exist_ok=True)
+            return
+        shutil.copy2(src_root, _fsspec_join(fs_out, dst_root, os.path.basename(src_root)))
+        return
+
+    if fs_in.isdir(src_root):
+        for src in fs_in.find(src_root):
+            if fs_in.isdir(src):
+                continue
+            rel = _fsspec_relpath(fs_in, src, src_root)
+            dst = _fsspec_join(fs_out, dst_root, rel)
+            parent = _fsspec_dirname(fs_out, dst)
+            fs_out.makedirs(parent, exist_ok=True)
+            fsspec_copyfile_between_fs(
+                fs_in=fs_in,
+                src=src,
+                fs_out=fs_out,
+                dst=dst,
+                chunk_size_bytes=chunk_size_bytes,
+            )
+        return
+
+    dst = _fsspec_join(fs_out, dst_root, os.path.basename(src_root))
+    parent = _fsspec_dirname(fs_out, dst)
+    fs_out.makedirs(parent, exist_ok=True)
+    fsspec_copyfile_between_fs(
+        fs_in=fs_in,
+        src=src_root,
+        fs_out=fs_out,
+        dst=dst,
+        chunk_size_bytes=chunk_size_bytes,
+    )
 
 
 _HF_RETRY_KEYWORDS = (
