@@ -517,3 +517,116 @@ def test_create_scaling_plot_with_data():
     scaling_fits = {"nemo": (0.5, 1e5)}
     fig = create_scaling_plot(minima_records, scaling_fits)
     assert fig is not None
+
+
+# --- Snapshot tests ---
+
+# Snapshot of expected output for generate_isoflop_train_args with budget=1e18.
+# This captures the configuration generation logic from experiments/isoflop_sweep.py
+# on the main branch to ensure the refactored code produces identical configs.
+EXPECTED_ISOFLOP_CONFIGS_1E18 = [
+    {
+        "hidden_size": 512,
+        "intermediate_dim": 2048,
+        "num_layers": 6,
+        "num_heads": 4,
+        "num_kv_heads": 4,
+        "batch_size": 32,
+        "train_steps": 32844,
+        "learning_rate": 0.003646,
+        "beta2": 0.994962,
+        "tpu_type": "v5p-8",
+        "run_name": "isoflop-1e+18-d512-L6-B32-test-snapshot",
+    },
+    {
+        "hidden_size": 640,
+        "intermediate_dim": 2560,
+        "num_layers": 7,
+        "num_heads": 5,
+        "num_kv_heads": 5,
+        "batch_size": 16,
+        "train_steps": 46274,
+        "learning_rate": 0.002063,
+        "beta2": 0.997478,
+        "tpu_type": "v5p-8",
+        "run_name": "isoflop-1e+18-d640-L7-B16-test-snapshot",
+    },
+    {
+        "hidden_size": 768,
+        "intermediate_dim": 3072,
+        "num_layers": 8,
+        "num_heads": 6,
+        "num_kv_heads": 6,
+        "batch_size": 16,
+        "train_steps": 33965,
+        "learning_rate": 0.001719,
+        "beta2": 0.997478,
+        "tpu_type": "v5p-8",
+        "run_name": "isoflop-1e+18-d768-L8-B16-test-snapshot",
+    },
+    {
+        "hidden_size": 896,
+        "intermediate_dim": 3584,
+        "num_layers": 10,
+        "num_heads": 7,
+        "num_kv_heads": 7,
+        "batch_size": 8,
+        "train_steps": 48105,
+        "learning_rate": 0.001042,
+        "beta2": 0.998738,
+        "tpu_type": "v5p-8",
+        "run_name": "isoflop-1e+18-d896-L10-B8-test-snapshot",
+    },
+    {
+        "hidden_size": 1024,
+        "intermediate_dim": 4096,
+        "num_layers": 11,
+        "num_heads": 8,
+        "num_kv_heads": 8,
+        "batch_size": 8,
+        "train_steps": 37335,
+        "learning_rate": 0.000912,
+        "beta2": 0.998738,
+        "tpu_type": "v5p-8",
+        "run_name": "isoflop-1e+18-d1024-L11-B8-test-snapshot",
+    },
+]
+
+
+def test_generate_isoflop_train_args_snapshot():
+    """Snapshot test: verify generate_isoflop_train_args produces expected configs.
+
+    This test ensures the refactored scaling_laws module produces identical
+    configurations to the original experiments/isoflop_sweep.py implementation.
+    """
+    config = IsoFlopSweepConfig(budgets=(1e18,))
+    result = generate_isoflop_train_args(
+        sweep_config=config,
+        experiment_name="test-snapshot",
+        vocab_size=MARIN_TOKENIZER_VOCAB_SIZE,
+    )
+
+    assert len(result) == len(EXPECTED_ISOFLOP_CONFIGS_1E18), (
+        f"Expected {len(EXPECTED_ISOFLOP_CONFIGS_1E18)} configs, got {len(result)}"
+    )
+
+    for i, (args, expected) in enumerate(zip(result, EXPECTED_ISOFLOP_CONFIGS_1E18)):
+        c = args.candidate
+        actual = {
+            "hidden_size": c.hidden_size,
+            "intermediate_dim": c.intermediate_dim,
+            "num_layers": c.num_layers,
+            "num_heads": c.num_heads,
+            "num_kv_heads": c.num_kv_heads,
+            "batch_size": c.batch_size,
+            "train_steps": c.train_steps,
+            "learning_rate": round(c.learning_rate, 6),
+            "beta2": round(c.beta2, 6),
+            "tpu_type": args.tpu_type,
+            "run_name": args.run_name,
+        }
+
+        for key in expected:
+            assert actual[key] == expected[key], (
+                f"Config {i}: {key} mismatch: expected {expected[key]}, got {actual[key]}"
+            )
