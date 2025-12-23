@@ -42,13 +42,8 @@ remembering the IP address of the cluster head node, what port the dashboard is 
 
 ### Ray token authentication
 
-Marin clusters use Ray token authentication (Ray >= 2.52). You will typically interact with clusters through SSH
+Marin clusters use Ray token authentication (Ray >= 2.53). You will typically interact with clusters through SSH
 port-forwarding on `localhost`, but you still need the token.
-
-Known issue: as of Ray 2.52.x, the Ray dashboard **Logs** tab may not work reliably with token auth enabled (you may see
-`UNAUTHENTICATED` / “Invalid or missing authentication token”). This appears to be upstream (tracking:
-[ray-project/ray#59614](https://github.com/ray-project/ray/issues/59614)). Prefer `ray_run.py` output and/or SSH to the
-head node and inspect `/tmp/ray/session_latest/logs/`.
 
 For the staging cluster (`marin-us-central2-staging`), the easiest flow is:
 

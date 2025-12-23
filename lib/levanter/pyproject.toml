@@ -53,7 +53,7 @@ dependencies = [
     "matplotlib>=3.7.0",
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
-    "ray[default]==2.52.0",
+    "ray[default]==2.53.0",
     "pydantic<3",
     "filelock~=3.13",
     "async-lru~=2.0",
