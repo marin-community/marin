@@ -20,8 +20,8 @@ from marin.execution.executor import executor_main
 
 def main() -> None:
     # For gcsfuse-backed checkpoints, prefer a path under `gs://$PREFIX/gcsfuse_mount/...`
-    model_path = "gs://marin-us-east5/gcsfuse_mount/perplexity-models/llama-200m"
-    model_name = "llama-200m-helmet"
+    model_path = "meta-llama/Llama-3.2-1B"
+    model_name = "llama-3.2-1b"
 
     steps = helmet_steps(
         model_name=model_name,
@@ -34,7 +34,7 @@ def main() -> None:
             # vllm_serve_args=("--max-model-len", "131072"),
         ),
         pipeline=HELMET_PIPELINE_AUTOMATIC,
-        wandb_tags=["helmet"],
+        wandb_tags=["helmet", "test"],
     )
 
     executor_main(steps=steps)

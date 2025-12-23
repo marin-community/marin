@@ -51,7 +51,7 @@ class HelmetConfig:
     seed: int = 42
     tag: str = "v1"
 
-    data_scratch_dir: str = "/opt/gcsfuse/helmet-data"
+    data_scratch_dir: str = "/opt/gcsfuse_mount/helmet-data"
     """
     Local scratch directory (backed by gcsfuse) where extracted HELMET data is stored.
     The actual directory used will be suffixed with the resolved dataset SHA.

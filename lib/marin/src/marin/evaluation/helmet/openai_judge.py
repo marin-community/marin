@@ -26,7 +26,7 @@ import fsspec
 from marin.utils import fsspec_copy_path_into_dir
 
 
-def _local_path_for_gcsfuse_mount(path: str, *, local_mount_root: str = "/opt/gcsfuse") -> str:
+def _local_path_for_gcsfuse_mount(path: str, *, local_mount_root: str = "/opt/gcsfuse_mount") -> str:
     marker = "gcsfuse_mount/"
     if marker not in path:
         return path

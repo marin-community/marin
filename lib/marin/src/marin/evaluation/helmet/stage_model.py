@@ -29,11 +29,18 @@ class StageModelToGcsfuseConfig:
     output_path: str
 
 
+def _looks_like_hf_model_id(path: str) -> bool:
+    if "://" in path:
+        return False
+    parts = path.split("/")
+    return len(parts) == 2 and all(part.strip() for part in parts)
+
+
 def stage_model_to_gcsfuse(config: StageModelToGcsfuseConfig) -> None:
     """Copy a model directory to a gcsfuse-backed output directory.
 
     This is used to avoid repeated downloads onto local TPU disks for large checkpoints:
-    once staged into `gs://$PREFIX/gcsfuse_mount/...`, TPU jobs can read via `/opt/gcsfuse/...`.
+    once staged into `gs://$PREFIX/gcsfuse_mount/...`, TPU jobs can read via `/opt/gcsfuse_mount/...`.
     """
     fs_out, out_root = fsspec.core.url_to_fs(config.output_path)
     success_path = os.path.join(out_root, "_SUCCESS")
@@ -50,11 +57,13 @@ def stage_model_to_gcsfuse(config: StageModelToGcsfuseConfig) -> None:
         fs_out.rm(staged_root, recursive=True)
     fs_out.makedirs(staged_root, exist_ok=True)
 
-    fs_in, in_root = fsspec.core.url_to_fs(config.input_path)
-    if not fs_in.exists(in_root):
-        raise FileNotFoundError(f"Input model path does not exist: {config.input_path}")
+    src_path = config.input_path
+    # Convenience: allow passing HF model ids like `org/repo` for staging.
+    # We only treat it as an HF id if it doesn't exist as a local path.
+    if _looks_like_hf_model_id(src_path) and not os.path.exists(src_path):
+        src_path = f"hf://{src_path}"
 
-    fsspec_copy_path_into_dir(fs_in=fs_in, src_path=in_root, fs_out=fs_out, dst_path=staged_root)
+    fsspec_copy_path_into_dir(src_path=src_path, fs_out=fs_out, dst_path=staged_root)
 
     with fs_out.open(os.path.join(out_root, "metadata.json"), "w") as f:
         json.dump(

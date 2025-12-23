@@ -32,7 +32,7 @@ from marin.utils import fsspec_copy_path_into_dir
 from marin.utils import remove_tpu_lockfile_on_exit
 
 
-def _local_path_for_gcsfuse_mount(path: str, *, local_mount_root: str = "/opt/gcsfuse") -> str:
+def _local_path_for_gcsfuse_mount(path: str, *, local_mount_root: str = "/opt/gcsfuse_mount") -> str:
     marker = "gcsfuse_mount/"
     if marker not in path:
         raise ValueError(f"Expected a path under {marker}, got: {path}")
@@ -111,6 +111,11 @@ def _run_on_tpu(config: HelmetRunConfig) -> None:
 
     helmet_data_dir = _local_path_for_gcsfuse_mount(config.helmet_data_output_path)
     if not os.path.exists(os.path.join(helmet_data_dir, "_SUCCESS")):
+        # list the files that may or may not exist, for debugging. this dir and parent
+        parent_dir = os.path.dirname(helmet_data_dir)
+        print(f"Checking existence of HELMET data dir: {os.listdir('/opt/gcsfuse_mount')}")
+        print(f"Contents of parent dir: {parent_dir}: {os.listdir(parent_dir)}")
+        print(f"Contents of helmet data dir: {helmet_data_dir}: {os.listdir(helmet_data_dir)}")
         raise RuntimeError(f"HELMET data directory is not ready: {helmet_data_dir}")
 
     with tempfile.TemporaryDirectory(prefix="helmet_repo_") as tmpdir:

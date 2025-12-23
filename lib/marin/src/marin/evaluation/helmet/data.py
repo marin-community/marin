@@ -14,32 +14,24 @@
 
 import json
 import os
-import shutil
+import posixpath
 import tarfile
 import tempfile
 from dataclasses import dataclass
 
-from huggingface_hub import hf_hub_download
+import fsspec
 
-from marin.evaluation.utils import is_remote_path
+from marin.utils import fsspec_copy_path_into_dir
 
 _SUCCESS_FILE = "_SUCCESS"
 _DATA_DIRNAME = "data"
 _METADATA_FILENAME = "metadata.json"
 
 
-def _local_path_for_gcsfuse_mount(output_path: str, *, local_mount_root: str = "/opt/gcsfuse") -> str:
-    """Map an executor output path under `gcsfuse_mount/` to the local gcsfuse mount.
-
-    Example:
-      `gs://bucket/prefix/gcsfuse_mount/helmet-data-<sha>` -> `/opt/gcsfuse/helmet-data-<sha>`
-    """
-    marker = "gcsfuse_mount/"
-    if marker not in output_path:
-        raise ValueError(f"Expected output_path under {marker}, got: {output_path}")
-
-    relative = output_path.split(marker, 1)[1].lstrip("/")
-    return os.path.join(local_mount_root, relative)
+def _join_fs_path(path_a: str, path_b: str) -> str:
+    if "://" in path_a:
+        return posixpath.join(path_a, path_b)
+    return os.path.join(path_a, path_b)
 
 
 def _safe_extract_tar(tar: tarfile.TarFile, path: str) -> None:
@@ -61,52 +53,68 @@ class HelmetDataDownloadConfig:
     resolved_sha: str
 
     filename: str = "data.tar.gz"
-    local_mount_root: str = "/opt/gcsfuse"
-
-    hf_cache_dir: str = "/tmp/helmet-hf-cache"
 
 
-def _clear_partial_output(local_out_dir: str) -> None:
+def _clear_partial_output(*, fs_out: fsspec.AbstractFileSystem, out_root: str) -> None:
     """Remove only the artifacts we own, leaving executor sentinel files intact."""
-    data_dir = os.path.join(local_out_dir, _DATA_DIRNAME)
-    if os.path.exists(data_dir):
-        shutil.rmtree(data_dir)
+    # We only remove our own payload + markers; executor sentinel files (e.g. `.executor_status`) remain.
+    data_dir = _join_fs_path(out_root, _DATA_DIRNAME)
+    if fs_out.exists(data_dir):
+        fs_out.rm(data_dir, recursive=True)
 
     for filename in (_METADATA_FILENAME, _SUCCESS_FILE):
-        path = os.path.join(local_out_dir, filename)
-        if os.path.exists(path):
-            os.remove(path)
+        path = _join_fs_path(out_root, filename)
+        if fs_out.exists(path):
+            fs_out.rm(path)
+
+
+def _hf_url_for_repo_file(*, repo_id: str, revision: str | None, filename: str) -> str:
+    # `hf://[<repo_type_prefix>]<repo_id>[@<revision>]/<path/in/repo>`
+    # For HELMET data, the repo is a dataset by default.
+    if repo_id.startswith(("datasets/", "models/", "spaces/")):
+        repo_path = repo_id
+    else:
+        repo_path = f"datasets/{repo_id}"
+
+    url = f"hf://{repo_path}"
+    if revision:
+        url += f"@{revision}"
+    url += f"/{filename}"
+    return url
 
 
 def download_helmet_data(config: HelmetDataDownloadConfig) -> None:
-    """Download and extract HELMET data into the gcsfuse-backed output directory."""
-    if not is_remote_path(config.output_path):
-        # Local runs can still use the same directory structure; no mapping needed.
-        local_out_dir = config.output_path
-    else:
-        local_out_dir = _local_path_for_gcsfuse_mount(config.output_path, local_mount_root=config.local_mount_root)
+    """Download and extract HELMET data into the step output directory.
 
-    success_path = os.path.join(local_out_dir, _SUCCESS_FILE)
-    os.makedirs(local_out_dir, exist_ok=True)
+    For `gs://.../gcsfuse_mount/...` outputs, we write directly to GCS; TPU jobs will read via the gcsfuse mount.
+    """
+    fs_out, out_root = fsspec.core.url_to_fs(config.output_path)
 
-    data_out_dir = os.path.join(local_out_dir, _DATA_DIRNAME)
-    if os.path.exists(success_path):
+    success_path = _join_fs_path(out_root, _SUCCESS_FILE)
+    data_out_dir = _join_fs_path(out_root, _DATA_DIRNAME)
+    metadata_path = _join_fs_path(out_root, _METADATA_FILENAME)
+
+    fs_out.makedirs(out_root, exist_ok=True)
+
+    if fs_out.exists(success_path):
         # Completed previously; confirm the payload directory exists.
-        if os.path.exists(data_out_dir):
+        if fs_out.exists(data_out_dir):
             return
-        os.remove(success_path)
+        fs_out.rm(success_path)
 
     # Avoid silently reusing partial outputs, but don't delete executor sentinel files in the root.
-    _clear_partial_output(local_out_dir)
+    _clear_partial_output(fs_out=fs_out, out_root=out_root)
 
     with tempfile.TemporaryDirectory(prefix="helmet_data_") as tmpdir:
-        tar_path = hf_hub_download(
-            repo_id=config.repo_id,
-            repo_type="dataset",
-            filename=config.filename,
-            revision=config.revision,
-            cache_dir=config.hf_cache_dir,
-        )
+        tar_dir = os.path.join(tmpdir, "tar")
+        os.makedirs(tar_dir, exist_ok=True)
+
+        tar_url = _hf_url_for_repo_file(repo_id=config.repo_id, revision=config.revision, filename=config.filename)
+        fsspec_copy_path_into_dir(src_path=tar_url, dst_path=tar_dir)
+
+        tar_path = os.path.join(tar_dir, config.filename)
+        if not os.path.exists(tar_path):
+            raise FileNotFoundError(f"Expected tarball at {tar_path} after copying from {tar_url}")
 
         extract_dir = os.path.join(tmpdir, "extracted")
         os.makedirs(extract_dir, exist_ok=True)
@@ -116,22 +124,29 @@ def download_helmet_data(config: HelmetDataDownloadConfig) -> None:
         extracted_data_dir = os.path.join(extract_dir, _DATA_DIRNAME)
         if not os.path.isdir(extracted_data_dir):
             raise FileNotFoundError(
-                f"Expected HELMET archive to contain '{_DATA_DIRNAME}/' at {extracted_data_dir}; "
+                f"Expected HELMET archive to contain '{_DATA_DIRNAME}/' under {extract_dir}; "
                 f"found: {sorted(os.listdir(extract_dir))}"
             )
-        shutil.copytree(extracted_data_dir, data_out_dir, dirs_exist_ok=True)
 
-    with open(os.path.join(local_out_dir, _METADATA_FILENAME), "w") as f:
+        # Copy extracted `data/` to the step output path (gs://... or local).
+        fsspec_copy_path_into_dir(src_path=extracted_data_dir, dst_path=data_out_dir, fs_out=fs_out)
+
+    with fs_out.open(metadata_path, "w") as f:
         json.dump(
             {
                 "repo_id": config.repo_id,
                 "revision": config.revision,
                 "resolved_sha": config.resolved_sha,
                 "filename": config.filename,
+                "source_url": _hf_url_for_repo_file(
+                    repo_id=config.repo_id,
+                    revision=config.revision,
+                    filename=config.filename,
+                ),
             },
             f,
             indent=2,
         )
 
-    with open(success_path, "w") as f:
+    with fs_out.open(success_path, "w") as f:
         f.write("")
