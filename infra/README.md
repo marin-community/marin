@@ -76,7 +76,7 @@ eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
 
 As of Ray 2.52.x, the Ray dashboard **Logs** tab is currently unreliable with token authentication enabled (you may see
 `UNAUTHENTICATED` / “Invalid or missing authentication token” errors when fetching logs). This appears to be an upstream
-Ray issue.
+Ray issue (tracking: [ray-project/ray#59614](https://github.com/ray-project/ray/issues/59614)).
 
 Workarounds:
 - Prefer `ray_run.py` output (driver logs stream in the terminal).

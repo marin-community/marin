@@ -201,8 +201,9 @@ make get_ray_auth_token
 #### Known issue: dashboard Logs tab
 
 As of Ray 2.52.x, the Ray dashboard **Logs** tab may fail to load logs when token auth is enabled (errors like
-`UNAUTHENTICATED` / “Invalid or missing authentication token”). Prefer driver logs in `ray_run.py` and/or SSH to the
-head node and inspect `/tmp/ray/session_latest/logs/`.
+`UNAUTHENTICATED` / “Invalid or missing authentication token”). This appears to be upstream (tracking:
+[ray-project/ray#59614](https://github.com/ray-project/ray/issues/59614)). Prefer driver logs in `ray_run.py` and/or SSH
+to the head node and inspect `/tmp/ray/session_latest/logs/`.
 
 #### `auth-env`
 Emit shell exports for Ray token authentication (ssh-agent style).
