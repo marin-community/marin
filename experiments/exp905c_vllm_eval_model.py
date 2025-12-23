@@ -46,7 +46,7 @@ Note for people trying to do evals:
 """
 EVAL_TASKS = [
     EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
-    # EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime25_0shot"),
+    # EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime24_0shot"),
 ]
 
 MODELS = [
@@ -68,12 +68,12 @@ MODELS = [
     #     "apply_chat_template": True,
     #     "tensor_parallel_size": 4,
     # },
-    {
-        "name": "qwen2.5-7b-instruct-finetuned-redo_fixed_template_pt2-chkpt10500-aime24",
-        "path": "gs://marin-us-central2/checkpoints/exp2199b_redo_pt2_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-1a1aff/hf/step-10500-padded-vocab",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-redo_fixed_template_pt2-chkpt10500-aime24",
+    #     "path": "gs://marin-us-central2/checkpoints/exp2199b_redo_pt2_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-1a1aff/hf/step-10500-padded-vocab",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
     # {
     #     "name": "qwen3-8b-finetuned-aime25",
     #     "path": "gs://marin-us-east5/checkpoints/exp2199c_sft_qwen3_8b_openthoughts3_bsz512_lr8e_5-accb91/hf/step-11718-padded-vocab/",
@@ -134,6 +134,18 @@ MODELS = [
     #     "apply_chat_template": True,
     #     "tensor_parallel_size": 4,
     # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-chkpt1170-aime24",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262a_ot4_math30k_qwen3_32b_bsz128_lr4e_5-ad01cb/hf/step-1170-padded-vocab",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    {
+        "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-chkpt1170-aime24",
+        "path": "gs://marin-us-east5/checkpoints/exp2262b_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-41ff16/hf/step-1170-padded-vocab",
+        "apply_chat_template": True,
+        "tensor_parallel_size": 4,
+    },
 ]
 
 
