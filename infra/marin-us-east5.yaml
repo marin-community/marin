@@ -41,6 +41,7 @@ docker:
       - -v "/var/run/docker.sock:/var/run/docker.sock"
 
       - -e RAY_AUTH_MODE=token
+      - -e RAY_AUTH_TOKEN_PATH=/home/ray/.ray/auth_token
 
     head_run_options:
       - --privileged
@@ -49,6 +50,7 @@ docker:
       - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
 
       - -e RAY_AUTH_MODE=token
+      - -e RAY_AUTH_TOKEN_PATH=/home/ray/.ray/auth_token
 
 
 

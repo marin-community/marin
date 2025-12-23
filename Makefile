@@ -189,6 +189,15 @@ get_ray_auth_token: install_gcloud
 	gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN > $$HOME/.ray/auth_token
 	chmod 600 $$HOME/.ray/auth_token
 
+# commenting out so people don't accidentally overwrite the secret, but keeping for reference
+#init_ray_auth_token_secret: install_gcloud
+#	@if [ ! -f "$$HOME/.ray/auth_token" ]; then \
+#		echo "Missing $$HOME/.ray/auth_token; generate one first (e.g. export RAY_AUTH_MODE=token && ray get-auth-token --generate)"; \
+#		exit 1; \
+#	fi
+#	@gcloud secrets describe RAY_AUTH_TOKEN >/dev/null 2>&1 || gcloud secrets create RAY_AUTH_TOKEN --replication-policy=automatic
+#	gcloud secrets versions add RAY_AUTH_TOKEN --data-file="$$HOME/.ray/auth_token"
+
 
 setup_pre_commit:
 	@HOOK_PATH=.git/hooks/pre-commit; \

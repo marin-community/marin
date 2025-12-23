@@ -45,6 +45,10 @@ remembering the IP address of the cluster head node, what port the dashboard is 
 Marin clusters use Ray token authentication (Ray >= 2.52). You will typically interact with clusters through SSH
 port-forwarding on `localhost`, but you still need the token.
 
+Known issue: as of Ray 2.52.x, the Ray dashboard **Logs** tab may not work reliably with token auth enabled (you may see
+`UNAUTHENTICATED` / “Invalid or missing authentication token”). Prefer `ray_run.py` output and/or SSH to the head node
+and inspect `/tmp/ray/session_latest/logs/`.
+
 For the staging cluster (`marin-us-central2-staging`), the easiest flow is:
 
 ```bash
@@ -58,12 +62,29 @@ For non-staging clusters, install the default token locally (or re-run `make dev
 make get_ray_auth_token
 ```
 
+If this fails because the Secret Manager secret doesn’t exist yet, someone needs to create it once (see
+`infra/README.md`).
+
+If you prefer ssh-agent style exports for the current shell session (sets `RAY_AUTH_MODE=token` and `RAY_AUTH_TOKEN_PATH=...`), you can do:
+
+```bash
+eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
+```
+
+You can put that in your shell profile (e.g. `~/.zshrc`) if you want it in every terminal. You'll want to do something like:
+
+```bash
+MARIN_HOME="${MARIN_HOME:-$HOME/marin}"  # TODO: set this where you checkout marin
+if [[ -z "${RAY_AUTH_TOKEN_PATH:-}" ]]; then
+    cd "$MARIN_HOME" && eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
+fi
+```
+
+
 If you need to install the staging token locally (only needed for CLI + SDK usage against staging), do:
 
 ```bash
-mkdir -p ~/.ray
-gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN_STAGING > ~/.ray/auth_token
-chmod 600 ~/.ray/auth_token
+make get_ray_auth_token_staging
 ```
 
 There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the
@@ -90,7 +111,7 @@ launching tasks -- see [test_integration_test.py](https://github.com/marin-commu
 ```bash
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
-uv run python marin/run/ray_run.py --no_wait --env_vars WANDB_API_KEY=${WANDB_API_KEY} -- python experiments/hello_world.py
+uv run lib/marin/src/marin/run/ray_run.py --no_wait --env_vars WANDB_API_KEY=${WANDB_API_KEY} -- python experiments/hello_world.py
 
 # Get Job Status
 uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml list-jobs

@@ -182,6 +182,10 @@ Open a single cluster dashboard, copy the Ray auth token to clipboard, and open 
 uv run scripts/ray/cluster.py --cluster us-central2-staging auth
 ```
 
+When the browser shows the token prompt, paste the token (already in your clipboard) and click **Submit**.
+If you are not prompted, you already have a `ray-authentication-token` cookie for this host; if you switch between
+clusters with different tokens you may need to clear that cookie or use an incognito window.
+
 If the secret can't be inferred, or you want to override it:
 
 ```bash
@@ -192,6 +196,27 @@ Note: for non-staging clusters, you can install the default token locally with:
 
 ```bash
 make get_ray_auth_token
+```
+
+#### Known issue: dashboard Logs tab
+
+As of Ray 2.52.x, the Ray dashboard **Logs** tab may fail to load logs when token auth is enabled (errors like
+`UNAUTHENTICATED` / “Invalid or missing authentication token”). Prefer driver logs in `ray_run.py` and/or SSH to the
+head node and inspect `/tmp/ray/session_latest/logs/`.
+
+#### `auth-env`
+Emit shell exports for Ray token authentication (ssh-agent style).
+
+Recommended usage (exports `RAY_AUTH_MODE=token` and `RAY_AUTH_TOKEN_PATH=...`):
+
+```bash
+eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
+```
+
+To export the token value directly (less secure):
+
+```bash
+eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env --inline-token)"
 ```
 
 #### `monitor-cluster`

@@ -312,16 +312,25 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def check_dashboard(cluster_name: str, dashboard_port: int) -> tuple[str, bool]:
-        """Check if a dashboard port is reachable.
+        """Check if a dashboard is reachable through the local tunnel.
 
-        Ray dashboard endpoints may require authentication (token auth), so we
-        can't rely on unauthenticated HTTP health checks here. A successful TCP
-        connect is sufficient to prove the SSH tunnel is working.
+        A TCP connect can succeed even when the remote end of an SSH `-L` forward
+        is refusing connections, so use a lightweight HTTP request instead.
+
+        With token auth enabled, this may return 401/403 without a token; that's
+        still a useful signal that the tunnel is correctly targeting a live
+        dashboard process.
         """
         try:
-            with socket.create_connection(("localhost", dashboard_port), timeout=3):
-                return (cluster_name, True)
-        except OSError:
+            import http.client
+
+            conn = http.client.HTTPConnection("localhost", dashboard_port, timeout=3)
+            conn.request("GET", "/api/version")
+            resp = conn.getresponse()
+            resp.read(1)  # ensure the socket is usable
+            # 200 = unauthenticated clusters; 401/403 = token-auth enabled clusters without a token.
+            return (cluster_name, resp.status in {200, 401, 403})
+        except Exception:
             return (cluster_name, False)
 
     max_retries = 3

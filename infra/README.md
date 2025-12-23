@@ -50,10 +50,48 @@ For the staging cluster (`marin-us-central2-staging`):
 uv run scripts/ray/cluster.py --cluster us-central2-staging auth
 ```
 
+If you need the staging token locally for CLI/SDK usage:
+
+```bash
+make get_ray_auth_token_staging
+```
+
+Note: the Ray dashboard stores the token in a `ray-authentication-token` cookie scoped to the host (e.g. `localhost`).
+If you switch between clusters with different tokens (staging vs non-staging), you may need to clear that cookie or use
+an incognito window (or open via `127.0.0.1` vs `localhost`).
+
 For non-staging clusters, install the default token locally:
 
 ```bash
 make get_ray_auth_token
+```
+
+If you prefer ssh-agent style exports (sets `RAY_AUTH_MODE=token` and `RAY_AUTH_TOKEN_PATH=...` for the current shell):
+
+```bash
+eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
+```
+
+#### Known issue: dashboard Logs tab
+
+As of Ray 2.52.x, the Ray dashboard **Logs** tab is currently unreliable with token authentication enabled (you may see
+`UNAUTHENTICATED` / “Invalid or missing authentication token” errors when fetching logs). This appears to be an upstream
+Ray issue.
+
+Workarounds:
+- Prefer `ray_run.py` output (driver logs stream in the terminal).
+- SSH to the head node and `tail -f` files under `/tmp/ray/session_latest/logs/`.
+
+#### One-time: create the production token secret
+
+Non-staging clusters read their token from the `RAY_AUTH_TOKEN` Secret Manager secret.
+
+If `make get_ray_auth_token` fails because the secret doesn’t exist yet, create it once:
+
+```bash
+export RAY_AUTH_MODE=token
+ray get-auth-token --generate  # writes ~/.ray/auth_token (don’t commit this)
+make init_ray_auth_token_secret
 ```
 
 For **data processing** (downloads, transforms, deduplication), we use Zephyr instead of raw Ray.

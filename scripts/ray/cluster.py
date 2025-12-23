@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -895,8 +896,14 @@ def auth(ctx, secret: str | None, copy: bool, open_browser: bool):
         url = f"http://localhost:{ports.dashboard_port}"
         print()
         print(f"Dashboard: {url}")
-        print("- If the browser prompts for a token, paste from clipboard and submit.")
-        print("- If you are not prompted, you likely already have a valid auth cookie for `localhost`.")
+        print()
+        print("Auth steps (Ray token auth prompt):")
+        print("  1) Paste the token (already in your clipboard) into the prompt.")
+        print("  2) Click Submit.")
+        print()
+        print("If you are not prompted, you already have a `ray-authentication-token` cookie for this host.")
+        print("If you switch between clusters with different tokens (e.g. staging vs non-staging),")
+        print("clear that cookie or use an incognito window (or open via 127.0.0.1 vs localhost).")
 
         if open_browser:
             try:
@@ -912,6 +919,54 @@ def auth(ctx, secret: str | None, copy: bool, open_browser: bool):
             time.sleep(86400)
         except KeyboardInterrupt:
             print("\nShutting down...")
+
+
+@cli.command("auth-env")
+@click.option(
+    "--secret",
+    default=None,
+    help="GCP Secret Manager secret containing the Ray auth token (default: infer from cluster config).",
+)
+@click.option(
+    "--inline-token/--token-path",
+    default=False,
+    help="Export RAY_AUTH_TOKEN directly (less secure) instead of exporting RAY_AUTH_TOKEN_PATH (default: token-path).",
+)
+@click.pass_context
+def auth_env(ctx, secret: str | None, inline_token: bool):
+    """Emit shell exports for Ray token authentication.
+
+    Intended usage:
+
+      eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
+
+    By default, this exports RAY_AUTH_MODE=token and RAY_AUTH_TOKEN_PATH pointing
+    at a cached token file under ~/.ray/. Use --inline-token to export the token
+    value directly as RAY_AUTH_TOKEN.
+    """
+    config_path = ctx.obj.config_file if ctx.obj.config_obj else None
+    inferred_secret = _infer_ray_auth_secret_from_config(config_path) if config_path else None
+    secret = secret or inferred_secret or "RAY_AUTH_TOKEN"
+
+    token = subprocess.check_output(
+        ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"],
+        text=True,
+    ).strip()
+    if not token:
+        raise RuntimeError(f"Secret {secret} returned empty token")
+
+    print("export RAY_AUTH_MODE=token")
+
+    if inline_token:
+        print(f"export RAY_AUTH_TOKEN={shlex.quote(token)}")
+        return
+
+    token_dir = Path.home() / ".ray"
+    token_dir.mkdir(parents=True, exist_ok=True)
+    token_path = token_dir / f"auth_token.{secret}"
+    token_path.write_text(token)
+    token_path.chmod(0o600)
+    print(f"export RAY_AUTH_TOKEN_PATH={shlex.quote(str(token_path))}")
 
 
 @cli.command("show-logs")
