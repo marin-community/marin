@@ -148,12 +148,12 @@ We now turn to the calculation of the optimal concurrence for general $n$ and $p
 
 For any values of $n$ and $p$, the most general form of $|\\xi\\rangle$ consistent with condition (i) is
 
-$$|\\xi\\rangle=\\sum\_{j\_{1}\\\<\\cdots\  
+$$|\\xi\\rangle=\\sum\_{j\_{1}\\\<\\cdots\\\<j\_{p}}a\_{j\_{1},\\ldots,j\_{p}}|j\_{1},\\ldots,j\_{p}\\rangle,$$  
 
 (19)   
 where $|j\_{1},\\ldots,j\_{p}\\rangle$ is the state of $n$ sites $j=1,\\dots,n$ in which sites $j\_{1},\\ldots,j\_{p}$ are occupied and the rest are unoccupied. Because of conditions (ii) and (iii), $a\_{j\_{1},\\ldots,j\_{p}}$ must be zero if two of the indices differ by 1 or if $j\_{p}$ has the value $n$. The coefficients in Eq. (19) satisfy the normalization condition
 
-$$\\sum\_{j\_{1}\\\<\\cdots\  
+$$\\sum\_{j\_{1}\\\<\\cdots\\\<j\_{p}}|a\_{j\_{1},\\ldots,j\_{p}}|^{2}=1.$$  
 
 (20)   
 Going through the same steps as in the above example, we find that in the state $w$ the density matrix of any pair of neighboring sites is
@@ -163,19 +163,19 @@ $$\\rho=\\frac{1}{n}\\left(\\begin{array}\[\]{cccc}n-2p&0&0&0\\\\ 0&p&y&0\\\\ 0&
 (21)   
 where
 
-$$y=\\sum\_{q=1}^{p}\\sum\_{j\_{1}\\\<\\cdots\  
+$$y=\\sum\_{q=1}^{p}\\sum\_{j\_{1}\\\<\\cdots\\\<j\_{p}}\\sum\_{j\_{1}^{\\prime}\\\<\\cdots\\\<j\_{p}^{\\prime}}\\bigg{\[}{a}^{\*}\_{j\_{1},\\ldots,j\_{p}}a\_{j\_{1}^{\\prime},\\ldots,j\_{p}^{\\prime}}\\delta\_{j\_{q}^{\\prime},j\_{q}+1}\\prod\_{r\\neq q}\\delta\_{j\_{r}^{\\prime},j\_{r}}\\bigg{\]}.$$  
 
 (22)   
 Here $\\delta$ is the Kronecker delta, and we define $a\_{j\_{1},\\ldots,j\_{p}}$ to be zero if any two of the indices are equal. In words, $y$ is constructed as follows: Let two coefficients $a\_{j\_{1},\\ldots,j\_{p}}$ and $a\_{j\_{1}^{\\prime},\\ldots,j\_{p}^{\\prime}}$ be called adjacent if they differ in only one index and if the difference in that index is exactly one; then $y$ is the sum of all products of adjacent pairs of coefficients, the coefficient with the smaller value of the special index being complex conjugated in each case. In the above example there were only two such products, ${a}\_{13}^{\*}a\_{14}$ and ${a}\_{14}^{\*}a\_{24}$; hence the form of Eq. (14).
 
 As before, the concurrence of the chain is equal to $2|\\rho\_{23}|$; that is, $C=(2/n)|y|$. We want to maximize the concurrence over all possible values of the coefficients that are consistent with conditions (ii) and (iii). These conditions are somewhat awkward to enforce directly: one has to make sure that certain of the coefficients $a\_{j\_{1},\\ldots,j\_{p}}$ are zero. However, this problem is easily circumvented by defining a new set of indices. Let $k\_{1}=j\_{1}$, $k\_{2}=j\_{2}-1$, $k\_{3}=j\_{3}-2$, and so on up to $k\_{p}=j\_{p}-(p-1)$, and let $b\_{k\_{1},\\ldots,k\_{p}}=a\_{j\_{1},\\ldots,j\_{p}}$. The constraints on the new indices $k\_{r}$ are simply that $0\\\<k\_{1}\\\<k\_{2}\\\<\\cdots\\\<k\_{p}\\\<n^{\\prime}$, where $n^{\\prime}=n-(p-1)$. Finally, in place of $|\\xi\\rangle$, define a new vector $|\\zeta\\rangle$:
 
-$$|\\zeta\\rangle=\\sum\_{k\_{1}\\\<\\cdots\  
+$$|\\zeta\\rangle=\\sum\_{k\_{1}\\\<\\cdots\\\<k\_{p}}b\_{k\_{1},\\ldots,k\_{p}}|k\_{1},\\ldots,k\_{p}\\rangle,$$  
 
 (23)   
 where $|k\_{1},\\ldots,k\_{p}\\rangle$ is the state of a lattice of length $n^{\\prime}-1$ in which the sites $k\_{1},\\ldots,k\_{p}$ are occupied. In effect we have removed from the lattice the site lying to the right of each occupied site. Note that our earlier inequality $2p\\leq n$ becomes, in terms of $n^{\\prime}$, simply $p\\leq n^{\\prime}-1$, which reflects the fact that the new lattice has only $n^{\\prime}-1$ sites. The concurrence is still given by $C=(2/n)|y|$, where
 
-$$y=\\sum\_{q=1}^{p}\\sum\_{k\_{1}\\\<\\cdots\  
+$$y=\\sum\_{q=1}^{p}\\sum\_{k\_{1}\\\<\\cdots\\\<k\_{p}}\\sum\_{k\_{1}^{\\prime}\\\<\\cdots\\\<k\_{p}^{\\prime}}\\bigg{\[}{b}^{\*}\_{k\_{1},\\ldots,k\_{p}}b\_{k\_{1}^{\\prime},\\ldots,k\_{p}^{\\prime}}\\delta\_{k\_{q}^{\\prime},k\_{q}+1}\\prod\_{r\\neq q}\\delta\_{k\_{r}^{\\prime},k\_{r}}\\bigg{\]}.$$  
 
 (24)   
 We can express $y$ more simply by introducing creation and annihilation operators for each site. We associate with site $k$ the operators

@@ -38,7 +38,7 @@ It is also interesting to measure the median computational effort, as given by t
 
 To achieve this, we use the strong similarity between combinatorial optimization problems and statistical mechanics. In the first case, a cost function depending on many discrete variables has to be minimized, e.g. the number of uncovered edges is such a cost function for vertex cover. This is equivalent to zero temperature statistical mechanics, where the Gibbs weight is completely concentrated in the ground states of the Hamiltonian. As the local variables for VC are binary because a vertex is either covered or uncovered, we may give a canonical one-to-one mapping of the vertex cover problem to an Ising model: for any subset $U\\subset V$ we set $S\_{i}=+1$ if $i\\in U$, and $S\_{i}=-1$ if $i\\notin U$. The edges are encoded in the adjacency matrix $(J\_{ij})$: an entry equals 1 iff $(i,j)\\in E$, and $J\_{ij}=0$ else. $(J\_{ij})$ is thus a symmetric random matrix with independently and identically distributed entries in its lower triangle. The Hamiltonian, or cost function, of the system counts the number of edges which are not covered by the elements of $U$,
 
-$$H=\\sum\_{i\  
+$$H=\\sum\_{i\\\<j}J\_{ij}\\delta\_{S\_{i},-1}\\delta\_{S\_{j},-1},$$  
 
 (2)   
 and has to be minimized under the constraint $|U|=xN$, which, in terms of Ising spins, reads
