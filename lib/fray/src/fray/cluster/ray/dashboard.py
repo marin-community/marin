@@ -26,7 +26,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import requests
 import yaml
 
 from .dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
@@ -313,11 +312,25 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def check_dashboard(cluster_name: str, dashboard_port: int) -> tuple[str, bool]:
-        """Check if a dashboard is accessible."""
+        """Check if a dashboard is reachable through the local tunnel.
+
+        A TCP connect can succeed even when the remote end of an SSH `-L` forward
+        is refusing connections, so use a lightweight HTTP request instead.
+
+        With token auth enabled, this may return 401/403 without a token; that's
+        still a useful signal that the tunnel is correctly targeting a live
+        dashboard process.
+        """
         try:
-            response = requests.get(f"http://localhost:{dashboard_port}/api/version", timeout=3)
-            return (cluster_name, response.status_code == 200)
-        except (requests.ConnectionError, requests.Timeout):
+            import http.client
+
+            conn = http.client.HTTPConnection("localhost", dashboard_port, timeout=3)
+            conn.request("GET", "/api/version")
+            resp = conn.getresponse()
+            resp.read(1)  # ensure the socket is usable
+            # 200 = unauthenticated clusters; 401/403 = token-auth enabled clusters without a token.
+            return (cluster_name, resp.status in {200, 401, 403})
+        except Exception:
             return (cluster_name, False)
 
     max_retries = 3
@@ -347,6 +360,73 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
     for cluster_name, is_ready in results.items():
         if not is_ready:
             logger.error(f"Dashboard for cluster {cluster_name} is not accessible")
+
+
+def _infer_ray_auth_secret_from_config(config_path: str) -> str | None:
+    """Best-effort inference of the Ray auth token secret from a cluster YAML.
+
+    We infer the secret by looking for a setup command that writes `auth_token`.
+    """
+    try:
+        with open(config_path, "r") as f:
+            cluster_config = yaml.safe_load(f) or {}
+    except Exception:
+        logger.exception("Failed to load cluster config for auth secret inference: %s", config_path)
+        return None
+
+    for cmd in cluster_config.get("setup_commands", []) or []:
+        if not isinstance(cmd, str):
+            continue
+        if "gcloud secrets versions access" not in cmd:
+            continue
+        if "auth_token" not in cmd:
+            continue
+        for part in cmd.split():
+            if part.startswith("--secret="):
+                return part.split("=", 1)[1]
+
+    return None
+
+
+def _ensure_local_ray_token(*, config_path: str | None) -> str:
+    """Ensure a Ray auth token is available locally and return a token file path.
+
+    Priority:
+    - Respect an existing RAY_AUTH_TOKEN_PATH if it points to a file.
+    - If a token exists at the default path (~/.ray/auth_token), use it.
+    - Otherwise, if we can infer a GCP Secret Manager secret from the cluster config,
+      fetch it with `gcloud` into a per-secret cache file under ~/.ray/.
+    """
+    token_path_env = os.environ.get("RAY_AUTH_TOKEN_PATH")
+    if token_path_env and Path(token_path_env).expanduser().exists():
+        return str(Path(token_path_env).expanduser())
+
+    default_path = Path.home() / ".ray" / "auth_token"
+    if default_path.exists():
+        return str(default_path)
+
+    if not config_path:
+        raise RuntimeError(
+            "Ray token authentication is enabled but no local token was found. "
+            "Create a token file at ~/.ray/auth_token or set RAY_AUTH_TOKEN_PATH."
+        )
+
+    secret = _infer_ray_auth_secret_from_config(config_path) or "RAY_AUTH_TOKEN"
+    cache_dir = Path.home() / ".ray"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached_path = cache_dir / f"auth_token.{secret}"
+
+    if not cached_path.exists():
+        token = subprocess.check_output(
+            ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"],
+            text=True,
+        ).strip()
+        if not token:
+            raise RuntimeError(f"Secret {secret} returned empty token")
+        cached_path.write_text(token)
+        cached_path.chmod(0o600)
+
+    return str(cached_path)
 
 
 @contextmanager
@@ -399,6 +479,8 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
         "RAY_API_SERVER_ADDRESS": os.environ.get("RAY_API_SERVER_ADDRESS"),
         "RAY_DASHBOARD_ADDRESS": os.environ.get("RAY_DASHBOARD_ADDRESS"),
         "RAY_GCS_ADDRESS": os.environ.get("RAY_GCS_ADDRESS"),
+        "RAY_AUTH_MODE": os.environ.get("RAY_AUTH_MODE"),
+        "RAY_AUTH_TOKEN_PATH": os.environ.get("RAY_AUTH_TOKEN_PATH"),
     }
 
     # For single cluster, set Ray environment variables
@@ -408,9 +490,24 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
 
         # Set new values
         os.environ["RAY_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
-        os.environ["RAY_API_SERVER_ADDRESS"] = f"ray://localhost:{ports.api_port}"
+        # Ray's Jobs SDK treats RAY_API_SERVER_ADDRESS as an override for the
+        # dashboard URL and will resolve Ray Client (ray://) addresses to the
+        # head node's internal webui_url (e.g. http://10.x.x.x:8265), which is
+        # not reachable from a developer laptop. Keep this as an HTTP URL so
+        # job submission uses the SSH-forwarded dashboard port.
+        os.environ["RAY_API_SERVER_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
         os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
         os.environ["RAY_GCS_ADDRESS"] = f"localhost:{ports.gcs_port}"
+
+    # Marin clusters assume token auth; always enable token mode client-side and
+    # ensure a token is available. For single-cluster connections, we can infer
+    # the token secret from the cluster config and fetch it automatically.
+    config_path_for_token = None
+    if len(clusters) == 1:
+        config_path_for_token = next(iter(clusters.values())).config_path
+    token_path = _ensure_local_ray_token(config_path=config_path_for_token)
+    os.environ["RAY_AUTH_TOKEN_PATH"] = token_path
+    os.environ["RAY_AUTH_MODE"] = "token"
 
     try:
         # Initialize Ray if requested

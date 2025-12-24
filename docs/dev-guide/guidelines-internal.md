@@ -40,6 +40,49 @@ Once authenticated for GCP, all other work happens through our
 truth for all cluster operations** -- you can think of this file as an alternative to managing your own SSH keys,
 remembering the IP address of the cluster head node, what port the dashboard is running on, etc. For more info about this template and connecting to specific clusters, see [README.md](https://github.com/marin-community/marin/blob/main/infra/README.md).
 
+### Ray token authentication
+
+Marin clusters use Ray token authentication (Ray >= 2.53). You will typically interact with clusters through SSH
+port-forwarding on `localhost`, but you still need the token.
+
+For the staging cluster (`marin-us-central2-staging`), the easiest flow is:
+
+```bash
+# Starts SSH port-forwarding, copies the token to clipboard, and opens the dashboard.
+uv run scripts/ray/cluster.py --cluster us-central2-staging auth
+```
+
+For non-staging clusters, install the default token locally (or re-run `make dev_setup`):
+
+```bash
+make get_ray_auth_token
+```
+
+If this fails because the Secret Manager secret doesn’t exist yet, someone needs to create it once (see
+`infra/README.md`).
+
+If you prefer ssh-agent style exports for the current shell session (sets `RAY_AUTH_MODE=token` and `RAY_AUTH_TOKEN_PATH=...`), you can do:
+
+```bash
+eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
+```
+
+You can put that in your shell profile (e.g. `~/.zshrc`) if you want it in every terminal. You'll want to do something like:
+
+```bash
+MARIN_HOME="${MARIN_HOME:-$HOME/marin}"  # TODO: set this where you checkout marin
+if [[ -z "${RAY_AUTH_TOKEN_PATH:-}" ]]; then
+    cd "$MARIN_HOME" && eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
+fi
+```
+
+
+If you need to install the staging token locally (only needed for CLI + SDK usage against staging), do:
+
+```bash
+make get_ray_auth_token_staging
+```
+
 There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the
 cluster. **You will need at least two terminal processes running for the following steps** (make sure to activate your
 `marin` Python environment as well):
@@ -64,7 +107,7 @@ launching tasks -- see [test_integration_test.py](https://github.com/marin-commu
 ```bash
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
-uv run python marin/run/ray_run.py --no_wait --env_vars WANDB_API_KEY=${WANDB_API_KEY} -- python experiments/hello_world.py
+uv run lib/marin/src/marin/run/ray_run.py --no_wait --env_vars WANDB_API_KEY=${WANDB_API_KEY} -- python experiments/hello_world.py
 
 # Get Job Status
 uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml list-jobs
