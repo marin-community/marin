@@ -29,7 +29,6 @@ downloads = {
         config=NemotronIngressConfig(
             output_path=this_output_path(),
         ),
-        pip_dependency_groups=["download_transform"],
     )
 }
 

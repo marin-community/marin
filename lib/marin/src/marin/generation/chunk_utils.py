@@ -16,12 +16,13 @@
 Utilities for chunking text on character, paragraph or passage boundaries.
 """
 
-from enum import Enum
-from dataclasses import dataclass
-from typing import Any
 import re
+from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
 
-from zephyr import Dataset, flow_backend, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 
 class ChunkStrategy(str, Enum):
@@ -212,12 +213,11 @@ def _chunk_single_record(example: dict, config: ChunkingConfig):
     yield from chunk_text(example, config.chunk_strategy, config.chunk_size)
 
 
-def chunk_with_config(config: ChunkingConfig) -> list[str]:
-    backend = flow_backend()
+def chunk_with_config(config: ChunkingConfig) -> Sequence[str]:
     pipeline = (
         Dataset.from_files(f"{config.input_path}/{config.glob_pattern}")
         .flat_map(load_jsonl)
-        .flat_map(lambda example: _chunk_single_record(example, config=config))
+        .flat_map(lambda example: _chunk_single_record(example, config))
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    return list(backend.execute(pipeline))
+    return Backend.execute(pipeline)
