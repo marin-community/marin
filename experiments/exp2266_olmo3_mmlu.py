@@ -23,7 +23,6 @@ from experiments.evals.task_configs import MMLU_0_SHOT, MMLU_5_SHOT
 from experiments.models import olmo_3_1025_7b
 from marin.execution.executor import executor_main
 
-
 if __name__ == "__main__":
     mmlu_eval = default_eval(
         step=olmo_3_1025_7b,
