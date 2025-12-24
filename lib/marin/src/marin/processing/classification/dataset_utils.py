@@ -25,10 +25,53 @@ since we have to store the mapping of id -> attributes.
 2. We use some of the builtin Huggingface Dataset .map and .filter functions which may not work with
 the streaming data paradigm (it might but not sure).
 """
-import pandas as pd
-import datasets
 import datetime
+import json
+import logging
+import os
+from collections.abc import Callable, Generator
+from contextlib import ExitStack
+from dataclasses import dataclass
+from typing import TypedDict
+
+import fsspec
 import numpy as np
+import pandas as pd
+from zephyr import Backend, Dataset
+
+from marin.utils import rebase_file_path
+
+logger = logging.getLogger("ray")
+
+
+class Document(TypedDict):
+    id: str
+    source: str
+    text: str
+
+
+class Attribute(TypedDict):
+    id: str
+    source: str
+    attributes: dict
+
+
+@dataclass
+class DatasetConfig:
+    """Configuration for curating a dataset for training a quality classifier
+
+    Attributes:
+        input_doc_path (str): Path to the input dataset directory (Dolma format).
+        label (str): Label for the dataset. This should be in the format "<label>"
+            where <label> is the label for the dataset. For example, "hq" or "lq", respectively.
+        sampling_rate (Optional[float]): Subsampling fraction to construct the dataset.
+        max_sample_size (Optional[int]): Maximum number of examples to include in the dataset.
+    """
+
+    input_doc_path: str
+    label: str
+    sampling_rate: float = 1.0
+    max_sample_size: int | None = None
 
 
 # TODO(chris): Consolidate this with other make json serializable functions
@@ -89,9 +132,8 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
         append semantics for object stores.
       - Checkpoint restoration should continue to read from the remote path.
     """
-    import json
     import hashlib
-    import os
+    import json
     import shutil
 
     import fsspec
@@ -149,42 +191,67 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
     raise ValueError(f"Unsupported filetype: {output_filename}")
 
 
-def read_dataset(input_filename: str, columns: list[str] | None = None):
-    """Read in a data source and return as a Huggingface Dataset
+def label_documents(
+    input_doc_path: str,
+    output_attr_path: str,
+    label_func: Callable[[Document, list[Attribute]], dict],
+    input_attr_paths: list[str] | None = None,
+) -> None:
+    """
+    Create a new attribute by applying label_func to each document and its (optional) associated attributes.
 
     Args:
-        input_filename: str
-            The path to the input file. Currently supports .jsonl.gz and .parquet
-
-    Returns:
-        datasets.Dataset: A Huggingface Dataset in-memory without using the disk
+        input_doc_path (str): Path to documents (i.e., gs://$BUCKET/documents/...).
+        output_attr_path (str): Path to write attributes (i.e., gs://$BUCKET/attributes/...).
+        label_func (Callable[[Document, list[Attribute]], dict]): Generates attribute dict
+            from document and other input attributes.
+        input_attr_paths (list[str]): Path to attributes needed to determine new attribute.
     """
-    datasets.disable_caching()  # Disabling caching or else it spills to disk to cache
-    datasets.logging.set_verbosity_warning()
-    # We use pandas to read in the file so that we don't have to materialize
-    # the entire dataset in disk since we have limited disk space.
-    # Huggingface datasets loads the dataset into disk first and mmaps.
-    if input_filename.endswith(".jsonl.gz"):
-        df = pd.read_json(input_filename, compression="gzip", lines=True)
-    elif input_filename.endswith(".jsonl.zst"):
-        df = pd.read_json(input_filename, compression="zstd", lines=True)
-    elif input_filename.endswith(".parquet"):
-        df = pd.read_parquet(input_filename, columns=columns)
-    else:
-        raise ValueError(f"Unsupported filetype: {input_filename}")
 
-    return datasets.Dataset.from_pandas(df)
+    logger.info(f"Creating custom attribute for documents in {input_doc_path}, writing to {output_attr_path}.")
+
+    def processing_func(input_file_path):
+        attr_file_paths = (
+            [rebase_file_path(input_doc_path, input_file_path, input_attr_path) for input_attr_path in input_attr_paths]
+            if input_attr_paths is not None
+            else []
+        )
+        return label_documents_shard(input_file_path, label_func, attr_file_paths)
+
+    Backend.execute(
+        Dataset.from_files(f"{input_doc_path}/**/*.jsonl.gz")
+        .flat_map(processing_func)
+        .write_jsonl(f"{output_attr_path}/{{shard:05d}}.jsonl.gz")
+    )
 
 
-def write_dataset(dataset, output_filename: str):
-    """Writes a Huggingface Dataset to a file (remote or local)"""
-    if output_filename.endswith(".jsonl.gz"):
-        dataset.to_json(output_filename, compression="gzip")
-    elif output_filename.endswith(".jsonl.zst"):
-        df_pandas = dataset.to_pandas()
-        df_pandas.to_json(output_filename, orient="records", compression="zstd", lines=True)
-        # dataset.to_json(output_filename, to_json_kwargs={"compression": "zstd", "lines": True})
-    elif output_filename.endswith(".parquet"):
-        dataset.to_parquet(output_filename)
-    else:
-        raise ValueError(f"Unsupported filetype: {output_filename}")
+def label_documents_shard(
+    input_file_path: str, label_func: Callable[[Document, list[Attribute]], dict], attr_file_paths: list[str]
+) -> Generator[dict, None, None]:
+    """
+    Process a shard of documents by applying label_func to each document and its attributes.
+
+    Args:
+        input_file_path (str): Path to the input document file.
+        label_func (Callable[[Document, list[Attribute]], dict]): Function to generate attribute dict.
+        attr_file_paths (list[str]): Paths to attribute files.
+
+    Yields:
+        dict: Labeled document
+    """
+    with ExitStack() as stack:
+        doc_fs = fsspec.open(input_file_path, "r", compression="infer")
+        doc_file = stack.enter_context(doc_fs)
+
+        attr_files = []
+        for attr_file_path in attr_file_paths:
+            attr_fs = fsspec.open(attr_file_path, "r", compression="infer")
+            attr_file = stack.enter_context(attr_fs)
+            attr_files.append(attr_file)
+
+        for doc_line in doc_file:
+            doc = json.loads(doc_line)
+            attrs = [json.loads(attr_file.readline()) for attr_file in attr_files]
+
+            result = label_func(doc, attrs)
+            yield {"id": doc["id"], "source": doc["source"], "attributes": result}
