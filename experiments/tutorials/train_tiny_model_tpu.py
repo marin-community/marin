@@ -28,7 +28,7 @@ from experiments.llama import llama_30m
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 
-RESOURCES = ResourceConfig.with_tpu("v4-8")
+RESOURCES = ResourceConfig.with_tpu("v5p-8")
 
 # 1. Choose a dataset
 tinystories_hf_id = "roneneldan/TinyStories"
