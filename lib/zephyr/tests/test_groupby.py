@@ -17,14 +17,15 @@
 import hashlib
 
 import pytest
-from zephyr import Dataset, create_backend
+from fray.job import create_job_ctx
+from zephyr import Backend, Dataset
 
 
 @pytest.fixture(
     params=[
-        pytest.param(create_backend("sync"), id="sync"),
-        pytest.param(create_backend("threadpool", max_parallelism=2), id="thread"),
-        pytest.param(create_backend("ray", max_parallelism=2), id="ray"),
+        pytest.param(create_job_ctx("sync"), id="sync"),
+        pytest.param(create_job_ctx("threadpool", max_workers=2), id="thread"),
+        pytest.param(create_job_ctx("ray"), id="ray"),
     ]
 )
 def backend(request):
@@ -60,7 +61,7 @@ def test_deduplicate_basic(backend):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(backend.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
 
     # Should have exactly 3 unique items (ids 1, 2, 3)
     assert len(results) == 3
@@ -73,7 +74,7 @@ def test_deduplicate_basic(backend):
 def test_deduplicate_empty(backend):
     """Test deduplication on empty dataset."""
     ds = Dataset.from_list([]).deduplicate(key=lambda x: x["id"])
-    results = list(backend.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert results == []
 
 
@@ -83,7 +84,7 @@ def test_deduplicate_all_unique(backend):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(backend.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 10
 
 
@@ -93,7 +94,7 @@ def test_deduplicate_all_duplicates(backend):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"])
 
-    results = list(backend.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert len(results) == 1
     assert results[0]["id"] == 1
 
@@ -113,7 +114,7 @@ def test_group_by_count(backend):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)}
     )
 
-    results = list(backend.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
 
     # Should have 3 groups
     assert len(results) == 3
@@ -140,7 +141,7 @@ def test_group_by_sum(backend):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "sum": sum(item["val"] for item in items)}
     )
 
-    results = list(backend.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     results = sorted(results, key=lambda x: x["cat"])
 
     assert results[0] == {"cat": "A", "sum": 4}  # 1 + 3
@@ -160,7 +161,7 @@ def test_group_by_list(backend):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "vals": [item["val"] for item in items]}
     )
 
-    results = list(backend.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     results = sorted(results, key=lambda x: x["cat"])
 
     assert results[0]["cat"] == "A"
@@ -176,7 +177,7 @@ def test_group_by_empty(backend):
         key=lambda x: x["cat"], reducer=lambda key, items: {"cat": key, "count": sum(1 for _ in items)}
     )
 
-    results = list(backend.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
     assert results == []
 
 
@@ -186,7 +187,7 @@ def test_deduplicate_with_num_output_shards(backend):
 
     ds = Dataset.from_list(data).deduplicate(key=lambda x: x["id"], num_output_shards=5)
 
-    results = list(backend.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
 
     # Should have exactly 3 unique items (ids 0, 1, 2)
     assert len(results) == 3
@@ -218,7 +219,7 @@ def test_group_by_with_hash_key_large(backend, large_document_dataset):
         .group_by(key=lambda doc: doc["hash"], reducer=count_and_extract)
     )
 
-    results = list(backend.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
 
     # Should have exactly 100 groups (one per unique content)
     assert len(results) == 100
@@ -256,7 +257,7 @@ def test_group_by_with_none_and_filter(backend):
         .filter(lambda x: x is not None)  # Filter out None values
     )
 
-    results = list(backend.execute(ds))
+    results = list(Backend.execute(ds, context=backend))
 
     # Should only have duplicate keys: "a" and "foo"
     assert len(results) == 2

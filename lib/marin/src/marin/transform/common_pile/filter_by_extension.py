@@ -12,19 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Copyright 2025 The Marin Authors
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 """Utilities for filtering Common Pile datasets by metadata extensions.
 
 Example Usage:
@@ -40,7 +27,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 
-from zephyr import Dataset, flow_backend, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 logger = logging.getLogger("ray")
 
@@ -138,12 +125,11 @@ def filter_dataset_by_metadata_extension(config: FilterByMetadataExtensionConfig
         sorted(allowed_extensions),
     )
 
-    backend = flow_backend()
     pipeline = (
         Dataset.from_files(f"{config.input_path}/{config.input_glob}")
         .flat_map(load_jsonl)
-        .map(lambda record: _filter_record_by_metadata_extension(record, config=config))
+        .map(lambda record: _filter_record_by_metadata_extension(record, config))
         .filter(lambda record: record is not None)
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline)

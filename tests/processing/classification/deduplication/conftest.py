@@ -13,13 +13,15 @@
 # limitations under the License.
 
 from pathlib import Path
+
 import pytest
-from zephyr.backend_factory import create_backend
+from fray.job import create_job_ctx, fray_default_job_ctx
 
 
 @pytest.fixture(scope="module")
-def sync_backend():
-    return create_backend("sync")
+def sync_backend(request):
+    with fray_default_job_ctx(create_job_ctx("sync")):
+        yield
 
 
 @pytest.fixture(scope="module")

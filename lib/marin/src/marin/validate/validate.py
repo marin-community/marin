@@ -36,7 +36,8 @@ import draccus
 import fsspec
 import numpy as np
 from marin.utilities.validation_utils import compute_global_mean_std, summarize_document
-from zephyr import Dataset, flow_backend, load_jsonl
+from zephyr import Dataset, load_jsonl
+from zephyr.backends import Backend
 
 
 @dataclass
@@ -160,8 +161,6 @@ def aggregate_and_write_metadata(shard_metadata_iter: Iterator[list[dict]], outp
 @draccus.wrap()
 def main(cfg: ValidationConfig) -> None:
     """Validate Dolma-formatted documents using Zephyr pipeline."""
-    backend = flow_backend()
-
     pipeline = (
         Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
@@ -172,7 +171,7 @@ def main(cfg: ValidationConfig) -> None:
         )
     )
 
-    result = list(backend.execute(pipeline))
+    result = list(Backend.execute(pipeline))
     print(f"Validation complete: {result[0]}")
 
 

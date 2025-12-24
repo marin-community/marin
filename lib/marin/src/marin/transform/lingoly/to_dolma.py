@@ -29,7 +29,7 @@ import json
 from dataclasses import dataclass
 
 import draccus
-from zephyr import Dataset, flow_backend, load_zip_members
+from zephyr import Backend, Dataset, load_zip_members
 
 
 @dataclass
@@ -87,14 +87,13 @@ def process_lingoly_member(member: dict, max_doc_length: int = 7000):
 
 def convert_lingoly_to_dolma(config: ConvertLingolyToDolmaConfig) -> None:
     """Convert Lingoly dataset to Dolma format."""
-    backend = flow_backend()
     pipeline = (
         Dataset.from_list([config.input_path])
         .flat_map(lambda p: load_zip_members(p, pattern="test.jsonl"))
         .flat_map(lambda m: process_lingoly_member(m, max_doc_length=config.max_doc_length))
         .write_jsonl(f"{config.output_path}/{{shard:05d}}.jsonl")
     )
-    list(backend.execute(pipeline))
+    list(Backend.execute(pipeline))
 
 
 @draccus.wrap()

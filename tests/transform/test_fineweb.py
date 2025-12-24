@@ -21,7 +21,6 @@ import pandas as pd
 import pytest
 from warcio.statusandheaders import StatusAndHeaders
 from warcio.warcwriter import WARCWriter
-from zephyr import create_backend, set_flow_backend
 
 from marin.schemas.web.convert import HtmlToMarkdownConfig
 from marin.transform.fineweb.process_parquet_fw import process_one_warc_file
@@ -150,8 +149,6 @@ def create_parquet_with_warc_refs(create_warc_file, tmp_path):
 
 def test_process_one_warc_file_basic(tmp_path, create_parquet_with_warc_refs, read_jsonl_gz, validate_dolma_record):
     """Test basic WARC processing with URL matching."""
-    # Use sync backend for testing
-    set_flow_backend(create_backend("sync"))
 
     # Create test data
     urls = list(SAMPLE_HTML_PAGES.keys())
@@ -203,7 +200,6 @@ def test_process_one_warc_file_basic(tmp_path, create_parquet_with_warc_refs, re
 
 def test_process_one_warc_file_url_filtering(tmp_path, create_parquet_with_warc_refs, read_jsonl_gz):
     """Test that only URLs in parquet are processed from WARC."""
-    set_flow_backend(create_backend("sync"))
 
     # Only include subset of URLs in parquet
     all_urls = list(SAMPLE_HTML_PAGES.keys())
@@ -245,7 +241,6 @@ def test_process_one_warc_file_url_filtering(tmp_path, create_parquet_with_warc_
 
 def test_process_one_warc_file_metadata_preservation(tmp_path, create_parquet_with_warc_refs, read_jsonl_gz):
     """Test that FineWeb metadata is properly preserved with fw_ prefix."""
-    set_flow_backend(create_backend("sync"))
 
     urls = list(SAMPLE_HTML_PAGES.keys())[:1]  # Just one URL for simplicity
     parquet_path = tmp_path / "input" / "test.parquet"

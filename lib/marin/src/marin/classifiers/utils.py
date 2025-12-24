@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
-from zephyr import Dataset, flow_backend
+from zephyr import Backend, Dataset
 
 from marin.classifiers.types import Attribute, Document, LabeledExample
 from marin.utils import fsspec_glob, fsspec_rm, rebase_file_path
@@ -95,13 +95,12 @@ def label_documents(
         )
         return label_documents_shard(input_file_path, label_func, attr_file_paths)
 
-    backend = flow_backend(max_parallelism=1000)
     pipeline = (
         Dataset.from_files(f"{input_doc_path}/**/*.jsonl.gz")
         .flat_map(processing_func)
         .write_jsonl(f"{output_attr_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline, max_parallelism=1000)
 
 
 def label_documents_shard(
@@ -175,13 +174,12 @@ def create_dataset(
     )
     shard_path = os.path.join(config.output_dataset_path, "shards", doc_fs_path.lstrip("/"))
 
-    backend = flow_backend(max_parallelism=1000)
     pipeline = (
         Dataset.from_files(f"{config.input_doc_path}/**/*.{config.filetype}")
         .flat_map(processing_func)
         .write_jsonl(f"{shard_path}/data-{{shard:05d}}-of-{{total:05d}}.{config.filetype}")
     )
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline, max_parallelism=1000)
 
     shard_paths = fsspec_glob(os.path.join(shard_path, f"**/*.{config.filetype}"))
     if config.max_sample_size is None:
