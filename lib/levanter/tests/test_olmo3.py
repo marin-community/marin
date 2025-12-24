@@ -13,13 +13,11 @@ OLMo 3 key differences from OLMo 2:
 import tempfile
 
 import chex
-import equinox as eqx
 import numpy as np
 import pytest
 from jax import random
 
 import haliax as hax
-import haliax.nn as hnn
 
 from levanter.layers.attention import AttentionMask
 from levanter.utils.jax_utils import parameter_count
