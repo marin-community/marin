@@ -55,7 +55,7 @@ from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig, Re
 from marin.utils import fsspec_glob, fsspec_rm
 from marin.web.convert import convert_page
 from warcio import ArchiveIterator
-from zephyr import Dataset, flow_backend
+from zephyr import Backend, Dataset
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
@@ -326,8 +326,6 @@ class ParquetFWConfig:
 
 @draccus.wrap()
 def process_fw_dump(cfg: ParquetFWConfig):
-    backend = flow_backend()
-
     # Glob all parquet files across all CC dumps upfront
     cc_dumps = cfg.cc_dumps or fsspec_glob(f"{cfg.input_path}/*")
 
@@ -393,7 +391,7 @@ def process_fw_dump(cfg: ParquetFWConfig):
         .write_jsonl(f"{cfg.md_output_path}/.metrics/process-{{shard:05d}}.jsonl", skip_existing=True)
     )
 
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline)
 
 
 if __name__ == "__main__":

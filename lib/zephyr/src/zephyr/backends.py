@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 
 import numpy as np
-from fray.job import JobContext
+from fray.job import JobContext, get_default_job_ctx
 from tqdm_loggable.auto import tqdm
 
 from zephyr.dataset import Dataset
@@ -158,38 +158,47 @@ class Backend:
         self.config = config
         self.dry_run = config.dry_run
 
-    def execute(self, dataset: Dataset[T], hints: ExecutionHint = ExecutionHint(), verbose: bool = False) -> Sequence[T]:
-        """Execute a dataset, returning a sequence of results.
+    @staticmethod
+    def execute(
+        dataset: Dataset[T],
+        context: JobContext | None = None,
+        hints: ExecutionHint = ExecutionHint(),
+        verbose: bool = False,
+        max_parallelism: int = 1024,
+        dry_run: bool = False,
+    ) -> Sequence[T]:
+        """Execute a dataset and return results.
 
         Args:
             dataset: Dataset to execute
-            hints: Execution hints (chunk_size, source_chunk_bytes, etc.)
+            context: JobContext to use for execution. If None, uses get_default_job_ctx()
+            hints: Execution hints (chunk_size, intra_shard_parallelism, etc.)
             verbose: Print additional logging and optimization stats
+            max_parallelism: Maximum number of concurrent tasks
+            dry_run: If True, show optimization plan without executing
 
         Returns:
             Sequence of results
+
+        Examples:
+            >>> from zephyr import Backend, Dataset
+            >>>
+            >>> ds = Dataset.from_list([1, 2, 3]).map(lambda x: x * 2)
+            >>> results = list(Backend.execute(ds))  # Uses default context
+            [2, 4, 6]
         """
+        if context is None:
+            context = get_default_job_ctx()
+        config = BackendConfig(max_parallelism=max_parallelism, dry_run=dry_run)
+        backend = Backend(context, config)
+
         plan = compute_plan(dataset, hints)
-
         if verbose:
-            self._print_plan(dataset.operations, plan)
-
-        if self.dry_run:
+            backend._print_plan(dataset.operations, plan)
+        if dry_run:
             return []
 
-        return self.execute_plan(plan, hints)
-
-    def execute_plan(self, plan: PhysicalPlan, hints: ExecutionHint = ExecutionHint()) -> Sequence:
-        """Execute a pre-computed physical plan.
-
-        Args:
-            plan: Physical plan to execute
-            hints: Execution hints
-
-        Returns:
-            Sequence of results
-        """
-        return list(self._execute_plan_impl(plan, hints))
+        return list(backend._execute_plan(plan, hints))
 
     def _print_plan(self, original_ops: list, plan: PhysicalPlan) -> None:
         """Print the physical plan showing shard count and operation fusion.
@@ -322,7 +331,7 @@ class Backend:
             for shard_idx in range(len(shards))
         ]
 
-    def _execute_plan_impl(self, plan: PhysicalPlan, hints: ExecutionHint) -> Iterator:
+    def _execute_plan(self, plan: PhysicalPlan, hints: ExecutionHint) -> Iterator:
         """Execute a physical plan and materialize results.
 
         Args:
