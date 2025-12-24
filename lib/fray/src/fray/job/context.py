@@ -99,6 +99,7 @@ class JobContext(Protocol):
         name: str | None = None,
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
+        preemptible: bool = True,
         **kwargs,
     ) -> Any:
         """Create an actor (stateful service) within the execution context.
@@ -249,6 +250,7 @@ class SyncContext:
         name: str | None = None,
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
+        preemptible: bool = True,
         **kwargs,
     ) -> ThreadActorHandle:
         if name is not None and name in self._actors:
@@ -342,6 +344,7 @@ class ThreadContext:
         name: str | None = None,
         get_if_exists: bool = False,
         lifetime: Literal["non_detached", "detached"] = "non_detached",
+        preemptible: bool = True,
         **kwargs,
     ) -> ThreadActorHandle:
         with self._actors_lock:

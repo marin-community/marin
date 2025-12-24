@@ -24,11 +24,6 @@ See https://github.com/marin-community/marin/issues/615 for more details.
 import os
 from dataclasses import dataclass, field
 
-from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
-from experiments.defaults import default_tokenize
-from experiments.exp164_quality_classifiers import dclm_eli5_100k_oh_100k_rw_200k
-from experiments.exp274_mmlu_quality_classifier import marin_mmlu_100k_rw_100k
-from experiments.llama import llama3_tokenizer
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -41,6 +36,12 @@ from marin.processing.classification.config.inference_config import RuntimeConfi
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.custom.custom_attribute import CustomAttributeConfig, create_custom_attribute
 from marin.processing.classification.inference import InferenceConfig, run_inference
+
+from experiments.cooldown_quality import QualityAblationConfig, default_quality_ablation
+from experiments.defaults import default_tokenize
+from experiments.exp164_quality_classifiers import dclm_eli5_100k_oh_100k_rw_200k
+from experiments.exp274_mmlu_quality_classifier import marin_mmlu_100k_rw_100k
+from experiments.llama import llama3_tokenizer
 
 # mapping of data source names to their GCS paths
 INPUT_DATA_SOURCE_TO_PATH: dict[str, str] = {
@@ -106,7 +107,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                     ),
                     task=TaskConfig(max_in_flight=500),
                 ),
-                pip_dependency_groups=["fasttext", "datasets", "filelock"],
+                pip_dependency_groups=["filelock"],
             )
             inference_steps.append(inference_step)
 
