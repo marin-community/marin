@@ -2909,6 +2909,7 @@ requires-dist = [
     { name = "jax", marker = "extra == 'cpu'", specifier = "==0.8.0" },
     { name = "jax", extras = ["cuda12"], marker = "extra == 'gpu'", specifier = "==0.8.0" },
     { name = "jax", extras = ["tpu"], marker = "extra == 'tpu'", specifier = "==0.8.0" },
+    { name = "jaxopt", specifier = ">=0.8.3" },
     { name = "levanter", extras = ["serve"], editable = "lib/levanter" },
     { name = "lm-eval", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
     { name = "lm-eval", extras = ["math"], marker = "extra == 'eval'", git = "https://github.com/stanford-crfm/lm-evaluation-harness?rev=d5e3391f22cde186c827674d5c3ec7c5f4fe0cab" },
