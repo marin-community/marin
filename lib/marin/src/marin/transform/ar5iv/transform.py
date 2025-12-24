@@ -118,7 +118,7 @@ def unwrap_eqn(page: BeautifulSoup) -> BeautifulSoup:
     Extract alttext from math element and convert to LaTeX format.
     Returns BeautifulSoup object with the formatted equation.
     """
-    from html import unescape
+    from html import escape, unescape
 
     math_elements = page.find_all("math")
 
@@ -131,6 +131,11 @@ def unwrap_eqn(page: BeautifulSoup) -> BeautifulSoup:
         equation = equation.replace("\\", "\\\\")
         equation = equation.replace("<", r"\<")
         equation = equation.replace(">", r"\>")
+
+        # HTML-escape the equation to prevent < and > from being interpreted as tags
+        # This is critical for equations like $T_{0}\<T\<6$ where \< would otherwise
+        # be parsed as an opening tag by HTML parsers like lxml/resiliparse
+        equation = escape(equation)
 
         is_display = math_elem.get("display") == "block"
 
