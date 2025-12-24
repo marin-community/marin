@@ -531,19 +531,18 @@ MMMLU_MULTILINGUAL_TASKS = tuple(
 )
 
 MULTILINGUAL_LM_EVAL_LOGPROB_TASKS = (
-    # INCLUDE_44_TASKS +
-    BELEBELE_TASKS
-    # + XSTORYCLOZE_MULTILINGUAL_TASKS
-    # + (
-    #     EvalTaskConfig("cmmlu", 0, task_alias="cmmlu_0shot"),
-    #     EvalTaskConfig("kmmlu", 0, task_alias="kmmlu_0shot"),
-    #     EvalTaskConfig("lm_syneval", 0, task_alias="lm_syneval_0shot"),
-    #     EvalTaskConfig("zhoblimp", 0, task_alias="zhoblimp_0shot"),
-    #     EvalTaskConfig("turblimp_core", 0, task_alias="turblimp_core_0shot"),
-    #     EvalTaskConfig("blimp_nl", 0, task_alias="blimp_nl_0shot"),
-    # )
-    # +
-    # MMMLU_MULTILINGUAL_TASKS
+    INCLUDE_44_TASKS
+    + BELEBELE_TASKS
+    + XSTORYCLOZE_MULTILINGUAL_TASKS
+    + (
+        EvalTaskConfig("cmmlu", 0, task_alias="cmmlu_0shot"),
+        EvalTaskConfig("kmmlu", 0, task_alias="kmmlu_0shot"),
+        EvalTaskConfig("lm_syneval", 0, task_alias="lm_syneval_0shot"),
+        EvalTaskConfig("zhoblimp", 0, task_alias="zhoblimp_0shot"),
+        EvalTaskConfig("turblimp_core", 0, task_alias="turblimp_core_0shot"),
+        EvalTaskConfig("blimp_nl", 0, task_alias="blimp_nl_0shot"),
+    )
+    + MMMLU_MULTILINGUAL_TASKS
 )
 
 MULTILINGUAL_LM_EVAL_GENERATIVE_TASKS = MGSM_MULTILINGUAL_TASKS
