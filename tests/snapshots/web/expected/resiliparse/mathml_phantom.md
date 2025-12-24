@@ -57,4 +57,4 @@ Here is the description of all the attributes of this tag −
 
 ## Output
 
-$`\frac{x+y+z}{x+z}`$
+$`\frac{x+y+z}{x\phantom{+}\phantom{y}+z}`$

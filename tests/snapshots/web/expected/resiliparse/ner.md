@@ -12,11 +12,11 @@ Starting prediction server…
 
 ### Factorizing Joint Distributions
 
-$$p(a,b)=p(a)p(b\mathrm{}a)$$
+$$p(a,b)=p(a)p(ba)p(a, b) = p(a) \cdot p(b|a)$$
 
 Notation: the shorthand *p(a)* means *p(A = a)*, that is, the probability of variable A taking value a.
 
-$$p(a,b,c,d)=p(a)p(b\mathrm{}a)p(c)p(d\mathrm{}a,b,c)$$
+$$p(a,b,c,d)=p(a)p(ba)p(c)p(da,b,c)p(a, b, c, d) = p(a) \cdot p(b|a) \cdot p(c) \cdot p(d|a, b, c)$$
 
 ### Directed Acyclic Graphs
 
@@ -26,13 +26,13 @@ Sampled Population
 
 ### The Hidden Layer
 
-$$p(s_i\mathrm{}s_1,s_2,,s_{i1})=p(s_i\mathrm{}s_{i1})\text{for all }{\textstyle i{\scriptscriptstyle }\{2,,N\}}$$
+$$p({s}_{i}{s}_{1},{s}_{2},,{s}_{i1})=p({s}_{i}{s}_{i1})\text{for all }i{2,,N}p(s_i | s_1, s_2,…, s_{i-1}) = p(s_i | s_{i-1}) \\ \footnotesize\textrm{for all $i\,{\scriptscriptstyle \in}\,\{2,…, N\}$}$$
 
-$$p(s_i\mathrm{}s_{i1})=p(s_{i+1}\mathrm{}s_i)\text{for all }{\textstyle i{\scriptscriptstyle }\{2,,N1\}}$$
+$$p({s}_{i}{s}_{i1})=p({s}_{i+1}{s}_{i})\text{for all }i{2,,N1}p(s_i | s_{i-1}) = p(s_{i+1} | s_i) \\ \footnotesize\textrm{for all $i\,{\scriptscriptstyle \in}\,\{2,…, N-1\}$}$$
 
 ### The Observed Layer
 
-$$p(o_i\mathrm{}s_1,s_2,,s_N)=p(o_i\mathrm{}s_i)\text{for all }{\textstyle i{\scriptscriptstyle }\{1,2,,N\}}$$
+$$p({o}_{i}{s}_{1},{s}_{2},,{s}_{N})=p({o}_{i}{s}_{i})\text{for all }i{1,2,,N}p(o_i | s_1, s_2,…, s_N) = p(o_i | s_i) \\ \footnotesize\textrm{for all $i\,{\scriptscriptstyle \in}\,\{1, 2,…, N\}$}$$
 
 ### Representing Named Entities
 
@@ -108,13 +108,13 @@ Recall
 
 ### Word Features
 
-$$b(o_t)=\{\begin{array}{l}{\textstyle \text{1 if }{\textstyle o_t}\text{ has shape “Xxx”}}\\ {\textstyle \text{0 otherwise}}\end{array}$$
+$$b({o}_{t})={\begin{matrix} \text{1 if }{o}_{t}\text{ has shape “Xxx”} \\ \text{0 otherwise} \end{matrix}b(o_t) = \begin{cases} \textrm{1 if $o_t$ has shape “Xxx”} \\ \textrm{0 otherwise} \end{cases}$$
 
-$$f_{b,s}(o_t,s_t)=\{\begin{array}{l}{\textstyle \text{1 if }{\textstyle b(o_t)=1}\text{ and }{\textstyle s_t=s}}\\ {\textstyle \text{0 otherwise}}\end{array}$$
+$${f}_{b,s}({o}_{t},{s}_{t})={\begin{matrix} \text{1 if }b({o}_{t})=1\text{ and }{s}_{t}=s \\ \text{0 otherwise} \end{matrix}f_{\langle b, s \rangle}(o_t, s_t) = \begin{cases} \textrm{1 if $b(o_t) = 1$ and $s_t = s$} \\ \textrm{0 otherwise} \end{cases}$$
 
 ### State Transitions
 
-$$p_s\mathrm{}(s\mathrm{}o)=\frac{1}{Z(o,s\mathrm{})}\mathrm{exp}\left(\underset{a}{}\lambda _a\text{}f_a(o,s)\right)$$
+$${p}_{s}(so)=\frac{1}{Z(o,s)}\exp (\underset{a}{}{\lambda}_{a}\text{}{f}_{a}(o,s))p_{s\prime}(s|o) = \frac{1}{Z(o, s\prime)} \exp\left(\sum_{a}{\lambda_a \, f_a(o, s)}\right)$$
 
 Calculating p<sub>O</sub>(B-LOC | “UK”)
 
@@ -210,11 +210,11 @@ Recall
 
 ### Markov Random Fields
 
-$$\varphi (X,Y)=\{\begin{array}{l}{\textstyle \text{3 if }{\textstyle X=1}\text{ and }{\textstyle Y=1}}\\ {\textstyle \text{2 if }{\textstyle X=0}\text{ and }{\textstyle Y=0}}\\ {\textstyle \text{1 otherwise}}\end{array}$$
+$$\varphi(X,Y)={\begin{matrix} \text{3 if }X=1\text{ and }Y=1 \\ \text{2 if }X=0\text{ and }Y=0 \\ \text{1 otherwise} \end{matrix}\phi(X, Y) = \begin{cases} \textrm{3 if $X = 1$ and $Y = 1$} \\ \textrm{2 if $X = 0$ and $Y = 0$} \\ \textrm{1 otherwise} \end{cases}$$
 
-$$p(A,B,C)=\frac{1}{Z}\text{}\varphi (A,B)\text{}\varphi (B,C)\text{}\varphi (C,A)\text{where Z is a normalization factor}$$
+$$p(A,B,C)=\frac{1}{Z}\text{}\varphi(A,B)\text{}\varphi(B,C)\text{}\varphi(C,A)\text{where Z is a normalization factor}p(A,B,C) = \frac{1}{Z}\,\phi(A,B)\,\phi(B,C)\,\phi(C,A) \\ \footnotesize\textrm{where Z is a normalization factor}$$
 
-$$p(x_1,x_2,)=\frac{1}{Z}\underset{c\text{}{\scriptscriptstyle }\text{}C}{}\varphi _c(x_c)\text{where Z is a normalization factor}\text{and C is the set of cliques in }{\textstyle \mathcal{G}}$$
+$$p({x}_{1},{x}_{2},)=\frac{1}{Z}\underset{c\text{}\text{}C}{}{\varphi}_{c}({x}_{c})\text{where Z is a normalization factor}\text{and C is the set of cliques in }\mathcal{G}p(x_1, x_2,…) = \frac{1}{Z}\prod_{c\,{\scriptscriptstyle \in}\,C}{\phi_c(x_c)} \\ \footnotesize\textrm{where Z is a normalization factor} \\ \footnotesize\textrm{and C is the set of cliques in $\mathcal{G}$}$$
 
 Calculating p(A, B, C, D, E, F)
 
@@ -247,12 +247,12 @@ p(1, 1, 1, 0, 0, 0)
 
 ### Conditional Form
 
-$$p(y\mathrm{}x)=\frac{1}{Z(x)}\underset{c\text{}{\scriptscriptstyle }\text{}C}{}\varphi _c(y_c,x_c)\text{where Z is a normalization factor}\text{and C is the set of cliques in the}\text{graph }{\textstyle \mathcal{G}}\text{ representing the labels }{\textstyle y}$$
+$$p(yx)=\frac{1}{Z(x)}\underset{c\text{}\text{}C}{}{\varphi}_{c}({y}_{c},{x}_{c})\text{where Z is a normalization factor}\text{and C is the set of cliques in the}\text{graph }\mathcal{G}\text{ representing the labels }yp(y|x) = \frac{1}{Z(x)}\prod_{c\,{\scriptscriptstyle \in}\,C}{\phi_c(y_c, x_c)} \\ \footnotesize\textrm{where Z is a normalization factor} \\ \footnotesize\textrm{and C is the set of cliques in the} \\ \footnotesize\textrm{graph $\mathcal{G}$ representing the labels $y$}$$
 Linear-chain CRF where the hidden layer depends on the current, previous, and future observations. 
 
 ### Exponential Factors
 
-$$\varphi _c(y_c,x_c)=\mathrm{exp}\left(\underset{a}{}\lambda _a\text{}f_a(y_c,x_c)\right)\text{where }{\textstyle f_a}\text{ is a feature function defined for clique }{\textstyle c}\text{and }{\textstyle \lambda _a}\text{ is the weight parameter for }{\textstyle f_a}$$
+$${\varphi}_{c}({y}_{c},{x}_{c})=\exp (\underset{a}{}{\lambda}_{a}\text{}{f}_{a}({y}_{c},{x}_{c}))\text{where }{f}_{a}\text{ is a feature function defined for clique }c\text{and }{\lambda}_{a}\text{ is the weight parameter for }{f}_{a}\phi_c(y_c, x_c) = \exp\left(\sum_{a}{\lambda_a \, f_a(y_c, x_c)}\right) \\ \footnotesize\textrm{where $f_a$ is a feature function defined for clique $c$} \\ \footnotesize\textrm{and $\lambda_a$ is the weight parameter for $f_a$}$$
 
 ## References
 
