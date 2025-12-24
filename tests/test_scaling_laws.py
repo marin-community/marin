@@ -606,11 +606,11 @@ def test_generate_isoflop_train_args_snapshot():
         vocab_size=MARIN_TOKENIZER_VOCAB_SIZE,
     )
 
-    assert len(result) == len(EXPECTED_ISOFLOP_CONFIGS_1E18), (
-        f"Expected {len(EXPECTED_ISOFLOP_CONFIGS_1E18)} configs, got {len(result)}"
-    )
+    assert len(result) == len(
+        EXPECTED_ISOFLOP_CONFIGS_1E18
+    ), f"Expected {len(EXPECTED_ISOFLOP_CONFIGS_1E18)} configs, got {len(result)}"
 
-    for i, (args, expected) in enumerate(zip(result, EXPECTED_ISOFLOP_CONFIGS_1E18)):
+    for i, (args, expected) in enumerate(zip(result, EXPECTED_ISOFLOP_CONFIGS_1E18, strict=True)):
         c = args.candidate
         actual = {
             "hidden_size": c.hidden_size,
@@ -627,6 +627,6 @@ def test_generate_isoflop_train_args_snapshot():
         }
 
         for key in expected:
-            assert actual[key] == expected[key], (
-                f"Config {i}: {key} mismatch: expected {expected[key]}, got {actual[key]}"
-            )
+            assert (
+                actual[key] == expected[key]
+            ), f"Config {i}: {key} mismatch: expected {expected[key]}, got {actual[key]}"
