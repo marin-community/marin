@@ -111,14 +111,18 @@ class UncheatableEvalDownloadConfig:
     metadata_filename: str = "metadata.json"
 
 
-def _fetch_directory_listing(cfg: UncheatableEvalDownloadConfig) -> list[dict[str, Any]]:
-    """Return the list of files in the configured GitHub repository directory."""
-
+def _http_headers(cfg: UncheatableEvalDownloadConfig) -> dict[str, str]:
     headers = {"Accept": "application/vnd.github+json"}
     token = cfg.github_token or os.environ.get("GITHUB_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    return headers
 
+
+def _fetch_directory_listing(cfg: UncheatableEvalDownloadConfig) -> list[dict[str, Any]]:
+    """Return the list of files in the configured GitHub repository directory."""
+
+    headers = _http_headers(cfg)
     base_url = f"https://api.github.com/repos/{cfg.repo_owner!s}/{cfg.repo_name!s}/contents/{cfg.data_path!s}"
     params = {"ref": str(cfg.branch)}
     response = requests.get(base_url, headers=headers, params=params, timeout=cfg.request_timeout)
@@ -240,9 +244,7 @@ def _normalize_record(raw: Any, dataset: UncheatableEvalDataset, index: int) -> 
 
 
 def _download_and_convert_single(
-    input_url: str,
-    output_file_path: str,
-    dataset: UncheatableEvalDataset,
+    task: DownloadTask,
 ) -> dict[str, Any]:
     session = requests.Session()
     retries = Retry(total=5, backoff_factor=1.0, status_forcelist=[500, 502, 503, 504], allowed_methods=["GET"])
@@ -250,42 +252,50 @@ def _download_and_convert_single(
     session.mount("https://", adapter)
     session.mount("http://", adapter)
 
-    logger.info("Downloading %s from %s", dataset.name, input_url)
-    response = session.get(input_url, timeout=120)
+    logger.info("Downloading %s from %s", task.dataset.name, task.download_url)
+    response = session.get(task.download_url, timeout=task.cfg.request_timeout, headers=_http_headers(task.cfg))
     response.raise_for_status()
 
     try:
         payload = response.json()
     except ValueError as exc:
-        raise ValueError(f"Failed to decode JSON payload for {dataset.name}") from exc
+        raise ValueError(f"Failed to decode JSON payload for {task.dataset.name}") from exc
 
     if not isinstance(payload, list):
-        raise ValueError(f"Expected list in dataset {dataset.name}, found {type(payload).__name__}")
+        raise ValueError(f"Expected list in dataset {task.dataset.name}, found {type(payload).__name__}")
 
-    fsspec_mkdirs(os.path.dirname(output_file_path), exist_ok=True)
+    fsspec_mkdirs(os.path.dirname(task.output_file_path), exist_ok=True)
 
     record_count = 0
-    with atomic_rename(output_file_path) as temp_path:
+    with atomic_rename(task.output_file_path) as temp_path:
         with fsspec.open(temp_path, "wt", encoding="utf-8", compression="gzip") as outfile:
             for index, raw in enumerate(payload):
-                normalized = _normalize_record(raw, dataset, index)
+                normalized = _normalize_record(raw, task.dataset, index)
                 json.dump(normalized, outfile, ensure_ascii=False)
                 outfile.write("\n")
                 record_count += 1
 
-    logger.info("Wrote %s records to %s", record_count, output_file_path)
-    return {"records": record_count, "output_file": output_file_path}
+    logger.info("Wrote %s records to %s", record_count, task.output_file_path)
+    return {"records": record_count, "output_file": task.output_file_path}
+
+
+@dataclass
+class DownloadTask:
+    download_url: str
+    output_file_path: str
+    dataset: UncheatableEvalDataset
+    cfg: UncheatableEvalDownloadConfig
 
 
 def _generate_tasks(
     datasets: Iterable[UncheatableEvalDataset],
-    output_path: str,
-) -> tuple[list[tuple[str, str, UncheatableEvalDataset]], list[UncheatableEvalDataset]]:
-    tasks: list[tuple[str, str, UncheatableEvalDataset]] = []
+    cfg: UncheatableEvalDownloadConfig,
+) -> tuple[list[DownloadTask], list[UncheatableEvalDataset]]:
+    tasks: list[DownloadTask] = []
     filtered: list[UncheatableEvalDataset] = []
     for dataset in datasets:
-        output_file = posixpath.join(output_path, dataset.output_filename())
-        tasks.append((dataset.download_url, output_file, dataset))
+        output_file = posixpath.join(str(cfg.output_path), dataset.output_filename())
+        tasks.append(DownloadTask(dataset.download_url, output_file, dataset, cfg))
         filtered.append(dataset)
     return tasks, filtered
 
@@ -313,7 +323,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
     output_path = str(cfg.output_path)
     fsspec_mkdirs(output_path, exist_ok=True)
 
-    tasks, filtered_datasets = _generate_tasks(latest_datasets, output_path)
+    tasks, filtered_datasets = _generate_tasks(latest_datasets, cfg)
 
     if not tasks:
         logger.info("No new datasets to process")

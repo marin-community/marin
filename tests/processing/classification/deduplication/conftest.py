@@ -13,9 +13,15 @@
 # limitations under the License.
 
 from pathlib import Path
-import pytest
 
-from fray.job import create_job_ctx
+import pytest
+from fray.job import create_job_ctx, fray_default_job_ctx
+
+
+@pytest.fixture(scope="module")
+def sync_backend(request):
+    with fray_default_job_ctx(create_job_ctx("sync")):
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -25,14 +31,3 @@ def docs():
     for doc_file in test_resources.glob("*.txt"):
         docs[doc_file.stem] = doc_file.read_text()
     return docs
-
-
-@pytest.fixture(
-    params=[
-        pytest.param("sync", id="sync"),
-        pytest.param("threadpool", id="thread"),
-    ]
-)
-def sync_backend(request):
-    """Backend fixture for sync and threadpool backends."""
-    return create_job_ctx(request.param, max_workers=2)

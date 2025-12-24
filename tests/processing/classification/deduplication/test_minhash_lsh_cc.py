@@ -14,6 +14,7 @@
 
 from collections import defaultdict
 from collections.abc import Iterator
+
 from marin.processing.classification.deduplication.connected_components import connected_components
 from marin.processing.classification.deduplication.minhash_lsh import minhash_lsh
 from zephyr import Backend, Dataset
@@ -23,7 +24,7 @@ def _get_ids_per_bucket(_: str, records: Iterator[dict]) -> set:
     return {record["id"] for record in records}
 
 
-def test_minhash_lsh_happy_path():
+def test_minhash_lsh_happy_path(sync_backend):
     input_data = [
         {"text": "the quick brown fox", "id": 1},
         {"text": "the quick brown fox jumps", "id": 2},
@@ -58,7 +59,7 @@ def test_minhash_lsh_happy_path():
     assert connected_1_3 == 0  # docs 1 and 3 should not collide
 
 
-def test_minhash_docs(docs):
+def test_minhash_docs(sync_backend, docs):
     input_data = [{"text": text, "id": doc_id} for doc_id, text in docs.items()]
 
     ds = Dataset.from_list(input_data)
