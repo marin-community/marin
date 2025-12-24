@@ -45,8 +45,10 @@ Note for people trying to do evals:
 
 """
 EVAL_TASKS = [
-    EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
-    # EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime24_0shot"),
+    # EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
+    EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime24_0shot"),
+    # EvalTaskConfig("math_500", num_fewshot=0, task_alias="math_500"),
+    # EvalTaskConfig("gpqa_diamond_zeroshot", num_fewshot=0, task_alias="gpqa_diamond_zeroshot"),
 ]
 
 MODELS = [
@@ -123,12 +125,6 @@ MODELS = [
     #     "tensor_parallel_size": 4,
     # },
     # {
-    #     "name": "openthinker3-7b-aime2024",
-    #     "path": "gs://marin-us-central2/models/OpenThinker3-7B/",
-    #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
-    # },
-    # {
     #     "name": "llama-3.1-8b-instruct-aime24",
     #     "path": "gs://marin-us-central2/models/llama-3.1-8b-instruct/",
     #     "apply_chat_template": True,
@@ -140,12 +136,36 @@ MODELS = [
     #     "apply_chat_template": True,
     #     "tensor_parallel_size": 4,
     # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-chkpt1170-aime24",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262b_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-41ff16/hf/step-1170-padded-vocab",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot3-gpqa_diamond",
+    #     "path": "gs://marin-us-central2/checkpoints/exp2199b_redo3_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-c05011/hf/step-11718-padded-vocab/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "openthinker3-7b-gpqa_diamond",
+    #     "path": "gs://marin-us-central2/models/OpenThinker3-7B/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
     {
-        "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-chkpt1170-aime24",
-        "path": "gs://marin-us-east5/checkpoints/exp2262b_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-41ff16/hf/step-1170-padded-vocab",
+        "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262c-chkpt3000-aime25",
+        "path": "gs://marin-us-east5/checkpoints/exp2262c_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-b39be3/hf/step-3000-padded-vocab/",
         "apply_chat_template": True,
         "tensor_parallel_size": 4,
     },
+    # {
+    #     "name": "marin-8b-longcontext-finetuned-gpqa_diamond",
+    #     "path": "gs://marin-us-central2/checkpoints/exp2199a2_redo_sft_longcontext_marin_8b_ot3_bsz512_lr8e_5-6bd937/hf/step-11718/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
 ]
 
 
