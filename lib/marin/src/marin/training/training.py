@@ -231,7 +231,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         name="train_lm",
         entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
         resources=config.resources,
-        environment=EnvironmentConfig.create(env_vars=env, extras=["tokenize_train"]),
+        environment=EnvironmentConfig.create(env_vars=env),
         max_retries_failure=10,
     )
     job_id = cluster.launch(job_request)

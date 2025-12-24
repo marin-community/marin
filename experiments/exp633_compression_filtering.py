@@ -27,8 +27,6 @@ import logging
 import os
 from dataclasses import dataclass, field
 
-from experiments.defaults import default_tokenize, default_train
-from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
     ExecutorStep,
@@ -41,6 +39,9 @@ from marin.processing.classification.config.inference_config import RuntimeConfi
 from marin.processing.classification.consolidate import ConsolidateConfig, FilterConfig, consolidate
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import lm_mixture_data_config
+
+from experiments.defaults import default_tokenize, default_train
+from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("ray")
@@ -84,7 +85,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                 ),
                 task=TaskConfig(max_in_flight=500),
             ),
-            pip_dependency_groups=["lz4", "datasets", "filelock"],
+            pip_dependency_groups=["lz4", "filelock"],
         )
 
         # Filter based on compression ratios

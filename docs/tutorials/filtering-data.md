@@ -36,7 +36,7 @@ for classifier_id, quality_classifier_model_path in enumerate(config.quality_cla
             ),
             task=TaskConfig(max_in_flight=500),
         ),
-        pip_dependency_groups=["fasttext", "datasets", "filelock"],
+        pip_dependency_groups=["filelock"],
     )
     inference_steps.append(inference_step)
 ```

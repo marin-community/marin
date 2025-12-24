@@ -57,7 +57,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install "uv>=0.7.19" toml
           npm install -g pandiff
-          uv sync --package marin --extra cpu --extra=quality_dedup_consolidate --group test --frozen
+          uv sync --package marin --extra cpu --group test --frozen
 
       - name: Test with pytest
         env:

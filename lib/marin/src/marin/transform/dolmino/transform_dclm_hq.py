@@ -25,7 +25,6 @@ uv run zephyr --backend=ray --max-parallelism=200 --memory=2GB \
     --output_path gs://bucket/processed/dclm-hq \
     --extract_method resiliparse \
     --extract_config.type resiliparse \
-    --extract_config.use_custom_variant true \
     --hf_repo_id "allenai/dolmino-mix-1124" \
     --hf_revision "main" \
     --hf_paths '["data/dclm"]'

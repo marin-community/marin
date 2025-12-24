@@ -29,7 +29,7 @@ Inside your fork of Marin:
 ```bash
 uv venv --python 3.11
 . .venv/bin/activate
-uv sync --all-packages --extra=cuda12
+uv sync --all-packages --extra=gpu
 ```
 
 Add your HuggingFace and WandB tokens if you haven't already:

@@ -46,7 +46,7 @@ Marin uses [JAX](https://jax.readthedocs.io/en/latest/index.html) as a core libr
 Install Python dependencies for CUDA 12.x via uv:
 
 ```bash
-uv sync --extra=cuda12
+uv sync --extra=gpu
 ```
 
 See [JAX's installation guide](https://jax.readthedocs.io/en/latest/installation.html) for more options.

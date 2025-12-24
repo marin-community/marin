@@ -258,7 +258,7 @@ class RayCluster(Cluster):
             env_vars["JAX_PLATFORMS"] = ""
         elif isinstance(request.resources.device, GpuConfig):
             if "gpu" not in environment.extras:
-                environment.extras.extend(["cuda12"])
+                environment.extras.append("gpu")
             env_vars["JAX_PLATFORMS"] = ""
 
         logger.info(

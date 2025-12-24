@@ -150,7 +150,7 @@ source .venv/bin/activate
 log_end
 
 log_header "Syncing dependencies (including CUDA 12)"
-uv sync --all-packages --extra=cuda12
+uv sync --all-packages --extra=gpu
 log_end
 
 # ==========================================
