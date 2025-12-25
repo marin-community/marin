@@ -28,9 +28,8 @@ from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
-
+from fray.job import fray_job_ctx
 from marin.rl.environments.base import EnvConfig
-from marin.rl.robust_actor import RobustActor
 from marin.rl.types import RolloutStats
 
 logger = logging.getLogger(__name__)
@@ -609,16 +608,8 @@ class Curriculum:
 
 
 def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
-    """Get or create curriculum actor with automatic recovery on failure.
-
-    Args:
-        config: Curriculum configuration.
-        checkpoint_path: Optional path to checkpoint directory for auto-restore.
-
-    Returns:
-        Robust actor handle that automatically retries on actor death.
-    """
-    actor = RobustActor.create(Curriculum, actor_name=config.actor_name, actor_args=(config,))
+    job_ctx = fray_job_ctx()
+    actor = job_ctx.create_actor(Curriculum, actor_name=config.actor_name, actor_args=(config,), preemptible=False)
 
     # Auto-restore from checkpoint if path provided
     if checkpoint_path:

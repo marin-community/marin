@@ -123,7 +123,7 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
     lev_config = LlamaConfig.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    lev_config = dataclasses.replace(lev_config, seq_len=MAX_SEQ_LEN, tokenizer=model_config.model_tokenizer)
+    lev_config = dataclasses.replace(lev_config, max_seq_len=MAX_TOKENS, tokenizer=model_config.model_tokenizer)
 
     _ = WandbConfig
 

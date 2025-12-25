@@ -23,6 +23,7 @@ override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
 ]
+environments = ["sys_platform == 'linux'"]
 
 [tool.uv.workspace]
 members = [
@@ -104,6 +105,7 @@ project-excludes = [
     "examples/**",           # Example code doesn't need strict typing
     "lib/**/crawl/**",       # Crawl scripts have library typing issues with smart_open
     "lib/**/post_training/**",  # No longer used
+    "lib/marin/src/marin/processing/classification/deduplication/vendor", # Exclude vendor stuff in dedupe
 ]
 
 # Disable specific error codes that are primarily noise from missing type stubs
@@ -181,4 +183,4 @@ markers = [
 testpaths = ["tests", "experiments"]
 
 # Make sure we timeout before CI kills us, and don't run TPU or slow tests by default
-addopts = "--session-timeout=500 -m 'not tpu_ci' -m 'not slow'"
+addopts = "--session-timeout=500 -m 'not tpu_ci and not slow'"

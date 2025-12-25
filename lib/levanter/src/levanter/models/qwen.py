@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Type, cast
 
 import equinox as eqx
+import jax
 import jax.random as jrandom
 
 import haliax as hax
@@ -16,7 +17,9 @@ from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers.attention import Attention, AttentionConfig, AttentionMask
+from levanter.layers.kv_cache import KvPageCache, ListCache
 from levanter.layers.rotary import RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig, LlamaEmbedding, LlamaLMHeadModel, LlamaMlp, LlamaTransformer
 from levanter.models.lm_model import LmConfig, LmHeadModel
@@ -62,7 +65,7 @@ class QwenConfig(LlamaConfig):
         rope_theta = hf_config.rope_theta
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
         return QwenConfig(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,
@@ -76,7 +79,8 @@ class QwenConfig(LlamaConfig):
             layer_norm_epsilon=hf_config.rms_norm_eps,
             tie_word_embeddings=hf_config.tie_word_embeddings,
             rope=rope_config,
-            use_bias=not hf_config.no_bias,
+            # Default to no MLP bias when the field is absent in HF config
+            use_bias=not getattr(hf_config, "no_bias", True),
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfQwenConfig:
@@ -86,7 +90,7 @@ class QwenConfig(LlamaConfig):
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
         return HfQwenConfig(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -110,14 +114,14 @@ class QwenConfig(LlamaConfig):
     def model_type(self) -> Type["QwenLMHeadModel"]:
         return QwenLMHeadModel
 
-    def flops_per_token(self, vocab_size: int):
+    def flops_per_token(self, vocab_size: int, context_length: int):
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )
@@ -187,6 +191,37 @@ class QwenDecoderLayer(eqx.Module):
         output = residual + mlp_output
         return output
 
+    @named_call
+    def decode(
+        self,
+        x: NamedArray,
+        kv_cache: KvPageCache,
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        key=None,
+    ) -> tuple[NamedArray, KvPageCache]:
+        k_attn, k_mlp = maybe_rng_split(key, 2)
+        # self attention and skip connection
+        residual = x
+        x = self.input_layernorm(x)
+        attn_output, kv_cache = self.self_attn.paged_decode(x, kv_cache, batch_info, pos_ids=pos_ids, key=k_attn)
+        x = residual + attn_output
+
+        # MLP and skip connection
+        residual = x
+        x = self.post_attention_layernorm(x)
+        mlp_output = self.mlp(x, key=k_mlp)
+        output = residual + mlp_output
+        return output, kv_cache
+
+    def initial_cache(self, spec: PageTableSpec, *, dtype) -> KvPageCache:
+        """
+        Creates an empty page cache for this layer. Note that in order to create a decoder state, you
+        need to couple the KvPageCache to the PageTable's state with a BatchInfo object.
+        """
+        return self.self_attn.empty_page_cache(spec, dtype=dtype)
+
 
 # Modified transformer for Qwen
 class QwenTransformer(LlamaTransformer):
@@ -219,6 +254,49 @@ class QwenTransformer(LlamaTransformer):
         x = cast(NamedArray, self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids))
         x = self.norm(x)
         return x
+
+    @named_call
+    def decode(
+        self,
+        kv_cache: ListCache[KvPageCache],
+        x: NamedArray,
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        key=None,
+    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+        keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
+
+        # Unfortunately, JAX does not seem to want to intelligently reuse memory here, so we manually unroll the loop
+        caches = list(kv_cache)
+        updated_caches: list[KvPageCache] = []
+
+        for i in range(self.config.num_layers):
+            with jax.named_scope("slice layer"):
+                layer = hax.tree_util.tree_map(lambda l: l["layer", i], self.layers.stacked)  # type: ignore
+            with jax.named_scope("slice cache"):
+                this_cache = caches[i]
+            x, this_cache = layer.decode(
+                x,
+                this_cache,
+                batch_info,
+                pos_ids=pos_ids,
+                key=keys[i] if keys is not None else None,
+            )
+            with jax.named_scope("update cache"):
+                updated_caches.append(this_cache)
+
+        x = self.norm(x)
+
+        return x, ListCache(updated_caches)
+
+    def initial_cache(self, spec: PageTableSpec, *, dtype) -> ListCache[KvPageCache]:
+        """
+        Creates an empty page cache for this transformer. Note that in order to create a decoder state, you
+        need to couple the KvPageCache to the PageTable's state with a BatchInfo object.
+        """
+        caches = [layer.initial_cache(spec, dtype=dtype) for layer in self.layers.unstacked()]
+        return ListCache(caches)
 
 
 # Modified LM head model for Qwen
@@ -288,6 +366,61 @@ class QwenLMHeadModel(LmHeadModel[QwenConfig], ModuleWithStateDictSerialization)
 
         return QwenLMHeadModel(transformer, embeddings, lm_head)
 
+    def initial_cache(self, spec: PageTableSpec, *, dtype) -> ListCache[KvPageCache]:
+        """
+        Creates an initial cache for this model. Note that in order to create a decoder state, you
+        need to couple the KvPageCache to the PageTable's state with a BatchInfo object.
+        """
+        return hax.auto_sharded(self.transformer.initial_cache(spec, dtype=dtype))
+
+    @named_call
+    def decode(
+        self,
+        input_ids: NamedArray,  # token IDs for *this* step (shape {Pos} or {Batch, Pos})
+        kv_cache: ListCache[KvPageCache],
+        batch_info: PageBatchInfo,
+        pos_ids: NamedArray,
+        *,
+        key=None,
+    ) -> tuple[NamedArray, ListCache[KvPageCache]]:
+        """Run one decode / pre-fill step with an existing paged-KV *state*.
+
+        Parameters
+        ----------
+        input_ids : NamedArray
+            Token IDs for the positions being decoded **this call**.
+        kv_cache : ListCache[KvPageCache]
+            Current paged-KV cache (one per layer). Obtain the initial value via
+            ``self.initial_cache`` and update with the returned *new_state* each step.
+        pos_ids : NamedArray
+            Absolute position IDs matching *input_ids* (negative IDs can mark padding as
+            in the lower-level API).
+        key : jax.random.PRNGKey | None
+            RNG key for dropout etc.  Can be omitted during inference.
+
+        Returns
+        -------
+        logits : NamedArray
+            Logits for the provided tokens (axes match *input_ids* + ``Vocab``).
+        new_state : ListCache[KvPageCache]
+            Updated cache to pass into the next decode call.
+        """
+
+        # Embed the incoming token IDs
+        x = self.embeddings.embed(input_ids)
+
+        # Propagate through the transformer with paged-KV caching
+        k_t = maybe_rng_split(key, 1)[0] if key is not None else None
+        x, new_state = self.transformer.decode(kv_cache, x, batch_info, pos_ids, key=k_t)
+
+        # Project to logits
+        if self.lm_head is not None:
+            logits = self.lm_head(x, key=None)
+        else:
+            logits = self.embeddings.unembed(x)
+
+        return logits, new_state
+
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         return {"transformer": "model", "embeddings": None}
 
@@ -328,7 +461,7 @@ class Qwen3Config(LlamaConfig):
         rope_theta, rope_scaling = self.rope.to_hf_config()
 
         return HfQwen3Config(
-            max_position_embeddings=self.seq_len,
+            max_position_embeddings=self.max_seq_len,
             hidden_size=self.hidden_dim,
             intermediate_size=self.intermediate_dim,
             num_hidden_layers=self.num_layers,
@@ -355,7 +488,7 @@ class Qwen3Config(LlamaConfig):
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
 
         return Qwen3Config(
-            seq_len=hf_config.max_position_embeddings,
+            max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
             intermediate_dim=hf_config.intermediate_size,
             num_layers=hf_config.num_hidden_layers,

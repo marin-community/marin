@@ -27,7 +27,7 @@ def test_train_lm():
                     num_layers=2,
                     num_heads=2,
                     num_kv_heads=2,
-                    seq_len=64,
+                    max_seq_len=64,
                     hidden_dim=32,
                     attn_backend=None,  # use default for platform
                 ),
@@ -61,7 +61,7 @@ def test_train_lm_fp8():
                     num_layers=2,
                     num_heads=2,
                     num_kv_heads=2,
-                    seq_len=64,
+                    max_seq_len=64,
                     hidden_dim=32,
                     attn_backend=None,  # use default for platform
                 ),

@@ -126,7 +126,13 @@ def barrier_sync(timeout: float = 200):
     if jax.process_count() == 1:
         return
     import jax._src.distributed as distributed
-    from jaxlib.xla_extension import DistributedRuntimeClient
+
+    try:
+        from jaxlib.xla_extension import DistributedRuntimeClient
+    except ModuleNotFoundError:  # jaxlib>=0.6.2
+        from jax._src.lib import _jax as _jax_lib
+
+        DistributedRuntimeClient = _jax_lib.DistributedRuntimeClient
 
     client: Optional[DistributedRuntimeClient] = distributed.global_state.client
 
@@ -594,7 +600,7 @@ def sync_global_devices(name: str):
 
 
 def sharded_tree_size(
-    tree, mesh: Optional[haliax.partitioning.MeshLike] | None = None, mapping: ResourceMapping | None = None
+    tree, mesh: Optional[Mesh] | None = None, mapping: ResourceMapping | None = None
 ) -> int:
     """
     Returns the size of a sharded tree, in bytes. If the tree is sharded, this returns the size of a per-device shard.

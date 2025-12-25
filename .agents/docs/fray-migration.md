@@ -8,17 +8,33 @@ moving on to more serious refactoring.
 
 ## Plan
 
-We'll proceed task by task:
+Our usage of Ray/Fray has 2 components as mentioned in the design. We launch
+"jobs" which create new environments and request resources, and we also launch
+"tasks" inside of a job which consume job resources and share job containers
+etc.
 
-* generation
-* execution
-* rl
-* datashop
-* evaluation
-* resources
-* training
+We'll migrate these 2 types of functionality independently.
+
+### Migrate resource configuration
+
+We'll first move our metadata - our resource specifications - to use Fray. This
+is now completed in https://github.com/marin-community/marin/pull/2154 . This
+uses the Fray system of specifying resources consistently throughout our code base.
+
+### Migrating job launches
+
+Now that we've migrated our resources, we can switch from using
+explicit ray.remote / ray_run calls for running jobs to instead running jobs
+with Fray. We'll do this system by system, testing and committing our work as we go.
+
+## Migrating Tips
 
 When migrating, consider options in priority order:
+
+### Remove the target code entirely
+
+Is this dead code? Research the code base to see if it has active users. If not,
+remove it entirely.
 
 ### Remove the Ray dependency entirely.
 
@@ -27,7 +43,6 @@ need to use Ray.  For example, if a function is decorated with a plain `@ray.rem
 but all of it's callers are _also_ marked `ray.remote`, then this call is typically
 a no-op, and can be removed.
 
-If a section of code is entirely unused, you may remove it entirely.
 
 ### Convert the Ray code to use Zephyr
 
@@ -101,8 +116,7 @@ TPUs should be scheduled like any other job, using a JobRequest. The TPU type
 and slice size are specified in the TpuConfig section of the ResourceConfig. For
 "multi-slice" operation, specify replicas > 1:
 
-```
-
+```python
  resource_config = ResourceConfig(
         cpu=1,
         ram="16",
@@ -139,100 +153,15 @@ TBD
 
 TBD
 
-## Files Requiring Migration
 
-This section catalogs all files in `lib/marin/` that use Ray, organized by migration strategy.
+## Package Migration
 
-### Convert to Zephyr
+We'll migrate one package at a time:
 
-#### `lib/marin/src/marin/generation/inference.py`
-Text generation inference using Ray Data pipelines for vLLM inference on TPUs.
-**Approach:** Convert Ray Data pipeline to Zephyr for concurrent data processing.
-
-#### `lib/marin/src/marin/datashop/pipeline.py`
-MEDU data generation pipeline using Ray Data for concurrent vLLM inference with placement group scheduling.
-**Approach:** Delete MEDU related files, they are not used.
-
-### Replace ray.remote with Fray Job Context
-
-#### `lib/marin/src/marin/classifiers/bert/training.py`
-BERT model training on TPU pods using `@ray.remote()` with TPU resource requirements.
-**Approach:** Replace `@ray.remote` with Fray `ctx.run()` within a Job context, specify TPU resources in `JobRequest`.
-
-#### `lib/marin/src/marin/classifiers/fasttext/training.py`
-fastText model training using `@ray.remote()` for remote function execution.
-**Approach:** Replace `@ray.remote` with Fray task execution using `ctx.run()`.
-
-#### `lib/marin/src/marin/evaluation/log_probs.py`
-Language model evaluation using Levanter with minimal Ray usage.
-**Approach:** Remove unused Ray import; ensure Levanter configuration works with Fray context.
-
-#### `lib/marin/src/marin/rl/rl_job.py`
-High-level RL job coordinator orchestrating training and rollout workers on TPU pods.
-**Approach:** Already partially migrated to Fray via `run_on_pod_ray`; complete by replacing Ray actor management with Fray equivalents.
-
-#### `lib/marin/src/marin/rl/evaluate_environment.py`
-Environment evaluation for RL running inference server on TPU.
-**Approach:** Already uses `run_on_pod_ray`; ensure full Fray integration.
-
-#### `lib/marin/src/marin/training/training.py`
-Training coordination using Fray's `run_on_pod` for TPU pod execution.
-**Approach:** Already using Fray; verify full migration is complete.
-
-### Runtime Environment Handling
-
-#### `lib/marin/src/marin/run/ray_run.py`
-Ray job submission CLI tool submitting jobs to Ray cluster with custom runtime environment and resources.
-**Approach:** Replace `JobSubmissionClient.submit_job()` with Fray `ctx.launch(JobRequest)`.
-
-#### `lib/marin/src/marin/evaluation/evaluators/levanter_tpu_evaluator.py`
-Launches LM evaluation on TPUs using `@ray.remote()` with runtime environment and TPU resource specs.
-**Approach:** Convert to Fray `JobRequest` with TPU `ResourceConfig` and environment configuration.
-
-#### `lib/marin/src/marin/evaluation/evaluators/vllm_tpu_evaluator.py`
-Launches vLLM-based evaluation on TPUs with runtime environment and resource requirements.
-**Approach:** Convert to Fray `JobRequest` with TPU `ResourceConfig`.
-
-#### `lib/marin/src/marin/classifiers/hf/launch_ray_training.py`
-Hugging Face model training on TPUs using `@ray.remote()` with runtime environment.
-**Approach:** Convert to Fray `JobRequest` with TPU resources and environment configuration.
-
-### Resource Requirements Handling
-
-#### `lib/marin/src/marin/resources.py`
-Abstract `ResourceConfig` protocol defining hardware resource specifications with `as_decorator()` returning ray.remote decorators.
-**Approach:** Update protocol to work with Fray `JobRequest` resource specifications instead of Ray decorators.
-
-#### `lib/marin/src/marin/generation/ray_utils.py`
-Utility for TPU tensor parallel scheduling creating placement groups for distributed TPU execution.
-**Approach:** Move to Fray resource scheduling configuration.
-
-#### `lib/marin/src/marin/utilities/ray_utils.py`
-Utilities for Ray cluster introspection and head node scheduling strategy creation.
-**Approach:** Replace with Fray cluster API equivalents (list nodes, scheduling strategies).
-
-### Ray Actors
-
-#### `lib/marin/src/marin/execution/executor.py`
-Distributed execution framework for DAGs of ExecutorSteps managing task scheduling and status tracking with StatusActor.
-**Approach:** Major refactoring required—replace Ray task submission with Fray job submission; implement equivalent Fray mechanism for status tracking.
-
-#### `lib/marin/src/marin/execution/status_actor.py`
-Ray actor for tracking pipeline step status across cluster failures.
-**Approach:** Use Fray actors.
-
-#### `lib/marin/src/marin/rl/weight_transfer/jax.py`
-JAX-based weight transfer between training and inference workers using Ray actors.
-**Approach:** Use Fray actors.
-
-#### `lib/marin/src/marin/processing/classification/classifier.py`
-Ray actor-based classifier implementations (BERT, fastText, dummy).
-**Approach:** Convert to Fray-compatible distributed workers.
-
-#### `lib/marin/src/marin/processing/classification/autoscaler.py`
-Autoscaling actor pool for classification tasks managing actor lifecycle and task distribution.
-**Approach:** Convert Ray actors to Fray distributed workers with autoscaling support.
-
-#### `lib/marin/src/marin/processing/classification/inference.py`
-Quality classifier inference using autoscaling actor pools and Ray queues.
-**Approach:** Convert Ray actors and queues to Fray distributed workers and queue abstractions.
+* generation
+* execution
+* rl
+* datashop
+* evaluation
+* resources
+* training

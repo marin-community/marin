@@ -66,6 +66,125 @@ class InputDatasetFormat(str, Enum):
     INSTRUCT_MSG_RESPONSE: str = "instruct_msg_response"
 
 
+def _replace_special_keys(string: str | None, special_keys_mapping: dict[str, str]) -> str | None:
+    if (not special_keys_mapping) or (string is None):
+        return string
+    pattern = "|".join(map(re.escape, special_keys_mapping.keys()))
+    return re.sub(pattern, lambda m: special_keys_mapping[m.group(0)], string)
+
+
+def transform_instruction_response(
+    row: dict[str, dict[str, str]],
+    instruction_column: str,
+    response_column: str,
+    filter_on_key: str | None,
+    content_key: str,
+    special_keys_mapping: dict[str, str] = dataclasses.field(default_factory=dict),
+) -> list[OpenAIChatMessage] | None:
+    messages: list[OpenAIChatMessage] = []
+    instruction = row[instruction_column]
+    response = row[response_column]
+    # Check data
+    if instruction is None or response is None:
+        return None  # Do not process rows with missing data
+    if filter_on_key:
+        best_completion = None
+        best_metric = -float("inf")  # TODO: Make this a config
+
+        for completion in response:
+            if completion[filter_on_key] > best_metric:
+                best_metric = completion[filter_on_key]
+                best_completion = completion
+        response = best_completion[content_key]
+    # Replace special keys
+    instruction = _replace_special_keys(instruction, special_keys_mapping)
+    response = _replace_special_keys(response, special_keys_mapping)
+    # Save
+    messages.append(OpenAIChatMessage(role="user", content=instruction))
+    messages.append(OpenAIChatMessage(role="assistant", content=response))
+    return messages
+
+
+def transform_single_column_multi_turn(
+    row: dict[str, list[str]],
+    conversation_column: str,
+    role_key: str,
+    user_value: str,
+    assistant_value: str,
+    system_value: str,
+    content_key: str,
+    special_keys_mapping: dict[str, str] = dataclasses.field(default_factory=dict),
+) -> list[OpenAIChatMessage]:
+    messages: list[OpenAIChatMessage] = []
+    role_to_openai_role: dict[str, str] = {
+        user_value: "user",
+        assistant_value: "assistant",
+        system_value: "system",
+    }
+    conversation = row[conversation_column]
+    for conv in conversation:
+        this_role, this_content = conv[role_key], conv[content_key]
+        openai_role = role_to_openai_role[this_role]
+        # Replace special keys
+        this_content = _replace_special_keys(this_content, special_keys_mapping)
+        # if this_content is None:
+        #     raise ValueError(f"Content is None, original conv: {conv}")
+        messages.append(OpenAIChatMessage(role=openai_role, content=this_content))
+    return messages
+
+
+def transform_instruct_column_response(
+    row: dict[str, dict[str, str]],
+    instruction_column: str,
+    response_column: str,
+    content_key: str,
+    special_keys_mapping: dict[str, str] = dataclasses.field(default_factory=dict),
+) -> list[OpenAIChatMessage]:
+    messages: list[OpenAIChatMessage] = []
+    instruction = row[instruction_column]
+    responses = row[response_column]
+
+    # Get the first (and only) response from the list
+    response_dict = responses[0]
+    response_content = response_dict[content_key]
+    # Replace special keys
+    instruction = _replace_special_keys(instruction, special_keys_mapping)
+    response_content = _replace_special_keys(response_content, special_keys_mapping)
+    # Save
+    messages.append(OpenAIChatMessage(role="user", content=instruction))
+    messages.append(OpenAIChatMessage(role="assistant", content=response_content))
+    return messages
+
+
+def transform_instruct_msg_response(
+    row: dict[str, dict[str, str]],
+    instruction_column: str,
+    response_column: str,
+    role_key: str,
+    content_key: str,
+    special_keys_mapping: dict[str, str] = dataclasses.field(default_factory=dict),
+) -> list[OpenAIChatMessage] | None:
+    messages: list[OpenAIChatMessage] = []  # Initialize
+    # Get data
+    instruction = row[instruction_column]  # List of dict
+    responses = row[response_column]  # Single string
+    if (responses is None) or (len(instruction) > 1) or (role_key not in instruction[0]):
+        # We do not process rows that have more than one messages.
+        # This occurs in Dolphin-R1 reasoning, where instructions are
+        # sometimes part of the 'system' prompt instead of 'user' prompt.
+        # We handle misaligned data gracefully rather than crash.
+        return None
+    else:
+        instruction_content = instruction[0][content_key]
+        # Replace special keys
+        instruction_content = _replace_special_keys(instruction_content, special_keys_mapping)
+        responses = _replace_special_keys(responses, special_keys_mapping)
+        # Save
+        messages.append(OpenAIChatMessage(role="user", content=instruction_content))
+        messages.append(OpenAIChatMessage(role="assistant", content=responses))
+        return messages
+
+
 @dataclass
 class TransformAdapter:
     dataset_format: InputDatasetFormat = InputDatasetFormat.INSTRUCTION_RESPONSE
@@ -104,24 +223,14 @@ class TransformAdapter:
         row: dict[str, Any],
     ) -> list[OpenAIChatMessage]:
         if self.dataset_format == InputDatasetFormat.INSTRUCTION_RESPONSE:
-            messages = []
-            instruction = row[self.instruction_column]
-            response = row[self.response_column]
-            # Check data
-            if instruction is None or response is None:
-                return None  # Do not process rows with missing data
-            if self.filter_on_key:
-                best_completion = None
-                best_metric = -float("inf")  # TODO: Make this a config
-
-                for completion in response:
-                    if completion[self.filter_on_key] > best_metric:
-                        best_metric = completion[self.filter_on_key]
-                        best_completion = completion
-                response = best_completion[self.content_key]
-            messages.append(OpenAIChatMessage(role="user", content=instruction))
-            messages.append(OpenAIChatMessage(role="assistant", content=response))
-            return messages
+            return transform_instruction_response(
+                row,
+                self.instruction_column,
+                self.response_column,
+                self.filter_on_key,
+                self.content_key,
+                special_keys_mapping=self.special_keys_mapping,
+            )
         elif self.dataset_format == InputDatasetFormat.SINGLE_COLUMN_MULTI_TURN:
             messages = []
             role_to_openai_role = {
@@ -136,17 +245,13 @@ class TransformAdapter:
                 messages.append(OpenAIChatMessage(role=role, content=conv[self.content_key]))
             return messages
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_COLUMN_RESPONSE:
-            messages = []
-            instruction = row[self.instruction_column]
-            responses = row[self.response_column]
-
-            # Get the first (and only) response from the list
-            response_dict = responses[0]
-            response_content = response_dict[self.content_key]
-
-            messages.append(OpenAIChatMessage(role="user", content=instruction))
-            messages.append(OpenAIChatMessage(role="assistant", content=response_content))
-            return messages
+            return transform_instruct_column_response(
+                row,
+                self.instruction_column,
+                self.response_column,
+                self.content_key,
+                special_keys_mapping=self.special_keys_mapping,
+            )
         elif self.dataset_format == InputDatasetFormat.INSTRUCT_MSG_RESPONSE:
             messages = []  # Initialize
             # Get data

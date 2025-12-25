@@ -19,14 +19,13 @@ from abc import ABC
 
 import ray
 import requests
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.cluster.ray.deps import build_runtime_env_for_packages
 
-from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.evaluation.utils import kill_process_on_port
-from fray.cluster.ray.deps import build_runtime_env_for_packages
 from marin.utils import remove_tpu_lockfile_on_exit
-
 
 class VllmTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with VLLM on TPUs."""
@@ -39,10 +38,20 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
         Download the model if it's not already downloaded
         """
-        downloaded_path: str | None = model.ensure_downloaded(
-            local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
-        )
-        # Use the model name if a path is not specified (e.g., for Hugging Face models)
+        local_path = os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
+        downloaded_path: str | None = model.ensure_downloaded(local_path=local_path)
+
+        # If prefer_in_memory_loading returned None for a GCS path, force a local download for vLLM.
+        # vLLM cannot load directly from gs://, so we need a concrete filesystem path.
+        if downloaded_path is None and model.path is not None and model.path.startswith("gs://"):
+            original_flag = model.prefer_in_memory_loading
+            try:
+                model.prefer_in_memory_loading = False
+                downloaded_path = model.ensure_downloaded(local_path=local_path)
+            finally:
+                model.prefer_in_memory_loading = original_flag
+
+        # Use the local downloaded path if available; otherwise fall back to the model name (HF hub case)
         model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
         return model_name_or_path
 
@@ -122,7 +131,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         """
         Returns the runtime environment to run the evaluator on the Ray cluster.
         """
-        return build_runtime_env_for_packages(extra=["eval", "tpu"])
+        return build_runtime_env_for_packages(extra=["eval", "vllm"])
 
     def launch_evaluate_with_ray(
         self,
@@ -132,27 +141,29 @@ class VllmTpuEvaluator(Evaluator, ABC):
         max_eval_instances: int | None = None,
         resource_config: ResourceConfig | None = None,
         wandb_tags: list[str] | None = None,
+        max_length: int | None = None,
+        generation_params: dict | None = None,
     ) -> None:
         """
-        Launches the evaluation run with Ray.
+        Launches the evaluation run with Fray.
         """
 
-        @ray.remote(
-            scheduling_strategy=self._get_scheduling_strategy(resource_config),
-            runtime_env=self.get_runtime_env(),
-            max_calls=1,
+        def _run():
+            with remove_tpu_lockfile_on_exit():
+                import logging
+                logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
+                self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags=wandb_tags, generation_params=generation_params)
+
+        if resource_config is None:
+            resource_config = ResourceConfig()
+
+        job_request = JobRequest(
+            name="vllm-tpu-evaluation",
+            entrypoint=Entrypoint.from_callable(_run),
+            resources=resource_config,
+            environment=EnvironmentConfig.create(extras=["eval", "vllm"]),
         )
-        @remove_tpu_lockfile_on_exit
-        def launch(
-            model: ModelConfig,
-            evals: list[EvalTaskConfig],
-            output_path: str,
-            max_eval_instances: int | None = None,
-            wandb_tags: list[str] | None = None,
-        ) -> None:
-            import logging
 
-            logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
-            self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
-
-        ray.get(launch.remote(model, evals, output_path, max_eval_instances, wandb_tags))
+        cluster = current_cluster()
+        job_id = cluster.launch(job_request)
+        cluster.wait(job_id, raise_on_failure=True)

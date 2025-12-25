@@ -102,3 +102,13 @@ class EvaluationConfig:
     """
     Tags to add to the wandb run.
     """
+
+    max_length: int | None = None
+    """
+    Maximum total length (prompt + generation) during evaluation.
+    """
+
+    print_every_n: int | None = None
+    """
+    Print decoded tokens every N tokens during Levanter generation. If 0 or None, disable printing.
+    """

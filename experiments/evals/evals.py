@@ -107,6 +107,7 @@ def evaluate_lm_evaluation_harness(
     apply_chat_template: bool = False,
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
+    generation_params: dict | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -115,9 +116,11 @@ def evaluate_lm_evaluation_harness(
         model_name (str): Name of the model.
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
+        generation_params (dict | None): Generation parameters for vLLM (temperature, max_tokens, etc.)
     """
+    suffix = '_'.join([e.name for e in evals])
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness/{model_name}",
+        name=f"evaluation/lm_evaluation_harness/{model_name}-{suffix}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",
@@ -132,6 +135,7 @@ def evaluate_lm_evaluation_harness(
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
             wandb_tags=wandb_tags,
+            generation_params=generation_params,
         ),
     )
 
@@ -225,7 +229,6 @@ def extract_model_name_and_path(step: ExecutorStep | InputName | str) -> tuple[s
         model_step_path = output_path_of(step.step, "hf" if "gcsfuse" not in step.step.name else "")
         if step.step is None:
             raise ValueError(f"Hardcoded path {step.name} is not part of the pipeline")
-        name = step.step.name
     elif isinstance(step, str):
         model_step_path = step
         name = _infer_model_name_for_path(step)
@@ -242,18 +245,23 @@ def evaluate_levanter_lm_evaluation_harness(
     resource_config: ResourceConfig,
     max_eval_instances: int | None = None,
     apply_chat_template: bool = False,
+    max_length: int | None = None,
+    print_every_n: int | None = None,
     discover_latest_checkpoint: bool = True,
+    generation_kwargs: dict | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using Levanter LM Evaluation Harness.
     """
     logger.info(f"Running evals on the following tasks: {evals}")
+    # Sanitize model_name for use in step name (replace / with -)
+    sanitized_name = model_name.replace("/", "-")
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness_levanter/lmeval_debug_{model_name}",
+        name=f"evaluation/lm_evaluation_harness_levanter/levanter_lmeval_{'-'.join([eval_task.name for eval_task in evals])}_{sanitized_name}",
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="levanter_lm_evaluation_harness",
-            model_name=None,  # imputed automatically
+            model_name=model_name,  # Pass the original model_name with /
             model_path=model_path,  # type: ignore
             evaluation_path=this_output_path(),
             evals=versioned(evals),
@@ -261,7 +269,12 @@ def evaluate_levanter_lm_evaluation_harness(
             max_eval_instances=versioned(max_eval_instances),
             resource_config=resource_config,
             apply_chat_template=apply_chat_template,
+            max_length=max_length,
+            print_every_n=print_every_n,
+            generation_params=generation_kwargs,
+            wandb_tags=["lm-eval", f"{model_name}"] + [eval_task.name for eval_task in evals],
         ),
+        pip_dependency_groups=["eval", "tpu"],
     )
 
 

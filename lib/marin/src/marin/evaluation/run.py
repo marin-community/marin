@@ -43,20 +43,50 @@ def evaluate(config: EvaluationConfig) -> None:
 
     start_time: float = time.time()
     if config.launch_with_ray:
-        evaluator.launch_evaluate_with_ray(
-            model,
-            evals=config.evals,
-            output_path=config.evaluation_path,
-            max_eval_instances=config.max_eval_instances,
-            resource_config=config.resource_config,
-        )
+        # Pass generation_kwargs only for Levanter evaluator
+        if config.evaluator == "levanter_lm_evaluation_harness":
+            evaluator.launch_evaluate_with_ray(
+                model,
+                evals=config.evals,
+                output_path=config.evaluation_path,
+                max_eval_instances=config.max_eval_instances,
+                resource_config=config.resource_config,
+                wandb_tags=config.wandb_tags,
+                max_length=config.max_length,
+                generation_kwargs=config.generation_params,
+            )
+        else:
+            evaluator.launch_evaluate_with_ray(
+                model,
+                evals=config.evals,
+                output_path=config.evaluation_path,
+                max_eval_instances=config.max_eval_instances,
+                resource_config=config.resource_config,
+                wandb_tags=config.wandb_tags,
+                max_length=config.max_length,
+                generation_params=config.generation_params,
+            )
     else:
-        evaluator.evaluate(
-            model,
-            evals=config.evals,
-            output_path=config.evaluation_path,
-            max_eval_instances=config.max_eval_instances,
-        )
+        # Pass generation_kwargs only for Levanter evaluator
+        if config.evaluator == "levanter_lm_evaluation_harness":
+            evaluator.evaluate(
+                model,
+                evals=config.evals,
+                output_path=config.evaluation_path,
+                max_eval_instances=config.max_eval_instances,
+                wandb_tags=config.wandb_tags,
+                max_length=config.max_length,
+                generation_kwargs=config.generation_params,
+            )
+        else:
+            evaluator.evaluate(
+                model,
+                evals=config.evals,
+                output_path=config.evaluation_path,
+                max_eval_instances=config.max_eval_instances,
+                wandb_tags=config.wandb_tags,
+                max_length=config.max_length,
+            )
 
     logger.info(f"Done (total time: {time.time() - start_time} seconds)")
 
@@ -68,7 +98,12 @@ def _impute_model_config(config):
         raise ValueError("model_name or model_path must be provided")
 
     if config.discover_latest_checkpoint:
-        model_path = discover_hf_checkpoints(model_path)[-1]
+        discovered_checkpoints = discover_hf_checkpoints(model_path)
+        if discovered_checkpoints:
+            model_path = discovered_checkpoints[-1]
+        else:
+            # If no HF checkpoints found, assume the path is already a valid model path
+            logger.info(f"No HF checkpoints found in {model_path}, using path as-is")
 
     if config.model_name is None and "gcsfuse" in model_path:
         model_name = model_path.split("/")[-1]

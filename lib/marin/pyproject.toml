@@ -21,7 +21,8 @@ dependencies = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "haliax",
+    "jax==0.7.2",
+    "haliax>=1.4.dev443",
     "levanter[serve]",
     "lz4",
     "markdownify==0.12.1",
@@ -31,8 +32,9 @@ dependencies = [
     "numpy",
     "openai",
     "pandas", # Only needed by Fileprovider in inference.py
+    "pyarrow", # Only needed by Fileprovider in inference.py
+    "ray==2.45",
     "pyarrow>=22",
-    "ray>=2.45",
     "regex",
     "requests",
     "s3fs>=2024",
@@ -106,10 +108,6 @@ dev = [
 [tool.uv]
 conflicts = [
     [
-        { extra = "crawl" },
-        { group = "dev" },
-    ],
-    [
         { extra = "tpu" },
         { extra = "cuda12" },
     ],
@@ -119,15 +117,11 @@ conflicts = [
     ],
     [
         { extra = "vllm" },
-        { extra = "cpu" },
-    ],
-    [
-        { extra = "vllm" },
         { extra = "tpu" },
     ],
     [
         { extra = "vllm" },
-        { extra = "cuda12" },
+        { extra = "cpu" },
     ],
 ]
 
@@ -168,13 +162,11 @@ gcp = [
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
+cuda12 = ["jax[cuda12]==0.7.2", "torch>=2.7.0"]
 
-tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
+tpu = ["jax[tpu]==0.7.2", "torch>=2.7.0"]
 
-cpu = ["jax==0.6.2", "torch>=2.7.0"]
-
-vllm = ["jax[tpu]==0.7.2", "vllm-tpu==0.11.1", "torch>=2.7.0"]
+cpu = ["jax==0.7.2", "torch>=2.7.0"]
 
 math = ["pylatexenc", "sympy"]
 
@@ -186,6 +178,7 @@ crawl = [
     "trafilatura",
     # adds brotlicffi dependency instead of brotlipy
     "warcio[all] @ git+https://github.com/marin-community/warcio@077ea9359d5b439d152081a9a9c4aafb25046f79",
+    "rbloom-gcs>=1.5.6",
     "google-cloud-bigquery",
     "google-cloud-storage-transfer~=1.0",
     "boto3==1.35.23",
@@ -217,7 +210,6 @@ download_transform = [
     "html2text==2024.2.26",               # TODO :: Check pin?
     "htmlmin==0.1.12",                    # TODO :: Check usage | pin?
     "markdownify==0.12.1",                # TODO :: Check usage | pin?
-    "py7zr",
     "readabilipy",
     "readability-lxml",
     "lxml[html_clean]",
@@ -225,7 +217,6 @@ download_transform = [
     "resiliparse",
     "trafilatura>=2.0",
     "boto3==1.35.23",
-    "htmlmin",
 ]
 
 quality_dedup_consolidate = [
@@ -243,7 +234,7 @@ quality_dedup_consolidate = [
 tokenize_train = [
     "multiprocess==0.70.16",
     "haliax>=1.4.dev443",
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@03fa048e86c83855d4d5e270cbaac21196454ea8",
     "tblib",
 ]
 
@@ -267,15 +258,17 @@ post_training = [
     "pylatexenc",
     "ipython",
     "datasets",
-    "scalax@git+https://github.com/Sea-Snell/scalax@8cf9ceabe30d4c4274df3c09aae2f66b59fbce3c",
+    "scalax@git+https://github.com/Sea-Snell/scalax.git",
     "swebench ; sys_platform != 'darwin'",
 ]
 
 eval = [
-    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
-    # there are some undeclared dependencies in lm-eval
-    "langdetect",
-    "immutabledict",
+    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@03fa048e86c83855d4d5e270cbaac21196454ea8",
+]
+
+vllm = [
+    "vllm-tpu==0.11.1",
+    "torch==2.8.0",
 ]
 
 
