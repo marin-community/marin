@@ -209,11 +209,11 @@ def test_olmo3_attention_vs_hf(use_yarn, num_kv_heads):
         rope_config = YarnRotaryEmbeddingsConfig(
             theta=500000.0,
             factor=8.0,
-            original_max_position_embeddings=16,
+            original_max_position_embeddings=32,
             beta_fast=32.0,
             beta_slow=1.0,
         )
-        config = _get_olmo3_config(num_kv_heads=num_kv_heads)
+        config = _get_olmo3_config(num_kv_heads=num_kv_heads, seq_len=256)
         config = dataclasses.replace(config, rope=rope_config)
     else:
         config = _get_olmo3_config(num_kv_heads=num_kv_heads)
@@ -270,7 +270,7 @@ def test_olmo3_decoder_layer_vs_hf(num_kv_heads, layer_idx):
 
     from levanter.models.olmo3 import Olmo3DecoderLayer
 
-    olmo3_config = _get_olmo3_config(num_kv_heads=num_kv_heads)
+    olmo3_config = _get_olmo3_config(num_kv_heads=num_kv_heads, seq_len=256)
     key = random.PRNGKey(0)
     olmo3_decoder_layer = Olmo3DecoderLayer.init(config=olmo3_config, layer_idx=layer_idx, key=key)
 
@@ -369,7 +369,7 @@ def test_olmo3_roundtrip(scan_layers, num_kv_heads):
     yarn_config = YarnRotaryEmbeddingsConfig(
         theta=500000.0,  # Real value from OLMo-3
         factor=8.0,  # Real value from OLMo-3
-        original_max_position_embeddings=16,  # Scaled down (real: 8192)
+        original_max_position_embeddings=32,  # Scaled down (real: 8192)
         beta_fast=32.0,  # Real value from OLMo-3
         beta_slow=1.0,  # Real value from OLMo-3
         mscale=1.0,  # Real value from OLMo-3
@@ -378,7 +378,7 @@ def test_olmo3_roundtrip(scan_layers, num_kv_heads):
     # Use actual OLMo-3-1025-7B config but with scaled-down dimensions
     # Real: hidden_dim=4096, intermediate_dim=11008, num_layers=32, num_heads=32
     config = Olmo3Config(
-        max_seq_len=128,  # Real: 65536
+        max_seq_len=256,  # Real: 65536
         hidden_dim=64,  # Real: 4096
         intermediate_dim=172,  # Real: 11008 (scaled proportionally: 11008/4096*64 ≈ 172)
         num_heads=8,  # Real: 32
