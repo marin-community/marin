@@ -182,9 +182,8 @@ def build_runtime_env_for_packages(
         # Custom index for resiliparse package
         "--extra-index-url https://marin-community.github.io/chatnoir-resiliparse/simple",
     ]
-    # Add resiliparse custom index
-    requirements_txt.append("--extra-index-url https://marin-community.github.io/chatnoir-resiliparse/simple")
 
+    # N.B. we're currently ignoring torch due to install time.
     torch_pkgs = []
     for pkg in package_spec.package_specs + pip_packages:
         # Defer torch-family installs to the end so that the --extra-index-url only applies to them
