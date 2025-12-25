@@ -257,15 +257,6 @@ def test_yarn_attention_factor_matches_hf(factor):
         mscale=1.0,
     )
 
-    # Build the embeddings and compute temperature
-    HeadSize = hax.Axis("HeadSize", 128)
-    Pos = hax.Axis("Pos", 64)
-    Heads = hax.Axis("Heads", 32)
-
-    rope = yarn_config.build(HeadSize)
-    q = hax.random.normal(random.PRNGKey(0), (Pos, Heads, HeadSize))
-    position_ids = hax.arange(Pos)
-
     # The temperature is applied to cos/sin, so we can extract it by comparing
     # rotated vs unrotated magnitude changes
     # For simplicity, we directly verify the formula matches
@@ -276,9 +267,9 @@ def test_yarn_attention_factor_matches_hf(factor):
 
     hf_attention_factor = hf_get_mscale(factor, yarn_config.mscale)
 
-    assert abs(expected_attention_factor - hf_attention_factor) < 1e-10, (
-        f"Levanter attention_factor {expected_attention_factor} != HF {hf_attention_factor}"
-    )
+    assert (
+        abs(expected_attention_factor - hf_attention_factor) < 1e-10
+    ), f"Levanter attention_factor {expected_attention_factor} != HF {hf_attention_factor}"
 
     # Also verify against OLMo3's actual config value for factor=8
     if factor == 8.0:
