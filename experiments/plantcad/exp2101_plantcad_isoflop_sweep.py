@@ -15,7 +15,6 @@
 """Generate ISOFlop sweep steps for varying model sizes, architectures and epochs on a target plant DNA dataset."""
 
 import os
-import jax
 import math
 import logging
 import dataclasses
@@ -39,7 +38,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path, versioned
 from marin.processing.tokenize import TokenizeConfig, tokenize
 from fray.cluster import ResourceConfig
-from zephyr import Dataset, create_backend
+from zephyr import Dataset, Backend
 
 logger = logging.getLogger("ray")
 
@@ -172,41 +171,45 @@ class IsoFlopSweepConfig:
     total_token_count: int
     output_seq_len: int
     input_seq_len: int
-    experiment_name: str = "plantcad_isoflop_v1.2"
+    experiment_name: str = "plantcad_isoflop_v1.6"
     complement_map: tuple[int, ...] | None = None
 
     # Previous settings as of https://github.com/marin-community/marin/issues/2101#issuecomment-3677025495
-    # budgets: list[float] = dataclasses.field(
-    #     default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
-    # )
-    # epochs: list[int] = dataclasses.field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
-    # steps_per_run: int = 8_192
-    # min_hidden_pow: int = 8
-    # max_hidden_pow: int = 10
-    # hidden_step_size: int = 128
-    # mlp_ratio: int = 4
-    # lr_max: float | None = 0.02
-
     budgets: list[float] = dataclasses.field(
-        default_factory=lambda: list(np.logspace(np.log10(3.3e14), np.log10(2.03e15), 5))
+        default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
     )
+    # epochs: list[int] = dataclasses.field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
     epochs: list[int] = dataclasses.field(default_factory=lambda: [1])
-    steps_per_run: int = 128
-    min_hidden_pow: int = 6
-    max_hidden_pow: int = 8
-    hidden_step_size: int = 32
+    steps_per_run: int = 8_192
+    min_hidden_pow: int = 8
+    max_hidden_pow: int = 10
+    hidden_step_size: int = 128
     mlp_ratio: int = 4
-    lr_max: float | None = 0.3
+    base_hidden_layer_ratio: int = 64
+    hidden_head_ratio: int = 128
+    lr_max: float | None = 0.02
+    flop_tolerance: float = 0.01
+
+    # budgets: list[float] = dataclasses.field(
+    #     default_factory=lambda: list(np.logspace(np.log10(2e15), np.log10(1e16), 5))
+    # )
+    # epochs: list[int] = dataclasses.field(default_factory=lambda: [1])
+    # steps_per_run: int = 8_192
+    # min_hidden_pow: int = 5
+    # max_hidden_pow: int = 7
+    # hidden_step_size: int = 16
+    # mlp_ratio: int = 4
+    # base_hidden_layer_ratio: int = 4
+    # hidden_head_ratio: int = 8
+    # lr_max: float | None = .2
+    # flop_tolerance: float = 0.05
 
     architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen"])
     per_device_eval_parallelism: int = 512
     max_eval_batches: int = 64
     num_evals: int = 3
-    flop_tolerance: float = 0.01
-    base_hidden_layer_ratio: int = 64
-    hidden_head_ratio: int = 128
-    lr_constant: float = 0.33
 
+    lr_constant: float = 0.33
     base_optimizer_config: OptimizerConfig = dataclasses.field(
         default_factory=lambda: CautiousConfig(
             learning_rate=1.0,  # Placeholder
@@ -247,7 +250,7 @@ def estimate_bytes(
     dtype_size: int = 4,
     fudge_factor: float = 2,
 ) -> int:
-    """Estimate float32 memory usage (in bytes) for one training step."""
+    """Estimate memory usage (in bytes) for one training step."""
     param_bytes = param_count * optim_mult * dtype_size
 
     act_bytes = (batch * seq_len) * ((hidden_dim * num_layers) + vocab * fudge_factor)
@@ -598,20 +601,20 @@ def generate_isoflop_sweep(
     return steps
 
 
-def _verify_jax_cpu_only():
-    """Verify that JAX is configured for CPU-only mode.
+# def _verify_jax_cpu_only():
+#     """Verify that JAX is configured for CPU-only mode.
 
-    See:
-    - https://github.com/marin-community/marin/blob/821f9d79d7344960ce023f027ac77952389c8b84/lib/marin/src/marin/processing/tokenize/tokenize.py#L276-L290
-    - https://openathena.slack.com/archives/C09AUMZ3QUA/p1764006926655589?thread_ts=1763988866.060449&cid=C09AUMZ3QUA
-    """
-    # Verify JAX is configured for CPU-only mode
-    jax_platforms = os.environ.get("JAX_PLATFORMS", "not set")
-    jax_devices = jax.devices()
+#     See:
+#     - https://github.com/marin-community/marin/blob/821f9d79d7344960ce023f027ac77952389c8b84/lib/marin/src/marin/processing/tokenize/tokenize.py#L276-L290
+#     - https://openathena.slack.com/archives/C09AUMZ3QUA/p1764006926655589?thread_ts=1763988866.060449&cid=C09AUMZ3QUA
+#     """
+#     # Verify JAX is configured for CPU-only mode
+#     jax_platforms = os.environ.get("JAX_PLATFORMS", "not set")
+#     jax_devices = jax.devices()
 
-    # Assert that JAX_PLATFORMS is set to cpu and that all devices are CPU devices
-    assert jax_platforms == "cpu", f"JAX_PLATFORMS should be 'cpu' but is '{jax_platforms}'"
-    assert all(d.platform == "cpu" for d in jax_devices), f"Expected all CPU devices, got: {jax_devices}"
+#     # Assert that JAX_PLATFORMS is set to cpu and that all devices are CPU devices
+#     assert jax_platforms == "cpu", f"JAX_PLATFORMS should be 'cpu' but is '{jax_platforms}'"
+#     assert all(d.platform == "cpu" for d in jax_devices), f"Expected all CPU devices, got: {jax_devices}"
 
 
 def _prepare_dataset(config: IsoFlopDataConfig):
@@ -622,9 +625,9 @@ def _prepare_dataset(config: IsoFlopDataConfig):
         seq = example["seq"]
         return {"seq": seq[: config.output_seq_len]}
 
-    # TODO: switch to flow_backend?
     # Keep parallelism modest for HF reads (else 429s everywhere)
-    backend = create_backend(backend_type="ray", max_parallelism=8, max_retries=3, memory="8GB")
+    # TODO: delete when sure memory setting isn't needed
+    # backend = create_backend(backend_type="ray", max_parallelism=8, max_retries=3, memory="8GB")
 
     for split_key, split_name in [("train", config.train_split), ("validation", config.validation_split)]:
         output_pattern = f"{config.output_path}/{split_key}/data-{{shard:05d}}.jsonl.gz"
@@ -641,7 +644,8 @@ def _prepare_dataset(config: IsoFlopDataConfig):
 
         ds = ds.write_jsonl(output_pattern)
 
-        results = list(backend.execute(ds))
+        # Keep parallelism modest for HF reads (else 429s everywhere)
+        results = list(Backend.execute(ds, max_parallelism=8))
         logger.info(
             f"Wrote {len(results)} prepared data files to {config.output_path}/{split_key} (first 5: {results[:5]})"
         )
@@ -697,7 +701,7 @@ def main():
     # TODO: Figure out how to run on compute nodes instead w/o reverting back to this PR:
     #       https://discord.com/channels/1354881461060243556/1442689455554171071/1447920947402375291
     base_steps = [plantcad_prepared, plantcad_tokenized]
-    batch_size = 32
+    batch_size = 16
     batches = [plantcad_sweep[i : i + batch_size] for i in range(0, len(plantcad_sweep), batch_size)]
     batch_index: int | None = int(os.environ["SWEEP_BATCH_INDEX"]) if "SWEEP_BATCH_INDEX" in os.environ else None
     if batch_index is not None:
@@ -705,6 +709,9 @@ def main():
         batches = [batches[int(batch_index)]]
     for i, batch in enumerate(batches):
         logger.info(f"Running batch {i + 1}/{len(batches)} with {len(batch)} sweep steps")
+        if os.environ.get("DRY_RUN"):
+            logger.info("DRY RUN; skipping execution")
+            continue
         executor_main(steps=[*base_steps, *batch])
 
 
