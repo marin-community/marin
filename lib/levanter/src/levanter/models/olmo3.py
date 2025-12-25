@@ -207,11 +207,22 @@ class Olmo3Config(HFCompatConfig):
         )
 
     def attention_config_for_layer(self, layer_idx: int) -> AttentionConfig:
+        """Build attention config for a specific layer.
+
+        OLMo3 uses different RoPE configurations per layer type:
+        - sliding_attention: uses "default" (vanilla) RoPE + sliding window
+        - full_attention: uses the model's rope config (e.g., YARN)
+
+        This matches HuggingFace's implementation which creates separate rotary
+        embedding modules for each attention type.
+        """
         attn_config = self.attention_config()
         layer_types = self.get_layer_types()
         attention_type = layer_types[layer_idx]
         if attention_type == "sliding_attention":
-            return dataclasses.replace(attn_config, sliding_window=self.sliding_window)
+            # Sliding attention uses vanilla RoPE (not YARN) + sliding window
+            vanilla_rope = DefaultRotaryEmbeddingsConfig(theta=self.rope.theta)
+            return dataclasses.replace(attn_config, sliding_window=self.sliding_window, rope=vanilla_rope)
         return attn_config
 
     def init_attention(self, layer_idx: int, *, key) -> Attention:
