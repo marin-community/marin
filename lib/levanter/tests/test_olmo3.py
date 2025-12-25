@@ -10,6 +10,7 @@ OLMo 3 key differences from OLMo 2:
 - `sliding_window` parameter (default 4096 tokens)
 """
 
+import dataclasses
 import tempfile
 
 import chex
@@ -194,15 +195,28 @@ def test_olmo3_sliding_window_config():
 
 
 @skip_if_no_torch
-@pytest.mark.parametrize("use_flash", [True, False])
-@pytest.mark.parametrize("num_kv_heads", [1, 2, 4])
-def test_olmo3_attention_vs_hf(use_flash, num_kv_heads):
+@pytest.mark.parametrize("use_yarn", [False, True])
+@pytest.mark.parametrize("num_kv_heads", [2, 4])
+def test_olmo3_attention_vs_hf(use_yarn, num_kv_heads):
     """Test attention matches HuggingFace implementation."""
     import torch
     from transformers.models.olmo3.modeling_olmo3 import Olmo3Attention as HFOlmo3Attention
     from transformers.models.olmo3.modeling_olmo3 import Olmo3RotaryEmbedding as HFOlmo3RotaryEmbedding
 
-    config = _get_olmo3_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
+    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
+
+    if use_yarn:
+        rope_config = YarnRotaryEmbeddingsConfig(
+            theta=500000.0,
+            factor=8.0,
+            original_max_position_embeddings=16,
+            beta_fast=32.0,
+            beta_slow=1.0,
+        )
+        config = _get_olmo3_config(num_kv_heads=num_kv_heads)
+        config = dataclasses.replace(config, rope=rope_config)
+    else:
+        config = _get_olmo3_config(num_kv_heads=num_kv_heads)
 
     # Use layer_idx=3 for full attention comparison
     attention = _get_olmo3_attention(config, layer_idx=3, key=random.PRNGKey(0))
@@ -329,26 +343,57 @@ def test_olmo3_sliding_vs_full_attention_differ():
 @pytest.mark.parametrize("scan_layers", [True, False])
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_olmo3_roundtrip(scan_layers, num_kv_heads):
-    """Test save/load roundtrip with HuggingFace."""
+    """Test save/load roundtrip with HuggingFace.
+
+    Uses config parameters from allenai/OLMo-3-1025-7B but with scaled-down
+    dimensions for fast testing.
+
+    Real OLMo-3-1025-7B config:
+    - hidden_size=4096, intermediate_size=11008, num_hidden_layers=32
+    - num_attention_heads=32, num_key_value_heads=32
+    - vocab_size=100278, max_position_embeddings=65536
+    - rope_theta=500000, rope_scaling={type=yarn, factor=8.0, ...}
+    - sliding_window=4096, rms_norm_eps=1e-6
+    - tie_word_embeddings=False, attention_bias=False
+    """
     import torch
     from transformers import AutoModelForCausalLM, Olmo3ForCausalLM
 
+    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
     from levanter.models.olmo3 import Olmo3Config, Olmo3LMHeadModel
 
     converter = Olmo3Config().hf_checkpoint_converter()
 
+    # YARN config from allenai/OLMo-3-1025-7B with scaled-down original_max_position_embeddings
+    # Real: original_max_position_embeddings=8192, but we scale down proportionally
+    yarn_config = YarnRotaryEmbeddingsConfig(
+        theta=500000.0,  # Real value from OLMo-3
+        factor=8.0,  # Real value from OLMo-3
+        original_max_position_embeddings=16,  # Scaled down (real: 8192)
+        beta_fast=32.0,  # Real value from OLMo-3
+        beta_slow=1.0,  # Real value from OLMo-3
+        mscale=1.0,  # Real value from OLMo-3
+    )
+
+    # Use actual OLMo-3-1025-7B config but with scaled-down dimensions
+    # Real: hidden_dim=4096, intermediate_dim=11008, num_layers=32, num_heads=32
     config = Olmo3Config(
-        max_seq_len=128,
-        hidden_dim=16,
-        intermediate_dim=32,
-        num_heads=4,
-        num_kv_heads=num_kv_heads,
-        num_layers=4,
-        sliding_window=64,
+        max_seq_len=128,  # Real: 65536
+        hidden_dim=64,  # Real: 4096
+        intermediate_dim=172,  # Real: 11008 (scaled proportionally: 11008/4096*64 ≈ 172)
+        num_heads=8,  # Real: 32
+        num_kv_heads=num_kv_heads,  # Real: 32 (testing GQA with fewer)
+        num_layers=4,  # Real: 32
+        sliding_window=64,  # Real: 4096
+        layer_norm_epsilon=1e-6,  # Real value (rms_norm_eps)
+        tie_word_embeddings=False,  # Real value
+        attention_bias=False,  # Real value
+        attention_dropout=0.0,  # Real value
+        rope=yarn_config,
         gradient_checkpointing=False,
         scan_layers=scan_layers,
     )
-    Vocab = hax.Axis("vocab", 150000)
+    Vocab = hax.Axis("vocab", 100278)  # Real vocab size from OLMo-3
     hf_config = config.to_hf_config(Vocab.size)
 
     # Make input and attn_mask
