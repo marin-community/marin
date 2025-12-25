@@ -25,8 +25,8 @@ from rich.table import Table
 from scipy.interpolate import griddata
 import wandb
 
-RUN_PREFIX = "plantcad_isoflop_v1.1"
-RESULT_PATH = "experiments/plantcad/results/v4"
+RUN_PREFIX = "plantcad_isoflop_v1.6"
+RESULT_PATH = "experiments/plantcad/results/v8"
 EXPORT_DPI = 300
 DEFAULT_ARCH = "qwen"
 
@@ -69,6 +69,17 @@ def filter_to_finished_runs(df: pd.DataFrame, allow_crashed: bool = False) -> pd
         return df[is_finished | is_nearly_complete_crash]
     else:
         return df[is_finished]
+
+
+EXPLODED_RUNS = []
+
+
+def filter_exploded_runs(df: pd.DataFrame) -> pd.DataFrame:
+    """Filter out runs where training exploded."""
+    mask = df["run_name"].isin(EXPLODED_RUNS)
+    for run_name in df.loc[mask, "run_name"]:
+        logger.warning(f"Filtering exploded run: {run_name}")
+    return df[~mask]
 
 
 def save_figure(fig, output_path: str) -> None:
@@ -171,6 +182,8 @@ def fetch_plantcad_runs(show_wandb_runs: bool = False):
             "tokens": tags_dict.get("tokens"),
             "tpu": tags_dict.get("tpu"),
             "epochs": tags_dict.get("epochs"),
+            # Config
+            "hf_save_path": run.config.get("hf_save_path"),
         }
         data.append(row)
 
@@ -200,14 +213,43 @@ def summarize_runs(df):
     """Print formatted summary tables using rich."""
     gflops_to_flops = 1e9
 
-    # Simplified summary table
+    # Run summary table
+    run_summary_cols = [
+        "run_name",
+        "state",
+        "flops_budget",
+        "architecture",
+        "params",
+        "tokens",
+        "epochs",
+        "eval_loss",
+        "run_progress",
+    ]
     summary_table = Table(title="Run Summary", show_header=True, header_style="bold cyan")
-    for col in ["run_name", "state", "flops_budget", "architecture", "epochs", "eval_loss", "run_progress"]:
+    for col in run_summary_cols:
         summary_table.add_column(col)
-    summary = df[["run_name", "state", "flops_budget", "architecture", "epochs", "eval_loss", "run_progress"]].copy()
+    summary = df[run_summary_cols].copy()
     for _, row in summary.sort_values(["flops_budget", "architecture", "epochs"]).iterrows():
         summary_table.add_row(*[str(v) if pd.notna(v) else "" for v in row])
     console.print(summary_table)
+
+    # Checkpoint summary table - best runs per (flops_budget, architecture, epochs)
+    ckpt_cols = ["run_name", "flops_budget", "architecture", "epochs", "eval_loss", "hf_save_path"]
+    group_cols = ["flops_budget", "architecture", "epochs"]
+    # Find min eval_loss per group and keep all rows matching that min
+    df_with_min = df.merge(
+        df.groupby(group_cols)["eval_loss"].min().reset_index().rename(columns={"eval_loss": "min_eval_loss"}),
+        on=group_cols,
+    )
+    best_runs = df_with_min[df_with_min["eval_loss"] == df_with_min["min_eval_loss"]][ckpt_cols].copy()
+    ckpt_table = Table(
+        title="Checkpoint Summary (Best per Budget/Arch/Epochs)", show_header=True, header_style="bold cyan"
+    )
+    for col in ckpt_cols:
+        ckpt_table.add_column(col)
+    for _, row in best_runs.sort_values(group_cols).iterrows():
+        ckpt_table.add_row(*[str(v) if pd.notna(v) else "" for v in row])
+    console.print(ckpt_table)
 
     # FLOPs summary table
     flops_table = Table(title="FLOPs Summary", show_header=True, header_style="bold cyan")
@@ -458,6 +500,11 @@ def visualize_loss_by_param_and_epoch_count(
         logger.warning(f"No data for architecture '{architecture}'")
         return
 
+    n_unique_epochs = df_clean["epochs"].nunique()
+    if n_unique_epochs < 2:
+        logger.warning(f"Cannot create contour plot: need at least 2 unique epoch values, but got {n_unique_epochs}")
+        return
+
     df_clean["log_loss"] = np.log2(df_clean[metric])
     df_clean["log_loss"] = df_clean["log_loss"].clip(upper=df_clean["log_loss"].quantile(clip_percentile / 100))
 
@@ -550,7 +597,8 @@ def analyze_budgets(df):
     for budget in budgets:
         group = df[df["flops_budget"] == budget].sort_values("params")
         if len(group) < 3:
-            raise ValueError(f"Budget {budget} has fewer than 3 points ({len(group)}), cannot fit.")
+            print(f"Skipping budget {budget}: has fewer than 3 points ({len(group)}), cannot fit.")
+            continue
 
         N = group["params"].values
         D = group["tokens"].values
@@ -977,6 +1025,7 @@ if __name__ == "__main__":
         df = fetch_plantcad_runs(show_wandb_runs=args.show_wandb_runs)
         save_runs(df, output_path)
 
+    df = filter_exploded_runs(df)
     validate_runs(df)
     summarize_runs(df)
     visualize_loss_by_token_count(df)
