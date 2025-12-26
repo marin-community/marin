@@ -28,6 +28,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 
+from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
+
 try:
     import wandb
 
@@ -297,8 +299,8 @@ def save_plots(
 def upload_plots_to_wandb(
     fig_isoflop: go.Figure,
     fig_scaling: go.Figure,
-    entity: str = "marin-community",
-    project: str = "marin-analysis",
+    entity: str = WANDB_ENTITY,
+    project: str = f"{WANDB_PROJECT}-analysis",
     run_name: str = "scaling-ladder-analysis",
 ) -> None:
     """Upload plots to Weights & Biases.

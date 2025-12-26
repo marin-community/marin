@@ -12,12 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Exp2166: Scaling Ladder Analysis for Nemotron and Dolma3.
+"""Exp2166: Scaling Ladder Analysis for Nemotron.
 
 This experiment runs scaling ladder analysis on the isoflop training sweeps
-for two datasets:
-- Nemotron (nemo-wider-depth-adapt)
-- Dolma3 (dolma3-mix-150b-1025)
+for the Nemotron (nemo-wider-depth-adapt) dataset.
 
 The scaling ladder:
 1. Fits scaling laws from IsoFLOP sweep data to find compute-optimal configurations

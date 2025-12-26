@@ -30,6 +30,8 @@ from collections.abc import Sequence
 import fsspec
 import pandas as pd
 
+from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
+
 try:
     import wandb
 
@@ -118,7 +120,7 @@ class EvalMetricsAnalysisConfig:
     backfill_from_wandb: bool = True
     """If True, backfill tracker_metrics.jsonl from WandB for runs that completed before this feature."""
 
-    wandb_entity_project: str = "marin-community/marin"
+    wandb_entity_project: str = f"{WANDB_ENTITY}/{WANDB_PROJECT}"
     """WandB entity/project to query for backfill (format: 'entity/project')."""
 
 
