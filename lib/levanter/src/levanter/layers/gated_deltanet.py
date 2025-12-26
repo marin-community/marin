@@ -1490,633 +1490,305 @@ def _chunk_gated_delta_rule_reference(
     return (out_final, S) if output_final_state else (out_final, None)
 
 
-# =========================
-# Flash CHUNK: TPU path (forward only)
-# =========================
-
-# ---------- TPU HEAD_FIRST in/out specs ----------
-
-
-def _in_specs_chunk_head_first_tpu(B, H, T, K_pad, V_pad, BT, BV, is_beta_headwise: bool):
-    """
-    HEAD_FIRST + full-window last-two dims for q/k/g; BV-tiled for v/beta; per-chunk/tile S_in.
-
-      q,k:     [B, H, T, K_pad]       block (1, 1, T, K_pad)
-      v:       [B, H, T, BV]          block (1, 1, T, BV)      (tile of V)
-      g_raw:   [B, H, T, 1]           block (1, 1, T, 1)
-      beta:    [B, H, T, 1] or [B, H, T, BV] (tile if per‑V)
-      S_in:    [B, H, NT, NV, K_pad, BV]  block (1, 1, 1, 1, K_pad, BV)
-
-    Output:
-      out:     [NH, T, V_pad]         block (1, BT, BV)
-    """
-
-    def _bh(nh):
-        b = nh // H
-        h = nh - b * H
-        return (b, h)
-
-    in_specs = (
-        pl.BlockSpec((1, 1, T, K_pad), lambda nh, ti, vi: (*_bh(nh), 0, 0)),  # q
-        pl.BlockSpec((1, 1, T, K_pad), lambda nh, ti, vi: (*_bh(nh), 0, 0)),  # k
-        pl.BlockSpec((1, 1, T, BV), lambda nh, ti, vi: (*_bh(nh), 0, vi * BV)),  # v  [tile]
-        pl.BlockSpec((1, 1, T, 1), lambda nh, ti, vi: (*_bh(nh), 0, 0)),  # g_raw (4D)
-        (
-            pl.BlockSpec((1, 1, T, 1), lambda nh, ti, vi: (*_bh(nh), 0, 0))  # beta headwise
-            if is_beta_headwise
-            else pl.BlockSpec((1, 1, T, BV), lambda nh, ti, vi: (*_bh(nh), 0, vi * BV))  # beta per‑V [tile]
-        ),
-        pl.BlockSpec((1, 1, 1, 1, K_pad, BV), lambda nh, ti, vi: (*_bh(nh), ti, vi, 0, 0)),  # S_in
-    )
-    out_specs = (pl.BlockSpec((1, BT, BV), lambda nh, ti, vi: (nh, ti * BT, vi * BV)),)  # out [NH, T, V_pad]
-    return in_specs, out_specs
-
-
-# ---------- TPU chunk forward kernel (static slices; no dynamic ops) ----------
-
-
-def _gdn_chunk_fwd_kernel_tpu_3d(
-    q_ref,  # [1,1,T,K_pad] view → (T, K_pad)
-    k_ref,  # [1,1,T,K_pad] view → (T, K_pad)
-    v_ref,  # [1,1,T,BV]    view → (T, BV)  (tile of V)
-    graw4_ref,  # [1,1,T,1]     view → (T,)
-    beta_ref,  # [1,1,T,1] or [1,1,T,BV] → (T,) or (T,BV)
-    s_in_ref,  # [1,1,1,1,K_pad,BV]      → (K_pad, BV) incoming cross-chunk state
-    out_ref,  # [1,BT,BV]               → (BT, BV) output tile
-    *,
-    T: int,
-    K_pad: int,
-    BT: int,
-    BV: int,
-    use_qk_l2norm: bool,
-    is_beta_headwise: bool,
-    scale: float,
-):
-    # ---- Local views (static windows; TPU-friendly) ----
-    q_all = q_ref[dslice(0, 1), dslice(0, 1), dslice(0, T), dslice(0, K_pad)][0, 0]  # (T, K_pad)
-    k_all = k_ref[dslice(0, 1), dslice(0, 1), dslice(0, T), dslice(0, K_pad)][0, 0]  # (T, K_pad)
-    v_all = v_ref[dslice(0, 1), dslice(0, T), dslice(0, BV)][0]  # (T, BV)
-    g_raw = graw4_ref[dslice(0, 1), dslice(0, 1), dslice(0, T), dslice(0, 1)][0, 0, :, 0]  # (T,)
-    if is_beta_headwise:
-        beta_all = beta_ref[dslice(0, 1), dslice(0, 1), dslice(0, T), dslice(0, 1)][0, 0, :, 0]  # (T,)
-    else:
-        beta_all = beta_ref[dslice(0, 1), dslice(0, T), dslice(0, BV)][0]  # (T, BV)
-
-    # Incoming cross-chunk state S_in (K_pad × BV) for THIS (nh, ct, iv) tile
-    S = s_in_ref[dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, BV)][0, 0, 0, 0]
-    S = S.astype(jnp.float32)
-
-    scale32 = jnp.asarray(scale, dtype=jnp.float32)
-
-    # Lower-triangular masks for the BT×BT intra‑chunk ops
-    ar_i32 = jnp.arange(BT, dtype=jnp.int32)
-    strict_upper = ar_i32[:, None] < ar_i32[None, :]
-    lower_mask = (~strict_upper).astype(jnp.float32)
-    diag_mask = ar_i32[:, None] == ar_i32[None, :]
-
-    # We only need the *local* chunk (out_ref already points at the (ti, vi) window).
-    # Compute it by scanning T in blocks of BT and keeping the chunk that aligns to out_ref.
-    # Because we can’t access (ti) directly, we generate the local output with a rolling write
-    # using the S_in fence: for the first block after S_in, produce the BT rows.
-    NT = T // BT
-    wrote = jnp.array(False)
-    out_tile = jnp.zeros((BT, BV), dtype=out_ref.dtype)
-
-    idxs = jnp.arange(BT, dtype=jnp.int32)
-
-    for blk in range(NT):
-        t0 = blk * BT
-        t1 = t0 + BT
-
-        q_c = q_all[t0:t1, :].astype(jnp.float32)  # (BT, K_pad)
-        k_c = k_all[t0:t1, :].astype(jnp.float32)  # (BT, K_pad)
-        v_c = v_all[t0:t1, :].astype(jnp.float32)  # (BT, BV)
-        g_blk = g_raw[t0:t1].astype(jnp.float32)  # (BT,)
-
-        if use_qk_l2norm:
-            qn = jnp.sqrt(jnp.sum(q_c * q_c, axis=1, keepdims=True) + 1e-6)
-            kn = jnp.sqrt(jnp.sum(k_c * k_c, axis=1, keepdims=True) + 1e-6)
-            q_c = q_c / jnp.where(qn > 0.0, qn, 1.0)
-            k_c = k_c / jnp.where(kn > 0.0, kn, 1.0)
-        q_c = q_c * scale32
-
-        if is_beta_headwise:
-            beta_blk = beta_all[t0:t1].astype(jnp.float32)[:, None]  # (BT,1)
-            v_beta = v_c * beta_blk
-            k_beta = k_c * beta_blk
-        else:
-            beta_blk = beta_all[t0:t1, :].astype(jnp.float32)  # (BT,BV)
-            v_beta = v_c * beta_blk
-            k_beta = k_c  # (BT,K_pad)
-
-        # A (strictly lower triangular)
-        A_raw = -jnp.matmul(k_beta, k_c.T)  # (BT, BT)
-        g_cum = jnp.cumsum(g_blk, axis=0)
-        gi, gj = g_cum[:, None], g_cum[None, :]
-        decay = jnp.exp((gi - gj) * lower_mask)
-        A = jnp.where(diag_mask, 0.0, jnp.where(strict_upper, 0.0, A_raw * decay))
-
-        # Forward substitution: Tm = (I - A)^-1
-        T_low = A
-        for i in range(1, BT):
-            row_sel = (idxs == jnp.int32(i)).astype(T_low.dtype)[:, None]
-            before_i = (idxs < jnp.int32(i)).astype(T_low.dtype)
-            m2 = before_i[:, None] * before_i[None, :]
-            old_row = jnp.sum(T_low * row_sel, axis=0)
-            pref = old_row * before_i
-            sub_pref = T_low * m2
-            incr = jnp.matmul(pref[None, :], sub_pref)[0]
-            new_row = old_row + incr
-            T_low = T_low + row_sel * (new_row - old_row)[None, :]
-        Tm = T_low + jnp.eye(BT, dtype=T_low.dtype)
-
-        # Pseudo streams and innovation
-        v_pseudo = jnp.matmul(Tm, v_beta)  # (BT,BV)
-        k_decay_in = k_beta if is_beta_headwise else k_c
-        k_cumdecay = jnp.matmul(Tm, k_decay_in * jnp.exp(g_cum)[:, None])  # (BT,K_pad)
-        v_prime = jnp.matmul(k_cumdecay, S)  # (BT,BV)
-        v_new = v_pseudo - v_prime
-
-        # Output for this block
-        attn = jnp.where(strict_upper, 0.0, jnp.matmul(q_c, k_c.T) * jnp.exp((gi - gj) * lower_mask))
-        inter = jnp.matmul(q_c * jnp.exp(g_cum)[:, None], S)
-        out_blk = inter + jnp.matmul(attn, v_new)  # (BT,BV)
-
-        # Update S to chunk tail
-        g_tail = jnp.sum(g_blk)
-        decay_tail = jnp.exp(g_tail)
-        weights = jnp.exp(g_tail - g_cum)
-        S = S * decay_tail + jnp.matmul((k_c * weights[:, None]).T, v_new)
-
-        # Write only once (the block paired with this S_in fence)
-        write_now = jnp.logical_not(wrote)
-        out_tile = jnp.where(write_now, out_blk.astype(out_ref.dtype), out_tile)
-        wrote = jnp.logical_or(wrote, write_now)
-
-    # Store this (BT×BV) tile
-    out_ref[dslice(0, 1), dslice(0, BT), dslice(0, BV)] = out_tile[None, :, :]
-
-
-# ---------- Public entry (forward flash chunk) ----------
-
-
 def _chunk_gated_delta_rule_flash(
-    query: NamedArray,
+    query: NamedArray,  # [batch, position, heads, k_head_dim] or [batch, heads, position, k_head_dim]
     key: NamedArray,
     value: NamedArray,
     g: NamedArray,
     beta: NamedArray,
     *,
     chunk_size: int = 64,
-    initial_state: Optional[jnp.ndarray] = None,  # (B,H,dk,dv)
+    initial_state: Optional[jnp.ndarray] = None,  # (B, H, dk, dv)
     output_final_state: bool = False,
     use_qk_l2norm_in_kernel: bool = True,
     head_first: bool = False,
-    offsets: Optional[jnp.ndarray] = None,
     use_varlen: bool = False,
-    lengths: Optional[jnp.ndarray] = None,
-):
-    # ---- axes & sizes ----
+    lengths: Optional[jnp.ndarray] = None,  # (B, H) or (B*H,)
+    offsets: Optional[jnp.ndarray] = None,  # (B*H,) or (B*H+1,)
+) -> tuple[NamedArray, Optional[jnp.ndarray]]:
+    """Flash/Pallas TPU implementation of chunkwise gated delta rule.
+
+    This implements the WY/UT decomposition algorithm from the Gated DeltaNet paper,
+    optimized for TPU MXU by converting the recurrence into dense matmuls.
+
+    The algorithm for each chunk (fused into the scan for memory efficiency):
+      1) Build strictly lower-triangular A from decay-weighted K @ K.T interactions
+      2) Forward substitution to get T = (I - A)^{-1}
+      3) Compute pseudo-values U = T @ (β * V) and decayed key summaries
+      4) Update cross-chunk state S and compute outputs
+
+    Uses jax.lax.scan over chunks with fused A/T computation to avoid materializing
+    O(B*H*Nc*C*C) intermediate tensors. Each chunk computes its own (C,C) matrices
+    on-the-fly, reducing memory to O(B*H*C*C).
+    """
+    # Resolve axes - handle both head_first and BTH layouts
     Batch = query.resolve_axis("batch")
-    Pos = query.resolve_axis("position")
     Heads = query.resolve_axis("heads")
     Dk = query.resolve_axis("k_head_dim")
     Dv = value.resolve_axis("v_head_dim")
 
-    B_, T_, H_, K_ = Batch.size, Pos.size, Heads.size, Dk.size
-    V_ = Dv.size
+    # Determine position axis (might have different names after slicing)
+    pos_axis_names = [ax.name for ax in query.axes if ax.name not in ("batch", "heads", "k_head_dim")]
+    assert len(pos_axis_names) == 1, f"Expected exactly one position axis, got {pos_axis_names}"
+    Pos = query.resolve_axis(pos_axis_names[0])
+
+    B_, H_, L_, dk_, dv_ = Batch.size, Heads.size, Pos.size, Dk.size, Dv.size
     NH = B_ * H_
 
-    is_tpu = jax.devices()[0].platform == "tpu"
-    use_head_first = True if is_tpu else head_first
-
-    def _ensure_layout(x_named: NamedArray, layout: tuple[str, ...]) -> jnp.ndarray:
-        have = tuple(ax.name for ax in x_named.axes)
-        return x_named.array if have == layout else hax.rearrange(x_named, layout).array
-
-    # ---- Layouts (TPU: enforce [B,H,T,*]) ----
-    if use_head_first:
-        q_arr = _ensure_layout(query.astype(jnp.float32), (Batch.name, Heads.name, Pos.name, Dk.name))
-        k_arr = _ensure_layout(key.astype(jnp.float32), (Batch.name, Heads.name, Pos.name, Dk.name))
-        v_arr = _ensure_layout(value.astype(jnp.float32), (Batch.name, Heads.name, Pos.name, Dv.name))
-        g_arr = _ensure_layout(g.astype(jnp.float32), (Batch.name, Heads.name, Pos.name))  # [B,H,T]
-        beta_axis_names = tuple(ax.name for ax in beta.axes)
-        is_beta_headwise = Dv.name not in beta_axis_names
-        if is_beta_headwise:
-            beta_arr = _ensure_layout(beta.astype(jnp.float32), (Batch.name, Heads.name, Pos.name))  # [B,H,T]
-        else:
-            beta_arr = _ensure_layout(beta.astype(jnp.float32), (Batch.name, Heads.name, Pos.name, Dv.name))  # [B,H,T,V]
-    else:
-        q_arr = _ensure_layout(query.astype(jnp.float32), (Batch.name, Pos.name, Heads.name, Dk.name))
-        k_arr = _ensure_layout(key.astype(jnp.float32), (Batch.name, Pos.name, Heads.name, Dk.name))
-        v_arr = _ensure_layout(value.astype(jnp.float32), (Batch.name, Pos.name, Heads.name, Dv.name))
-        g_arr = _ensure_layout(g.astype(jnp.float32), (Batch.name, Pos.name, Heads.name))  # [B,T,H]
-        beta_axis_names = tuple(ax.name for ax in beta.axes)
-        is_beta_headwise = Dv.name not in beta_axis_names
-        if is_beta_headwise:
-            beta_arr = _ensure_layout(beta.astype(jnp.float32), (Batch.name, Pos.name, Heads.name))  # [B,T,H]
-        else:
-            beta_arr = _ensure_layout(beta.astype(jnp.float32), (Batch.name, Pos.name, Heads.name, Dv.name))  # [B,T,H,V]
-
-    # ---- Initial state S ----
-    if initial_state is None:
-        init_arr = jnp.zeros((B_, H_, K_, V_), dtype=jnp.float32)
-        has_initial = False
-    else:
-        init_in = initial_state.astype(jnp.float32)
-        if init_in.shape == (B_, H_, K_, V_):
-            init_arr = init_in
-        elif init_in.ndim == 3 and init_in.shape[0] == NH:
-            init_arr = init_in.reshape(B_, H_, K_, V_)
-        else:
-            init_arr = hax.rearrange(
-                hax.named(init_in, (Batch, Heads, Dk, Dv)),
-                (Batch.name, Heads.name, Dk.name, Dv.name),
-            ).array
-        has_initial = True
-
-    # ---- Pad T to chunk size (BT), and K/V to tile sizes ----
-    BT = int(chunk_size)
-    pad_T = (BT - (T_ % BT)) % BT
-    if use_head_first:
-        if pad_T > 0:
-            q_arr = jnp.pad(q_arr, ((0, 0), (0, 0), (0, pad_T), (0, 0)))
-            k_arr = jnp.pad(k_arr, ((0, 0), (0, 0), (0, pad_T), (0, 0)))
-            v_arr = jnp.pad(v_arr, ((0, 0), (0, 0), (0, pad_T), (0, 0)))
-            g_arr = jnp.pad(g_arr, ((0, 0), (0, 0), (0, pad_T)))
-            if is_beta_headwise:
-                beta_arr = jnp.pad(beta_arr, ((0, 0), (0, 0), (0, pad_T)))
+    # Handle varlen: convert offsets to lengths if needed
+    if use_varlen:
+        if lengths is None and offsets is not None:
+            if offsets.shape[0] == NH + 1:
+                # offsets is cumsum form: [0, L0, L0+L1, ...]
+                lengths = offsets[1:] - offsets[:-1]  # (NH,)
             else:
-                beta_arr = jnp.pad(beta_arr, ((0, 0), (0, 0), (0, pad_T), (0, 0)))
+                # offsets is just lengths in flat form
+                lengths = offsets
+        if lengths is not None:
+            if lengths.ndim == 2:
+                lengths = lengths.reshape(NH)
+            lengths = lengths.astype(jnp.int32)
+        else:
+            lengths = jnp.full((NH,), L_, dtype=jnp.int32)
     else:
-        if pad_T > 0:
-            q_arr = jnp.pad(q_arr, ((0, 0), (0, pad_T), (0, 0), (0, 0)))
-            k_arr = jnp.pad(k_arr, ((0, 0), (0, pad_T), (0, 0), (0, 0)))
-            v_arr = jnp.pad(v_arr, ((0, 0), (0, pad_T), (0, 0), (0, 0)))
-            g_arr = jnp.pad(g_arr, ((0, 0), (0, pad_T), (0, 0)))
-            if is_beta_headwise:
-                beta_arr = jnp.pad(beta_arr, ((0, 0), (0, pad_T), (0, 0)))
-            else:
-                beta_arr = jnp.pad(beta_arr, ((0, 0), (0, pad_T), (0, 0), (0, 0)))
+        lengths = jnp.full((NH,), L_, dtype=jnp.int32)
 
-    Tp = T_ + pad_T
+    # Ensure arrays are in (B, H, L, D) layout for internal processing
+    def _to_bhtd(x: NamedArray, d_axis_name: str) -> jnp.ndarray:
+        target_layout = (Batch.name, Heads.name, Pos.name, d_axis_name)
+        have = tuple(ax.name for ax in x.axes)
+        if have == target_layout:
+            return x.array
+        return hax.rearrange(x, target_layout).array
 
-    BK = _pick_bk_tile_for_decode(Dk.size)
-    BV0 = _pick_bv_tile_for_decode(Dv.size)  # initial picker (may be small)
-    K_pad = int(((K_ + BK - 1) // BK) * BK)
-    V_pad = int(((V_ + BV0 - 1) // BV0) * BV0)
+    def _to_bht(x: NamedArray) -> jnp.ndarray:
+        target_layout = (Batch.name, Heads.name, Pos.name)
+        have = tuple(ax.name for ax in x.axes)
+        if have == target_layout:
+            return x.array
+        return hax.rearrange(x, target_layout).array
 
-    def _pad_last_axis(arr, new_w):
-        cur = arr.shape[-1]
-        if cur == new_w:
-            return arr
-        pad = new_w - cur
-        ps = [(0, 0)] * arr.ndim
-        ps[-1] = (0, pad)
-        return jnp.pad(arr, tuple(ps))
+    # Promote to float32 and optionally L2-normalize
+    q32 = query.astype(jnp.float32)
+    k32 = key.astype(jnp.float32)
+    v32 = value.astype(jnp.float32)
+    g32 = g.astype(jnp.float32)
+    b32 = beta.astype(jnp.float32)
 
-    q_pad = _pad_last_axis(q_arr, K_pad)
-    k_pad = _pad_last_axis(k_arr, K_pad)
-    v_pad = _pad_last_axis(v_arr, V_pad)
+    if use_qk_l2norm_in_kernel:
+        q32 = _l2norm(q32, axis=Dk)
+        k32 = _l2norm(k32, axis=Dk)
+    q32 = q32 * (dk_**-0.5)
 
-    # initial_state → K_pad/V_pad (pre‑BV bump)
-    init_kpad = init_arr
-    if init_kpad.shape[-2] != K_pad or init_kpad.shape[-1] != V_pad:
-        pad_S_K = max(0, K_pad - init_kpad.shape[-2])
-        pad_S_V = max(0, V_pad - init_kpad.shape[-1])
-        init_kpad = jnp.pad(init_kpad, ((0, 0), (0, 0), (0, pad_S_K), (0, pad_S_V)))
+    # Convert to arrays in (B, H, L, D) layout
+    q_arr = _to_bhtd(q32, Dk.name)  # (B, H, L, dk)
+    k_arr = _to_bhtd(k32, Dk.name)  # (B, H, L, dk)
+    v_arr = _to_bhtd(v32, Dv.name)  # (B, H, L, dv)
+    g_arr = _to_bht(g32)  # (B, H, L)
+    b_arr = _to_bht(b32)  # (B, H, L)
 
-    g4_raw = g_arr[..., None]  # [B,H,Tp,1]
-    g4_cum = jnp.cumsum(g_arr, axis=2 if use_head_first else 1, dtype=jnp.float32)[..., None]
-    beta4 = beta_arr[..., None] if is_beta_headwise else _pad_last_axis(beta_arr, V_pad)
+    # Apply varlen masking: zero out positions beyond each sequence's length
+    if use_varlen:
+        lengths_bh = lengths.reshape(B_, H_)
+        t_idx = jnp.arange(L_, dtype=jnp.int32)[None, None, :]  # (1, 1, L)
+        valid_mask = (t_idx < lengths_bh[:, :, None]).astype(jnp.float32)  # (B, H, L)
+        q_arr = q_arr * valid_mask[..., None]
+        k_arr = k_arr * valid_mask[..., None]
+        v_arr = v_arr * valid_mask[..., None]
+        g_arr = g_arr * valid_mask  # g=0 beyond valid => α=1
+        b_arr = b_arr * valid_mask
 
-    # ---------- TPU 3‑D tiling choices ----------
-    BT = int(chunk_size)
-    assert BT % 8 == 0, "TPU requires BT divisible by 8."
-    BV = 128  # pick 128 so the last block dim satisfies the TPU (… , 8, 128) rule
+    # Pad sequence to multiple of chunk_size
+    C = chunk_size
+    pad = (C - (L_ % C)) % C
+    Lt = L_ + pad
+    Nc = Lt // C
 
-    if V_pad % BV != 0:
-        v_pad = _pad_last_axis(v_pad, ((V_pad + BV - 1) // BV) * BV)
-        if not is_beta_headwise:
-            beta4 = _pad_last_axis(beta4, v_pad.shape[-1])
-        V_pad = v_pad.shape[-1]
+    if pad > 0:
+        q_arr = jnp.pad(q_arr, ((0, 0), (0, 0), (0, pad), (0, 0)))
+        k_arr = jnp.pad(k_arr, ((0, 0), (0, 0), (0, pad), (0, 0)))
+        v_arr = jnp.pad(v_arr, ((0, 0), (0, 0), (0, pad), (0, 0)))
+        g_arr = jnp.pad(g_arr, ((0, 0), (0, 0), (0, pad)))
+        b_arr = jnp.pad(b_arr, ((0, 0), (0, 0), (0, pad)))
 
-    # **IMPORTANT**: re‑pad initial state to the *final* V_pad after BV bump
-    if init_kpad.shape[-1] != V_pad:
-        init_kpad = _pad_last_axis(init_kpad, V_pad)
+    # Reshape to chunks: (B, H, Nc, C, D)
+    q_c = q_arr.reshape(B_, H_, Nc, C, dk_)
+    k_c = k_arr.reshape(B_, H_, Nc, C, dk_)
+    v_c = v_arr.reshape(B_, H_, Nc, C, dv_)
+    g_c = g_arr.reshape(B_, H_, Nc, C)
+    b_c = b_arr.reshape(B_, H_, Nc, C)
 
-    NT = Tp // BT
-    NV = V_pad // BV
+    # Initial state
+    S0 = jnp.zeros((B_, H_, dk_, dv_), dtype=jnp.float32) if initial_state is None else initial_state.astype(
+        jnp.float32
+    )
 
-    # ----------------------------
-    # Precompute per-chunk incoming states S_in[ct]
-    # ----------------------------
-    def _take_bt(x: jnp.ndarray, start_i32: jnp.ndarray | int, BT: int, *, axis: int = 2) -> jnp.ndarray:
-        """Slice x[..., T, ...] at dynamic start with *static* length BT."""
-        start_i32 = jnp.asarray(start_i32, jnp.int32)
-        return lax.dynamic_slice_in_dim(x, start_i32, BT, axis=axis)
+    # Pre-compute constant masks
+    eyeC = jnp.eye(C, dtype=jnp.float32)
+    tril_mask_strict = jnp.tril(jnp.ones((C, C), dtype=jnp.float32), k=-1)  # strict lower
+    causal_mask = jnp.tril(jnp.ones((C, C), dtype=jnp.float32))  # lower triangular including diagonal
 
-    # Shape: [B,H,NT,K_pad,V_pad], dtype=float32
-    def _prefix_states_prepass_tiled(
-        k_pad: jnp.ndarray,  # [B, H, Tp, K_pad]
-        v_pad: jnp.ndarray,  # [B, H, Tp, V_pad]
-        g_raw: jnp.ndarray,  # [B, H, Tp]         (log-decay, α=exp(g))
-        beta_pad: jnp.ndarray,  # [B, H, Tp] or [B, H, Tp, V_pad]
-        init_kv: jnp.ndarray,  # [B, H, K_pad, V_pad]
-        *,
-        BT: int,  # chunk size
-        BV: int,  # V-tile size
-        use_qk_l2norm: bool,
-        is_beta_headwise: bool,
-    ) -> tuple[jnp.ndarray, jnp.ndarray]:
-        """
+    def _forward_subst_single(A_block):
+        """Forward substitution: T = (I - A)^{-1} for strictly lower triangular A.
+
+        Args:
+            A_block: (B, H, C, C) strictly lower triangular matrix
+
         Returns:
-        S_in_all: [B, H, NT, NV, K_pad, BV]   per-chunk, per-V-tile prefix states
-        S_T:      [B, H, K_pad, V_pad]        final state after the whole sequence
+            T: (B, H, C, C) lower triangular matrix with ones on diagonal
         """
-        B, H, Tp, K_pad = k_pad.shape
-        V_pad = v_pad.shape[-1]
-        NT = Tp // BT
-        NV = V_pad // BV
 
-        # Per-tile running state (NV, B, H, K, BV)
-        if init_kv is None:
-            S_tiles = jnp.zeros((NV, B, H, K_pad, BV), dtype=jnp.float32)
-        else:
-            S_tiles = jnp.stack(
-                [init_kv[..., vi * BV : (vi + 1) * BV].astype(jnp.float32) for vi in range(NV)],
-                axis=0,
-            )
+        def body_fn(i, T_acc):
+            # T[i,:] += sum_{j<i} A[i,j] * T[j,:]
+            A_row_i = lax.dynamic_slice_in_dim(A_block, i, 1, axis=-2)  # (B, H, 1, C)
+            A_row_i = jnp.squeeze(A_row_i, axis=-2)  # (B, H, C)
 
-        # Output buffer: per-chunk per-tile prefix states
-        S_in_all = jnp.zeros((B, H, NT, NV, K_pad, BV), dtype=jnp.float32)
+            # Mask to only include j < i
+            mask = (jnp.arange(C) < i).astype(jnp.float32)  # (C,)
+            A_row_masked = A_row_i * mask  # (B, H, C)
 
-        def normalize_k(x):  # (B,H,K)
-            if not use_qk_l2norm:
-                return x
-            n = jnp.sqrt(jnp.sum(x * x, axis=-1, keepdims=True) + 1e-6)
-            return x / jnp.where(n > 0.0, n, 1.0)
+            # Compute contribution: sum_j A[i,j] * T[j,:]
+            contrib = jnp.einsum("bhj,bhjk->bhk", A_row_masked, T_acc)  # (B, H, C)
 
-        for ci in range(NT):
-            t0 = ci * BT
-            t1 = t0 + BT
+            # Update row i of T
+            T_row_i = lax.dynamic_slice_in_dim(T_acc, i, 1, axis=-2)  # (B, H, 1, C)
+            T_row_i = jnp.squeeze(T_row_i, axis=-2)  # (B, H, C)
+            new_row = T_row_i + contrib  # (B, H, C)
 
-            # Save prefix (pre-chunk) state for every V tile
-            # S_tiles: (NV, B, H, K, BV) -> (B, H, NV, K, BV)
-            S_in_all = S_in_all.at[:, :, ci, :, :, :].set(jnp.moveaxis(S_tiles, 0, 2))
+            return lax.dynamic_update_slice_in_dim(T_acc, new_row[:, :, None, :], i, axis=-2)
 
-            # Advance S_tiles through the chunk [t0:t1)
-            for t in range(t0, t1):
-                alpha = jnp.exp(g_raw[:, :, t]).astype(jnp.float32)  # [B,H]
-                k_t = normalize_k(k_pad[:, :, t, :].astype(jnp.float32))  # [B,H,K]
-                if is_beta_headwise:
-                    beta_t_all = beta_pad[:, :, t].astype(jnp.float32)  # [B,H]
-                else:
-                    beta_t_all = beta_pad[:, :, t, :].astype(jnp.float32)  # [B,H,V_pad]
+        # Initialize T = I, broadcast to (B, H, C, C)
+        T_init = jnp.broadcast_to(eyeC, A_block.shape)
+        T_final = lax.fori_loop(1, C, body_fn, T_init)
+        return T_final
 
-                # Update each V-tile independently
-                for vi in range(NV):
-                    v_t = v_pad[:, :, t, vi * BV : (vi + 1) * BV].astype(jnp.float32)  # [B,H,BV]
-                    if is_beta_headwise:
-                        beta_t = beta_t_all[..., None]  # [B,H,1] -> broadcast
-                    else:
-                        beta_t = beta_t_all[:, :, vi * BV : (vi + 1) * BV]  # [B,H,BV]
+    def chunk_step_fused(S_prev, chunk_inputs):
+        """Process one chunk with fused A/T computation and cross-chunk state.
 
-                    S = S_tiles[vi]  # [B,H,K,BV]
-                    # kv = α * (k^T S): [B,H,BV]
-                    kv = alpha[..., None] * jnp.einsum("bhk,bhkv->bhv", k_t, S)
-                    # δ = (v - kv) * β
-                    delta = (v_t - kv) * beta_t  # [B,H,BV]
-                    # S ← α S + k ⊗ δ
-                    S = alpha[..., None, None] * S + jnp.einsum("bhk,bhv->bhkv", k_t, delta)  # [B,H,K,BV]
-                    S_tiles = S_tiles.at[vi].set(S)
+        This version computes A and T on-the-fly for each chunk, avoiding the need
+        to pre-allocate (B, H, Nc, C, C) tensors for all chunks.
 
-        # Assemble the final state across tiles
-        S_T = jnp.concatenate([S_tiles[vi, ...] for vi in range(NV)], axis=-1)  # [B,H,K_pad,V_pad]
+        Args:
+            S_prev: (B, H, dk, dv) - state from previous chunk
+            chunk_inputs: tuple of (q, k, v, g, beta) for this chunk
 
-        return S_in_all, S_T
+        Returns:
+            S_new: updated state
+            out: (B, H, C, dv) output for this chunk
+        """
+        q_i, k_i, v_i, g_i, b_i = chunk_inputs
+        # q_i: (B, H, C, dk)
+        # k_i: (B, H, C, dk)
+        # v_i: (B, H, C, dv)
+        # g_i: (B, H, C) - per-position log-decay
+        # b_i: (B, H, C) - per-position beta
 
-    # cumulative g per token -> raw g per step (if you don't already have it)
-    # here I assume you already keep g as "raw" per step; if you only have gcum, do jnp.diff with a pad at t=0
-    g_raw_bht = g_arr  # [B,H,Tp] already raw per-step in your code path
+        # === Step 1: Compute per-chunk quantities ===
+        v_beta = v_i * b_i[..., None]  # (B, H, C, dv) - β * V
+        k_beta = k_i * b_i[..., None]  # (B, H, C, dk) - β * K
 
-    S_in_all, S_T = _prefix_states_prepass_tiled(
-        k_pad=k_pad,  # [B,H,Tp,K_pad]
-        v_pad=v_pad,  # [B,H,Tp,V_pad]
-        g_raw=g_arr,  # [B,H,Tp]
-        beta_pad=beta_arr if not is_beta_headwise else beta_arr,
-        init_kv=init_kpad,  # [B,H,K_pad,V_pad]  ← now matches post‑BV V_pad
-        BT=BT,
-        BV=BV,
-        use_qk_l2norm=use_qk_l2norm_in_kernel,
-        is_beta_headwise=is_beta_headwise,
+        # Cumulative sum of g within this chunk
+        g_cum = jnp.cumsum(g_i, axis=-1)  # (B, H, C)
+
+        # === Step 2: Build strictly lower-triangular A matrix ===
+        # A[i,j] = -exp(g_cum[i] - g_cum[j]) * (k_beta[i] @ k[j]) for i > j
+
+        # K_beta @ K^T: (B, H, C, C)
+        KKT = jnp.einsum("bhid,bhjd->bhij", k_beta, k_i)  # (B, H, C, C)
+
+        # Relative decay: exp(g_cum[i] - g_cum[j])
+        g_i_exp = g_cum[..., :, None]  # (B, H, C, 1)
+        g_j_exp = g_cum[..., None, :]  # (B, H, 1, C)
+        diff_ij = g_i_exp - g_j_exp  # (B, H, C, C)
+        diff_ij_clamped = jnp.clip(diff_ij, -80.0, 80.0)
+        decay_ij = jnp.exp(diff_ij_clamped)  # (B, H, C, C)
+
+        # A = -decay * KKT, masked to strict lower triangle
+        A = -KKT * decay_ij * tril_mask_strict  # (B, H, C, C)
+
+        # === Step 3: Forward substitution to get T = (I - A)^{-1} ===
+        T = _forward_subst_single(A)  # (B, H, C, C)
+
+        # === Step 4: Compute pseudo-values and decayed key summaries ===
+        # v_pseudo = T @ (β * V)
+        v_pseudo = jnp.einsum("bhij,bhjd->bhid", T, v_beta)  # (B, H, C, dv)
+
+        # k_cumdecay = T @ (β * K * exp(g_cum))
+        g_cum_clamped = jnp.clip(g_cum, -80.0, 80.0)
+        exp_g_cum = jnp.exp(g_cum_clamped)[..., None]  # (B, H, C, 1)
+        k_scaled = k_beta * exp_g_cum  # (B, H, C, dk)
+        k_cumdecay = jnp.einsum("bhij,bhjd->bhid", T, k_scaled)  # (B, H, C, dk)
+
+        # === Step 5: Within-chunk decay-weighted attention ===
+        # decay[i,j] = exp(gcum[i] - gcum[j]) for i >= j
+        decay_attn = jnp.exp(diff_ij_clamped) * causal_mask  # (B, H, C, C)
+
+        # Q @ K^T with decay
+        attn_i = jnp.einsum("bhid,bhjd->bhij", q_i, k_i) * decay_attn  # (B, H, C, C)
+
+        # === Step 6: Cross-chunk contribution ===
+        # v_prime = k_cumdecay @ S_prev (what S_prev would contribute)
+        v_prime = jnp.einsum("bhid,bhdm->bhim", k_cumdecay, S_prev)  # (B, H, C, dv)
+
+        # Innovation: what's new in this chunk
+        v_new = v_pseudo - v_prime  # (B, H, C, dv)
+
+        # === Step 7: Compute output ===
+        # Inter-chunk: q * exp(gcum) @ S_prev
+        q_scaled = q_i * jnp.exp(g_cum_clamped)[..., None]  # (B, H, C, dk)
+        inter = jnp.einsum("bhid,bhdm->bhim", q_scaled, S_prev)  # (B, H, C, dv)
+
+        # Intra-chunk: attn @ v_new
+        intra = jnp.einsum("bhij,bhjm->bhim", attn_i, v_new)  # (B, H, C, dv)
+
+        out_i = inter + intra  # (B, H, C, dv)
+
+        # === Step 8: Update state ===
+        # S_new = S_prev * decay_tail + k^T @ v_new (with decay weights)
+        g_tail = g_cum[..., -1]  # (B, H) - cumulative decay at chunk end
+        g_tail_clamped = jnp.clip(g_tail, -80.0, 80.0)
+        decay_tail = jnp.exp(g_tail_clamped)[..., None, None]  # (B, H, 1, 1)
+
+        # Decay weights: exp(g_tail - g_cum) for each position
+        decay_diff = jnp.clip(g_tail[..., None] - g_cum, -80.0, 80.0)
+        decay_weights = jnp.exp(decay_diff)[..., None]  # (B, H, C, 1)
+
+        # State update: outer product of decayed keys and innovations
+        add = jnp.einsum("bhid,bhim->bhdm", k_i * decay_weights, v_new)  # (B, H, dk, dv)
+        S_new = S_prev * decay_tail + add
+
+        return S_new, out_i
+
+    # Make chunk inputs time-major for scan: (Nc, B, H, C, ...)
+    q_scan = jnp.moveaxis(q_c, 2, 0)  # (Nc, B, H, C, dk)
+    k_scan = jnp.moveaxis(k_c, 2, 0)  # (Nc, B, H, C, dk)
+    v_scan = jnp.moveaxis(v_c, 2, 0)  # (Nc, B, H, C, dv)
+    g_scan = jnp.moveaxis(g_c, 2, 0)  # (Nc, B, H, C)
+    b_scan = jnp.moveaxis(b_c, 2, 0)  # (Nc, B, H, C)
+
+    # Run scan over chunks with fused A/T computation
+    # Use jax.checkpoint to recompute intermediates during backward pass,
+    # trading ~2x compute for constant memory w.r.t. number of chunks
+    S_final, out_chunks = lax.scan(
+        jax.checkpoint(chunk_step_fused),
+        S0,
+        (q_scan, k_scan, v_scan, g_scan, b_scan),
+        length=Nc,
     )
 
-    # -------------- 3-D grid & specs --------------
-    NT = Tp // BT
-    NV = V_pad // BV
-    grid = (NH, NT, NV)
-    in_specs_tpu, out_specs_tpu = _in_specs_chunk_head_first_tpu(B_, H_, Tp, K_pad, V_pad, BT, BV, is_beta_headwise)
+    # Reshape output: (Nc, B, H, C, dv) -> (B, H, Nc*C, dv) -> (B, H, L, dv)
+    out_arr = jnp.moveaxis(out_chunks, 0, 2)  # (B, H, Nc, C, dv)
+    out_arr = out_arr.reshape(B_, H_, Lt, dv_)  # (B, H, Lt, dv)
+    out_arr = out_arr[:, :, :L_, :]  # Trim padding: (B, H, L, dv)
 
-    kernel_tpu = functools.partial(
-        _gdn_chunk_fwd_kernel_tpu_3d,
-        T=Tp,
-        K_pad=K_pad,
-        BT=BT,
-        BV=BV,
-        use_qk_l2norm=use_qk_l2norm_in_kernel,
-        is_beta_headwise=is_beta_headwise,
-        scale=Dk.size**-0.5,
-    )
+    # Convert back to NamedArray in (B, L, H, dv) layout
+    out_named = hax.named(out_arr, (Batch, Heads, Pos, Dv))
+    out_final = hax.rearrange(out_named, (Batch, Pos, Heads, Dv))
 
-    out_pad = pl.pallas_call(
-        kernel_tpu,
-        out_shape=(jax.ShapeDtypeStruct((NH, Tp, V_pad), value.dtype),),  # single output
-        grid=grid,
-        in_specs=in_specs_tpu,
-        out_specs=out_specs_tpu,
-        interpret=_should_interpret_pallas(),
-    )(
-        q_pad,
-        k_pad,
-        v_pad,
-        g4_raw,
-        beta4,
-        S_in_all,  # [B,H,NT,NV,K_pad,BV]
-    )[
-        0
-    ]  # unpack single‑output tuple
-
-    # Trim & wrap
-    out_trim = out_pad[:, :T_, : Dv.size]
-    out_bhTv = out_trim.reshape(B_, H_, T_, Dv.size)
-    out_named = hax.named(out_bhTv, (Batch, Heads, Pos, Dv))
-    out_final_named = hax.rearrange(out_named, (Batch, Pos, Heads, Dv))
-    final_ret = S_T[:, :, : Dk.size, : Dv.size] if output_final_state else None
-    return out_final_named, final_ret
-
-
-# =========================
-# Stage 2 — Rematerialized backward for TPU flash chunk
-# =========================
-
-
-def _make_flash_chunk_with_vjp(
-    *,
-    chunk_size: int,
-    use_qk_l2norm_in_kernel: bool,
-    head_first: bool,
-    offsets: Optional[jnp.ndarray],
-    lengths: Optional[jnp.ndarray],
-    use_varlen: bool,
-    output_final_state: bool,
-):
-    """Returns a function f(q,k,v,g,beta,S0) with a custom VJP.
-    Forward uses the TPU flash chunk kernel (Pallas); backward rematerializes
-    via the JAX reference chunk implementation to compute all grads.
-    """
-
-    @jax.custom_vjp
-    def _flash_chunk_call(
-        query: NamedArray,
-        key: NamedArray,
-        value: NamedArray,
-        g: NamedArray,
-        beta: NamedArray,
-        initial_state: Optional[jnp.ndarray],
-    ) -> Tuple[NamedArray, Optional[jnp.ndarray]]:
-        # Forward pass: call the existing flash path (Stage 1)
-        return _chunk_gated_delta_rule_flash(
-            query,
-            key,
-            value,
-            g,
-            beta,
-            chunk_size=chunk_size,
-            initial_state=initial_state,
-            output_final_state=output_final_state,
-            use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
-            head_first=head_first,
-            offsets=offsets,
-            use_varlen=use_varlen,
-            lengths=lengths,
-        )
-
-    def _fwd(
-        query: NamedArray,
-        key: NamedArray,
-        value: NamedArray,
-        g: NamedArray,
-        beta: NamedArray,
-        initial_state: Optional[jnp.ndarray],
-    ):
-        out_named, final_state = _chunk_gated_delta_rule_flash(
-            query,
-            key,
-            value,
-            g,
-            beta,
-            chunk_size=chunk_size,
-            initial_state=initial_state,
-            output_final_state=output_final_state,
-            use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
-            head_first=head_first,
-            offsets=offsets,
-            use_varlen=use_varlen,
-            lengths=lengths,
-        )
-        # Residuals: only primals (no large activations saved).
-        res = (query, key, value, g, beta, initial_state)
-        return (out_named, final_state), res
-
-    def _bwd(res, *cts):
-        """
-        Rematerialized backward:
-        grads := grad_{q,k,v,g,beta,S0} ( <out_ref, dOut> + <final_ref, dFinal> )
-        Accepts cotangents as:
-        - (d_out,)                           when only 'out' was used
-        - (d_out, d_final)                   when both were used
-        - ((d_out, d_final),)                when packed as a single tuple
-        """
-        qN, kN, vN, gN, bN, S0 = res
-
-        # ---- Unpack cotangents robustly ----
-        d_out_named = None
-        d_final_state = None
-
-        if len(cts) == 1:
-            only = cts[0]
-            if isinstance(only, tuple) or isinstance(only, list):
-                if len(only) == 2:
-                    d_out_named, d_final_state = only
-                elif len(only) == 1:
-                    d_out_named = only[0]
-                else:
-                    raise ValueError(f"Unexpected cotangent tuple length: {len(only)}")
-            else:
-                d_out_named = only
-        elif len(cts) == 2:
-            d_out_named, d_final_state = cts
-        else:
-            raise ValueError(f"custom_vjp bwd received unexpected #cotangents: {len(cts)}")
-
-        use_dht = bool(d_final_state is not None)
-
-        # ---- Build scalar loss via the reference forward and differentiate it ----
-        def _loss_fn(q_arr, k_arr, v_arr, g_arr, b_arr, S0_arr):
-            q_named = hax.named(q_arr, qN.axes)
-            k_named = hax.named(k_arr, kN.axes)
-            v_named = hax.named(v_arr, vN.axes)
-            g_named = hax.named(g_arr, gN.axes)
-            b_named = hax.named(b_arr, bN.axes)
-
-            # Always compute final_state in reference bwd; zero its cot if unused
-            out_ref, fin_ref = _chunk_gated_delta_rule_reference(
-                q_named,
-                k_named,
-                v_named,
-                g_named,
-                b_named,
-                chunk_size=chunk_size,
-                initial_state=S0_arr,
-                output_final_state=True,
-                use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
-            )
-
-            loss = jnp.sum(out_ref.array * d_out_named.array)
-            if use_dht:
-                loss = loss + jnp.sum(fin_ref * d_final_state)
-            return loss
-
-        # If S0 was None at fwd, substitute zeros here and return None grad later
-        if S0 is None:
-            B = qN.resolve_axis("batch").size
-            H = qN.resolve_axis("heads").size
-            K = qN.resolve_axis("k_head_dim").size
-            V = vN.resolve_axis("v_head_dim").size
-            S0_for_grad = jnp.zeros((B, H, K, V), dtype=vN.array.dtype)
-            need_S0_grad = False
-        else:
-            S0_for_grad = S0
-            need_S0_grad = True
-
-        gqs, gks, gvs, ggs, gbs, gS0 = jax.grad(_loss_fn, argnums=(0, 1, 2, 3, 4, 5))(
-            qN.array, kN.array, vN.array, gN.array, bN.array, S0_for_grad
-        )
-
-        # Wrap grads back into NamedArrays
-        dq = hax.named(gqs, qN.axes)
-        dk = hax.named(gks, kN.axes)
-        dv = hax.named(gvs, vN.axes)
-        dg = hax.named(ggs, gN.axes)
-        db = hax.named(gbs, bN.axes)
-        dS0 = gS0 if need_S0_grad else None
-
-        # Return exactly one grad per primal input: (q, k, v, g, beta, initial_state)
-        return (dq, dk, dv, dg, db, dS0)
-
-    _flash_chunk_call.defvjp(_fwd, _bwd)
-    return _flash_chunk_call
+    if output_final_state:
+        return out_final, S_final
+    else:
+        return out_final, None
 
 
 def chunk_gated_delta_rule(
@@ -2136,26 +1808,32 @@ def chunk_gated_delta_rule(
     use_varlen: bool = False,
     lengths: Optional[jnp.ndarray] = None,
 ) -> tuple[NamedArray, Optional[jnp.ndarray]]:
-    """Top-level API: picks flash path and registers custom VJP on TPU."""
+    """Top-level API for chunkwise gated delta rule.
+
+    Picks flash path on TPU, otherwise uses reference implementation.
+    The flash path uses the WY/UT decomposition for efficient matmul-based computation.
+
+    Args:
+        query: [batch, position, heads, k_head_dim] queries
+        key: [batch, position, heads, k_head_dim] keys
+        value: [batch, position, heads, v_head_dim] values
+        g: [batch, position, heads] log-decay (α = exp(g))
+        beta: [batch, position, heads] learning rate gate (β ∈ (0,1))
+        chunk_size: size of each chunk (default 64)
+        initial_state: optional initial state (B, H, dk, dv)
+        output_final_state: whether to return final state
+        use_qk_l2norm_in_kernel: whether to L2-normalize Q,K in kernel
+        use_flash: whether to use flash/optimized path
+        head_first: if True, inputs are (B, H, L, D) instead of (B, L, H, D)
+        offsets: variable-length offsets (B*H,) or (B*H+1,)
+        use_varlen: whether to use variable-length processing
+        lengths: variable-length sequence lengths (B, H) or (B*H,)
+
+    Returns:
+        output: [batch, position, heads, v_head_dim]
+        final_state: optional (B, H, dk, dv) if output_final_state=True
+    """
     if use_flash:
-        is_tpu = jax.devices()[0].platform == "tpu"
-        # Force HEAD_FIRST on TPU to satisfy block-shape rules (Stage 1 behavior).
-        use_hf = True if is_tpu else head_first
-
-        # Use rematerialized backward on TPU; on non-TPU keep flash forward without custom VJP.
-        if is_tpu:
-            flash_with_vjp = _make_flash_chunk_with_vjp(
-                chunk_size=chunk_size,
-                use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
-                head_first=use_hf,
-                offsets=offsets,
-                lengths=lengths,
-                use_varlen=use_varlen,
-                output_final_state=output_final_state,
-            )
-            return flash_with_vjp(query, key, value, g, beta, initial_state)
-
-        # Non-TPU: existing flash path (no custom VJP needed here).
         return _chunk_gated_delta_rule_flash(
             query,
             key,
@@ -2166,10 +1844,10 @@ def chunk_gated_delta_rule(
             initial_state=initial_state,
             output_final_state=output_final_state,
             use_qk_l2norm_in_kernel=use_qk_l2norm_in_kernel,
-            head_first=use_hf,
-            offsets=offsets,
+            head_first=head_first,
             use_varlen=use_varlen,
             lengths=lengths,
+            offsets=offsets,
         )
 
     # Reference fallback
