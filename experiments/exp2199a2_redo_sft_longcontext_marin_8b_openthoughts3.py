@@ -87,7 +87,7 @@ NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 longcontext_marin8b_checkpoint = phase3_final_checkpoint.nonblocking()
 
 mixture_sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v5p-128"),
+    resources=ResourceConfig.with_tpu("v4-512"),
     tokenizer=marin_tokenizer,
     initialize_from_hf=longcontext_marin8b_checkpoint,
     train_batch_size=TRAIN_BATCH_SIZE,

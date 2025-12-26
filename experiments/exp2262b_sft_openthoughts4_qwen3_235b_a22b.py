@@ -115,6 +115,7 @@ exp2262b_sft_qwen2pt5_7b_instruct_openthoughts3 = default_sft(
     tags=["qwen", "openthoughts3", "sft"],
 )
 
+exp2262b_pt1_checkpoint = exp2262b_sft_qwen2pt5_7b_instruct_openthoughts3.cd(f"hf/step-{NUM_TRAIN_STEPS - 1}").nonblocking()
 
 if __name__ == "__main__":
     executor_main(steps=[exp2262b_sft_qwen2pt5_7b_instruct_openthoughts3])
