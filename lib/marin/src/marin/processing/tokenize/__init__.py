@@ -15,6 +15,7 @@
 from .data_configs import (
     TokenizerStep,
     add_validation_sets_to_mixture,
+    get_vocab_size_for_tokenizer,
     lm_data_config,
     lm_mixture_data_config,
     mixture_for_evaluation,
