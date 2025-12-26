@@ -25,9 +25,8 @@ uv run zephyr --backend=ray --max-parallelism=1000 --memory=1GB --num-cpus=1 --c
 import logging
 from dataclasses import dataclass, field
 
-import draccus
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
-from zephyr import Dataset, flow_backend, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 logger = logging.getLogger("ray")
 
@@ -58,8 +57,11 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
         logger.debug(f"Converting {data_id} {url}")
         md = convert_page(html, url, extract_method, config)["content"]
         error = None
+    except (ModuleNotFoundError, ImportError):
+        # Configuration errors should fail the job, not be caught
+        raise
     except Exception as e:
-        # Failed to convert
+        # Failed to convert - content-level errors are logged and recorded
         logger.exception(f"{e} in processing {data_id = }, {url = }")
         md = None
         error = e
@@ -82,20 +84,16 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
 class SimpleHtmlToMdConfig:
     input_path: str  # Input directory containing jsonl.gz files
     output_path: str  # Output directory containing md files
-    extract_method: str = "readability"
-    # Extract method to use. Defaults to readability. Other options are traflatura and resiliparse.
-    config: ExtractionConfig = field(default_factory=HtmlToMarkdownConfig.default_config())
-    # Configuration for the extraction method.
+    extract_method: str = "resiliparse"
+    config: ExtractionConfig = field(default_factory=HtmlToMarkdownConfig)
 
 
-@draccus.wrap()
 def html_to_md(cfg: SimpleHtmlToMdConfig):
     """Transform HTML content to markdown using the specified extraction method."""
-    backend = flow_backend()
     pipeline = (
         Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
         .map(lambda data: _html_to_md(data, cfg.extract_method, cfg.config))
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    list(backend.execute(pipeline))
+    list(Backend.execute(pipeline))

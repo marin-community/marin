@@ -14,7 +14,7 @@
 
 """
 The `Executor` framework provides a way to specify a DAG of `ExecutorStep`s that
-are executed in a topological order using Ray.  Beyond that:
+are executed in a topological order using Fray.  Beyond that:
 
 1. The key distinguishing feature of the framework is allowing the user to
    flexibly control what steps are "new".
@@ -87,6 +87,7 @@ might be:
   finish executing (or even check if it is executing or failed) before running.
 """
 
+import copy
 import dataclasses
 import hashlib
 import inspect
@@ -96,51 +97,136 @@ import os
 import re
 import subprocess
 import time
-import traceback
 import urllib.parse
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
-from functools import cached_property
+from threading import Event, Thread
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import draccus
 import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
-import ray
-import ray.remote_function
-from ray.util import state  # noqa
+from fray import (
+    Cluster,
+    Entrypoint,
+    EnvironmentConfig,
+    JobId,
+    JobRequest,
+    JobStatus,
+    ResourceConfig,
+    current_cluster,
+)
 
 from marin.execution.executor_step_status import (
-    STATUS_CANCELLED,
+    HEARTBEAT_INTERVAL,
     STATUS_DEP_FAILED,
     STATUS_FAILED,
     STATUS_RUNNING,
     STATUS_SUCCESS,
-    STATUS_UNKNOWN,
-    STATUS_WAITING,
-    append_status,
-    get_latest_status_from_gcs,
-    get_status_path,
+    StatusFile,
 )
-from marin.execution.status_actor import PreviousTaskFailedError, StatusActor
-from marin.run.ray_deps import build_runtime_env_for_packages
 from marin.utilities.json_encoder import CustomJsonEncoder
-from marin.utilities.ray_utils import is_local_ray_cluster, schedule_on_head_node_strategy
 
 logger = logging.getLogger("ray")
 
 ConfigT = TypeVar("ConfigT", covariant=True, bound=dataclass)
 T_co = TypeVar("T_co", covariant=True)
 
-ExecutorFunction = Callable | ray.remote_function.RemoteFunction | None
+ExecutorFunction = Callable | None
+
+
+class StepRunner:
+    """Manages execution of a single step.
+
+    To prevent duplicate execution, Executor uses a per-step lease directory to track
+    the owner of a given step. Leases must be continually refreshed to prevent other
+    executors from running the same step.
+    """
+
+    def __init__(self, cluster: Cluster, status_file: StatusFile):
+        self.cluster = cluster
+        self._status_file = status_file
+        self._job_id: JobId | None = None
+        self._heartbeat_thread: Thread | None = None
+        self._stop_event = Event()
+
+    @property
+    def job_id(self) -> JobId | None:
+        return self._job_id
+
+    def launch(self, job_request: JobRequest) -> None:
+        """Launch job and start heartbeat thread."""
+        self._status_file.write_status(STATUS_RUNNING)
+        self._job_id = self.cluster.launch(job_request)
+        self._start_heartbeat()
+
+    def wait(self) -> None:
+        """Wait for job to complete, stop heartbeat, write final status."""
+        try:
+            result = self.cluster.wait(self._job_id)
+            if result.status == JobStatus.FAILED:
+                self._status_file.write_status(STATUS_FAILED)
+                raise RuntimeError(f"Job {self._job_id} failed: {result.error_message}")
+            self._status_file.write_status(STATUS_SUCCESS)
+        except Exception:
+            if self._status_file.status != STATUS_FAILED:
+                self._status_file.write_status(STATUS_FAILED)
+            raise
+        finally:
+            self._stop_heartbeat()
+            self._status_file.release_lock()
+
+    def poll(self) -> bool:
+        """Return True if job is finished."""
+        if self._job_id is None:
+            return True
+        return JobStatus.finished(self.cluster.poll(self._job_id).status)
+
+    def _start_heartbeat(self) -> None:
+        """Start background thread that periodically refreshes the lease."""
+
+        def heartbeat_loop():
+            while not self._stop_event.wait(HEARTBEAT_INTERVAL):
+                self._status_file.refresh_lock()
+
+        self._heartbeat_thread = Thread(target=heartbeat_loop, daemon=True)
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self) -> None:
+        """Stop the heartbeat thread."""
+        self._stop_event.set()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join(timeout=5)
+
+
+def worker_id() -> str:
+    import threading
+
+    return f"{os.uname()[1]}-{threading.get_ident()}"
 
 
 def asdict_without_description(obj: dataclass) -> dict[str, Any]:
-    """Return the `asdict` of an object, but remove the `description` field, because it doesn't affect the semantics."""
-    d = asdict(obj)
+    """Return the dict form of a dataclass, but remove the `description` field."""
+
+    def recurse(value: Any):
+        if is_dataclass(value):
+            return {f.name: recurse(getattr(value, f.name)) for f in fields(value)}
+        if isinstance(value, tuple) and hasattr(value, "_fields"):
+            return type(value)(*(recurse(v) for v in value))
+        if isinstance(value, (list, tuple)):
+            return type(value)(recurse(v) for v in value)
+        if isinstance(value, dict):
+            # RuntimeEnv (and other dict subclasses) require keyword-only init,
+            # so we normalize to a plain dict to avoid construction errors.
+            return {recurse(k): recurse(v) for k, v in value.items()}
+        return copy.deepcopy(value)
+
+    d = recurse(obj)
+    assert isinstance(d, dict)
     d.pop("description", None)
+    assert isinstance(d, dict)
     return d
 
 
@@ -150,7 +236,7 @@ class ExecutorStep(Generic[ConfigT]):
     An `ExecutorStep` represents a single step of a larger pipeline (e.g.,
     transforming HTML to text).  It is specified by:
      - a name (str), which is used to determine the `output_path`.
-     - a function `fn` (Ray remote), and
+     - a function `fn` (Callable), and
      - a configuration `config` which gets passed into `fn`.
      - a pip dependencies list (Optional[list[str]]) which are the pip dependencies required for the step.
      These can be keys of project.optional-dependencies in the project's pyproject.toml file or any other pip package.
@@ -386,7 +472,7 @@ class ExecutorInfo:
     """Contains information about an execution."""
 
     # Metadata related to the launch
-    ray_job_id: str
+    worker_id: str
     git_commit: str | None
     caller_path: str
     created_date: str
@@ -552,6 +638,7 @@ class Executor:
         executor_info_base_path: str,
         description: str | None = None,
     ):
+        self.cluster = current_cluster()
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description
@@ -566,22 +653,12 @@ class Executor:
         self.version_str_to_step: dict[str, ExecutorStep] = {}
         self.output_paths: dict[ExecutorStep, str] = {}
         self.steps: list[ExecutorStep] = []
-        self.refs: dict[ExecutorStep, ray.ObjectRef] = {}
+        self.step_runners: dict[ExecutorStep, StepRunner] = {}
         self.step_infos: list[ExecutorStepInfo] = []
         self.executor_info: ExecutorInfo | None = None
-        if not is_local_ray_cluster():
-            strategy = schedule_on_head_node_strategy()
-        else:
-            strategy = None
-
-        self.status_actor: StatusActor = StatusActor.options(
-            name="status_actor",
-            get_if_exists=True,
-            lifetime="detached",
-            # This is to ensure that the status actor is only schduled on the headnode
-            scheduling_strategy=strategy,
-        ).remote()
-        # TODO: Add a design docstring of how status_actor works
+        # Populated during dry runs to summarize which steps would be executed.
+        # Tuple is (step_name, action, reason, output_path)
+        self._dry_run_plan: list[tuple[str, str, str, str]] = []
 
     def run(
         self,
@@ -596,7 +673,8 @@ class Executor:
 
         Args:
             steps: The steps to run.
-            dry_run: If True, only print out what needs to be done.
+            dry_run: If True, only print out what needs to be done. Reads existing
+                statuses to report which steps would actually be executed.
             run_only: If not None, only run the steps in the list and their dependencies. Matches steps' names as regex
             force_run_failed: If True, run steps even if they have already been run (including if they failed)
         """
@@ -624,10 +702,16 @@ class Executor:
         self.write_infos()
 
         logger.info(f"### Launching {len(steps_to_run)} steps ###")
+        if dry_run:
+            self._dry_run_plan = []
         self._run_steps(steps_to_run, dry_run=dry_run, force_run_failed=force_run_failed)
 
+        if dry_run:
+            self._log_dry_run_summary()
+
         logger.info("### Waiting for all steps to finish ###")
-        ray.get(list(self.refs.values()))
+        for runner in self.step_runners.values():
+            runner.wait()
 
     def _run_steps(
         self,
@@ -645,33 +729,36 @@ class Executor:
                 dependents[dep].append(step)
 
         ready = [step for step, deps in remaining_deps.items() if not deps]
-        running: dict[ExecutorStep, tuple[ray.ObjectRef, bool]] = {}
+        running: dict[ExecutorStep, StepRunner | None] = {}
 
         while ready or running:
             while ready:
                 step = ready.pop()
-                ref, ran = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
-                self.refs[step] = ref
-                running[step] = (ref, ran)
+                runner = self._launch_step(step, dry_run=dry_run, force_run_failed=force_run_failed)
+                if runner is not None:
+                    self.step_runners[step] = runner
+                running[step] = runner
 
             if not running:
                 break
 
-            done_refs = self._filter_unique_waitables(running)
-            for ref in done_refs:
-                finished_step = next(step for step, r in running.items() if r[0] == ref)
-                status_path = get_status_path(self.output_paths[finished_step])
-                ran = running[finished_step][1]
-                try:
-                    logger.info("Waiting for %s to finish for step %s", ref, finished_step.name)
-                    ray.get(ref)
-                except Exception:
-                    message = traceback.format_exc()
-                    append_status(status_path, STATUS_FAILED, message=message)
-                    raise
-                else:
-                    if ran:
-                        append_status(status_path, STATUS_SUCCESS)
+            finished_steps = []
+            for step, runner in running.items():
+                if runner is None:
+                    # Dry run or already completed - immediately finished
+                    finished_steps.append(step)
+                elif runner.poll():
+                    finished_steps.append(step)
+
+            if not finished_steps:
+                time.sleep(1)
+                continue
+
+            for finished_step in finished_steps:
+                runner = running[finished_step]
+                if runner is not None:
+                    logger.info("Waiting for %s to finish for step %s", runner.job_id, finished_step.name)
+                    runner.wait()
 
                 running.pop(finished_step)
                 for child in dependents.get(finished_step, []):
@@ -679,18 +766,7 @@ class Executor:
                     if not remaining_deps[child]:
                         ready.append(child)
 
-    def _filter_unique_waitables(self, running):
-        # Ray now requires the waitables be unique, so we filter them out.
-        unique_refs = set()
-        out = []
-        for ref, _ in running.values():
-            if ref not in unique_refs:
-                unique_refs.add(ref)
-                out.append(ref)
-        done_refs, _ = ray.wait(out, num_returns=1)
-        return done_refs
-
-    def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> tuple[ray.ObjectRef, bool]:
+    def _launch_step(self, step: ExecutorStep, *, dry_run: bool, force_run_failed: bool) -> StepRunner | None:
         config = self.configs[step]
         config_version = self.versions[step]["config"]
         output_path = self.output_paths[step]
@@ -701,50 +777,98 @@ class Executor:
         for i, dep in enumerate(self.dependencies[step]):
             logger.info("  %s = %s", dependency_index_str(i), self.output_paths[dep])
 
-        if not dry_run:
-            step_name = f"{step.name}: {get_fn_name(step.fn)}"
-
-            ray_task_id = ray.get_runtime_context().get_task_id()
-            should_execute = should_run(output_path, step_name, self.status_actor, ray_task_id, force_run_failed)
-            status_path = get_status_path(output_path)
-            if not should_execute:
-                append_status(
-                    status_path,
-                    STATUS_SUCCESS,
-                    ray_task_id=ray_task_id,
-                    message="Step was already successful",
-                )
-                return self._dry_run_result, False
-
-            append_status(status_path, STATUS_RUNNING, ray_task_id=ray_task_id)
-
-            # Skip runtime_env for local clusters since packages are already available
-            if is_local_ray_cluster():
-                runtime_env = {"env_vars": {"MARIN_PREFIX": self.prefix}}
+        if dry_run:
+            action, reason = self._plan_dry_run(step, force_run_failed=force_run_failed)
+            self._record_dry_run(step, action, reason, output_path)
+            if action == "run":
+                logger.info("[DRY RUN] Would run %s -> %s: %s", step.name, output_path, reason)
+            elif action == "wait":
+                logger.info("[DRY RUN] %s currently running elsewhere: %s", step.name, reason)
             else:
-                runtime_env = build_runtime_env_for_packages(extra=step.pip_dependency_groups)
-                # Inject the marin prefix into the runtime environment for each step.
-                runtime_env["env_vars"] = runtime_env.get("env_vars", {}) | {"MARIN_PREFIX": self.prefix}
+                logger.info("[DRY RUN] Skip %s: %s", step.name, reason)
+            return None
 
-            # uv doesn't reuse dependencies and ends up installing CUDA-enabled
-            # torch, which is huge and causes OOMs, so disable it for now.
-            # if os.system("which uv >/dev/null 2>&1") == 0:
-            #     runtime_env["py_executable"] = "uv run --active"
+        step_name = f"{step.name}: {get_fn_name(step.fn)}"
+        status_file = StatusFile(output_path, worker_id())
 
-            if isinstance(step.fn, ray.remote_function.RemoteFunction):
-                ref = step.fn.options(
-                    name=f"{get_fn_name(step.fn, short=True)}:{step.name}", runtime_env=runtime_env
-                ).remote(config)
-            else:
-                remote_fn = ray.remote(step.fn)
-                ref = remote_fn.options(
-                    name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
-                    runtime_env=runtime_env,
-                ).remote(config)
+        if not should_run(status_file, step_name, force_run_failed):
+            return None
 
-            return ref, True
+        # need this hack for now to make ray remote functions work, as they aren't directly callable.
+        import ray
 
-        return self._dry_run_result, False
+        step_fn = step.fn
+        if isinstance(step.fn, ray.remote_function.RemoteFunction):
+
+            def _call_remote(*args, **kw):
+                return ray.get(step.fn.remote(*args, **kw))
+
+            step_fn = _call_remote
+
+        # always run driver functions on a non-preemptible node
+        non_preemptible_cpu = ResourceConfig.with_cpu(preemptible=False)
+        fray_job = JobRequest(
+            name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
+            entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
+            resources=non_preemptible_cpu,
+            environment=EnvironmentConfig.create(extras=step.pip_dependency_groups or []),
+        )
+
+        runner = StepRunner(self.cluster, status_file)
+        runner.launch(fray_job)
+        return runner
+
+    def _plan_dry_run(self, step: ExecutorStep, *, force_run_failed: bool) -> tuple[str, str]:
+        """Return a dry-run action and reason without acquiring locks or writing."""
+        status_file = StatusFile(self.output_paths[step], worker_id="dry-run")
+        status = status_file.status
+
+        if status == STATUS_SUCCESS:
+            return ("skip", "already succeeded")
+
+        if status in [STATUS_FAILED, STATUS_DEP_FAILED]:
+            if force_run_failed:
+                return ("run", f"previous status {status}; would rerun because force_run_failed=True")
+            raise PreviousTaskFailedError(
+                f"Step {step.name} failed previously with status {status}. "
+                "Rerun with force_run_failed=True to execute again."
+            )
+
+        if status == STATUS_RUNNING:
+            if status_file.has_active_lock():
+                return ("wait", "currently running with an active lock")
+            return ("run", "RUNNING with no active lock; would take over execution")
+
+        return ("run", "no status recorded")
+
+    def _record_dry_run(self, step: ExecutorStep, action: str, reason: str, output_path: str) -> None:
+        """Track dry-run decisions for summary output."""
+        self._dry_run_plan.append((step.name, action, reason, output_path))
+
+    def _log_dry_run_summary(self) -> None:
+        """Log a concise summary of dry-run decisions."""
+        if not self._dry_run_plan:
+            logger.info("### Dry run summary: no steps inspected ###")
+            return
+
+        to_run = [(name, path) for name, action, _, path in self._dry_run_plan if action == "run"]
+        waiting = [name for name, action, _, _ in self._dry_run_plan if action == "wait"]
+        skipped = [name for name, action, _, _ in self._dry_run_plan if action == "skip"]
+
+        logger.info("### Dry run summary ###")
+        if skipped:
+            formatted = "\n".join(f"- {name}" for name in skipped)
+            logger.info("Already succeeded:\n%s", formatted)
+
+        if to_run:
+            formatted = "\n".join(f"- {name} -> {path}" for name, path in to_run)
+            logger.info("Would run %d step(s):\n%s", len(to_run), formatted)
+        else:
+            logger.info("No steps need to be launched.")
+
+        if waiting:
+            formatted = "\n".join(f"- {name}" for name in waiting)
+            logger.info("Currently running (not relaunched):\n%s", formatted)
 
     def _compute_transitive_deps(self, steps: list[ExecutorStep], run_steps: list[str]) -> list[ExecutorStep]:
         """
@@ -786,7 +910,8 @@ class Executor:
             info = self.step_infos[self.steps.index(step)]
 
             # only run if the step hasn't already been run
-            if get_status(info.output_path, None, {}) not in [STATUS_SUCCESS]:
+            status_file = StatusFile(info.output_path, worker_id="check")
+            if status_file.status != STATUS_SUCCESS:
                 for dep in self.dependencies[step]:
                     dfs(dep)
                 to_run.append(step)
@@ -904,7 +1029,7 @@ class Executor:
             caller_path=path,
             created_date=datetime.now().isoformat(),
             user=get_user(),
-            ray_job_id=ray.get_runtime_context().get_job_id(),
+            worker_id=worker_id(),
             prefix=self.prefix,
             description=self.description,
             steps=self.step_infos,
@@ -958,139 +1083,68 @@ class Executor:
         with fsspec.open(self.executor_info_path, "w") as f:
             print(json.dumps(executor_info_dict, indent=2, cls=CustomJsonEncoder), file=f)
 
-    # caching saves ~10% off some tests
-    @cached_property
-    def _dry_run_result(self):
-        return ray.put(None)
+
+class PreviousTaskFailedError(Exception):
+    """Raised when a step failed previously and force_run_failed is False."""
+
+    pass
 
 
-def _get_ray_status(current_owner_task_id: str | None) -> str | None:
-    """Get the status of a Ray task."""
+def should_run(status_file: StatusFile, step_name: str, force_run_failed: bool = False) -> bool:
+    """Check if the step should run based on lease-based distributed locking.
 
-    current_owner_ray_status = None
-    if current_owner_task_id is None:
-        return current_owner_ray_status
-
-    try:
-        current_owner = ray.util.state.get_task(current_owner_task_id)
-        if type(current_owner) is list:  # Due to retries in ray, task_state can be a list of states
-            current_owner = current_owner[-1]
-    except ray.util.state.exception.RayStateApiException:
-        current_owner = None
-
-    if current_owner is None:  # We need to retry. Ray still does not have the status of the task
-        current_owner_ray_status = STATUS_UNKNOWN
-    elif current_owner.state == "FINISHED":
-        current_owner_ray_status = STATUS_SUCCESS
-    elif current_owner.state == "FAILED":
-        current_owner_ray_status = STATUS_FAILED
-    else:  # We give status as Running to task that are even waiting for dependencies
-        current_owner_ray_status = STATUS_RUNNING
-
-    return current_owner_ray_status
-
-
-def get_status(output_path: str, current_owner_task_id: str | None, states: dict) -> str | None:
-    """Get the status of an output Path. This retruns the status of the output path
-    there is no status anywhere (i.e. brand-new step) -> return None
-    a task is currently running a step -> return WAITING
-    no task is currently running it, but there is a status on disk -> return disk status
+    Uses lease files for distributed locking and status file for final state.
     """
-
-    current_owner_ray_status = _get_ray_status(current_owner_task_id)
-
-    num_unknown = states.get("num_unknown", 0)  # Number of times the status was unknown
-    # We check how many times has times ray has returned status Unknown in a row. If it returns more than 20 times,
-    # We assume ray has lost that task and we use GCP status instead.
-    if current_owner_ray_status == STATUS_UNKNOWN:
-        num_unknown += 1
-        states["num_unknown"] = num_unknown
-        if num_unknown > 20:
-            current_owner_ray_status = None
-            states["num_unknown"] = 0
-    else:
-        states["num_unknown"] = 0  # Reset the counter
-
-    # Immediately return if the ray status is unknown or running, we don't need to check GCS
-    if current_owner_ray_status in [STATUS_UNKNOWN, STATUS_RUNNING]:
-        return current_owner_ray_status
-
-    # If the ray status is terminal [Failed, Success], we check the status on GCS and trust it
-
-    current_owner_gcs_status = get_latest_status_from_gcs(output_path)
-
-    if current_owner_gcs_status in [STATUS_RUNNING, STATUS_WAITING]:
-        logger.info(
-            f"Status of {output_path = } is {current_owner_gcs_status} as per GCP. "
-            "But as per Ray, the task has terminated, it's likely that this task was cancelled previously"
-        )
-        current_owner_gcs_status = STATUS_CANCELLED
-
-    return current_owner_gcs_status
-
-
-def should_run(
-    output_path: str, step_name: str, status_actor: StatusActor, ray_task_id: str, force_run_failed: bool = False
-):
-    """Check if the step should run or not based on the status of the step."""
-    """Logic for should run:
-    1. Check which task is currently the owner of this step (current_owner_task_id).
-    2. If ray_status(current_owner_task_id) is Running , we wait.
-    3. if ray_status(current_owner_task_id) is Terminated (Failed, Successful), we trust the status on GCP
-    4. A special case where ray_status(current_owner_task_id) is Terminated, but GCP status is Running, We return
-    CANCELLED"""
-
+    worker_id = status_file.worker_id
     log_once = True
-    get_status_states = {}  # States used by get_status, since get_status is stateless we keep them here
-    while True:
-        current_owner_task_id = ray.get(status_actor.get_task_id_with_lock.remote(output_path=output_path))
 
-        # get_status also updates get_status_states via internal mutation
-        status = get_status(output_path, current_owner_task_id, get_status_states)
+    while True:
+        status = status_file.status
 
         if log_once:
-            logger.info(f"Status {step_name} : {status}.")
+            logger.info(f"[{worker_id}] Status {step_name}: {status}")
             log_once = False
 
-        if status in [STATUS_RUNNING, STATUS_WAITING, STATUS_UNKNOWN]:
+        if status == STATUS_SUCCESS:
+            logger.info(f"[{worker_id}] Step {step_name} has already succeeded.")
+            return False
+
+        if status in [STATUS_FAILED, STATUS_DEP_FAILED]:
+            if force_run_failed:
+                logger.info(f"[{worker_id}] Force running {step_name}, previous status: {status}")
+                # Fall through to acquire lock
+            else:
+                raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
+        elif status == STATUS_RUNNING and status_file.has_active_lock():
+            # Another worker is actively running with current lease
+            logger.debug(f"[{worker_id}] Step {step_name} has active lock, waiting...")
             time.sleep(5)
             continue
+        elif status == STATUS_RUNNING:
+            logger.info(f"[{worker_id}] Step {step_name} has no active lock, taking over.")
 
-        # If the current owner is finished or is None, try to become the owner.
-        # If we can't become the owner, then loop again
-        if ray.get(status_actor.get_lock_by_replacing_task_id.remote(output_path, ray_task_id, current_owner_task_id)):
-            break
-
-    if status is None:
-        return True
-    elif status == STATUS_CANCELLED:
-        logger.info(f"Step {step_name} was cancelled previously. Retrying.")
-        return True
-    elif status in [STATUS_FAILED, STATUS_DEP_FAILED]:
-        if force_run_failed:
-            logger.info(f"Force running {step_name}, previous status: {status}")
+        logger.info(f"[{worker_id}] Attempting to acquire lock for {step_name}")
+        if status_file.try_acquire_lock():
+            status_file.write_status(STATUS_RUNNING)
+            logger.info(f"[{worker_id}] Acquired lock for {step_name}")
             return True
-        else:
-            raise PreviousTaskFailedError(f"Step {step_name} failed previously. Status: {status}")
-    else:
-        logger.info(f"Step {step_name} has already succeeded. Status: {status}")
-        return False
+
+        logger.info(f"[{worker_id}] Lost lock race for {step_name}, retrying...")
+        time.sleep(1)
 
 
-def get_fn_name(fn: Callable | ray.remote_function.RemoteFunction, short: bool = False):
+def get_fn_name(fn: ExecutorFunction, short: bool = False):
     """Just for debugging: get the name of the function."""
     if fn is None:
         return "None"
+    import ray
+
     if isinstance(fn, ray.remote_function.RemoteFunction):
-        if short:
-            return f"{fn._function.__name__}"
-        else:
-            return f"{fn._function.__module__}.{fn._function.__qualname__}"
+        return fn._function.__name__
+    if short:
+        return f"{fn.__name__}"
     else:
-        if short:
-            return f"{fn.__name__}"
-        else:
-            return f"{fn.__module__}.{fn.__qualname__}"
+        return str(fn)
 
 
 def get_git_commit() -> str | None:
@@ -1127,26 +1181,10 @@ class ExecutorMainConfig:
     """Run these steps (matched by regex.search) and their dependencies only. If None, run all steps."""
 
 
-def _setup_logging():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-
 @draccus.wrap()
 def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], description: str | None = None):
     """Main entry point for experiments (to standardize)"""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-    time_in = time.time()
-
-    ray.init(
-        namespace="marin",
-        ignore_reinit_error=True,
-        resources={"head_node": 1} if is_local_ray_cluster() else None,
-        runtime_env={"worker_process_setup_hook": _setup_logging},
-    )  # We need to init ray here to make sure we have the correct namespace for actors
-    # (status_actor in particular)
-    time_out = time.time()
-    logger.info(f"Ray init took {time_out - time_in:.2f}s")
     time_in = time.time()
 
     prefix = config.prefix

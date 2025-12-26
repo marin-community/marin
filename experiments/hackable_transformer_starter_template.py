@@ -24,43 +24,53 @@ How to run:
      https://marin.readthedocs.io/en/latest/tutorials/submitting-speedrun/
   2) From repo root:
        python marin/run/ray_run.py -- python -m __SUBMISSION_IMPORT_PATH__ --force_run_failed true
-  3) Optional: SR_USE_GPU=1 to use GPU resource presets.
+  3) Optional: SR_USE_TPU=1 to use TPU resource presets (default is GPU).
 """
 
+# =========================
+# Submission metadata
+# TODO: fill out your information when you start
+# =========================
+
+SUBMISSION_BRANCH = "__SUBMISSION_BRANCH__"
+SUBMISSION_DESCRIPTION = "__SUBMISSION_DESCRIPTION__"
+SUBMISSION_AUTHOR_NAME = "__SUBMISSION_AUTHOR_NAME__"
+SUBMISSION_AUTHOR_AFFILIATION = "__SUBMISSION_AUTHOR_AFFILIATION__"
+SUBMISSION_AUTHOR_URL = "__SUBMISSION_AUTHOR_URL__"
+
+# ruff: noqa: E402
 # nodryrun
-import sys
-import os
 import dataclasses
 import logging
-from dataclasses import dataclass
+import os
+import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import equinox as eqx
-import jax.random as jrandom
-from jaxtyping import PRNGKeyArray
-
 import haliax as hax
 import haliax.nn as hnn
+import jax.random as jrandom
+from fray.cluster import ResourceConfig
 from haliax import Axis, AxisSpec, NamedArray
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split
 from haliax.nn.scan import ScanCheckpointPolicy, Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
-from levanter.utils.types import BlockFoldable
-
-from levanter.layers import RmsNormConfig, LayerNormConfigBase
-from levanter.layers.attention import Attention, AttentionWithSink, AttentionConfig, AttentionMask, AttentionBackend
+from jaxtyping import PRNGKeyArray
+from levanter.layers import LayerNormConfigBase, RmsNormConfig
+from levanter.layers.attention import Attention, AttentionBackend, AttentionConfig, AttentionMask, AttentionWithSink
 from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig, RotaryEmbeddingsConfig
 from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.optim import MuonConfig
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.logging import silence_transformer_nag
-
-from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
+from levanter.utils.types import BlockFoldable
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig, GpuConfig
-from experiments.simple_train_config import SimpleTrainConfig
-from levanter.optim import MuonConfig
+from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
+
 from experiments.llama import llama3_tokenizer_vocab_size
+from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger("ray")
 
@@ -68,19 +78,10 @@ _IMPORT_PATH = getattr(__spec__, "name", __name__)
 
 silence_transformer_nag()
 
-# =========================
-# Submission metadata (filled by onboarding)
-# =========================
-# The onboarding workflow replaces these placeholders before committing the file.
-SUBMISSION_BRANCH = "__SUBMISSION_BRANCH__"
-SUBMISSION_DESCRIPTION = "__SUBMISSION_DESCRIPTION__"
-SUBMISSION_AUTHOR_NAME = "__SUBMISSION_AUTHOR_NAME__"
-SUBMISSION_AUTHOR_AFFILIATION = "__SUBMISSION_AUTHOR_AFFILIATION__"
-SUBMISSION_AUTHOR_URL = "__SUBMISSION_AUTHOR_URL__"
-
 
 # =========================
 # Hackable config & modules
+# TODO: make any model architecture changes
 # =========================
 
 
@@ -88,7 +89,7 @@ SUBMISSION_AUTHOR_URL = "__SUBMISSION_AUTHOR_URL__"
 @dataclass(frozen=True)
 class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     # Core dims
-    seq_len: int = 2048
+    max_seq_len: int = 2048
     hidden_dim: int = 4096
     intermediate_dim: int = 11008
     num_layers: int = 32
@@ -126,8 +127,6 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     def model_type(self) -> type["HackableLMHeadModel"]:
         return HackableLMHeadModel
 
-    Pos = property(lambda self: Axis("position", self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
     Embed = property(lambda self: Axis("embed", self.hidden_dim))
     Layers = property(lambda self: Axis("layers", self.num_layers))
     Mlp = property(lambda self: Axis("mlp", self.intermediate_dim))
@@ -157,14 +156,14 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     def actual_head_size(self) -> int:
         return self.head_dim or (self.hidden_dim // self.num_heads)
 
-    def flops_per_token(self, vocab_size: int) -> float | None:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> float | None:
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )
@@ -365,13 +364,20 @@ def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: i
     return max(1, total_tokens // (batch_size * seq_len))
 
 
+# =========================
+# Model configuration presets
+# TODO: make any model configuration changes
+# =========================
+
+
 def _size_presets() -> dict[str, HackableTransformerConfig]:
     base = dict(
-        seq_len=4096,
+        max_seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
-        attn_backend=None,
+        attn_backend=AttentionBackend.JAX_FLASH,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
         tie_word_embeddings=False,
+        cross_entropy_block_size=4096,  # avoid materializing full logits (batch*seq*vocab)
     )
     return {
         "130m": HackableTransformerConfig(
@@ -387,6 +393,25 @@ def _size_presets() -> dict[str, HackableTransformerConfig]:
             hidden_dim=2048, intermediate_dim=7168, num_layers=16, num_heads=16, num_kv_heads=8, **base
         ),
     }
+
+
+# =========================
+# Muon optimizer presets
+# See https://wandb.ai/marin-community/marin/reports/Fantastic-Optimizers-and-Where-to-Find-Them--VmlldzoxMjgzMzQ2NQ
+# TODO: make any optimizer changes. You can use different optimizers: e.g.,
+# "130m": AdamHConfig(
+#             learning_rate=0.02,
+#             adam_lr=0.008,
+#             min_lr_ratio=0,
+#             warmup=1000,
+#             beta1=0.9,
+#             beta2=0.98,
+#             epsilon=1e-20,
+#             max_grad_norm=1,
+#             nesterov=False,
+#         ),
+# see available optimizers in lib/levanter/src/levanter/optim
+# =========================
 
 
 def _muon_presets() -> dict[str, MuonConfig]:
@@ -454,42 +479,58 @@ def _muon_presets() -> dict[str, MuonConfig]:
     }
 
 
-def _resource_presets(use_gpu: bool = False):
-    if use_gpu:
+# =========================
+# Resource presets (IMPORTANT!)
+# TODO: edit tpu_type or accelerator_type to match what you have available on your hardware
+# e.g., GpuConfig(gpu_count=8, accelerator_type="H100"),
+# If you ignore this and there is a mismatch, training cannot start if an unavailable resource is requested!
+# =========================
+
+
+def _resource_presets(use_tpu: bool = False):
+    if use_tpu:
         return {
-            "130m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
-            "300m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
-            "520m": GpuConfig(gpu_count=2, accelerator_type="A100-80G"),
-            "1_2b": GpuConfig(gpu_count=4, accelerator_type="A100-80G"),
+            "130m": ResourceConfig.with_tpu("v5p-32"),
+            "300m": ResourceConfig.with_tpu("v5p-32"),
+            "520m": ResourceConfig.with_tpu("v5p-32"),
+            "1_2b": ResourceConfig.with_tpu("v5p-32"),
         }
     return {
-        "130m": TpuPodConfig(tpu_type="v5p-32"),
-        "300m": TpuPodConfig(tpu_type="v5p-32"),
-        "520m": TpuPodConfig(tpu_type="v5p-32"),
-        "1_2b": TpuPodConfig(tpu_type="v5p-32"),
+        "130m": ResourceConfig.with_gpu("A100-80G", count=1),
+        "300m": ResourceConfig.with_gpu("A100-80G", count=1),
+        "520m": ResourceConfig.with_gpu("A100-80G", count=2),
+        "1_2b": ResourceConfig.with_gpu("A100-80G", count=4),
     }
+
+
+# =========================
+# Batch size presets
+# TODO: edit to adjust for your hardware
+# =========================
 
 
 def _batch_sizes() -> dict[str, int]:
     return {"130m": 128, "300m": 128, "520m": 128, "1_2b": 256}
 
 
-def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]:
+def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]:
     sizes = _size_presets()
     if size not in sizes:
         raise ValueError(f"Unknown size: {size}")
     model_cfg = sizes[size]
 
     batch = _batch_sizes()[size]
-    seq_len = model_cfg.seq_len
+    # train on same seq_len as model max seq len
+    train_seq_len = model_cfg.max_seq_len
     params = int(model_cfg.total_trainable_params(llama3_tokenizer_vocab_size))
-    steps = _get_num_train_steps(params, batch, seq_len, tpp=20)
+    steps = _get_num_train_steps(params, batch, train_seq_len, tpp=20)
 
     muon = _muon_presets()[size]
-    resources = _resource_presets(use_gpu=use_gpu)[size]
+    resources = _resource_presets(use_tpu=use_tpu)[size]
 
     train = SimpleTrainConfig(
-        resources,
+        resources=resources,
+        train_seq_len=train_seq_len,
         train_batch_size=batch,
         num_train_steps=steps,
         learning_rate=muon.learning_rate,
@@ -519,11 +560,15 @@ if __name__ == "__main__":
         _cls.__module__ = _IMPORT_PATH
     ###
 
-    sizes = ["130m", "300m", "520m", "1_2b"]
-    use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
+    sizes = [
+        "130m",
+    ]
+    # TODO: uncomment to run all sizes
+    # sizes = ["130m", "300m", "520m", "1_2b"]
+    use_tpu = bool(int(os.environ.get("SR_USE_TPU", "0")))
     steps = []
     for s in sizes:
-        name, cfg = build_run(s, use_gpu=use_gpu)
+        name, cfg = build_run(s, use_tpu=use_tpu)
         cfg.print_run_info()
         steps.extend(default_speedrun(name, cfg))
     executor_main(steps=steps, description=SUBMISSION_DESCRIPTION)

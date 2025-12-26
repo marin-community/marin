@@ -12,17 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from levanter.data.text import TextLmDatasetFormat
-
-from experiments.pretraining_datasets.dclm import DCLM_BASELINE_ONLY_MIXTURE, DCLM_MIXTURE_WEIGHTS
 from experiments.defaults import SimpleTrainConfig, default_tokenize, default_train
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import CORE_TASKS_PLUS_MMLU
 from experiments.llama import LlamaConfig
+from experiments.pretraining_datasets.dclm import DCLM_BASELINE_ONLY_MIXTURE, DCLM_MIXTURE_WEIGHTS
 from experiments.pretraining_datasets.simple import downloads
+from fray.cluster import ResourceConfig
+from levanter.data.text import TextLmDatasetFormat
 from marin.execution.executor import executor_main
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
-from marin.resources import TpuPodConfig
 
 gpt_neox_tokenizer = "EleutherAI/gpt-neox-20b"
 
@@ -83,7 +82,7 @@ dclm_baseline_only_config_wrong = lm_mixture_data_config(
 # hyperparams and numbers below are chosen to replicate the numbers in https://arxiv.org/abs/2406.11794.
 # Table 1 (page 5) has # model parameters and # training tokens. Table 11, page 43 has the hyperparameters.
 llama_1_4b_dclm = LlamaConfig(
-    seq_len=2048,
+    max_seq_len=2048,
     hidden_dim=2048,
     intermediate_dim=8192,
     num_heads=16,
@@ -95,7 +94,7 @@ NUM_TRAIN_TOKENS = int(28.8e9)  # 28.8 billion tokens
 NUM_TRAIN_STEPS = NUM_TRAIN_TOKENS // (256 * 2048)  # 256 is the batch size, 2048 is the sequence length
 
 training_config = SimpleTrainConfig(
-    resources=TpuPodConfig(tpu_type="v4-128", slice_count=1),
+    resources=ResourceConfig.with_tpu("v4-128", slice_count=1),
     train_batch_size=256,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=3e-3,

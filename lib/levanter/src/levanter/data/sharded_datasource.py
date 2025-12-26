@@ -7,20 +7,7 @@ import json
 import os
 import warnings
 from functools import cached_property
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Generic,
-    Iterable,
-    Iterator,
-    List,
-    Optional,
-    Sequence,
-    Sized,
-    Tuple,
-    TypeVar,
-)
+from typing import Any, Callable, Generic, Iterable, Iterator, List, Sequence, Sized, Tuple, TypeVar
 
 import datasets
 import fsspec
@@ -39,10 +26,6 @@ from ._preprocessor import (
     _MapTransform,
 )
 from .utils import batched
-
-
-if TYPE_CHECKING:
-    from .metrics_monitor import MetricsMonitor
 
 T = TypeVar("T")
 T_contra = TypeVar("T_contra", contravariant=True)
@@ -85,9 +68,6 @@ class ShardedDataSource(Generic[T_co]):
     def build_or_load_cache(
         self,
         path: str,
-        *,
-        await_finished: bool = True,
-        monitors: Optional[Sequence["MetricsMonitor"]] = None,
     ) -> AsyncDataset[T]:
         """
         Constructs a shard cache version of this dataset using Ray.
@@ -111,8 +91,6 @@ class ShardedDataSource(Generic[T_co]):
             path,
             source,
             processor,
-            await_finished=await_finished,
-            monitors=monitors,
         )
         return cache
 
@@ -160,6 +138,8 @@ class UrlBackedShardedDataSource(ShardedDataSource[T_co], abc.ABC):
 
     def __init__(self, urls):
         self.urls = urls
+        # Force materialization early so duplicate shard names surface immediately.
+        _ = self._shard_name_to_url_mapping
 
     @cached_property
     def _shard_name_to_url_mapping(self):
@@ -532,25 +512,24 @@ class ParquetDataSource(UrlBackedShardedDataSource[dict]):
 
 
 def _mk_shard_name_mapping(urls):
+    missing_urls: List[str] = []
+
+    def _expand_or_placeholder(url):
+        expanded = list(expand_glob(url))
+        return expanded if expanded else [url]
+
+    urls = [globbed for url in urls for globbed in _expand_or_placeholder(url)]
+
     _shard_name_to_url_mapping = {}
-    # remove common prefix
+
+    # remove common prefix, computed on expanded urls
     if len(urls) == 1:
         common_prefix = os.path.dirname(urls[0])
     else:
         common_prefix = os.path.commonprefix(urls)
 
-    missing_urls: List[str] = []
-
-    old_urls = urls
-    urls = [globbed for url in urls for globbed in expand_glob(url)]
-
-    if old_urls and not urls:
-        raise ValueError(f"Could not expand any of the urls: {old_urls}")
-
     for url in urls:
-        if not fsspec_utils.exists(url):
-            missing_urls.append(url)
-            continue
+        exists = fsspec_utils.exists(url)
         # escape the url for the shard name
         shard_name = url
         if common_prefix:
@@ -563,10 +542,12 @@ def _mk_shard_name_mapping(urls):
             raise ValueError(f"Duplicate shard name {shard_name}")
         _shard_name_to_url_mapping[shard_name] = url
 
+        if not exists:
+            missing_urls.append(url)
+
     if missing_urls:
-        # format nicely
         missing_urls_str = "\n  - ".join(missing_urls)
-        raise FileNotFoundError(f"Could not find the following urls:\n  - {missing_urls_str}")
+        warnings.warn("Some shard URLs do not exist yet; they will fail when accessed:\n  - " + missing_urls_str)
 
     return _shard_name_to_url_mapping
 

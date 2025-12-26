@@ -17,6 +17,10 @@
 import pytest
 import ray
 
+from fray.job import create_job_ctx
+
+from zephyr import load_file
+
 
 @pytest.fixture(scope="module")
 def ray_cluster():
@@ -31,3 +35,38 @@ def ray_cluster():
 def sample_data():
     """Sample data for testing."""
     return list(range(1, 11))  # [1, 2, 3, ..., 10]
+
+
+@pytest.fixture(
+    params=[
+        pytest.param(create_job_ctx("sync"), id="sync"),
+        pytest.param(create_job_ctx("threadpool", max_workers=2), id="thread"),
+        pytest.param(create_job_ctx("ray"), id="ray"),
+    ]
+)
+def backend(request):
+    """Parametrized fixture providing all job contexts for testing."""
+    return request.param
+
+
+class CallCounter:
+    """Helper to track function calls across test scenarios."""
+
+    def __init__(self):
+        self.flat_map_count = 0
+        self.map_count = 0
+        self.processed_ids = []
+
+    def reset(self):
+        self.flat_map_count = 0
+        self.map_count = 0
+        self.processed_ids = []
+
+    def counting_flat_map(self, path):
+        self.flat_map_count += 1
+        return load_file(path)
+
+    def counting_map(self, x):
+        self.map_count += 1
+        self.processed_ids.append(x["id"])
+        return {**x, "processed": True}

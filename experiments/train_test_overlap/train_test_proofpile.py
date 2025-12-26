@@ -25,9 +25,8 @@ Usage:
 
 import logging
 
-import ray
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
+from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 
 from experiments.pretraining_datasets.simple import tokenized
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
@@ -44,16 +43,15 @@ DEFAULT_NGRAM_CONFIG = NGramConfig(
 )
 
 
-@ray.remote(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "cpu"}})
-def run_train_test_overlap(config: DedupeConfig) -> str:
+def run_train_test_overlap(config: DeconConfig) -> str:
     logger.info(f"Starting train-test overlap dedupe with config: {config}")
-    dedupe(config)
+    decontaminate(config)
     logger.info(f"Train-test overlap completed! Results written to {config.output_path}")
     return config.output_path
 
 
 def build_proofpile_step() -> ExecutorStep:
-    dedupe_config = DedupeConfig(
+    dedupe_config = DeconConfig(
         input_path=tokenized["proofpile_2"],
         output_path=this_output_path(),
         decontaminate_source=EVAL_DATASET_STEPS,
@@ -61,7 +59,7 @@ def build_proofpile_step() -> ExecutorStep:
         false_positive_rate=1e-20,
         ngram=DEFAULT_NGRAM_CONFIG,
         processes=1024,
-        mode=DedupMode.TRAIN_TEST_OVERLAP,
+        mode=DeconMode.TRAIN_TEST_OVERLAP,
         text_field="text",
     )
 
@@ -70,7 +68,6 @@ def build_proofpile_step() -> ExecutorStep:
         fn=run_train_test_overlap,
         config=dedupe_config,
         description="Run dedupe train-test overlap on Proofpile",
-        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
 

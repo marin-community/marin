@@ -69,7 +69,7 @@ from levanter.utils.logging import silence_transformer_nag
 
 from marin.speedrun.speedrun import Author, SpeedrunConfig, default_speedrun
 from marin.execution.executor import executor_main
-from marin.resources import TpuPodConfig, GpuConfig
+from fray.cluster import ResourceConfig
 from experiments.simple_train_config import SimpleTrainConfig
 
 # Optional: Muon optimizer configs
@@ -132,8 +132,6 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     def model_type(self) -> type["HackableLMHeadModel"]:
         return HackableLMHeadModel
 
-    Pos = property(lambda self: Axis("position", self.seq_len))
-    KeyPos = property(lambda self: self.Pos.alias("key_position"))
     Embed = property(lambda self: Axis("embed", self.hidden_dim))
     Layers = property(lambda self: Axis("layers", self.num_layers))
     Mlp = property(lambda self: Axis("mlp", self.intermediate_dim))
@@ -163,14 +161,14 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     def actual_head_size(self) -> int:
         return self.head_dim or (self.hidden_dim // self.num_heads)
 
-    def flops_per_token(self, vocab_size: int) -> float | None:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> float | None:
         return lm_flops_per_token(
             hidden_dim=self.hidden_dim,
             intermediate_dim=self.intermediate_dim,
             num_layers=self.num_layers,
             num_kv_heads=self.num_kv_heads,
             num_heads=self.num_heads,
-            seq_len=self.seq_len,
+            seq_len=context_length,
             vocab_size=vocab_size,
             glu=True,
         )
@@ -393,7 +391,7 @@ def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: i
 
 def _size_presets() -> dict[str, HackableTransformerConfig]:
     base = dict(
-        seq_len=4096,
+        max_seq_len=4096,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
         attn_backend=None,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
@@ -484,16 +482,16 @@ def _muon_presets() -> dict[str, MuonConfig]:
 def _resource_presets(use_gpu: bool = False):
     if use_gpu:
         return {
-            "130m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
-            "300m": GpuConfig(gpu_count=1, accelerator_type="A100-80G"),
-            "520m": GpuConfig(gpu_count=2, accelerator_type="A100-80G"),
-            "1_2b": GpuConfig(gpu_count=4, accelerator_type="A100-80G"),
+            "130m": ResourceConfig.with_gpu("A100-80G", count=1),
+            "300m": ResourceConfig.with_gpu("A100-80G", count=1),
+            "520m": ResourceConfig.with_gpu("A100-80G", count=2),
+            "1_2b": ResourceConfig.with_gpu("A100-80G", count=4),
         }
     return {
-        "130m": TpuPodConfig(tpu_type="v5p-32"),
-        "300m": TpuPodConfig(tpu_type="v5p-32"),
-        "520m": TpuPodConfig(tpu_type="v5p-32"),
-        "1_2b": TpuPodConfig(tpu_type="v5p-32"),
+        "130m": ResourceConfig.with_tpu("v5p-32"),
+        "300m": ResourceConfig.with_tpu("v5p-32"),
+        "520m": ResourceConfig.with_tpu("v5p-32"),
+        "1_2b": ResourceConfig.with_tpu("v5p-32"),
     }
 
 
@@ -508,7 +506,7 @@ def build_run(size: str, use_sink: bool, *, use_gpu: bool = False) -> tuple[str,
     model_cfg = dataclasses.replace(sizes[size], use_attention_sink=use_sink)
 
     batch = _batch_sizes()[size]
-    seq_len = model_cfg.seq_len
+    seq_len = model_cfg.max_seq_len
     params = int(model_cfg.total_trainable_params(llama3_tokenizer_vocab_size))
     print(params)
     steps = _get_num_train_steps(params, batch, seq_len, tpp=20)

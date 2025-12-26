@@ -154,7 +154,7 @@ def rl_train(name: str) -> ExecutorStep:
     config = MODEL.config_class.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=MODEL.tokenizer)
+    model_config = dataclasses.replace(config, max_seq_len=MAX_TOKENS, tokenizer=MODEL.tokenizer)
 
     _ = WandbConfig
 
@@ -182,9 +182,6 @@ def rl_train(name: str) -> ExecutorStep:
             base_path=OutputName("checkpoints"),
             save_interval=datetime.timedelta(seconds=600),
         ),
-        tensor_parallel_axes=["mlp", "heads"],
-        fsdp_axis="embed",
-        batch_axis="batch",
         ray=RayConfig(auto_start_cluster=False),
     )
 

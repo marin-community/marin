@@ -257,6 +257,7 @@ def _jittable_dg_einsum(
     precision: PrecisionLike = None,
     preferred_element_type: DTypeLike | None = None,
     _dot_general: Callable[..., Array] = jax.lax.dot_general,
+    out_sharding=None,
 ) -> Array:
     """
     So we want to pass around a jittable dot_general module, but JAX's builtin version doesn't support this.
@@ -290,7 +291,7 @@ def _jittable_dg_einsum(
     einsum = eqx.filter_jit(jax_einsum._einsum, inline=True)
     if spec is not None:
         einsum = jax.named_call(einsum, name=spec)
-    return einsum(operands, contractions, precision, preferred_element_type, _dot_general)  # type: ignore[operator]
+    return einsum(operands, contractions, precision, preferred_element_type, _dot_general, out_sharding)  # type: ignore[operator]
 
 
 def tree_checkpoint_name(x: T, name: str) -> T:

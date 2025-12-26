@@ -4,16 +4,16 @@ model:
   hidden_dim: 1280
   num_heads: 20
   num_layers: 36
-  seq_len: 1024
+  max_seq_len: 1024
   gradient_checkpointing: true
   scale_attn_by_inverse_layer_idx: true
+train_seq_len: 1024
 trainer:
   tracker:
     project: "levanter"
     tags: [ "openwebtext", "gpt2"]
 
   mp: p=f32,c=bfloat16
-  model_axis_size: 1
   per_device_parallelism: -1
 optimizer:
   learning_rate: 2E-4

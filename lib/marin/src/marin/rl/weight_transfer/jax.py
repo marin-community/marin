@@ -27,20 +27,16 @@ import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Any
 
 import haliax as hax
 import jax
 import jax.experimental.transfer as jax_transfer
 import numpy as np
-import ray
-import ray.runtime_context
+from fray.job.context import get_default_job_ctx
 from haliax.jax_utils import is_jax_array_like
 from jax.sharding import Mesh
 from jaxtyping import PyTree
-from ray.actor import ActorHandle
-from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
-
-from marin.rl.robust_actor import RobustActor
 
 from .base import (
     WeightTransferClient,
@@ -227,7 +223,7 @@ class WeightTransferCoordinator:
 
 async def process_weight_transfers(
     transfer_server: jax_transfer.TransferServer,
-    coordinator: ActorHandle,
+    coordinator: Any,
     latest_weight_id: int,
     latest_weights: PyTree,
 ):
@@ -284,7 +280,7 @@ async def process_weight_transfers(
 
 
 async def receive_weight_transfers(
-    coordinator: ActorHandle,
+    coordinator: Any,
     client_server: jax_transfer.TransferServer,
     placeholder: PyTree,
 ) -> tuple[PyTree, WeightTransferMetadata]:
@@ -342,13 +338,6 @@ def get_local_ip_from_hostname():
     return ip_address
 
 
-def this_node_affinity_strategy(soft: bool = False) -> NodeAffinitySchedulingStrategy:
-    """
-    Returns a NodeAffinitySchedulingStrategy that will only schedule weight transfers to the current node.
-    """
-    return NodeAffinitySchedulingStrategy(node_id=ray.runtime_context.get_runtime_context().get_node_id(), soft=soft)
-
-
 def num_bytes(model: PyTree):
     # especially with jax.vjp, we get duplicate arrays and want to uniq them
     # NB we need to use object identity here, mostly because of ShapedDtypeStruct
@@ -359,18 +348,19 @@ def num_bytes(model: PyTree):
 class JAXTransferServer(WeightTransferServer):
     """JAX transfer server-based weight transfer server."""
 
-    coordinator: RobustActor
-
     def __init__(self, config: WeightTransferConfig, mesh, params_sharding_rules=None):
         self.config = config
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
 
-        self.coordinator = RobustActor.create(WeightTransferCoordinator, actor_name=config.coordinator_name)
+        self._ctx = get_default_job_ctx()
+        self.coordinator = self._ctx.create_actor(
+            WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True, preemptible=False
+        )
 
         # Start transfer server and register its address with coordinator
         self.transfer_server = start_transfer_server()
-        self.coordinator.register_transfer_server.call(self.transfer_server.address())
+        self._ctx.get(self.coordinator.register_transfer_server.remote(self.transfer_server.address()))
         self._setup_cpu_transfer()
 
         # Single-item queue for polling
@@ -455,7 +445,10 @@ class JAXTransferClient(WeightTransferClient):
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
 
-        self.coordinator = RobustActor.create(WeightTransferCoordinator, actor_name=config.coordinator_name)
+        self._ctx = get_default_job_ctx()
+        self.coordinator = self._ctx.create_actor(
+            WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True, preemptible=False
+        )
 
         # Start transfer server for client (doesn't register address with coordinator)
         self.transfer_server = start_transfer_server()
@@ -494,7 +487,7 @@ class JAXTransferClient(WeightTransferClient):
 
         # First check if new weights are available without blocking
         try:
-            latest_weight_id, server_address = self.coordinator.get_transfer_info.call()
+            latest_weight_id, server_address = self._ctx.get(self.coordinator.get_transfer_info.remote())
             logger.info(
                 "Current weight id %s, Latest weight ID: %s, Server address: %s",
                 self._last_received_weight_id,

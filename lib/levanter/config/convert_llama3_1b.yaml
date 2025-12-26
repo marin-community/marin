@@ -1,5 +1,4 @@
-tokenizer: "meta-llama/Llama-3.2-1B-Instruct"
-
+tokenizer: meta-llama/Llama-3.2-1B-Instruct
 model:
   type: llama
   hidden_dim: 2048
@@ -10,15 +9,11 @@ model:
   seq_len: 131072
   gradient_checkpointing: true
   tie_word_embeddings: true
-
 trainer:
   tracker:
-    - type: wandb
-    - mode: disabled
-
+  - type: wandb
+  - mode: disabled
   mp: p=f32,c=bfloat16
-  model_axis_size: 1
   per_device_parallelism: -1
-
   train_batch_size: 256
   num_train_steps: 20000

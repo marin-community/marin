@@ -14,20 +14,37 @@
 
 """Fray: Execution contexts for distributed and parallel computing."""
 
-from fray.job_context import (
-    ContextConfig,
-    ExecutionContext,
-    RayContext,
-    SyncContext,
-    ThreadContext,
-    create_context,
+from fray.cluster import (
+    Cluster,
+    CpuConfig,
+    Entrypoint,
+    EnvironmentConfig,
+    GpuConfig,
+    JobId,
+    JobInfo,
+    JobRequest,
+    LocalCluster,
+    ResourceConfig,
+    create_cluster,
+    current_cluster,
 )
+from fray.cluster.base import JobStatus
+from fray.isolated_env import JobGroup, TemporaryVenv
 
 __all__ = [
-    "ContextConfig",
-    "ExecutionContext",
-    "RayContext",
-    "SyncContext",
-    "ThreadContext",
-    "create_context",
+    "Cluster",
+    "CpuConfig",
+    "Entrypoint",
+    "EnvironmentConfig",
+    "GpuConfig",
+    "JobGroup",
+    "JobId",
+    "JobInfo",
+    "JobRequest",
+    "JobStatus",
+    "LocalCluster",
+    "ResourceConfig",
+    "TemporaryVenv",
+    "create_cluster",
+    "current_cluster",
 ]

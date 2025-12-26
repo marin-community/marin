@@ -26,22 +26,13 @@ import dataclasses
 
 import draccus
 from marin.execution.executor import THIS_OUTPUT_PATH
-from zephyr import Dataset, flow_backend, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 
 @dataclasses.dataclass
 class ConversationToDolmaConfig:
     input_path: str
     output_path: str = THIS_OUTPUT_PATH
-
-
-def role_to_str(role: str):
-    if role == "user":
-        return "U"
-    elif role == "assistant":
-        return "A"
-    else:
-        raise ValueError(f"Unknown role: {role}")
 
 
 def transform_conversation_to_dolma(row: dict):
@@ -58,17 +49,15 @@ def transform_conversation_to_dolma(row: dict):
     return dolma_row
 
 
-@draccus.wrap
 def process_dataset(config: ConversationToDolmaConfig):
     """Convert conversation format to Dolma format."""
-    backend = flow_backend()
     pipeline = (
         Dataset.from_files(f"{config.input_path}/**/*.jsonl.gz", empty_glob_ok=False)
         .flat_map(load_jsonl)
         .map(transform_conversation_to_dolma)
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline)
 
 
 # Alias for other callers
@@ -76,4 +65,5 @@ convert_conversation_to_dolma = process_dataset
 
 
 if __name__ == "__main__":
+    process_dataset = draccus.wrap(process_dataset)
     process_dataset()

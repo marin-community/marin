@@ -1,6 +1,6 @@
 # Train-Test Overlap Detection
 
-This tutorial will teach you how to use Marin's train-test overlap script (which is a wrapper around the dolma deduplication toolkit) to identify overlap between your training datasets and evaluation benchmarks. This is crucial for calibrating the results of your model evaluations. Under the hood, this uses the same library for deduplication and decontamination.
+This tutorial will teach you how to use Marin's train-test overlap script to identify overlap between your training datasets and evaluation benchmarks. This is crucial for calibrating the results of your model evaluations. Under the hood, this uses the same library for deduplication and decontamination.
 
 ## What is Train-Test Overlap?
 
@@ -161,11 +161,10 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
     )
 
     return ExecutorStep(
-        name=f"tmp/power/train_test_overlap/dolma/total/{dataset_config.name}",
+        name=f"tmp/power/train_test_overlap/total/{dataset_config.name}",
         fn=run_train_test_overlap,
         config=dedupe_config,
         description=f"Run dedupe train-test overlap on {dataset_config.name}",
-        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 ```
 
@@ -216,7 +215,7 @@ my_eval_raw = ExecutorStep(
 )
 
 # Convert to decontamination format
-my_eval_convert_dolma = ExecutorStep(
+my_eval_convert = ExecutorStep(
     name="decontamination/my_evaluation_dataset",
     fn=raw2json,
     config=DatasetConversionConfig(
@@ -330,7 +329,7 @@ python experiments/train_test_overlap/aggregate_total.py
 ```
 **4. Analyze results**
 ```bash
-gsutil cat gs://${BUCKET}/train_test_overlap/dolma/aggregate_total_final-*/overlap_matrix.csv
+gsutil cat gs://${BUCKET}/train_test_overlap/aggregate_total_final-*/overlap_matrix.csv
 ```
 
 This will give you overlap percentages for your training data against all standard evaluation benchmarks, helping you make informed decisions about data quality and evaluation validity.

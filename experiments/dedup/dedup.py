@@ -23,9 +23,8 @@ Usage:
 import logging
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-import ray
 from marin.execution.executor import ExecutorStep, InputName, executor_main
-from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
+from marin.processing.classification.deduplication.pipeline import DedupeConfig, DedupMode, deduplicate
 
 logger = logging.getLogger(__name__)
 
@@ -50,25 +49,40 @@ fineweb_edu_small_1 = ExecutorStep(
     ),
 )
 
-# N-gram configuration for train-test overlap detection
-DEFAULT_NGRAM_CONFIG = NGramConfig(
-    ngram_length=[5, 10, 15],
-    overlap_threshold=1e-6,
-    stride=0,
+fineweb_edu_small_10bt = ExecutorStep(
+    name="raw_fineweb_edu_small_10bt",
+    fn=download_hf,
+    config=DownloadConfig(
+        hf_dataset_id="HuggingFaceFW/fineweb-edu",
+        revision="3c452cb",
+        hf_urls_glob=["sample/10BT/*.parquet"],
+    ),
 )
 
 
-@ray.remote(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "cpu"}})
 def run_dedup(config: DedupeConfig) -> str:
     logger.info(f"Starting dedupe with config: {config}")
-    dedupe(config)
+
+    deduplicate(config)
+
     logger.info(f"Dedupe completed! Results written to {config.output_path}")
     return config.output_path
 
 
-def build_dedup_step(dataset: InputName) -> ExecutorStep:
+def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
+    """
+    Builds a deduplication step for the given dataset.
+
+    Args:
+        dataset: The input dataset to deduplicate.
+        max_parallelism: Maximum parallelism for Zephyr tasks.
+    """
+    input_path = dataset.cd("sample/10BT")
+
     config = DedupeConfig(
-        input_path=dataset.cd("sample/10BT"), attribute_name="is_duplicate", mode=DedupMode.EXACT_DOC_DEDUPLICATE
+        input_path=input_path,
+        mode=DedupMode.EXACT_PARAGRAPH_DEDUPLICATE,
+        processes=max_parallelism,
     )
 
     return ExecutorStep(
@@ -76,11 +90,14 @@ def build_dedup_step(dataset: InputName) -> ExecutorStep:
         fn=run_dedup,
         config=config,
         description=f"Run dedupe on {dataset.name}",
-        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
 
-STEPS = [build_dedup_step(fineweb_edu_small_1), build_dedup_step(fineweb_edu_small_2)]
+STEPS = [
+    build_dedup_step(fineweb_edu_small_1, max_parallelism=7),
+    build_dedup_step(fineweb_edu_small_2, max_parallelism=7),
+    build_dedup_step(fineweb_edu_small_10bt, max_parallelism=1024),
+]
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

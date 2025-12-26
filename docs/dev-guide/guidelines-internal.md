@@ -45,13 +45,11 @@ cluster. **You will need at least two terminal processes running for the followi
 `marin` Python environment as well):
 
 ```bash
-# [Terminal 1] Establish a Connection to the Ray Dashboard (launches an ssh connection w/ port-forwarding)
-#   =>> Assumes `marin` Python environment is active, and you're running scripts from the repository root directory
-#   =>> Assumes you want to run your jobs in the Central 2 Region of GCloud
-ray dashboard infra/marin-us-central2.yaml
+# [Terminal 1] Establish Ray dashboard connections (port-forwarding)
+uv run scripts/ray/cluster.py dashboard
 
-# [Browser] Navigate to `http://localhost:8265` (or whatever URL is output by the above command)
-#   =>> You should see the Cluster Overview Page (with a list of recent jobs, node status, resource status)
+# [Browser] Navigate to the URL printed above (typically http://localhost:9999) for the overall dashboard.
+# Clicking a cluster opens its overview page with jobs/nodes/resources.
 ```
 
 In addition to linking you to the cluster dashboard, the above command will establish a (persistent) SSH connection to
@@ -66,77 +64,11 @@ launching tasks -- see [test_integration_test.py](https://github.com/marin-commu
 ```bash
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
-python marin/run/ray_run.py --no_wait --env_vars WANDB_API_KEY ${WANDB_API_KEY} -- python experiments/hello_world.py
+uv run python marin/run/ray_run.py --no_wait --env_vars WANDB_API_KEY=${WANDB_API_KEY} -- python experiments/hello_world.py
 
-# Get Job Status (given Job ID = raysubmit_pAJM8vKfHPhiyHBa)
-ray job status --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
-
-# Get Job Logs (Console Out)
-ray job logs --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
+# Get Job Status
+uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml list-jobs
 
 # Kill / Stop Job (if necessary / error / bug)
-ray job stop --address http://127.0.0.1:8265 raysubmit_pAJM8vKfHPhiyHBa
-```
-
-**Quality of Life**: If you like `tmux` and `conda` (with environment name `marin`), feel free to run
-[`infra/marin-tmux.sh`](https://github.com/marin-community/marin/blob/main/infra/marin-tmux.sh) that automates launching the dashboard for you. Make sure to read the
-script before running!
-
-## Programming Guidelines
-
-### Using Ray
-
-When using Ray, use the `ray.remote` decorator for any function that you want to run distributed.
-`ray.remote` executes the function in a separate process, possibly on a separate machine.
-
-```python
-@ray.remote
-def my_function():
-    ...
-
-result_future = my_function.remote()
-
-# Get the result of the function
-result = ray.get(result_future)
-```
-
-Ray is a resource-aware job scheduler, so you can specify the resources that a job requires:
-
-```python
-@ray.remote(num_cpus=4)
-def my_cpu_job():
-    ...
-```
-
-Please see the [Ray documentation](https://docs.ray.io/en/latest/index.html) for more information, though
-see the next section for some important notes about using TPUs.
-
-### Using TPUs on Ray
-
-You can use our workers like normal CPU instances, just using the `ray.remote` decorator. However, if you want to use
-the TPUs, you need to tell Ray that you need them. To use TPUs on our cluster, you should use the following:
-
-```python
-@ray.remote(num_cpus=8, resources={"TPU": 4, "TPU-v4-8-head": 1})
-def my_tpu_job():
-    ...
-```
-
-Always use the `TPU-v4-8-head` resource when requesting TPUs unless you specifically want a multi-node slice. This will
-ensure you don't accidentally grab part of a multi-node slice, which will lead to weird errors.
-
-Also, despite it saying `"TPU": 4`, you're actually getting all the TPUs. TPU v4 slices have 4 boards with 2 cores each,
-so you're getting 8 cores total, but they present as 4 TPUs.
-
-**IMPORTANT**: Ray and `libtpu` don't always get along. If you are using TPUs, you should either fork a process that
-uses the TPUs or force remove the libtpu lockfile when your task finishes. The latter is very hacky, but it works.
-We offer a utility decorator to do this for you:
-
-```python
-from marin.utils import remove_tpu_lockfile_on_exit
-
-@ray.remote(num_cpus=8, resources={"TPU": 4, "TPU-v4-8-head": 1})
-@remove_tpu_lockfile_on_exit
-def my_tpu_job():
-    ...
+uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml stop-job raysubmit_pAJM8vKfHPhiyHBa
 ```

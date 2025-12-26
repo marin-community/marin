@@ -146,7 +146,7 @@ def mk_dataset(config: TrainArgs, tokenizer: transformers.PreTrainedTokenizerBas
         }
 
     dataset = dataset.map_batches(preprocess, batch_size=128, num_cpus=num_cpus_used_by_tokenizer(tokenizer))  # type: ignore
-    dataset = dataset.build_or_load_cache(config.data_cache_dir, await_finished=True)  # type: ignore
+    dataset = dataset.build_or_load_cache(config.data_cache_dir)  # type: ignore
 
     def _prepare_example(ex: dict) -> LmExample:
         """
@@ -200,10 +200,10 @@ def train(config: TrainArgs):
     converter = HFCheckpointConverter.from_hf(config.model_name_or_path, trust_remote_code=config.trust_remote_code)
     model_config = converter.default_config
 
-    if config.max_tune_length > model_config.Pos.size:
+    if config.max_tune_length > model_config.max_Pos.size:
         logger.warning(
             f"max_tune_length ({config.max_tune_length}) is greater than the model's maximum length"
-            f" ({model_config.Pos.size}). "
+            f" ({model_config.max_Pos.size}). "
         )
 
     # Randomness in JAX is tightly controlled. We pass around a key that is used to generate random numbers.

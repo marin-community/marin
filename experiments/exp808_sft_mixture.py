@@ -28,9 +28,9 @@ from experiments.llama import llama_8b
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import get_instruction_dataset
 from experiments.simple_sft_config import SimpleSFTConfig
+from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main
 from marin.processing.tokenize import lm_mixture_data_config
-from marin.resources import TpuPodConfig
 
 
 def create_tokenization_step(dataset_name: str) -> ExecutorStep:
@@ -95,7 +95,7 @@ mixture_sft_config = SimpleSFTConfig(
     train_batch_size=128,
     num_train_steps=NUM_TRAIN_STEPS,
     learning_rate=5e-6,
-    resources=TpuPodConfig(tpu_type="v4-128"),
+    resources=ResourceConfig.with_tpu("v4-128"),
     tokenizer=marin_tokenizer,
     model_name_or_path="meta-llama/Llama-3.1-8B",
     max_seq_len=4096,

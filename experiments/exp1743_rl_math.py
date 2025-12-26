@@ -24,6 +24,7 @@ from levanter.models.llama import LlamaConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import (
     ExecutorStep,
     OutputName,
@@ -121,7 +122,7 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
     lev_config = LlamaConfig.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    lev_config = dataclasses.replace(lev_config, seq_len=MAX_TOKENS, tokenizer=model_config.model_tokenizer)
+    lev_config = dataclasses.replace(lev_config, max_seq_len=MAX_TOKENS, tokenizer=model_config.model_tokenizer)
 
     _ = WandbConfig
 
@@ -149,9 +150,10 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
             base_path=OutputName("checkpoints"),
             save_interval=datetime.timedelta(seconds=600),
         ),
-        tensor_parallel_axes=["mlp", "heads"],
-        fsdp_axis="embed",
-        batch_axis="batch",
+        mesh=MeshConfig(
+            axes={"context": 1, "model": 1},  # inherited data:-1, replica:1
+            shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
+        ),
         ray=RayConfig(auto_start_cluster=False),
     )
 

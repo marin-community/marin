@@ -43,7 +43,7 @@ import logging
 from dataclasses import dataclass
 
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
-from marin.processing.classification.dedupe import DedupeConfig, DedupMode, NGramConfig, dedupe
+from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 
 from experiments.midtraining_datasets import finemath_3_plus
 from experiments.pretraining_datasets.simple import downloads
@@ -77,9 +77,9 @@ class DatasetConfig:
     """Name of the text field in the parquet file."""
 
 
-def run_train_test_overlap(config: DedupeConfig) -> str:
+def run_train_test_overlap(config: DeconConfig) -> str:
     logger.info(f"Starting train-test overlap dedupe with config: {config}")
-    dedupe(config)
+    decontaminate(config)
     logger.info(f"Train-test overlap completed! Results written to {config.output_path}")
     return config.output_path
 
@@ -97,7 +97,7 @@ DATASET_CONFIGS = [
 
 
 def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
-    dedupe_config = DedupeConfig(
+    dedupe_config = DeconConfig(
         input_path=dataset_config.path,
         output_path=this_output_path(),
         decontaminate_source=EVAL_DATASET_STEPS,
@@ -105,7 +105,7 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
         false_positive_rate=1e-20,
         ngram=DEFAULT_NGRAM_CONFIG,
         processes=1024,
-        mode=DedupMode.TRAIN_TEST_OVERLAP,
+        mode=DeconMode.TRAIN_TEST_OVERLAP,
         text_field=dataset_config.text_field,
     )
 
@@ -114,7 +114,6 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
         fn=run_train_test_overlap,
         config=dedupe_config,
         description=f"Run dedupe train-test overlap on {dataset_config.name}",
-        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
 

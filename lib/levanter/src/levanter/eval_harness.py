@@ -268,7 +268,7 @@ class _LmEvalHarnessWorker:
     def _receive_payload(self):
         payload = broadcast_shard(
             self._dummy_batch,
-            hax.partitioning.infer_resource_partitions(self._dummy_batch, preserve_existing_shardings=False),
+            hax.partitioning.infer_resource_partitions(self._dummy_batch),
         )
         return payload
 
@@ -279,9 +279,7 @@ class _LmEvalHarnessWorker:
 
     def _send_payload(self, payload):
         assert jax.process_index() == 0
-        out = broadcast_shard(
-            payload, hax.partitioning.infer_resource_partitions(payload, preserve_existing_shardings=False)
-        )
+        out = broadcast_shard(payload, hax.partitioning.infer_resource_partitions(payload))
         return out
 
     def process_loglikelihood(self, packed_request):
@@ -547,6 +545,8 @@ class LevanterHarnessLM(TemplateLM):
             )
 
             padding_count, batch_tokens = get_padding_count_from_batch(batch, self.tokenizer.pad_token_id)
+            batch = jax.device_put(batch)
+
             batch = jax.device_put(batch)
 
             out_ids, out_lls, out_correct = self.leader.dispatch_loglikelihood(batch)
@@ -1211,6 +1211,8 @@ def _actually_run_eval_harness(
     """
     max_examples = config.max_examples
     max_length = config.max_length
+
+    max_length = max_length or model.max_length
 
     EvalPos = model.Pos if max_length is None else model.Pos.resize(max_length)
     num_parameters = parameter_count(model)

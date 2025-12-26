@@ -9,9 +9,8 @@ description = "Marin Data Browser"
 authors = [{ name = "Marin Team" }]
 requires-python = ">=3.11"
 dependencies = [
-    "py7zr>=0.22.0",
     "fsspec>=2024.9.0",
-    "zstandard>=0.23.0",
+    "zstandard>=0.18.0",
     "flask>=3.1.1",
     "pyarrow>=17.0.0",
     "gcsfs>=2024.9.0.post1",

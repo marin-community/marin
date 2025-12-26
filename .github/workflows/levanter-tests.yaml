@@ -5,11 +5,13 @@ on:
     branches:
       - main
     paths:
+      - lib/haliax/**
       - lib/levanter/**
       - uv.lock
       - .github/workflows/levanter-tests.yaml
   pull_request:
     paths:
+      - lib/haliax/**
       - lib/levanter/**
       - uv.lock
       - .github/workflows/levanter-tests.yaml
@@ -124,7 +126,7 @@ jobs:
 
       - name: Force CPU torch wheel
         run: |
-          TORCH_VERSION=$(sed -n '/^name = "torch"$/ {n; s/version = "\([^"]*\)"/\1/p; q}' uv.lock)
+          TORCH_VERSION=$(sed -n '/^name = "torch"$/ {n; s/version = "\([^"]*\)"/\1/p; q}' ../../uv.lock)
           echo $TORCH_VERSION
           if [[ -z "$TORCH_VERSION" ]]; then
             echo "Unable to determine torch version from uv.lock" >&2
@@ -141,7 +143,7 @@ jobs:
   tpu-tests:
     runs-on: [tpu-ci]
     timeout-minutes: 15
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -176,7 +178,6 @@ jobs:
             --ulimit memlock=68719476736:68719476736 \
             -e TPU_CI=true \
             -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
-            -e START_RAY_TPU_CLUSTER=true \
             -e TPU_STDERR_LOG_LEVEL=3 \
             -e TPU_MIN_LOG_LEVEL=3 \
             -e PYTHONPATH=/workspace \

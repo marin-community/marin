@@ -14,9 +14,8 @@
 
 """Function thunk helper for executing cloudpickled callables.
 
-This module provides utilities for serializing and executing callables via cloudpickle.
-Used by cluster implementations to support callable entrypoints uniformly across
-different execution environments.
+This is primarily used to convert function invocations into Ray jobs -- the Ray
+"job" entrypoint only accepts a command to run, not callables.
 
 Usage as CLI:
     python -m fray.fn_thunk <fsspec-path>
@@ -36,7 +35,7 @@ Example:
 import logging
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import click
@@ -48,34 +47,31 @@ from fray.cluster.base import Entrypoint
 logger = logging.getLogger(__name__)
 
 
-def create_thunk_entrypoint(callable_fn: Callable[[], Any], prefix: str | None = None) -> Entrypoint:
-    """Serialize a callable to a temporary file and return an Entrypoint.
+def create_thunk_entrypoint(
+    callable_fn: Callable[..., Any],
+    prefix: str,
+    args: Sequence[Any] = (),
+    kwargs: dict[str, Any] | None = None,
+) -> Entrypoint:
+    """Serialize a callable and its arguments to a temporary file and return an Entrypoint.
 
     Args:
-        callable_fn: Zero-argument callable to serialize
-        prefix: Optional file prefix for the pickled callable (default: uses tempfile)
+        callable_fn: Callable to serialize
+        prefix: File prefix for the pickled callable
+        args: Positional arguments to pass to callable
+        kwargs: Keyword arguments to pass to callable
 
     Returns:
         Entrypoint configured to execute the callable via fray.fn_thunk
-
-    Example:
-        >>> def my_job():
-        ...     print("Running job")
-        >>> entrypoint = create_thunk_entrypoint(my_job, prefix="/tmp/myjob")
-        >>> # Returns: Entrypoint(binary="python", args=["-m", "fray.fn_thunk", "/tmp/myjob_abc123.pkl"])
     """
-    if prefix:
-        # Use prefix with tempfile naming for uniqueness
-        with tempfile.NamedTemporaryFile(mode="wb", suffix=".pkl", prefix=prefix + "_", delete=False) as f:
-            cloudpickle.dump(callable_fn, f)
-            pickle_path = f.name
-    else:
-        # Use default tempfile location
-        with tempfile.NamedTemporaryFile(mode="wb", suffix=".pkl", delete=False) as f:
-            cloudpickle.dump(callable_fn, f)
-            pickle_path = f.name
+    if " " in prefix:
+        raise ValueError("prefix must not contain spaces")
 
-    return Entrypoint(binary="python", args=["-m", "fray.fn_thunk", pickle_path])
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".pkl", prefix=prefix + "_", delete=False) as f:
+        cloudpickle.dump((callable_fn, args, kwargs or {}), f, protocol=cloudpickle.DEFAULT_PROTOCOL)
+        pickle_path = f.name
+
+    return Entrypoint.from_binary("python", ["-m", "fray.fn_thunk", pickle_path])
 
 
 @click.command()
@@ -86,25 +82,35 @@ def main(path: str):
     Args:
         path: fsspec-compatible path to the cloudpickled callable
     """
+    logging.basicConfig(
+        level=logging.INFO, format="%(filename)s:%(lineno)d %(asctime)s %(levelname)s %(message)s", stream=sys.stderr
+    )
     try:
         logger.info("Loading callable from %s", path)
         with fsspec.open(path, "rb") as f:
-            callable_fn = cloudpickle.load(f)
-
-        logger.info("Executing callable...")
-        result = callable_fn()
-
-        logger.info("Callable executed successfully. Result: %s", result)
-
-    except FileNotFoundError:
-        click.echo(f"Error: File not found: {path}", err=True)
-        sys.exit(1)
+            payload = cloudpickle.load(f)
+            if isinstance(payload, tuple) and len(payload) == 3:
+                callable_fn, args, kwargs = payload
+            elif isinstance(payload, tuple) and len(payload) == 2:
+                # Legacy format: (callable, function_args_dict)
+                callable_fn, kwargs = payload
+                args = ()
+            else:
+                callable_fn = payload
+                args = ()
+                kwargs = {}
     except Exception as e:
-        click.echo(f"Error executing function: {e}", err=True)
-        import traceback
+        logger.error("Failed to load callable from %s: %s", path, e)
+        raise
 
-        traceback.print_exc()
-        sys.exit(1)
+    try:
+        logger.info("Calling user entrypoint %s with args=%s, kwargs=%s", callable_fn, args, kwargs)
+        result = callable_fn(*args, **(kwargs or {}))
+        logger.info("Callable executed successfully. Result: %s", result)
+        return 0
+    except Exception as e:
+        logger.error("Failed to run callable: %s", e, exc_info=True)
+        return 1
 
 
 if __name__ == "__main__":

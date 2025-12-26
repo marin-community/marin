@@ -24,11 +24,13 @@
 # SOFTWARE.
 
 import os
-from typing import Any, BinaryIO, Iterable, Union, final
+from enum import Enum
+from typing import Any, BinaryIO, Iterable, Optional, Union, final
+
+import pyarrow as pa
 
 @final
 class Bloom:
-
     # expected_items:  max number of items to be added to the filter
     # false_positive_rate:  max false positive rate of the filter
     # Note: This bloom filter expects pre-hashed integers (i128) for add() and __contains__()
@@ -95,3 +97,79 @@ class Bloom:
     def issuperset(self, other: Bloom, /) -> bool: ...  # self >= other
     def clear(self) -> None: ...  # remove all items
     def copy(self) -> Bloom: ...  # duplicate self
+
+class HashAlgorithm(Enum):
+    Blake2b = ...
+    Blake3 = ...
+    Xxh3_128 = ...
+    Xxh3_64 = ...
+
+DEFAULT_HASH_ALGORITHM: HashAlgorithm
+
+@final
+class Transformation:
+    """Transformation steps for the deduplication pipeline.
+
+    Use these steps to build a list of operations that `transform` will apply
+    sequentially to a PyArrow RecordBatch.
+    """
+
+    @staticmethod
+    def ResolveIds(text_col: str, id_col: str, output_col: str) -> "Transformation":
+        """Creates a new column `output_col` containing resolved document IDs.
+
+        If `id_col` exists and is not null, it is used. Otherwise, a stable hash
+        of `text_col` is generated (using the default hash algorithm) and used as the ID.
+        """
+        ...
+
+    @staticmethod
+    def SplitParagraphs(text_col: str, id_col: str) -> "Transformation":
+        """Explodes the batch by splitting `text_col` into paragraphs (by newline).
+
+        The resulting batch will have columns: `doc_id`, `paragraph_text`, and `paragraph_span`.
+        """
+        ...
+
+    @staticmethod
+    def Hash(input_col: str, output_col: str, algo: HashAlgorithm) -> "Transformation":
+        """Computes the hash of `input_col` using the specified `algo` and stores it in `output_col`."""
+        ...
+
+    @staticmethod
+    def SelectColumns(columns: list[str]) -> "Transformation":
+        """Projects the batch to keep only the specified columns."""
+        ...
+
+def transform(batch: pa.RecordBatch, steps: list[Transformation]) -> pa.RecordBatch: ...
+def mark_paragraph_duplicates(
+    batch: pa.RecordBatch,
+    dup_map: dict[str, dict[str, str]],
+    attribute_name: str,
+    algorithm: Optional[HashAlgorithm] = None,
+) -> pa.RecordBatch: ...
+def mark_document_duplicates(
+    batch: pa.RecordBatch,
+    dup_map: dict[str, dict[str, str]],
+    attribute_name: str,
+    hash_col: Optional[str] = None,
+    algorithm: Optional[HashAlgorithm] = None,
+) -> pa.RecordBatch: ...
+def hash_blake2(text: bytes) -> list[int]: ...
+def hash_blake3(text: bytes) -> list[int]: ...
+def hash_xxh3_128(text: bytes) -> int: ...
+def hash_xxh3_64(text: bytes) -> int: ...
+def hash_xxh3_64_batch(texts: list[bytes]) -> list[int]: ...
+
+# Marshaling benchmarks
+@final
+class Document:
+    id: str
+    text: str
+    def __init__(self, id: str, text: str) -> None: ...
+
+def process_native(path: str) -> pa.RecordBatch: ...
+def process_arrow_batch(batch: pa.RecordBatch) -> pa.RecordBatch: ...
+def process_rust_structs(docs: list[Document]) -> list[Document]: ...
+def process_dicts_batch(docs: list[dict[str, Any]]) -> list[dict[str, Any]]: ...
+def process_dicts_loop(doc: dict[str, Any]) -> dict[str, Any]: ...

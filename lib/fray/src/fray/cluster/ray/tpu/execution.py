@@ -46,7 +46,7 @@ from ray.exceptions import (
 from ray.remote_function import RemoteFunction
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
-from fray.cluster.ray.tpu.config import get_tpu_config
+from fray.cluster.base import get_tpu_topology
 
 logger = logging.getLogger(__name__)
 
@@ -630,7 +630,7 @@ class SliceActor(ResourcePoolManager):
         pod_name = ray.util.accelerators.tpu.get_current_pod_name()
         tpe = _get_current_tpu_pod_type()
 
-        config = get_tpu_config(tpe)
+        config = get_tpu_topology(tpe)
 
         ip_address = socket.gethostbyname(socket.gethostname())
 
@@ -758,7 +758,7 @@ def run_on_pod(
     return ray.get(run_on_pod_ray.remote(remote_fn, tpu_type, num_slices, max_retries_preemption, max_retries_failure))
 
 
-@ray.remote(num_cpus=0.0, resources={"head_node": 0.001})
+@ray.remote(num_cpus=0.1, max_retries=-1, retry_exceptions=False)
 def run_on_pod_ray(
     remote_fn: RemoteFunction,
     tpu_type: str,

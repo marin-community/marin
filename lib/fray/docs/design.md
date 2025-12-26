@@ -109,8 +109,68 @@ worker_pool.py. The user code will typically listen on the queue for requests,
 take a lease, apply e.g. inference, then push the inference result on a result
 queue for retrieval.
 
-# Design
+## Actors (Job API)
 
+Actors are stateful services that maintain state across multiple method calls.
+They are used in a few places in Marin for distributed coordination. We may
+phase them out but they are useful for compatibility with existing Ray code.
+
+```python
+from fray.job import fray_job_ctx
+
+ctx = fray_job_ctx()
+
+# Create an actor
+actor = ctx.create_actor(
+    MyActorClass,
+    constructor_arg1,
+    name="my-actor",
+    get_if_exists=True,
+    lifetime="detached",
+    num_cpus=0
+)
+
+future = actor.my_method.remote(arg1, arg2)
+result = ctx.get(future)
+```
+
+Named actors enable workers to share the same actor instance:
+
+```python
+# Worker 1: Create
+curriculum = ctx.create_actor(
+    Curriculum,
+    config,
+    name="curriculum",
+    get_if_exists=True
+)
+
+# Worker 2: Get same instance
+curriculum = ctx.create_actor(
+    Curriculum,
+    config,  # Ignored if actor exists
+    name="curriculum",
+    get_if_exists=True
+)
+```
+
+### Integration with Fray Primitives
+
+Actor method results are compatible with Fray's put/get/wait:
+
+```python
+future = actor.compute.remote(data)
+result = ctx.get(future)
+
+futures = [actor.process.remote(i) for i in range(10)]
+ready, pending = ctx.wait(futures, num_returns=5)
+results = [ctx.get(f) for f in ready]
+
+actor_ref = ctx.put(actor)
+actor = ctx.get(actor_ref)
+```
+
+# Design
 
 Fray provides 2 related interfaces for _cluster_ vs _job_ level APIs.
 

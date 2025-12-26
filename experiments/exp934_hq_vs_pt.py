@@ -30,20 +30,23 @@ Metrics: Paloma Loss, Tulu3 Validation Loss, MMLU Accuracy
 # PT = Pretraining
 # HQ = High Quality
 
-from experiments.anneal_config import AnnealConfig
-from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
-from experiments.defaults import default_anneal, default_tokenize
-from experiments.pretraining_datasets.dolmino import tokenize_dolmino, tokenize_dolmino_math
-from experiments.exp575_wikipedia_markdownify import wikipedia_resiliparse_custom_fork
-from experiments.exp579_ar5iv_markdownify import ar5iv_no_problem_resiliparse_custom_fork
-from experiments.exp822_stackexchange_markdownify import stackexchange_text_resiliparse_custom_fork
-from experiments.llama import llama3_tokenizer
-from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
-from experiments.posttrain.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
-from marin.execution.executor import executor_main
+from fray.cluster import ResourceConfig
+from marin.execution.executor import ExecutorStep, executor_main, this_output_path, versioned
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.processing.tokenize.data_configs import lm_mixture_data_config
-from marin.resources import TpuPodConfig
+from marin.schemas.web.convert import HtmlToMarkdownConfig, ResiliparseConfig
+from marin.schemas.web.selectors import ARXIV_BLACKLISTED_SELECTORS, WIKI_BLACKLISTED_SELECTORS
+from marin.transform.ar5iv.transform_ar5iv import Ar5ivExtractionConfig, process_ar5iv_dump
+from marin.transform.wikipedia.transform_wikipedia import WikiExtractionConfig, process_wiki_dump
+
+from experiments.anneal_config import AnnealConfig
+from experiments.defaults import default_anneal, default_tokenize
+from experiments.exp822_stackexchange_markdownify import stackexchange_text_resiliparse_custom_fork
+from experiments.llama import llama3_tokenizer
+from experiments.posttrain.instruction_datasets import tulu3_flat_llama_tokenized_as_validation
+from experiments.pretraining_datasets import NEMOTRON_WEIGHTS, tokenize_nemotron
+from experiments.pretraining_datasets.dclm import DCLM_MIXTURE_WEIGHTS, dclm_components_llama3
+from experiments.pretraining_datasets.dolmino import tokenize_dolmino, tokenize_dolmino_math
 
 # 1. Original mix: DCLM + StarCoder + ProofPile
 original_mix = lm_mixture_data_config(
@@ -87,6 +90,50 @@ nemotron_code_dolmino_mix = lm_mixture_data_config(
 )
 
 # 4. Full mix with everything
+
+# Wikipedia resiliparse custom fork step (data already exists at hardcoded path)
+wikipedia_resiliparse_custom_fork = (
+    ExecutorStep(
+        name="documents/wikipedia-resiliparse-custom-fork",
+        fn=process_wiki_dump,
+        config=WikiExtractionConfig(
+            input_path="gs://marin-us-central2/raw/wikipedia-a7dad0/20241201",
+            revision=versioned("20241201"),
+            output_path=this_output_path(),
+            extract_method="resiliparse",
+            extract_config=ResiliparseConfig(
+                links=False,
+                skip_elements=WIKI_BLACKLISTED_SELECTORS,
+                markdownify_config=HtmlToMarkdownConfig(include_images=False, include_links=False),
+            ),
+            remove_reference_section=versioned(True),
+            digit_threshold=versioned(50),
+            word_threshold=versioned(70),
+            special_char_threshold=versioned(50),
+        ),
+    )
+    .with_output_path("documents/wikipedia-resiliparse-custom-fork-2569de")
+    .cd("20241201")
+)
+
+# ar5iv resiliparse custom fork step (data already exists at hardcoded path)
+ar5iv_no_problem_resiliparse_custom_fork = ExecutorStep(
+    name="documents/ar5iv/ar5iv-04-2024-no-problem",
+    fn=process_ar5iv_dump,
+    config=Ar5ivExtractionConfig(
+        input_path="gs://marin-us-central2/raw/ar5iv/ar5iv-04-2024-no-problem-49c4e3/202404",
+        revision="042024",
+        output_path=this_output_path("resiliparse-custom-fork"),
+        extract_method=versioned("resiliparse"),
+        extract_config=ResiliparseConfig(
+            links=versioned(False),
+            prepend_title=True,
+            skip_elements=ARXIV_BLACKLISTED_SELECTORS,
+        ),
+        remove_reference_section=versioned(True),
+    ),
+).with_output_path("documents/ar5iv/ar5iv-04-2024-no-problem-3971f")
+
 # Create the medu science QA dataset
 # MMLU Science QA tokenization
 medu_mmlu_science_qa_tokenized = default_tokenize(
@@ -177,7 +224,7 @@ def run_cooldown_ablation():
                 data_mix, {"tulu_sft": tulu3_flat_llama_tokenized_as_validation}
             ),
             num_anneal_training_tokens=anneal_tokens,
-            resources=TpuPodConfig(tpu_type=tpu_type, slice_count=node_count),
+            resources=ResourceConfig.with_tpu(tpu_type, slice_count=node_count),
             train_batch_size=2048,
         )
 

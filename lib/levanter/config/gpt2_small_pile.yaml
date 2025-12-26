@@ -4,16 +4,16 @@ model:
   hidden_dim: 768
   num_heads: 12
   num_layers: 12
-  seq_len: 2048
+  max_seq_len: 2048
   gradient_checkpointing: true
   scale_attn_by_inverse_layer_idx: true
+train_seq_len: 2048
 trainer:
   tracker:
     project: "levanter"
     tags: [ "pile", "gpt2"]
 
   mp: p=f32,c=bfloat16
-  model_axis_size: 1
 
   train_batch_size: 256
   num_train_steps: 50000

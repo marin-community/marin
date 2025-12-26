@@ -13,7 +13,6 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dynamic = ["version"]
 
 [project.urls]
 Homepage = "https://github.com/marin-community/marin"
@@ -30,8 +29,23 @@ cache-keys = [
     "Cargo.toml",
     "Cargo.lock",
     "pyproject.toml",
-    "src/**/*.rs"
+    "src/**/*.rs",
+    "dupekit/*.pyi"
 ]
 
 [dependency-groups]
-test = ["pytest", "pytest-timeout"]
+test = [
+    "huggingface-hub",
+    "pyarrow>=11.0.0",
+    "pytest>=8.3.2",
+    "pytest-timeout"
+]
+dev = [
+    { include-group = "test" },
+]
+
+[project.optional-dependencies]
+benchmark = [
+    "pytest-benchmark>=5.2.3",
+    "pytest-memray>=1.8.0"
+]

@@ -17,20 +17,16 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, NewType
+from enum import StrEnum
+from typing import Any, Literal, NewType, Self
 
 logger = logging.getLogger(__name__)
 
-# Job types
-JobId = NewType("JobId", str)
-JobStatus = Literal["pending", "running", "succeeded", "failed", "stopped"]
-
-# Device type literals
 TpuType = Literal[
     "v4-8",
     "v4-16",
@@ -50,14 +46,6 @@ TpuType = Literal[
     "v5litepod-64",
     "v5litepod-128",
     "v5litepod-256",
-    "v5e-1",
-    "v5e-4",
-    "v5e-8",
-    "v5e-16",
-    "v5e-32",
-    "v5e-64",
-    "v5e-128",
-    "v5e-256",
     "v5p-8",
     "v5p-16",
     "v5p-32",
@@ -157,32 +145,146 @@ TpuType = Literal[
     "v5p-12032",
     "v5p-12160",
     "v5p-12288",
+    "v6e-1",
+    "v6e-4",
+    "v6e-8",
+    "v6e-16",
+    "v6e-32",
+    "v6e-64",
+    "v6e-128",
+    "v6e-256",
 ]
 
 GpuType = Literal[
-    "A100",
-    "H100",
-    "V100",
-    "T4",
-    "L4",
-    "A10G",
     "A10",
+    "A100",
+    "A10G",
+    "B100",
+    "H100",
+    "H200",
+    "L4",
+    "T4",
+    "V100",
+    "auto",
 ]
+
+
+# TPU configurations are complicated. The number of chips per host is
+# always the same for a particular generation, but the number of VMs per host
+# can vary based on the pod size.
+#
+# Even more confusingly, Google sometimes refers to TPU cores
+# as chips and vice-versa: v4 and v5p topologies refer to "core", but
+# v5e and v6e topologies refer to "chips". It's doubly confusing as some
+# topologies split 2 VMs per host, while others do not. We just write them
+# all down here.
+@dataclass(frozen=True)
+class TpuTopologyInfo:
+    name: str
+    chip_count: int
+    host_count: int
+    vm_count: int
+    chips_per_vm: int
+
+
+TPU_TOPOLOGIES: list[TpuTopologyInfo] = [
+    # https://cloud.google.com/tpu/docs/v4
+    TpuTopologyInfo("v4-8", 4, 1, 1, 4),
+    TpuTopologyInfo("v4-16", 8, 2, 2, 4),
+    TpuTopologyInfo("v4-32", 16, 4, 4, 4),
+    TpuTopologyInfo("v4-64", 32, 8, 8, 4),
+    TpuTopologyInfo("v4-128", 64, 16, 16, 4),
+    TpuTopologyInfo("v4-256", 128, 32, 32, 4),
+    TpuTopologyInfo("v4-512", 256, 64, 64, 4),
+    TpuTopologyInfo("v4-1024", 512, 128, 128, 4),
+    TpuTopologyInfo("v4-2048", 1024, 256, 256, 4),
+    TpuTopologyInfo("v4-4096", 2048, 512, 512, 4),
+    # https://cloud.google.com/tpu/docs/v5e
+    TpuTopologyInfo("v5litepod-1", 1, 1, 1, 1),
+    TpuTopologyInfo("v5litepod-2", 2, 1, 1, 2),
+    TpuTopologyInfo("v5litepod-4", 4, 1, 1, 4),
+    TpuTopologyInfo("v5litepod-8", 8, 1, 1, 8),
+    TpuTopologyInfo("v5litepod-16", 16, 2, 4, 4),
+    TpuTopologyInfo("v5litepod-32", 32, 4, 8, 4),
+    TpuTopologyInfo("v5litepod-64", 64, 8, 16, 4),
+    TpuTopologyInfo("v5litepod-128", 128, 16, 32, 4),
+    TpuTopologyInfo("v5litepod-256", 256, 32, 64, 4),
+    # https://cloud.google.com/tpu/docs/v5p
+    TpuTopologyInfo("v5p-8", 4, 1, 1, 4),
+    TpuTopologyInfo("v5p-16", 8, 2, 2, 4),
+    TpuTopologyInfo("v5p-32", 16, 4, 4, 4),
+    TpuTopologyInfo("v5p-64", 32, 8, 8, 4),
+    TpuTopologyInfo("v5p-128", 64, 16, 16, 4),
+    TpuTopologyInfo("v5p-256", 128, 32, 32, 4),
+    TpuTopologyInfo("v5p-512", 256, 64, 64, 4),
+    TpuTopologyInfo("v5p-1024", 512, 128, 128, 4),
+    TpuTopologyInfo("v5p-2048", 1024, 256, 256, 4),
+    TpuTopologyInfo("v5p-4096", 2048, 512, 512, 4),
+    TpuTopologyInfo("v5p-8192", 4096, 1024, 1024, 4),
+    TpuTopologyInfo("v5p-12288", 6144, 1536, 1536, 4),
+    # https://cloud.google.com/tpu/docs/v6e
+    TpuTopologyInfo("v6e-1", 1, 1, 1, 1),
+    TpuTopologyInfo("v6e-4", 4, 1, 1, 4),
+    TpuTopologyInfo("v6e-8", 8, 1, 1, 8),
+    TpuTopologyInfo("v6e-16", 16, 4, 4, 4),
+    TpuTopologyInfo("v6e-32", 32, 8, 8, 4),
+    TpuTopologyInfo("v6e-64", 64, 16, 16, 4),
+    TpuTopologyInfo("v6e-128", 128, 32, 32, 4),
+    TpuTopologyInfo("v6e-256", 256, 64, 64, 4),
+]
+
+
+def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
+    """Get TPU topology by type name."""
+    for config in TPU_TOPOLOGIES:
+        if config.name == tpu_type:
+            return config
+    raise ValueError(f"Unknown TPU type: {tpu_type}")
+
+
+DeviceKind = Literal["cpu", "gpu", "tpu"]
 
 
 @dataclass(frozen=True)
 class CpuConfig:
     """CPU-only device configuration."""
 
-    pass
+    kind: DeviceKind = "cpu"
+    variant: str = "cpu"
+
+    def chip_count(self) -> int:
+        """CPU has no accelerator chips."""
+        return 0
+
+    def device_flops(self, dtype: str = "bf16") -> float:
+        """CPU FLOPS not tracked."""
+        raise NotImplementedError("CPU FLOPS not available")
 
 
 @dataclass(frozen=True)
 class GpuConfig:
     """GPU device configuration."""
 
-    type: GpuType
+    variant: GpuType
+    kind: DeviceKind = "gpu"
     count: int = 1
+
+    def chip_count(self) -> int:
+        """Total number of GPU chips."""
+        return self.count
+
+    def device_flops(self, dtype: str = "bf16") -> float:
+        """Peak FLOP/s for a single GPU."""
+        from fray.cluster.device_flops import device_flops
+
+        flops = device_flops(self.variant, dtype)
+        if flops is None:
+            raise ValueError(f"Unknown device/dtype: {self.variant}/{dtype}")
+        return flops
+
+    def total_flops(self, dtype: str = "bf16") -> float:
+        """Total peak FLOP/s across all GPUs."""
+        return self.device_flops(dtype) * self.count
 
 
 @dataclass(frozen=True)
@@ -190,16 +292,34 @@ class TpuConfig:
     """TPU device configuration.
 
     Args:
-        type: TPU accelerator type (e.g., "v5e-16", "v4-8")
-        count: Number of TPU chips to request
+        variant: TPU accelerator type (e.g., "v5litepod-16", "v4-8")
         topology: Optional topology specification (e.g., "2x2x1")
-        num_slices: Number of TPU slices for multi-slice execution (supports sequences for fallback)
     """
 
-    type: TpuType
-    count: int
+    variant: TpuType
+    kind: DeviceKind = "tpu"
     topology: str | None = None
-    num_slices: int | Sequence[int] = 1
+
+    def chip_count(self) -> int:
+        """Total number of TPU chips."""
+        return get_tpu_topology(self.variant).chip_count
+
+    def vm_count(self) -> int:
+        """Number of VMs in the TPU pod."""
+        return get_tpu_topology(self.variant).vm_count
+
+    def device_flops(self, dtype: str = "bf16") -> float:
+        """Peak FLOP/s for a single TPU chip."""
+        from fray.cluster.device_flops import device_flops
+
+        flops = device_flops(self.variant, dtype)
+        if flops is None:
+            raise ValueError(f"Unknown device/dtype: {self.variant}/{dtype}")
+        return flops
+
+    def total_flops(self, dtype: str = "bf16") -> float:
+        """Total peak FLOP/s across all TPU chips."""
+        return self.device_flops(dtype) * self.chip_count()
 
 
 DeviceConfig = CpuConfig | GpuConfig | TpuConfig
@@ -214,7 +334,8 @@ class ResourceConfig:
         ram: RAM requirement (e.g., "8g", "16g")
         disk: Disk space requirement (e.g., "10g", "100g")
         device: Device configuration (CPU, GPU, or TPU)
-        count: Number of workers with these resources
+        replicas: Number of replicas/slices (for multislice TPU training)
+        preemptible: Whether the job can be preempted
         regions: Preferred cloud regions for job placement
     """
 
@@ -222,8 +343,38 @@ class ResourceConfig:
     ram: str = "128m"
     disk: str = "1g"
     device: DeviceConfig = field(default_factory=CpuConfig)
-    count: int = 1
+    replicas: int = 1
+    preemptible: bool = True
     regions: Sequence[str] | None = None
+
+    def chip_count(self) -> int:
+        """Total accelerator chips across all replicas/slices."""
+        return self.device.chip_count() * self.replicas
+
+    def device_flops(self, dtype: str = "bf16") -> float:
+        """Peak FLOP/s for a single device."""
+        return self.device.device_flops(dtype)
+
+    def total_flops(self, dtype: str = "bf16") -> float:
+        """Total peak FLOP/s across all devices."""
+        if isinstance(self.device, CpuConfig):
+            # just use some reasonable number
+            return 100e9
+        return self.device_flops(dtype) * self.chip_count()
+
+    @staticmethod
+    def with_tpu(tpu_type: str, slice_count: int = 1, **kwargs) -> ResourceConfig:
+        device = TpuConfig(variant=tpu_type)
+        return ResourceConfig(device=device, replicas=slice_count, **kwargs)
+
+    @staticmethod
+    def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs) -> ResourceConfig:
+        device = GpuConfig(variant=gpu_type, count=count)
+        return ResourceConfig(device=device, **kwargs)
+
+    @staticmethod
+    def with_cpu(**kwargs) -> ResourceConfig:
+        return ResourceConfig(device=CpuConfig(), **kwargs)
 
 
 @dataclass
@@ -238,14 +389,14 @@ class EnvironmentConfig:
         docker_image: Docker image for containerized execution
         pip_packages: Additional pip packages to install
         env_vars: Environment variables to set
-        extra_dependency_groups: Extra dependency groups for uv (e.g., ["tpu", "eval"])
+        extras: Extra dependency groups for uv (e.g., ["tpu", "eval"])
     """
 
     workspace: str | None = None
     docker_image: str | None = None
     pip_packages: Sequence[str] = field(default_factory=list)
     env_vars: dict[str, str] = field(default_factory=dict)
-    extra_dependency_groups: Sequence[str] = field(default_factory=list)
+    extras: Sequence[str] = field(default_factory=list)
 
     def __post_init__(self):
         if self.workspace and self.docker_image:
@@ -253,43 +404,40 @@ class EnvironmentConfig:
         if not self.workspace and not self.docker_image:
             raise ValueError("Must specify either workspace or docker_image")
 
+    @staticmethod
+    def create(*args, **kw):
+        return create_environment(*args, **kw)
+
+
+@dataclass(frozen=True)
+class BinaryEntrypoint:
+    command: str
+    args: Sequence[str]
+
+
+@dataclass(frozen=True)
+class CallableEntrypoint:
+    callable: Callable[..., Any]
+    args: Sequence[Any] = field(default_factory=tuple)
+    kwargs: dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass(frozen=True)
 class Entrypoint:
-    """Job entrypoint specification.
+    callable_entrypoint: CallableEntrypoint | None = None
+    binary_entrypoint: BinaryEntrypoint | None = None
 
-    Supports two execution modes:
-    - Command line: Execute any binary with arguments (e.g., "python", "uv", "bash")
-    - Function call: Execute a zero-argument callable directly (for TPU/Ray remote execution)
+    @staticmethod
+    def from_callable(
+        c: Callable[..., Any],
+        args: Sequence[Any] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> Self:
+        return Entrypoint(callable_entrypoint=CallableEntrypoint(callable=c, args=args, kwargs=kwargs or {}))
 
-    Exactly one of (binary, callable) must be specified.
-
-    Args:
-        binary: Binary to execute (e.g., "python", "uv", "bash")
-        args: Command-line arguments for the binary
-        callable: Zero-argument callable for direct execution (use closures for arguments)
-
-    Examples:
-        # Command-line execution
-        Entrypoint(binary="python", args=["train.py", "--config", "config.yaml"])
-        Entrypoint(binary="uv", args=["run", "python", "script.py"])
-
-        # Function execution (with closure for arguments)
-        config = Config(...)
-        Entrypoint(callable=lambda: train_fn(config))
-    """
-
-    binary: str | None = None
-    args: Sequence[str] = field(default_factory=list)
-    callable: Callable[[], Any] | None = None
-
-    def __post_init__(self):
-        if self.binary is None and self.callable is None:
-            raise ValueError("Must specify either binary or callable")
-        if self.binary is not None and self.callable is not None:
-            raise ValueError("Cannot specify both binary and callable")
-        if self.args and self.callable is not None:
-            raise ValueError("args only valid with binary, not callable")
+    @staticmethod
+    def from_binary(command: str, args: Sequence[str]) -> Self:
+        return Entrypoint(binary_entrypoint=BinaryEntrypoint(command=command, args=args))
 
 
 @dataclass
@@ -308,14 +456,41 @@ class JobRequest:
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     environment: EnvironmentConfig | None = None
 
+    max_retries_failure: int = 0
+    max_retries_preemption: int = 100
+
+    def __post_init__(self):
+        if " " in self.name:
+            raise ValueError("Job name must not contain spaces")
+
+
+JobId = NewType("JobId", str)
+
+
+class JobStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    STOPPED = "stopped"
+
+    @staticmethod
+    def finished(status: Self) -> bool:
+        return status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED)
+
+
+@dataclass
+class TaskStatus:
+    status: JobStatus
+    error_message: str | None = None
+
 
 @dataclass
 class JobInfo:
     job_id: JobId
     status: JobStatus
+    tasks: list[TaskStatus]
     name: str
-    start_time: float | None = None
-    end_time: float | None = None
     error_message: str | None = None
 
 
@@ -324,61 +499,51 @@ def create_environment(
     docker_image: str | None = None,
     pip_packages: Sequence[str] | None = None,
     env_vars: dict[str, str] | None = None,
-    extra_dependency_groups: Sequence[str] | None = None,
+    extras: Sequence[str] | None = None,
 ) -> EnvironmentConfig:
-    """Create an EnvironmentConfig with sensible defaults.
+    """Create an EnvironmentConfig
 
-    Sets default environment variables commonly needed for ML workloads:
+    By default, sets the following environment variables:
     - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
     - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
+    - HF_TOKEN
+    - WANDB_API_KEY
 
     Args:
         workspace: Path to workspace root (default: current directory)
         docker_image: Docker image (mutually exclusive with workspace)
         pip_packages: Additional pip packages to install
         env_vars: Custom environment variables (merged with defaults)
-        extra_dependency_groups: Extra dependency groups for uv
+        extras: Extra dependency groups for uv
 
     Returns:
         EnvironmentConfig with defaults applied
     """
-    import os
 
-    # Use current directory as workspace if neither workspace nor docker_image specified
     if workspace is None and docker_image is None:
         workspace = os.getcwd()
 
-    # Default environment variables for ML workloads
     default_env_vars = {
         "HF_DATASETS_TRUST_REMOTE_CODE": "1",
         "TOKENIZERS_PARALLELISM": "false",
+        "HF_TOKEN": os.getenv("HF_TOKEN"),
+        "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
     }
 
-    # Merge user env vars with defaults (user values take precedence)
-    merged_env_vars = {**default_env_vars, **(env_vars or {})}
+    # Filter out None values - Ray requires all env var values to be strings
+    merged_env_vars = {k: v for k, v in {**default_env_vars, **(env_vars or {})}.items() if v is not None}
 
     return EnvironmentConfig(
         workspace=workspace,
         docker_image=docker_image,
         pip_packages=list(pip_packages or []),
         env_vars=merged_env_vars,
-        extra_dependency_groups=list(extra_dependency_groups or []),
+        extras=list(extras or []),
     )
 
 
 class Cluster(ABC):
-    """Abstract interface for cluster job scheduling.
-
-    Provides methods to launch jobs, monitor their progress, and manage
-    their lifecycle. Implementations include RayCluster and LocalCluster.
-
-    The Cluster abstraction is designed to handle both:
-    1. CLI-style job submissions (fire-and-forget batch jobs)
-    2. ray.remote-style function execution (distributed computation)
-
-    Any execution pattern that resembles job-level scheduling (as opposed
-    to task-level execution within a running job) should use this interface.
-    """
+    """Abstract interface for cluster job scheduling."""
 
     @abstractmethod
     def launch(self, request: JobRequest) -> JobId:
@@ -397,17 +562,17 @@ class Cluster(ABC):
         ...
 
     @abstractmethod
-    def monitor(self, job_id: JobId) -> Iterator[str]:
-        """Stream logs from a running job.
+    def monitor(self, job_id: JobId) -> JobInfo:
+        """Stream logs from a running job, blocking until completion.
 
-        Yields log lines as they become available. Blocks until the job
+        Logs are emitted directly via the logger. Blocks until the job
         completes or is terminated.
 
         Args:
             job_id: Job identifier returned by launch()
 
-        Yields:
-            Log lines as they become available
+        Returns:
+            JobInfo with final job status
 
         Raises:
             KeyError: If job_id is not found
@@ -452,28 +617,40 @@ class Cluster(ABC):
         """
         ...
 
-    @abstractmethod
-    @contextmanager
-    def connect(self) -> Iterator[None]:
-        """Establish connection to cluster.
+    def wait(self, job_id: JobId | Sequence[JobId], raise_on_failure: bool = False) -> JobInfo | list[JobInfo]:
+        """Block until the specified job(s) complete, returning final status.
 
-        For RayCluster, this creates SSH tunnels and sets up dashboard access.
-        For LocalCluster, this is a no-op.
+        Args:
+            job_id: Single job ID or sequence of job IDs to wait for
+            raise_on_failure: If True, raises RuntimeError when any job fails
 
-        Yields:
-            None - connection is active within context
+        Returns:
+            JobInfo for single job, or list of JobInfo for multiple jobs
         """
-        ...
+        if isinstance(job_id, str):
+            return self._wait_single(job_id, raise_on_failure)
 
-    def wait(self, job_id: JobId) -> JobInfo:
-        """Block until the specified job completes, returning its final status."""
-        # default implementation polls until job is no longer running
-        logger.info(f"[WAIT] Starting wait for job {job_id}")
+        # Multiple jobs: wait for all, then check for failures
+        results = [self._wait_single(jid, raise_on_failure=False) for jid in job_id]
+        if raise_on_failure:
+            failed = [r for r in results if r.status in (JobStatus.FAILED, JobStatus.STOPPED)]
+            if failed:
+                msg = "; ".join(f"{r.job_id}: {r.error_message}" for r in failed)
+                raise RuntimeError(f"{len(failed)} job(s) failed: {msg}")
+        return results
+
+    def _wait_single(self, job_id: JobId, raise_on_failure: bool = False) -> JobInfo:
+        """Wait for a single job to complete."""
+        logger.info(f"Starting wait for job {job_id}")
+        sleep_secs = 0.1
+        max_sleep_secs = 10.0
 
         while True:
             info = self.poll(job_id)
-            logger.info(f"[WAIT] Job {job_id} status: {info.status}")
-            if info.status in ["succeeded", "failed", "stopped"]:
-                logger.info(f"[WAIT] Job {job_id} completed with status {info.status}")
+            if JobStatus.finished(info.status):
+                logger.info(f"Job {job_id} completed with status {info.status}")
+                if raise_on_failure and info.status in (JobStatus.FAILED, JobStatus.STOPPED):
+                    raise RuntimeError(f"Job {job_id} failed with status {info.status} and error: {info.error_message}")
                 return info
-            time.sleep(0.5)
+            time.sleep(sleep_secs)
+            sleep_secs = min(sleep_secs * 2, max_sleep_secs)

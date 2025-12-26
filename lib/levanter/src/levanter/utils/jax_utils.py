@@ -16,7 +16,6 @@ import jax
 import numpy as np
 from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
-from jax.experimental import mesh_utils
 from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
@@ -26,6 +25,7 @@ from haliax import is_named_array
 from haliax._src.util import index_where
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceAxis, ResourceMapping
+from levanter.utils.mesh import create_mesh_from_axis_specs
 
 from levanter.utils.tree_utils import key_path_to_str, tree_flatten_one_level_with_keys
 
@@ -56,7 +56,16 @@ def use_cpu_device():
 def local_cpu_mesh():
     """Temporarily sets the default device to CPU and creates a mesh with a single CPU device"""
     cpu = jax.local_devices(backend="cpu")[0]
-    mesh = jax.make_mesh((1, 1, 1), (ResourceAxis.REPLICA, ResourceAxis.DATA, ResourceAxis.MODEL), devices=[cpu])
+    mesh = create_mesh_from_axis_specs(
+        ici_axes={
+            ResourceAxis.REPLICA: 1,
+            ResourceAxis.DATA: 1,
+            ResourceAxis.MODEL: 1,
+            ResourceAxis.CONTEXT: 1,
+        },
+        dcn_axes={},
+        devices=[cpu],
+    )
     with use_cpu_device(), haliax.partitioning.set_mesh(mesh):
         yield mesh
 
@@ -126,7 +135,13 @@ def barrier_sync(timeout: float = 200):
     if jax.process_count() == 1:
         return
     import jax._src.distributed as distributed
-    from jaxlib.xla_extension import DistributedRuntimeClient
+
+    try:
+        from jaxlib.xla_extension import DistributedRuntimeClient
+    except ModuleNotFoundError:  # jaxlib>=0.6.2
+        from jax._src.lib import _jax as _jax_lib
+
+        DistributedRuntimeClient = _jax_lib.DistributedRuntimeClient
 
     client: Optional[DistributedRuntimeClient] = distributed.global_state.client
 
@@ -328,29 +343,6 @@ def best_effort_sharding(shape, *, devices=None, mesh=None):
         return sharding
 
 
-def create_fsdp_mesh(
-    replica_ici_axis_size: int,
-    data_ici_axis_size: int,
-    model_axis_size: int,
-    replica_dcn_axis_size: int = 1,
-    data_dcn_axis_size: int = 1,
-):
-    is_multislice = hasattr(jax.devices()[0], "slice_index")
-    if is_multislice:
-        devices = mesh_utils.create_hybrid_device_mesh(
-            (replica_ici_axis_size, data_ici_axis_size, model_axis_size),
-            (replica_dcn_axis_size, data_dcn_axis_size, 1),
-            allow_split_physical_axes=True,
-        )
-    else:
-        devices = mesh_utils.create_device_mesh(
-            (replica_ici_axis_size, data_ici_axis_size, model_axis_size),
-            allow_split_physical_axes=True,
-        )
-
-    return Mesh(devices, (ResourceAxis.REPLICA, ResourceAxis.DATA, ResourceAxis.MODEL))
-
-
 def estimated_free_device_memory(device=None) -> Optional[float]:
     """
     Returns free memory in GiB. If the device doesn't support memory stats, returns None. If no device is provided,
@@ -506,7 +498,7 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
         arr = jax.lax.with_sharding_constraint(arr[valid_device_for_process], pspec)
 
         if isinstance(x, hax.NamedArray):
-            return hax.named(arr, x.axes)
+            return hax.named(arr, x.axis_names)
         else:
             return arr
 

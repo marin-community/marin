@@ -29,7 +29,7 @@ def test_apply_rotary_pos_emb(test_seq_len):
         return torch.from_numpy(np.array(named_array.array))
 
     _llama_config = _get_llama_config()
-    Pos = _llama_config.Pos
+    Pos = _llama_config.max_Pos
     Heads = _llama_config.attention_config().Heads
     HeadSize = _llama_config.attention_config().HeadSize
     Batch = hax.Axis("batch", 3)

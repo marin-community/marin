@@ -21,7 +21,8 @@ import os
 import shutil
 from dataclasses import dataclass
 
-import ray
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
+from fray.cluster.base import TpuConfig
 from levanter.compat.hf_checkpoints import RepoRef
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.distributed import RayConfig
@@ -31,10 +32,9 @@ from levanter.models.lm_model import LmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 
-from marin.evaluation.utils import download_from_gcs, is_remote_path, discover_levanter_checkpoints
+from marin.evaluation.utils import discover_levanter_checkpoints, download_from_gcs, is_remote_path
 from marin.execution.executor import ExecutorStep, InputName, this_output_path
 from marin.utilities.executor_utils import ckpt_path_to_step_name
-from marin.resources import ResourceConfig
 
 HUGGINGFACE_CACHE_PATH = "/tmp/huggingface-cache"
 GCSFUSE_MOUNT_POINT = "/opt/gcsfuse_mount"
@@ -106,11 +106,6 @@ def default_lm_log_probs(
     )
 
 
-@ray.remote(
-    memory=64 * 1024 * 1024 * 1024,
-    max_calls=1,
-    runtime_env={"env_vars": {"HF_HOME": HUGGINGFACE_CACHE_PATH}},
-)
 def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     """
     Visualizes log probabilities of a language model.
@@ -172,19 +167,30 @@ def evaluate_lm_log_probs(config: EvalLmConfig) -> None:
     else:
         max_eval_batches = config.max_samples_per_dataset // config.per_device_batch_size
 
+    wandb_tags = ["eval_lm", *(config.wandb_tags or [])]
     levanter_config = LevanterEvalLmConfig(
         checkpoint_path=config.checkpoint_path if not config.checkpoint_is_hf else None,
         hf_checkpoint=RepoRef.from_string(config.checkpoint_path) if config.checkpoint_is_hf else None,
         model=config.model,
         data=config.datasets,
         trainer=TrainerConfig(
-            tracker=WandbConfig(project="marin", tags=["eval_lm", *config.wandb_tags], name=name),
+            tracker=WandbConfig(project="marin", tags=wandb_tags, name=name),
             ray=RayConfig(auto_start_cluster=False),
             per_device_eval_parallelism=config.per_device_batch_size,
             max_eval_batches=max_eval_batches,
         ),
         log_entropy=config.log_entropy,
     )
-    ray.get(
-        do_eval_lm.options(resources={"TPU": 4, f"{config.resource_config.tpu_type}-head": 1}).remote(levanter_config)
+
+    assert isinstance(config.resource_config.device, TpuConfig), "evaluate_lm_log_probs requires TPU resource config"
+
+    env_vars = {"HF_HOME": HUGGINGFACE_CACHE_PATH}
+    cluster = current_cluster()
+    job_request = JobRequest(
+        name=f"eval-lm-{name}",
+        resources=config.resource_config,
+        entrypoint=Entrypoint.from_callable(do_eval_lm, args=[levanter_config]),
+        environment=EnvironmentConfig.create(env_vars=env_vars),
     )
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)

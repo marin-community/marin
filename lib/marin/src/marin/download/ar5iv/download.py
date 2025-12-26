@@ -30,7 +30,7 @@ from dataclasses import dataclass
 
 import draccus
 import fsspec
-from zephyr import Dataset, flow_backend
+from zephyr import Backend, Dataset
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,6 @@ logger = logging.getLogger(__name__)
 class DownloadConfig:
     input_path: str
     output_path: str
-    chunk_size: int = 20 * 1024 * 1024  # 20MB - not heavily used now, but left for compatibility
     max_files: int | None = None  # Maximum number of shards to process
 
 
@@ -127,14 +126,12 @@ def download(cfg: DownloadConfig) -> None:
                 )
 
     # Execute pipeline with zephyr
-    backend = flow_backend()
-
     pipeline = (
         Dataset.from_list(shard_tasks)
         .map(process_shard)
         .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
     )
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline)
 
     logger.info("Transfer completed successfully!")
 

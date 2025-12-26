@@ -26,13 +26,6 @@ See https://github.com/stanford-crfm/marin/issues/163 for more details.
 import os
 from dataclasses import dataclass, field
 
-from experiments.defaults import default_tokenize, default_train
-from experiments.pretraining_datasets import tokenize_dolmino_subset
-from experiments.exp274_mmlu_quality_classifier import (
-    dclm_negative_examples_in_dolma_format,
-    mmlu_eval_aux_in_dolma_format,
-)
-from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
 from marin.classifiers.utils import DatasetConfig
 from marin.core.runtime import TaskConfig
 from marin.execution.executor import (
@@ -42,7 +35,6 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
-from marin.processing.tokenize import lm_data_config
 from marin.processing.classification.bert.train_bert import (
     TrainBertClassifierConfig,
 )
@@ -58,6 +50,15 @@ from marin.processing.classification.fasttext.train_fasttext import (
     train as train_fasttext,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
+from marin.processing.tokenize import lm_data_config
+
+from experiments.defaults import default_tokenize, default_train
+from experiments.exp274_mmlu_quality_classifier import (
+    dclm_negative_examples_in_dolma_format,
+    mmlu_eval_aux_in_dolma_format,
+)
+from experiments.llama import llama3_tokenizer, llama_1_4b, llama_1_4b_train_config
+from experiments.pretraining_datasets import tokenize_dolmino_subset
 
 dolmino_dclm = tokenize_dolmino_subset("dclm")
 
@@ -154,7 +155,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                 ),
                 task=TaskConfig(max_in_flight=500),
             ),
-            pip_dependency_groups=["fasttext", "datasets", "filelock"],
+            pip_dependency_groups=["filelock"],
         )
 
         bert_inference = ExecutorStep(
