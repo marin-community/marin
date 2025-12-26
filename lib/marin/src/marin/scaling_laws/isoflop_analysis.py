@@ -700,7 +700,7 @@ def fit_scaling_laws(
 ) -> tuple[
     list[MinimaRecord],
     dict[str, tuple[float, float]],
-    dict[tuple[str, float], tuple[float, float, float]],
+    dict[tuple[str, float], tuple[float, float, float, float, float]],
 ]:
     """
     Fit scaling laws and extract optimal configurations.
@@ -711,7 +711,8 @@ def fit_scaling_laws(
     Returns:
         - minima_records: List of dicts with optimal config info per (label, flops)
         - scaling_fits: Dict of {label: (alpha, A)} for N* ~ A * C^alpha
-        - fit_curves: Dict of {(label, flops): (a, b, c)} quadratic coefficients for plotting
+        - fit_curves: Dict of {(label, flops): (a, b, c, token_min, token_max)} quadratic coefficients
+          for plotting
     """
     if df is None or df.empty:
         return [], {}, {}
@@ -721,7 +722,7 @@ def fit_scaling_laws(
     buckets = sorted(df.flops.unique())
 
     minima_records: list[MinimaRecord] = []
-    fit_curves: dict[tuple[str, float], tuple[float, float, float]] = {}
+    fit_curves: dict[tuple[str, float], tuple[float, float, float, float, float]] = {}
 
     # Fit quadratic for each (label, budget) and find minima
     for lab in datasets:
