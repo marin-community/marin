@@ -719,8 +719,6 @@ def fit_scaling_laws(
 
             idx = (sub.tokens - N_star).abs().argmin()
             nearest_row = sub.iloc[idx]
-            run_name = nearest_row["name"]
-            meta = parse_isoflop_run_name(run_name)
 
             minima_records.append(
                 MinimaRecord(
@@ -728,9 +726,9 @@ def fit_scaling_laws(
                     flops=float(C),
                     optimal_tokens=N_star,
                     loss_at_optimal=loss_opt,
-                    hidden_dim=int(meta["d"]) if meta else 0,
-                    num_layers=int(meta["L"]) if meta else 0,
-                    batch_size=int(meta["B"]) if meta else 0,
+                    hidden_dim=int(nearest_row["hidden_dim"]),
+                    num_layers=int(nearest_row["num_layers"]),
+                    batch_size=int(nearest_row["batch_size"]),
                     optimal_params=float(nearest_row.get("params") or C / (6 * N_star)),
                 )
             )
@@ -774,9 +772,11 @@ def transform_metrics_for_isoflop(
     transforms it into the format expected by the analysis:
     columns: tokens, loss, flops, params, name, label
 
+    The DataFrame contains nested 'config' and 'summary' dicts from tracker_metrics.jsonl.
+
     Args:
         df: Raw metrics DataFrame from read_metrics_dataframe()
-        metric_key: Which metric column to use for loss
+        metric_key: Which metric column to use for loss (e.g., 'eval/paloma/c4_en/bpb')
         label_map: Optional mapping from experiment_name -> display label
 
     Returns:
@@ -785,39 +785,52 @@ def transform_metrics_for_isoflop(
     if df.empty:
         return pd.DataFrame(columns=["tokens", "loss", "flops", "params", "name", "label"])
 
-    # Get final metrics for each run (max step)
-    final_metrics = df.loc[df.groupby("run_path")["step"].idxmax()].copy()
-
     records = []
-    for _, row in final_metrics.iterrows():
+    for _, row in df.iterrows():
         run_path = row["run_path"]
         run_name = extract_run_name_from_path(run_path)
-        meta = parse_isoflop_run_name(run_name)
-        if meta is None:
-            logger.warning(f"Could not parse metadata from run name: {run_name}")
+
+        # Extract config and summary dicts
+        config = row.get("config", {}) or {}
+        summary = row.get("summary", {}) or {}
+        model_config = config.get("model", {}) or {}
+        trainer_config = config.get("trainer", {}) or {}
+
+        # Get tokens directly from summary
+        tokens = summary.get("throughput/total_tokens")
+        if tokens is None or pd.isna(tokens):
+            logger.warning(f"Missing throughput/total_tokens in summary for run {run_name}")
             continue
 
-        flops = meta["flops"]
+        # Get total FLOPs from summary (convert GFLOPs to FLOPs)
+        total_gflops = summary.get("throughput/total_gflops")
+        if total_gflops is None or pd.isna(total_gflops):
+            logger.warning(f"Missing throughput/total_gflops in summary for run {run_name}")
+            continue
+        flops = total_gflops * 1e9
+
         if flops < 1e18:
             continue
 
-        # Calculate tokens = steps * batch * seq_len
-        steps = row["step"]
-        batch = meta["B"]
-        tokens = steps * batch * SEQ_LEN
-
-        # Get loss from the metric column
-        loss = row.get(metric_key)
+        # Get loss from summary[metric_key]
+        loss = summary.get(metric_key)
         if loss is None or pd.isna(loss):
             logger.warning(f"Missing metric {metric_key} for run {run_name}")
             continue
 
-        params = row.get("parameter_count")
+        # Get parameter count from summary
+        params = summary.get("parameter_count")
         if params is None or pd.isna(params):
             params = None
 
-        # Determine label
-        exp_name = meta["experiment_name"]
+        # Get model architecture from config
+        hidden_dim = model_config.get("hidden_dim")
+        num_layers = model_config.get("num_layers")
+        batch_size = trainer_config.get("train_batch_size")
+
+        # Determine experiment name and label from run name
+        meta = parse_isoflop_run_name(run_name)
+        exp_name = meta["experiment_name"] if meta else run_name
         if label_map and exp_name in label_map:
             label = label_map[exp_name]
         else:
@@ -829,6 +842,9 @@ def transform_metrics_for_isoflop(
                 loss=loss,
                 flops=flops,
                 params=params,
+                hidden_dim=hidden_dim,
+                num_layers=num_layers,
+                batch_size=batch_size,
                 name=run_name,
                 label=label,
             )
