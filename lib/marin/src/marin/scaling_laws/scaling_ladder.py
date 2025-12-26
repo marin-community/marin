@@ -67,6 +67,7 @@ from marin.scaling_laws.isoflop_analysis import (
     predict_optimal_config,
 )
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
+from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
 
@@ -340,8 +341,8 @@ def scaling_ladder_suite(
     label_map: dict[str, str] | None = None,
     save_plots: bool = True,
     upload_to_wandb: bool = True,
-    wandb_entity: str = "marin-community",
-    wandb_project: str = "marin-analysis",
+    wandb_entity: str = WANDB_ENTITY,
+    wandb_project: str = f"{WANDB_PROJECT}-analysis",
 ) -> ScalingLadderSuite:
     """Create a complete scaling ladder: IsoFLOP analysis + optimal training runs.
 

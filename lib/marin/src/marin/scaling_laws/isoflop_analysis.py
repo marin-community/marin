@@ -56,6 +56,7 @@ from marin.scaling_laws.eval_metrics_reader import (
     extract_run_name_from_path,
     read_metrics_dataframe,
 )
+from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
 
@@ -1025,10 +1026,10 @@ class IsoFlopAnalysisConfig(EvalMetricsAnalysisConfig):
     upload_to_wandb: bool = True
     """Whether to upload plots to WandB."""
 
-    wandb_entity: str = "marin-community"
-    """WandB entity for uploads."""
+    wandb_entity: str = WANDB_ENTITY
+    """WandB entity for uploads (defaults to WANDB_ENTITY env var or 'marin-community')."""
 
-    wandb_project: str = "marin-analysis"
+    wandb_project: str = f"{WANDB_PROJECT}-analysis"
     """WandB project for uploads."""
 
     wandb_run_name: str = "scaling-ladder-analysis"
@@ -1111,8 +1112,8 @@ def isoflop_analysis_step(
     label_map: dict[str, str] | None = None,
     save_plots: bool = True,
     upload_to_wandb: bool = True,
-    wandb_entity: str = "marin-community",
-    wandb_project: str = "marin-analysis",
+    wandb_entity: str = WANDB_ENTITY,
+    wandb_project: str = f"{WANDB_PROJECT}-analysis",
     wandb_run_name: str | None = None,
 ) -> ExecutorStep:
     """Create an ExecutorStep for scaling ladder analysis.
