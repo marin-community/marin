@@ -487,7 +487,7 @@ def default_sft(
         steps_per_export=sft_config.steps_per_checkpoint,
         int8=sft_config.int8,
         steps_per_hf_export=sft_config.steps_per_hf_export,
-        initialize_from_hf=sft_config.model_name_or_path if initialize_from_hf else None,
+        initialize_from_hf=initialize_from_hf,
         initialize_from_checkpoint_path=sft_config.initialize_from_checkpoint_path,
         train_seq_len=sft_config.max_seq_len,
         data_seed=sft_config.seed,
