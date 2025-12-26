@@ -732,11 +732,13 @@ def fit_scaling_laws(
 
             # Robust quadratic fit in log10(tokens)
             # Use float64 to avoid int32 overflow for token counts > 2^31
+            tokens_array = jnp.array(sub.tokens.values, dtype=jnp.float64)
             a, b, c = robust_quad_logx(
-                jnp.array(sub.tokens.values, dtype=jnp.float64),
+                tokens_array,
                 jnp.array(sub.loss.values, dtype=jnp.float64),
             )
-            fit_curves[(lab, C)] = (a, b, c)
+            # Store coefficients along with token range used for fitting
+            fit_curves[(lab, C)] = (a, b, c, float(tokens_array.min()), float(tokens_array.max()))
 
             if a == 0:
                 continue
@@ -991,8 +993,8 @@ class IsoFlopAnalysisResult:
     minima_records: list[MinimaRecord]
     """Raw minima records with detailed info for each optimum."""
 
-    fit_curves: dict[tuple[str, float], tuple[float, float, float]]
-    """Quadratic fit coefficients {(label, flops): (a, b, c)} for plotting."""
+    fit_curves: dict[tuple[str, float], tuple[float, float, float, float, float]]
+    """Quadratic fit coefficients {(label, flops): (a, b, c, token_min, token_max)} for plotting."""
 
     def to_json_dict(self) -> dict:
         """Convert result to JSON-serializable dict (excludes DataFrame and fit_curves)."""

@@ -87,14 +87,14 @@ _SCALE_LINE = dict(dash="dot", width=2, color=PALETTE[0])
 def create_isoflop_plot(
     df: pd.DataFrame,
     minima_records: list,
-    fit_curves: dict[tuple[str, float], tuple[float, float, float]],
+    fit_curves: dict[tuple[str, float], tuple[float, float, float, float, float]],
 ) -> go.Figure:
     """Create the IsoFLOP plot showing loss vs tokens for each compute budget.
 
     Args:
         df: DataFrame with columns: tokens, loss, flops, params, name, label
         minima_records: List of dicts with optimal config info per (label, flops)
-        fit_curves: Dict of {(label, flops): (a, b, c)} quadratic fit coefficients
+        fit_curves: Dict of {(label, flops): (a, b, c, token_min, token_max)} quadratic fit coefficients
 
     Returns:
         Plotly Figure with the isoflop visualization
@@ -140,9 +140,9 @@ def create_isoflop_plot(
             # Draw fit curve if available
             key = (lab, C)
             if key in fit_curves:
-                a, b, c = fit_curves[key]
+                a, b, c, token_min, token_max = fit_curves[key]
                 if a != 0:
-                    Ls = jnp.linspace(jnp.log10(sub.tokens.min()), jnp.log10(sub.tokens.max()), 200)
+                    Ls = jnp.linspace(jnp.log10(token_min), jnp.log10(token_max), 200)
                     fig.add_trace(
                         go.Scatter(
                             x=10**Ls,
