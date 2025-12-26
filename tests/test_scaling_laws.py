@@ -478,7 +478,7 @@ def test_create_isoflop_plot_with_data():
             optimal_params=1e8,
         )
     ]
-    fit_curves = {("nemo", 1e18): (0.1, -1.0, 3.0)}
+    fit_curves = {("nemo", 1e18): (0.1, -1.0, 3.0, 1e9, 3e9)}
     fig = create_isoflop_plot(df, minima_records, fit_curves)
     assert fig is not None
 
