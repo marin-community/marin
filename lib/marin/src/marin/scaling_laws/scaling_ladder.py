@@ -46,11 +46,13 @@ from datetime import timedelta
 import fsspec
 import jmp
 from fray.cluster import ResourceConfig
+from haliax.partitioning import ResourceAxis
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMMixtureDatasetConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 
 from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
@@ -217,7 +219,14 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
                 save_interval=timedelta(minutes=10),
                 keep=[dict(every=5000)],
             ),
-            replica_dcn_axis_size=-1,
+            mesh=MeshConfig(
+                # Special axes for MoEs
+                # TODO: this is actually bad and we should remove, but keeping for now
+                compute_mapping={
+                    "token": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                    "token_repeat": (ResourceAxis.REPLICA_DCN, ResourceAxis.REPLICA, ResourceAxis.DATA),
+                }
+            ),
             allow_nondivisible_batch_size=True,
         ),
         train_seq_len=config.seq_len,
@@ -288,7 +297,6 @@ def scaling_ladder_rung_step(
         fn=run_scaling_ladder_rung,
         config=config,
         description=f"Scaling ladder rung: optimal training for {target_budget:.1e} FLOPs based on IsoFLOP analysis",
-        pip_dependency_groups=["tokenize_train"],
     )
 
     if override_output_path is not None:
