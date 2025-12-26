@@ -560,7 +560,9 @@ def test_linear_mask_zeroes_padded_tokens_prefill(use_flash: bool):
     )
 
     # mask: left padding zeros, then ones
-    mask = jnp.concatenate([jnp.zeros((B, L_pad), dtype=jnp.float32), jnp.ones((B, L_core), dtype=jnp.float32)], axis=1)
+    mask = jnp.concatenate(
+        [jnp.zeros((B, L_pad), dtype=jnp.float32), jnp.ones((B, L_core), dtype=jnp.float32)], axis=1
+    )
 
     x_named = hax.named(np.array(x_full), ("batch", "position", "embed"))
     mask_named = hax.named(np.array(mask), ("batch", "position"))
@@ -572,4 +574,6 @@ def test_linear_mask_zeroes_padded_tokens_prefill(use_flash: bool):
     x_core_named = hax.named(np.array(x_core), ("batch", "position", "embed"))
     y_core, _ = lev_layer(x_core_named, inference=True, chunk_size=32)
 
-    np.testing.assert_allclose(np.array(y_full_masked.array)[:, L_pad:, :], np.array(y_core.array), rtol=1e-4, atol=1e-4)
+    np.testing.assert_allclose(
+        np.array(y_full_masked.array)[:, L_pad:, :], np.array(y_core.array), rtol=1e-4, atol=1e-4
+    )
