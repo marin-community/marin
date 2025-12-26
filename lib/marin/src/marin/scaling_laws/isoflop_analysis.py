@@ -731,7 +731,7 @@ def fit_scaling_laws(
                     hidden_dim=int(meta["d"]) if meta else 0,
                     num_layers=int(meta["L"]) if meta else 0,
                     batch_size=int(meta["B"]) if meta else 0,
-                    optimal_params=float(nearest_row.get("params", C / (6 * N_star))),
+                    optimal_params=float(nearest_row.get("params") or C / (6 * N_star)),
                 )
             )
 
