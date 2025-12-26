@@ -17,11 +17,11 @@ import hashlib
 import os
 import time
 import urllib.parse
-import ray
 from typing import Any, ClassVar
 
 import fsspec
 import lz4.frame
+import ray
 
 
 class BaseClassifier:
@@ -177,7 +177,9 @@ class CompressionClassifier(BaseClassifier):
                 ratio = len(compressed) / len(text_bytes)
 
             compression_ratios.append({self.attribute_name: ratio})
-        return {"attributes": compression_ratios}
+
+        batch.update({"attributes": compression_ratios})
+        return batch
 
 
 class AutoClassifier(BaseClassifier):
