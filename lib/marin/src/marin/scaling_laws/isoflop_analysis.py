@@ -212,6 +212,30 @@ def round_to_power_of_two(x: float) -> int:
     return 2 ** math.ceil(math.log2(x))
 
 
+def round_flops_to_bucket(flops: float) -> float:
+    """Round FLOP count to 1 significant figure (XeYY format).
+
+    This ensures runs with slightly different achieved FLOPs are grouped
+    together for analysis when they were targeting the same budget.
+
+    Examples:
+        1.05e19 → 1e19
+        1.5e19  → 2e19
+        2.8e19  → 3e19
+        9.5e19  → 1e20
+    """
+    if flops <= 0:
+        return flops
+
+    exponent = math.floor(math.log10(flops))
+    mantissa = flops / (10**exponent)
+    rounded_mantissa = round(mantissa)
+
+    if rounded_mantissa == 10:
+        return 1.0 * (10 ** (exponent + 1))
+    return float(rounded_mantissa) * (10**exponent)
+
+
 def compute_total_flops(
     batch: int,
     num_layers: int,
@@ -807,7 +831,7 @@ def transform_metrics_for_isoflop(
         if total_gflops is None or pd.isna(total_gflops):
             logger.warning(f"Missing throughput/total_gflops in summary for run {run_name}")
             continue
-        flops = total_gflops * 1e9
+        flops = round_flops_to_bucket(total_gflops * 1e9)
 
         if flops < 1e18:
             continue
