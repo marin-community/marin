@@ -34,8 +34,6 @@ from marin.scaling_laws import scaling_ladder_suite
 
 # Get training steps and datasets for each suite
 nemotron_training, _ = MARIN_SCALING_SUITES["nemotron"]
-dolma3_training, _ = MARIN_SCALING_SUITES["dolma3_mix_150b"]
-
 
 # --- Scaling Ladder Suites ---
 # These analyze completed isoflop training runs and optionally train compute-optimal models
@@ -54,18 +52,7 @@ nemotron_suite = scaling_ladder_suite(
     wandb_project="marin-analysis",
 )
 
-
-dolma3_suite = scaling_ladder_suite(
-    name="exp2166-scaling-ladder-dolma3",
-    training_runs=dolma3_training,
-    target_budgets=TARGET_BUDGETS,
-    label="dolma3-mix-150b-1025",
-    tokenized=dolma3_mix,
-    wandb_project="marin-analysis",
-)
-
-
-all_steps = [*nemotron_suite.all_steps, *dolma3_suite.all_steps]
+all_steps = [*nemotron_suite.all_steps]
 
 if __name__ == "__main__":
     executor_main(steps=all_steps)
