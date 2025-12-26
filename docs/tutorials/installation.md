@@ -91,7 +91,7 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
 
          ```bash
          # Install GPU-specific dependencies (local package included)
-         uv sync --all-packages --extra=cuda12
+         uv sync --all-packages --extra=gpu
          ```
 
     === "TPU"

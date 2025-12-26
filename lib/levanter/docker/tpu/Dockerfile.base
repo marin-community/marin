@@ -7,9 +7,15 @@ RUN pip install uv
 
 # Install package dependencies to make incremental builds faster, using the monorepo workspace.
 WORKDIR /opt/marin
-ADD . /opt/marin
 # Resolve only the Levanter package (with TPU/serve extras) to avoid pulling root-only deps like torch.
-RUN uv sync --package levanter --extra serve --extra tpu
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=lib/levanter/pyproject.toml,target=lib/levanter/pyproject.toml \
+    --mount=type=bind,source=lib/haliax/pyproject.toml,target=lib/haliax/pyproject.toml \
+    --mount=type=bind,source=lib/fray/pyproject.toml,target=lib/fray/pyproject.toml \
+    --mount=type=bind,source=lib/zephyr/pyproject.toml,target=lib/zephyr/pyproject.toml \
+    uv sync --frozen --no-install-workspace --package levanter --extra serve --extra tpu
 
 FROM python:3.11
 

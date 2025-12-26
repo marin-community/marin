@@ -1,4 +1,4 @@
-name: Marin - Quickstart
+name: Marin - Integration Test
 
 on:
   push:
@@ -7,9 +7,11 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
+
 
 jobs:
-  quickstart:
+  itest:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -37,6 +39,12 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-packages --extra=cpu
 
+      - name: Check df -h
+        run: df -h
+
+      - name: Give Ray tmp space
+        run: sudo mkdir -p /mnt/ray && sudo chmod 777 /mnt/ray
+
       - name: Run the quickstart script
         shell: bash -l {0}
         # N.B. You _must not_ use `uv run` here, as that triggers weird behavior from Ray
@@ -46,3 +54,4 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           JAX_TRACEBACK_FILTERING: off
           WANDB_MODE: offline
+          RAY_TMPDIR: /mnt/ray/
