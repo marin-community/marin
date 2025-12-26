@@ -33,11 +33,14 @@ from marin.scaling_laws.isoflop_analysis import (
     candidate_configs,
     compute_total_flops,
     compute_transformer_params,
+    fit_scaling_laws,
     generate_isoflop_train_args,
     parse_isoflop_run_name,
     predict_optimal_config,
     robust_quad_logx,
+    round_flops_to_bucket,
     round_to_power_of_two,
+    transform_metrics_for_isoflop,
 )
 
 # --- round_to_power_of_two tests ---
@@ -630,3 +633,394 @@ def test_generate_isoflop_train_args_snapshot():
             assert (
                 actual[key] == expected[key]
             ), f"Config {i}: {key} mismatch: expected {expected[key]}, got {actual[key]}"
+
+
+# --- round_flops_to_bucket tests ---
+
+
+def test_round_flops_to_bucket_exact_values():
+    """Test that exact significant figures remain unchanged."""
+    assert round_flops_to_bucket(1e18) == 1e18
+    assert round_flops_to_bucket(1e19) == 1e19
+    assert round_flops_to_bucket(3e19) == 3e19
+    assert round_flops_to_bucket(6e19) == 6e19
+    assert round_flops_to_bucket(1e20) == 1e20
+
+
+def test_round_flops_to_bucket_rounds_to_one_significant_figure():
+    """Test rounding to 1 significant figure."""
+    # Small variations should round to nearest integer mantissa
+    assert round_flops_to_bucket(1.05e19) == 1e19
+    assert round_flops_to_bucket(1.4e19) == 1e19
+    assert round_flops_to_bucket(1.5e19) == 2e19
+    assert round_flops_to_bucket(2.8e19) == 3e19
+    assert round_flops_to_bucket(9.5e19) == 1e20  # Wraps to next power
+
+
+def test_round_flops_to_bucket_handles_edge_cases():
+    """Test edge cases for FLOP bucket rounding."""
+    assert round_flops_to_bucket(0) == 0
+    assert round_flops_to_bucket(-1e18) == -1e18
+    # Very large values
+    assert round_flops_to_bucket(5.5e21) == 6e21
+
+
+# --- fit_scaling_laws tests ---
+
+
+def test_fit_scaling_laws_empty_dataframe():
+    """Test that fit_scaling_laws handles empty dataframe."""
+    df = pd.DataFrame()
+    minima_records, scaling_fits, fit_curves = fit_scaling_laws(df)
+    assert minima_records == []
+    assert scaling_fits == {}
+    assert fit_curves == {}
+
+
+def test_fit_scaling_laws_single_budget():
+    """Test fit_scaling_laws with data from a single FLOP budget."""
+    # Create synthetic data with multiple token counts at one budget
+    df = pd.DataFrame(
+        {
+            "tokens": [1e9, 2e9, 4e9, 8e9, 16e9],
+            "loss": [2.5, 2.2, 2.0, 2.1, 2.3],  # U-shaped (optimal around 4e9)
+            "flops": [1e18, 1e18, 1e18, 1e18, 1e18],
+            "params": [1e8, 1e8, 1e8, 1e8, 1e8],
+            "hidden_dim": [512, 512, 512, 512, 512],
+            "num_layers": [6, 6, 6, 6, 6],
+            "batch_size": [32, 32, 32, 32, 32],
+            "name": ["run1", "run2", "run3", "run4", "run5"],
+            "label": ["nemo", "nemo", "nemo", "nemo", "nemo"],
+        }
+    )
+    minima_records, scaling_fits, fit_curves = fit_scaling_laws(df)
+
+    # Should find exactly one minimum for the single (label, budget) pair
+    assert len(minima_records) == 1
+    rec = minima_records[0]
+    assert rec.label == "nemo"
+    assert rec.flops == 1e18
+    # Optimal should be near 4e9 (the minimum loss point)
+    assert 1e9 < rec.optimal_tokens < 20e9
+
+    # With only one budget, cannot fit scaling law
+    assert "nemo" not in scaling_fits
+
+    # Should have fit curve for (nemo, 1e18)
+    assert ("nemo", 1e18) in fit_curves
+
+
+def test_fit_scaling_laws_multiple_budgets():
+    """Test fit_scaling_laws with multiple FLOP budgets to fit scaling law."""
+    # Create data with two FLOP budgets
+    df = pd.DataFrame(
+        {
+            "tokens": [
+                # Budget 1e18 - optimal around 2e9
+                1e9,
+                2e9,
+                4e9,
+                # Budget 1e19 - optimal around 6e9 (more tokens for more compute)
+                2e9,
+                6e9,
+                18e9,
+            ],
+            "loss": [
+                2.3,
+                2.0,
+                2.2,  # U-shape at 1e18
+                2.0,
+                1.7,
+                1.9,  # U-shape at 1e19
+            ],
+            "flops": [1e18, 1e18, 1e18, 1e19, 1e19, 1e19],
+            "params": [1e8, 1e8, 1e8, 5e8, 5e8, 5e8],
+            "hidden_dim": [512, 512, 512, 1024, 1024, 1024],
+            "num_layers": [6, 6, 6, 12, 12, 12],
+            "batch_size": [32, 32, 32, 64, 64, 64],
+            "name": [f"run{i}" for i in range(6)],
+            "label": ["nemo"] * 6,
+        }
+    )
+    minima_records, scaling_fits, fit_curves = fit_scaling_laws(df)
+
+    # Should find two minima (one per budget)
+    assert len(minima_records) == 2
+
+    # Should have scaling fit for nemo
+    assert "nemo" in scaling_fits
+    alpha, _A = scaling_fits["nemo"]
+
+    # Scaling law alpha should be positive (more compute -> more tokens)
+    assert 0 < alpha < 1
+
+    # Should have fit curves for both budgets
+    assert ("nemo", 1e18) in fit_curves
+    assert ("nemo", 1e19) in fit_curves
+
+
+def test_fit_scaling_laws_multiple_labels():
+    """Test fit_scaling_laws with multiple dataset labels."""
+    df = pd.DataFrame(
+        {
+            "tokens": [1e9, 2e9, 4e9, 1e9, 2e9, 4e9],
+            "loss": [2.5, 2.2, 2.4, 2.3, 2.0, 2.2],
+            "flops": [1e18, 1e18, 1e18, 1e18, 1e18, 1e18],
+            "params": [1e8] * 6,
+            "hidden_dim": [512] * 6,
+            "num_layers": [6] * 6,
+            "batch_size": [32] * 6,
+            "name": [f"run{i}" for i in range(6)],
+            "label": ["nemo", "nemo", "nemo", "dclm", "dclm", "dclm"],
+        }
+    )
+    minima_records, _scaling_fits, fit_curves = fit_scaling_laws(df)
+
+    # Should find two minima (one per label at the single budget)
+    assert len(minima_records) == 2
+    labels = {rec.label for rec in minima_records}
+    assert labels == {"nemo", "dclm"}
+
+    # Should have fit curves for both labels
+    assert ("nemo", 1e18) in fit_curves
+    assert ("dclm", 1e18) in fit_curves
+
+
+# --- transform_metrics_for_isoflop tests ---
+
+
+# Sample tracker_metrics.jsonl data extracted from real runs
+# Note: throughput/total_gflops is in GFLOPs, multiply by 1e9 to get FLOPs
+# For 1e18 FLOPs, we need ~1e9 GFLOPs (1e9 * 1e9 = 1e18)
+# Need at least 3 data points per budget to fit a quadratic
+# Loss values form a U-shape in log(tokens) space for each budget
+SAMPLE_METRICS_DATA = [
+    # 1e18 budget - 3 runs with U-shaped loss curve
+    # Too few tokens: model is good but undertrained
+    # Just right: optimal training
+    # Too many tokens: model is too small
+    {
+        "run_path": "gs://marin/checkpoints/isoflop-1e+18-d1024-L11-B8-nemo-wider-depth-adapt",
+        "config": {
+            "model": {"hidden_dim": 1024, "num_layers": 11},
+            "trainer": {"train_batch_size": 8},
+        },
+        "summary": {
+            "throughput/total_tokens": 1000000000,  # 1B tokens (undertrained)
+            "throughput/total_gflops": 1000000000.0,  # 1e9 GFLOPs = 1e18 FLOPs
+            "eval/paloma/c4_en/bpb": 1.25,  # Higher loss - undertrained
+            "parameter_count": 400000000,
+        },
+    },
+    {
+        "run_path": "gs://marin/checkpoints/isoflop-1e+18-d768-L8-B16-nemo-wider-depth-adapt",
+        "config": {
+            "model": {"hidden_dim": 768, "num_layers": 8},
+            "trainer": {"train_batch_size": 16},
+        },
+        "summary": {
+            "throughput/total_tokens": 2500000000,  # 2.5B tokens (optimal)
+            "throughput/total_gflops": 1000000000.0,  # 1e9 GFLOPs = 1e18 FLOPs
+            "eval/paloma/c4_en/bpb": 1.12,  # Lowest loss - optimal
+            "parameter_count": 272513792,
+        },
+    },
+    {
+        "run_path": "gs://marin/checkpoints/isoflop-1e+18-d512-L6-B32-nemo-wider-depth-adapt",
+        "config": {
+            "model": {"hidden_dim": 512, "num_layers": 6},
+            "trainer": {"train_batch_size": 32},
+        },
+        "summary": {
+            "throughput/total_tokens": 5000000000,  # 5B tokens (overtrained/small model)
+            "throughput/total_gflops": 1000000000.0,  # 1e9 GFLOPs = 1e18 FLOPs
+            "eval/paloma/c4_en/bpb": 1.18,  # Higher loss - model too small
+            "parameter_count": 156508160,
+        },
+    },
+    # 1e19 budget - 3 runs with U-shaped loss curve (more tokens optimal)
+    {
+        "run_path": "gs://marin/checkpoints/isoflop-1e+19-d2048-L21-B16-nemo-wider-depth-adapt",
+        "config": {
+            "model": {"hidden_dim": 2048, "num_layers": 21},
+            "trainer": {"train_batch_size": 16},
+        },
+        "summary": {
+            "throughput/total_tokens": 3000000000,  # 3B tokens (undertrained)
+            "throughput/total_gflops": 10000000000.0,  # 1e10 GFLOPs = 1e19 FLOPs
+            "eval/paloma/c4_en/bpb": 1.05,  # Higher loss - undertrained
+            "parameter_count": 1800000000,
+        },
+    },
+    {
+        "run_path": "gs://marin/checkpoints/isoflop-1e+19-d1536-L16-B32-nemo-wider-depth-adapt",
+        "config": {
+            "model": {"hidden_dim": 1536, "num_layers": 16},
+            "trainer": {"train_batch_size": 32},
+        },
+        "summary": {
+            "throughput/total_tokens": 8000000000,  # 8B tokens (optimal)
+            "throughput/total_gflops": 10000000000.0,  # 1e10 GFLOPs = 1e19 FLOPs
+            "eval/paloma/c4_en/bpb": 0.98,  # Lowest loss - optimal
+            "parameter_count": 998036992,
+        },
+    },
+    {
+        "run_path": "gs://marin/checkpoints/isoflop-1e+19-d1024-L11-B64-nemo-wider-depth-adapt",
+        "config": {
+            "model": {"hidden_dim": 1024, "num_layers": 11},
+            "trainer": {"train_batch_size": 64},
+        },
+        "summary": {
+            "throughput/total_tokens": 20000000000,  # 20B tokens (overtrained)
+            "throughput/total_gflops": 10000000000.0,  # 1e10 GFLOPs = 1e19 FLOPs
+            "eval/paloma/c4_en/bpb": 1.02,  # Higher loss - model too small
+            "parameter_count": 400000000,
+        },
+    },
+]
+
+
+def test_transform_metrics_for_isoflop_basic():
+    """Test basic transformation of metrics data."""
+    raw_df = pd.DataFrame(SAMPLE_METRICS_DATA)
+    metric_key = "eval/paloma/c4_en/bpb"
+
+    result = transform_metrics_for_isoflop(raw_df, metric_key)
+
+    assert len(result) == 6  # 3 runs at 1e18 + 3 runs at 1e19
+    assert set(result.columns) == {
+        "tokens",
+        "loss",
+        "flops",
+        "params",
+        "hidden_dim",
+        "num_layers",
+        "batch_size",
+        "name",
+        "label",
+    }
+
+    # Check that values are extracted correctly - first row is d1024/L11
+    row0 = result.iloc[0]
+    assert row0["tokens"] == 1000000000  # 1B tokens
+    assert row0["loss"] == 1.25
+    assert row0["hidden_dim"] == 1024
+    assert row0["num_layers"] == 11
+    assert row0["batch_size"] == 8
+
+
+def test_transform_metrics_for_isoflop_with_label_map():
+    """Test transformation with custom label mapping."""
+    raw_df = pd.DataFrame(SAMPLE_METRICS_DATA)
+    metric_key = "eval/paloma/c4_en/bpb"
+    label_map = {"nemo-wider-depth-adapt": "NeMo"}
+
+    result = transform_metrics_for_isoflop(raw_df, metric_key, label_map)
+
+    assert len(result) == 6  # 3 runs at 1e18 + 3 runs at 1e19
+    assert all(result["label"] == "NeMo")
+
+
+def test_transform_metrics_for_isoflop_filters_low_flops():
+    """Test that runs with < 1e18 FLOPs are filtered out."""
+    raw_df = pd.DataFrame(
+        [
+            {
+                "run_path": "gs://marin/checkpoints/small-run",
+                "config": {
+                    "model": {"hidden_dim": 256, "num_layers": 4},
+                    "trainer": {"train_batch_size": 8},
+                },
+                "summary": {
+                    "throughput/total_tokens": 1e7,
+                    "throughput/total_gflops": 1e6,  # Only 1e15 FLOPs (< 1e18)
+                    "eval/paloma/c4_en/bpb": 3.0,
+                    "parameter_count": 1e7,
+                },
+            }
+        ]
+    )
+
+    result = transform_metrics_for_isoflop(raw_df, "eval/paloma/c4_en/bpb")
+    assert len(result) == 0
+
+
+def test_transform_metrics_for_isoflop_empty_input():
+    """Test transformation with empty input."""
+    raw_df = pd.DataFrame()
+    result = transform_metrics_for_isoflop(raw_df, "eval/paloma/c4_en/bpb")
+    assert result.empty
+
+
+def test_transform_metrics_for_isoflop_missing_fields():
+    """Test transformation handles missing fields gracefully."""
+    raw_df = pd.DataFrame(
+        [
+            {
+                "run_path": "gs://marin/checkpoints/isoflop-1e+18-d512-L6-B32-incomplete",
+                "config": {"model": {}, "trainer": {}},
+                "summary": {
+                    # Missing throughput/total_tokens
+                    "throughput/total_gflops": 1000001.0,
+                    "eval/paloma/c4_en/bpb": 1.5,
+                },
+            }
+        ]
+    )
+
+    result = transform_metrics_for_isoflop(raw_df, "eval/paloma/c4_en/bpb")
+    # Should skip the row with missing required fields
+    assert len(result) == 0
+
+
+# --- Integration test: fit_scaling_laws with transform_metrics_for_isoflop ---
+
+
+def test_end_to_end_analysis_pipeline():
+    """Integration test: transform metrics and fit scaling laws."""
+    raw_df = pd.DataFrame(SAMPLE_METRICS_DATA)
+
+    # Transform metrics
+    isoflop_df = transform_metrics_for_isoflop(raw_df, "eval/paloma/c4_en/bpb")
+    assert len(isoflop_df) == 6  # 3 runs at 1e18 + 3 runs at 1e19
+
+    # Fit scaling laws
+    minima_records, scaling_fits, _fit_curves = fit_scaling_laws(isoflop_df)
+
+    # With 2 budgets (1e18, 1e19), each with 3 points, we should get 2 minima
+    assert len(minima_records) == 2
+
+    # Should have a scaling fit for the label
+    assert len(scaling_fits) == 1
+    label = next(iter(scaling_fits.keys()))
+    alpha, A = scaling_fits[label]
+
+    # Sanity check the scaling law parameters
+    assert 0 < alpha < 1  # Typical range for token scaling exponent
+    assert A > 0
+
+
+def test_minima_records_have_scaling_fit_params():
+    """Test that minima records are augmented with scaling fit parameters."""
+    df = pd.DataFrame(
+        {
+            "tokens": [1e9, 2e9, 4e9, 2e9, 6e9, 18e9],
+            "loss": [2.3, 2.0, 2.2, 2.0, 1.7, 1.9],
+            "flops": [1e18, 1e18, 1e18, 1e19, 1e19, 1e19],
+            "params": [1e8, 1e8, 1e8, 5e8, 5e8, 5e8],
+            "hidden_dim": [512, 512, 512, 1024, 1024, 1024],
+            "num_layers": [6, 6, 6, 12, 12, 12],
+            "batch_size": [32, 32, 32, 64, 64, 64],
+            "name": [f"run{i}" for i in range(6)],
+            "label": ["nemo"] * 6,
+        }
+    )
+    minima_records, scaling_fits, _ = fit_scaling_laws(df)
+
+    # All records for a label with a scaling fit should have the params
+    for rec in minima_records:
+        if rec.label in scaling_fits:
+            alpha, A = scaling_fits[rec.label]
+            assert rec.scaling_alpha == alpha
+            assert rec.scaling_A == A
