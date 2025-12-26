@@ -8,11 +8,11 @@ import numpy as np
 from jax._src.state.indexing import dslice
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
+from jax.experimental.shard_map import shard_map
 from jaxtyping import ArrayLike, Scalar
 
 import haliax as hax
 from haliax import NamedArray
-from haliax.partitioning import shard_map
 
 
 class Histogram(equinox.Module):

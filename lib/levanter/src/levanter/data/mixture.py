@@ -8,6 +8,8 @@ from typing import List, Mapping, Optional, Sequence, Tuple, TypeVar
 import jax
 import numpy as np
 from async_lru import alru_cache
+from jax.random import PRNGKey
+import equinox as eqx
 from jaxtyping import PRNGKeyArray
 
 from haliax.util import StringHolderEnum
@@ -17,6 +19,7 @@ from levanter.data import AsyncDataset
 from levanter.schedule import BatchSchedule
 from levanter.utils.index import Index
 from levanter.utils.thread_utils import future_from_value
+from levanter.models.lm_model import LmExample
 
 
 T = TypeVar("T")
@@ -263,14 +266,31 @@ class MixtureDataset(AsyncDataset[T]):
 
         batches = await asyncio.gather(*batch_futures)
 
-        # reassemble the final batch
+        # reassemble the final batch and, if possible, set dataset_id on LmExample instances
         final_batch = [None] * len(indices)
 
         for dataset_id, indices_into_batch in enumerate(indices_in_final_batch):
             for i, idx in enumerate(indices_into_batch):
                 assert final_batch[idx] is None
                 assert len(final_batch) > idx
-                final_batch[idx] = batches[dataset_id][i]
+                ex = batches[dataset_id][i]
+                # If example supports dataset_id (e.g., LmExample), set it.
+                if isinstance(ex, LmExample):
+                    ex = LmExample(
+                        tokens=ex.tokens,
+                        loss_weight=ex.loss_weight,
+                        attn_mask=ex.attn_mask,
+                        index=ex.index,
+                        dataset_id=np.array(dataset_id, dtype=np.int32),
+                    )
+                elif hasattr(ex, "dataset_id"):
+                    # Best-effort for non-LmExample types
+                    try:
+                        ex = eqx.tree_at(lambda e: e.dataset_id, ex, np.array(dataset_id, dtype=np.int32))
+                    except Exception:
+                        pass
+                #print(f'> dataset_id: {dataset_id} | ex.idx: {ex.index} | ex: {ex}')
+                final_batch[idx] = ex
 
         return final_batch  # type: ignore
 
@@ -284,7 +304,22 @@ class MixtureDataset(AsyncDataset[T]):
         dataset = self._dataset_of_id(dataset_id)
         dataset_index = (await self._remap_indices(dataset, [dataset_index]))[0]
 
-        return await dataset.getitem_async(dataset_index)
+        ex = await dataset.getitem_async(dataset_index)
+        # Ensure initial example carries dataset_id so DataLoader infers the leaf and batches it.
+        if isinstance(ex, LmExample):
+            ex = LmExample(
+                tokens=ex.tokens,
+                loss_weight=ex.loss_weight,
+                attn_mask=ex.attn_mask,
+                index=ex.index,
+                dataset_id=np.array(dataset_id, dtype=np.int32),
+            )
+        elif hasattr(ex, "dataset_id"):
+            try:
+                ex = eqx.tree_at(lambda e: e.dataset_id, ex, np.array(dataset_id, dtype=np.int32))
+            except Exception:
+                pass
+        return ex
 
     async def _remap_indices(self, ds, indices_into_ds):
         """

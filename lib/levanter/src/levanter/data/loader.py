@@ -233,6 +233,41 @@ class DataLoader(Iterable[Ex]):
         step = self.scheduler.find_step_containing_offset(total_length) + 1
         return step
 
+    def reversed(
+        self,
+        num_train_steps: int | None = None,
+        segment_starts: Iterable[int] | None = None,
+    ):
+        """Return a reversed-order loader.
+
+        If ``segment_starts`` is provided, returns a segment-aware reversed loader
+        that iterates segments in reverse and supports ``iter_segment``.
+        Otherwise returns the basic reversed loader.
+        """
+        if segment_starts is not None:
+            return ReversedSegmentedDataLoader(self, segment_starts, num_train_steps=num_train_steps)
+        return ReversedDataLoader(self, num_train_steps=num_train_steps)
+
+    def reversed_segmented(
+        self,
+        segment_starts: Iterable[int],
+        num_train_steps: int | None = None,
+    ):
+        """Segment-aware reverse traversal.
+
+        Returns a dataloader that iterates over batches by reversing the order of
+        segments while iterating forward within each segment. If
+        ``segment_starts = [0, s1, ..., sk]`` (sorted, increasing), and the
+        forward order is batches ``[0, 1, ..., N-1]``, then iteration order will be
+        ``[sk, sk+1, ..., N-1, s{k-1}, ..., sk-1, ..., 0, ..., s1-1]``.
+
+        Args:
+            segment_starts: Sorted increasing list of segment start batch numbers.
+                             0 will be added if not present.
+            num_train_steps: Optional cap on the number of batches to iterate.
+        """
+        return ReversedSegmentedDataLoader(self, segment_starts, num_train_steps=num_train_steps)
+
 
 class DataLoaderIterator(Iterator[Ex]):
     def __init__(self, data_loader: DataLoader, start_from_batch: int | None = None):
@@ -638,3 +673,400 @@ def _make_padding_example(ex: Ex) -> Ex:
 
 def _round_to_nearest_multiple(x: int, multiple: int) -> int:
     return ((x + multiple - 1) // multiple) * multiple
+
+
+class ReversedDataLoader(Iterable[Ex]):
+    """A thin wrapper that exposes the same interface as :class:DataLoader but iterates in reverse batch order."""
+
+    def __init__(self, dl: DataLoader, num_train_steps: int | None = None):
+        self._dl = dl
+        self._num_train_steps = num_train_steps
+
+    # ---------------- Iterable interface ----------------
+    def __iter__(self):
+        return _ReversedDataLoaderIterator(self._dl, num_train_steps=self._num_train_steps)
+
+    # --------------- convenience passthroughs ------------
+    def __getattr__(self, item):
+        """Delegate attribute access to the wrapped DataLoader for convenience (read-only)."""
+        return getattr(self._dl, item)
+
+    # Helpful hint for callers that need per-segment iteration
+    def iter_segment(self, segment_start: int):  # pragma: no cover - simple runtime hint
+        raise AttributeError(
+            "iter_segment is only available on ReversedSegmentedDataLoader. "
+            "Construct via DataLoader.reversed_segmented(segment_starts, num_train_steps)."
+        )
+
+    def get_segment_loader(self, segment_start: int):  # pragma: no cover - simple runtime hint
+        return self.iter_segment(segment_start)
+
+
+class _ReversedDataLoaderIterator(DataLoaderIterator):
+    """
+    Iterator that yields batches in the opposite order compared to
+    :class:`DataLoaderIterator`, but only over the first `num_train_steps`
+    batches if that argument is supplied.
+    """
+
+    # ------------------------------------------------------------------
+    # Constructor
+    # ------------------------------------------------------------------
+    def __init__(
+        self,
+        data_loader: DataLoader,
+        *,
+        num_train_steps: int | None = None,   # ← NEW
+    ):
+        # -------------------------------------------------------------
+        # 1.  Work out the last batch index we are allowed to visit.
+        #     If the underlying dataset is infinite, require
+        #     `num_train_steps` and use it to bound iteration.
+        # -------------------------------------------------------------
+        if not data_loader.data_store.is_finite():
+            if num_train_steps is None:
+                raise ValueError(
+                    "ReversedDataLoader requires a finite dataset with a known length, or provide num_train_steps."
+                )
+            if num_train_steps <= 0:
+                raise ValueError("num_train_steps must be > 0 for reversed iteration.")
+
+            # Bound by the requested training horizon
+            self._last_batch_number = int(num_train_steps) - 1
+            # For infinite datasets, treat the final batch as full-sized
+            self._final_batch_start = data_loader.scheduler.global_data_offset_by_step(self._last_batch_number)
+            self._final_batch_expected_size = data_loader.scheduler.batch_size_at_step(self._last_batch_number)
+            self._final_batch_size = self._final_batch_expected_size
+            self._num_train_steps = num_train_steps
+
+            super().__init__(data_loader, start_from_batch=None)  # type: ignore[arg-type]
+            return
+
+        total_len = blocking_wait(data_loader.data_store.async_len())
+
+        # “Natural” last batch in the dataset.
+        last_bn_dataset = 0
+        while data_loader.scheduler.global_data_offset_by_step(last_bn_dataset) < total_len:
+            last_bn_dataset += 1
+        last_bn_dataset -= 1
+        if last_bn_dataset < 0:
+            raise ValueError("Dataset appears to be empty – nothing to iterate over in reverse.")
+
+        # If the caller limits us, respect it (but never exceed the dataset’s end).
+        if num_train_steps is not None:
+            self._last_batch_number = min(num_train_steps - 1, last_bn_dataset)
+        else:
+            self._last_batch_number = last_bn_dataset
+
+        # Figure out sizing info for that *new* last batch.
+        self._final_batch_start = data_loader.scheduler.global_data_offset_by_step(
+            self._last_batch_number
+        )
+        self._final_batch_expected_size = data_loader.scheduler.batch_size_at_step(
+            self._last_batch_number
+        )
+        self._final_batch_size = total_len - self._final_batch_start
+        if self._final_batch_size == 0:
+            # Perfectly divisible – treat as a full batch.
+            self._final_batch_size = self._final_batch_expected_size
+
+        # Remember the limit so we know when to stop in `_produce_batches`.
+        self._num_train_steps = num_train_steps
+
+        # -------------------------------------------------------------
+        # 2.  Now it’s safe to invoke the parent, which launches the
+        #     background pre-fetch thread that calls `_produce_batches`.
+        # -------------------------------------------------------------
+        super().__init__(data_loader, start_from_batch=None)  # type: ignore[arg-type]
+
+    # ------------------------------------------------------------------
+    # Core producer
+    # ------------------------------------------------------------------
+    async def _produce_batches(self):  # type: ignore[override]
+        bn = self._last_batch_number
+        prefetch = self.dl.prefetch_size
+
+        # How many batches we’ve yielded so far (needed if we are limited).
+        yielded = 0
+        to_yield_total = (
+            self._num_train_steps if self._num_train_steps is not None else None
+        )
+
+        while bn >= 0 and (to_yield_total is None or yielded < to_yield_total):
+            lower_bn = max(0, bn - prefetch + 1)
+            next_batch_numbers = list(range(lower_bn, bn + 1))[::-1]
+
+            # Trim window so we don’t overshoot `num_train_steps`.
+            if to_yield_total is not None:
+                remaining = to_yield_total - yielded
+                next_batch_numbers = next_batch_numbers[:remaining]
+
+            batches: list[_Batch[None]] = []
+            for batch_number in next_batch_numbers:
+                global_offset = self.dl.scheduler.global_data_offset_by_step(batch_number)
+                global_size = self.dl.scheduler.batch_size_at_step(batch_number)
+                if (
+                    batch_number == self._last_batch_number
+                    and self._final_batch_size != global_size
+                ):
+                    global_size = self._final_batch_size
+                batches.append(_Batch(batch_number, global_offset, global_size, {}))
+
+            batch_of_batches = await self._do_retrieve_batch_of_batches(batches)
+
+            for batch in batch_of_batches:
+                yield self._batchify_local_data(batch)
+                yielded += 1
+
+            # Move cursor to the preceding window.
+            bn = lower_bn - 1
+
+
+class ReversedSegmentedDataLoader(Iterable[Ex]):
+    """Wrapper mirroring :class:`DataLoader` but iterating with reversed segments.
+
+    Within each segment, batch order is forward; the order of segments is reversed.
+    Accepts the same convenience attribute accessors as :class:`ReversedDataLoader`.
+    """
+
+    def __init__(
+        self,
+        dl: DataLoader,
+        segment_starts: Iterable[int],
+        num_train_steps: int | None = None,
+    ):
+        self._dl = dl
+        self._segment_starts = list(segment_starts)
+        self._num_train_steps = num_train_steps
+
+    def __iter__(self):
+        return _ReversedSegmentedDataLoaderIterator(
+            self._dl,
+            segment_starts=self._segment_starts,
+            num_train_steps=self._num_train_steps,
+        )
+
+    def __getattr__(self, item):
+        return getattr(self._dl, item)
+
+    def iter_segment(self, segment_start: int):
+        """Return an iterator over a single forward-ordered segment starting at ``segment_start``.
+
+        The iterator yields batches ``segment_start, segment_start+1, ...`` up to (but not including)
+        the next ``segment_start`` in the original list, or up to the final batch if this is the last
+        segment within the available training range.
+        """
+        return _SegmentOnlyDataLoaderIterator(
+            self._dl,
+            segment_start=segment_start,
+            segment_starts=self._segment_starts,
+            num_train_steps=self._num_train_steps,
+        )
+
+    # Backward-compatible alias if callers prefer this name
+    def get_segment_loader(self, segment_start: int):
+        return self.iter_segment(segment_start)
+
+
+class _ReversedSegmentedDataLoaderIterator(DataLoaderIterator):
+    """Iterator that reverses segments but iterates forward within each segment.
+
+    If the forward batch order is ``[0, 1, ..., N-1]`` and
+    ``segment_starts = [0, s1, ..., sk]`` (sorted, increasing), then iteration
+    order is ``sk, sk+1, ..., N-1, s{k-1}, ..., sk-1, ..., 0, ..., s1-1``.
+    Optionally limits to the first ``num_train_steps`` batches.
+    """
+
+    def __init__(
+        self,
+        data_loader: DataLoader,
+        *,
+        segment_starts: Iterable[int],
+        num_train_steps: int | None = None,
+    ):
+        if not data_loader.data_store.is_finite():
+            if num_train_steps is None:
+                raise ValueError(
+                    "ReversedSegmentedDataLoader requires a finite dataset or num_train_steps to bound iteration."
+                )
+            if num_train_steps <= 0:
+                raise ValueError("num_train_steps must be > 0 for reversed segmented iteration.")
+
+            self._last_batch_number = int(num_train_steps) - 1
+            self._final_batch_start = data_loader.scheduler.global_data_offset_by_step(self._last_batch_number)
+            self._final_batch_expected_size = data_loader.scheduler.batch_size_at_step(self._last_batch_number)
+            self._final_batch_size = self._final_batch_expected_size
+        else:
+            total_len = blocking_wait(data_loader.data_store.async_len())
+
+            # Determine the last reachable batch index from dataset size
+            last_bn_dataset = 0
+            while data_loader.scheduler.global_data_offset_by_step(last_bn_dataset) < total_len:
+                last_bn_dataset += 1
+            last_bn_dataset -= 1
+            if last_bn_dataset < 0:
+                raise ValueError("Dataset appears to be empty – nothing to iterate over in reverse-segmented order.")
+
+            if num_train_steps is not None:
+                self._last_batch_number = min(num_train_steps - 1, last_bn_dataset)
+            else:
+                self._last_batch_number = last_bn_dataset
+
+            # Final batch size (handle partial at dataset end)
+            self._final_batch_start = data_loader.scheduler.global_data_offset_by_step(self._last_batch_number)
+            self._final_batch_expected_size = data_loader.scheduler.batch_size_at_step(self._last_batch_number)
+            self._final_batch_size = total_len - self._final_batch_start
+            if self._final_batch_size == 0:
+                self._final_batch_size = self._final_batch_expected_size
+
+        # Normalize and store segment starts for iteration planning
+        starts = sorted(set(int(s) for s in segment_starts if int(s) >= 0))
+        if not starts or starts[0] != 0:
+            starts = [0] + starts
+            starts = sorted(set(starts))
+
+        # Clip to the last batch we're going to visit
+        max_bn = self._last_batch_number
+        starts = [s for s in starts if s <= max_bn]
+        if not starts:
+            starts = [0]
+
+        # Build [start, end) segments, where the final end is max_bn + 1
+        ends_exclusive = starts[1:] + [max_bn + 1]
+        self._segments: list[tuple[int, int]] = [
+            (s, e) for s, e in zip(starts, ends_exclusive, strict=False) if s < e
+        ]
+
+        self._num_train_steps = num_train_steps
+
+        # Launch background machinery; it will call our _produce_batches
+        super().__init__(data_loader, start_from_batch=None)  # type: ignore[arg-type]
+
+    async def _produce_batches(self):  # type: ignore[override]
+        # Precompute the exact batch-number sequence: reverse the segments,
+        # forward within each segment.
+        batch_numbers: list[int] = []
+        for start, end in reversed(self._segments):
+            batch_numbers.extend(range(start, end))
+
+        # If for any reason a num_train_steps smaller than the computed
+        # range is supplied, respect it.
+        if self._num_train_steps is not None:
+            batch_numbers = batch_numbers[: self._num_train_steps]
+
+        prefetch = self.dl.prefetch_size
+        i = 0
+        N = len(batch_numbers)
+        while i < N:
+            window = batch_numbers[i : min(i + prefetch, N)]
+
+            batches: list[_Batch[None]] = []
+            for bn in window:
+                global_offset = self.dl.scheduler.global_data_offset_by_step(bn)
+                global_size = self.dl.scheduler.batch_size_at_step(bn)
+                if bn == self._last_batch_number and self._final_batch_size != global_size:
+                    global_size = self._final_batch_size
+                batches.append(_Batch(bn, global_offset, global_size, {}))
+
+            batch_of_batches = await self._do_retrieve_batch_of_batches(batches)
+
+            for batch in batch_of_batches:
+                yield self._batchify_local_data(batch)
+
+            i += len(window)
+
+
+class _SegmentOnlyDataLoaderIterator(DataLoaderIterator):
+    """Iterates forward only within a single segment [start, next_start) or to the last batch.
+
+    Handles partial final batch sizing if this segment contains the dataset's final batch.
+    """
+
+    def __init__(
+        self,
+        data_loader: DataLoader,
+        *,
+        segment_start: int,
+        segment_starts: Iterable[int],
+        num_train_steps: int | None = None,
+    ):
+
+        # If an explicit training-step bound is provided, avoid waiting on dataset length (which would
+        # call cache.finished()). Bound iteration by the training schedule instead.
+        if num_train_steps is not None:
+            if num_train_steps <= 0:
+                raise ValueError("num_train_steps must be > 0 for segment iteration.")
+
+            self._max_bn = int(num_train_steps) - 1
+            # Without dataset length, treat the final batch as full-sized
+            expected_size = data_loader.scheduler.batch_size_at_step(self._max_bn)
+            self._partial_last_bn = self._max_bn
+            self._partial_last_bn_size = expected_size
+        else:
+            if not data_loader.data_store.is_finite():
+                raise ValueError(
+                    "Segment iterator requires a finite dataset or num_train_steps to bound iteration."
+                )
+
+            total_len = blocking_wait(data_loader.data_store.async_len())
+
+            # Compute the last permissible batch number given dataset length
+            last_bn_dataset = 0
+            while data_loader.scheduler.global_data_offset_by_step(last_bn_dataset) < total_len:
+                last_bn_dataset += 1
+            last_bn_dataset -= 1
+            if last_bn_dataset < 0:
+                raise ValueError("Dataset appears to be empty – nothing to iterate.")
+
+            self._max_bn = last_bn_dataset
+
+            # Partial final batch sizing for the true last batch within training range
+            final_bn_start = data_loader.scheduler.global_data_offset_by_step(self._max_bn)
+            expected_size = data_loader.scheduler.batch_size_at_step(self._max_bn)
+            partial_size = total_len - final_bn_start
+            if partial_size == 0:
+                partial_size = expected_size
+            self._partial_last_bn = self._max_bn
+            self._partial_last_bn_size = partial_size
+        # Normalize provided segment starts, ensure 0 present, then clip to range
+        starts = sorted(set(int(s) for s in segment_starts if int(s) >= 0))
+        if not starts or starts[0] != 0:
+            starts = sorted(set([0, *starts]))
+        starts = [s for s in starts if s <= self._max_bn]
+        if not starts:
+            starts = [0]
+
+        if segment_start not in starts:
+            raise ValueError(f"segment_start {segment_start} not found in segment_starts {starts}")
+
+        idx = starts.index(segment_start)
+        end_exclusive = starts[idx + 1] if idx + 1 < len(starts) else (self._max_bn + 1)
+
+        if segment_start >= end_exclusive:
+            raise ValueError(f"Empty segment derived for start {segment_start}")
+
+        self._range_start = segment_start
+        self._range_end_exclusive = end_exclusive
+
+        super().__init__(data_loader, start_from_batch=None)  # type: ignore[arg-type]
+
+    async def _produce_batches(self):  # type: ignore[override]
+        prefetch = self.dl.prefetch_size
+        i = self._range_start
+        N = self._range_end_exclusive
+        while i < N:
+            window = list(range(i, min(i + prefetch, N)))
+
+            batches: list[_Batch[None]] = []
+            for bn in window:
+                global_offset = self.dl.scheduler.global_data_offset_by_step(bn)
+                global_size = self.dl.scheduler.batch_size_at_step(bn)
+                if bn == self._partial_last_bn and self._partial_last_bn_size != global_size:
+                    global_size = self._partial_last_bn_size
+                batches.append(_Batch(bn, global_offset, global_size, {}))
+
+            batch_of_batches = await self._do_retrieve_batch_of_batches(batches)
+            for batch in batch_of_batches:
+                yield self._batchify_local_data(batch)
+
+            i += len(window)

@@ -71,8 +71,9 @@ class Olmo2Config(HFCompatConfig):
 
     # Attention-related config
     upcast_attn: bool = False
-    use_flash_attention: Optional[bool] = True
-    attn_backend: Optional[AttentionBackend] = None
+    # Sam: overriden because no higher-order support with Splash
+    use_flash_attention: Optional[bool] = False
+    attn_backend: Optional[AttentionBackend] = AttentionBackend.VANILLA
     flash_attention_block_size: Optional[int] = None
 
     gradient_checkpointing: bool = True

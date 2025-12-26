@@ -129,34 +129,66 @@ def wandb_xla_logger(config: WandbConfig):
         return lambda x: None
 
 
-def profile(path: str, start_step: int, num_steps: int, create_perfetto_link: bool) -> Callable[[StepInfo], None]:
+def profile(
+    trainer, path: str, start_step: int, num_steps: int, create_perfetto_link: bool
+) -> Callable[[StepInfo], None]:
     def profiler_callback_fn(step: StepInfo):
         # -1 b/c step is the finished step
         if step.step == start_step - 1:
+            try:
+                jax.profiler.stop_trace()
+            except RuntimeError:
+                # it's okay if the profiler was not running
+                pass
             _create_perfetto_link = create_perfetto_link and jax.process_index() == 0
             logger.info(f"Starting profiler until step {start_step + num_steps}.")
-            jax.profiler.start_trace(path, create_perfetto_link=_create_perfetto_link, create_perfetto_trace=True)
-        elif step.step == start_step + num_steps - 1:
-            if create_perfetto_link:
-                logger.info(
-                    f"Stopping profiler. Process 0 will open a perfetto link. I am process {jax.process_index()}"
-                )
+            _tpu_trace_mode = getattr(trainer.config, "profiler_tpu_trace_mode", None)
+            if _tpu_trace_mode:
+                try:
+                    options = jax.profiler.ProfileOptions()
+                    options.advanced_configuration = {"tpu_trace_mode": _tpu_trace_mode}
+                    jax.profiler.start_trace(
+                        path,
+                        create_perfetto_link=_create_perfetto_link,
+                        create_perfetto_trace=True,
+                        options=options,
+                    )
+                except TypeError:
+                    jax.profiler.start_trace(
+                        path,
+                        create_perfetto_link=_create_perfetto_link,
+                        create_perfetto_trace=True,
+                    )
             else:
-                logger.info("Stopping profiler.")
-            # so, annoyingly, gcloud ssh doesn't reliably flush stdout here, so we need to spin up
-            # a thread to flush and print periodically until we make it past stop_trace
-            # (note: stop_trace blocks if perfetto is enabled)
-            event = threading.Event()
-            if create_perfetto_link and jax.process_index() == 0:
-                _flush_while_waiting(event)
+                jax.profiler.start_trace(
+                    path,
+                    create_perfetto_link=_create_perfetto_link,
+                    create_perfetto_trace=True,
+                )
+            trainer.profiler_running = True
+        elif step.step == start_step + num_steps - 1:
+            if trainer.profiler_running:
+                if create_perfetto_link:
+                    logger.info(
+                        f"Stopping profiler. Process 0 will open a perfetto link. I am process {jax.process_index()}"
+                    )
+                else:
+                    logger.info("Stopping profiler.")
+                # so, annoyingly, gcloud ssh doesn't reliably flush stdout here, so we need to spin up
+                # a thread to flush and print periodically until we make it past stop_trace
+                # (note: stop_trace blocks if perfetto is enabled)
+                event = threading.Event()
+                if create_perfetto_link and jax.process_index() == 0:
+                    _flush_while_waiting(event)
 
-            jax.profiler.stop_trace()
+                jax.profiler.stop_trace()
 
-            if create_perfetto_link and jax.process_index() == 0:
-                event.set()
+                if create_perfetto_link and jax.process_index() == 0:
+                    event.set()
 
-            levanter.tracker.current_tracker().log_artifact(path, type="jax_profile")
-            barrier_sync()
+                levanter.tracker.current_tracker().log_artifact(path, type="jax_profile")
+                barrier_sync()
+                trainer.profiler_running = False
 
     return profiler_callback_fn
 

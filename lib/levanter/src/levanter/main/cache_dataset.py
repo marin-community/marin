@@ -9,6 +9,7 @@ import levanter
 from levanter.data.text import BatchTokenizer, SingleDatasetLMConfigBase
 from levanter.distributed import RayConfig
 from levanter.store.cache import build_or_load_cache
+from levanter.utils.cache_naming import hashed_cache_dir
 from levanter.tracker import NoopConfig, TrackerConfig
 from levanter.utils.logging import init_logging
 
@@ -30,10 +31,12 @@ def main(args: RayCachedLMDatasetConfig):
     tokenizer = args.the_tokenizer
 
     for split in ["train", "validation"]:
-        print(f"Caching {split} to {args.cache_dir}.")
+        # Use a hashed subdirectory based on args (excluding cache_dir) so changes to fields create a new cache
+        base_cache_dir = hashed_cache_dir(args.cache_dir, args, extra={"tokenizer": getattr(tokenizer, "name_or_path", None), "enforce_eos": args.enforce_eos})  # type: ignore
+        print(f"Caching {split} to {base_cache_dir}.")
         # connect or start the actor
         batch_tokenizer = BatchTokenizer(tokenizer, enforce_eos=args.enforce_eos)
-        split_cache_dir = os.path.join(args.cache_dir, split)  # type: ignore
+        split_cache_dir = os.path.join(base_cache_dir, split)  # type: ignore
         source = args.get_shard_source(split)
 
         if source is None:

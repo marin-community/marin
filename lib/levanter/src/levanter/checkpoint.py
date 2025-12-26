@@ -73,6 +73,8 @@ class Checkpointer:
         keep_params: PyTree[FilterSpec] = True,
         dt_now_injection: Optional[Callable[[], datetime.datetime]] = None,
         delete_old_temp_checkpoints: bool = True,
+        axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
+        mesh: Optional[jax.sharding.Mesh] = None,
     ):
         """
         Class for managing checkpoints. Saves checkpoints according to two policies: time and step.
@@ -97,6 +99,8 @@ class Checkpointer:
         self._dt_now_injection = dt_now_injection or datetime.datetime.now
         self._last_save_time = self._dt_now_injection()
         self._last_save_step = 0
+        self.axis_mapping = axis_mapping
+        self.mesh = mesh
 
         # ensure that the step_policies are sorted. We could sort, but instead we'll just insist that they are sorted
         # since it's probably a typo if they aren't
@@ -122,6 +126,12 @@ class Checkpointer:
             self._async_checkpoint_remover_thread.start()
             self._checkpoint_being_removed = None
 
+        self._loader = AsyncCkptLoader(
+            self,
+            axis_mapping=self.axis_mapping,
+            mesh=self.mesh,
+        )
+
         # discover latest checkpoint and see if it's temporary
         self._last_temporary_checkpoint = None
         latest_checkpoint = discover_latest_checkpoint(self.base_path)
@@ -134,6 +144,12 @@ class Checkpointer:
                 )
                 self._last_temporary_checkpoint = latest_checkpoint
 
+    def begin_checkpoint_loading(self, step: int, exemplar_state: M):
+        self._loader.prefetch(step, exemplar_state)
+
+    def get_loaded_checkpoint(self) -> Optional[M]:
+        return self._loader.get()
+
     def load_checkpoint(
         self,
         state: M,
@@ -145,7 +161,9 @@ class Checkpointer:
     ) -> Optional[M]:
         if path is None:
             path = self.base_path
-        return load_checkpoint(state, path, discover_latest=discover_latest, axis_mapping=axis_mapping, mesh=mesh)
+        return load_checkpoint(
+            state, path, discover_latest=discover_latest, axis_mapping=axis_mapping, mesh=mesh
+        )
 
     def load_model(
         self,
@@ -161,7 +179,9 @@ class Checkpointer:
         Loads just the model assuming the model is in the `model` subdir of the discovered checkpoint.
         """
         ret_dict = self.load_checkpoint(
-            {"model": model}, path, discover_latest=discover_latest, axis_mapping=axis_mapping, mesh=mesh
+            {"model": model},
+            path,
+            discover_latest=discover_latest,
         )
         if ret_dict is None:
             return None
@@ -172,8 +192,9 @@ class Checkpointer:
 
         if step == 0:
             self._last_save_time = self._dt_now_injection()
-            if not force:
-                return  # don't save checkpoint at step 0 unless forced
+            # Remove this check to allow step 0 checkpoints
+            # if not force:
+            #     return  # don't save checkpoint at step 0 unless forced
 
         if step == self._last_save_step and not force:
             # we've already saved a checkpoint at this step
@@ -305,6 +326,59 @@ class Checkpointer:
             self._checkpoint_being_removed = checkpoint
             self._do_rm_checkpoint(checkpoint)
             self._checkpoint_being_removed = None
+
+
+class AsyncCkptLoader:
+    """A helper class to load checkpoints asynchronously."""
+
+    def __init__(
+        self,
+        checkpointer: "Checkpointer",
+        axis_mapping: Optional[haliax.partitioning.ResourceMapping] = None,
+        mesh: Optional[jax.sharding.Mesh] = None,
+    ):
+        self.checkpointer = checkpointer
+        self.axis_mapping = axis_mapping
+        self.mesh = mesh
+        self._thread: Optional[threading.Thread] = None
+        self._result: Optional[PyTree] = None
+        self._exception: Optional[Exception] = None
+
+    def prefetch(self, step_to_load: int, exemplar_state: M):
+        """Initiates loading of a checkpoint for a given step in a background thread."""
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeError("Another checkpoint load is already in progress.")
+
+        def load_fn():
+            try:
+                path = os.path.join(self.checkpointer.base_path, f"step-{step_to_load}")
+                self._result = self.checkpointer.load_checkpoint(
+                    exemplar_state,
+                    path=path,
+                    discover_latest=False,
+                    axis_mapping=self.axis_mapping,
+                    mesh=self.mesh,
+                )
+            except Exception as e:
+                self._exception = e
+
+        self._result = None
+        self._exception = None
+        self._thread = threading.Thread(target=load_fn)
+        self._thread.start()
+
+    def get(self) -> Optional[M]:
+        """Waits for the in-progress checkpoint load to complete and returns the loaded state."""
+        if self._thread is None:
+            return None
+
+        self._thread.join()
+        self._thread = None
+
+        if self._exception:
+            raise self._exception
+
+        return self._result
 
 
 # In callbacks.py - Add a new callback that handles epoch checkpointing
@@ -613,10 +687,9 @@ def _get_fs_and_plain_path(path, fs=None):
         path_to_open = path
     return fs, path_to_open
 
-
 @dataclass
 class CheckpointerConfig:
-    base_path: str = "checkpoints/"
+    base_path: Optional[str] = None  # If None, defaults to /scr-ssd/{USER}/levanter/checkpoints/
     save_interval: timedelta = timedelta(minutes=15)
     # TODO: I'd like to write this, but it's not supported by draccus
     # keep: List[CheckpointInterval] = field(default_factory=lambda: [CheckpointInterval(every=1000)])
@@ -637,16 +710,23 @@ class CheckpointerConfig:
             return os.path.expanduser(os.path.join(self.base_path, run_id))
         return os.path.expanduser(self.base_path)
 
-    def create(self, run_id) -> Checkpointer:
+    def create(self, run_id, axis_mapping=None, mesh=None) -> "Checkpointer":
         keeps = [CheckpointInterval(**k) for k in self.keep]
         return Checkpointer(
             base_path=self.expanded_path(run_id),
             save_interval=self.save_interval,
             step_policies=keeps,
             delete_old_temp_checkpoints=self.delete_old_temp_checkpoints,
+            axis_mapping=axis_mapping,
+            mesh=mesh,
         )
 
     def __post_init__(self):
+        # Set default base_path if not provided via config
+        if self.base_path is None:
+            username = os.environ.get("USER", "sampark")
+            self.base_path = f"/scr-ssd/{username}/levanter/checkpoints/"
+
         # Workaround for Executor using placeholder types.
         if isinstance(self.base_path, str):
             self.base_path = os.path.expanduser(self.base_path)

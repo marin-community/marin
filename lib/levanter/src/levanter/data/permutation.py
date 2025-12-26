@@ -1,14 +1,16 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
+from pathlib import Path
 
 import jax.random
+import numpy as np
 from async_lru import alru_cache
 from jaxtyping import PRNGKeyArray
 
 from levanter.data import AsyncDataset
-from levanter.data._prp import PermType, Permutation
+from levanter.data._prp import PermType, Permutation, PredefinedPermutation
 from levanter.data.dataset import T_co
 
 
@@ -17,12 +19,35 @@ class PermutationDataset(AsyncDataset[T_co]):
 
     # TODO: add epoch reshuffling
 
-    def __init__(self, dataset: AsyncDataset[T_co], key: PRNGKeyArray, perm_type: PermType = "feistel"):
+    def __init__(self, dataset: AsyncDataset[T_co], key: Optional[jax.random.PRNGKey] = None,
+                 perm_type: PermType = "feistel", permutation_array: Optional[np.ndarray] = None):
         super().__init__()
         self.dataset = dataset
         self.key = key
         self._permutation: Optional[Permutation] = None
         self._perm_type = perm_type
+        self._permutation_array = permutation_array
+
+        if perm_type == "predefined" and permutation_array is None:
+            raise ValueError("predefined permutation type requires permutation_array to be provided")
+        if perm_type != "predefined" and key is None:
+            raise ValueError(f"permutation type {perm_type} requires key to be provided")
+
+    @classmethod
+    def from_permutation_file(cls, dataset: AsyncDataset[T_co], permutation_file_path: str) -> "PermutationDataset":
+        """Create a PermutationDataset from a predefined permutation file.
+
+        Args:
+            dataset: The dataset to wrap
+            permutation_file_path: Path to a .npy file containing the permutation array
+
+        Returns:
+            A PermutationDataset using the predefined permutation
+        """
+        print(f"🔀 LOADING PREDEFINED PERMUTATION from {permutation_file_path}")
+        permutation_array = np.load(permutation_file_path)
+        print(f"🔀 PERMUTATION LOADED: shape={permutation_array.shape}, first 10 elements={permutation_array[:10]}")
+        return cls(dataset, key=None, perm_type="predefined", permutation_array=permutation_array)
 
     async def async_len(self) -> int:
         return await self.dataset.async_len()
@@ -42,17 +67,27 @@ class PermutationDataset(AsyncDataset[T_co]):
 
     async def getitem_async(self, index: int) -> T_co:
         permutation = await self._get_permutation()
-        return await self.dataset.getitem_async(permutation(index))
+        permuted_index = permutation(index)
+        if self._perm_type == "predefined":
+            print(f"🔀 PERMUTATION: logical_index={index} -> permuted_index={permuted_index}")
+        return await self.dataset.getitem_async(permuted_index)
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[T_co]:
         permutation = await self._get_permutation()
-        return await self.dataset.get_batch(
-            [int(permutation(i)) for i in indices]
-        )  # cast to int to be sure it's python int
+        permuted_indices = [int(permutation(i)) for i in indices]
+        if self._perm_type == "predefined":
+            print(f"🔀 BATCH PERMUTATION: logical_indices={list(indices)[:5]}... -> permuted_indices={permuted_indices[:5]}...")
+        return await self.dataset.get_batch(permuted_indices)
 
     async def _get_permutation(self):
         if self._permutation is None:
-            self._permutation = Permutation.make(self._perm_type, await self.async_len(), self.key)
+            if self._perm_type == "predefined":
+                dataset_len = await self.async_len()
+                if len(self._permutation_array) != dataset_len:
+                    raise ValueError(f"Permutation array length ({len(self._permutation_array)}) does not match dataset length ({dataset_len})")
+                self._permutation = PredefinedPermutation(self._permutation_array)
+            else:
+                self._permutation = Permutation.make(self._perm_type, await self.async_len(), self.key)
         return self._permutation
 
     async def wait_until_len_at_least(self, length: int) -> int:

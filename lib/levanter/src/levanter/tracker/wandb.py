@@ -240,6 +240,25 @@ class WandbConfig(TrackerConfig):
         wandb.summary["num_hosts"] = jax.process_count()  # type: ignore
         wandb.summary["backend"] = jax.default_backend()  # type: ignore
 
+        # If requested, register an atexit hook to upload XLA dumps to W&B.
+        # Only do this on process 0 to avoid multi-host duplication.
+        if self.save_xla_dumps and jax.process_index() == 0:
+            import atexit
+            import time as _time
+
+            start_time = getattr(r, "start_time", None) or _time.time()
+
+            def _upload_xla_dumps_at_exit():
+                try:
+                    # Lazy import to avoid circular import issues
+                    from levanter.utils.logging import save_xla_dumps_to_wandb
+
+                    save_xla_dumps_to_wandb(start_time)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Failed to upload XLA dumps to W&B at exit: {e}")
+
+            atexit.register(_upload_xla_dumps_at_exit)
+
         return WandbTracker(r)
 
     def _git_settings(self):

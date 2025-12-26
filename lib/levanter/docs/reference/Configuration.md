@@ -330,9 +330,25 @@ which are common to all optimizers (and most have to do with learning rate sched
 | `rewarmup`      | The learning rate re-warmup, if using cycles.                                 | `0.0`    |
 | `cycles`        | The number of cycles for the learning rate, or steps where cycles end         | `None`   |
 | `cycle_length`  | How long the cycles should be (as an int, fraction), or list of cycle lengths | `None`   |
+| `schedule_steps`| Optional total steps used for LR scheduling only (overrides trainer steps)    | `None`   |
 
 By default, Levanter uses a cosine learning rate decay with warmup. The learning rate is decayed to
 `min_lr_ratio * learning_rate` over the course of the training run. This is a fairly standard default for LLM training.
+
+If you want the learning rate schedule to span a different number of steps than the actual training duration, set
+`optimizer.schedule_steps`. For example, you can schedule over 10,000 steps while training for only 2,000 steps by
+configuring:
+
+```yaml
+trainer:
+  num_train_steps: 2000
+optimizer:
+  schedule_steps: 10000
+  lr_schedule: cosine
+  learning_rate: 6e-4
+```
+In this setup, the training loop still stops at `trainer.num_train_steps`, but the LR schedule phases (warmup/decay/cycles)
+are computed against `optimizer.schedule_steps`.
 
 #### Learning Rate Schedules
 

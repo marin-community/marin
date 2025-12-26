@@ -138,10 +138,17 @@ class AsyncDataset(DatasetBase[T_co]):
         """
         return self.slice_dataset(end_index=n)
 
-    def shuffle(self, key: PRNGKeyArray, *, perm_type: PermType = "feistel"):
+    def shuffle(self, key: PRNGKeyArray = None, *, perm_type: PermType = "feistel", permutation_file_path: Optional[str] = None):
         import levanter.data.permutation as permutation
 
-        return permutation.PermutationDataset(self, key, perm_type=perm_type)
+        if perm_type == "predefined":
+            if permutation_file_path is None:
+                raise ValueError("permutation_file_path must be provided when perm_type is 'predefined'")
+            return permutation.PermutationDataset.from_permutation_file(self, permutation_file_path)
+        else:
+            if key is None:
+                raise ValueError("key must be provided when perm_type is not 'predefined'")
+            return permutation.PermutationDataset(self, key, perm_type=perm_type)
 
     def era_shuffle(self, era_length: int, key: PRNGKeyArray, *, perm_type: PermType = "feistel"):
         import levanter.data.permutation as permutation

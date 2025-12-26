@@ -60,12 +60,13 @@ class AttentionBackend(Enum):
     SPLASH = "splash"  # on TPU.
     JAX_FLASH = "jax_flash"  # Use the JAX reference implementation
     VANILLA = "vanilla"  # regular dot product attention
+    FLASH_META = "flash_meta"  # use the flash attention meta kernel
 
 
 def default_attention_type() -> AttentionBackend:
     accelerator_type = jax.local_devices()[0].platform
     if accelerator_type == "gpu":
-        return AttentionBackend.NVTE
+        return AttentionBackend.DEFAULT
     elif accelerator_type == "tpu":
         return AttentionBackend.SPLASH
     else:
@@ -130,6 +131,9 @@ def dot_product_attention(
     if axis_name(QPos) == axis_name(KPos):
         raise ValueError("QPos and KPos must have different names")
 
+    #print(f"use_flash: {use_flash}, attn_backend: {attn_backend}", flush=True)
+    #import pdb; pdb.set_trace()
+
     if use_flash is not None:
         if attn_backend is None:
             if not use_flash:
@@ -160,6 +164,7 @@ def dot_product_attention(
         scaling_factor = 1 / math.sqrt(query.resolve_axis(Key).size)
 
     attention_out = None
+    print(f"*** dot_product_attention > ATTN_BACKEND: {attn_backend}", flush=True)
 
     match attn_backend:
         case AttentionBackend.NVTE:
@@ -255,6 +260,26 @@ def dot_product_attention(
                     logits_soft_cap=logits_soft_cap,
                 )
 
+        case AttentionBackend.FLASH_META:
+            from levanter.models.flash_attention_new import flash_attention
+            return flash_attention(
+                QPos,
+                KPos,
+                Key,
+                query,
+                key,
+                value,
+                block_size=flash_block_size,
+                mask=mask,
+                bias=bias,
+                dropout=dropout,
+                inference=inference,
+                key=prng,
+                dtype=attention_dtype,
+                precision=precision,
+                scaling_factor=scaling_factor,
+                logits_soft_cap=logits_soft_cap,
+            )
         case _:
             attention_out = None
 
@@ -362,6 +387,8 @@ def simple_attention_with_dropout(
 ):
     QPos = query.resolve_axis(QPos)
     KPos = key.resolve_axis(KPos)
+
+
     m = materialize_mask(mask, QPos, KPos)
     orig_dtype = query.dtype
 
@@ -382,16 +409,17 @@ def simple_attention_with_dropout(
     if logits_soft_cap is not None:
         weights = hax.tanh(weights / logits_soft_cap) * logits_soft_cap
 
+
     if m is not None:
-        weights = haliax.where(m, weights, -1e9)
+        weights = haliax.where(m, weights, -jnp.inf) # TODO: check
 
     weights = haliax.nn.softmax(weights, axis=KPos)
 
     weights = weights.astype(orig_dtype)
 
     out = haliax.nn.dropout(weights, dropout, key=prng, inference=inference)
-
-    return haliax.dot(out, value, axis=KPos)
+    out = haliax.dot(out, value, axis=KPos)
+    return out
 
 
 def _try_te_attention(
@@ -1569,6 +1597,8 @@ class AttentionConfig:
     scaling_factor: Optional[float] = None
     logits_soft_cap: Optional[float] = None
     qk_norm: Optional[LayerNormConfigBase] = None
+    initializer_range: float = 0.02
+
     """Configuration for QK normalization. If None, no normalization is applied."""
 
     def __post_init__(self):
@@ -1640,6 +1670,7 @@ class Attention(eqx.Module):
             key=k_q,
             use_bias=use_bias,
             out_first=True,
+            init_scale=math.sqrt(config.Embed.size) * config.initializer_range,
         )
         k_proj = hnn.Linear.init(
             In=config.Embed,
@@ -1696,6 +1727,14 @@ class Attention(eqx.Module):
         k = k.rearrange((..., "kv_head", "position", "head_size"))
         v = v.rearrange((..., "kv_head", "position", "head_size"))
 
+        # Apply rotary position embeddings if configured
+        if self.rot_embs is not None:
+            if pos_ids is None:
+                pos_ids = hax.arange(x.resolve_axis("position"), dtype=jnp.int32)
+            q = self.rot_embs(q, pos_ids)
+            k = self.rot_embs(k, pos_ids)
+
+        # Rename position axis for attention
         # Distinguish key sequence axis for attention
         k = k.rename({"position": "key_position"})
         v = v.rename({"position": "key_position"})
@@ -2403,5 +2442,6 @@ class AttentionWithSink(Attention):
         attn_output = attn_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
         attn_output = attn_output.astype(x.dtype)
         attn_output = self.o_proj(attn_output, key=key_o)
+
 
         return attn_output

@@ -287,3 +287,57 @@ def rotary_pos_emb(
         sin = hax.sin(emb)
         # This is different from the paper but aligns with HF implementation:
         return cos, sin
+
+
+# === BEGIN: Partial RoPE (drop-in, no recursion) ============================
+from dataclasses import dataclass
+import equinox as eqx
+import haliax as hax
+from levanter.layers.rotary import RotaryEmbeddingsConfig, DefaultRotaryEmbeddingsConfig
+
+@RotaryEmbeddingsConfig.register_subclass("partial")
+@dataclass(frozen=True)
+class PartialRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
+    # Rotate this fraction of the head dimension; the rest passes through unrotated.
+    fraction: float = 0.5  # must be in (0, 1]; typical = 0.5
+
+    def build(self, Pos: hax.Axis, HeadDim: hax.Axis):
+        # Build the normal (full-head) RoPE, then wrap it to keep only a prefix rotated.
+        inner = DefaultRotaryEmbeddingsConfig().build(Pos, HeadDim)
+        return PartialRotaryEmbeddings(inner, HeadDim, self.fraction)
+
+    # Optional: keep HF export behavior identical to default
+    def to_hf_config(self):
+        return DefaultRotaryEmbeddingsConfig().to_hf_config()
+
+
+class PartialRotaryEmbeddings(eqx.Module):
+    inner: eqx.Module       # the actual full-head RoPE module
+    HeadDim: hax.Axis
+    rot_dim: int            # number of head-dim channels to keep rotated (even)
+
+    def __init__(self, inner, HeadDim: hax.Axis, fraction: float):
+        object.__setattr__(self, "inner", inner)
+        object.__setattr__(self, "HeadDim", HeadDim)
+        hd = HeadDim.size
+        # ensure even, >= 2, and <= hd
+        r = max(2, min(hd, (int(hd * fraction) // 2) * 2))
+        object.__setattr__(self, "rot_dim", r)
+
+    def apply(self, q, k, *, pos_ids=None):
+        # Compute the normal full-head rotation first...
+        q_all, k_all = self.inner.apply(q, k, pos_ids=pos_ids)
+
+        # ...then splice: keep rotated prefix, keep original (unrotated) suffix.
+        hd = self.HeadDim.size
+        r = self.rot_dim
+
+        q_rot = q_all[{self.HeadDim: slice(0, r)}]
+        k_rot = k_all[{self.HeadDim: slice(0, r)}]
+        q_pas = q[{self.HeadDim: slice(r, hd)}]
+        k_pas = k[{self.HeadDim: slice(r, hd)}]
+
+        q_out = hax.concatenate([q_rot, q_pas], axis=self.HeadDim)
+        k_out = hax.concatenate([k_rot, k_pas], axis=self.HeadDim)
+        return q_out, k_out
+# === END: Partial RoPE =======================================================

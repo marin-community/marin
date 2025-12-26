@@ -137,6 +137,11 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
     """Whether to apply a default reasonable weight decay to modules not explicitly masked. None means it will if
     no weight_decay_modules are set. False means it will not. True means it will regardless of weight_decay_modules."""
 
+    schedule_steps: Optional[int] = None
+    """If set, overrides the number of steps used for the learning-rate schedule.
+    Training duration remains controlled by `trainer.num_train_steps`. This allows, e.g.,
+    scheduling over 10k steps while actually training for 2k steps."""
+
     @classmethod
     def default_choice_name(cls) -> Optional[str]:
         return "adam"
@@ -155,7 +160,7 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
             if "RmsNorm" in path:
                 return False
             if "Embedding" in path:
-                return False
+                return False # TODO: CHANGE BACK
             if path.endswith("bias"):
                 return False
             return None
@@ -237,13 +242,16 @@ class OptimizerConfig(draccus.ChoiceRegistry, abc.ABC):
             return mask_fn
 
     def lr_scheduler(self, num_train_steps, override_lr=None):
+        # Allow overriding the schedule horizon separately from actual training steps
+        steps_for_schedule = self.schedule_steps or num_train_steps
+
         if self.cooldown is not None:
             warnings.warn("cooldown is deprecated. Just use the normal schedule.", DeprecationWarning)
-            cooldown_steps = _convert_frac_or_steps(self.cooldown, num_train_steps)
+            cooldown_steps = _convert_frac_or_steps(self.cooldown, steps_for_schedule)
         else:
             cooldown_steps = 0
 
-        total_main_steps = num_train_steps - cooldown_steps
+        total_main_steps = steps_for_schedule - cooldown_steps
         cooldown_points = self._get_cycle_minima(total_main_steps)
 
         learning_rate = self.learning_rate
@@ -407,7 +415,8 @@ class AdamConfig(OptimizerConfig):
     # https://x.com/giffmana/status/1692641748445438301
     beta2: float = 0.95
     epsilon: float = 1e-8
-    max_grad_norm: Optional[float] = 1.0
+    epsilon_root: float = 1e-8
+    max_grad_norm: Optional[float] = None
     nesterov: bool = False
     update_rms_clipping: Optional[float] = None
     """
@@ -461,7 +470,7 @@ class AdamConfig(OptimizerConfig):
             if self.max_grad_norm:
                 components.append(optax.clip_by_global_norm(self.max_grad_norm))
 
-            components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon, nesterov=self.nesterov))
+            components.append(optax.scale_by_adam(self.beta1, self.beta2, self.epsilon, self.epsilon_root, nesterov=self.nesterov))
 
             if self.weight_decay > 0:
                 if self.adamc_weight_decay:

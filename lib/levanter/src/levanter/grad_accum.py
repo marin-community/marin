@@ -119,6 +119,7 @@ def microbatched(
         args = _reshape_for_microbatch(Batch, Microbatch, AccumStep, args, compute_axis_mapping)
 
         def loop(acc, microbatch_and_key):
+            #debug.print("!!! LOOPing in microbatched !!!")
             microbatch, microbatch_kwargs, key = microbatch_and_key
             with jax.named_scope("compute"):
                 microbatch_kwargs = microbatch_kwargs.copy()

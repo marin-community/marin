@@ -163,6 +163,26 @@ def main(config: LoraLmConfig):
 
         iter_data = train_loader.iter_from_step(state.step)
 
+        # If eval harness is configured, add it here as well (mirroring train_lm)
+        if config.eval_harness is not None:
+            try:
+                import lm_eval  # type: ignore
+                _ = lm_eval
+                eval_harness = config.eval_harness
+                trainer.add_hook(
+                    levanter.eval_harness.lm_eval_harness(
+                        eval_harness,
+                        tokenizer,
+                        trainer.EvalBatch,
+                        trainer.compute_axis_mapping,
+                        trainer.mp,
+                        checkpoint_base_path=trainer.checkpoint_path,
+                    ),
+                    every=config.eval_harness_steps,
+                )
+            except Exception:
+                logger.warning("lm-evaluation-harness is not installed; skipping eval harness hook registration.")
+
         ## OK, actually run training!
         trainer.train(state, iter_data)
 

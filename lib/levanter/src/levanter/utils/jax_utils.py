@@ -126,7 +126,7 @@ def multihost_broadcast_sync(obj: X, is_source: Optional[bool] = None, timeout: 
     return obj
 
 
-def barrier_sync(timeout: float = 200):
+def barrier_sync(timeout: float = 30):
     """
     Uses jax's unpublished distributed api to wait for all processes to reach a barrier. This is useful for ensuring
     that all processes have reached a certain point in the code before continuing.
@@ -466,6 +466,17 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
      2. Then, inside jit, we select the source'th element of the array, then reshard with the out_axis_specs
 
     """
+    if jax.process_count() == 1:
+        return x
+
+    # Check if x contains globally sharded JAX arrays (not fully addressable).
+    # If so, return as-is since it's already distributed across all hosts.
+    def is_global_array(leaf):
+        return isinstance(leaf, jax.Array) and not leaf.is_fully_addressable
+
+    if any(jax.tree.leaves(jax.tree.map(is_global_array, x))):
+        return x
+
     current_mesh: jax.sharding.Mesh = hax.partitioning._get_mesh()
 
     axis_names = current_mesh.axis_names
@@ -479,6 +490,10 @@ def broadcast_shard(x: T, out_axis_specs: Any, source: int = 0) -> T:
     )
 
     def pre_jit(x):
+        # If x is already a globally sharded JAX array, return it as-is
+        if isinstance(x, jax.Array) and not x.is_fully_addressable:
+            return x
+
         if jax.process_index() == source:
             inp = np.array(x)
         else:

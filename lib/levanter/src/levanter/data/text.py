@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 from functools import cached_property
 from itertools import chain
+from urllib.parse import urlparse
 from typing import (
     Any,
     Dict,
@@ -50,6 +51,7 @@ from levanter.store.cache import CacheMetadata, CacheOptions, TreeCache
 from levanter.store.jagged_array import JaggedArrayStore
 from levanter.store.tree_store import TreeStore
 from levanter.utils import fsspec_utils
+from levanter.utils.cache_naming import hashed_cache_dir
 from levanter.utils.hf_utils import HfTokenizer, num_cpus_used_by_tokenizer
 
 # intercept the logging nonsense here
@@ -149,7 +151,7 @@ class TokenSeqDataset(AsyncDataset[np.ndarray]):
         return length
 
 
-class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
+class CausalLmDataset(AsyncDataset[LmExample]):
     def __init__(
         self,
         dataset: AsyncDataset[np.ndarray],
@@ -159,32 +161,157 @@ class CausalLmDataset(MappedAsyncDataset[np.ndarray, LmExample]):
         eos_id: Optional[int] = None,
         block_cross_document_attention: bool = True,
     ):
+        super().__init__()
         self.dataset = dataset
         self.Pos = Pos
         self.ignore_id = ignore_index
         self.eos_id = eos_id
         self.block_cross_document_attention = block_cross_document_attention
 
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[LmExample]:
+        tokens_batch = await self.dataset.get_batch(indices)
+
         sharding = jax.sharding.SingleDeviceSharding(jax.local_devices(backend="cpu")[0])
 
         @functools.partial(eqx.filter_jit)
-        def _create_lm_example(tokens):
+        def _create_lm_example(tokens, index):
             tokens = hax.named(tokens, self.Pos)
             example = LmExample.causal(
                 tokens=tokens,
                 ignore_id=self.ignore_id,
-                eos_id=eos_id,
-                block_cross_document_attention=block_cross_document_attention,
+                eos_id=self.eos_id,
+                block_cross_document_attention=self.block_cross_document_attention,
+                index=index,
             )
+            return jax.lax.with_sharding_constraint(example, sharding)
 
-            example = jax.lax.with_sharding_constraint(example, sharding)
-
-            return example
-
-        super().__init__(self.dataset, _create_lm_example)
+        return [
+            _create_lm_example(tokens, np.array(index, dtype=np.int32))
+            for tokens, index in zip(tokens_batch, indices)
+        ]
 
     async def async_len(self) -> int:
         return await self.dataset.async_len()
+
+    def is_finite(self) -> bool:
+        return self.dataset.is_finite()
+
+    async def current_len(self) -> Optional[int]:
+        return await self.dataset.current_len()
+
+    async def final_length_is_known(self) -> bool:
+        return await self.dataset.final_length_is_known()
+
+
+class CausalLmDatasetWithMask(AsyncDataset[LmExample]):
+    """
+    Variant of CausalLmDataset that multiplies an external per-token mask from the cache with the causal mask.
+
+    Expects a leaf in the cache named by `mask_field` with the same jagged structure as `input_ids`.
+    """
+
+    def __init__(
+        self,
+        dataset: AsyncDataset[np.ndarray],
+        Pos: Axis,
+        *,
+        mask_cache: TreeCache[dict],
+        mask_field: str = "loss_mask_mult",
+        ignore_index: Optional[int] = None,
+        eos_id: Optional[int] = None,
+        block_cross_document_attention: bool = True,
+    ):
+        super().__init__()
+        self.dataset = dataset
+        self.Pos = Pos
+        self.ignore_id = ignore_index
+        self.eos_id = eos_id
+        self.block_cross_document_attention = block_cross_document_attention
+        self._mask_cache = mask_cache
+        self._mask_field = mask_field
+        self._store: Optional[TreeStore] = None
+
+    async def _await_mask_store(self) -> JaggedArrayStore:
+        if self._store is None:
+            self._store = self._mask_cache.store
+        return self._store.tree[self._mask_field]
+
+    async def get_batch(self, indices: Sequence[int]) -> Sequence[LmExample]:
+        tokens_batch = await self.dataset.get_batch(indices)
+        mask_store = await self._await_mask_store()
+
+        offsets = np.array(indices, dtype=np.int64) * self.Pos.size
+        with ts.Batch():
+            mask_reads = [mask_store.data[offset : offset + self.Pos.size].read() for offset in offsets]
+        mask_batch = await asyncio.gather(*mask_reads)
+
+        # Optional debug logging for masking slices (set LEV_DEBUG_MASK=1)
+        try:
+            import os as _os
+            if _os.getenv("LEV_DEBUG_MASK", "").lower() in ("1", "true", "yes"):
+                kept = sum(int(np.sum(m) == len(m)) for m in mask_batch)
+                blocked = sum(int(np.sum(m) == 0) for m in mask_batch)
+                logger.info(
+                    "[MaskDebug][CausalLmDatasetWithMask] kept=%s blocked=%s total=%s",
+                    kept,
+                    blocked,
+                    len(mask_batch),
+                )
+        except Exception:
+            pass
+
+        @functools.partial(eqx.filter_jit)
+        def _create(tokens, mask, index):
+            tokens = hax.named(tokens, self.Pos)
+            m = hax.named(mask, self.Pos)
+            return LmExample.causal(
+                tokens=tokens,
+                loss_weight=m,
+                ignore_id=self.ignore_id,
+                eos_id=self.eos_id,
+                block_cross_document_attention=self.block_cross_document_attention,
+                index=index,
+            )
+
+        return [
+            _create(tokens, np.asarray(mask), np.array(index, dtype=np.int32))
+            for tokens, mask, index in zip(tokens_batch, mask_batch, indices)
+        ]
+
+    async def async_len(self) -> int:
+        return await self.dataset.async_len()
+
+    def is_finite(self) -> bool:
+        return self.dataset.is_finite()
+
+    async def current_len(self) -> Optional[int]:
+        return await self.dataset.current_len()
+
+    async def final_length_is_known(self) -> bool:
+        return await self.dataset.final_length_is_known()
+
+
+class ZeroLossLmDataset(MappedAsyncDataset[LmExample, LmExample]):
+    """Wraps an ``AsyncDataset[LmExample]`` and forces ``loss_weight`` to zeros.
+
+    This makes the dataset contribute zero training loss while preserving tokens and attention masks.
+    Useful for mixing in a "dummy" dataset in an ``LMMixtureDatasetConfig``.
+    """
+
+    def __init__(self, base: AsyncDataset[LmExample], Pos: Axis):
+        self.Pos = Pos
+
+        def _to_zero(ex: LmExample) -> LmExample:
+            zero_weight = hax.zeros(self.Pos, dtype=jnp.float32)
+            return LmExample(
+                tokens=ex.tokens,
+                loss_weight=zero_weight,
+                attn_mask=ex.attn_mask,
+                index=ex.index,
+                dataset_id=ex.dataset_id,
+            )
+
+        super().__init__(base, _to_zero)
 
 
 def _maybe_force_tokenizer_parallelism(tokenizer: PreTrainedTokenizerBase):
@@ -199,6 +326,131 @@ LONG_STRING_WORKAROUND = 10_000
 ws = regex.compile(r"\s")
 
 
+# ------------------------
+# Loss Mask Rule Plugins
+# ------------------------
+
+
+class LossMaskRule(abc.ABC, ChoiceRegistry):
+    """
+    Plugin interface for computing a per-token loss multiplier mask (0/1 or weights) from record metadata.
+
+    Rules run in preprocessing, not in training, so they can freely use Python/regex.
+    """
+
+    @classmethod
+    def default_choice_name(cls) -> Optional[str]:
+        return None
+
+    def needs_offsets(self) -> bool:
+        """Return True if the rule requires `return_offsets_mapping` from the tokenizer."""
+        return False
+
+    @abc.abstractmethod
+    def mask_for(self, record: dict, input_ids: Sequence[int]) -> np.ndarray:
+        """
+        Compute a per-token loss multiplier for this record.
+
+        Args:
+            record: The raw example dict read from the datasource (e.g., JSONL object)
+            input_ids: The token ids for the example (already tokenized)
+        Returns:
+            np.ndarray[int32] of shape [len(input_ids)] with 0/1 values
+        """
+        raise NotImplementedError
+
+
+@LossMaskRule.register_subclass("url")
+@dataclass(frozen=True)
+class UrlFilterRule(LossMaskRule):
+    """
+    Doc-level URL filter rule that masks the entire example if it does not satisfy the rule.
+
+    - mode="allow": keep examples whose URL matches any regex in `patterns` OR endswith any domain in `domains`.
+      If no patterns/domains provided, all examples are kept.
+    - mode="block": mask examples whose URL matches any regex in `patterns` OR endswith any domain in `domains`.
+      If no patterns/domains provided, nothing is blocked.
+    - If the URL is missing, behavior defaults to `default_keep`.
+    """
+
+    mode: Literal["allow", "block"] = "allow"
+    patterns: List[str] = field(default_factory=list)
+    domains: Optional[List[str]] = None
+    url_field: str = "url"
+    default_keep: bool = True
+
+    def __post_init__(self):
+        # Precompile regexes for performance
+        compiled = [re.compile(p) for p in self.patterns]
+        object.__setattr__(self, "_compiled_patterns", compiled)
+
+        # Normalize domain list to lowercase
+        if self.domains is not None:
+            object.__setattr__(self, "_domains_lc", [d.lower() for d in self.domains])
+        else:
+            object.__setattr__(self, "_domains_lc", None)
+
+    def _url_matches(self, url: str) -> bool:
+        # Pattern match
+        if getattr(self, "_compiled_patterns", None):
+            if any(p.search(url) is not None for p in self._compiled_patterns):
+                return True
+
+        # Domain match
+        if self._domains_lc is not None:
+            try:
+                parsed = urlparse(url)
+                dom = parsed.netloc.lower()
+            except Exception:
+                dom = ""
+            # Handle bare domains without scheme (e.g., "example.com") where netloc is empty
+            if not dom:
+                dom = url.lower()
+            if any(dom.endswith(d) for d in self._domains_lc):
+                return True
+
+        return False
+
+    def mask_for(self, record: dict, input_ids: Sequence[int]) -> np.ndarray:
+        # Support dotted field paths like "metadata.url"
+        url = None
+        try:
+            field = self.url_field
+            if "." in field:
+                cur: Any = record
+                for part in field.split("."):
+                    if isinstance(cur, dict):
+                        cur = cur.get(part)
+                    else:
+                        cur = None
+                        break
+                url = cur
+            else:
+                url = record.get(field)
+        except Exception:
+            url = None
+        keep = self.default_keep
+
+        if url is not None:
+            #try:
+            #    print(f"[UrlFilterRule] url: {url}", flush=True)
+            #except Exception:
+            #    pass
+            matched = self._url_matches(url)
+            if self.mode == "allow":
+                # Keep only if it matches; if no patterns/domains, keep everything
+                keep = matched if (self.patterns or self.domains) else True
+            else:  # block
+                # Block if it matches; if no patterns/domains, block nothing
+                keep = not matched
+
+        length = len(input_ids)
+        if keep:
+            return np.ones((length,), dtype=np.int32)
+        else:
+            return np.zeros((length,), dtype=np.int32)
+
+
 class BatchTokenizer(BatchProcessor[dict, dict]):
     """
     A batch processor that tokenizes a batch of strings using a tokenizer.
@@ -209,7 +461,7 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         self,
         tokenizer: HfTokenizer,
         text_field="text",
-        enforce_bos=True,
+        enforce_bos=False,
         enforce_eos=True,
         *,
         override_resources=None,
@@ -217,6 +469,8 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         return_attention_mask=False,
         padding=False,
         max_length=None,
+        metadata_fields: list[str] | None = None,
+        loss_mask_rule: LossMaskRule | None = None,
     ):
         _maybe_force_tokenizer_parallelism(tokenizer)
         self.tokenizer = tokenizer
@@ -224,6 +478,8 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         self.override_resources = override_resources
         self.return_attention_mask = return_attention_mask
         self.padding = padding
+        self.metadata_fields = metadata_fields
+        self.loss_mask_rule = loss_mask_rule
         if max_length is not None:
             self.max_length = max_length
         else:
@@ -249,6 +505,7 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         self._need_to_add_eos = should_append_eos
         self._need_to_add_bos = should_append_bos
         self._workaround_len = _workaround_len
+        self._needs_offsets = bool(self.loss_mask_rule.needs_offsets() if self.loss_mask_rule is not None else False)
 
     def __call__(self, batch: Sequence[dict]) -> list[dict]:
         batch_text = [example[self.text_field] for example in batch]
@@ -264,19 +521,21 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
         else:
             needs_merge = []
 
+        # Common kwargs for tokenization
+        encode_kwargs = dict(return_attention_mask=self.return_attention_mask, verbose=False)
+        if self._needs_offsets:
+            encode_kwargs["return_offsets_mapping"] = True
+
         if self.padding is not False:
             encoding = self.tokenizer(
                 batch_text,
-                return_attention_mask=self.return_attention_mask,
-                verbose=False,
                 padding=self.padding,
                 max_length=self.max_length,
                 truncation=True,
+                **encode_kwargs,
             )  # type: ignore
         else:
-            encoding = self.tokenizer(
-                batch_text, return_attention_mask=self.return_attention_mask, verbose=False
-            )  # type: ignore
+            encoding = self.tokenizer(batch_text, **encode_kwargs)  # type: ignore
 
         if needs_merge:
             new_encoding = self._merge_split_encodings(batch_text, encoding, needs_merge)
@@ -284,6 +543,38 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
 
         # debatch the encoding
         unbatched = [dict(zip(encoding, t)) for t in zip(*[encoding[k] for k in encoding])]
+
+        # Attach per-token loss mask multiplier derived from metadata (e.g., URL-based rule).
+        kept = 0
+        blocked = 0
+        if self.loss_mask_rule is not None:
+            for i, doc in enumerate(unbatched):
+                ids = doc.get("input_ids")
+                ids_seq = ids if isinstance(ids, Sequence) else list(ids)
+                mask = self.loss_mask_rule.mask_for(batch[i], ids_seq)
+                mask = np.asarray(mask, dtype=np.int32)
+                #print(f'>>> batch i: {i} mask: {mask}', flush=True)
+                doc["loss_mask_mult"] = mask
+                # Count doc-level mask status for debug
+                if mask.size > 0:
+                    s = int(mask.sum())
+                    if s == int(mask.size):
+                        kept += 1
+                    elif s == 0:
+                        blocked += 1
+        else:
+            for doc in unbatched:
+                ids = doc.get("input_ids")
+                ids_len = len(ids if isinstance(ids, Sequence) else list(ids))
+                doc["loss_mask_mult"] = np.ones((ids_len,), dtype=np.int32)
+
+        # Optional debug logging for masking (set LEV_DEBUG_MASK=1)
+        try:
+            import os as _os
+            if _os.getenv("LEV_DEBUG_MASK", "").lower() in ("1", "true", "yes") and self.loss_mask_rule is not None:
+                logger.info(f"[MaskDebug][BatchTokenizer] kept={kept} blocked={blocked} total={len(unbatched)} rule={type(self.loss_mask_rule).__name__}")
+        except Exception:
+            pass
 
         return unbatched
 
@@ -324,11 +615,16 @@ class BatchTokenizer(BatchProcessor[dict, dict]):
             "max_length": self.max_length,
             "append_bos": self._need_to_add_bos,
             "append_eos": self._need_to_add_eos,
+            "loss_mask_rule": type(self.loss_mask_rule).__name__ if self.loss_mask_rule is not None else None,
         }
 
     @property
     def output_exemplar(self) -> dict:
-        return dict(**self.tokenizer("hi there", return_attention_mask=self.return_attention_mask, verbose=False))
+        base = dict(
+            **self.tokenizer("hi there", return_attention_mask=self.return_attention_mask, verbose=False)
+        )
+        base["loss_mask_mult"] = np.zeros((0,), dtype=np.int32)
+        return base
 
     @property
     def name_or_path(self):
@@ -422,6 +718,9 @@ class TextLmDatasetFormat(LmDatasetFormatBase):
     """
 
     text_key: str = "text"  # key for the text field in the jsonl file
+    # Optional metadata-aware masking
+    metadata_fields: Optional[List[str]] = None
+    loss_mask_rule: Optional[LossMaskRule] = None
 
 
 @LmDatasetFormatBase.register_subclass("chat")
@@ -463,7 +762,10 @@ class LmDatasetSourceConfigBase(abc.ABC):
     def load_cache(
         self, split, tokenizer: HfTokenizer, override_cache_dir: str | None = None, enforce_eos=True
     ) -> TreeCache[dict]:
-        base_cache = override_cache_dir if override_cache_dir is not None else self.cache_dir
+        base_cache_in = override_cache_dir if override_cache_dir is not None else self.cache_dir
+        base_cache = hashed_cache_dir(
+            base_cache_in, self, extra={"tokenizer": getattr(tokenizer, "name_or_path", None), "enforce_eos": enforce_eos}
+        )
         if base_cache is None:
             raise ValueError("cache_dir must be set or override_cache_dir must be provided")
         return load_lm_dataset_cache(os.path.join(base_cache, split), self.format, tokenizer, enforce_eos=enforce_eos)
@@ -552,11 +854,18 @@ class LMTaskConfig(abc.ABC):
     shuffle: bool | int = False
     """whether to shuffle the dataset. True means shuffle the whole dataset, False means don't shuffle.
     If you want to shuffle in eras, set this to the era length"""
-    permutation_type: Literal["feistel", "linear"] | None = None
+    permutation_type: Literal["feistel", "linear", "predefined"] | None = None
     """
     Type of permutation to use for shuffle.
 
     If None, defaults to linear, but this will change in the future since Feistel is better.
+    If "predefined", uses a permutation loaded from permutation_file.
+    """
+    permutation_file: Optional[str] = None
+    """
+    Path to a .npy file containing a predefined permutation array.
+    Only used when permutation_type is "predefined".
+    The file should contain a numpy array that is a valid permutation of range(dataset_length).
     """
 
     block_cross_document_attention: bool = True
@@ -623,7 +932,14 @@ def preprocessor_for_format(
 ) -> BatchProcessor[dict, dict]:
     match format:
         case TextLmDatasetFormat(text_key=key):
-            return BatchTokenizer(tokenizer, enforce_bos=enforce_bos, enforce_eos=enforce_eos, text_field=key)
+            return BatchTokenizer(
+                tokenizer,
+                enforce_bos=enforce_bos,
+                enforce_eos=enforce_eos,
+                text_field=key,
+                loss_mask_rule=getattr(format, "loss_mask_rule", None),
+                metadata_fields=getattr(format, "metadata_fields", None),
+            )
         case ChatLmDatasetFormat(
             messages_field=m,
             chat_template=ct,
@@ -654,6 +970,23 @@ def dataset_for_format(
 ) -> AsyncDataset[LmExample]:
     match format:
         case TextLmDatasetFormat():
+            # If a per-token multiplier mask is present, wire it through
+            has_mask = False
+            try:
+                _ = cache.store.tree["loss_mask_mult"]
+                has_mask = True
+            except Exception:
+                has_mask = False
+            if has_mask:
+                return CausalLmDatasetWithMask(
+                    TokenSeqDataset(cache, Pos.size),
+                    Pos,
+                    mask_cache=cache,
+                    mask_field="loss_mask_mult",
+                    eos_id=eos_id,
+                    ignore_index=ignore_index,
+                    block_cross_document_attention=block_cross_document_attention,
+                )
             return CausalLmDataset(
                 TokenSeqDataset(cache, Pos.size),
                 Pos,
@@ -766,8 +1099,16 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
             perm_type = "linear"
 
         if self.shuffle is True:
-            ds = ds.shuffle(key, perm_type=perm_type)
+            if perm_type == "predefined":
+                if self.permutation_file is None:
+                    raise ValueError("permutation_file must be specified when using predefined permutation type")
+                print(f"🔀 CREATING PREDEFINED PERMUTATION DATASET with file: {self.permutation_file}")
+                ds = ds.shuffle(key=None, perm_type=perm_type, permutation_file_path=self.permutation_file)
+            else:
+                ds = ds.shuffle(key, perm_type=perm_type)
         elif isinstance(self.shuffle, int) and self.shuffle > 0:
+            if perm_type == "predefined":
+                raise ValueError("Era shuffling is not supported with predefined permutations")
             ds = ds.era_shuffle(self.shuffle, key=key, perm_type=perm_type)
 
         if epochs:
@@ -835,7 +1176,13 @@ class SingleDatasetLMConfigBase(LmDatasetSourceConfigBase, LMTaskConfig):
         if cache_dir is None:
             raise ValueError("cache_dir cannot be None")
 
-        cache_dir = os.path.join(cache_dir, split)
+        # Use a hashed subdirectory so changes to other fields create a new cache path
+        base_cache = hashed_cache_dir(
+            cache_dir,
+            self,
+            extra={"tokenizer": getattr(tokenizer, "name_or_path", None), "enforce_eos": enforce_eos},
+        )
+        cache_dir = os.path.join(base_cache, split)
 
         cache_exists = fsspec_utils.exists(cache_dir)
 
@@ -890,6 +1237,9 @@ class LMMixtureDatasetConfig(LMTaskConfig):
 
     stop_strategy: str = field(default=StopStrategy.RESTART_STRATEGY)
 
+    # Names of datasets (keys in configs) to wrap in ZeroLossLmDataset so they contribute zero loss.
+    zero_loss_datasets: Optional[List[str]] = None
+
     # Configuration for Simulated Epoching
     target_budget: Optional[int] = None
     experiment_budget: Optional[int] = None
@@ -939,6 +1289,15 @@ class LMMixtureDatasetConfig(LMTaskConfig):
             )
             for name, cache in caches.items()
         }
+
+        # Optionally wrap selected datasets to force zero loss contribution
+        if self.zero_loss_datasets:
+            for name in self.zero_loss_datasets:
+                if name in token_datasets:
+                    token_datasets[name] = ZeroLossLmDataset(token_datasets[name], Pos)
+                    logger.info(f"Wrapped dataset '{name}' with ZeroLossLmDataset (zero loss masking enabled)")
+                else:
+                    logger.warning(f"zero_loss_datasets contains '{name}' which is not present in built caches")
 
         return token_datasets
 
@@ -998,8 +1357,16 @@ class LMMixtureDatasetConfig(LMTaskConfig):
 
         def shuffle_ds(ds, key):
             if self.shuffle is True:
-                ds = ds.shuffle(key, perm_type=perm_type)
+                if perm_type == "predefined":
+                    if self.permutation_file is None:
+                        raise ValueError("permutation_file must be specified when using predefined permutation type")
+                    print(f"🔀 CREATING PREDEFINED PERMUTATION DATASET (mixture) with file: {self.permutation_file}")
+                    ds = ds.shuffle(key=None, perm_type=perm_type, permutation_file_path=self.permutation_file)
+                else:
+                    ds = ds.shuffle(key, perm_type=perm_type)
             elif isinstance(self.shuffle, int) and self.shuffle > 0:
+                if perm_type == "predefined":
+                    raise ValueError("Era shuffling is not supported with predefined permutations")
                 ds = ds.era_shuffle(self.shuffle, key=key, perm_type=perm_type)
 
             return ds
@@ -1104,7 +1471,12 @@ class LMMixtureDatasetConfig(LMTaskConfig):
             else:
                 cache_dir = source_config.cache_dir
 
-            cache_path = os.path.join(cache_dir, split)
+            hashed_dir = hashed_cache_dir(
+                cache_dir,
+                source_config,
+                extra={"tokenizer": getattr(self.the_tokenizer, "name_or_path", None), "enforce_eos": self.enforce_eos},
+            )
+            cache_path = os.path.join(hashed_dir, split)
 
             # easy path: cache already exists
             try:

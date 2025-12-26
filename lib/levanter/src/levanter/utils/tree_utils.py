@@ -9,6 +9,7 @@ import jax.numpy as jnp
 
 import equinox as eqx
 import jax
+import jax.numpy as jnp
 from jax._src.tree_util import DictKey, FlattenedIndexKey, GetAttrKey, KeyEntry, PyTreeDef, SequenceKey
 from jaxtyping import PyTree
 from enum import Enum
@@ -144,6 +145,44 @@ def key_path_to_str(path: Sequence) -> str:
     return out
 
 
+def mean_norm_of_tree(tree):
+    """Calculate mean norm across all arrays in a pytree."""
+    norms = jax.tree_util.tree_map(
+        lambda x: jnp.linalg.norm(x) if isinstance(x, jnp.ndarray) else 0.0,
+        tree
+    )
+    total_norm = jax.tree_util.tree_reduce(lambda x, y: x + y, norms, 0.0)
+    num_leaves = len(jax.tree_util.tree_leaves(tree))
+    return total_norm / num_leaves if num_leaves > 0 else 0.0
+
+
+def tree_statistics(tree, name: str = "tree"):
+    """Calculate and print comprehensive statistics for a pytree.
+
+    Args:
+        tree: The pytree to analyze
+        name: Name to use in the printed output
+    """
+    # Flatten all arrays in the tree
+    arrays = [x for x in jax.tree_util.tree_leaves(tree) if isinstance(x, jnp.ndarray)]
+
+    if not arrays:
+        print(f"{name}: No arrays found")
+        return
+
+    # Concatenate all arrays into one for global statistics
+    all_values = jnp.concatenate([x.flatten() for x in arrays])
+
+    # Calculate statistics
+    mean_val = jnp.nanmean(all_values)
+    var_val = jnp.nanvar(all_values)
+    num_nans = jnp.sum(jnp.isnan(all_values))
+    num_pos_infs = jnp.sum(jnp.isposinf(all_values))
+    num_neg_infs = jnp.sum(jnp.isneginf(all_values))
+    total_elements = len(all_values)
+    mean_norm = mean_norm_of_tree(tree)
+
+    print(f"{name} - Mean: {mean_val}, Var: {var_val}, NaNs: {num_nans}/{total_elements}, +Infs: {num_pos_infs}/{total_elements}, -Infs: {num_neg_infs}/{total_elements}, Mean norm: {mean_norm}")
 @jax.tree_util.register_dataclass
 @dataclasses.dataclass
 class PackedLeaf:

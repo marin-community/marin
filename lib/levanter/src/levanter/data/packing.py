@@ -315,10 +315,10 @@ def greedy_pack_prompt_completions(
             concat_loss_weight = concat_loss_weight[-Pos.size :]
             segment_ids = segment_ids[-Pos.size :]
 
-        # Create the LmExample
-        tokens = hax.named(np.array(concat_ids), Pos)
-        loss_weight = hax.named(np.array(concat_loss_weight), Pos)
-        segment_ids = hax.named(np.array(segment_ids), Pos)
+        # Create the LmExample (force numeric dtypes)
+        tokens = hax.named(np.asarray(concat_ids, dtype=np.int32), Pos)
+        loss_weight = hax.named(np.asarray(concat_loss_weight, dtype=np.float32), Pos)
+        segment_ids = hax.named(np.asarray(segment_ids, dtype=np.int32), Pos)
         attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
 
         out.append(LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask))

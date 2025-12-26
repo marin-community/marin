@@ -42,7 +42,7 @@ class LevanterSlurmCluster(clusters.SlurmCluster):
 
     # this is mostly copy paste, but it looks at range of different env variables that slurm sometimes sets
     @classmethod
-    def get_coordinator_address(cls, timeout_secs: int | None = None) -> str:
+    def get_coordinator_address(cls) -> str:
         # Pick port in ephemeral range [(65535 - 2^12 + 1), 65535]
         id = os.environ[_JOBID_PARAM]
         port = _choose_port(id)
@@ -70,22 +70,6 @@ class LevanterSlurmCluster(clusters.SlurmCluster):
     @classmethod
     def _node_list(cls):
         return next((os.environ[o] for o in _NODE_LIST_CHOICES if o in os.environ), None)
-
-    @classmethod
-    def get_process_count(cls) -> int:  # type: ignore[override]
-        if _PROCESS_COUNT in os.environ:
-            return int(os.environ[_PROCESS_COUNT])
-
-        if cls.is_env_present():
-            num_nodes = next(
-                (os.environ[o] for o in ["SLURM_JOB_NUM_NODES", _NUM_NODES, "SLURM_NNODES"] if o in os.environ),
-                None,
-            )
-            if num_nodes == "1":
-                logger.info("%s not set; assuming single-process job", _PROCESS_COUNT)
-                return 1
-
-        return super().get_process_count()
 
     @classmethod
     def get_local_device_ids_for_process(cls) -> Optional[List[int]]:
@@ -130,7 +114,14 @@ class LevanterSlurmCluster(clusters.SlurmCluster):
 
         node_list = _square_brace_expand(node_list)
         local_node = os.environ[_NODE_NAME]
-        local_node_index = node_list.index(local_node)
+        local_node_index = -1
+        for i, node in enumerate(node_list):
+            if node.startswith(local_node.split('.')[0]):
+                local_node_index = i
+                break
+
+        if local_node_index == -1:
+            raise ValueError(f"Could not find local node '{local_node}' in node list '{node_list}'")
 
         # We want to figure out how many tasks are running on this node
         # the only env variable that is reliably set here is SLURM_STEP_TASKS_PER_NODE
@@ -140,10 +131,6 @@ class LevanterSlurmCluster(clusters.SlurmCluster):
         # So we have to do some parsing to figure out how many tasks are on each node
         # and then figure out which node we are on
         # first replace the repeated values with the number of times they are repeated
-        if _TASKS_PER_NODE not in os.environ:
-            logger.warning("%s not set in environment, assuming a single task per node", _TASKS_PER_NODE)
-            return 1
-
         unrolled_tasks_per_node = []
         multi_match = re.compile(r"(\d+)\(x(\d+)\)")
         for x in os.environ[_TASKS_PER_NODE].split(","):
@@ -259,7 +246,7 @@ def auto_ray_cluster(
                         logger.info(f"Starting ray head on port {ray_port}. We are process the coordinator {host}.")
                         logger.info(f"Starting ray head with num_cpus set to {num_cpus}.")
                         ret = os.system(
-                            f"ray start --head --port {ray_port} --num-cpus {num_cpus} --dashboard-host=0.0.0.0"
+                            f"ray start --head --port {ray_port} --num-cpus {num_cpus} --include-dashboard=False"
                         )
                         if ret != 0:
                             if not fail_if_cluster_already_initialized:
@@ -359,21 +346,10 @@ class DistributedConfig:
                     device_ids = LevanterSlurmCluster.get_local_device_ids_for_process()
 
                 if coordinator_address is None:
-                    coordinator_address = LevanterSlurmCluster.get_coordinator_address(300.0)
-
-                if self.num_processes is None:
-                    self_num_processes = LevanterSlurmCluster.get_process_count()
-                else:
-                    self_num_processes = self.num_processes
-            else:
-                self_num_processes = self.num_processes
+                    coordinator_address = LevanterSlurmCluster.get_coordinator_address()
 
             jax.distributed.initialize(
-                coordinator_address,
-                self_num_processes,
-                self.process_id,
-                device_ids,
-                initialization_timeout=30 * 60,
+                coordinator_address, self.num_processes, self.process_id, device_ids, initialization_timeout=30 * 60
             )
             logger.info(
                 f"Initialized jax.distributed with {jax.device_count()} devices, {jax.process_count()} processes,"

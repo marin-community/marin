@@ -58,7 +58,7 @@ class TrainLmOnPodConfig:
     """Tuple of JSON paths (e.g., 'data.cache_dir') that are allowed to be read from or written to different regions."""
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
-    auto_build_caches: bool = False
+    auto_build_caches: bool = True
     """Whether to allow Levanter to build dataset caches on the fly.
 
     Defaults to False so Marin jobs fail fast when a cache is missing instead of

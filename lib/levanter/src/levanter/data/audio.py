@@ -37,6 +37,7 @@ from levanter.store.cache import CacheOptions, TreeCache, build_or_load_cache
 from levanter.utils.hf_utils import HfTokenizer
 from levanter.utils.jax_utils import key_iterator
 from levanter.utils.logging import silence_transformer_nag
+from levanter.utils.cache_naming import hashed_cache_dir
 
 silence_transformer_nag()  # noqa
 from transformers import (  # noqa
@@ -393,7 +394,8 @@ class AudioIODatasetConfig(AudioDatasetSourceConfig, AudioTaskConfig):
         split: str,
         cache_options: CacheOptions = CacheOptions.default(),
     ) -> Optional[ProcessedAudioCache]:
-        split_cache_dir = os.path.join(self.cache_dir, split)
+        base_cache_dir = hashed_cache_dir(self.cache_dir, self)
+        split_cache_dir = os.path.join(base_cache_dir, split)
 
         try:
             return ProcessedAudioCache.load(split_cache_dir)

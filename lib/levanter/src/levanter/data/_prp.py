@@ -11,7 +11,7 @@ from jaxtyping import PRNGKeyArray
 
 from levanter.utils.jax_utils import local_cpu_mesh
 
-PermType = typing.Literal["feistel", "linear"]
+PermType = typing.Literal["feistel", "linear", "predefined"]
 
 
 class Permutation(typing.Protocol):
@@ -61,10 +61,11 @@ class Permutation(typing.Protocol):
         """Create a permutation of the given kind.
 
         Args:
-            kind: The kind of permutation to create. Can be "feistel" or "linear".
+            kind: The kind of permutation to create. Can be "feistel", "linear", or "predefined".
             length: The length of the permutation.
             prng_key: A JAX PRNG key for random number generation.
             **kwargs: Additional arguments for the specific permutation type.
+                     For "predefined", requires "permutation_array" keyword argument.
 
         Returns:
             An instance of the specified permutation type.
@@ -73,6 +74,10 @@ class Permutation(typing.Protocol):
             return FeistelPermutation(length, prng_key, **kwargs)
         elif kind == "linear":
             return LcgPermutation(length, prng_key)
+        elif kind == "predefined":
+            if "permutation_array" not in kwargs:
+                raise ValueError("predefined permutation requires 'permutation_array' keyword argument")
+            return PredefinedPermutation(kwargs["permutation_array"])
         else:
             raise ValueError(f"Unknown permutation kind: {kind}")
 
@@ -237,6 +242,56 @@ class FeistelPermutation(Permutation):
             out[mask] = n
             mask = out >= self.length
             cycles += 1
+
+        if was_int:
+            return int(out)
+        return out
+
+
+class PredefinedPermutation(Permutation):
+    """A permutation that uses a predefined permutation array."""
+
+    def __init__(self, permutation_array: np.ndarray):
+        """Initialize with a predefined permutation array.
+
+        Args:
+            permutation_array: A numpy array containing the permutation indices.
+                              Must be a valid permutation of range(len(permutation_array)).
+        """
+        self.permutation_array = np.asarray(permutation_array, dtype=np.int64)
+        self.length = len(self.permutation_array)
+
+        # Validate that it's a valid permutation
+        if not np.array_equal(np.sort(self.permutation_array), np.arange(self.length)):
+            raise ValueError("permutation_array must be a valid permutation of range(length)")
+
+        print(f"🔀 PREDEFINED PERMUTATION INITIALIZED: length={self.length}, first 10 mappings: {[(i, int(self.permutation_array[i])) for i in range(min(10, self.length))]}")
+
+    @typing.overload
+    def __call__(self, indices: int) -> int:
+        ...
+
+    @typing.overload
+    def __call__(self, indices: np.ndarray) -> np.ndarray:
+        ...
+
+    def __call__(self, indices):
+        was_int = False
+        if isinstance(indices, (int, np.integer)):
+            if indices < 0 or indices >= self.length:
+                raise IndexError(f"index {indices} is out of bounds for length {self.length}")
+            indices = np.array(indices)
+            was_int = True
+        elif isinstance(indices, jnp.ndarray):
+            indices = np.array(indices)
+
+        if not isinstance(indices, np.ndarray):
+            indices = np.array(indices)
+
+        if np.any(indices < 0) or np.any(indices >= self.length):
+            raise IndexError(f"index {indices} is out of bounds for length {self.length}")
+
+        out = self.permutation_array[indices]
 
         if was_int:
             return int(out)

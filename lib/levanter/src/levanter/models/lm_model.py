@@ -25,6 +25,9 @@ class LmExample(eqx.Module):
     tokens: hax.NamedArray
     loss_weight: hax.NamedArray
     attn_mask: AttentionMask | NamedArray = AttentionMask.causal()
+    index: Optional[jnp.ndarray] = None
+    # Optional dataset identity (e.g., in mixture datasets). Scalar per-example, batched later by the DataLoader.
+    dataset_id: Optional[jnp.ndarray] = None
 
     @staticmethod
     def causal(
@@ -35,6 +38,8 @@ class LmExample(eqx.Module):
         eos_id: Optional[int] = None,
         segment_ids: Optional[hax.NamedArray] = None,
         sliding_window: int | None = None,
+        index: Optional[jnp.ndarray] = None,
+        dataset_id: Optional[jnp.ndarray] = None,
         block_cross_document_attention: bool = True,
     ) -> "LmExample":
         if tokens.ndim != 1:
@@ -64,18 +69,25 @@ class LmExample(eqx.Module):
 
         attn_mask = AttentionMask.causal(sliding_window=sliding_window)
 
-        if block_cross_document_attention:
-            if eos_id is not None and segment_ids is None:
-                # the next token after an eos token is in a new segment
-                eos_mask = hax.roll(tokens, 1, Pos) == eos_id
-                # first token is always in segment 0
-                eos_mask = eos_mask.at[Pos, 0].set(False).astype(jnp.int32)
-                segment_ids = hax.cumsum(eos_mask, axis=Pos)
-                attn_mask = attn_mask.with_segment_ids(segment_ids)
-            elif segment_ids is not None:
-                attn_mask = attn_mask.with_segment_ids(segment_ids)
+        # NOTE: Cross-document segment masking temporarily disabled (retain for future re-enable).
+        # if block_cross_document_attention:
+        #     if eos_id is not None and segment_ids is None:
+        #         # the next token after an eos token is in a new segment
+        #         eos_mask = hax.roll(tokens, 1, Pos) == eos_id
+        #         # first token is always in segment 0
+        #         eos_mask = eos_mask.at[Pos, 0].set(False).astype(jnp.int32)
+        #         segment_ids = hax.cumsum(eos_mask, axis=Pos)
+        #         attn_mask = attn_mask.with_segment_ids(segment_ids)
+        #     elif segment_ids is not None:
+        #         attn_mask = attn_mask.with_segment_ids(segment_ids)
 
-        return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
+        return LmExample(
+            tokens=tokens,
+            loss_weight=loss_weight,
+            attn_mask=attn_mask,
+            index=index,
+            dataset_id=dataset_id,
+        )
 
     @staticmethod
     def from_prompt_and_completion(

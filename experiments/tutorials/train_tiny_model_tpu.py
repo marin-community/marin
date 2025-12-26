@@ -28,7 +28,7 @@ from experiments.llama import llama_30m
 from experiments.marin_models import marin_tokenizer
 from experiments.simple_train_config import SimpleTrainConfig
 
-RESOURCES = ResourceConfig.with_tpu("v5p-8")
+RESOURCES = ResourceConfig.with_tpu("v4p-8")
 
 # 1. Choose a dataset
 tinystories_hf_id = "roneneldan/TinyStories"
@@ -57,7 +57,7 @@ small_train_config = SimpleTrainConfig(
 
 # 4. Train the model
 tinystories_model_30m = default_train(
-    name="marin-tinystories-30m",
+    name="marin-tinystories-30m-v4",
     # Steps can depend on other steps: tinystories_model_30m depends on tinystories_tokenized
     tokenized=tinystories_tokenized,
     model_config=versioned(llama_30m),
