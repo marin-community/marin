@@ -15,7 +15,7 @@
 """Base infrastructure for eval metrics analysis.
 
 This module provides a base config and utilities for analysis jobs that
-read eval_metrics.jsonl files from completed training runs. The subclassing
+read tracker_metrics.jsonl files from completed training runs. The subclassing
 pattern mirrors the Evaluator approach in
 lib/marin/src/marin/evaluation/evaluators/evaluator.py, so specific analyses
 (like IsoFlop) should subclass EvalMetricsAnalysisConfig.
@@ -54,11 +54,14 @@ def _backfill_metrics_from_wandb(
     entity_project: str,
 ) -> bool:
     """
-    Backfill eval_metrics.jsonl from WandB for a training run.
+    Backfill tracker_metrics.jsonl from WandB for a training run.
+
+    Writes a single record with config and summary, matching the format
+    written by WandbTracker.finish() when replicate_path is set.
 
     Args:
         checkpoint_path: Path to the checkpoint directory
-        metrics_file: Full path to where eval_metrics.jsonl should be written
+        metrics_file: Full path to where tracker_metrics.jsonl should be written
         entity_project: WandB entity/project (format: 'entity/project')
 
     Returns:
@@ -70,30 +73,24 @@ def _backfill_metrics_from_wandb(
 
     try:
         run_id = extract_run_name_from_path(checkpoint_path)
-        logger.info(f"Attempting to backfill summary metrics for run_id: {run_id}")
+        logger.info(f"Attempting to backfill metrics for run_id: {run_id}")
 
         api = wandb.Api()
         run = api.run(f"{entity_project}/{run_id}")
 
-        # Get summary metrics only
-        summary = dict(run.summary)
-
-        eval_metrics = {k: v for k, v in summary.items() if k.startswith("eval/")}
-        if not eval_metrics:
-            logger.warning(f"No eval summary metrics found in WandB for run {run_id}")
-            return False
+        # Build record matching WandbTracker._write_replicate_file format
         record = {
-            "step": summary.get("_step", summary.get("trainer/global_step", 0)),
-            **eval_metrics,
+            "config": dict(run.config),
+            "summary": {k: v for k, v in run.summary.items() if not k.startswith("_")},
         }
 
         fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
         fs.makedirs(os.path.dirname(metrics_file), exist_ok=True)
 
         with fs.open(metrics_file, "w") as f:
-            f.write(json.dumps(record) + "\n")
+            f.write(json.dumps(record, sort_keys=True, default=str) + "\n")
 
-        logger.info(f"Successfully backfilled summary metrics to {metrics_file}")
+        logger.info(f"Successfully backfilled metrics to {metrics_file}")
         return True
 
     except Exception as e:
@@ -115,11 +112,11 @@ class EvalMetricsAnalysisConfig:
     output_path: str
     """Where to write analysis outputs."""
 
-    metrics_filename: str = "eval_metrics.jsonl"
+    metrics_filename: str = "tracker_metrics.jsonl"
     """Name of the metrics file within each checkpoint directory."""
 
     backfill_from_wandb: bool = True
-    """If True, backfill eval_metrics.jsonl from WandB for runs that completed before this feature."""
+    """If True, backfill tracker_metrics.jsonl from WandB for runs that completed before this feature."""
 
     wandb_entity_project: str = "marin-community/marin"
     """WandB entity/project to query for backfill (format: 'entity/project')."""
