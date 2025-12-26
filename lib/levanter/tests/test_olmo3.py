@@ -166,23 +166,24 @@ def test_olmo3_custom_layer_types():
     # Verify get_layer_types returns custom pattern
     assert list(config.get_layer_types()) == custom_pattern
 
-    # Build model and verify each layer has correct attention type
-    Vocab = hax.Axis("vocab", 1000)
-    model = Olmo3LMHeadModel.init(Vocab=Vocab, config=config, key=random.PRNGKey(0))
+    with use_test_mesh():
+        # Build model and verify each layer has correct attention type
+        Vocab = hax.Axis("vocab", 1000)
+        model = Olmo3LMHeadModel.init(Vocab=Vocab, config=config, key=random.PRNGKey(0))
 
-    for i, layer in enumerate(model.transformer.layers):
-        expected = custom_pattern[i]
-        if expected == "sliding_attention":
-            assert layer.self_attn.config.sliding_window == config.sliding_window
-        else:
-            assert layer.self_attn.config.sliding_window is None
+        for i, layer in enumerate(model.transformer.layers):
+            expected = custom_pattern[i]
+            if expected == "sliding_attention":
+                assert layer.self_attn.config.sliding_window == config.sliding_window
+            else:
+                assert layer.self_attn.config.sliding_window is None
 
-    # Verify model runs successfully
-    Batch = hax.Axis("batch", 2)
-    input_ids = hax.random.randint(random.PRNGKey(0), (Batch, config.max_Pos), 0, Vocab.size)
-    mask = AttentionMask.causal()
-    out = model(input_ids, mask)
-    assert out.array.shape == (Batch.size, config.max_Pos.size, Vocab.size)
+        # Verify model runs successfully
+        Batch = hax.Axis("batch", 2)
+        input_ids = hax.random.randint(random.PRNGKey(0), (Batch, config.max_Pos), 0, Vocab.size)
+        mask = AttentionMask.causal()
+        out = model(input_ids, mask)
+        assert out.array.shape == (Batch.size, config.max_Pos.size, Vocab.size)
 
 
 def test_olmo3_sliding_window_config():
