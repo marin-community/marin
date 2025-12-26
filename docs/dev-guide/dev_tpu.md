@@ -7,11 +7,18 @@ You will need to setup your SSH key in `gcloud` to get started.
 ## Quick Start
 
 1. Login to google cloud. It's important to set your default login to your Marin account.
+
 ```bash
 gcloud auth login
 gcloud config set project hai-gcp-models
 gcloud auth application-default login
 make dev_setup
+```
+
+**Note:** The `dev_tpu.py` script requires the `watchdog` package for the `watch` command. Make sure you have the dev dependencies installed:
+
+```bash
+uv sync --package marin --group dev
 ```
 
 2. Add your local machine's SSH key to gcloud: https://console.cloud.google.com/compute/metadata?resourceTab=sshkeys&project=hai-gcp-models&scopeTab=projectMetadata
@@ -26,6 +33,7 @@ This is the username you will need to use when connecting to the TPU. It's easie
 use as the default user for your TPU account.
 
 3. Allocate an interactive node:
+
 ```bash
 uv run scripts/ray/dev_tpu.py --config infra/marin-us-central1.yaml allocate --tpu-type v5p-8
 ```
@@ -35,19 +43,22 @@ Your TPU will boot up and synchronize your marin directory. The TPU will remain 
 4. Connect to the node.
 
 You can connect to the TPU in a few ways:
-  - `dev_tpu.py connect` will give you an SSH terminal.
-  - `dev_tpu.py execute` will sync your directory and run a remote command, for example:
+
+- `dev_tpu.py connect` will give you an SSH terminal.
+- `dev_tpu.py execute` will sync your directory and run a remote command, for example:
 
 ```
 uv run marin/scripts/ray/dev_tpu.py --tpu-name=$USER-scratch --cluster us-central1 execute -- "cd submodules/levanter && EQX_ON_ERROR=nan WANDB_MODE=offline uv run src/levanter/main/sample_lm.py --config config/sampler/sample_llama8b.yaml --n_generations 10 --n_rounds 4 --profile false"
 ```
 
-  - You can also connect to dev-tpu-{username} directly from VSCode/Cursor via Remote-SSH's Connect to Host feature.
+- You can also connect to dev-tpu-{username} directly from VSCode/Cursor via Remote-SSH's Connect to Host feature.
 
 _If connecting directly, remember Dev TPUs are pre-emptible - don't forget to checkpoint your work frequently if you are making changes!_
 
 # Tips
+
 1. **Kill ghost processes:** If you encounter `RuntimeError: Unable to initialize backend 'tpu': ABORTED: The TPU is already in use by another process probably owned by another user`, do:
+
 ```bash
 sudo rm -rf /tmp/libtpu_lockfile and sudo lsof -t /dev/vfio/* | xargs -r sudo kill -9
 ```

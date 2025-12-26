@@ -38,7 +38,7 @@ dependencies = [
     "openai",
     "pandas",
     "pyarrow>=22",
-    "ray==2.45",
+    "ray==2.49.2",
     "regex",
     "requests",
     "s3fs>=2024",
@@ -98,6 +98,7 @@ dev = [
     { include-group = "lint" },
     { include-group = "docs" },
     { include-group = "math" },
+    "watchdog>=3.0.0",
 ]
 
 [tool.uv]
@@ -136,25 +137,7 @@ name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
-torch = [
-    # Default to the CPU index for TPU/CPU builds
-    { index = "pytorch-cpu", extra="cpu" },
-    { index = "pytorch-cpu", extra="tpu" },
-    # GPU index only when --extra gpu
-    { index = "pytorch-cu128", extra = "gpu" },
-]
 resiliparse = { index = "marin-resiliparse" }
-
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true
 
 
 [tool.hatch.metadata]
