@@ -497,39 +497,25 @@ function renderExperimentStatus({step, auxiliaryData}) {
   const lastEvent = events[events.length - 1] || {};
   const status = lastEvent.status || "UNKNOWN";
 
-  const hasLastDate = typeof lastEvent.date === "string" && lastEvent.date.length > 0;
-  const lastUpdatedInfo = hasLastDate ? `last updated ${renderDate(lastEvent.date)}` : null;
-
   const isActive = ["WAITING", "RUNNING"].includes(status);
 
-  let startTime = null;
-  if (events.length > 1 && events[0] && events[0].date) {
-    startTime = new Date(events[0].date);
-  } else if (isActive && hasLastDate) {
-    startTime = new Date(lastEvent.date);
+  const firstDate = events[0] && typeof events[0].date === "string" && events[0].date.length > 0 ? events[0].date : null;
+  const lastDate = typeof lastEvent.date === "string" && lastEvent.date.length > 0 ? lastEvent.date : null;
+  const temporalParts = [];
+  if (lastDate) {
+    temporalParts.push(`last updated ${renderDate(lastDate)}`);
   }
-
-  let endTime = null;
-  if (isActive) {
-    endTime = new Date();
-  } else if (hasLastDate) {
-    endTime = new Date(lastEvent.date);
-  }
-
-  let lifetimeInfo = null;
-  if (startTime && endTime) {
-    const startMs = startTime.getTime();
-    const endMs = endTime.getTime();
+  if (firstDate) {
+    const startMs = new Date(firstDate).getTime();
+    const endMs = isActive ? Date.now() : (lastDate ? new Date(lastDate).getTime() : NaN);
     if (!Number.isNaN(startMs) && !Number.isNaN(endMs) && endMs >= startMs) {
-      const duration = (endMs - startMs) / 1000;
-      lifetimeInfo = `lifetime is ${renderDuration(duration)}`;
+      temporalParts.push(`lifetime is ${renderDuration((endMs - startMs) / 1000)}`);
     }
   }
 
   const statusIcon = statusIcons[status] || status;
 
   const lastStatus = <span className={"status-" + status}>{statusIcon}</span>;
-  const temporalParts = [lastUpdatedInfo, lifetimeInfo].filter(Boolean);
   const temporalInfo = temporalParts.length ? ` (${temporalParts.join(", ")})` : "";
   return <span className="status-container">
     <a href={viewStatusUrl(step)} target="_blank" rel="noreferrer" title={`View raw JSON status of this step${temporalInfo}`}>
