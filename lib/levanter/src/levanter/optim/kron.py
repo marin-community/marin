@@ -1147,7 +1147,7 @@ def _init_Q_exprs(
                     if have_hax:
                         # if we're in haliax we can grab fsdp axis and shard accordingly
                         # get current mesh
-                        mesh = hax.partitioning._get_mesh()
+                        mesh = jax._src.mesh.get_concrete_mesh()
                         if mesh.devices.shape == ():
                             mesh = None
                         # get fsdp mesh axis

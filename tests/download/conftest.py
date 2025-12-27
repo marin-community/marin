@@ -21,13 +21,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, Mock
 
 import pytest
-from zephyr import create_backend, set_flow_backend
+from fray.job import create_job_ctx, fray_default_job_ctx
 
 
 @pytest.fixture(autouse=True)
 def flow_backend_ctx():
     """Set up sync backend for all download tests."""
-    set_flow_backend(create_backend("sync"))
+    with fray_default_job_ctx(create_job_ctx("sync")):
+        yield
 
 
 @pytest.fixture

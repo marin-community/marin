@@ -41,6 +41,7 @@ from levanter.utils.jax_utils import barrier_sync
 from transformers import PreTrainedTokenizer
 from typing import Literal
 
+from levanter.utils.mesh import MeshConfig
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
 from marin.rl.environments.base import load_environment_from_spec
@@ -148,8 +149,7 @@ def create_inference_context(
         inference_config.inference_server_config = dataclasses.replace(
             inference_config.inference_server_config,
             trainer=dataclasses.replace(
-                inference_config.inference_server_config.trainer,
-                model_axis_size=jax.local_device_count(),
+                inference_config.inference_server_config.trainer, mesh=MeshConfig(axes={"data": 1, "model": -1})
             ),
         )
         return LevanterInferenceContext(

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-import os
 import re
 from textwrap import fill
 
@@ -27,13 +26,8 @@ from marin.schemas.web.convert import HtmlToMarkdownConfig
 
 logger = logging.getLogger(__name__)
 
-# TODOs:
-# - [x] add more tests of core functionality (tables, lists, etc)
-# - [x] add code block lang id
-# - [x] add latex math support
 
-
-def to_markdown(html, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.default_config()):
+def to_markdown(html, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig()):
     if isinstance(html, str):
         html = BeautifulSoup(html, "html.parser")
     text = MyMarkdownConverter(config).convert_soup(html)
@@ -43,40 +37,8 @@ def to_markdown(html, config: HtmlToMarkdownConfig = HtmlToMarkdownConfig.defaul
     return text
 
 
-_global_html2text = None
-
-
-def get_html2text():
-    """
-    Returns a global instance of HTML2Text configured for Markdown conversion.
-    """
-    global _global_html2text
-    if _global_html2text is None:
-        # Initialize the global HTML2Text instance with default settings
-        # This is done to avoid re-initializing it multiple times
-        # and to ensure consistent behavior across the application.
-        import html2text
-
-        _global_html2text = html2text.HTML2Text()
-
-        _global_html2text.ignore_links = False
-        _global_html2text.body_width = 0
-        # TODO: html2text uses [code]...[/code] for code blocks. would prefer github markdown style
-        # Could also use some kind of PL lang-id to highlight code blocks, but probably not super necessary
-        _global_html2text.mark_code = True  # Optionally convert code blocks to markdown
-        _global_html2text.include_sup_sub = True  # Optionally include <sup> and <sub> tags
-        _global_html2text.pad_tables = False
-
-    return _global_html2text
-
-
 whitespace_re = re.compile(r"[\t ]+")
 spaces_re = re.compile(r"^[ ]+$")
-
-
-def html2text_markdown(html):
-    html = str(html)
-    return get_html2text().handle(html)
 
 
 always_escape_pattern = re.compile(r"([\[\]<>`])")  # square brackets, backticks, angle brackets
@@ -634,38 +596,396 @@ class MyMarkdownConverter(MarkdownConverter):
         return text
 
 
-_xslt_mml = None
+# Mappings for unicode characters to LaTeX
+_GREEK_LETTERS = {
+    # Lowercase
+    "α": "\\alpha",  # noqa: RUF001
+    "β": "\\beta",
+    "γ": "\\gamma",  # noqa: RUF001
+    "δ": "\\delta",
+    "ε": "\\epsilon",
+    "ϵ": "\\varepsilon",
+    "ζ": "\\zeta",
+    "η": "\\eta",
+    "θ": "\\theta",
+    "ϑ": "\\vartheta",
+    "ι": "\\iota",  # noqa: RUF001
+    "κ": "\\kappa",
+    "λ": "\\lambda",
+    "μ": "\\mu",
+    "ν": "\\nu",  # noqa: RUF001
+    "ξ": "\\xi",
+    "ο": "o",  # noqa: RUF001
+    "π": "\\pi",
+    "ϖ": "\\varpi",
+    "ρ": "\\rho",  # noqa: RUF001
+    "ϱ": "\\varrho",  # noqa: RUF001
+    "σ": "\\sigma",  # noqa: RUF001
+    "ς": "\\varsigma",
+    "τ": "\\tau",
+    "υ": "\\upsilon",  # noqa: RUF001
+    "φ": "\\phi",
+    "ϕ": "\\varphi",
+    "χ": "\\chi",
+    "ψ": "\\psi",
+    "ω": "\\omega",
+    # Uppercase
+    "Γ": "\\Gamma",
+    "Δ": "\\Delta",
+    "Θ": "\\Theta",
+    "Λ": "\\Lambda",
+    "Ξ": "\\Xi",
+    "Π": "\\Pi",
+    "Σ": "\\Sigma",
+    "Υ": "\\Upsilon",  # noqa: RUF001
+    "Φ": "\\Phi",
+    "Ψ": "\\Psi",
+    "Ω": "\\Omega",
+    "Χ": "{\\rm X}",  # noqa: RUF001
+    "Ι": "I",  # noqa: RUF001
+    "Κ": "K",  # noqa: RUF001
+    "Ο": "O",  # noqa: RUF001
+    "ℏ": "\\hslash",
+}
 
-_xslt_mml_path = os.path.join(os.path.dirname(__file__), "xsl_yarosh/mmltex.xsl")
+
+class LatexNode:
+    """Base class for LaTeX nodes with smart string conversion and spacing logic."""
+
+    def __init__(self, text: str):
+        self.text = text
+
+    def __str__(self):
+        return self.text
+
+    def needs_space_before(self, other: "LatexNode") -> bool:
+        """Determine if a space is needed before the other node."""
+        return False
 
 
-# cf https://github.com/oerpub/mathconverter/blob/master/converter.py#L14
-# (we've modified the xslt to output simpler markdown when possible
+class MacroNode(LatexNode):
+    """LaTeX command like \\alpha, \\langle."""
+
+    def needs_space_before(self, other: "LatexNode") -> bool:
+        # Macro needs space before text, another macro, or braced content
+        return isinstance(other, (MacroNode, TextNode, BracedNode))
+
+
+class TextNode(LatexNode):
+    """Plain alphanumeric content like x, 1."""
+
+    pass
+
+
+class BracedNode(LatexNode):
+    """Content wrapped in braces like {a}."""
+
+    pass
+
+
+class OperatorNode(LatexNode):
+    """Operators and symbols like +, =, (, )."""
+
+    pass
+
+
+_MATH_OPERATORS = {
+    "×": "\\times",  # noqa: RUF001
+    "·": "\\cdot",
+    "÷": "\\div",
+    "±": "\\pm",
+    "∓": "\\mp",
+    "≤": "\\le",
+    "≥": "\\ge",
+    "≠": "\\neq",
+    "≈": "\\approx",
+    "≡": "\\equiv",
+    "≃": "\\simeq",
+    "∞": "\\infty",
+    "∂": "\\partial",
+    "∇": "\\nabla",
+    "√": "\\surd",
+    "∫": "\\int",
+    "∬": "\\iint",
+    "∭": "\\iiint",
+    "∮": "\\oint",
+    "∑": "\\sum",
+    "∏": "\\prod",
+    "∐": "\\coprod",
+    "∈": "\\in",
+    "∉": "\\notin",
+    "∋": "\\ni",
+    "⊂": "\\subset",
+    "⊃": "\\supset",
+    "⊆": "\\subseteq",
+    "⊇": "\\supseteq",
+    "∪": "\\cup",  # noqa: RUF001
+    "∩": "\\cap",
+    "→": "\\to",
+    "←": "\\gets",
+    "↔": "\\leftrightarrow",
+    "⇒": "\\Rightarrow",
+    "⇐": "\\Leftarrow",
+    "⇔": "\\iff",
+    "↦": "\\mapsto",
+    "…": "\\dots",
+    "∀": "\\forall",
+    "∃": "\\exists",
+    "∄": "\\nexists",
+    "¬": "\\neg",
+    "∧": "\\land",
+    "∨": "\\lor",  # noqa: RUF001
+    "⟨": "\\langle",
+    "⟩": "\\rangle",
+    "∥": "\\parallel",
+    "∣": "\\mid",  # noqa: RUF001
+    "ℏ": "\\hslash",
+}
+
+
+class MathMLToLatex:
+    def convert(self, element):
+        if not element:
+            return ""
+
+        if isinstance(element, str):
+            try:
+                soup = BeautifulSoup(element, "html.parser")
+                element = soup.find("math")
+                if not element:
+                    # Fallback if no math tag found, though unlikely for valid mathml string
+                    return element
+            except Exception:
+                return element
+
+        node = self._visit(element)
+        latex = str(node)
+
+        # Determine wrapping
+        tag = element.name
+        if tag == "math":
+            display = element.get("display", "inline")
+            if display == "block":
+                return f"\n$${latex}$$\n"
+            else:
+                return f"$`{latex}`$"
+        return latex
+
+    def _visit(self, element):
+        if isinstance(element, NavigableString):
+            text = element.strip()
+            return TextNode(text) if text else TextNode("")
+
+        if not element.name:
+            return TextNode("")
+
+        method_name = f"visit_{element.name}"
+        if hasattr(self, method_name):
+            return getattr(self, method_name)(element)
+
+        # Default recursive visit
+        return self._visit_children(element)
+
+    def _visit_children(self, element):
+        nodes = []
+        for child in element.children:
+            node = self._visit(child)
+            if node and str(node):
+                nodes.append(node)
+
+        if not nodes:
+            return TextNode("")
+
+        # Join nodes with smart spacing
+        result = [str(nodes[0])]
+        for i in range(1, len(nodes)):
+            if nodes[i - 1].needs_space_before(nodes[i]):
+                result.append(" ")
+            result.append(str(nodes[i]))
+
+        return TextNode("".join(result))
+
+    def _get_clean_children(self, element):
+        return [c for c in element.children if not (isinstance(c, NavigableString) and not c.strip())]
+
+    def visit_math(self, element):
+        return self._visit_children(element)
+
+    def visit_mrow(self, element):
+        return self._visit_children(element)
+
+    def visit_mi(self, element):
+        text = element.get_text().strip()
+        if text in _GREEK_LETTERS:
+            return MacroNode(_GREEK_LETTERS[text])
+
+        variant = element.get("mathvariant")
+        if variant == "bold":
+            return BracedNode(f"\\mathbf{{{text}}}")
+        elif variant == "italic":
+            return TextNode(text)
+        elif variant == "double-struck":
+            return BracedNode(f"\\mathbb{{{text}}}")
+        elif variant == "script":
+            return BracedNode(f"\\mathcal{{{text}}}")
+        elif variant == "fraktur":
+            return BracedNode(f"\\mathfrak{{{text}}}")
+        elif variant == "sans-serif":
+            return BracedNode(f"\\mathsf{{{text}}}")
+        elif variant == "monospace":
+            return BracedNode(f"\\mathtt{{{text}}}")
+
+        # Basic heuristic: if length > 1 and not greek, it might be a function name
+        if len(text) > 1 and text.isalpha():
+            # Check for standard functions
+            funcs = {
+                "sin",
+                "cos",
+                "tan",
+                "csc",
+                "sec",
+                "cot",
+                "sinh",
+                "cosh",
+                "tanh",
+                "log",
+                "ln",
+                "exp",
+                "lim",
+                "det",
+                "dim",
+                "min",
+                "max",
+            }
+            if text in funcs:
+                return MacroNode(f"\\{text}")
+            return BracedNode(f"\\mathrm{{{text}}}")
+
+        return TextNode(text)
+
+    def visit_mn(self, element):
+        return TextNode(element.get_text().strip())
+
+    def visit_mo(self, element):
+        text = element.get_text().strip()
+        if text in _MATH_OPERATORS:
+            return MacroNode(_MATH_OPERATORS[text])
+        return OperatorNode(text)
+
+    def visit_mtext(self, element):
+        text = element.get_text()
+        return BracedNode(f"\\text{{{text}}}")
+
+    def visit_mfrac(self, element):
+        children = self._get_clean_children(element)
+        if len(children) == 2:
+            num = self._visit(children[0])
+            den = self._visit(children[1])
+            return BracedNode(f"\\frac{{{num}}}{{{den}}}")
+        return TextNode("")
+
+    def visit_msqrt(self, element):
+        content = self._visit_children(element)
+        return BracedNode(f"\\sqrt{{{content}}}")
+
+    def visit_mroot(self, element):
+        children = self._get_clean_children(element)
+        if len(children) == 2:
+            base = self._visit(children[0])
+            index = self._visit(children[1])
+            return BracedNode(f"\\sqrt[{index}]{{{base}}}")
+        return TextNode("")
+
+    def visit_msup(self, element):
+        children = self._get_clean_children(element)
+        if len(children) == 2:
+            base = self._visit(children[0])
+            sup = self._visit(children[1])
+            return BracedNode(f"{{{base}}}^{{{sup}}}")
+        return TextNode("")
+
+    def visit_msub(self, element):
+        children = self._get_clean_children(element)
+        if len(children) == 2:
+            base = self._visit(children[0])
+            sub = self._visit(children[1])
+            return BracedNode(f"{{{base}}}_{{{sub}}}")
+        return TextNode("")
+
+    def visit_msubsup(self, element):
+        children = self._get_clean_children(element)
+        if len(children) == 3:
+            base = self._visit(children[0])
+            sub = self._visit(children[1])
+            sup = self._visit(children[2])
+            return BracedNode(f"{{{base}}}_{{{sub}}}^{{{sup}}}")
+        return TextNode("")
+
+    def visit_munder(self, element):
+        children = self._get_clean_children(element)
+        if len(children) == 2:
+            base = self._visit(children[0])
+            under = self._visit(children[1])
+            # Check if base is an operator usually taking limits
+            if "\\sum" in str(base) or "\\prod" in str(base) or "\\lim" in str(base):
+                return BracedNode(f"{base}_{{{under}}}")
+            return BracedNode(f"\\underset{{{under}}}{{{base}}}")
+        return TextNode("")
+
+    def visit_mover(self, element):
+        children = self._get_clean_children(element)
+        if len(children) == 2:
+            base = self._visit(children[0])
+            over = self._visit(children[1])
+            return BracedNode(f"\\overset{{{over}}}{{{base}}}")
+        return TextNode("")
+
+    def visit_munderover(self, element):
+        children = self._get_clean_children(element)
+        if len(children) == 3:
+            base = self._visit(children[0])
+            under = self._visit(children[1])
+            over = self._visit(children[2])
+            return BracedNode(f"{{{base}}}_{{{under}}}^{{{over}}}")
+        return TextNode("")
+
+    def visit_mtable(self, element):
+        rows = []
+        for child in element.children:
+            if child.name == "mtr":
+                cells = []
+                for cell in child.children:
+                    if cell.name == "mtd":
+                        cells.append(str(self._visit(cell)))
+                rows.append(" & ".join(cells))
+        content = " \\\\ ".join(rows)
+        return BracedNode(f"\\begin{{matrix}} {content} \\end{{matrix}}")
+
+    def visit_mfenced(self, element):
+        open_char = element.get("open", "(")
+        close_char = element.get("close", ")")
+        separators = element.get("separators", ",")
+
+        args = [str(self._visit(c)) for c in self._get_clean_children(element)]
+
+        seps = list(separators)
+        result = []
+
+        for i, arg in enumerate(args):
+            result.append(arg)
+            if i < len(args) - 1:
+                sep = seps[i] if i < len(seps) else seps[-1]
+                if separators:
+                    result.append(sep + " ")
+
+        content = "".join(result)
+        return BracedNode(f"\\left{open_char} {content} \\right{close_char}")
+
+    def visit_mphantom(self, element):
+        content = self._visit_children(element)
+        return BracedNode(f"\\phantom{{{content}}}")
+
+
 def mathml_to_markdown(mathml_node):
-    import lxml.etree as ET
-
-    global _xslt_mml
-    if _xslt_mml is None:
-        _xslt_mml = ET.parse(_xslt_mml_path)
-
-    # mathml_node is a bs4 element. we need to convert it to an lxml element
-    mml_str = str(mathml_node)
-    # often times, the mathml doesn't have the xmlns, which lxml needs
-    # need to also handle display being present or not
-    # this is hacky but probably enough
-    if "xmlns" not in mml_str:
-        if "display" in mml_str:
-            mml_str = mml_str.replace("<math", '<math xmlns="http://www.w3.org/1998/Math/MathML"')
-        else:
-            # default is inline
-            mml_str = mml_str.replace("<math", '<math xmlns="http://www.w3.org/1998/Math/MathML" display="inline"')
-
-    mml_dom = ET.fromstring(mml_str)
-
-    transform = ET.XSLT(_xslt_mml)
-    try:
-        mml_dom = transform(mml_dom)
-    except Exception as e:
-        print(transform.error_log)
-        raise e
-    return str(mml_dom)
+    converter = MathMLToLatex()
+    return converter.convert(mathml_node)
