@@ -144,6 +144,7 @@ def _make_levanter_apertus_config(scan_layers: bool, num_kv_heads: int) -> Apert
         rope=rope,
         gradient_checkpointing=False,
         scan_layers=scan_layers,
+        tokenizer="swiss-ai/Apertus-8B-2509",
     )
 
 

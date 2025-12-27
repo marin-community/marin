@@ -30,7 +30,6 @@ from levanter.utils.types import BlockFoldable
 
 silence_transformer_nag()
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
-from transformers import PreTrainedTokenizerFast  # noqa: E402
 from transformers.models.apertus.configuration_apertus import ApertusConfig as HfApertusConfig  # noqa: E402
 
 
@@ -72,23 +71,6 @@ class XIELUActivation(eqx.Module):
         return hax.where(x > 0, positive, negative)
 
 
-def _build_dummy_tokenizer() -> PreTrainedTokenizerFast:
-    from tokenizers import Tokenizer
-    from tokenizers.models import WordLevel
-    from tokenizers.pre_tokenizers import Whitespace
-
-    vocab = {"<pad>": 0, "<unk>": 1, "<bos>": 2, "<eos>": 3}
-    tokenizer = Tokenizer(WordLevel(vocab=vocab, unk_token="<unk>"))
-    tokenizer.pre_tokenizer = Whitespace()
-    return PreTrainedTokenizerFast(
-        tokenizer_object=tokenizer,
-        unk_token="<unk>",
-        pad_token="<pad>",
-        bos_token="<bos>",
-        eos_token="<eos>",
-    )
-
-
 @LmConfig.register_subclass("apertus")
 @dataclass(frozen=True)
 class ApertusConfig(LlamaConfig):
@@ -114,7 +96,7 @@ class ApertusConfig(LlamaConfig):
             self.__class__,
             reference_checkpoint=reference_checkpoint,
             trust_remote_code=False,
-            tokenizer=_build_dummy_tokenizer() if self.tokenizer is None else self.tokenizer,
+            tokenizer=reference_checkpoint if self.tokenizer is None else self.tokenizer,
             HfConfigClass=HfApertusConfig,
         )
 
@@ -223,7 +205,7 @@ class ApertusConfig(LlamaConfig):
         return transformer + token_embedding + lm_head
 
 
-class ApertusMlp(eqx.Module):
+class ApertusMlp(ModuleWithStateDictSerialization):
     up_proj: hnn.Linear
     down_proj: hnn.Linear
     act_fn: XIELUActivation
@@ -255,7 +237,7 @@ class ApertusMlp(eqx.Module):
         return x
 
 
-class ApertusDecoderLayer(eqx.Module):
+class ApertusDecoderLayer(ModuleWithStateDictSerialization):
     config: ApertusConfig = eqx.field(static=True)
     self_attn: Attention
     mlp: ApertusMlp
@@ -274,9 +256,9 @@ class ApertusDecoderLayer(eqx.Module):
             config.activation_function,
             key=k_mlp,
         )
-        ln_1 = config.mk_LayerNorm(config.Embed)
-        ln_2 = config.mk_LayerNorm(config.Embed)
-        return ApertusDecoderLayer(config, attn, mlp, ln_1, ln_2)
+        attention_layernorm = config.mk_LayerNorm(config.Embed)
+        feedforward_layernorm = config.mk_LayerNorm(config.Embed)
+        return ApertusDecoderLayer(config, attn, mlp, attention_layernorm, feedforward_layernorm)
 
     @named_call
     def __call__(
@@ -320,7 +302,7 @@ class ApertusDecoderLayer(eqx.Module):
         return self.self_attn.empty_page_cache(spec, dtype=dtype)
 
 
-class ApertusTransformer(ModuleWithStateDictSerialization):
+class ApertusTransformer(eqx.Module):
     config: ApertusConfig = eqx.field(static=True)
     layers: BlockFoldable[ApertusDecoderLayer]
     norm: hnn.RmsNorm
