@@ -30,119 +30,39 @@ from marin.execution.executor import ExecutorStep, executor_main
 SINGLE_TPU_V5p_8 = ResourceConfig.with_tpu("v5p-8")
 
 
-def _create_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[ExecutorStep]:
-    """Return one evaluation step per LM Eval Harness task for the multilingual CPT model."""
-
-    per_task_steps: list[ExecutorStep] = []
+def _create_per_task_eval_steps(
+    model_step: ExecutorStep,
+    tasks: Iterable[EvalTaskConfig],
+    apply_chat_template: bool | None = None,
+    discover_latest_checkpoint: bool | None = None,
+) -> list[ExecutorStep]:
+    """Return one evaluation step per LM Eval Harness task for the given model."""
+    steps: list[ExecutorStep] = []
     for task in tasks:
-        eval_step = default_eval(
-            step=multilingual_cpt_8b_fineweb2_hq,
+        kwargs: dict = dict(
+            step=model_step,
             resource_config=SINGLE_TPU_V5p_8,
             evals=(task,),
         )
+        if apply_chat_template is not None:
+            kwargs["apply_chat_template"] = apply_chat_template
+        if discover_latest_checkpoint is not None:
+            kwargs["discover_latest_checkpoint"] = discover_latest_checkpoint
+
+        eval_step = default_eval(**kwargs)
         task_label = (task.task_alias or task.name).replace(" ", "_")
-        per_task_steps.append(replace(eval_step, name=f"{eval_step.name}/{task_label}"))
+        steps.append(replace(eval_step, name=f"{eval_step.name}/{task_label}"))
 
-    return per_task_steps
-
-
-def _create_llama3_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[ExecutorStep]:
-    """Return one evaluation step per LM Eval Harness task for Llama 3.1 8B."""
-
-    llama3_steps: list[ExecutorStep] = []
-    for task in tasks:
-        eval_step = default_eval(
-            step=llama_3_1_8b,
-            resource_config=SINGLE_TPU_V5p_8,
-            evals=(task,),
-            apply_chat_template=False,
-            discover_latest_checkpoint=False,
-        )
-        task_label = (task.task_alias or task.name).replace(" ", "_")
-        llama3_steps.append(replace(eval_step, name=f"{eval_step.name}/{task_label}"))
-
-    return llama3_steps
-
-
-def _create_qwen2_5_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[ExecutorStep]:
-    """Return one evaluation step per LM Eval Harness task for Qwen 2.5 7B."""
-
-    qwen_steps: list[ExecutorStep] = []
-    for task in tasks:
-        eval_step = default_eval(
-            step=qwen2_5_7b,
-            resource_config=SINGLE_TPU_V5p_8,
-            evals=(task,),
-            apply_chat_template=False,
-            discover_latest_checkpoint=False,
-        )
-        task_label = (task.task_alias or task.name).replace(" ", "_")
-        qwen_steps.append(replace(eval_step, name=f"{eval_step.name}/{task_label}"))
-
-    return qwen_steps
-
-
-def _create_apertus_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[ExecutorStep]:
-    """Return one evaluation step per LM Eval Harness task for Apertus 8B."""
-
-    apertus_steps: list[ExecutorStep] = []
-    for task in tasks:
-        eval_step = default_eval(
-            step=apertus_8b,
-            resource_config=SINGLE_TPU_V5p_8,
-            evals=(task,),
-            apply_chat_template=False,
-            discover_latest_checkpoint=False,
-        )
-        task_label = (task.task_alias or task.name).replace(" ", "_")
-        apertus_steps.append(replace(eval_step, name=f"{eval_step.name}/{task_label}"))
-
-    return apertus_steps
-
-
-def _create_olmo2_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[ExecutorStep]:
-    """Return one evaluation step per LM Eval Harness task for OLMo 2 7B."""
-
-    olmo2_steps: list[ExecutorStep] = []
-    for task in tasks:
-        eval_step = default_eval(
-            step=olmo_2_base_8b,
-            resource_config=SINGLE_TPU_V5p_8,
-            evals=(task,),
-            apply_chat_template=False,
-            discover_latest_checkpoint=False,
-        )
-        task_label = (task.task_alias or task.name).replace(" ", "_")
-        olmo2_steps.append(replace(eval_step, name=f"{eval_step.name}/{task_label}"))
-
-    return olmo2_steps
-
-
-def _create_olmo3_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[ExecutorStep]:
-    """Return one evaluation step per LM Eval Harness task for OLMo 3 7B."""
-
-    olmo3_steps: list[ExecutorStep] = []
-    for task in tasks:
-        eval_step = default_eval(
-            step=olmo_3_1025_7b,
-            resource_config=SINGLE_TPU_V5p_8,
-            evals=(task,),
-            apply_chat_template=False,
-            discover_latest_checkpoint=False,
-        )
-        task_label = (task.task_alias or task.name).replace(" ", "_")
-        olmo3_steps.append(replace(eval_step, name=f"{eval_step.name}/{task_label}"))
-
-    return olmo3_steps
+    return steps
 
 
 multilingual_eval_steps = [
-    *_create_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
-    *_create_llama3_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
-    *_create_qwen2_5_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
-    *_create_olmo2_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
-    *_create_olmo3_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
-    *_create_apertus_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
+    *_create_per_task_eval_steps(multilingual_cpt_8b_fineweb2_hq, MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
+    *_create_per_task_eval_steps(llama_3_1_8b, MULTILINGUAL_LM_EVAL_LOGPROB_TASKS, False, False),
+    *_create_per_task_eval_steps(qwen2_5_7b, MULTILINGUAL_LM_EVAL_LOGPROB_TASKS, False, False),
+    *_create_per_task_eval_steps(olmo_2_base_8b, MULTILINGUAL_LM_EVAL_LOGPROB_TASKS, False, False),
+    *_create_per_task_eval_steps(olmo_3_1025_7b, MULTILINGUAL_LM_EVAL_LOGPROB_TASKS, False, False),
+    *_create_per_task_eval_steps(apertus_8b, MULTILINGUAL_LM_EVAL_LOGPROB_TASKS, False, False),
 ]
 
 
