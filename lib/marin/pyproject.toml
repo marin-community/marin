@@ -38,7 +38,7 @@ dependencies = [
     "openai",
     "pandas",
     "pyarrow>=22",
-    "ray==2.49.2",
+    "ray==2.45.0",
     "regex",
     "requests",
     "s3fs>=2024",

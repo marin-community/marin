@@ -33,7 +33,6 @@ import dataclasses
 import functools
 import os
 from typing import Optional, Tuple, Literal
-import contextlib
 
 import equinox as eqx
 import jax
@@ -57,20 +56,6 @@ def _dbg(tag: str, arr):
         jax.debug.inspect_array_sharding(arr, callback=lambda s: print(f"[GDN][internal] {tag}: {s}"))
     except Exception:
         pass
-
-
-def _should_interpret_pallas() -> bool:
-    try:
-        platform = jax.devices()[0].platform
-    except RuntimeError:
-        platform = "cpu"
-    return platform == "cpu"
-
-
-@contextlib.contextmanager
-def _fp32_mm():
-    with jax.default_matmul_precision("float32"):
-        yield
 
 
 # ---------- small utilities ----------
@@ -110,34 +95,73 @@ def _fused_rmsnorm_gated_pallas(
     gate_2d: jnp.ndarray,
     weight: jnp.ndarray,
     eps: float,
+    *,
+    BM: int = 8,  # 8 is the minimum "nice" TPU multiple
 ) -> jnp.ndarray:
     n_rows, hidden_size = x_2d.shape
 
-    def kernel(x_ref, gate_ref, weight_ref, out_ref, *, eps):
-        x = x_ref[0, :].astype(jnp.float32)
-        gate = gate_ref[0, :].astype(jnp.float32)
-        weight = weight_ref[:].astype(jnp.float32)
-        eps32 = jnp.asarray(eps, dtype=jnp.float32)
-        inv = jax.lax.rsqrt(jnp.mean(x * x) + eps32)
-        y = x * inv * weight
-        gated = y * jax.nn.silu(gate)
-        out_ref[0, :] = gated.astype(out_ref.dtype)
+    # TPU blocked-indexing constraints: BM should be divisible by 8 unless it equals n_rows
+    # (see TPU block_shape restrictions).
+    if BM % 8 != 0:
+        raise ValueError("BM must be a multiple of 8 on TPU")
 
-    kernel_partial = functools.partial(kernel, eps=float(eps))
+    # Pad only the OUTPUT shape so stores are always in-bounds.
+    # We avoid padding the INPUTS to prevent a full extra copy.
+    n_rows_pad = ((n_rows + BM - 1) // BM) * BM
+
+    inv_scale = jnp.asarray(1.0 / hidden_size, dtype=jnp.float32)
+    eps32 = jnp.asarray(eps, dtype=jnp.float32)
+
+    def kernel(x_ref, gate_ref, w_ref, out_ref):
+        pid = pl.program_id(axis=0)  # block id along rows
+        row_ids = pid * BM + jnp.arange(BM)
+        row_mask = row_ids < n_rows  # (BM,)
+
+        # Load the whole (BM, D) tile; OOB rows may be garbage => mask them out
+        x = x_ref[:, :].astype(jnp.float32)
+        g = gate_ref[:, :].astype(jnp.float32)
+
+        x = jnp.where(row_mask[:, None], x, 0.0)
+        g = jnp.where(row_mask[:, None], g, 0.0)
+
+        w = w_ref[:].astype(jnp.float32)
+
+        # RMS per row
+        ss = jnp.sum(x * x, axis=-1, keepdims=True) * inv_scale  # (BM, 1)
+        inv = lax.rsqrt(ss + eps32)  # (BM, 1)
+
+        y = x * inv * w[None, :]  # (BM, D)
+        out = y * jax.nn.silu(g)
+
+        # Optional: keep padded rows deterministic
+        out = jnp.where(row_mask[:, None], out, 0.0)
+
+        out_ref[:, :] = out.astype(out_ref.dtype)
+
+    # TPU compiler params (optional)
+    compiler_params = None
+    try:
+        from jax.experimental.pallas import tpu as pltpu
+
+        compiler_params = pltpu.CompilerParams(dimension_semantics=["parallel"])
+    except Exception:
+        pass
 
     out = pl.pallas_call(
-        kernel_partial,
-        out_shape=jax.ShapeDtypeStruct(x_2d.shape, x_2d.dtype),
-        grid=(n_rows,),
+        kernel,
+        out_shape=jax.ShapeDtypeStruct((n_rows_pad, hidden_size), x_2d.dtype),
+        grid=(n_rows_pad // BM,),
         in_specs=[
-            pl.BlockSpec((1, hidden_size), lambda i: (i, 0)),
-            pl.BlockSpec((1, hidden_size), lambda i: (i, 0)),
-            pl.BlockSpec((hidden_size,), lambda i: (0,)),
+            # IMPORTANT: index_map returns BLOCK indices; do NOT multiply by BM.
+            pl.BlockSpec((BM, hidden_size), lambda pid: (pid, 0)),
+            pl.BlockSpec((BM, hidden_size), lambda pid: (pid, 0)),
+            pl.BlockSpec((hidden_size,), lambda pid: (0,)),
         ],
-        out_specs=pl.BlockSpec((1, hidden_size), lambda i: (i, 0)),
-        interpret=_should_interpret_pallas(),
+        out_specs=pl.BlockSpec((BM, hidden_size), lambda pid: (pid, 0)),
+        compiler_params=compiler_params,
     )(x_2d, gate_2d, weight)
-    return out
+
+    return out[:n_rows, :]
 
 
 # ---------- depthwise conv: positional (lax) helpers with named wrappers ----------
@@ -244,10 +268,7 @@ def _causal_depthwise_conv1d_update(
 def _rmsnorm_gated_flash(x_2d: jnp.ndarray, gate_2d: jnp.ndarray, weight: jnp.ndarray, eps: float) -> jnp.ndarray:
     """Forward: call the Pallas fused kernel (fallback to reference).
     Backward: analytic grads in pure JAX (no Pallas autodiff)."""
-    try:
-        return _fused_rmsnorm_gated_pallas(x_2d, gate_2d, weight, eps)
-    except Exception:
-        return _rmsnorm_gated_reference(x_2d, gate_2d, weight, eps)
+    return _fused_rmsnorm_gated_pallas(x_2d, gate_2d, weight, eps)
 
 
 def _rmsnorm_gated_flash_fwd(x_2d, gate_2d, weight, eps):
@@ -325,11 +346,7 @@ class FusedRMSNormGated(eqx.Module):
         weight_arr = self.weight.array
 
         if self.use_flash:
-            try:
-                out_arr = _rmsnorm_gated_flash(x_arr, gate_arr, weight_arr, self.eps)
-            except Exception:
-                # If Pallas fails at runtime, fall back to reference (grad still correct via custom VJP bwd)
-                out_arr = _rmsnorm_gated_reference(x_arr, gate_arr, weight_arr, self.eps)
+            out_arr = _rmsnorm_gated_flash(x_arr, gate_arr, weight_arr, self.eps)
         else:
             out_arr = _rmsnorm_gated_reference(x_arr, gate_arr, weight_arr, self.eps)
 
@@ -1195,7 +1212,6 @@ def _recurrent_gated_delta_rule_flash(
             grid=(NH,),
             in_specs=in_specs_tpu,
             out_specs=out_specs_tpu,
-            interpret=_should_interpret_pallas(),
             compiler_params=compiler_params,
         )(q_pad, k_pad, v_pad, g_arg, beta_arg, init_kpad)
 
@@ -1229,7 +1245,6 @@ def _recurrent_gated_delta_rule_flash(
             grid=grid,
             in_specs=in_specs,
             out_specs=out_specs,
-            interpret=_should_interpret_pallas(),
         )(q_pad, k_pad, v_pad, g_arr, beta_pad, init_kpad, lengths_flat)
 
         # Convert NH-major -> (B,H,T,V_pad) for wrapping
@@ -2073,7 +2088,7 @@ def chunk_gated_delta_rule(
     offsets: Optional[jnp.ndarray] = None,
     use_varlen: bool = False,
     lengths: Optional[jnp.ndarray] = None,
-    backward_mode: "Literal['checkpoint','custom_vjp']" = "custom_vjp",
+    backward_mode: "Literal['checkpoint','custom_vjp']" = "checkpoint",
     use_triangular_solve: bool = True,
 ) -> tuple[NamedArray, Optional[jnp.ndarray]]:
     """Top-level API for chunkwise gated delta rule.
@@ -2198,7 +2213,7 @@ class GatedDeltaNet(eqx.Module):
         )
         dt_bias = hax.named(jnp.ones((config.Heads.size,), dtype=jnp.float32), (config.Heads.name,))
 
-        o_norm = FusedRMSNormGated.init(config.VHeadDim, eps=config.rms_norm_eps, use_flash=use_flash)
+        o_norm = FusedRMSNormGated.init(config.VHeadDim, eps=config.rms_norm_eps, use_flash=False)
         out_proj = hnn.Linear.init(
             In=(config.Heads, config.VHeadDim), Out=config.Embed, out_first=True, use_bias=False, key=k_out
         )
