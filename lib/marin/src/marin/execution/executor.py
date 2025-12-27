@@ -101,6 +101,7 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, fields, is_dataclass, replace
 from datetime import datetime
+from pathlib import Path
 from threading import Event, Thread
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from urllib.parse import urlparse
@@ -130,6 +131,40 @@ from marin.execution.executor_step_status import (
 from marin.utilities.json_encoder import CustomJsonEncoder
 
 logger = logging.getLogger("ray")
+
+_LOCAL_DATA_BROWSER_PORT_RE = re.compile(r"^\s*port\s*:\s*(\d+)\s*(?:#.*)?$")
+_LOCAL_DATA_BROWSER_CONFIG_REL = Path("data_browser") / "conf" / "local.conf"
+
+
+def _find_data_browser_local_conf(max_parents: int = 6) -> Path | None:
+    here = Path.cwd().resolve()
+    for _ in range(max_parents + 1):
+        candidate = here / _LOCAL_DATA_BROWSER_CONFIG_REL
+        if candidate.exists():
+            return candidate
+        parent = here.parent
+        if parent == here:
+            break
+        here = parent
+    return None
+
+
+def _get_local_data_browser_port(default: int = 5000) -> int:
+    config_path = _find_data_browser_local_conf()
+    if config_path is None:
+        return default
+
+    try:
+        with config_path.open() as fp:
+            for line in fp:
+                match = _LOCAL_DATA_BROWSER_PORT_RE.match(line)
+                if match:
+                    return int(match.group(1))
+    except OSError:
+        return default
+
+    return default
+
 
 ConfigT = TypeVar("ConfigT", covariant=True, bound=dataclass)
 T_co = TypeVar("T_co", covariant=True)
@@ -1037,11 +1072,10 @@ class Executor:
 
     def get_experiment_url(self) -> str:
         """Return the URL where the experiment can be viewed."""
-        # TODO: remove hardcoding
         if self.prefix.startswith("gs://"):
             host = "https://marin.community/data-browser"
         else:
-            host = "http://localhost:5000"
+            host = f"http://localhost:{_get_local_data_browser_port()}"
 
         return host + "/experiment?path=" + urllib.parse.quote(self.executor_info_path)
 
@@ -1067,6 +1101,8 @@ class Executor:
 
         # Print where to find the executor info (experiments JSON)
         logger.info(f"Writing executor info to {self.executor_info_path}")
+        if not self.prefix.startswith("gs://"):
+            logger.info("Start data browser: cd data_browser && uv run python run-dev.py --config conf/local.conf")
         logger.info("To view the experiment page, go to:")
         logger.info("")
         logger.info(self.get_experiment_url())
@@ -1217,6 +1253,8 @@ def executor_main(config: ExecutorMainConfig, steps: list[ExecutorStep], descrip
     logger.info(f"Executor run took {time_out - time_in:.2f}s")
     # print json path again so it's easy to copy
     logger.info(f"Executor info written to {executor.executor_info_path}")
+    if not executor.prefix.startswith("gs://"):
+        logger.info("Start data browser: cd data_browser && uv run python run-dev.py --config conf/local.conf")
     logger.info(f"View the experiment at {executor.get_experiment_url()}")
 
 

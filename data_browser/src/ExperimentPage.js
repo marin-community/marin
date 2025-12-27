@@ -489,23 +489,50 @@ function renderExperimentStatus({step, auxiliaryData}) {
   if (data.error) {
     return <span className="error" title={data.error}>{errorIcon}</span>;
   }
-  const events = data.items;
+  const events = data.items || [];
+  if (events.length === 0) {
+    return <span className="error" title="No status events found">{errorIcon}</span>;
+  }
 
-  const lastEvent = events[events.length - 1];
+  const lastEvent = events[events.length - 1] || {};
+  const status = lastEvent.status || "UNKNOWN";
 
-  // If last event is RUNNING, use the current time as the end time
-  // Otherwise, use the time of the last event
-  const startTime = new Date(events[0].date);
-  const endTime = ["WAITING", "RUNNING"].includes(lastEvent.status) ? new Date() : new Date(lastEvent.date);
+  const hasLastDate = typeof lastEvent.date === "string" && lastEvent.date.length > 0;
+  const lastUpdatedInfo = hasLastDate ? `last updated ${renderDate(lastEvent.date)}` : null;
 
-  const duration = (endTime.getTime() - startTime.getTime()) / 1000;
+  const isActive = ["WAITING", "RUNNING"].includes(status);
 
-  const statusIcon = statusIcons[lastEvent.status] || lastEvent.status;
+  let startTime = null;
+  if (events.length > 1 && events[0] && events[0].date) {
+    startTime = new Date(events[0].date);
+  } else if (isActive && hasLastDate) {
+    startTime = new Date(lastEvent.date);
+  }
 
-  const lastStatus = <span className={"status-" + lastEvent.status}>{statusIcon}</span>;
-  const temporalInfo = `last updated ${renderDate(lastEvent.date)}, lifetime is ${renderDuration(duration)}`;
+  let endTime = null;
+  if (isActive) {
+    endTime = new Date();
+  } else if (hasLastDate) {
+    endTime = new Date(lastEvent.date);
+  }
+
+  let lifetimeInfo = null;
+  if (startTime && endTime) {
+    const startMs = startTime.getTime();
+    const endMs = endTime.getTime();
+    if (!Number.isNaN(startMs) && !Number.isNaN(endMs) && endMs >= startMs) {
+      const duration = (endMs - startMs) / 1000;
+      lifetimeInfo = `lifetime is ${renderDuration(duration)}`;
+    }
+  }
+
+  const statusIcon = statusIcons[status] || status;
+
+  const lastStatus = <span className={"status-" + status}>{statusIcon}</span>;
+  const temporalParts = [lastUpdatedInfo, lifetimeInfo].filter(Boolean);
+  const temporalInfo = temporalParts.length ? ` (${temporalParts.join(", ")})` : "";
   return <span className="status-container">
-    <a href={viewStatusUrl(step)} target="_blank" rel="noreferrer" title={`View raw JSON status of this step ${temporalInfo}`}>
+    <a href={viewStatusUrl(step)} target="_blank" rel="noreferrer" title={`View raw JSON status of this step${temporalInfo}`}>
       {lastStatus}
     </a>
   </span>;
