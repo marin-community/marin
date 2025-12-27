@@ -150,6 +150,7 @@ def _find_data_browser_local_conf(max_parents: int = 6) -> Path | None:
 
 
 def _get_local_data_browser_port(default: int = 5000) -> int:
+    # looks for the port in the local data browser config file
     config_path = _find_data_browser_local_conf()
     if config_path is None:
         return default
