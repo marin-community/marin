@@ -137,11 +137,11 @@ def _create_olmo3_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[E
 
 
 multilingual_eval_steps = [
-    # *_create_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
-    # *_create_llama3_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
-    # *_create_qwen2_5_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
-    # *_create_olmo2_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
-    # *_create_olmo3_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
+    *_create_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
+    *_create_llama3_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
+    *_create_qwen2_5_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
+    *_create_olmo2_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
+    *_create_olmo3_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
     *_create_apertus_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
 ]
 
