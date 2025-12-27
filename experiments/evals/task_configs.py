@@ -311,6 +311,12 @@ SPECIALIZED_TASKS = (
     EvalTaskConfig("webqs", 0, task_alias="webqs_0shot"),
 )
 
+# Long context evals
+LONG_CONTEXT_TASKS = (
+    EvalTaskConfig("ruler", 0, task_alias="ruler_0shot"),
+    # EvalTaskConfig("graphwalks", 0, task_alias="graphwalks_0shot"),
+)
+
 
 def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
     """
