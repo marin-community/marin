@@ -159,8 +159,7 @@ def convert_checkpoint_to_hf_step(
         use_cpu: Force conversion to run on CPU instead of the configured device mesh. When False, CPU mode is enabled
             automatically if the provided resources do not expose an accelerator.
         override_output_path: Explicit output path override. Useful when aligning with pre-existing directories.
-        pip_dependency_groups: Optional executor dependency groups. Defaults to ``["tokenize_train"]`` so the
-            Levanter/JAX stack is available.
+        pip_dependency_groups: Optional executor dependency groups.
         discover_latest: If True, resolves ``checkpoint_path`` to the most recent checkpoint in that directory.
     """
 
@@ -184,12 +183,10 @@ def convert_checkpoint_to_hf_step(
         discover_latest=discover_latest,
     )
 
-    dependency_groups = pip_dependency_groups or ["tokenize_train"]
-
     return ExecutorStep(
         name=name,
         fn=convert_checkpoint_to_hf,
         config=config,
         override_output_path=override_output_path,
-        pip_dependency_groups=dependency_groups,
+        pip_dependency_groups=pip_dependency_groups,
     )
