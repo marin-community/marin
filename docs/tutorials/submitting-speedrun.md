@@ -103,7 +103,7 @@ Speedrun Configuration:
   {
     "train_batch_size": 128,
     "num_train_steps": 5880,
-    "learning_rate": 0.032,
+    "learning_rate": 0.016,
     "data_seed": null,
     "weight_decay": null,
     "beta1": null,
@@ -132,7 +132,7 @@ Speedrun Configuration:
     "int8": false,
     "optimizer_config":
     {
-      "learning_rate": 0.032,
+      "learning_rate": 0.016,
       "weight_decay": 0.1,
       "min_lr_ratio": 0,
       "warmup": 0,
@@ -141,7 +141,7 @@ Speedrun Configuration:
       "weight_decay_modules": null,
       "default_weight_decay_mask": null,
       "lr": 0.02,
-      "adam_lr": 0.0064,
+      "adam_lr": 0.0032,
       "momentum": 0.95,
       "nesterov": true,
       "backend_steps": 5,
