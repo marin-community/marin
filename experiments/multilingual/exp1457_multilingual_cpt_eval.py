@@ -13,8 +13,7 @@
 # limitations under the License.
 
 """
-Evaluate the multilingual CPT continuation (exp1457), Llama 3.1 8B, and Qwen 2.5 7B on multilingual LM Eval Harness
-tasks.
+Evaluate the multilingual CPT continuation (exp1457) and baseline 7B/8B models on multilingual LM Eval Harness tasks.
 """
 
 from collections.abc import Iterable
@@ -23,7 +22,7 @@ from dataclasses import replace
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import MULTILINGUAL_LM_EVAL_LOGPROB_TASKS
 from experiments.multilingual.exp1457_multilingual_cpt import multilingual_cpt_8b_fineweb2_hq
-from experiments.models import llama_3_1_8b, olmo_2_base_8b, olmo_3_1025_7b, qwen2_5_7b
+from experiments.models import apertus_8b, llama_3_1_8b, olmo_2_base_8b, olmo_3_1025_7b, qwen2_5_7b
 from fray.cluster import ResourceConfig
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, executor_main
@@ -83,6 +82,24 @@ def _create_qwen2_5_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list
     return qwen_steps
 
 
+def _create_apertus_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[ExecutorStep]:
+    """Return one evaluation step per LM Eval Harness task for Apertus 8B."""
+
+    apertus_steps: list[ExecutorStep] = []
+    for task in tasks:
+        eval_step = default_eval(
+            step=apertus_8b,
+            resource_config=SINGLE_TPU_V5p_8,
+            evals=(task,),
+            apply_chat_template=False,
+            discover_latest_checkpoint=False,
+        )
+        task_label = (task.task_alias or task.name).replace(" ", "_")
+        apertus_steps.append(replace(eval_step, name=f"{eval_step.name}/{task_label}"))
+
+    return apertus_steps
+
+
 def _create_olmo2_per_task_eval_steps(tasks: Iterable[EvalTaskConfig]) -> list[ExecutorStep]:
     """Return one evaluation step per LM Eval Harness task for OLMo 2 7B."""
 
@@ -124,7 +141,8 @@ multilingual_eval_steps = [
     # *_create_llama3_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
     # *_create_qwen2_5_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
     # *_create_olmo2_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
-    *_create_olmo3_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
+    # *_create_olmo3_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
+    *_create_apertus_per_task_eval_steps(MULTILINGUAL_LM_EVAL_LOGPROB_TASKS),
 ]
 
 
