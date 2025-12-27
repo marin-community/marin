@@ -1,24 +1,24 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "fray"
 version = "0.1.0"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "typing-extensions>=4.0",
-    "zstandard>=0.22.0",
-    "mergedeep",
-    "cloudpickle>=3.1.2",
     "click>=8.0",
-    "humanfriendly>=10.0",
+    "cloudpickle>=3.1.2",
+    "fastapi>=0.100.0",
     "flask",
     "fsspec>=2024.0.0",
-    "pyyaml>=6.0",
     "httpx>=0.28.1",
-    "fastapi>=0.100.0",
+    "humanfriendly>=10.0",
+    "mergedeep",
+    "pyyaml>=6.0",
+    "typing-extensions>=4.0",
     "uvicorn[standard]>=0.23.0",
+    "zstandard>=0.22.0",
 ]
 
 [project.scripts]
@@ -28,16 +28,26 @@ fray = "fray.cli:main"
 ray = ["ray==2.45"]
 
 [dependency-groups]
-fray_test = [
+test = [
     "numpy",
     "pip", # ray requires pip to be installed
     "pytest-timeout",
     "pytest>=8.3.2",
-    "ray[default]"
+    "ray[default]",
 ]
-fray_tpu_test = ["jax[tpu]", { include-group = "fray_test" }]
+tpu_test = ["jax[tpu]", { include-group = "test" }]
+dev = [{ include-group = "test" }]
 
-dev = [{ include-group = "fray_test" }]
+[tool.maturin]
+module-name = "fray.fray_rpc"
+manifest-path = "Cargo.toml"
+python-source = "src"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/fray"]
+[tool.uv]
+cache-keys = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "build.rs",
+    "rust_src/**/*.rs",
+    "proto/*.proto",
+]

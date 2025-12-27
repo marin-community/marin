@@ -1188,14 +1188,14 @@ dev = [
     { name = "pytest-timeout" },
     { name = "ray", extra = ["default"] },
 ]
-fray-test = [
+test = [
     { name = "numpy" },
     { name = "pip" },
     { name = "pytest" },
     { name = "pytest-timeout" },
     { name = "ray", extra = ["default"] },
 ]
-fray-tpu-test = [
+tpu-test = [
     { name = "jax", extra = ["tpu"] },
     { name = "numpy" },
     { name = "pip" },
@@ -1230,14 +1230,14 @@ dev = [
     { name = "pytest-timeout" },
     { name = "ray", extras = ["default"] },
 ]
-fray-test = [
+test = [
     { name = "numpy" },
     { name = "pip" },
     { name = "pytest", specifier = ">=8.3.2" },
     { name = "pytest-timeout" },
     { name = "ray", extras = ["default"] },
 ]
-fray-tpu-test = [
+tpu-test = [
     { name = "jax", extras = ["tpu"] },
     { name = "numpy" },
     { name = "pip" },

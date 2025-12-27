@@ -18,18 +18,19 @@ from fray.job.context import (
     ActorHandle,
     ActorMethod,
     ContextConfig,
-    GeneratorFuture,
     JobContext,
-    RayContext,
     SimpleActor,
-    SyncContext,
-    ThreadActorHandle,
-    ThreadActorMethod,
-    ThreadContext,
     create_job_ctx,
     fray_default_job_ctx,
     get_default_job_ctx,
 )
+from fray.job.ray_ctx import RayContext
+from fray.job.sync_ctx import SyncActorHandle, SyncActorMethod, SyncContext, SyncFuture
+from fray.job.thread_ctx import GeneratorFuture, ThreadActorHandle, ThreadActorMethod, ThreadContext, ThreadFuture
+from fray.fray_rpc import RustyContext
+
+# Alias for backwards compatibility
+RpcContext = RustyContext
 
 __all__ = [
     "ActorHandle",
@@ -38,11 +39,17 @@ __all__ = [
     "GeneratorFuture",
     "JobContext",
     "RayContext",
+    "RpcContext",
+    "RustyContext",
     "SimpleActor",
+    "SyncActorHandle",
+    "SyncActorMethod",
     "SyncContext",
+    "SyncFuture",
     "ThreadActorHandle",
     "ThreadActorMethod",
     "ThreadContext",
+    "ThreadFuture",
     "create_job_ctx",
     "fray_default_job_ctx",
     "get_default_job_ctx",
