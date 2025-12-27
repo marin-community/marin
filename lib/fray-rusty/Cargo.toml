@@ -1,0 +1,27 @@
+[package]
+name = "fray-rusty"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fray_rusty"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+parking_lot = "0.12"
+tonic = "0.12"
+prost = "0.13"
+prost-types = "0.13"
+bytes = "1.8"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1.11", features = ["v4"] }
+pyo3 = { version = "0.26", features = ["extension-module", "abi3-py311"] }
+anyhow = "1.0"
+thiserror = "2.0"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4.5", features = ["derive"] }
+futures = "0.3"
+
+[build-dependencies]
+tonic-build = "0.12"

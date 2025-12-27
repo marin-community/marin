@@ -1,0 +1,135 @@
+syntax = "proto3";
+
+package fray;
+
+// ID types - using bytes to store full 16-byte UUIDs
+message ObjectRef {
+  bytes id = 1;  // 16-byte UUID
+}
+
+message TaskRef {
+  bytes id = 1;  // 16-byte UUID
+}
+
+message ActorRef {
+  bytes id = 1;  // 16-byte UUID
+}
+
+message WorkerId {
+  bytes id = 1;  // 16-byte UUID
+}
+
+// Python object wrapper
+message PyObject {
+  bytes data = 1;  // Cloudpickle-serialized Python object
+}
+
+// Task definition
+message Task {
+  bytes id = 1;       // 16-byte UUID
+  bytes payload = 2;  // Serialized function and arguments
+}
+
+// Task result with oneof for success/error
+message TaskResult {
+  bytes task_id = 1;  // 16-byte UUID
+  oneof result {
+    bytes success = 2;  // Success data
+    string error = 3;   // Error message
+  }
+}
+
+// Actor specification
+message ActorSpec {
+  string class_name = 1;
+  repeated bytes args = 2;  // List of serialized args
+  repeated KwArg kwargs = 3;
+  string name = 4;
+  Lifetime lifetime = 5;
+
+  message KwArg {
+    string key = 1;
+    bytes value = 2;
+  }
+
+  enum Lifetime {
+    DETACHED = 0;
+    JOB_SCOPED = 1;
+  }
+}
+
+// Actor method call
+message ActorMethodCall {
+  bytes actor_id = 1;  // 16-byte UUID
+  string method_name = 2;
+  repeated bytes args = 3;
+  repeated ActorSpec.KwArg kwargs = 4;
+}
+
+// Coordinator service
+service Coordinator {
+  // Object store operations
+  rpc Put(PyObject) returns (ObjectRef);
+  rpc Get(ObjectRef) returns (PyObject);
+
+  // Task management
+  rpc SubmitTask(Task) returns (TaskRef);
+  rpc GetTaskResult(TaskRef) returns (TaskResult);
+  rpc WaitTasks(WaitTasksRequest) returns (WaitTasksResponse);
+
+  // Actor management
+  rpc CreateActor(ActorSpec) returns (ActorRef);
+  rpc GetActorByName(GetActorByNameRequest) returns (ActorRef);
+  rpc CallActorMethod(ActorMethodCall) returns (TaskRef);
+
+  // Worker coordination
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+// Additional request/response messages
+message WaitTasksRequest {
+  repeated TaskRef task_refs = 1;
+  uint32 num_returns = 2;
+  uint64 timeout_ms = 3;
+}
+
+message WaitTasksResponse {
+  repeated TaskRef ready = 1;
+}
+
+message GetActorByNameRequest {
+  string name = 1;
+}
+
+message RegisterWorkerRequest {
+  bytes worker_id = 1;  // 16-byte UUID
+  string capabilities = 2;
+}
+
+message RegisterWorkerResponse {}
+
+message HeartbeatRequest {
+  bytes worker_id = 1;  // 16-byte UUID
+}
+
+message HeartbeatResponse {}
+
+// Worker service (for future implementation)
+service Worker {
+  rpc ExecuteTask(Task) returns (TaskResult);
+  rpc CreateActorInstance(CreateActorInstanceRequest) returns (CreateActorInstanceResponse);
+  rpc CallActorMethod(ActorMethodCall) returns (TaskResult);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+}
+
+message CreateActorInstanceRequest {
+  ActorSpec spec = 1;
+  bytes actor_id = 2;  // 16-byte UUID
+}
+
+message CreateActorInstanceResponse {}
+
+message ShutdownRequest {}
+
+message ShutdownResponse {}
