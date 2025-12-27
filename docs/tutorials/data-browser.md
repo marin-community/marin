@@ -58,7 +58,7 @@ If you prefer to manage the processes yourself, run them in separate terminals:
 **Terminal 1: Backend Server**
 ```bash
 cd data_browser
-DEV=true uv run server.py --config conf/local.conf
+DEV=true uv run python server.py --config conf/local.conf
 ```
 
 **Terminal 2: Frontend Server**
@@ -73,7 +73,7 @@ When you only need the REST API (or the React server won't start), launch just t
 
 ```bash
 cd data_browser
-DEV=true uv run server.py --config conf/local.conf
+DEV=true uv run python server.py --config conf/local.conf
 ```
 
 **Access**: `http://localhost:<port>/api/view?path=local_store` (replace `<port>` with the value from your config; `5050` for `conf/local.conf`).
