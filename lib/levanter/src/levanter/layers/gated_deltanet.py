@@ -1946,7 +1946,7 @@ def _chunk_gated_delta_rule_flash(
     use_varlen: bool = False,
     lengths: Optional[jnp.ndarray] = None,  # (B,H) or (B*H,)
     offsets: Optional[jnp.ndarray] = None,  # (B*H,) or (B*H+1,)
-    backward_mode: "Literal['checkpoint','custom_vjp']" = "checkpoint",
+    backward_mode: "Literal['checkpoint','custom_vjp']" = "custom_vjp",
     use_triangular_solve: bool = True,
 ) -> tuple[NamedArray, Optional[jnp.ndarray]]:
     """Flash/Pallas TPU implementation of chunkwise gated delta rule with selectable backward."""
@@ -2073,7 +2073,7 @@ def chunk_gated_delta_rule(
     offsets: Optional[jnp.ndarray] = None,
     use_varlen: bool = False,
     lengths: Optional[jnp.ndarray] = None,
-    backward_mode: "Literal['checkpoint','custom_vjp']" = "checkpoint",
+    backward_mode: "Literal['checkpoint','custom_vjp']" = "custom_vjp",
     use_triangular_solve: bool = True,
 ) -> tuple[NamedArray, Optional[jnp.ndarray]]:
     """Top-level API for chunkwise gated delta rule.
