@@ -314,7 +314,6 @@ SPECIALIZED_TASKS = (
 # Long context evals
 LONG_CONTEXT_TASKS = (
     EvalTaskConfig("ruler", 0, task_alias="ruler_0shot"),
-    # EvalTaskConfig("graphwalks", 0, task_alias="graphwalks_0shot"),
 )
 
 
