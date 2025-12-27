@@ -163,6 +163,13 @@ olmo_2_base_32b = download_model_step(
     )
 )
 
+olmo_3_1025_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/Olmo-3-1025-7B",
+        hf_revision="18b40a1e895f829c68a132befa20109c41488e62",
+    )
+)
+
 amber_base_7b = download_model_step(
     ModelConfig(
         hf_repo_id="LLM360/Amber",
