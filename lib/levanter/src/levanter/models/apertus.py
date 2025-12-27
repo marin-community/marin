@@ -88,15 +88,14 @@ class ApertusConfig(LlamaConfig):
             high_freq_factor=4.0,
         )
     )
-    reference_checkpoint: str = ""
+    reference_checkpoint: str = "swiss-ai/Apertus-8B-2509"
 
     def hf_checkpoint_converter(self, ref_checkpoint: Optional[str] = None) -> HFCheckpointConverter["ApertusConfig"]:
-        reference_checkpoint = ref_checkpoint if ref_checkpoint is not None else (self.reference_checkpoint or None)
         return HFCheckpointConverter(
             self.__class__,
-            reference_checkpoint=reference_checkpoint,
+            reference_checkpoint=self.reference_checkpoint if ref_checkpoint is None else ref_checkpoint,
             trust_remote_code=False,
-            tokenizer=reference_checkpoint if self.tokenizer is None else self.tokenizer,
+            tokenizer=ref_checkpoint if self.tokenizer is None else self.tokenizer,
             HfConfigClass=HfApertusConfig,
         )
 
