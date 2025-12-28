@@ -13,22 +13,20 @@
 # limitations under the License.
 
 """
-Evaluate marin_32b on the RULER long-context benchmark.
+Evaluate Llama-3.1-8B-Instruct on the RULER long-context benchmark.
 """
 
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import LONG_CONTEXT_TASKS
+from experiments.models import llama_3_1_8b_instruct
 from fray.cluster import ResourceConfig
 from marin.execution.executor import executor_main
 
-# Direct path avoids importing the training step (which triggers gated tokenizer downloads)
-MARIN_32B_PATH = "gs://marin-us-central2/checkpoints/tootsie-32b-cooldown-mantis-adamc-v2"
-
 ruler_eval_step = default_eval(
-    step=MARIN_32B_PATH,
-    resource_config=ResourceConfig.with_tpu("v5p-8"),
+    step=llama_3_1_8b_instruct,
+    resource_config=ResourceConfig.with_tpu("v4-8"),
     evals=LONG_CONTEXT_TASKS,
-    discover_latest_checkpoint=True,
+    apply_chat_template=True,
 )
 
 if __name__ == "__main__":

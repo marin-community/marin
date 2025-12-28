@@ -985,6 +985,11 @@ class LmEvalHarnessConfig:
 
     These can be overridden on a per-request basis by the evaluation harness.
     """
+    metadata: dict | None = None
+    """
+    Metadata to pass to lm-eval's TaskManager. Some tasks (e.g., RULER) require
+    'pretrained' to specify the tokenizer for data preprocessing.
+    """
 
     @property
     def max_gen_toks(self) -> int:
@@ -1011,7 +1016,7 @@ class LmEvalHarnessConfig:
         logger.info("Loading tasks...")
         import lm_eval.tasks as tasks
 
-        manager = tasks.TaskManager()
+        manager = tasks.TaskManager(metadata=self.metadata)
         # we need to do it this way b/c i can't figure out how to run e.g. hellaswag 0 shot and 10 shot in a single run
         this_tasks = {}
         for task in tqdm(self.to_task_spec()):
