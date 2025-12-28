@@ -17,6 +17,7 @@ from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.layers.attention import Attention, AttentionConfig, AttentionMask
+from levanter.layers.normalization import LayerNormConfigBase, RmsNormConfig
 from levanter.layers.rotary import RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig, LlamaEmbedding, LlamaLMHeadModel, LlamaMlp, LlamaTransformer
 from levanter.models.lm_model import LmConfig, LmHeadModel
@@ -61,6 +62,10 @@ class QwenConfig(LlamaConfig):
     def from_hf_config(cls, hf_config: HfConfig):
         rope_theta = hf_config.rope_theta
         rope_config = RotaryEmbeddingsConfig.from_hf_config(rope_theta, hf_config.rope_scaling)
+        use_bias = getattr(hf_config, "attention_bias", None)
+        if use_bias is None:
+            # Qwen2Config in newer transformers drops no_bias; assume bias by default
+            use_bias = not getattr(hf_config, "no_bias", False)
         return QwenConfig(
             max_seq_len=hf_config.max_position_embeddings,
             hidden_dim=hf_config.hidden_size,
@@ -76,7 +81,7 @@ class QwenConfig(LlamaConfig):
             layer_norm_epsilon=hf_config.rms_norm_eps,
             tie_word_embeddings=hf_config.tie_word_embeddings,
             rope=rope_config,
-            use_bias=not hf_config.no_bias,
+            use_bias=use_bias,
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfQwenConfig:
@@ -156,7 +161,6 @@ class QwenDecoderLayer(eqx.Module):
             config.Mlp,
             config.activation_function,
             key=k_mlp,
-            use_bias=config.use_bias,
         )
         ln_1 = config.mk_LayerNorm(config.Embed)
         ln_2 = config.mk_LayerNorm(config.Embed)
@@ -309,6 +313,14 @@ class Qwen3Config(LlamaConfig):
     @property  # type: ignore[override]
     def model_type(self):  # noqa: D401
         return Qwen3LMHeadModel
+
+    @property  # type: ignore[override]
+    def norm_config(self) -> LayerNormConfigBase:
+        return RmsNormConfig(
+            use_weight=self.use_layer_norm_weight,
+            use_bias=False,
+            eps=self.layer_norm_epsilon,
+        )
 
     def hf_checkpoint_converter(
         self, ref_checkpoint: Optional[str] = None
