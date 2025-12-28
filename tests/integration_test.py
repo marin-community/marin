@@ -22,7 +22,6 @@ from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -31,6 +30,7 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from marin.processing.classification.dataset_utils import DatasetConfig
 from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
