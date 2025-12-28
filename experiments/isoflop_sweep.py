@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Generate ISOFlop sweep steps for varying model sizes on a target datasett.
+"""Generate ISOFlop sweep steps for varying model sizes on a target dataset.
 
 This script constructs `ExecutorStep` objects that train models of different
 sizes while keeping the total training FLOPs roughly constant.  It is intended
@@ -20,116 +20,47 @@ as a lightweight scaffold for ISOFlop scaling law experiments.
 """
 
 import dataclasses
-import math
-import os
 from dataclasses import dataclass, replace
 
 from levanter.data.text import LMMixtureDatasetConfig
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
-from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
-from levanter.utils.flop_utils import lm_flops_per_token
 
+from experiments.evals.evals import default_eval
+from experiments.evals.task_configs import EvalTaskConfig
 from experiments.common_pile.tokenize_common_pile import comma_main_mixture
 from experiments.defaults import default_tokenize, default_train
-from experiments.llama import compute_num_parameters, llama3_tokenizer
-from experiments.metrics.wandb_related import get_vocab_size_for_tokenizer
+from experiments.llama import llama3_tokenizer
 from experiments.pretraining_datasets.simple import downloads
 from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main
-from marin.processing.tokenize import lm_mixture_data_config
-
-DEFAULT_BUDGETS = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
-MLP_RATIO = 4
-
-# TPU v5p hardware constants for memory estimation
-# Constants for TPU v5p
-HBM_PER_CHIP_GIB = 95
-CORES_PER_CHIP = 2
-V5P_CORE_OPTIONS = [8, 16, 32, 128, 256, 512]  # TPU slices
+from marin.processing.tokenize import get_vocab_size_for_tokenizer, lm_mixture_data_config
+from marin.scaling_laws.isoflop_analysis import (
+    CandidateConfig,
+    IsoFlopSweepConfig,
+    generate_isoflop_train_args,
+)
 
 
-def estimate_bytes(
-    param_count: int,
-    hidden_dim: int,
-    num_layers: int,
-    batch: int,
-    seq_len: int,
-    vocab: int,
-    optim_mult: int = 3,
-    dtype_size: int = 4,
-    fudge_factor: float = 2,
-) -> int:
+@dataclass(frozen=True)
+class IsoFlopExperimentConfig:
+    """Configuration for isoflop experiments with dataset and eval settings.
+
+    Composes an IsoFlopSweepConfig for core sweep parameters and adds
+    experiment-specific settings like tokenized dataset and eval tasks.
     """
-    Estimate float32 memory usage (in bytes) for one training step.
-    Note(Will): I had to do more fudging than expected on this,
-    but not seems to work ok.
-
-    Parameters:
-    - hidden_dim: model hidden size
-    - num_layers: number of Transformer layers
-    - batch, seq_len: training batch size and sequence length
-    - vocab: vocabulary size
-    - optim_mult: optimizer memory multiplier (e.g., 100x for Adam + states)
-    - dtype_size: bytes per float (4 for float32)
-    - fudge_factor: safety margin for extra memory
-
-    Returns:
-    - total estimated memory in bytes
-    """
-    param_bytes = param_count * optim_mult * dtype_size
-
-    act_bytes = (batch * seq_len) * ((hidden_dim * num_layers) + vocab * fudge_factor)
-
-    total_bytes = param_bytes + act_bytes
-    return int(total_bytes) * fudge_factor
-
-
-def pick_v5p_type(
-    config: Qwen3Config,
-    hidden: int,
-    layers: int,
-    batch: int,
-    seq_len: int,
-    vocab: int,
-) -> str:
-    """
-    Select the smallest TPU v5p slice that fits the model in float32.
-
-    Returns:
-    - TPU slice name, e.g., "v5p-8" or "v5p-32"
-    """
-    param_count = compute_num_parameters(config, vocab)
-    need_bytes = estimate_bytes(param_count, hidden, layers, batch, seq_len, vocab)
-    chip_bytes = HBM_PER_CHIP_GIB * 1024**3
-    chips = math.ceil(need_bytes / chip_bytes)
-    cores_req = chips * CORES_PER_CHIP
-
-    valid = [c for c in V5P_CORE_OPTIONS if c >= cores_req]
-    if not valid:
-        raise ValueError(f"Model too large for available v5p slices (need {cores_req} cores).")
-
-    return f"v5p-{min(valid)}"
-
-
-@dataclass
-class IsoFlopSweepConfig:
-    """Configuration for generating ISOFlop sweep steps."""
 
     tokenized_dataset: InputName | str
-    tokenizer: str = "stanford-crfm/marin-tokenizer"
-    budgets: list[float] = dataclasses.field(default_factory=lambda: DEFAULT_BUDGETS)
-    seq_len: int = 4096
-    steps_per_run: int = 2**16
-    flop_tolerance: float = 0.01
-    base_hidden_layer_ratio: int = 64
-    hidden_head_ratio: int = 128
-    lr_constant: float = 0.33
-    min_hidden_pow: int = 9
-    max_hidden_pow: int = 12
+    """Tokenized dataset to train on."""
+
+    sweep_config: IsoFlopSweepConfig = dataclasses.field(default_factory=IsoFlopSweepConfig)
+    """Core sweep parameters (budgets, seq_len, etc.)."""
+
+    eval_tasks: tuple[EvalTaskConfig, ...] | None = None
+    """Evaluation tasks to run after training (disabled by default)."""
+
     base_optimizer_config: OptimizerConfig = dataclasses.field(
         default_factory=lambda: CautiousConfig(
             learning_rate=1.0,  # Placeholder
@@ -145,6 +76,7 @@ class IsoFlopSweepConfig:
             decay=0.2,
         ),
     )
+
     base_train_config: SimpleTrainConfig = dataclasses.field(
         default_factory=lambda: SimpleTrainConfig(
             resources=ResourceConfig.with_tpu("v5p-8"),
@@ -159,193 +91,102 @@ class IsoFlopSweepConfig:
     )
 
 
-def round_to_power_of_two(x: float) -> int:
-    """Round ``x`` to the nearest power of two."""
+def generate_isoflop_steps(
+    config: IsoFlopExperimentConfig,
+    experiment_name: str,
+) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
+    """Generate executor steps for an ISOFlop sweep.
 
-    if x <= 1:
-        return 1
-    return 2 ** math.ceil(math.log2(x))
+    Uses generate_isoflop_train_args() from the scaling_laws library to get
+    model configs, optimizer configs, and other arguments, then constructs
+    ExecutorSteps using default_train().
 
+    Returns:
+        A tuple of:
+        - steps: Training and evaluation ExecutorSteps for the sweep.
+        - candidates: CandidateConfig for each training run (contains budget, hidden_size,
+          num_layers, batch_size, train_steps, learning_rate, etc.)
+    """
+    vocab_size = get_vocab_size_for_tokenizer(config.sweep_config.tokenizer)
 
-def compute_total_flops(
-    batch: int,
-    num_layers: int,
-    hidden: int,
-    intermediate: int,
-    num_kv_heads: int,
-    num_heads: int,
-    steps: int,
-    seq_len: int,
-    vocab_size: int,
-) -> float:
-    """Compute total training FLOPs using Levanter utilities."""
-
-    flops_per_token = lm_flops_per_token(
-        hidden,
-        intermediate,
-        num_layers,
-        num_kv_heads,
-        num_heads,
-        seq_len,
-        vocab_size,
-        glu=True,
+    # Get training arguments from the library
+    train_args_list = generate_isoflop_train_args(
+        sweep_config=config.sweep_config,
+        experiment_name=experiment_name,
+        vocab_size=vocab_size,
+        base_optimizer_config=config.base_optimizer_config,
     )
-    return flops_per_token * batch * steps * seq_len
 
+    train_steps_list: list[ExecutorStep] = []
+    eval_steps: list[ExecutorStep] = []
+    candidates: list[CandidateConfig] = []
 
-def candidate_configs(cfg: IsoFlopSweepConfig, budget: float):
-    """Yield candidate model configurations within the FLOP budget."""
-
-    vocab_size = get_vocab_size_for_tokenizer(cfg.tokenizer)
-
-    if budget > 9e18:
-        step_size = 256
-    else:
-        step_size = 128
-
-    for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, step_size):
-        hs_pow = math.log2(hidden_size)
-        intermediate_dim = hidden_size * MLP_RATIO
-        num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))
-        n_heads = max(1, hidden_size // cfg.hidden_head_ratio)
-        n_kv_heads = n_heads
-
-        batch_exact = budget / compute_total_flops(
-            1,
-            num_layers,
-            hidden_size,
-            intermediate_dim,
-            n_kv_heads,
-            n_heads,
-            cfg.steps_per_run,
-            cfg.seq_len,
-            vocab_size,
+    for args in train_args_list:
+        # Build SimpleTrainConfig from the library-provided arguments
+        train_cfg = replace(
+            config.base_train_config,
+            train_batch_size=args.candidate.batch_size,
+            learning_rate=args.candidate.learning_rate,
+            num_train_steps=args.candidate.train_steps,
+            resources=ResourceConfig.with_tpu(args.tpu_type),
+            optimizer_config=args.optimizer_config,
         )
 
-        batch_size = round_to_power_of_two(batch_exact)
-        lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
-        while lr > 0.01:
-            batch_size //= 2
-            lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
-        b2 = 0.98 ** (batch_size / 128)  # https://arxiv.org/pdf/2507.07101
-
-        if batch_size < 8:
-            continue
-
-        steps_exact = budget / compute_total_flops(
-            batch_size,
-            num_layers,
-            hidden_size,
-            intermediate_dim,
-            n_kv_heads,
-            n_heads,
-            1,
-            cfg.seq_len,
-            vocab_size,
-        )
-        train_steps = round(steps_exact)
-
-        achieved_flops = compute_total_flops(
-            batch_size,
-            num_layers,
-            hidden_size,
-            intermediate_dim,
-            n_kv_heads,
-            n_heads,
-            train_steps,
-            cfg.seq_len,
-            vocab_size,
+        # Create training step using default_train
+        train_step = default_train(
+            name=args.run_name,
+            tokenized=config.tokenized_dataset,
+            model_config=args.model_config,
+            train_config=train_cfg,
+            eval_harness_tasks=[],
+            tags=args.tags,
         )
 
-        if abs(achieved_flops - budget) / budget > cfg.flop_tolerance:
-            continue
+        # Pin to static output path for checkpoint reuse
+        train_step = train_step.with_output_path(args.output_path)
+        train_steps_list.append(train_step)
+        candidates.append(args.candidate)
 
-        yield (hidden_size, intermediate_dim, num_layers, n_heads, n_kv_heads, batch_size, train_steps, lr, b2)
-
-
-def generate_isoflop_steps(config: IsoFlopSweepConfig, experiment_name: str) -> list[ExecutorStep]:
-    """Generate executor steps for an ISOFlop sweep."""
-
-    steps: list[ExecutorStep] = []
-    metadata = []
-    vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
-
-    for budget in config.budgets:
-        for (
-            hidden_size,
-            intermediate_dim,
-            num_layers,
-            n_heads,
-            n_kv_heads,
-            batch_size,
-            train_steps,
-            lr,
-            b2,
-        ) in candidate_configs(config, budget):
-            model_cfg = Qwen3Config(
-                max_seq_len=config.seq_len,
-                hidden_dim=hidden_size,
-                intermediate_dim=intermediate_dim,
-                num_heads=n_heads,
-                num_kv_heads=n_kv_heads,
-                num_layers=num_layers,
-                rope=Llama3RotaryEmbeddingsConfig(),
+        # Evaluation on the latest checkpoint for each ISOFlop run
+        if config.eval_tasks:
+            eval_step = default_eval(
+                train_step,
+                resource_config=train_cfg.resources,
+                evals=config.eval_tasks,
             )
-            tpu_type = pick_v5p_type(
-                config=model_cfg,
-                hidden=hidden_size,
-                layers=num_layers,
-                batch=batch_size,
-                seq_len=config.seq_len,
-                vocab=vocab_size,
-            )
-            optimizer_cfg = replace(config.base_optimizer_config, learning_rate=lr, beta2=b2)
-            train_cfg = replace(
-                config.base_train_config,
-                train_batch_size=batch_size,
-                learning_rate=lr,
-                num_train_steps=train_steps,
-                resources=ResourceConfig.with_tpu(tpu_type),
-                optimizer_config=optimizer_cfg,
-            )
+            eval_steps.append(eval_step)
 
-            run_name = f"isoflop-{budget:.0e}-d{hidden_size}-L{num_layers}-B{batch_size}-{experiment_name}"
-            step = default_train(
-                name=run_name,
-                tokenized=config.tokenized_dataset,
-                model_config=model_cfg,
-                train_config=train_cfg,
-                eval_harness_tasks=[],
-                tags=(
-                    f"FLOPs={budget:.1e}",
-                    f"d={hidden_size}",
-                    f"L={num_layers}",
-                    f"B={batch_size}",
-                    f"steps={train_steps}",
-                    f"tpu={tpu_type}",
-                ),
-            )
-            metadata.append((budget, hidden_size, num_layers, batch_size, train_steps))
-            # Reuse checkpoints by pinning every sweep run to a deterministic directory.
-            static_output_path = os.path.join(
-                "checkpoints",
-                "isoflop",
-                run_name,
-            )
-            steps.append(step.with_output_path(static_output_path))
-
-    return steps, metadata
+    all_steps: list[ExecutorStep] = [*train_steps_list, *eval_steps]
+    return all_steps, candidates
 
 
 def generate_isoflop_sweep(
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
     experiment_name: str,
-    **kwargs,
-) -> list[ExecutorStep]:
-    sweep_cfg = IsoFlopSweepConfig(tokenized_dataset=tokenized, **kwargs)
-    steps, metadata = generate_isoflop_steps(sweep_cfg, experiment_name)
+    sweep_config: IsoFlopSweepConfig | None = None,
+    eval_tasks: tuple[EvalTaskConfig, ...] | None = None,
+) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
+    """Generate an ISOFlop sweep for a tokenized dataset.
 
-    return steps, metadata
+    Args:
+        tokenized: Tokenized dataset to train on.
+        experiment_name: Name suffix for the experiment (e.g., 'nemo', 'dclm').
+        sweep_config: Optional custom sweep config. Uses defaults if None.
+        eval_tasks: Optional evaluation tasks to run after training.
+
+    Returns:
+        A tuple of:
+        - steps: Training and evaluation ExecutorSteps for the sweep.
+        - candidates: CandidateConfig for each training run with full config details.
+    """
+    config = IsoFlopExperimentConfig(
+        tokenized_dataset=tokenized,
+        sweep_config=sweep_config or IsoFlopSweepConfig(),
+        eval_tasks=eval_tasks,
+    )
+    steps, candidates = generate_isoflop_steps(config, experiment_name)
+
+    return steps, candidates
 
 
 dclm_tokenized = dataclasses.replace(

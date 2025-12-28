@@ -24,6 +24,7 @@ from experiments.isoflop_sweep import MARIN_SCALING_SUITES
 from experiments.models import ModelConfig, download_model_step
 from marin.execution.executor import executor_main, output_path_of, versioned
 from marin.evaluation.log_probs import default_lm_log_probs
+from marin.scaling_laws.isoflop_analysis import build_model_config
 
 
 def create_eval_steps() -> list:
@@ -37,8 +38,12 @@ def create_eval_steps() -> list:
 
     steps = []
     dist_eval = distributional_eval_sets(llama3_tokenizer)
-    for model, metadata in list(zip(*MARIN_SCALING_SUITES["nemotron"], strict=False)):
-        name = f"marin-nemo-{metadata[0]}C-{metadata[-3] * metadata[-2] * 4096}T-{metadata[1]}W-{metadata[2]}D"
+    for model, candidate in list(zip(*MARIN_SCALING_SUITES["nemotron"], strict=False)):
+        total_tokens = candidate.batch_size * candidate.train_steps * 4096
+        name = (
+            f"marin-nemo-{candidate.flops_budget:.0e}C-{total_tokens}T-"
+            f"{candidate.hidden_size}W-{candidate.num_layers}D"
+        )
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
@@ -50,7 +55,7 @@ def create_eval_steps() -> list:
 
         logprobs_step = default_lm_log_probs(
             output_path_of(model).cd("checkpoints"),
-            metadata[-1],
+            build_model_config(candidate),
             dist_eval,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
             checkpoint_is_hf=False,
@@ -59,8 +64,12 @@ def create_eval_steps() -> list:
 
         steps.append(logprobs_step)
 
-    for model, metadata in list(zip(*MARIN_SCALING_SUITES["common_pile"], strict=False)):
-        name = f"marin-comma-{metadata[0]}C-{metadata[-3] * metadata[-2] * 4096}T-{metadata[1]}W-{metadata[2]}D"
+    for model, candidate in list(zip(*MARIN_SCALING_SUITES["common_pile"], strict=False)):
+        total_tokens = candidate.batch_size * candidate.train_steps * 4096
+        name = (
+            f"marin-comma-{candidate.flops_budget:.0e}C-{total_tokens}T-"
+            f"{candidate.hidden_size}W-{candidate.num_layers}D"
+        )
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
@@ -72,7 +81,7 @@ def create_eval_steps() -> list:
 
         logprobs_step = default_lm_log_probs(
             output_path_of(model).cd("checkpoints"),
-            metadata[-1],
+            build_model_config(candidate),
             dist_eval,
             resource_config=ResourceConfig.with_tpu("v5p-8"),
             checkpoint_is_hf=False,
@@ -81,8 +90,12 @@ def create_eval_steps() -> list:
 
         steps.append(logprobs_step)
 
-    for model, metadata in list(zip(*MARIN_SCALING_SUITES["dclm-default"], strict=False)):
-        name = f"marin-dclm-{metadata[0]}C-{metadata[-3] * metadata[-2] * 4096}T-{metadata[1]}W-{metadata[2]}D"
+    for model, candidate in list(zip(*MARIN_SCALING_SUITES["dclm-default"], strict=False)):
+        total_tokens = candidate.batch_size * candidate.train_steps * 4096
+        name = (
+            f"marin-dclm-{candidate.flops_budget:.0e}C-{total_tokens}T-"
+            f"{candidate.hidden_size}W-{candidate.num_layers}D"
+        )
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
@@ -94,7 +107,7 @@ def create_eval_steps() -> list:
 
     logprobs_step = default_lm_log_probs(
         output_path_of(model).cd("checkpoints"),
-        metadata[-1],
+        build_model_config(candidate),
         dist_eval,
         resource_config=ResourceConfig.with_tpu("v5p-8"),
         checkpoint_is_hf=False,
