@@ -46,6 +46,7 @@ import dataclasses
 import logging
 from dataclasses import dataclass
 from collections.abc import Callable
+from typing import Literal
 
 import equinox as eqx
 import numpy as np
@@ -108,7 +109,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     input_embedding_norm: bool = False
 
     # Attention
-    use_gated_attention: bool = False
+    use_gated_attention: Literal["none", "headwise", "elementwise"] = "none"
     upcast_attn: bool = False
     attn_backend: AttentionBackend | None = None
     flash_attention_block_size: int | None = None
@@ -182,8 +183,12 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
             + 2 * self.hidden_dim * hs * self.num_kv_heads
             + hs * self.num_heads * self.hidden_dim
         )
-        if self.use_gated_attention:
+        if self.use_gated_attention == "headwise":
+            attn += self.hidden_dim * self.num_heads
+        elif self.use_gated_attention == "elementwise":
             attn += self.hidden_dim * hs * self.num_heads
+        else:
+            raise ValueError(f"Unknown gated attention mode: {self.use_gated_attention}")
         mlp = 3 * self.hidden_dim * self.intermediate_dim
         transformer = self.num_layers * (attn + mlp + 2 * self.hidden_dim) + self.hidden_dim
         if self.input_embedding_norm:
@@ -550,7 +555,7 @@ if __name__ == "__main__":
     # sizes = ["130m", "300m", "520m", "1_2b"]
     sizes = ["1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
-    use_gate = True
+    use_gate = "elementwise"
     steps = []
     # Sweep LR from 1x to 4x at 0.5x increments (paper suggests higher LR for gated attention)
     lr_mults = _lr_multipliers(start=1.0, stop=4.0, step=0.5)
