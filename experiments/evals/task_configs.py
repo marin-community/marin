@@ -14,8 +14,6 @@
 
 from collections.abc import Sequence
 
-from levanter.eval_harness import TaskConfig
-
 from marin.evaluation.evaluation_config import EvalTaskConfig
 
 # tasks to run (corresponding to lm_eval_harness tasks)
@@ -312,15 +310,15 @@ SPECIALIZED_TASKS = (
 )
 
 # Long context evals
-LONG_CONTEXT_TASKS = (
-    EvalTaskConfig("ruler", 0, task_alias="ruler_0shot"),
-)
+LONG_CONTEXT_TASKS = (EvalTaskConfig("ruler", 0, task_alias="ruler_0shot"),)
 
 
-def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list[TaskConfig]:
+def convert_to_levanter_task_config(tasks: Sequence[EvalTaskConfig]) -> list:
     """
     Convert a list of EvalTaskConfig to a list of TaskConfig that Levanter's eval_harness expects.
     """
+    from levanter.eval_harness import TaskConfig
+
     return [
         TaskConfig(
             task=task.name,
