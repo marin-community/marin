@@ -30,7 +30,7 @@ classifiers = [
 dependencies = [
     "haliax>=1.4.dev450",
     "equinox>=0.11.7,!=0.12.0",
-    "jax>=0.6.2,!=0.7.0,!=0.7.1",
+    "jax>=0.8.0",
     "fray",
     "zephyr",
     "jaxtyping>=0.2.34",
