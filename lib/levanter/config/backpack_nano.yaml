@@ -12,11 +12,8 @@ model:
   sense_intermediate_scale: 4
 trainer:
   mp: f32
-
   num_train_steps: 100
   train_batch_size: 32
-  model_axis_size: 1
-
 optimizer:
   learning_rate: 6E-4
   weight_decay: 0.1

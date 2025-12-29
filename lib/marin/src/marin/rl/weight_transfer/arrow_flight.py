@@ -373,7 +373,9 @@ class ArrowFlightServer(WeightTransferServer):
         self.metrics = WeightTransferServerMetrics()
         self._ctx: JobContext = fray_job_ctx()
         self._coordinator = self._ctx.create_actor(
-            ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
+            ArrowFlightCoordinator,
+            name=self.config.coordinator_name,
+            get_if_exists=True,
         )
         logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
 

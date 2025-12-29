@@ -9,6 +9,9 @@ Before you begin, ensure you have the following installed:
 - Python 3.11 or higher
 - uv (Python package manager)
 - Git
+- Rust toolchain via [rustup](https://rustup.rs) (needed for `lib/dupekit`, which is built with Maturin; see [`lib/dupekit/README.md`](https://github.com/marin-community/marin/blob/main/lib/dupekit/README.md) for background)
+    - Recommended: `rustup toolchain install 1.91.0 && rustup default 1.91.0` (matches the Docker pin)
+    - If you hit an `edition2024` error from Cargo (e.g., when building Arrow), use nightly: `rustup default nightly`
 - On macOS, install additional build tools for SentencePiece:
     ```bash
     brew install cmake pkg-config coreutils
@@ -48,7 +51,7 @@ If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
 
 5. Setup the Hugging Face CLI so you can use gated models/tokenizers (such as [Meta's Llama 3.1 8B model](https://huggingface.co/meta-llama/Llama-3.1-8B)):
    ```bash
-   huggingface-cli login
+   hf auth login
    ```
 
 ## Hardware-specific Setup
@@ -105,7 +108,7 @@ you train a tiny language model on TinyStories on your CPU.  For a sneak preview
 
 ```bash
 wandb offline  # Disable WandB logging
-python experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
+uv run experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
 ```
 
 This will:

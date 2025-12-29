@@ -54,7 +54,7 @@ dependencies = [
     "matplotlib>=3.7.0",
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
-    "ray[default]>=2.34.0",
+    "ray[default]==2.45.0",
     "pydantic<3",
     "filelock~=3.13",
     "async-lru~=2.0",
@@ -145,11 +145,6 @@ conflicts = [
     { extra = "tpu" },
   ],
 ]  # Never solve for both GPU and TPU at once
-
-[tool.uv.sources]
-zephyr = { workspace = true }
-fray = { workspace = true }
-haliax = { workspace = true }
 
 [tool.ruff]
 line-length = 119

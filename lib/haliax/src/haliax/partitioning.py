@@ -49,6 +49,8 @@ class ResourceAxis(StringHolderEnum):
     MODEL = "model"
     DATA = "data"
     REPLICA = "replica"
+    REPLICA_DCN = "replica_dcn"
+    CONTEXT = "context"
 
 
 class _ResourceMappingHolder:

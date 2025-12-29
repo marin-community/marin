@@ -499,6 +499,45 @@ def test_write_and_read_parquet_nested(tmp_path, backend):
         assert record["metadata"]["version"] == expected["metadata"]["version"]
 
 
+@pytest.mark.parametrize("output_format", ["jsonl", "parquet"])
+def test_write_dataclass(tmp_path, backend, output_format: str):
+    """Test writing and reading jsonl files with dataclass instances."""
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    # Create dataset with dataclass instances
+    sample_data = [
+        SampleDataclass("alpha", 100),
+        SampleDataclass("beta", 200),
+        SampleDataclass("gamma", 300),
+    ]
+
+    if output_format == "jsonl":
+        ds = Dataset.from_list(sample_data).write_jsonl(str(output_dir / "dataclass-{shard:05d}.jsonl"))
+    else:
+        ds = Dataset.from_list(sample_data).write_parquet(str(output_dir / "dataclass-{shard:05d}.parquet"))
+
+    output_files = list(backend.execute(ds))
+
+    # Verify output files were created
+    assert len(output_files) > 0
+
+    ds_read = Dataset.from_files(f"{output_dir}/*.{output_format}").flat_map(load_file)
+
+    records = list(backend.execute(ds_read))
+
+    # Verify data integrity
+    assert len(records) == len(sample_data)
+
+    # Sort both lists by name for comparison
+    records_sorted = sorted(records, key=lambda x: x["name"])
+    sample_sorted = sorted(sample_data, key=lambda x: x.name)
+
+    for record, expected in zip(records_sorted, sample_sorted, strict=True):
+        assert record["name"] == expected.name
+        assert record["value"] == expected.value
+
+
 def test_load_file_parquet(tmp_path, backend):
     """Test load_file with .parquet files."""
     output_dir = tmp_path / "output"
@@ -687,6 +726,29 @@ def test_reduce_with_pipeline(backend):
     assert len(results) == 1
     expected = sum(x * 2 for x in range(1, 21) if x % 2 == 0)
     assert results[0] == expected
+
+
+def test_count_basic(backend):
+    """Test basic count operation."""
+    ds = Dataset.from_list(range(100)).count()
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0] == 100
+
+
+def test_count_empty(backend):
+    """Test count on empty dataset."""
+    ds = Dataset.from_list([]).count()
+    results = list(backend.execute(ds))
+    assert len(results) == 0
+
+
+def test_count_with_filter(backend):
+    """Test count with filter operation."""
+    ds = Dataset.from_list(range(100)).filter(lambda x: x % 2 == 0).count()
+    results = list(backend.execute(ds))
+    assert len(results) == 1
+    assert results[0] == 50
 
 
 def test_sorted_merge_join_inner_basic(backend):
