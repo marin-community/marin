@@ -28,9 +28,8 @@ from dataclasses import dataclass
 
 import draccus
 from bs4 import BeautifulSoup
-from zephyr import Backend, Dataset, load_jsonl
-
 from marin import markdown
+from zephyr import Backend, Dataset, load_jsonl
 
 
 def transform_abstract(html: BeautifulSoup):
@@ -114,18 +113,30 @@ def linelisting_to_newline(html: BeautifulSoup):
         fn.append(BeautifulSoup("<br>", "html.parser"))
 
 
-def unwrap_eqn(html: BeautifulSoup) -> BeautifulSoup:
+def unwrap_eqn(page: BeautifulSoup) -> BeautifulSoup:
     """
     Extract alttext from math element and convert to LaTeX format.
     Returns BeautifulSoup object with the formatted equation.
     """
-    math_elements = html.find_all("math")
+    from html import escape, unescape
+
+    math_elements = page.find_all("math")
 
     for math_elem in math_elements:
         if not math_elem or "alttext" not in math_elem.attrs:
             continue
 
         equation = math_elem["alttext"]
+        equation = unescape(equation)
+        equation = equation.replace("\\", "\\\\")
+        equation = equation.replace("<", r"\<")
+        equation = equation.replace(">", r"\>")
+
+        # HTML-escape the equation to prevent < and > from being interpreted as tags
+        # This is critical for equations like $T_{0}\<T\<6$ where \< would otherwise
+        # be parsed as an opening tag by HTML parsers like lxml/resiliparse
+        equation = escape(equation)
+
         is_display = math_elem.get("display") == "block"
 
         if is_display:
@@ -135,7 +146,7 @@ def unwrap_eqn(html: BeautifulSoup) -> BeautifulSoup:
 
         math_elem.replace_with(formatted_eq)
 
-    return html
+    return page
 
 
 def deconstruct_eqn(html: BeautifulSoup):
