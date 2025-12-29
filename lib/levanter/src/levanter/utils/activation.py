@@ -23,8 +23,11 @@ class ActivationFunctionEnum(str, enum.Enum):
     gelu_new = "gelu_new"
     quick_gelu = "quick_gelu"
     tanh = "tanh"
+    xielu = "xielu"
 
     def to_fn(self) -> ActivationFunction:
+        if self is ActivationFunctionEnum.xielu:
+            raise ValueError("xielu is parameterized; use XIELUActivation directly.")
         return TO_FN[self]
 
 
