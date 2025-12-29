@@ -18,6 +18,7 @@ import enum
 import hashlib
 import logging
 import os
+import platform
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -165,13 +166,21 @@ def build_runtime_env_for_packages(
     env_vars: dict | None = None,
 ) -> RuntimeEnv:
     """Inject the appropriate UV environment for the given packages."""
-    env_vars = env_vars or {}
+    env_vars = dict(env_vars or {})
     pip_packages = pip_packages or []
     extra = extra or []
 
     python_path = build_python_path()
     if "PYTHONPATH" in env_vars:
         python_path.extend(env_vars["PYTHONPATH"].split(":"))
+
+    # When Ray's `uv run` runtime_env hook is enabled, workers are started under
+    # `uv run ...` and uv may otherwise re-resolve to a different Python version.
+    # Default to the current ("driver") Python version unless the caller already
+    # set a UV_PYTHON override.
+    # see https://github.com/ray-project/ray/issues/59639
+    if "UV_PYTHON" not in env_vars:
+        env_vars["UV_PYTHON"] = os.environ.get("UV_PYTHON", platform.python_version())
 
     package_spec = compute_frozen_packages(extra)
 

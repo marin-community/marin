@@ -20,6 +20,14 @@ import sys
 
 import numpy as np
 import pytest
+
+# Ray 2.53 enables a `uv run` runtime_env hook by default. When tests are executed
+# via `uv run pytest`, that hook can (a) start local workers with a different
+# Python version and (b) attempt to inspect the process tree with psutil, which
+# may fail in sandboxed macOS environments. Disable it for tests.
+# https://github.com/ray-project/ray/issues/59639
+# os.environ.setdefault("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
+
 import ray
 from fray.cluster.ray.tpu import run_on_pod
 from ray.exceptions import RayTaskError
