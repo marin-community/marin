@@ -186,9 +186,27 @@ def read_executor_status_file(path: str, offset: int, count: int) -> dict:
     if is_too_many_lines(offset, count):
         return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
 
-    # Read the lines from the file
+    # Read the lines from the file, enforcing max_size if configured.
     with server.fs(path).open(path, "r") as f:
-        lines = [line.strip() for line in f.readlines() if line.strip()]
+        lines: list[str] = []
+        if server.config.max_size is None:
+            for raw_line in f:
+                line = raw_line.strip()
+                if line:
+                    lines.append(line)
+        else:
+            bytes_read = 0
+            for raw_line in f:
+                # Approximate byte size using UTF-8 encoding
+                bytes_read += len(raw_line.encode("utf-8"))
+                if is_too_large(bytes_read):
+                    return {
+                        "type": "jsonl",
+                        "error": f"File too large (exceeded {server.config.max_size} bytes)",
+                    }
+                line = raw_line.strip()
+                if line:
+                    lines.append(line)
 
     if not lines:
         return {"type": "jsonl", "items": []}
