@@ -17,6 +17,7 @@
 import asyncio
 import logging
 import os
+import platform
 import time
 import uuid
 from dataclasses import dataclass
@@ -250,6 +251,12 @@ class RayCluster(Cluster):
         environment = request.environment if request.environment else EnvironmentConfig.create()
 
         env_vars = dict(environment.env_vars)
+
+        # If the Ray worker environment is created via `uv run`, uv can re-resolve
+        # to a different Python version than the driver unless it's pinned.
+        # Default to the current Python version unless caller explicitly set it.
+        if "UV_PYTHON" not in env_vars:
+            env_vars["UV_PYTHON"] = os.environ.get("UV_PYTHON") or platform.python_version()
 
         # disable access to the TPU if we're not a TPU job, otherwise
         # any import of JAX will claim the TPU and block other users.
