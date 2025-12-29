@@ -21,7 +21,6 @@ dependencies = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "jax==0.7.2",
     "haliax>=1.4.dev443",
     "levanter[serve]",
     "lz4",
@@ -123,6 +122,10 @@ conflicts = [
         { extra = "vllm" },
         { extra = "cpu" },
     ],
+    [
+        { extra = "vllm" },
+        { extra = "cuda12" },
+    ],
 ]
 
 [tool.uv.sources]
@@ -162,11 +165,9 @@ gcp = [
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]==0.7.2", "torch>=2.7.0"]
-
-tpu = ["jax[tpu]==0.7.2", "torch>=2.7.0"]
-
-cpu = ["jax==0.7.2", "torch>=2.7.0"]
+cuda12 = ["jax[cuda12]==0.8.0", "torch>=2.7.0"]
+tpu = ["jax[tpu]==0.8.0", "torch>=2.7.0"]
+cpu = ["jax==0.8.0", "torch>=2.7.0"]
 
 math = ["pylatexenc", "sympy"]
 
@@ -266,11 +267,7 @@ eval = [
     "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness.git@03fa048e86c83855d4d5e270cbaac21196454ea8",
 ]
 
-vllm = [
-    "vllm-tpu==0.11.1",
-    "torch==2.8.0",
-]
-
+vllm = ["jax[tpu]==0.8.0", "vllm-tpu==0.12.0", "torch==2.9.0"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
