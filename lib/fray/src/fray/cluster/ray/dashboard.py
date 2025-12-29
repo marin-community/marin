@@ -324,8 +324,7 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
         dashboard process.
         """
         try:
-            session = requests.Session()
-            response = session.get(f"http://localhost:{dashboard_port}/api/version", timeout=3)
+            response = requests.get(f"http://localhost:{dashboard_port}/api/version", timeout=3)
             return (cluster_name, response.status_code in {200, 401, 403})
         except (requests.ConnectionError, requests.Timeout):
             return (cluster_name, False)
@@ -359,7 +358,7 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
             logger.error(f"Dashboard for cluster {cluster_name} is not accessible")
 
 
-def _ensure_local_ray_token(*, config_path: str | None) -> str:
+def _maybe_fetch_local_ray_token(*, config_path: str | None) -> str:
     """Ensure a Ray auth token is available locally and return a token file path.
 
     Priority:
@@ -443,7 +442,6 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
     # Save original environment variables
     original_env = {
         "RAY_ADDRESS": os.environ.get("RAY_ADDRESS"),
-        "RAY_API_SERVER_ADDRESS": os.environ.get("RAY_API_SERVER_ADDRESS"),
         "RAY_DASHBOARD_ADDRESS": os.environ.get("RAY_DASHBOARD_ADDRESS"),
         "RAY_GCS_ADDRESS": os.environ.get("RAY_GCS_ADDRESS"),
         "RAY_AUTH_MODE": os.environ.get("RAY_AUTH_MODE"),
@@ -457,12 +455,6 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
 
         # Set new values
         os.environ["RAY_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
-        # Ray's Jobs SDK treats RAY_API_SERVER_ADDRESS as an override for the
-        # dashboard URL and will resolve Ray Client (ray://) addresses to the
-        # head node's internal webui_url (e.g. http://10.x.x.x:8265), which is
-        # not reachable from a developer laptop. Keep this as an HTTP URL so
-        # job submission uses the SSH-forwarded dashboard port.
-        os.environ["RAY_API_SERVER_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
         os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
         os.environ["RAY_GCS_ADDRESS"] = f"localhost:{ports.gcs_port}"
 
@@ -474,7 +466,7 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
     config_path_for_token = None
     if len(clusters) == 1:
         config_path_for_token = next(iter(clusters.values())).config_path
-    token_path = _ensure_local_ray_token(config_path=config_path_for_token)
+    token_path = _maybe_fetch_local_ray_token(config_path=config_path_for_token)
     os.environ["RAY_AUTH_TOKEN_PATH"] = token_path
     os.environ["RAY_AUTH_MODE"] = "token"
 

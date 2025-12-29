@@ -102,6 +102,10 @@ def tpus_per_node(tpu_type: str) -> int:
 def make_client() -> JobSubmissionClient:
     """Create a JobSubmissionClient based on environment variables."""
     address = os.environ.get("RAY_ADDRESS", REMOTE_DASHBOARD_URL)
+    # Always pass an explicit HTTP dashboard URL. If Ray has to infer the Jobs
+    # API endpoint (e.g. from a `ray://...` address), it can resolve to the head
+    # node's internal `webui_url`, which isn't reachable from a developer laptop
+    # when using SSH port forwarding.
     return JobSubmissionClient(address)
 
 
