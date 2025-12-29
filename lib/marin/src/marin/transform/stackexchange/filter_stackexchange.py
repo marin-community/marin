@@ -31,7 +31,7 @@ uv run zephyr --backend=ray --max-parallelism=1000 --cluster=us-central2 \
 import dataclasses
 
 import draccus
-from zephyr import Dataset, flow_backend
+from zephyr import Backend, Dataset
 
 
 @dataclasses.dataclass
@@ -84,15 +84,13 @@ def _process_file_with_filtering(file_path: str, config: FilterStackExchangeConf
 @draccus.wrap()
 def filter_stackexchange(config: FilterStackExchangeConfig):
     """Filter StackExchange data by vote threshold and remove duplicates."""
-    backend = flow_backend()
-
     pipeline = (
         Dataset.from_files(f"{config.input_path}/*.jsonl.gz")
         .flat_map(lambda path: _process_file_with_filtering(path, config))
         .write_jsonl(f"{config.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
 
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline)
 
 
 if __name__ == "__main__":

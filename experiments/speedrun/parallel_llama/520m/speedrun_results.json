@@ -3,9 +3,9 @@
     {
       "run_info": {
         "author": {
-          "affiliation": "Stanford University",
-          "name": "Calvin Xu",
-          "url": "https://pinlinxu.com"
+          "affiliation": "Independent",
+          "name": "Harry Shin",
+          "url": "https://www.linkedin.com/in/harry-shin-34743216a/"
         },
         "description": "Hackable Transformer (520m); Attention with parallel MLP (Muon)",
         "device_flops": 459000000000000.0,

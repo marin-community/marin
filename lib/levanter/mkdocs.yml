@@ -104,6 +104,8 @@ nav:
       - "LoRA.md"
       - "tutorials/Fine-Tuning-Semantic-Parsing.md"
       - "Hardware-Agnostic-Training.md"
+  - 'Explanation':
+      - 'explanation/Mesh-Parallelism.md'
   - 'Reference':
       - 'reference/Configuration.md'
       - "reference/Data-Formats.md"

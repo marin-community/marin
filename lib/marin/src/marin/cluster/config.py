@@ -22,8 +22,11 @@ import jinja2
 import yaml
 
 # Cluster configuration constants and templates
-LATEST = "5b9b77c"  # The latest docker tag used for the clusters
+LATEST = "4554f82"  # The latest docker tag used for the clusters
 LATEST_VLLM = "20251209"
+DOCKER_TAG_TESTING = "latest"
+DEFAULT_IMAGE_NAME = "marin_cluster"
+VLLM_IMAGE_NAME = "marin_vllm"
 
 
 @dataclass
@@ -115,6 +118,17 @@ CONFIGS = {
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
         "DOCKER_TAG": LATEST,
+        "IMAGE_NAME": DEFAULT_IMAGE_NAME,
+        "tpu_generation": "v4",
+        "min_workers": 4,
+    },
+    "marin-us-central2-staging": {
+        "NAME": "marin-us-central2-staging",
+        "REGION": "us-central2",
+        "ZONE": "us-central2-b",
+        "BUCKET": "marin-us-central2",
+        "DOCKER_TAG": DOCKER_TAG_TESTING,
+        "IMAGE_NAME": "marin_cluster_test",
         "tpu_generation": "v4",
         "min_workers": 4,
     },
@@ -124,6 +138,7 @@ CONFIGS = {
         "ZONE": "us-central1-a",
         "BUCKET": "marin-us-central1",
         "DOCKER_TAG": LATEST,
+        "IMAGE_NAME": DEFAULT_IMAGE_NAME,
         "tpu_generation": "v5p",
         "min_workers": 1,
         "worker_targets": {
@@ -142,6 +157,8 @@ CONFIGS = {
         "ZONE": "us-central1-a",
         "BUCKET": "marin-us-central1",
         "DOCKER_TAG": LATEST_VLLM,
+        "IMAGE_NAME": VLLM_IMAGE_NAME,
+        "TEMPLATE": "vllm",
         "tpu_generation": "v5p",
         "min_workers": 1,
         "worker_targets": {
@@ -153,7 +170,6 @@ CONFIGS = {
             "v5p-256": 0,
             "v5p-512": 0,
         },
-        "VLLM": True,
     },
     "marin-big-run": {
         "NAME": "marin-big-run",
@@ -161,6 +177,7 @@ CONFIGS = {
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
         "DOCKER_TAG": LATEST,
+        "IMAGE_NAME": DEFAULT_IMAGE_NAME,
         "tpu_generation": "v4",
         "min_workers": 0,
     },
@@ -170,6 +187,7 @@ CONFIGS = {
         "ZONE": "europe-west4-b",
         "BUCKET": "marin-eu-west4",
         "DOCKER_TAG": LATEST,
+        "IMAGE_NAME": DEFAULT_IMAGE_NAME,
         "tpu_generation": "v5e",
         "min_workers": 4,
         "worker_targets": {
@@ -182,6 +200,7 @@ CONFIGS = {
         "ZONE": "us-west4-a",
         "BUCKET": "marin-us-west4",
         "DOCKER_TAG": LATEST,
+        "IMAGE_NAME": DEFAULT_IMAGE_NAME,
         "tpu_generation": "v5e",
         "min_workers": 0,
     },
@@ -191,6 +210,7 @@ CONFIGS = {
         "ZONE": "us-east1-d",
         "BUCKET": "marin-us-east1",
         "DOCKER_TAG": LATEST,
+        "IMAGE_NAME": DEFAULT_IMAGE_NAME,
         "tpu_generation": "v6e",
         "min_workers": 0,
         "worker_targets": {
@@ -203,6 +223,7 @@ CONFIGS = {
         "ZONE": "us-east5-b",
         "BUCKET": "marin-us-east5",
         "DOCKER_TAG": LATEST,
+        "IMAGE_NAME": DEFAULT_IMAGE_NAME,
         "tpu_generation": "v6e",
         "min_workers": 0,
         "worker_targets": {
@@ -215,6 +236,7 @@ CONFIGS = {
         "ZONE": "us-east5-a",
         "BUCKET": "marin-us-east5",
         "DOCKER_TAG": LATEST,
+        "IMAGE_NAME": DEFAULT_IMAGE_NAME,
         "tpu_generation": "v5p",
         "min_workers": 8,
         "worker_targets": {
@@ -228,6 +250,8 @@ CONFIGS = {
         "ZONE": "us-east5-a",
         "BUCKET": "marin-us-east5",
         "DOCKER_TAG": LATEST_VLLM,
+        "IMAGE_NAME": VLLM_IMAGE_NAME,
+        "TEMPLATE": "vllm",
         "tpu_generation": "v5p",
         "min_workers": 1,
         "worker_targets": {
@@ -239,7 +263,6 @@ CONFIGS = {
             "v5p-256": 0,
             "v5p-512": 0,
         },
-        "VLLM": True,
     },
     "marin-eu-west4-a": {
         "NAME": "marin-eu-west4-a",
@@ -247,6 +270,7 @@ CONFIGS = {
         "ZONE": "europe-west4-a",
         "BUCKET": "marin-eu-west4",
         "DOCKER_TAG": LATEST,
+        "IMAGE_NAME": DEFAULT_IMAGE_NAME,
         "tpu_generation": "v6e",
         "min_workers": 0,
         "worker_targets": {
@@ -259,9 +283,10 @@ CONFIGS = {
         "ZONE": "us-east5-b",
         "BUCKET": "marin-us-east5",
         "DOCKER_TAG": "6e804a10",
+        "IMAGE_NAME": VLLM_IMAGE_NAME,
+        "TEMPLATE": "vllm",
         "tpu_generation": "v6e-serve",
         "min_workers": 2,
-        "VLLM": True,
     },
     "marin-eu-west4-vllm": {
         "NAME": "marin-eu-west4-vllm",
@@ -269,9 +294,10 @@ CONFIGS = {
         "ZONE": "europe-west4-b",
         "BUCKET": "marin-eu-west4",
         "DOCKER_TAG": "7fab502e",
+        "IMAGE_NAME": VLLM_IMAGE_NAME,
+        "TEMPLATE": "vllm",
         "tpu_generation": "v5e",
         "min_workers": 2,
-        "VLLM": True,
     },
     "marin-us-central2-vllm": {
         "NAME": "marin-us-central2-vllm",
@@ -279,9 +305,10 @@ CONFIGS = {
         "ZONE": "us-central2-b",
         "BUCKET": "marin-us-central2",
         "DOCKER_TAG": "1bc975e12",
+        "IMAGE_NAME": VLLM_IMAGE_NAME,
+        "TEMPLATE": "vllm",
         "tpu_generation": "v4",
         "min_workers": 2,
-        "VLLM": True,
     },
     "marin-us-east1-d-vllm": {
         "NAME": "marin-us-east1-d-vllm",
@@ -289,9 +316,10 @@ CONFIGS = {
         "ZONE": "us-east1-d",
         "BUCKET": "marin-us-east1",
         "DOCKER_TAG": "1bc975e12",
+        "IMAGE_NAME": VLLM_IMAGE_NAME,
+        "TEMPLATE": "vllm",
         "tpu_generation": "v6e-serve",
         "min_workers": 2,
-        "VLLM": True,
     },
 }
 
@@ -361,12 +389,14 @@ def make_tpu_slice_config(generation: str, count: int, target_count: int) -> dic
 
 def get_template_path(config_name: str, infra_path: str = "infra") -> str:
     """Get the template path for a given config."""
-    cluster_template_path = os.path.join(infra_path, "marin-cluster-template.yaml")
-    vllm_template_path = os.path.join(infra_path, "marin-vllm-template.yaml")
+    template_name = CONFIGS[config_name].get("TEMPLATE", "cluster")
+    template_filename = f"marin-{template_name}-template.yaml"
+    template_path = os.path.join(infra_path, template_filename)
 
-    if CONFIGS[config_name].get("VLLM", False):
-        return vllm_template_path
-    return cluster_template_path
+    if not os.path.exists(template_path):
+        raise FileNotFoundError(f"Template {template_filename} not found in {infra_path}")
+
+    return template_path
 
 
 def make_tpu_worker_config(generation: str, count: int, min_workers: int = 4) -> dict:
@@ -385,7 +415,8 @@ def update_cluster_configs(infra_path: str = "infra") -> None:
             with open(template_path) as f_template:
                 template = jinja2.Template(f_template.read())
 
-            yaml_string = template.render(**config)
+            template_params = {"IMAGE_NAME": DEFAULT_IMAGE_NAME, **config}
+            yaml_string = template.render(**template_params)
 
             # pyyaml strips comments, which we'd like to keep
             # so instead of using yaml.dump, we'll write the string directly after

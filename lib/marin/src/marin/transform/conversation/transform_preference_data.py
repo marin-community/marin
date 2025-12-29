@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 import datasets
 import draccus
 from datasets import get_dataset_config_info
-from zephyr import Dataset, flow_backend, write_jsonl_file
+from zephyr import Backend, Dataset, write_jsonl_file
 
 from .preference_data_adapters import PreferenceTransformAdapter, get_preference_adapter
 
@@ -65,7 +65,10 @@ class SplitTask:
     subset: str
     split: str
     output_path: str
-    cfg: "TransformPreferenceDatasetConfig"
+    adapter_name: str
+    source: str
+    metadata_columns: list[str]
+    shard_size: int
 
 
 def generate_hash_from_pair(chosen, rejected) -> str:
@@ -73,7 +76,7 @@ def generate_hash_from_pair(chosen, rejected) -> str:
     return hashlib.sha256((str(chosen) + str(rejected)).encode()).hexdigest()
 
 
-def transform_row(row: dict, cfg: TransformPreferenceDatasetConfig, adapter: PreferenceTransformAdapter):
+def transform_row(row: dict, task: SplitTask, adapter: PreferenceTransformAdapter):
     example = adapter.extract_preference_example(row)
     if example is None:
         return None
@@ -84,7 +87,7 @@ def transform_row(row: dict, cfg: TransformPreferenceDatasetConfig, adapter: Pre
         "rejected": rejected_dicts,
         "hash": generate_hash_from_pair(chosen_dicts, rejected_dicts),
     }
-    for col in cfg.metadata_columns:
+    for col in task.metadata_columns:
         if col in row:
             result[col] = row[col]
     return result
@@ -134,7 +137,10 @@ def get_dataset_tasks(cfg: TransformPreferenceDatasetConfig):
                 subset=subset,
                 split=split,
                 output_path=subset_output_path,
-                cfg=cfg,
+                adapter_name=cfg.adapter_name,
+                source=cfg.source,
+                metadata_columns=cfg.metadata_columns,
+                shard_size=cfg.shard_size,
             )
 
 
@@ -146,7 +152,7 @@ def process_split_task(task: SplitTask) -> dict:
     subset/split hierarchy.
 
     Args:
-        task: SplitTask with input_path, subset, split, output_path, and cfg
+        task: SplitTask with input_path, subset, split, output_path, and config fields
 
     Returns:
         Dict with subset, split, shards (list of file metadata), and total_count
@@ -154,11 +160,10 @@ def process_split_task(task: SplitTask) -> dict:
     subset = task.subset
     split = task.split
     output_path = task.output_path
-    cfg = task.cfg
 
-    adapter = get_preference_adapter(cfg.adapter_name or cfg.source)
+    adapter = get_preference_adapter(task.adapter_name or task.source)
     if adapter is None:
-        raise ValueError(f"No preference adapter found for source: {cfg.adapter_name or cfg.source}")
+        raise ValueError(f"No preference adapter found for source: {task.adapter_name or task.source}")
 
     logger.info(f"Processing subset: {subset}, split: {split}")
     dataset = datasets.load_dataset(path=task.input_path, name=subset, split=split, streaming=True)
@@ -169,11 +174,11 @@ def process_split_task(task: SplitTask) -> dict:
     batch = []
 
     for row in dataset:
-        transformed_row = transform_row(row, cfg, adapter)
+        transformed_row = transform_row(row, task, adapter)
         if transformed_row is not None:
             batch.append(transformed_row)
 
-            if len(batch) >= cfg.shard_size:
+            if len(batch) >= task.shard_size:
                 # Write this shard
                 output_file = f"{output_path}/shard-{shard_idx:05d}.jsonl.gz"
                 result = write_jsonl_file(batch, output_file)
@@ -203,15 +208,13 @@ def transform_hf_preference_dataset(cfg: TransformPreferenceDatasetConfig):
     All subset/split combinations are processed in parallel. Each task loads,
     transforms, and writes its records to maintain the directory structure.
     """
-    backend = flow_backend()
-
     # Get all tasks (subset/split combinations)
     tasks = list(get_dataset_tasks(cfg))
     logger.info(f"Processing {len(tasks)} subset/split combinations")
 
     # Process all tasks in parallel
     pipeline = Dataset.from_list(tasks).map(process_split_task)
-    results = list(backend.execute(pipeline))
+    results = Backend.execute(pipeline)
 
     # Log summary
     for result in results:

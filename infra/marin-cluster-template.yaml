@@ -20,7 +20,7 @@ provider:
 
 
 docker:
-    image: "{{REGION}}-docker.pkg.dev/hai-gcp-models/marin/{% if VLLM %}marin_vllm{% else %}marin_cluster{% endif %}:{{DOCKER_TAG}}"
+    image: "{{REGION}}-docker.pkg.dev/hai-gcp-models/marin/{{ IMAGE_NAME | default('marin_cluster') }}:{{DOCKER_TAG}}"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -30,7 +30,7 @@ docker:
       - --privileged
       - --ulimit memlock=-1:-1  #
       - --ulimit nofile=1048576:1048576
-      - --shm-size=200gb
+      - --shm-size=100gb
       - -v
       - "/tmp:/tmp"
       # this lets the worker run docker commands and have them run as sibling containers

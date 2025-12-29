@@ -25,7 +25,6 @@ uv run zephyr --backend=ray --max-parallelism=200 --memory=2GB \
     --output_path gs://bucket/processed/dclm-hq \
     --extract_method resiliparse \
     --extract_config.type resiliparse \
-    --extract_config.use_custom_variant true \
     --hf_repo_id "allenai/dolmino-mix-1124" \
     --hf_revision "main" \
     --hf_paths '["data/dclm"]'
@@ -57,7 +56,7 @@ from marin.download.huggingface.stream_remove_columns import hf_fs
 from marin.schemas.web.convert import ExtractionConfig
 from marin.web.convert import convert_page
 from tqdm import tqdm
-from zephyr import Dataset, flow_backend
+from zephyr import Backend, Dataset
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
@@ -125,8 +124,6 @@ def process_file(
 def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
     logger.info(f"Starting processing of DCLM HQ dump in {cfg.input_hf_path}")
 
-    backend = flow_backend()
-
     # Glob all files across all shards upfront
     all_files = []
     paths = [i.split("/")[-1] for i in hf_fs.ls(cfg.input_hf_path, detail=False)]
@@ -165,4 +162,4 @@ def process_dclm_hq_dump(cfg: DCLMHQExtractionConfig) -> None:
         )
     )
 
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline)

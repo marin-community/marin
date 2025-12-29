@@ -12,9 +12,12 @@ dependencies = [
     "braceexpand",
     "cryptography>=45",
     "datasets",
+    "ddsketch",
     "deepdiff",
     "draccus>=0.11.5",
+    "dupekit",
     "fasteners>=0.19",
+    "fasttext",
     "flask",
     "fsspec>=2025.3.0",
     "gcsfs",
@@ -24,6 +27,8 @@ dependencies = [
     "jax==0.6.2",
     "haliax",
     "levanter[serve]",
+    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "lxml[html_clean]",
     "lz4",
     "markdownify==0.12.1",
     "zephyr",
@@ -31,7 +36,7 @@ dependencies = [
     "multiprocess==0.70.16",
     "numpy",
     "openai",
-    "pandas", # Only needed by Fileprovider in inference.py
+    "pandas",
     "pyarrow>=22",
     "ray==2.45",
     "regex",
@@ -42,6 +47,8 @@ dependencies = [
     "tqdm",
     "tqdm-loggable",
     "wandb",
+    "warcio",
+    "resiliparse>=0.17.2",
 ]
 
 [project.license]
@@ -86,49 +93,57 @@ math = ["pylatexenc", "sympy"]
 
 metrics = ["google-cloud-logging"]
 
-transform_test_deps = [
-    "trafilatura>=2.0",
-    "readabilipy",
-    "readability-lxml",
-    "warcio",
-    "markdownify==0.12.1",
-    "resiliparse",
-    "ddsketch",
-]
-
 dev = [
     { include-group = "test" },
     { include-group = "lint" },
     { include-group = "docs" },
     { include-group = "math" },
-    { include-group = "transform_test_deps" },
 ]
 
 [tool.uv]
 conflicts = [
     [
+        { extra = "gpu" },
         { extra = "tpu" },
-        { extra = "cuda12" },
     ],
     [
-        { extra = "cuda12" },
+        { extra = "gpu" },
         { extra = "cpu" },
     ],
 ]
 
-[tool.uv.sources]
-zephyr = { workspace = true }
-levanter = { workspace = true }
-fray = { workspace = true }
-dupekit = { workspace = true }
 
+[project.optional-dependencies]
+
+gpu = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
+
+tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
+
+cpu = ["jax==0.6.2", "torch>=2.7.0"]
+
+rl = [
+    "prime",
+    "sympy",
+    "verifiers==0.1.5",
+]
+
+eval = [
+    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+]
+
+[[tool.uv.index]]
+name = "marin-resiliparse"
+url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
+
+[tool.uv.sources]
 torch = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra="cpu" },
     { index = "pytorch-cpu", extra="tpu" },
-    # CUDA12 index only when --extra cuda12
-    { index = "pytorch-cu128", extra = "cuda12" },
+    # GPU index only when --extra gpu
+    { index = "pytorch-cu128", extra = "gpu" },
 ]
+resiliparse = { index = "marin-resiliparse" }
 
 
 [[tool.uv.index]]
@@ -140,90 +155,6 @@ explicit = true
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
-
-
-[project.optional-dependencies]
-
-gcp = [
-    "google-api-python-client>=2.175.0", # ray GCP workaround
-    "cryptography>=45",
-    "google-cloud-storage>=3.3.1",
-    "google-cloud-storage-transfer",
-    "google-cloud-compute",
-]
-
-cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
-
-tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
-
-cpu = ["jax==0.6.2", "torch>=2.7.0"]
-
-download_transform = [
-    "chardet",
-    "datasets>=2.18.0",
-    "fastparquet",
-    "google-cloud-storage-transfer~=1.0",
-    "html2text==2024.2.26",               # TODO :: Check pin?
-    "htmlmin==0.1.12",                    # TODO :: Check usage | pin?
-    "markdownify==0.12.1",                # TODO :: Check usage | pin?
-    "readabilipy",
-    "readability-lxml",
-    "lxml[html_clean]",
-    "warcio",
-    "resiliparse",
-    "trafilatura>=2.0",
-    "boto3==1.35.23",
-]
-
-quality_dedup_consolidate = [
-    "cattrs==24.1.3",
-    "datasets",
-    "ddsketch",
-    "dupekit",
-    "fasttext",
-    "huggingface_hub",
-    "nltk>=3.8.1",
-    "transformers",
-    "zstandard>=0.18.0",
-]
-
-tokenize_train = [
-    "multiprocess==0.70.16",
-    "haliax>=1.4.dev443",
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
-    "tblib",
-]
-
-rl = [
-    "prime",
-    "sympy",
-    "verifiers==0.1.5",
-]
-
-post_training = [
-    "gcsfs",
-    "transformers",
-    "flax==0.10.0",
-    "jaxtyping",
-    "tyro==0.8.11",
-    "tqdm",
-    "wandb",
-    "einops",
-    "ringattention==0.1.2",
-    "sympy",
-    "pylatexenc",
-    "ipython",
-    "datasets",
-    "scalax@git+https://github.com/Sea-Snell/scalax@8cf9ceabe30d4c4274df3c09aae2f66b59fbce3c",
-    "swebench ; sys_platform != 'darwin'",
-]
-
-eval = [
-    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
-    # there are some undeclared dependencies in lm-eval
-    "langdetect",
-    "immutabledict",
-]
 
 
 [tool.hatch.metadata]

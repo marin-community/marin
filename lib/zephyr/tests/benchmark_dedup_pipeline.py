@@ -37,7 +37,7 @@ from typing import Any
 import click
 import psutil
 from tqdm import tqdm
-from zephyr import Dataset, ExecutionHint, create_backend
+from zephyr import Backend, Dataset, ExecutionHint
 from zephyr.readers import load_file
 from zephyr.writers import write_parquet_file
 
@@ -137,24 +137,6 @@ def run_benchmark(
     process = psutil.Process(os.getpid())
 
     try:
-        # Create backend
-        if backend_type == "sync":
-            backend = create_backend("sync")
-        elif backend_type == "threadpool":
-            backend = create_backend("threadpool", max_parallelism=16)
-        elif backend_type == "ray":
-            import ray
-
-            ray.init(
-                address="local",
-                resources={"head_node": 1},
-                num_cpus=16,
-                runtime_env={"working_dir": None},
-            )
-            backend = create_backend("ray", max_parallelism=16)
-        else:
-            raise ValueError(f"Unknown backend: {backend_type}")
-
         # Create pipeline
         print("Creating pipeline...")
         pipeline = create_pipeline(input_dir, output_dir)
@@ -163,7 +145,7 @@ def run_benchmark(
         print("Executing pipeline...")
         mem_before = process.memory_info().rss
         exec_start = time.time()
-        results = list(backend.execute(pipeline, ExecutionHint(intra_shard_parallelism=8)))
+        results = list(Backend.execute(pipeline, ExecutionHint(intra_shard_parallelism=8)))
         exec_time = time.time() - exec_start
         mem_after = process.memory_info().rss
 

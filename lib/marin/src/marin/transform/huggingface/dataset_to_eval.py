@@ -45,10 +45,9 @@ from urllib.parse import urlparse
 import draccus
 from datasets import get_dataset_config_names, load_dataset
 from google.cloud import storage
-from zephyr import Dataset, flow_backend
-
 from marin.core.data import QAExample, QAExampleMetadata
 from marin.utilities.dataclass_utils import asdict_without_nones
+from zephyr import Backend, Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -579,7 +578,6 @@ def hf_dataset_to_jsonl(cfg: DatasetConversionConfig) -> None:
     """
     # Load config parameters
     datasets = load_datasets(cfg)
-    backend = flow_backend()
 
     # Process each (subset, split) pair
     for dataset_meta in datasets:
@@ -592,14 +590,17 @@ def hf_dataset_to_jsonl(cfg: DatasetConversionConfig) -> None:
         # Convert to list of dicts with idx and example for processing
         enumerated_examples = [{"idx": idx, "example": example} for idx, example in enumerate(dataset_meta.dataset)]
 
+        def _transform(item, meta=dataset_meta):
+            return wrap_transform(item, meta, cfg)
+
         pipeline = (
             Dataset.from_list(enumerated_examples)
-            .map(lambda item, dm=dataset_meta, c=cfg: wrap_transform(item, dm, c))
+            .map(_transform)
             .filter(lambda record: record is not None)
             .write_jsonl(output_pattern)  # Compression auto-detected from .gz extension
         )
 
-        list(backend.execute(pipeline))
+        Backend.execute(pipeline)
         logger.info(f"Wrote to {output_pattern}")
 
 

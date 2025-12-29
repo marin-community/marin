@@ -68,7 +68,6 @@ def build_proofpile_step() -> ExecutorStep:
         fn=run_train_test_overlap,
         config=dedupe_config,
         description="Run dedupe train-test overlap on Proofpile",
-        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
 

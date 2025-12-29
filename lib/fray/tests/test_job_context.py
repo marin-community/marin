@@ -15,7 +15,7 @@
 """Tests for execution contexts."""
 
 import pytest
-from fray.job import RayContext, SimpleActor, SyncContext, ThreadContext, fray_job_ctx
+from fray.job import RayContext, SimpleActor, SyncContext, ThreadContext, create_job_ctx
 
 
 @pytest.fixture(params=["sync", "threadpool", "ray"])
@@ -48,7 +48,7 @@ def test_context_wait(job_context):
 
 def test_fray_job_ctx_invalid():
     with pytest.raises(ValueError, match="Unknown context type"):
-        fray_job_ctx("invalid")  # type: ignore
+        create_job_ctx("invalid")  # type: ignore
 
 
 def test_actor_named_get_if_exists(job_context):

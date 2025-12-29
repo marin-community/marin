@@ -1,9 +1,6 @@
 eval_harness:
   task_spec:
-    - mmlu
-#    - task: mmlu
-#      task_alias: mmlu_0shot
-#      num_fewshot: 0
+  - mmlu
   max_examples: 32
 eval_harness_steps: 50
 data:
@@ -16,15 +13,9 @@ model:
 trainer:
   mp: f32
   num_train_steps: 100
-
   checkpointer:
     keep:
-      - every: 50
+    - every: 50
     save_interval: 5m
-
   per_device_parallelism: -1
   train_batch_size: 4
-
-  tensor_parallel_axes: ["mlp", "heads"]
-  fsdp_axis: "embed"
-  batch_axis: "batch"

@@ -22,7 +22,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 from huggingface_hub import HfFileSystem
 from tqdm import tqdm
-from zephyr import Dataset, flow_backend
+from zephyr import Backend, Dataset
 
 hf_fs = HfFileSystem()
 logger = logging.getLogger(__name__)
@@ -95,19 +95,17 @@ def prune_hf_dataset(cfg: DatasetConfig):
         hf_path = f"hf://datasets/{cfg.hf_repo_id}@{cfg.hf_revision}/{path}"
         logger.info(f"Processing subset {hf_path}")
         output_path = os.path.join(cfg.output_path, path)
-        subset_tasks.append({"hf_path": hf_path, "output_path": output_path, "keep_columns": cfg.keep_columns})
-
-    backend = flow_backend()
+        subset_tasks.append({"hf_path": hf_path, "output_path": output_path})
 
     # Build pipeline with nested parallelism:
     # - Outer level: process subsets (MAX_CONCURRENT_WORKERS=1)
     # - Inner level: process files within each subset
     pipeline = (
         Dataset.from_list(subset_tasks)
-        .flat_map(lambda task: get_file_tasks(task["hf_path"], task["output_path"], task["keep_columns"]))
-        .map(lambda task: prune_stream_and_save(task["input_file"], task["output_file"], task["keep_columns"]))
+        .flat_map(lambda task: get_file_tasks(task["hf_path"], task["output_path"], cfg.keep_columns))
+        .map(lambda task: prune_stream_and_save(task["input_file"], task["output_file"], cfg.keep_columns))
     )
 
     logger.info("Executing pipeline")
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline)
     logger.info("Successfully processed all subsets")

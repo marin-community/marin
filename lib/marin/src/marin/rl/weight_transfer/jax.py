@@ -33,7 +33,7 @@ import haliax as hax
 import jax
 import jax.experimental.transfer as jax_transfer
 import numpy as np
-from fray.job.context import JobContext, fray_job_ctx
+from fray.job.context import get_default_job_ctx
 from haliax.jax_utils import is_jax_array_like
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -353,7 +353,7 @@ class JAXTransferServer(WeightTransferServer):
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
 
-        self._ctx: JobContext = fray_job_ctx()
+        self._ctx = get_default_job_ctx()
         self.coordinator = self._ctx.create_actor(
             WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True, preemptible=False
         )
@@ -445,7 +445,7 @@ class JAXTransferClient(WeightTransferClient):
         self.mesh = mesh
         self.params_sharding_rules = params_sharding_rules
 
-        self._ctx: JobContext = fray_job_ctx()
+        self._ctx = get_default_job_ctx()
         self.coordinator = self._ctx.create_actor(
             WeightTransferCoordinator, name=config.coordinator_name, get_if_exists=True, preemptible=False
         )

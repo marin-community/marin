@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import pytest
-
 from marin.markdown import mathml_to_markdown, minimal_markdown_escape, to_markdown
 
 
@@ -130,26 +129,26 @@ def test_mathml_to_markdown():
         # pythagorean theorem
         (
             """<math xmlns='http://www.w3.org/1998/Math/MathML' display="inline"> <mrow> <msup> <mi>a</mi> <mn>2</mn> </msup> <mo>+</mo> <msup> <mi>b</mi> <mn>2</mn> </msup> <mo>=</mo> <msup> <mi>c</mi> <mn>2</mn> </msup> </mrow> </math>""",
-            r"$`a^2+b^2=c^2`$",
+            r"$`{a}^{2}+{b}^{2}={c}^{2}`$",
         ),
         # More complicated exponentiation gets brackets
         (
             '<math display="inline"><msup><mi>x</mi><mrow><mi>y</mi><mo>+</mo><mn>1</mn></mrow></msup></math>',
-            "$`x^{y+1}`$",
+            "$`{x}^{y+1}`$",
         ),
         # subscripts
-        ('<math display="inline"><msub><mi>x</mi><mi>i</mi></msub></math>', "$`x_i`$"),
+        ('<math display="inline"><msub><mi>x</mi><mi>i</mi></msub></math>', "$`{x}_{i}`$"),
         # subscripts and superscripts
-        ('<math display="inline"><msubsup><mi>x</mi><mi>i</mi><mn>2</mn></msubsup></math>', "$`x_i^2`$"),
+        ('<math display="inline"><msubsup><mi>x</mi><mi>i</mi><mn>2</mn></msubsup></math>', "$`{x}_{i}^{2}`$"),
         # complex subscripts and superscripts
         (
             '<math display="inline"><msubsup><mi>x</mi><mrow><mi>i</mi><mo>+</mo><mn>1</mn></mrow><mrow><mi>z</mi><mo>-</mo><mn>1</mn></mrow></msubsup></math>',
-            "$`x_{i+1}^{z-1}`$",
+            "$`{x}_{i+1}^{z-1}`$",
         ),
         # physics stuff: quantum
         (
             '<math display="inline"><mrow><mo>&#x27E8;</mo><mi>&#x03A8;</mi><mo>&#x2223;</mo><mi>&#x03A6;</mi><mo>&#x27E9;</mo></mrow></math>',
-            "$`\\langle \\Psi \\mid \\Phi \\rangle `$",
+            "$`\\langle \\Psi \\mid \\Phi \\rangle`$",
         ),
         (
             '<math display="inline"><mrow><mo>&#x27E8;</mo><mi>&#x03A8;</mi><mo>&#x2223;</mo><mi>&#x03A6;</mi><mo>&#x27E9;</mo><mo>&#x2223;</mo><mi>&#x03A7;</mi></mrow></math>',
@@ -157,17 +156,17 @@ def test_mathml_to_markdown():
         ),
         (
             '<math display="inline"><mrow><mo>&#x27E8;</mo><msub><mi>&#x03A8;</mi><mi>i</mi></msub><mo>&#x2223;</mo><msub><mi>&#x03A6;</mi><mi>j</mi></msub><mo>&#x27E9;</mo></mrow></math>',
-            "$`\\langle \\Psi _i\\mid \\Phi _j\\rangle `$",
+            "$`\\langle {\\Psi}_{i}\\mid {\\Phi}_{j}\\rangle`$",
         ),
         # physics stuff: relativity
         (
             '<math display="inline"><mrow><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></mrow></math>',
-            "$`E=mc^2`$",
+            "$`E=m{c}^{2}`$",
         ),
         # physics stuff: schrodinger
         (
             '<math display="inline"><mrow><mi>i</mi><mi>&#x210F;</mi><mi>&#x03B6;</mi><mo>=</mo><mi>H</mi><mi>&#x03B6;</mi></mrow></math>',
-            "$`i\\hslash \\zeta =H\\zeta `$",
+            "$`i\\hslash \\zeta=H\\zeta`$",
         ),
     ]
     for mathml, expected in test_cases:
@@ -183,7 +182,7 @@ def test_mathml_block():
         # cauchy-schwarz inequality
         (
             "<math display='block'><mrow><mo>(</mo><mrow><mfrac><mrow><mo>|</mo><mi>a</mi><mo>,</mo><mi>b</mi><mo>|</mo></mrow><mrow><mo>(</mo><mrow><msup><mi>a</mi><mn>2</mn></msup><mo>+</mo><msup><mi>b</mi><mn>2</mn></msup></mrow><mo>)</mo></mrow></mfrac></mrow><mo>)</mo><mo>^</mo><mn>2</mn></mrow></math>",
-            "\n$$\\left(\\frac{|a,b|}{\\left(a^2+b^2\\right)}\\right)^2$$\n",
+            "\n$$(\\frac{|a,b|}{({a}^{2}+{b}^{2})})^2$$\n",
         ),
     ]
 

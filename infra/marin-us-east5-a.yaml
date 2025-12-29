@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:5b9b77c"
+    image: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:4554f82"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -34,7 +34,7 @@ docker:
       - --privileged
       - --ulimit memlock=-1:-1  #
       - --ulimit nofile=1048576:1048576
-      - --shm-size=200gb
+      - --shm-size=100gb
       - -v
       - "/tmp:/tmp"
       # this lets the worker run docker commands and have them run as sibling containers

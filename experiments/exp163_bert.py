@@ -155,7 +155,7 @@ def create_steps(config: ExperimentConfig) -> list[ExecutorStep]:
                 ),
                 task=TaskConfig(max_in_flight=500),
             ),
-            pip_dependency_groups=["fasttext", "datasets", "filelock"],
+            pip_dependency_groups=["filelock"],
         )
 
         bert_inference = ExecutorStep(

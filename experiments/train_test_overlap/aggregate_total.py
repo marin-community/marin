@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 import fsspec
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.utils import fsspec_glob
-from zephyr import Dataset, create_backend, flow_backend, load_file, load_jsonl
+from zephyr import Backend, Dataset, load_file, load_jsonl
 
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
@@ -71,12 +71,10 @@ def extract_shard_metadata(shard_path: str, training_root: str, ngram_size: int)
 def _compute_dataset_sizes(dataset_steps: list[ExecutorStep]) -> dict[str, int]:
     """Return mapping dataset_name -> total example count using Zephyr."""
 
-    thread_backend = create_backend("threadpool", max_parallelism=32)
-
     def count_dir(path: str) -> int:
         pattern = os.path.join(path.rstrip("/"), "**", "*.jsonl*")
         pipeline = Dataset.from_files(pattern, empty_glob_ok=True).flat_map(load_file).map(lambda _: 1).reduce(sum)
-        results = list(thread_backend.execute(pipeline))
+        results = Backend.execute(pipeline)
         return results[0]
 
     size_map: dict[str, int] = {}
@@ -216,7 +214,7 @@ def aggregate_single_dataset(
             }
 
     intermediate_dir = os.path.join(cfg.output_path, ".intermediate", training_name)
-    intermediate_paths = flow_backend().execute(
+    intermediate_paths = Backend.execute(
         Dataset.from_list(shard_paths)
         .flat_map(extract_overlap_records)
         .write_jsonl(f"{intermediate_dir}/overlap-{{shard:05d}}.jsonl.gz", skip_existing=True)
