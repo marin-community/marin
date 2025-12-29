@@ -7,7 +7,6 @@ model:
   max_seq_len: 1024
   gradient_checkpointing: true
   scale_attn_by_inverse_layer_idx: true
-train_seq_len: 1024
 trainer:
   tracker:
     - type: wandb
@@ -15,6 +14,15 @@ trainer:
       tags: [ "openwebtext", "gpt2", "itest"]
 
   mp: p=f32,c=bfloat16
+  mesh:
+    axes:
+      context: 2        # context parallel axis of size 2
+    shared_mapping:
+      position: context
+    compute_mapping:
+      batch: [replica_dcn, replica, data]
+    param_mapping:
+      embed: data
   per_device_parallelism: -1
 
   train_batch_size: 256

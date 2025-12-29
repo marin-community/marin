@@ -5,6 +5,8 @@ import tempfile
 
 import pytest
 from datasets import load_dataset
+
+from levanter.data.sharded_datasource import AudioTextUrlDataSource
 from test_utils import skip_if_hf_model_not_accessible, skip_if_no_soundlibs
 from transformers import AutoProcessor, AutoTokenizer
 
@@ -100,3 +102,9 @@ def test_metadata_works():
     batch_processor = BatchAudioProcessor(processor, tokenizer)
     # test this doesn't throw
     assert len(batch_processor.metadata)
+
+
+@pytest.mark.skip("File is gone")
+@skip_if_no_soundlibs
+def test_resolve_audio_pointer():
+    AudioTextUrlDataSource.resolve_audio_pointer("https://ccrma.stanford.edu/~jos/mp3/trumpet.mp3", 16_000)
