@@ -79,7 +79,7 @@ def train(cfg: TrainFasttextClassifierConfig):
                 **cfg.fasttext_args,
             },
         ),
-        environment=EnvironmentConfig.create(extras=["quality_dedup_consolidate"]),
+        environment=EnvironmentConfig.create(),
     )
     cluster = current_cluster()
     job_id = cluster.launch(job_request)

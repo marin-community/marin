@@ -58,6 +58,13 @@ class TrainLmOnPodConfig:
     """Tuple of JSON paths (e.g., 'data.cache_dir') that are allowed to be read from or written to different regions."""
     env_vars: dict[str, str] | None = None
     """Environment variables to pass to the training task (e.g., WANDB_MODE, WANDB_API_KEY)."""
+    auto_build_caches: bool = False
+    """Whether to allow Levanter to build dataset caches on the fly.
+
+    Defaults to False so Marin jobs fail fast when a cache is missing instead of
+    spending time (and money) building it during training. Override to True if
+    you explicitly want cache construction.
+    """
 
 
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
@@ -113,6 +120,15 @@ def _suppress_ray_config(config: TrainLmConfig) -> TrainLmConfig:
             config,
             trainer=replace(config.trainer, ray=replace(config.trainer.ray, start_workers=False)),
         )
+    return config
+
+
+def _maybe_override_auto_build_caches(config: TrainLmConfig, auto_build: bool) -> TrainLmConfig:
+    data = config.data
+    if data.auto_build_caches != auto_build:
+        logger.info("Overriding auto_build_caches to %s", auto_build)
+        data = dataclasses.replace(data, auto_build_caches=auto_build)
+        config = replace(config, data=data)
     return config
 
 
@@ -199,6 +215,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     train_config = config.train_config
     train_config = _suppress_ray_config(train_config)
+    train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
 
     # disable accelerator requirement when running without GPU/TPU resources
     if config.resources.device.kind == "cpu":
@@ -214,7 +231,7 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
         name="train_lm",
         entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
         resources=config.resources,
-        environment=EnvironmentConfig.create(env_vars=env, extras=["tokenize_train"]),
+        environment=EnvironmentConfig.create(env_vars=env),
         max_retries_failure=10,
     )
     job_id = cluster.launch(job_request)

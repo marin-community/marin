@@ -1,0 +1,58 @@
+On the resemblance and containment of documents
+Andrei Z. Broder
+digital Systems Research Center
+130 Lytton Avenue, Palo Alto, CA 94301, USA
+broder@pa.dec.com
+Abstract
+Given two documents A and B we define two mathematical notions: their
+resemblance r(A, B) and their containment c(A, B) that seem to capture well
+the informal notions of “roughly the same” and “roughly contained.”
+The basic idea is to reduce these issues to set intersection problems that can
+be easily evaluated by a process of random sampling that can be done independently for each document. Furthermore, the resemblance can be evaluated
+using a fixed size sample for each document.
+This paper discusses the mathematical properties of these measures and the
+efficient implementation of the sampling process using Rabin fingerprints.
+1 Introduction
+The on-line information explosion, and in particular the World Wide Web, has led a
+proliferation of documents that are identical or almost identical. In many situations it
+is necessary to determine whether two documents are “roughly the same” or “roughly
+contained” in each other.
+These informal concepts do not seem to be well captured by any of the standard
+distances defined on strings (Hamming, Levenshtein, etc.). Furthermore the computation of these distances usually requires the pairwise comparison of entire documents.
+For a very large collection of documents this is not feasible, and a sampling mechanism
+per document is necessary.
+To attack this problem we use two mathematical concepts resemblance and containment defined precisely below.
+The resemblance r(A, B) of two documents, A and B, is a number between 0 and
+1, such that when the resemblance is close to 1 it is likely that the documents are
+roughly the same. Similarly, the containment c(A, B) of A in B is a number between
+0 and 1 that, when close to 1, indicates that A is roughly contained within B. The
+resemblance has the additional property that d(A, B)=1 − r(A, B), is a metric
+(obeys the triangle inequality), which is useful for the design of algorithms intended
+to cluster a collection of documents into sets of closely resembling documents.
+1
+To compute the resemblance and/or the containment of two documents it suffices
+to keep for each document a relatively small sketch. The sketches can be computed
+fairly fast (linear in the size of the documents) and given two sketches the resemblance
+or the containment of the corresponding documents can be computed in linear time
+in the size of the sketches. For computing resemblance, it suffices to keep a fixed size
+sketch. For computing containment, we need a sketch proportional to the size of the
+underlying document; however as it will be explained this problem can be finessed at
+the cost of a loss of precision.
+Our approach to determining syntactic similarity is related to the sampling approach developed independently by Heintze [6], though there are differences in detail
+and in the precise definition of the measures used. Related sampling mechanisms for
+determining similarity were also developed by Manber [7] and within the Stanford
+SCAM project [2, 8, 9].
+We tested the ideas discussed above by building a clustering of a collection of over
+30,000,000 documents into sets of closely resembling document. The documents were
+retrieved from a walk of the World Wide Web performed by the Alta Vista search
+engine. The total input data was over 150 Gbytes. We calculated our clusters based on
+a 50% resemblance. We found 3.6 million clusters containing a total of 12.3 million
+documents. Of these, 2.1 million clusters contained only identical documents (5.3
+million documents). The remaining 1.5 million clusters contained 7 million documents
+(a mixture of exact duplicates and similar). For further details see [5].
+The basic approach has two aspects: First, resemblance and containment are
+expressed as set intersection problems (this is explained in Section 2) and second,
+the relative size of these intersections is evaluated by a process of random sampling
+that can be done independently for each document (this is explained in Section 3).
+This process of estimating the relative size of intersection of sets can be applied to
+arbitrary sets, and thus might be of independent interest.
