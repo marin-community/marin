@@ -26,6 +26,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import requests
 import yaml
 
 from .dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
@@ -323,15 +324,10 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
         dashboard process.
         """
         try:
-            import http.client
-
-            conn = http.client.HTTPConnection("localhost", dashboard_port, timeout=3)
-            conn.request("GET", "/api/version")
-            resp = conn.getresponse()
-            resp.read(1)  # ensure the socket is usable
-            # 200 = unauthenticated clusters; 401/403 = token-auth enabled clusters without a token.
-            return (cluster_name, resp.status in {200, 401, 403})
-        except Exception:
+            session = requests.Session()
+            response = session.get(f"http://localhost:{dashboard_port}/api/version", timeout=3)
+            return (cluster_name, response.status_code in {200, 401, 403})
+        except (requests.ConnectionError, requests.Timeout):
             return (cluster_name, False)
 
     max_retries = 3
