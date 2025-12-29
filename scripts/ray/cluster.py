@@ -26,7 +26,6 @@ from dataclasses import dataclass
 import json
 import logging
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -39,6 +38,7 @@ from typing import Any
 import click
 import yaml
 
+from fray.cluster.ray.auth import ray_auth_secret
 from fray.cluster.ray.dashboard import DashboardConfig, ray_dashboard
 from marin.cluster import gcp
 from marin.cluster.config import (
@@ -788,40 +788,11 @@ def open_dashboard(ctx):
             print("\nShutting down...")
 
 
-def _infer_ray_auth_secret_from_config(config_path: str) -> str | None:
-    """Best-effort inference of the Ray auth token secret from a cluster YAML.
-
-    We prefer secrets named like `RAY_AUTH_TOKEN*`.
-    """
-    try:
-        with open(config_path, "r") as f:
-            cluster_config = yaml.safe_load(f) or {}
-    except Exception:
-        logger.exception("Failed to load cluster config for auth secret inference: %s", config_path)
-        return None
-
-    for cmd in cluster_config.get("setup_commands", []) or []:
-        if not isinstance(cmd, str):
-            continue
-        if "gcloud secrets versions access" not in cmd:
-            continue
-        if "auth_token" not in cmd:
-            continue
-        match = re.search(r"--secret=([A-Za-z0-9_]+)", cmd)
-        if not match:
-            continue
-        secret = match.group(1)
-        if secret.startswith("RAY_AUTH_TOKEN"):
-            return secret
-
-    return None
-
-
 @cli.command("auth")
 @click.option(
     "--secret",
     default=None,
-    help="GCP Secret Manager secret containing the Ray auth token (default: infer from cluster config).",
+    help="GCP Secret Manager secret containing the Ray auth token (default: RAY_AUTH_TOKEN).",
 )
 @click.option(
     "--copy/--no-copy",
@@ -845,8 +816,7 @@ def auth(ctx, secret: str | None, copy: bool, open_browser: bool):
         raise click.UsageError("--config/--cluster is required for auth")
 
     config_path = ctx.obj.config_file
-    inferred_secret = _infer_ray_auth_secret_from_config(config_path)
-    secret = secret or inferred_secret or "RAY_AUTH_TOKEN"
+    secret = ray_auth_secret(secret)
 
     token = subprocess.check_output(
         ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"],
@@ -902,8 +872,7 @@ def auth(ctx, secret: str | None, copy: bool, open_browser: bool):
         print("  2) Click Submit.")
         print()
         print("If you are not prompted, you already have a `ray-authentication-token` cookie for this host.")
-        print("If you switch between clusters with different tokens (e.g. staging vs non-staging),")
-        print("clear that cookie or use an incognito window (or open via 127.0.0.1 vs localhost).")
+        print("If the token has been rotated, clear that cookie or use an incognito window.")
 
         if open_browser:
             try:
@@ -925,7 +894,7 @@ def auth(ctx, secret: str | None, copy: bool, open_browser: bool):
 @click.option(
     "--secret",
     default=None,
-    help="GCP Secret Manager secret containing the Ray auth token (default: infer from cluster config).",
+    help="GCP Secret Manager secret containing the Ray auth token (default: RAY_AUTH_TOKEN).",
 )
 @click.option(
     "--inline-token/--token-path",
@@ -944,9 +913,7 @@ def auth_env(ctx, secret: str | None, inline_token: bool):
     at a cached token file under ~/.ray/. Use --inline-token to export the token
     value directly as RAY_AUTH_TOKEN.
     """
-    config_path = ctx.obj.config_file if ctx.obj.config_obj else None
-    inferred_secret = _infer_ray_auth_secret_from_config(config_path) if config_path else None
-    secret = secret or inferred_secret or "RAY_AUTH_TOKEN"
+    secret = ray_auth_secret(secret)
 
     token = subprocess.check_output(
         ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"],
@@ -963,7 +930,7 @@ def auth_env(ctx, secret: str | None, inline_token: bool):
 
     token_dir = Path.home() / ".ray"
     token_dir.mkdir(parents=True, exist_ok=True)
-    token_path = token_dir / f"auth_token.{secret}"
+    token_path = token_dir / "auth_token"
     token_path.write_text(token)
     token_path.chmod(0o600)
     print(f"export RAY_AUTH_TOKEN_PATH={shlex.quote(str(token_path))}")

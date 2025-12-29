@@ -76,7 +76,7 @@ setup_commands:
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
 
   - mkdir -p $HOME/.ray
-  - gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN_STAGING > $HOME/.ray/auth_token
+  - gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN > $HOME/.ray/auth_token
   - chmod 600 $HOME/.ray/auth_token
 
   - echo 'export MARIN_PREFIX="gs://marin-us-central2"' >> $HOME/.bashrc

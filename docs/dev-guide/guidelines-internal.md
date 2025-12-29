@@ -77,11 +77,7 @@ fi
 ```
 
 
-If you need to install the staging token locally (only needed for CLI + SDK usage against staging), do:
-
-```bash
-make get_ray_auth_token_staging
-```
+All clusters (including staging) use the same Ray token; `make get_ray_auth_token` is sufficient for CLI + SDK usage.
 
 There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the
 cluster. **You will need at least two terminal processes running for the following steps** (make sure to activate your

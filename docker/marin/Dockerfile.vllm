@@ -15,7 +15,7 @@ FROM rust:1.91-slim AS rust-builder
 
 
 # Main build
-FROM rayproject/ray:2.52.0-py311-cpu
+FROM rayproject/ray:2.53.0-py311-cpu
 ARG VLLM_VERSION=0.11.1
 
 # For some reason, ray destroys the apt sources list, so we need to restore it

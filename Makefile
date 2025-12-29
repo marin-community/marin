@@ -179,24 +179,22 @@ get_secret_key: install_gcloud
 	chmod 600 ~/.ssh/marin_ray_cluster.pem
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
-get_ray_auth_token_staging: install_gcloud
-	mkdir -p $$HOME/.ray
-	gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN_STAGING > $$HOME/.ray/auth_token
-	chmod 600 $$HOME/.ray/auth_token
-
 get_ray_auth_token: install_gcloud
 	mkdir -p $$HOME/.ray
 	gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN > $$HOME/.ray/auth_token
 	chmod 600 $$HOME/.ray/auth_token
 
-# commenting out so people don't accidentally overwrite the secret, but keeping for reference
-#init_ray_auth_token_secret: install_gcloud
-#	@if [ ! -f "$$HOME/.ray/auth_token" ]; then \
-#		echo "Missing $$HOME/.ray/auth_token; generate one first (e.g. export RAY_AUTH_MODE=token && ray get-auth-token --generate)"; \
-#		exit 1; \
-#	fi
-#	@gcloud secrets describe RAY_AUTH_TOKEN >/dev/null 2>&1 || gcloud secrets create RAY_AUTH_TOKEN --replication-policy=automatic
-#	gcloud secrets versions add RAY_AUTH_TOKEN --data-file="$$HOME/.ray/auth_token"
+init_ray_auth_token_secret: install_gcloud
+	@if [ ! -f "$$HOME/.ray/auth_token" ]; then \
+		echo "Missing $$HOME/.ray/auth_token; generate one first (e.g. export RAY_AUTH_MODE=token && ray get-auth-token --generate)"; \
+		exit 1; \
+	fi
+	@if gcloud secrets describe RAY_AUTH_TOKEN >/dev/null 2>&1; then \
+		echo "Secret RAY_AUTH_TOKEN already exists; refusing to add a new version (token rotation) via Makefile."; \
+		exit 1; \
+	fi
+	gcloud secrets create RAY_AUTH_TOKEN --replication-policy=automatic
+	gcloud secrets versions add RAY_AUTH_TOKEN --data-file="$$HOME/.ray/auth_token"
 
 
 setup_pre_commit:

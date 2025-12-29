@@ -183,16 +183,16 @@ uv run scripts/ray/cluster.py --cluster us-central2-staging auth
 ```
 
 When the browser shows the token prompt, paste the token (already in your clipboard) and click **Submit**.
-If you are not prompted, you already have a `ray-authentication-token` cookie for this host; if you switch between
-clusters with different tokens you may need to clear that cookie or use an incognito window.
+If you are not prompted, you already have a `ray-authentication-token` cookie for this host; if the token is rotated
+you may need to clear that cookie or use an incognito window.
 
-If the secret can't be inferred, or you want to override it:
+If you want to override the Secret Manager secret:
 
 ```bash
-uv run scripts/ray/cluster.py --cluster us-central2-staging auth --secret RAY_AUTH_TOKEN_STAGING
+uv run scripts/ray/cluster.py --cluster us-central2-staging auth --secret RAY_AUTH_TOKEN
 ```
 
-Note: for non-staging clusters, you can install the default token locally with:
+You can also install the token locally with:
 
 ```bash
 make get_ray_auth_token

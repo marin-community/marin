@@ -160,13 +160,27 @@ class RayCluster(Cluster):
         entrypoint_params = self._get_entrypoint_params(request)
         logger.debug("Entrypoint params: %s", entrypoint_params)
 
-        submission_id = self._job_client().submit_job(
-            entrypoint=entrypoint_cmd,
-            runtime_env=runtime_env,
-            submission_id=f"{request.name}-{uuid.uuid4()}",
-            metadata={"name": request.name},
-            **entrypoint_params,
-        )
+        client = self._job_client()
+        submission_timeout_s = float(os.environ.get("FRAY_RAY_JOB_SUBMIT_TIMEOUT_S", "30"))
+        deadline = time.time() + submission_timeout_s
+        sleep_s = 0.5
+        while True:
+            try:
+                submission_id = client.submit_job(
+                    entrypoint=entrypoint_cmd,
+                    runtime_env=runtime_env,
+                    submission_id=f"{request.name}-{uuid.uuid4()}",
+                    metadata={"name": request.name},
+                    **entrypoint_params,
+                )
+                break
+            except RuntimeError as e:
+                # Ray can briefly return "No available agent to submit job" right after startup.
+                if "No available agent to submit job" not in str(e) or time.time() >= deadline:
+                    raise
+                logger.info("Ray job agent not ready yet, retrying submit in %.1fs...", sleep_s)
+                time.sleep(sleep_s)
+                sleep_s = min(5.0, sleep_s * 1.5)
         logger.info("Job submitted with ID: %s", submission_id)
         job_id = JobId(submission_id)
         self._jobs[job_id] = RayJobInfo.from_submission_id(submission_id, request.name)
@@ -425,6 +439,16 @@ class RayCluster(Cluster):
         configured address.
         """
         if ray.is_initialized():
+            # Prefer the actual dashboard URL if we have it. Ray may move the
+            # dashboard off the default port (8265) if it's already in use.
+            try:
+                webui_url = ray._private.worker.global_worker.node.address_info.get("webui_url")
+                if webui_url:
+                    return f"http://{webui_url}" if "://" not in webui_url else webui_url
+            except Exception:
+                logger.exception("bleck")
+                pass
+
             try:
                 ctx = ray.get_runtime_context()
                 if hasattr(ctx, "gcs_address"):

@@ -131,7 +131,7 @@ CONFIGS = {
         "DOCKER_TAG": DOCKER_TAG_TESTING,
         "IMAGE_NAME": "marin_cluster_test",
         "RAY_AUTH_MODE": "token",
-        "RAY_AUTH_SECRET": "RAY_AUTH_TOKEN_STAGING",
+        "RAY_AUTH_SECRET": "RAY_AUTH_TOKEN",
         "tpu_generation": "v4",
         "min_workers": 4,
     },

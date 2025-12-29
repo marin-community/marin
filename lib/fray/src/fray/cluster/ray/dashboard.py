@@ -29,6 +29,7 @@ from pathlib import Path
 import yaml
 
 from .dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
+from .auth import ray_auth_secret
 
 logger = logging.getLogger(__name__)
 
@@ -362,40 +363,13 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
             logger.error(f"Dashboard for cluster {cluster_name} is not accessible")
 
 
-def _infer_ray_auth_secret_from_config(config_path: str) -> str | None:
-    """Best-effort inference of the Ray auth token secret from a cluster YAML.
-
-    We infer the secret by looking for a setup command that writes `auth_token`.
-    """
-    try:
-        with open(config_path, "r") as f:
-            cluster_config = yaml.safe_load(f) or {}
-    except Exception:
-        logger.exception("Failed to load cluster config for auth secret inference: %s", config_path)
-        return None
-
-    for cmd in cluster_config.get("setup_commands", []) or []:
-        if not isinstance(cmd, str):
-            continue
-        if "gcloud secrets versions access" not in cmd:
-            continue
-        if "auth_token" not in cmd:
-            continue
-        for part in cmd.split():
-            if part.startswith("--secret="):
-                return part.split("=", 1)[1]
-
-    return None
-
-
 def _ensure_local_ray_token(*, config_path: str | None) -> str:
     """Ensure a Ray auth token is available locally and return a token file path.
 
     Priority:
     - Respect an existing RAY_AUTH_TOKEN_PATH if it points to a file.
     - If a token exists at the default path (~/.ray/auth_token), use it.
-    - Otherwise, if we can infer a GCP Secret Manager secret from the cluster config,
-      fetch it with `gcloud` into a per-secret cache file under ~/.ray/.
+    - Otherwise, fetch it with `gcloud` into the default path (~/.ray/auth_token).
     """
     token_path_env = os.environ.get("RAY_AUTH_TOKEN_PATH")
     if token_path_env and Path(token_path_env).expanduser().exists():
@@ -411,22 +385,19 @@ def _ensure_local_ray_token(*, config_path: str | None) -> str:
             "Create a token file at ~/.ray/auth_token or set RAY_AUTH_TOKEN_PATH."
         )
 
-    secret = _infer_ray_auth_secret_from_config(config_path) or "RAY_AUTH_TOKEN"
-    cache_dir = Path.home() / ".ray"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cached_path = cache_dir / f"auth_token.{secret}"
+    secret = ray_auth_secret()
+    default_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if not cached_path.exists():
-        token = subprocess.check_output(
-            ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"],
-            text=True,
-        ).strip()
-        if not token:
-            raise RuntimeError(f"Secret {secret} returned empty token")
-        cached_path.write_text(token)
-        cached_path.chmod(0o600)
+    token = subprocess.check_output(
+        ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"],
+        text=True,
+    ).strip()
+    if not token:
+        raise RuntimeError(f"Secret {secret} returned empty token")
 
-    return str(cached_path)
+    default_path.write_text(token)
+    default_path.chmod(0o600)
+    return str(default_path)
 
 
 @contextmanager
@@ -500,8 +471,10 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
         os.environ["RAY_GCS_ADDRESS"] = f"localhost:{ports.gcs_port}"
 
     # Marin clusters assume token auth; always enable token mode client-side and
-    # ensure a token is available. For single-cluster connections, we can infer
-    # the token secret from the cluster config and fetch it automatically.
+    # ensure a token is available. For explicit single-cluster connections, we
+    # can fetch the token from Secret Manager automatically (default secret:
+    # RAY_AUTH_TOKEN). For multi-cluster autodiscovery, require the token file
+    # to already exist locally.
     config_path_for_token = None
     if len(clusters) == 1:
         config_path_for_token = next(iter(clusters.values())).config_path

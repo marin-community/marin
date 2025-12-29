@@ -37,30 +37,17 @@ cluster infrastructure for Marin. We use Ray for:
 
 ### Ray token authentication
 
-Marin clusters use Ray token authentication (Ray >= 2.52). Ray APIs (dashboard, jobs, status) require a shared token.
+Marin clusters use Ray token authentication (Ray >= 2.53). Ray APIs (dashboard, jobs, status) require a shared token.
 
 - Cluster-side: the token is fetched from GCP Secret Manager into `/home/ray/.ray/auth_token` during `setup_commands`
   (runs inside the Ray container) and `RAY_AUTH_MODE=token` is set via Docker run options.
 - Client-side (your laptop): `scripts/ray/cluster.py` will automatically fetch/cache the token into `~/.ray/` when you
   connect to a specific cluster config. You can also install tokens explicitly (see below).
 
-For the staging cluster (`marin-us-central2-staging`):
+All clusters use the same `RAY_AUTH_TOKEN` Secret Manager secret, and clients use the standard Ray token file path
+`~/.ray/auth_token`.
 
-```bash
-uv run scripts/ray/cluster.py --cluster us-central2-staging auth
-```
-
-If you need the staging token locally for CLI/SDK usage:
-
-```bash
-make get_ray_auth_token_staging
-```
-
-Note: the Ray dashboard stores the token in a `ray-authentication-token` cookie scoped to the host (e.g. `localhost`).
-If you switch between clusters with different tokens (staging vs non-staging), you may need to clear that cookie or use
-an incognito window (or open via `127.0.0.1` vs `localhost`).
-
-For non-staging clusters, install the default token locally:
+Install the token locally:
 
 ```bash
 make get_ray_auth_token
@@ -72,19 +59,14 @@ If you prefer ssh-agent style exports (sets `RAY_AUTH_MODE=token` and `RAY_AUTH_
 eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
 ```
 
-#### Known issue: dashboard Logs tab
-
-As of Ray 2.52.x, the Ray dashboard **Logs** tab is currently unreliable with token authentication enabled (you may see
-`UNAUTHENTICATED` / “Invalid or missing authentication token” errors when fetching logs). This appears to be an upstream
-Ray issue (tracking: [ray-project/ray#59614](https://github.com/ray-project/ray/issues/59614)).
-
-Workarounds:
-- Prefer `ray_run.py` output (driver logs stream in the terminal).
-- SSH to the head node and `tail -f` files under `/tmp/ray/session_latest/logs/`.
+Note: the Ray dashboard stores the token in a `ray-authentication-token` cookie scoped to the host (e.g. `localhost`).
+If the token is rotated, you may need to clear that cookie or use an incognito window.
 
 #### One-time: create the production token secret
 
-Non-staging clusters read their token from the `RAY_AUTH_TOKEN` Secret Manager secret.
+You will only need to do this if setting up in a new GCP project or similar.
+
+Clusters read their token from the `RAY_AUTH_TOKEN` Secret Manager secret.
 
 If `make get_ray_auth_token` fails because the secret doesn’t exist yet, create it once:
 
