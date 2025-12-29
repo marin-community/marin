@@ -141,7 +141,7 @@ def dot_general_with_precision_jvp(
     del preferred_element_type
     del out_sharding
     del precision
-    lhs, rhs = oprimals
+    lhs, rhs = primals
     lhs_dot, rhs_dot = tangents
 
     out = lax.dot_general(lhs, rhs, dimension_numbers, precision=lax.Precision.DEFAULT)
