@@ -20,7 +20,7 @@ dependencies = [
     "google-api-python-client>=2.175.0",
     "google-cloud-storage",
     "google-cloud-storage-transfer",
-    "jax==0.6.2",
+    "jax>=0.8.0",
     "haliax",
     "levanter[serve]",
     "lz4",
@@ -32,7 +32,7 @@ dependencies = [
     "openai",
     "pandas", # Only needed by Fileprovider in inference.py
     "pyarrow>=22",
-    "ray==2.45",
+    "ray==2.52",
     "regex",
     "requests",
     "s3fs>=2024",
@@ -113,6 +113,10 @@ conflicts = [
         { extra = "cuda12" },
         { extra = "cpu" },
     ],
+    [
+        { extra = "cuda12" },
+        { extra = "vllm_tpu" },
+    ],
 ]
 
 torch = [
@@ -145,11 +149,11 @@ gcp = [
     "google-cloud-compute",
 ]
 
-cuda12 = ["jax[cuda12]==0.6.2", "torch>=2.7.0"]
+cuda12 = ["jax[cuda12]==0.8.0", "torch>=2.7.0"]
 
-tpu = ["jax[tpu]==0.6.2", "torch>=2.7.0"]
+tpu = ["jax[tpu]==0.8.0", "torch>=2.7.0"]
 
-cpu = ["jax==0.6.2", "torch>=2.7.0"]
+cpu = ["jax==0.8.0", "torch>=2.7.0"]
 
 download_transform = [
     "chardet",
@@ -196,7 +200,7 @@ rl = [
 post_training = [
     "gcsfs",
     "transformers",
-    "flax==0.10.0",
+    "flax>=0.10.0",
     "jaxtyping",
     "tyro==0.8.11",
     "tqdm",
@@ -224,6 +228,10 @@ helmet = [
     "pytrec_eval-terrier==0.5.7",
     "rouge_score",
     "tiktoken",
+]
+
+vllm_tpu = [
+    "vllm-tpu==0.12.0",
 ]
 
 

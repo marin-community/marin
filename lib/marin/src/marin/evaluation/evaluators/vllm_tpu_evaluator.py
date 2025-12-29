@@ -15,6 +15,8 @@
 import os
 import subprocess
 import time
+import tempfile
+import shutil
 from abc import ABC
 
 import requests
@@ -31,6 +33,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
     # Where to store checkpoints, cache inference results, etc.
     CACHE_PATH: str = "/tmp"
+    VLLM_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
 
     @staticmethod
     def download_model(model: ModelConfig) -> str:
@@ -59,50 +62,87 @@ class VllmTpuEvaluator(Evaluator, ABC):
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
         model_name_or_path: str = VllmTpuEvaluator.download_model(model)
 
-        # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
-        command: str = (
-            f"vllm serve {model_name_or_path} "
-            f"--trust-remote-code "
-            f"--host {host} "
-            f"--port {port} "
-            f"--device tpu "
-            f"--distributed-executor-backend ray"
-        )
+        vllm_bin = shutil.which("vllm")
+        if vllm_bin is None:
+            raise RuntimeError(
+                "`vllm` CLI not found on PATH. Install vLLM in the job runtime environment "
+                "(e.g. via `EnvironmentConfig(pip_packages=[...])`) before using VllmTpuEvaluator."
+            )
+
+        cmd: list[str] = [
+            vllm_bin,
+            "serve",
+            model_name_or_path,
+            "--trust-remote-code",
+            "--host",
+            host,
+            "--port",
+            str(port),
+            "--device",
+            "tpu",
+            "--distributed-executor-backend",
+            "ray",
+        ]
         if extra_args:
-            command = f"{command} {' '.join(extra_args)}"
-        process = subprocess.Popen(command, shell=True)
+            cmd.extend(extra_args)
+
+        log_dir = tempfile.mkdtemp(prefix="vllm_server_")
+        stdout_path = os.path.join(log_dir, "stdout.log")
+        stderr_path = os.path.join(log_dir, "stderr.log")
+        stdout_f = open(stdout_path, "w")
+        stderr_f = open(stderr_path, "w")
+        process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True)
 
         # Check that the server has started by sending heartbeat checks
         server_url: str = f"http://{host}:{port}/v1"
         start_time: float = time.time()
         elapsed_time: float = 0
+
+        def tail(path: str, max_lines: int = 200) -> str:
+            try:
+                with open(path, "r") as f:
+                    lines = f.readlines()
+                return "".join(lines[-max_lines:])
+            except Exception as e:
+                return f"<failed to read {path}: {e}>"
+
         while True:
+            if process.poll() is not None:
+                stdout_f.close()
+                stderr_f.close()
+                raise RuntimeError(
+                    "vLLM server process exited before becoming ready.\n"
+                    f"Command: {cmd}\n"
+                    f"Exit code: {process.returncode}\n"
+                    f"Logs: {log_dir}\n"
+                    f"--- stdout (tail) ---\n{tail(stdout_path)}\n"
+                    f"--- stderr (tail) ---\n{tail(stderr_path)}"
+                )
             try:
                 # Attempt to send a request to the server's health endpoint
-                response = requests.get(f"{server_url}/models")
+                response = requests.get(f"{server_url}/models", timeout=5)
                 if response.status_code == 200:
-                    raw_response: dict = response.json()
-                    loaded_models: list[str] = [model["id"] for model in raw_response["data"]]
-
-                    # Can be on a machine with a vLLM server up and running, so also check the model is loaded
+                    # If the /models endpoint responds, the server is up.
                     print(f"vLLM server is up and running at {server_url}: {response.text}")
-                    if model_name_or_path in loaded_models:
-                        print(f"Model {model_name_or_path} is loaded.")
-                        break
-                    else:
-                        print(f"Model {model_name_or_path} is not loaded yet. Loaded models: {loaded_models}")
+                    break
             except requests.ConnectionError:
                 # If the connection is refused, wait and try again
                 print(f"vLLM server is not ready yet. Elapsed time in seconds: {elapsed_time}")
+            except requests.Timeout:
+                print(f"vLLM server is not ready yet (timeout). Elapsed time in seconds: {elapsed_time}")
 
             # Check if the timeout has been reached
             elapsed_time = time.time() - start_time
             if elapsed_time > timeout_seconds:
                 process.kill()
+                stdout_f.close()
+                stderr_f.close()
                 raise TimeoutError("Failed to start vLLM server within timeout period.")
 
             time.sleep(5)  # Wait 5 seconds before retrying
 
+        stdout_f.close()
+        stderr_f.close()
         print(f"vLLM server is ready at {server_url} ({elapsed_time}s).")
         return server_url
 
@@ -158,7 +198,10 @@ class VllmTpuEvaluator(Evaluator, ABC):
             name="vllm-tpu-evaluation",
             entrypoint=Entrypoint.from_callable(_run),
             resources=resource_config,
-            environment=EnvironmentConfig.create(extras=["eval", "tpu"]),
+            environment=EnvironmentConfig.create(
+                extras=["eval", "tpu"],
+                pip_packages=self.VLLM_PIP_PACKAGES,
+            ),
         )
 
         cluster = current_cluster()

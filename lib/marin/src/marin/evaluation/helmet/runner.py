@@ -31,8 +31,10 @@ from marin.evaluation.utils import is_remote_path
 from marin.utils import fsspec_copy_path_into_dir
 from marin.utils import remove_tpu_lockfile_on_exit
 
+_VLLM_PIP_PACKAGES = ("vllm-tpu",)
 
-def _local_path_for_gcsfuse_mount(path: str, *, local_mount_root: str = "/opt/gcsfuse_mount") -> str:
+
+def _local_path_for_gcsfuse_mount(path: str, *, local_mount_root: str = "/opt/gcsfuse") -> str:
     marker = "gcsfuse_mount/"
     if marker not in path:
         raise ValueError(f"Expected a path under {marker}, got: {path}")
@@ -98,7 +100,10 @@ def run_helmet(config: HelmetRunConfig) -> None:
         name=f"helmet:{config.run_name}",
         entrypoint=Entrypoint.from_callable(_run),
         resources=config.resource_config,
-        environment=EnvironmentConfig.create(extras=["eval", "tpu", "helmet"]),
+        environment=EnvironmentConfig.create(
+            extras=["eval", "tpu", "helmet"],
+            pip_packages=_VLLM_PIP_PACKAGES,
+        ),
     )
 
     cluster = current_cluster()
@@ -113,7 +118,7 @@ def _run_on_tpu(config: HelmetRunConfig) -> None:
     if not os.path.exists(os.path.join(helmet_data_dir, "_SUCCESS")):
         # list the files that may or may not exist, for debugging. this dir and parent
         parent_dir = os.path.dirname(helmet_data_dir)
-        print(f"Checking existence of HELMET data dir: {os.listdir('/opt/gcsfuse_mount')}")
+        print(f"Checking existence of HELMET data dir: {os.listdir('/opt/gcsfuse')}")
         print(f"Contents of parent dir: {parent_dir}: {os.listdir(parent_dir)}")
         print(f"Contents of helmet data dir: {helmet_data_dir}: {os.listdir(helmet_data_dir)}")
         raise RuntimeError(f"HELMET data directory is not ready: {helmet_data_dir}")

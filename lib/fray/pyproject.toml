@@ -25,7 +25,7 @@ dependencies = [
 fray = "fray.cli:main"
 
 [project.optional-dependencies]
-ray = ["ray==2.45"]
+ray = ["ray==2.52"]
 
 [dependency-groups]
 fray_test = [
