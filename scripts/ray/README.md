@@ -179,7 +179,7 @@ uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml open-dashboa
 Open a single cluster dashboard, copy the Ray auth token to clipboard, and open a browser.
 
 ```bash
-uv run scripts/ray/cluster.py --cluster us-central2-staging auth
+uv run scripts/ray/cluster.py --cluster us-central2 auth
 ```
 
 When the browser shows the token prompt, paste the token (already in your clipboard) and click **Submit**.
@@ -189,7 +189,7 @@ you may need to clear that cookie or use an incognito window.
 If you want to override the Secret Manager secret:
 
 ```bash
-uv run scripts/ray/cluster.py --cluster us-central2-staging auth --secret RAY_AUTH_TOKEN
+uv run scripts/ray/cluster.py --cluster us-central2 auth --secret RAY_AUTH_TOKEN
 ```
 
 You can also install the token locally with:
