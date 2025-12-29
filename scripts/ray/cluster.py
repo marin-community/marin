@@ -826,39 +826,31 @@ def auth(ctx, secret: str | None, copy: bool, open_browser: bool):
         raise RuntimeError(f"Secret {secret} returned empty token")
 
     if copy:
-        try:
-            if sys.platform == "darwin":
-                subprocess.run(["pbcopy"], input=token, text=True, check=True)
-                print()
-                print("Ray dashboard token auth")
-                print(f"- Token source: Secret Manager `{secret}`")
-                print("- Token copied to clipboard (paste with Cmd+V when prompted).")
-            else:
-                clipboard_cmd: list[str] | None = None
-                # Prefer xclip, then xsel on Linux.
-                if shutil.which("xclip"):
-                    clipboard_cmd = ["xclip", "-selection", "clipboard"]
-                elif shutil.which("xsel"):
-                    clipboard_cmd = ["xsel", "--clipboard", "--input"]
+        clipboard_commands: list[list[str]] = [
+            ["pbcopy"],
+            ["xclip", "-selection", "clipboard"],
+            ["xsel", "--clipboard", "--input"],
+        ]
 
-                if clipboard_cmd:
-                    subprocess.run(clipboard_cmd, input=token, text=True, check=True)
-                    print()
-                    print("Ray dashboard token auth")
-                    print(f"- Token source: Secret Manager `{secret}`")
-                    print(f"- Token copied to clipboard via `{clipboard_cmd[0]}` (paste when prompted).")
-                else:
-                    print(token)
-                    print()
-                    print("Ray dashboard token auth")
-                    print(f"- Token source: Secret Manager `{secret}`")
-                    print("- Clipboard copy unavailable (install `xclip` or `xsel`); token printed above.")
-        except FileNotFoundError:
+        used_clipboard_command: str | None = None
+        for clipboard_cmd in clipboard_commands:
+            if not shutil.which(clipboard_cmd[0]):
+                continue
+            try:
+                subprocess.run(clipboard_cmd, input=token, text=True, check=True)
+            except subprocess.CalledProcessError:
+                continue
+            used_clipboard_command = clipboard_cmd[0]
+            break
+
+        print()
+        print("Ray dashboard token auth")
+        print(f"- Token source: Secret Manager `{secret}`")
+        if used_clipboard_command:
+            print(f"- Token copied to clipboard via `{used_clipboard_command}` (paste when prompted).")
+        else:
             print(token)
-            print()
-            print("Ray dashboard token auth")
-            print(f"- Token source: Secret Manager `{secret}`")
-            print("- Clipboard copy unavailable (pbcopy not found); token printed above.")
+            print("- Clipboard copy unavailable (install `xclip` or `xsel`); token printed above.")
 
     with ray_dashboard(DashboardConfig.from_cluster(config_path)) as conn:
         cluster_name = next(iter(conn.clusters.keys()))
