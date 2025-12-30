@@ -40,7 +40,6 @@ from fray.cluster.base import (
 from fray.cluster.ray.config import find_config_by_region
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
-from fray.cluster.ray.uv import default_uv_python
 from fray.job.context import RayContext, fray_default_job_ctx
 
 logger = logging.getLogger("ray")
@@ -257,12 +256,6 @@ class RayCluster(Cluster):
         environment = request.environment if request.environment else EnvironmentConfig.create()
 
         env_vars = dict(environment.env_vars)
-
-        # If the Ray worker environment is created via `uv run`, uv can re-resolve
-        # to a different Python version than the driver unless it's pinned.
-        # Default to the current Python version unless caller explicitly set it.
-        if "UV_PYTHON" not in env_vars:
-            env_vars["UV_PYTHON"] = os.environ.get("UV_PYTHON") or default_uv_python()
 
         # disable access to the TPU if we're not a TPU job, otherwise
         # any import of JAX will claim the TPU and block other users.

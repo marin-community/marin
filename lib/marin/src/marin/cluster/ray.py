@@ -33,8 +33,6 @@ import numpy as np
 import requests
 import yaml
 
-from fray.cluster.ray.uv import ensure_uv_python_pinned
-
 from .config import RayClusterConfig
 
 logger = logging.getLogger(__name__)
@@ -532,7 +530,6 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
 
             cluster_name = next(iter(clusters.keys()))
             api_port = port_mappings[cluster_name].api_port
-            ensure_uv_python_pinned()
             ray.init(address=f"ray://localhost:{api_port}", runtime_env={"working_dir": "."})
 
         yield connection

@@ -24,8 +24,6 @@ from pathlib import Path
 
 from ray.runtime_env import RuntimeEnv
 
-from fray.cluster.ray.uv import default_uv_python
-
 logger = logging.getLogger("ray")
 
 # Packages to ignore when computing the runtime environment.
@@ -174,14 +172,6 @@ def build_runtime_env_for_packages(
     python_path = build_python_path()
     if "PYTHONPATH" in env_vars:
         python_path.extend(env_vars["PYTHONPATH"].split(":"))
-
-    # When Ray's `uv run` runtime_env hook is enabled, workers are started under
-    # `uv run ...` and uv may otherwise re-resolve to a different Python version.
-    # Default to the current ("driver") Python version unless the caller already
-    # set a UV_PYTHON override.
-    # see https://github.com/ray-project/ray/issues/59639
-    if "UV_PYTHON" not in env_vars:
-        env_vars["UV_PYTHON"] = os.environ.get("UV_PYTHON", default_uv_python())
 
     package_spec = compute_frozen_packages(extra)
 
