@@ -14,7 +14,6 @@
 
 """Pytest fixtures for fray tests."""
 
-
 import logging
 import os
 import secrets
@@ -23,25 +22,77 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from fray.cluster.local_cluster import LocalCluster, LocalClusterConfig
 
+# Note: For best performance and to avoid pulling in heavyweight workspace deps,
+# run Fray tests from `lib/fray/` (e.g. `cd lib/fray && uv run pytest ...`).
 # Ensure Ray subprocesses can pick up our test-only `sitecustomize.py`.
 tests_dir = Path(__file__).resolve().parent
 os.environ["PYTHONPATH"] = f"{tests_dir}{os.pathsep}{os.environ.get('PYTHONPATH', '')}".rstrip(os.pathsep)
 
-# Ray token auth is now assumed to be enabled in Marin/Fray.
-# For tests, ensure there's a stable token available *before* importing Ray.
-os.environ.setdefault("RAY_AUTH_MODE", "token")
-if "RAY_AUTH_TOKEN" not in os.environ and "RAY_AUTH_TOKEN_PATH" not in os.environ:
-    token_dir = Path(tempfile.mkdtemp(prefix="fray-ray-auth-"))
-    token_path = token_dir / "auth_token"
-    token_path.write_text(secrets.token_hex(32))
-    token_path.chmod(0o600)
-    os.environ["RAY_AUTH_TOKEN_PATH"] = str(token_path)
 
-    import atexit
+def _configure_ray_auth_for_tests() -> None:
+    """Configure Ray auth environment for tests.
 
-    atexit.register(lambda: shutil.rmtree(token_dir, ignore_errors=True))
+    By default, run tests against a token-authenticated local Ray cluster. This
+    matches our production assumptions and avoids relying on whatever token may
+    exist in `~/.ray/auth_token`. If `~/.ray/auth_token` exists, we default to it
+    (so developers can use a stable token across local runs).
+
+    To force token auth on for tests, set `FRAY_TEST_RAY_AUTH_MODE=token`.
+    To force auth off for tests, set `FRAY_TEST_RAY_AUTH_MODE=disabled`.
+    `FRAY_TEST_RAY_AUTH_MODE=auto` attempts to mirror the parent environment.
+    """
+    auth_mode = os.environ.get("FRAY_TEST_RAY_AUTH_MODE", "token").strip().lower()
+    if auth_mode not in {"auto", "token", "disabled"}:
+        raise ValueError(f"Invalid FRAY_TEST_RAY_AUTH_MODE={auth_mode!r}; expected auto|token|disabled")
+
+    if auth_mode == "auto":
+        ray_auth_mode = os.environ.get("RAY_AUTH_MODE")
+        if ray_auth_mode in {"token", "disabled"}:
+            wants_token = ray_auth_mode == "token"
+        else:
+            wants_token = (
+                "RAY_AUTH_TOKEN" in os.environ
+                or "RAY_AUTH_TOKEN_PATH" in os.environ
+                or (Path.home() / ".ray" / "auth_token").exists()
+            )
+    else:
+        wants_token = auth_mode == "token"
+
+    if wants_token:
+        # Use a test-only token rather than relying on whatever happens to be in
+        # ~/.ray/auth_token, to avoid flakiness when developers are connected to
+        # other clusters.
+        os.environ["RAY_AUTH_MODE"] = "token"
+        if "RAY_AUTH_TOKEN" in os.environ and "RAY_AUTH_TOKEN_PATH" in os.environ:
+            return
+
+        default_token_path = Path.home() / ".ray" / "auth_token"
+        if default_token_path.exists():
+            os.environ.setdefault("RAY_AUTH_TOKEN_PATH", str(default_token_path))
+            return
+
+        token_dir = Path(tempfile.mkdtemp(prefix="fray-ray-auth-"))
+        token_path = token_dir / "auth_token"
+        token = secrets.token_hex(32)
+        token_path.write_text(token)
+        token_path.chmod(0o600)
+        os.environ["RAY_AUTH_TOKEN"] = token
+        os.environ["RAY_AUTH_TOKEN_PATH"] = str(token_path)
+
+        import atexit
+
+        atexit.register(lambda: shutil.rmtree(token_dir, ignore_errors=True))
+        return
+
+    # Unauthenticated cluster. Clear any token state inherited from the parent
+    # environment before importing Ray.
+    os.environ["RAY_AUTH_MODE"] = "disabled"
+    os.environ.pop("RAY_AUTH_TOKEN", None)
+    os.environ.pop("RAY_AUTH_TOKEN_PATH", None)
+
+
+_configure_ray_auth_for_tests()
 
 # In some environments Ray's job supervisor uses process-scanning to discover a
 # local cluster address ("auto"), which can be blocked by sandboxing. Provide a
@@ -64,7 +115,9 @@ def ray_cluster():
     import ray
 
     patched_ray_node = False
+    patched_ray_uv_hook = False
     orig_get_system_pids = None
+    orig_uv_pids = None
     if not ray.is_initialized():
         # Ray 2.53+ calls psutil to enumerate dashboard child processes during
         # startup, which can fail in sandboxed macOS environments (PermissionError
@@ -73,6 +126,23 @@ def ray_cluster():
         from ray._private import node as ray_node
 
         orig_get_system_pids = ray_node.Node._get_system_processes_for_resource_isolation
+
+        # Ray 2.53+ uses psutil in its uv runtime-env hook to walk parent
+        # processes. In sandboxed macOS environments, psutil's PID enumeration
+        # can fail with PermissionError from sysctl and prevent ray.init from
+        # starting.
+        from ray._private.runtime_env import uv_runtime_env_hook as uv_hook
+
+        orig_uv_pids = uv_hook.psutil.pids
+
+        def _safe_uv_pids() -> list[int]:
+            try:
+                return orig_uv_pids()
+            except PermissionError:
+                return [1]
+
+        uv_hook.psutil.pids = _safe_uv_pids  # type: ignore[assignment]
+        patched_ray_uv_hook = True
 
         def _safe_get_system_pids(self: ray_node.Node) -> str:
             try:
@@ -89,7 +159,8 @@ def ray_cluster():
             address="local",
             num_cpus=8,
             ignore_reinit_error=True,
-            logging_level="info",
+            # ray declares this as int, but its default value is a string!
+            logging_level="info",  # type: ignore
             log_to_driver=True,
             resources={"head_node": 1},
         )
@@ -107,16 +178,27 @@ def ray_cluster():
             from ray._private import node as ray_node
 
             ray_node.Node._get_system_processes_for_resource_isolation = orig_get_system_pids
+        if patched_ray_uv_hook and orig_uv_pids is not None:
+            from ray._private.runtime_env import uv_runtime_env_hook as uv_hook
+
+            uv_hook.psutil.pids = orig_uv_pids  # type: ignore[assignment]
 
 
 @pytest.fixture(scope="module")
 def local_cluster():
-    yield LocalCluster(LocalClusterConfig(use_isolated_env=True))
+    from fray.cluster.local_cluster import LocalCluster, LocalClusterConfig
+
+    yield LocalCluster(
+        LocalClusterConfig(
+            isolated_env_mode="shared",
+        )
+    )
 
 
 @pytest.fixture(scope="module", params=["local", "ray"])
-def cluster(request, local_cluster, ray_cluster):
+def cluster(request):
     if request.param == "local":
-        return local_cluster
+        return request.getfixturevalue("local_cluster")
     elif request.param == "ray":
-        return ray_cluster
+        return request.getfixturevalue("ray_cluster")
+    raise RuntimeError(f"Unknown cluster param: {request.param!r}")

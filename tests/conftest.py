@@ -31,6 +31,6 @@ def reset_fray_context():
 
 @pytest.fixture(autouse=True)
 def fray_cluster():
-    set_current_cluster(create_cluster("local?use_isolated_env=False"))
+    set_current_cluster(create_cluster("local"))
     yield
     set_current_cluster(None)

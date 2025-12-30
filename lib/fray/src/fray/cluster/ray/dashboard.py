@@ -31,6 +31,7 @@ import yaml
 
 from .dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
 from .auth import ray_auth_secret
+from .uv import ensure_uv_python_pinned
 
 logger = logging.getLogger(__name__)
 
@@ -477,6 +478,7 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
 
             cluster_name = next(iter(clusters.keys()))
             api_port = port_mappings[cluster_name].api_port
+            ensure_uv_python_pinned()
             ray.init(address=f"ray://localhost:{api_port}", runtime_env={"working_dir": "."})
 
         yield connection

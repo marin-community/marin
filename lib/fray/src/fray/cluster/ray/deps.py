@@ -18,12 +18,13 @@ import enum
 import hashlib
 import logging
 import os
-import platform
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from ray.runtime_env import RuntimeEnv
+
+from fray.cluster.ray.uv import default_uv_python
 
 logger = logging.getLogger("ray")
 
@@ -180,7 +181,7 @@ def build_runtime_env_for_packages(
     # set a UV_PYTHON override.
     # see https://github.com/ray-project/ray/issues/59639
     if "UV_PYTHON" not in env_vars:
-        env_vars["UV_PYTHON"] = os.environ.get("UV_PYTHON", platform.python_version())
+        env_vars["UV_PYTHON"] = os.environ.get("UV_PYTHON", default_uv_python())
 
     package_spec = compute_frozen_packages(extra)
 
