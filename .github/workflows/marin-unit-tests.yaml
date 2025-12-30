@@ -64,10 +64,10 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CI: true
         run: |
-          PYTHONPATH=tests:. uv run --frozen pytest -n 2 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
+          PYTHONPATH=tests:. uv run --extra cpu --frozen pytest -n 2 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
 
       - name: Test zephyr
         env:
           CI: true
         run: |
-          cd lib/zephyr && uv run --frozen pytest -n 2 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
+          cd lib/zephyr && uv run --extra cpu --frozen pytest -n 2 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
