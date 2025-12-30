@@ -33,6 +33,11 @@ jobs:
           version: "0.7.20"
           enable-cache: true
 
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          uv sync --package zephyr --group test --frozen
+
       - name: Test with pytest
         env:
           CI: true
