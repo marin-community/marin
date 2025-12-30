@@ -470,7 +470,7 @@ def _resource_presets(use_gpu: bool = False):
         "130m": ResourceConfig.with_tpu("v5p-32"),
         "300m": ResourceConfig.with_tpu("v5p-32"),
         "520m": ResourceConfig.with_tpu("v5p-32"),
-        "1_2b": ResourceConfig.with_tpu("v5p-64"),
+        "1_2b": ResourceConfig.with_tpu("v5p-32"),
     }
 
 
@@ -526,7 +526,7 @@ def build_run(
     )
 
     lr_tag = f"_lr_x{_format_multiplier_label(lr_multiplier)}" if lr_multiplier is not None else ""
-    run_name = f"hacktx_{size}_{'attngate' if use_gate else 'stdattn'}_{seq_len}_splash_lr_sweep{lr_tag}"
+    run_name = f"hacktx_{size}_{'attngate' if use_gate else 'stdattn'}_{seq_len}_splash_lr_sweep{lr_tag}_v5p32"
     desc = (
         f"Hackable Transformer ({size}); "
         f"{'Gated Attention' if use_gate else 'Std Attention'} (Splash); "
