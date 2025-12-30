@@ -43,7 +43,7 @@ def read_file(file_path):
 
 
 def compare_outputs(input_name, expected_file, output_file, diff_path):
-    """Compare expected and actual output files using pandiff."""
+    """Compare expected and actual output files using"""
     with open(expected_file, "r") as f, open(output_file, "r") as g:
         if f.read() == g.read():
             return

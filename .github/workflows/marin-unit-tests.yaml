@@ -34,31 +34,6 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
       
-      - name: Setup pandoc
-        uses: r-lib/actions/setup-pandoc@v2
-        with:
-          pandoc-version: '3.1.11'  # Pin version for cache consistency
-      
-      - name: Cache dependencies
-        id: cache-deps
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cache/pip
-            ~/.cache/uv
-            ~/.npm
-            ~/node_modules
-          key: ${{ runner.os }}-deps-v1-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-deps-v1-
-      
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install "uv>=0.7.19" toml
-          npm install -g pandiff
-          uv sync --package marin --extra cpu --group test --frozen
-
       - name: Test with pytest
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
