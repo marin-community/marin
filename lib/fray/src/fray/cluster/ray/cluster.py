@@ -292,7 +292,6 @@ class RayCluster(Cluster):
             runtime_env["working_dir"] = environment.workspace
             runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
             runtime_env["config"] = {"setup_timeout_seconds": 1800}
-            runtime_env["uv"] = []
         else:
             runtime_env = {"env_vars": env_vars}
 
