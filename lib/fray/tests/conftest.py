@@ -125,34 +125,34 @@ def ray_cluster():
         # resource isolation, so it's safe to best-effort it for tests.
         from ray._private import node as ray_node
 
-        orig_get_system_pids = ray_node.Node._get_system_processes_for_resource_isolation
+        orig_get_system_pids = getattr(ray_node.Node, "_get_system_processes_for_resource_isolation", None)
+        if orig_get_system_pids is not None:
+            # Ray 2.53+ uses psutil in its uv runtime-env hook to walk parent
+            # processes. In sandboxed macOS environments, psutil's PID enumeration
+            # can fail with PermissionError from sysctl and prevent ray.init from
+            # starting.
+            from ray._private.runtime_env import uv_runtime_env_hook as uv_hook
 
-        # Ray 2.53+ uses psutil in its uv runtime-env hook to walk parent
-        # processes. In sandboxed macOS environments, psutil's PID enumeration
-        # can fail with PermissionError from sysctl and prevent ray.init from
-        # starting.
-        from ray._private.runtime_env import uv_runtime_env_hook as uv_hook
+            orig_uv_pids = uv_hook.psutil.pids
 
-        orig_uv_pids = uv_hook.psutil.pids
+            def _safe_uv_pids() -> list[int]:
+                try:
+                    return orig_uv_pids()
+                except PermissionError:
+                    return [1]
 
-        def _safe_uv_pids() -> list[int]:
-            try:
-                return orig_uv_pids()
-            except PermissionError:
-                return [1]
+            uv_hook.psutil.pids = _safe_uv_pids  # type: ignore[assignment]
+            patched_ray_uv_hook = True
 
-        uv_hook.psutil.pids = _safe_uv_pids  # type: ignore[assignment]
-        patched_ray_uv_hook = True
+            def _safe_get_system_pids(self: ray_node.Node) -> str:
+                try:
+                    return orig_get_system_pids(self)
+                except PermissionError:
+                    system_process_pids = [str(p[0].process.pid) for p in self.all_processes.values()]
+                    return ",".join(system_process_pids)
 
-        def _safe_get_system_pids(self: ray_node.Node) -> str:
-            try:
-                return orig_get_system_pids(self)
-            except PermissionError:
-                system_process_pids = [str(p[0].process.pid) for p in self.all_processes.values()]
-                return ",".join(system_process_pids)
-
-        ray_node.Node._get_system_processes_for_resource_isolation = _safe_get_system_pids
-        patched_ray_node = True
+            ray_node.Node._get_system_processes_for_resource_isolation = _safe_get_system_pids
+            patched_ray_node = True
 
         logging.info("Initializing Ray cluster")
         ray.init(
