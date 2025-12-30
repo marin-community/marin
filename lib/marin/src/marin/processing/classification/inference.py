@@ -31,6 +31,7 @@ from marin.core.runtime import cached_or_construct_output
 from marin.processing.classification.autoscaler import AutoscalingActorPool, AutoscalingActorPoolConfig
 from marin.processing.classification.checkpoint_utils import get_finished_ids, get_id_from_row
 from marin.processing.classification.classifier import (
+    AutoClassifier,
     AutoClassifierRayActor,
 )
 from marin.processing.classification.config.inference_config import DatasetSchemaConfig, InferenceConfig
@@ -152,7 +153,7 @@ def process_file_with_quality_classifier_streaming(
             write_dataset_streaming(output_rows_buffer, output_filename, append=append_mode or total_processed > 0)
             output_rows_buffer = []
 
-        total_processed += len(processed_batch)
+        total_processed += len(processed_batch[dataset_schema.output_columns[0]])
         logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
 
     if output_rows_buffer:
@@ -164,6 +165,129 @@ def process_file_with_quality_classifier_streaming(
         f"[*] Completed processing {input_filename} - \
         Total rows: {total_processed} (skipped {total_skipped} already finished)"
     )
+
+
+@cached_or_construct_output(success_suffix="SUCCESS")
+def process_file_with_quality_classifier_streaming_local(
+    input_filename: str,
+    output_filename: str,
+    classifier: AutoClassifier,
+    dataset_schema: DatasetSchemaConfig,
+    num_batches_per_upload: int,
+    batch_size: int = 512,
+    resume: bool = True,
+):
+    """Process a file without Ray (in-process), with streaming I/O and resumption capability."""
+    print(f"[*] Processing (local) {input_filename} to {output_filename}")
+
+    finished_ids: set[str] = set()
+    if resume:
+        finished_ids = get_finished_ids(output_filename, dataset_schema.id_column)
+        if finished_ids:
+            print(f"[*] Resuming: found {len(finished_ids)} already processed IDs")
+        else:
+            print(f"[*] No existing IDs found in {output_filename}")
+
+    row_iterator = read_dataset_streaming(input_filename, dataset_schema.input_columns)
+
+    append_mode = len(finished_ids) > 0
+    total_processed = len(finished_ids)
+    total_skipped = 0
+
+    batch: list[dict] = []
+    output_rows_buffer: list[dict] = []
+    num_collected_batches = 0
+
+    def flush_buffer() -> None:
+        nonlocal output_rows_buffer
+        if not output_rows_buffer:
+            return
+        write_dataset_streaming(output_rows_buffer, output_filename, append=append_mode or total_processed > 0)
+        output_rows_buffer = []
+
+    def process_batch(batch_rows: list[dict]) -> None:
+        nonlocal num_collected_batches, total_processed, output_rows_buffer
+        if not batch_rows:
+            return
+
+        batch_dict: dict[str, list] = {
+            key: [row.get(key, "") for row in batch_rows] for key in dataset_schema.input_columns
+        }
+        processed_batch = classifier(batch_dict)
+        if dataset_schema.output_columns[0] not in processed_batch:
+            raise ValueError(
+                f"Classifier output missing expected key {dataset_schema.output_columns[0]!r}. "
+                f"Got keys: {sorted(processed_batch.keys())}"
+            )
+        batch_len = len(processed_batch[dataset_schema.output_columns[0]])
+        output_rows = convert_batch_dict_to_output_rows(processed_batch, dataset_schema.output_columns, batch_len)
+        output_rows_buffer.extend(output_rows)
+
+        num_collected_batches += 1
+        if num_collected_batches % num_batches_per_upload == 0:
+            flush_buffer()
+
+        total_processed += batch_len
+
+    for row in row_iterator:
+        row_id = get_id_from_row(row, dataset_schema.id_column)
+        if row_id is None:
+            logger.warning(f"No ID found in row: {row} for ID path: {dataset_schema.id_column} - skipping")
+            continue
+        if row_id in finished_ids:
+            total_skipped += 1
+            continue
+
+        batch.append(row)
+        if len(batch) >= batch_size:
+            process_batch(batch)
+            batch = []
+
+    if batch:
+        process_batch(batch)
+
+    flush_buffer()
+
+    print(
+        f"[*] Completed processing (local) {input_filename} - "
+        f"Total rows: {total_processed} (skipped {total_skipped} already finished)"
+    )
+
+
+def run_inference_local(inference_config: InferenceConfig):
+    """Run inference without Ray (in-process)."""
+    logger.info(f"Running local inference for {inference_config.input_path} to {inference_config.output_path}")
+    filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
+
+    if len(filepaths) == 0:
+        pattern = f"**/*.{inference_config.filetype}"
+        raise FileNotFoundError(f"No files found in {inference_config.input_path} with pattern {pattern}")
+
+    if inference_config.output_path is None:
+        raise ValueError("output_path must be set for inference.")
+
+    classifier = AutoClassifier(
+        inference_config.model_name,
+        inference_config.attribute_name,
+        inference_config.model_type,
+        **(inference_config.classifier_kwargs or {}),
+    )
+
+    input_path = inference_config.input_path
+    output_path = inference_config.output_path
+
+    for input_filepath in filepaths:
+        output_fp = rebase_file_path(input_path, input_filepath, output_path)
+        fsspec_mkdirs(os.path.dirname(output_fp))
+        process_file_with_quality_classifier_streaming_local(
+            input_filepath,
+            output_fp,
+            classifier,
+            inference_config.dataset_schema,
+            inference_config.num_batches_per_upload,
+            inference_config.batch_size,
+            inference_config.resume,
+        )
 
 
 @ray.remote(max_calls=1)
@@ -196,6 +320,9 @@ def process_file_ray(
 
 
 def run_inference(inference_config: InferenceConfig):
+    if not inference_config.use_ray:
+        return run_inference_local(inference_config)
+
     logger.info(f"Running inference for {inference_config.input_path} to {inference_config.output_path}")
     filepaths = fsspec_glob(os.path.join(inference_config.input_path, f"**/*.{inference_config.filetype}"))
 
@@ -205,6 +332,8 @@ def run_inference(inference_config: InferenceConfig):
 
     input_path = inference_config.input_path
     output_path = inference_config.output_path
+    if output_path is None:
+        raise ValueError("output_path must be set for inference.")
 
     # Resilient wait/get with per-task retries to tolerate preemptions.
     max_in_flight = inference_config.task.max_in_flight

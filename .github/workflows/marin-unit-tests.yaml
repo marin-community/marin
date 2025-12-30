@@ -28,7 +28,18 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: ${{ matrix.python-version }}
-      
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.7.20"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          uv sync --package marin --extra cpu --group test --frozen
+
       - name: Set up Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v3
         with:
@@ -39,7 +50,8 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CI: true
         run: |
-          PYTHONPATH=tests:. cd lib/marin && uv run --frozen pytest -n 2 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci' -v ../../tests/
+          # Ensure we select the CPU torch wheels (and JAX CPU) for unit tests on GitHub runners.
+          PYTHONPATH=tests:. uv run --package marin --extra cpu --frozen pytest -n 2 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
 
       - name: Test zephyr
         env:

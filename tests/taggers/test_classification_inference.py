@@ -157,6 +157,7 @@ class TestMultipleFileProcessing:
             runtime=RuntimeConfig(memory_limit_gb=1),
             task=TaskConfig(max_in_flight=2),
             autoscaling_actor_pool_config=DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG,
+            use_ray=False,
             dataset_schema=DEFAULT_DATASET_SCHEMA,
         )
 
