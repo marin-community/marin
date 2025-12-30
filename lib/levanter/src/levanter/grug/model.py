@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from dataclasses import dataclass
 from functools import partial
 
@@ -8,7 +11,7 @@ from jax import random
 from jax.sharding import PartitionSpec as P, reshard
 from jax.tree_util import register_dataclass
 
-from .attention import apply_rotary_embedding, resolve_attention_backend
+from .attention import AttentionMask, apply_rotary_embedding, resolve_attention_backend
 from .config import AttentionRuntimeConfig, GrugModelConfig
 
 
@@ -65,7 +68,12 @@ def init_parameters(cfg: GrugModelConfig, *, key: jax.Array) -> GrugModelParamet
         )
     if cfg.tie_embeddings:
         output_proj = reshard(output_proj, P("data", None))
-    final_norm = reshard(jnp.ones((cfg.hidden_dim,), dtype=jnp.float32), P("data",))
+    final_norm = reshard(
+        jnp.ones((cfg.hidden_dim,), dtype=jnp.float32),
+        P(
+            "data",
+        ),
+    )
 
     blocks: list[GrugBlockParams] = []
     for i in range(cfg.num_layers):
@@ -108,7 +116,9 @@ def init_parameters(cfg: GrugModelConfig, *, key: jax.Array) -> GrugModelParamet
 def _unshard(x: jax.Array) -> jax.Array:
     return reshard(x, P((None,) * x.ndim))
 
+
 _Pbatch = P(("replica", "data"), None)
+
 
 def _rms_norm(x: jax.Array, weight: jax.Array, eps: float) -> jax.Array:
     weight = _unshard(weight)
@@ -130,7 +140,7 @@ def forward(
     cfg: GrugModelConfig,
     runtime: AttentionRuntimeConfig,
     *,
-    mask: jax.Array | None = None,
+    mask: AttentionMask | jax.Array | None = None,
     causal: bool = True,
 ) -> jax.Array:
     backend = resolve_attention_backend(runtime)

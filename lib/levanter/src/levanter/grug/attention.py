@@ -1,7 +1,6 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
-import dataclasses
-import functools as ft
+import functools
 import math
 from dataclasses import dataclass
 from typing import Protocol
@@ -13,30 +12,26 @@ from jax.tree_util import register_dataclass
 from .config import AttentionRuntimeConfig, RotaryConfig
 
 
-class AttentionBackend(Protocol):
-    def __call__(
-        self,
-        q: jax.Array,
-        k: jax.Array,
-        v: jax.Array,
-        mask: jax.Array | None,
-        causal: bool,
-    ) -> jax.Array: ...
-
-
 def default_attention_mask(seq_len: int) -> jax.Array:
     """Boolean causal mask with shape (seq, seq). True == keep, False == block."""
     return jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))
 
 
-@ft.partial(register_dataclass, meta_fields=["is_causal"])
+@functools.partial(
+    register_dataclass, data_fields=["segment_ids"], meta_fields=["is_causal", "causal_offset", "sliding_window"]
+)
 @dataclass(frozen=True)
 class AttentionMask:
-    """Structured mask that can emit a boolean mask."""
+    """Grug attention mask spec.
 
-    is_causal: bool = dataclasses.field(metadata=dict(static=True), default=False)
+    This is deliberately simpler than `levanter.layers.attention.AttentionMask`:
+    - Stores raw JAX arrays (no NamedArray fields).
+    - Does not support explicit masks (for now).
+    - Supports causal masking, sliding windows, and segment IDs.
+    """
+
+    is_causal: bool = False
     causal_offset: int = 0
-    explicit_mask: jax.Array | None = None
     segment_ids: tuple[jax.Array, jax.Array] | None = None
     sliding_window: int | None = None
 
@@ -44,20 +39,21 @@ class AttentionMask:
     def causal(cls, *, offset: int = 0, sliding_window: int | None = None) -> "AttentionMask":
         return cls(is_causal=True, causal_offset=offset, sliding_window=sliding_window)
 
-    @classmethod
-    def explicit(cls, mask: jax.Array) -> "AttentionMask":
-        return cls(explicit_mask=mask)
-
-    def with_segment_ids(
-        self, query_segment_ids: jax.Array, kv_segment_ids: jax.Array | None = None
-    ) -> "AttentionMask":
-        kv_ids = query_segment_ids if kv_segment_ids is None else kv_segment_ids
+    def with_segment_ids(self, q_segment_ids: jax.Array, kv_segment_ids: jax.Array | None = None) -> "AttentionMask":
+        kv_ids = q_segment_ids if kv_segment_ids is None else kv_segment_ids
         return AttentionMask(
             is_causal=self.is_causal,
             causal_offset=self.causal_offset,
-            explicit_mask=self.explicit_mask,
-            segment_ids=(query_segment_ids, kv_ids),
+            segment_ids=(q_segment_ids, kv_ids),
             sliding_window=self.sliding_window,
+        )
+
+    def with_sliding_window(self, sliding_window: int | None) -> "AttentionMask":
+        return AttentionMask(
+            is_causal=self.is_causal,
+            causal_offset=self.causal_offset,
+            segment_ids=self.segment_ids,
+            sliding_window=sliding_window,
         )
 
     def materialize_mask(self, q_len: int, k_len: int) -> jax.Array | None:
@@ -81,10 +77,18 @@ class AttentionMask:
             allowed = q_seg[:, None] == k_seg[None, :]
             mask = allowed if mask is None else jnp.logical_and(mask, allowed)
 
-        if self.explicit_mask is not None:
-            mask = self.explicit_mask if mask is None else jnp.logical_and(mask, self.explicit_mask)
-
         return mask
+
+
+class AttentionBackend(Protocol):
+    def __call__(
+        self,
+        q: jax.Array,
+        k: jax.Array,
+        v: jax.Array,
+        mask: AttentionMask | jax.Array | None,
+        causal: bool,
+    ) -> jax.Array: ...
 
 
 def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[jax.Array, jax.Array]:
@@ -156,57 +160,45 @@ def reference_attention(
     return ctx.astype(v.dtype)
 
 
-def _maybe_splash_attention() -> AttentionBackend | None:
+def _maybe_blocksparse_attention() -> AttentionBackend | None:
     try:
-        from jax.experimental.pallas.ops.tpu import splash_attention as splash
-        from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel as kernel
-        from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_mask as mask_lib
+        from ejkernel.modules.operations import blocksparse_attention as ej_blocksparse_attention
     except Exception:
         return None
 
-    def _backend(q, k, v, mask, causal, *, runtime: AttentionRuntimeConfig):
-        if runtime.head_shards is None or runtime.q_seq_shards is None:
-            raise ValueError("Splash attention requires head_shards and q_seq_shards to be set in AttentionRuntimeConfig.")
-        Sq = q.shape[1]
-        Sk = k.shape[1]
-        Hq = q.shape[2]
-
-        # Build base mask
-        base_mask: mask_lib.Mask
-        if causal:
-            base_mask = mask_lib.CausalMask((Sq, Sk), offset=0, shard_count=runtime.q_seq_shards)
-        else:
-            base_mask = mask_lib.FullMask(_shape=(Sq, Sk))
+    def _backend(q, k, v, mask, causal):
+        q_segment_ids = None
+        kv_segment_ids = None
+        sliding_window = None
 
         if isinstance(mask, AttentionMask):
+            if mask.causal_offset != 0:
+                raise NotImplementedError("Grug AttentionMask.causal_offset is not supported by ejkernel blocksparse.")
+
             if mask.segment_ids is not None:
-                raise NotImplementedError("segment_ids not supported by splash attention wrapper yet.")
-            if mask.sliding_window is not None:
-                local = mask_lib.LocalMask(
-                    (Sq, Sk),
-                    window_size=(mask.sliding_window, mask.sliding_window),
-                    offset=mask.causal_offset,
-                    shard_count=runtime.q_seq_shards,
-                )
-                base_mask = mask_lib.LogicalAnd(base_mask, local)
-            if mask.explicit_mask is not None:
-                explicit = mask_lib.NumpyMask(jnp.array(mask.explicit_mask, dtype=bool))
-                base_mask = mask_lib.LogicalAnd(base_mask, explicit)
-        elif isinstance(mask, jax.Array) and mask.dtype == jnp.bool_:
-            explicit = mask_lib.NumpyMask(jnp.array(mask, dtype=bool))
-            base_mask = mask_lib.LogicalAnd(base_mask, explicit)
+                q_segment_ids, kv_segment_ids = mask.segment_ids
 
-        multi_mask = mask_lib.MultiHeadMask(masks=[base_mask for _ in range(Hq)])
+            sliding_window = mask.sliding_window
+            causal = causal or mask.is_causal
 
-        # Splash currently assumes Hq is divisible by Kv heads; if not, fall back elsewhere.
-        mha = kernel.make_splash_mha(
-            multi_mask,
-            head_shards=runtime.head_shards,
-            q_seq_shards=runtime.q_seq_shards,
-            is_mqa=False,
+        if isinstance(mask, jax.Array):
+            # Grug sometimes passes an explicit (q,k) boolean mask. ejkernel blocksparse_attention
+            # does not accept an arbitrary dense mask; it only supports structured masks
+            # (causal/window/segments) and block-sparse patterns.
+            raise NotImplementedError("Dense boolean masks are not supported by ejkernel blocksparse attention.")
+
+        out = ej_blocksparse_attention.blocksparse_attention(
+            q.transpose(0, 2, 1, 3),
+            k.transpose(0, 2, 1, 3),
+            v.transpose(0, 2, 1, 3),
+            softmax_aux=None,
+            bias=None,
+            q_segment_ids=q_segment_ids,
+            kv_segment_ids=kv_segment_ids,
+            sliding_window=sliding_window,
+            causal=causal,
         )
-        out = mha(q, k, v)
-        return out
+        return out.transpose(0, 2, 1, 3)
 
     return _backend
 
@@ -217,15 +209,16 @@ def resolve_attention_backend(runtime: AttentionRuntimeConfig) -> AttentionBacke
 
     if runtime.backend == "reference":
         return _reference_backend
-    if runtime.backend == "splash":
-        backend = _maybe_splash_attention()
+    if runtime.backend == "blocksparse":
+        backend = _maybe_blocksparse_attention()
         if backend is None:
-            raise RuntimeError("Splash attention requested but unavailable")
-        # bind runtime so shard counts flow through
-        return ft.partial(backend, runtime=runtime)
-    backend = _maybe_splash_attention() if runtime.backend == "auto" else None
-    if backend is not None:
-        return ft.partial(backend, runtime=runtime)
+            raise RuntimeError("blocksparse attention requested but unavailable")
+        return backend
+
+    if runtime.backend == "auto":
+        backend = _maybe_blocksparse_attention()
+        if backend is not None:
+            return backend
     return _reference_backend
 
 

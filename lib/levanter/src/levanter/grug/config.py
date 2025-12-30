@@ -1,3 +1,6 @@
+# Copyright 2025 The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -46,10 +49,8 @@ class GrugModelConfig:
 class AttentionRuntimeConfig:
     """Controls attention backend selection for training/eval."""
 
-    backend: Literal["auto", "reference", "splash"] = "auto"
+    backend: Literal["auto", "reference", "blocksparse"] = "blocksparse"
     logits_dtype: jnp.dtype | None = jnp.float32
-    head_shards: int = 1
-    q_seq_shards: int = 1
 
 
 @dataclass(frozen=True)

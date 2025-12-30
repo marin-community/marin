@@ -1,7 +1,11 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grug: a grug-simple explicit-sharding transformer trainer."""
+"""Grug: a grug-simple explicit-sharding transformer trainer.
+
+This package intentionally exposes only the "grug core" (raw-array model + kernels).
+Levanter integration adapters live under `levanter.models`.
+"""
 
 from .attention import apply_rotary_embedding, default_attention_mask, resolve_attention_backend
 from .config import AttentionRuntimeConfig, GrugModelConfig, GrugTrainingConfig, RotaryConfig
@@ -13,7 +17,6 @@ from .model import (
     forward,
     init_parameters,
 )
-from .wrapper import GrugConfigLike, GrugForwardFn, GrugInitFn, GrugWrapper
 
 __all__ = [
     "AttentionRuntimeConfig",
@@ -31,8 +34,4 @@ __all__ = [
     "make_token_dataset",
     "make_dataloader",
     "build_token_loader",
-    "GrugWrapper",
-    "GrugInitFn",
-    "GrugForwardFn",
-    "GrugConfigLike",
 ]
