@@ -199,6 +199,11 @@ def main(config: TrainLmConfig):
         if len(tagged_eval_datasets) == 0:
             logger.warning("No evaluation datasets provided.")
         else:
+            # TODO: remove
+            logger.info(f"[run={config.trainer.id}] train_config: {config.trainer}")
+            logger.info(f"[run={config.trainer.id}] eval_batch_size: {config.trainer.eval_batch_size}")
+            # TODO: /remove
+
             cb = levanter.eval.cb_tagged_lm_evaluate(
                 EvalBatch,
                 tagged_eval_datasets,
