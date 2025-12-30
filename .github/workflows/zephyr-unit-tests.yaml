@@ -43,4 +43,4 @@ jobs:
           CI: true
         run: |
           # important: don't cd into lib/zephyr so that ray uv integration doesn't freak out
-          uv run --frozen pytest -n 2 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
+          uv run --package zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
