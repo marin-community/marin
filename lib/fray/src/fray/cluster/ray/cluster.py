@@ -445,16 +445,6 @@ class RayCluster(Cluster):
         configured address.
         """
         if ray.is_initialized():
-            # Prefer the actual dashboard URL if we have it. Ray may move the
-            # dashboard off the default port (8265) if it's already in use.
-            try:
-                webui_url = ray._private.worker.global_worker.node.address_info.get("webui_url")
-                if webui_url:
-                    return f"http://{webui_url}" if "://" not in webui_url else webui_url
-            except Exception:
-                logger.exception("bleck")
-                pass
-
             try:
                 ctx = ray.get_runtime_context()
                 if hasattr(ctx, "gcs_address"):
