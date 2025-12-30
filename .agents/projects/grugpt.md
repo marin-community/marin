@@ -10,15 +10,22 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 ### Software Principles
 
 - **Few methods, keep arrays out of them inside jit.** We still prefer top-level functions, but lightweight dataclass helpers/property accessors—and any method that only touches metadata, not arrays—are fine even inside jit-traced regions. Once a method would manipulate `jax.Array`s, implement it as a standalone function instead.
-- **Keep dependencies small.** Only `einshard`, `einops`, `optax`, JAX core libs, HF tokenizers, and Levanter’s `data` + `tracker` + TensorStore serialization APIs are allowed. Grug doesn't want to reinvent wheels, but we also don't want heavy frameworks obscuring the core logic.
+- **Keep dependencies small.** Prefer `einshard`, `einops`, `optax`, JAX core libs, HF tokenizers, and Levanter’s `data` + `tracker` + TensorStore serialization APIs. Grug doesn't want to reinvent wheels, but we also don't want heavy frameworks obscuring the core logic.
+- **Fast attention kernels are allowed, but keep the surface simple.** For now, we standardize on `ejkernel` block-sparse attention (`ejkernel.modules.operations.blocksparse_attention`) with a reference fallback.
 - **Serializable state.** Trainer state must round-trip through `levanter.tensorstore_serialization.tree_{de,}serialize_leaves_tensorstore` with no custom logic.
 - **Consumption-ready.** Provide a `uv run python -m marin.grugpt.train` entrypoint plus tests. Tracking hooks log loss/perplexity through Levanter’s tracker interface.
 
 ### JAX/ML Principles
 
 - **Mesh-first mental model.** We always create one mesh axis per logical unit. For now, `['replica', 'data', 'tensor']`. Work must still run on a single GPU (mesh axes collapse to size 1) but should seamlessly extend to 4-device TPU v4-8 pods for CI. Mesh creation and validation live in one place.
-- **Use good kernels when available.** Grug is happy to call out to other people's fast attention kernels (Splash, Tokamax, etc.) as long as the surface stays simple and the fallback reference path remains.
+- **Use good kernels when available.** Grug is happy to call out to other people's fast attention kernels (ejkernel blocksparse today; Tokamax later) as long as the surface stays simple and the fallback reference path remains.
 - **Explicit sharding everywhere.** Arrays carry `PartitionSpec`s in their types using `jax.set_mesh`, `AxisType.Explicit`, and `einshard` helpers. Any op with ambiguous shardings must either supply `out_sharding=` or run inside `auto_axes`.
+
+### Code Organization Principles
+
+- **Keep `levanter.grug` core-only.** The `levanter.grug` package should stay “notebook-like”: raw `jax.Array` inputs/outputs, top-level functions, small dataclasses, and minimal plumbing.
+- **Adapters live outside grug.** Integration with Levanter model interfaces (`LmHeadModel`, `NamedArray`, etc.) lives in `levanter.models`, currently `levanter.models.grug_wrapper`.
+- **Mask spec is simple.** Grug’s attention mask is a small spec (`levanter.grug.attention.AttentionMask`) storing only raw JAX arrays/ints (no NamedArray fields and no explicit dense masks yet).
 
 
 ## Proposed Directory Layout
@@ -43,7 +50,7 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 - Each config only stores data—no helper methods. Convenience functions live in `config.py` (e.g., `def validate_config(cfg)`), returning new configs instead of mutating.
 - `TrainingState` dataclass contains `(params, opt_state, step, rng)` and is registered as a pytree. Parameters are themselves a dataclass (`ModelParameters`) mirroring module structure (token embedding, attention weights, etc.).
 - Provide `default_run_config()` helper that builds a small LM spec for smoke tests (e.g., 4 layers, 256 hidden size).
-- Add an `AttentionRuntimeConfig` (or similar) holding `backend` (`"auto" | "splash" | "reference"`) and `logits_dtype` (default `jnp.float32`). The flag `upcast_logits=True/False` controls whether QKᵀ runs in FP16/bfloat16 while softmax logits get promoted to float32 before normalization.
+- Attention backend selection is a single string: `AttentionBackend = Literal["reference", "blocksparse"]`. This keeps the surface small and avoids runtime config objects in hot paths.
 
 - `mesh.py` exposes `def create_mesh(cfg: RunConfig) -> Mesh` which:
   1. Discovers available devices.
@@ -81,12 +88,12 @@ def rms_norm(x, weight, eps):
     var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
     return x * weight / jnp.sqrt(var + eps)
 
-def apply_attention(params, hidden, mask, rotary, runtime):
+def apply_attention(params, hidden, mask, rotary, backend):
     q = einsum("b s h, h (n d) -> b s n d", hidden, params.attn.w_q)
     k = einsum("b s h, h (m d) -> b s m d", hidden, params.attn.w_k)
     v = einsum("b s h, h (m d) -> b s m d", hidden, params.attn.w_v)
     q, k = apply_rotary_embedding(q, k, rotary)
-    attn = runtime.backend(q, k, v, mask, logits_dtype=runtime.logits_dtype)
+    attn = attention(q, k, v, mask, backend=backend)
     return einsum("b s n d, (n d) h -> b s h", attn, params.attn.w_o)
 
 def transformer_block(block, hidden, mask, rotary, runtime, eps):
@@ -111,12 +118,11 @@ def forward(params, tokens, mask, rotary, runtime, eps):
 
 - Use `einops.rearrange` for `[batch, seq, heads, head_dim]` manipulations where it improves clarity.
 - Use `jnp.einsum` and explicit `PartitionSpec` annotations to keep matmuls consistent with the mesh layout.
-- Attention backend selection lives in `attention.py`:
-  - Runtime config flows into every call, carrying both the backend choice and optional logits dtype. When `logits_dtype` is not `None`, we cast attention scores to that dtype (e.g., float32) before softmax even if queries/keys/values are bf16.
-  - If running on TPU and splash kernels import, call the `splash_attention` variant (modeled after `levanter.layers.attention`).
-  - Otherwise fall back to reference attention implemented with `einsum` + stable softmax.
-  - Both paths share the same sharding contract (batch -> `data`, heads -> `tensor`, sequence replicated or optionally data-sharded later) and are responsible for any grouped-query head tiling. Splash already supports uneven head counts; the reference backend repeats KV heads internally when `num_heads != num_kv_heads` so caller code stays simple.
-- Attention masks are plain bias arrays (e.g., lower-triangular `-inf` paddings) that are replicated across devices; no wrapper dataclass is needed. The reference backend materializes a causal mask if none is provided.
+- Attention backend selection lives in `attention.py` as a single `attention(q, k, v, mask, *, backend=...)` function:
+  - `backend="blocksparse"` uses ejkernel blocksparse attention.
+  - `backend="reference"` uses `einsum` + softmax.
+  - The reference path exists for debugging; blocksparse is the default for real runs.
+- Attention masks are a small spec dataclass (`levanter.grug.attention.AttentionMask`) rather than a dense mask/bias array. Grug defaults to causal masking.
 - Layer norm: implement epsilon-stabilized RMSNorm using `jnp.mean/var` and explicit shardings.
 - Residual dropouts remain optional and implemented via `jax.random.bernoulli` (with `out_sharding=P(None)` to keep them replicated).
 
@@ -169,11 +175,9 @@ def forward(params, tokens, mask, rotary, runtime, eps):
 
 ### Current Status
 
-- Configs, parameter dataclasses, and the synthetic `main.py` driver are implemented under `lib/grugpt/`.
-- Parameters are initialized with explicit `PartitionSpec`s so shardings are baked into the types; the synthetic demo simply calls `create_mesh()` and runs `optax.adamw` on fake data.
-- `attention.py` hosts the rotary helpers, reference attention backend (with optional logit upcasting + causal mask materialization), and a splash stub. `model.py` now imports these helpers so the core forward pass reads linearly.
-- Splash attention is still a TODO; the current backend always falls back to the reference implementation.
-- No real data loader or tracker integration yet—`main.py` sticks to random tokens. No tests exist beyond the doc sketch.
+- The current prototype lives under `lib/levanter/src/levanter/grug/` (not yet extracted to `lib/grugpt/`).
+- Attention uses ejkernel blocksparse by default; reference attention remains available for debugging.
+- Levanter integration lives in `lib/levanter/src/levanter/models/grug_wrapper.py` (kept out of `levanter.grug` intentionally).
 
 ## Implementation Tasks
 
