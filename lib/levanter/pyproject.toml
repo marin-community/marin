@@ -30,7 +30,7 @@ classifiers = [
 dependencies = [
     "haliax>=1.4.dev450",
     "equinox>=0.11.7,!=0.12.0",
-    "jax>=0.6.2,!=0.7.0,!=0.7.1",
+    "jax>=0.8.0",
     "fray",
     "zephyr",
     "einops>=0.8.0",
@@ -108,7 +108,8 @@ test = [
   "pytest-forked",
   "pytest-asyncio",
   "soundfile",
-  "librosa",
+  "librosa>=0.11.0",
+  "numba>=0.63.1",
   "tensorboardX>=2.6",
   "chex>=0.1.86",
   "httpx>=0.28.1",

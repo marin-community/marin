@@ -41,7 +41,7 @@ from marin.utils import (
     fsspec_glob,
     rebase_file_path,
 )
-from zephyr import Dataset, flow_backend
+from zephyr import Backend, Dataset
 from zephyr.readers import InputFileSpec, load_file
 
 
@@ -214,8 +214,7 @@ def _compute_percentile_threshold(
             combined.merge(sketch)
         return combined
 
-    backend = flow_backend()
-    result = backend.execute(
+    result = Backend.execute(
         Dataset.from_list(attr_paths)
         .load_file()
         .select("attributes")
@@ -322,20 +321,16 @@ def process_file_shard(shard, filters: list[FilterConfig], input_base: str) -> I
 
 def consolidate(config: ConsolidateConfig):
     """Consolidate documents by applying filters based on attributes."""
-    backend = flow_backend()
-
     filters = calculate_percentile_thresholds(config)
     input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
     logger.info(f"Consolidating {len(input_paths)} document files")
 
     output_pattern = f"{config.output_path}/part-{{shard:04d}}.{config.filetype}"
 
-    results = list(
-        backend.execute(
-            Dataset.from_list(input_paths)
-            .map_shard(lambda shard: process_file_shard(shard, filters, config.input_path))
-            .write_jsonl(output_pattern)
-        )
+    results = Backend.execute(
+        Dataset.from_list(input_paths)
+        .map_shard(lambda shard: process_file_shard(shard, filters, config.input_path))
+        .write_jsonl(output_pattern)
     )
 
     logger.info(f"Consolidation complete. Wrote {len(results)} output files")

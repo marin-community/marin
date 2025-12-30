@@ -43,7 +43,7 @@ import jax
 import numpy as np
 import pyarrow as pa
 import pyarrow.flight as flight
-from fray.job.context import JobContext, fray_job_ctx
+from fray.job.context import get_default_job_ctx
 from haliax.partitioning import ResourceMapping
 from jax.sharding import Mesh
 from jaxtyping import PyTree
@@ -371,7 +371,7 @@ class ArrowFlightServer(WeightTransferServer):
             logger.info(f"Arrow Flight server {i} started at {server_location}")
 
         self.metrics = WeightTransferServerMetrics()
-        self._ctx: JobContext = fray_job_ctx()
+        self._ctx = get_default_job_ctx()
         self._coordinator = self._ctx.create_actor(
             ArrowFlightCoordinator,
             name=self.config.coordinator_name,
@@ -469,7 +469,7 @@ class ArrowFlightClient(WeightTransferClient):
 
         self.metrics = WeightTransferClientMetrics()
         self._receive_pool = ThreadPoolExecutor(max_workers=NUM_PARALLEL_RECEIVES)
-        self._ctx: JobContext = fray_job_ctx()
+        self._ctx = get_default_job_ctx()
         self._coordinator = self._ctx.create_actor(
             ArrowFlightCoordinator, name=self.config.coordinator_name, get_if_exists=True, preemptible=False
         )

@@ -25,6 +25,7 @@ from threading import Thread
 
 from fray.cluster.base import Cluster, EnvironmentConfig, JobId, JobInfo, JobRequest, TaskStatus
 from fray.isolated_env import TemporaryVenv
+from fray.job.context import SyncContext, fray_default_job_ctx
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,8 @@ class FakeProcess(Thread):
 
     def run(self):
         try:
-            super().run()
+            with fray_default_job_ctx(SyncContext()):
+                super().run()
         except BaseException as e:
             self._exception = e
             raise
