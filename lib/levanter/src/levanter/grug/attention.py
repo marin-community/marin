@@ -3,7 +3,6 @@
 import functools
 import math
 from dataclasses import dataclass
-from typing import Protocol
 
 import jax
 import jax.numpy as jnp
@@ -80,17 +79,6 @@ class AttentionMask:
         return mask
 
 
-class AttentionBackend(Protocol):
-    def __call__(
-        self,
-        q: jax.Array,
-        k: jax.Array,
-        v: jax.Array,
-        mask: AttentionMask | jax.Array | None,
-        causal: bool,
-    ) -> jax.Array: ...
-
-
 def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[jax.Array, jax.Array]:
     half_dim = head_dim // 2
     inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
@@ -160,73 +148,77 @@ def reference_attention(
     return ctx.astype(v.dtype)
 
 
-def _maybe_blocksparse_attention() -> AttentionBackend | None:
-    try:
-        from ejkernel.modules.operations import blocksparse_attention as ej_blocksparse_attention
-    except Exception:
-        return None
+def _blocksparse_attention(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    mask: AttentionMask | jax.Array | None,
+    *,
+    causal: bool,
+) -> jax.Array:
+    from ejkernel.modules.operations import blocksparse_attention as ej_blocksparse_attention
 
-    def _backend(q, k, v, mask, causal):
-        q_segment_ids = None
-        kv_segment_ids = None
-        sliding_window = None
+    q_segment_ids = None
+    kv_segment_ids = None
+    sliding_window = None
 
-        if isinstance(mask, AttentionMask):
-            if mask.causal_offset != 0:
-                raise NotImplementedError("Grug AttentionMask.causal_offset is not supported by ejkernel blocksparse.")
+    if isinstance(mask, AttentionMask):
+        if mask.causal_offset != 0:
+            raise NotImplementedError("Grug AttentionMask.causal_offset is not supported by ejkernel blocksparse.")
 
-            if mask.segment_ids is not None:
-                q_segment_ids, kv_segment_ids = mask.segment_ids
+        if mask.segment_ids is not None:
+            q_segment_ids, kv_segment_ids = mask.segment_ids
 
-            sliding_window = mask.sliding_window
-            causal = causal or mask.is_causal
+        sliding_window = mask.sliding_window
+        causal = causal or mask.is_causal
 
-        if isinstance(mask, jax.Array):
-            # Grug sometimes passes an explicit (q,k) boolean mask. ejkernel blocksparse_attention
-            # does not accept an arbitrary dense mask; it only supports structured masks
-            # (causal/window/segments) and block-sparse patterns.
-            raise NotImplementedError("Dense boolean masks are not supported by ejkernel blocksparse attention.")
+    if isinstance(mask, jax.Array):
+        # Grug sometimes passes an explicit (q,k) boolean mask. ejkernel blocksparse_attention
+        # does not accept an arbitrary dense mask; it only supports structured masks
+        # (causal/window/segments) and block-sparse patterns.
+        raise NotImplementedError("Dense boolean masks are not supported by ejkernel blocksparse attention.")
 
-        out = ej_blocksparse_attention.blocksparse_attention(
-            q.transpose(0, 2, 1, 3),
-            k.transpose(0, 2, 1, 3),
-            v.transpose(0, 2, 1, 3),
-            softmax_aux=None,
-            bias=None,
-            q_segment_ids=q_segment_ids,
-            kv_segment_ids=kv_segment_ids,
-            sliding_window=sliding_window,
-            causal=causal,
-        )
-        return out.transpose(0, 2, 1, 3)
-
-    return _backend
+    out = ej_blocksparse_attention.blocksparse_attention(
+        q.transpose(0, 2, 1, 3),
+        k.transpose(0, 2, 1, 3),
+        v.transpose(0, 2, 1, 3),
+        softmax_aux=None,
+        bias=None,
+        q_segment_ids=q_segment_ids,
+        kv_segment_ids=kv_segment_ids,
+        sliding_window=sliding_window,
+        causal=causal,
+    )
+    return out.transpose(0, 2, 1, 3)
 
 
-def resolve_attention_backend(runtime: AttentionRuntimeConfig) -> AttentionBackend:
-    def _reference_backend(q, k, v, mask, causal):
+def attention(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    mask: AttentionMask | jax.Array | None,
+    *,
+    causal: bool,
+    runtime: AttentionRuntimeConfig,
+) -> jax.Array:
+    if runtime.backend == "reference":
         return reference_attention(q, k, v, mask, causal=causal, logits_dtype=runtime.logits_dtype)
 
-    if runtime.backend == "reference":
-        return _reference_backend
-    if runtime.backend == "blocksparse":
-        backend = _maybe_blocksparse_attention()
-        if backend is None:
-            raise RuntimeError("blocksparse attention requested but unavailable")
-        return backend
+    if runtime.backend not in ("auto", "blocksparse"):
+        raise ValueError(f"Unknown attention backend: {runtime.backend}")
 
-    if runtime.backend == "auto":
-        backend = _maybe_blocksparse_attention()
-        if backend is not None:
-            return backend
-    return _reference_backend
+    try:
+        return _blocksparse_attention(q, k, v, mask, causal=causal)
+    except Exception:
+        if runtime.backend == "blocksparse":
+            raise
+        return reference_attention(q, k, v, mask, causal=causal, logits_dtype=runtime.logits_dtype)
 
 
 __all__ = [
-    "AttentionBackend",
     "AttentionMask",
     "apply_rotary_embedding",
+    "attention",
     "default_attention_mask",
     "reference_attention",
-    "resolve_attention_backend",
 ]

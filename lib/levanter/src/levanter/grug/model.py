@@ -11,7 +11,7 @@ from jax import random
 from jax.sharding import PartitionSpec as P, reshard
 from jax.tree_util import register_dataclass
 
-from .attention import AttentionMask, apply_rotary_embedding, resolve_attention_backend
+from .attention import AttentionMask, apply_rotary_embedding, attention
 from .config import AttentionRuntimeConfig, GrugModelConfig
 
 
@@ -143,7 +143,6 @@ def forward(
     mask: AttentionMask | jax.Array | None = None,
     causal: bool = True,
 ) -> jax.Array:
-    backend = resolve_attention_backend(runtime)
     head_dim = cfg.inferred_head_dim
     seq_len = token_ids.shape[1]
 
@@ -155,7 +154,7 @@ def forward(
         k = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_v), "... (m d) -> ... m d", d=head_dim)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=cfg.rope)
-        attn_out = backend(q, k, v, mask, causal)
+        attn_out = attention(q, k, v, mask, causal=causal, runtime=runtime)
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         attn_out = jnp.einsum("bsh,hd->bsd", attn_out, block.attn.w_o, out_sharding=_Pbatch)
 
