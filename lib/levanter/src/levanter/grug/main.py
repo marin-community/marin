@@ -6,16 +6,15 @@ from dataclasses import dataclass, replace
 from typing import Iterator
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 import optax
+from jax import numpy as jnp
 from jax.tree_util import register_dataclass
 from jax.sharding import AxisType
 
 from levanter.store.cache import TreeCache
 
-from .attention import default_attention_mask
-from .config import AttentionRuntimeConfig, GrugModelConfig, GrugTrainingConfig, validate_config
+from .config import AttentionBackend, GrugModelConfig, GrugTrainingConfig, validate_config
 from .data import DEFAULT_AXIS_MAPPING, build_token_loader
 from .model import GrugModelParameters, forward, init_parameters
 
@@ -64,13 +63,11 @@ def create_mesh() -> jax.sharding.Mesh:
 
 def make_train_step(
     model_cfg: GrugModelConfig,
-    runtime_cfg: AttentionRuntimeConfig,
+    attention_backend: AttentionBackend,
     optimizer: optax.GradientTransformation,
-    *,
-    causal_mask: jax.Array | None,
 ):
     def loss_and_metrics(params: GrugModelParameters, batch: dict[str, jax.Array]):
-        logits = forward(params, batch["tokens"], model_cfg, runtime_cfg, mask=causal_mask, causal=True)
+        logits = forward(params, batch["tokens"], model_cfg, attention_backend, mask=None)
         loss = cross_entropy_loss(logits, batch["labels"])
         metrics = {"loss": loss, "ppl": jnp.exp(loss)}
         return loss, metrics
@@ -108,8 +105,7 @@ def run_training(train_cfg: GrugTrainingConfig, *, cache_dir: str | None = None)
     state = TrainingState(step=0, params=params, opt_state=opt_state)
 
     seq_len = train_cfg.model.max_seq_len
-    causal_mask = default_attention_mask(seq_len - 1)
-    train_step = make_train_step(train_cfg.model, train_cfg.attention, optimizer, causal_mask=causal_mask)
+    train_step = make_train_step(train_cfg.model, train_cfg.attention_backend, optimizer)
 
     if cache_dir:
         cache = load_cache(cache_dir, seq_len=seq_len)
@@ -170,7 +166,7 @@ def build_training_config(args: argparse.Namespace) -> GrugTrainingConfig:
     )
     train_cfg = GrugTrainingConfig(
         model=model_cfg,
-        attention=AttentionRuntimeConfig(backend="reference"),
+        attention_backend="reference",
         learning_rate=1e-3,
         weight_decay=0.01,
         steps=args.steps,

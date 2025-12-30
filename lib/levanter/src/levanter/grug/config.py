@@ -4,7 +4,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-import jax.numpy as jnp
+AttentionBackend = Literal["reference", "blocksparse"]
 
 
 @dataclass(frozen=True)
@@ -46,19 +46,11 @@ class GrugModelConfig:
 
 
 @dataclass(frozen=True)
-class AttentionRuntimeConfig:
-    """Controls attention backend selection for training/eval."""
-
-    backend: Literal["auto", "reference", "blocksparse"] = "blocksparse"
-    logits_dtype: jnp.dtype | None = jnp.float32
-
-
-@dataclass(frozen=True)
 class GrugTrainingConfig:
-    """Full training recipe, nested around a model + runtime config."""
+    """Full training recipe, nested around a model + attention backend."""
 
     model: GrugModelConfig = field(default_factory=GrugModelConfig)
-    attention: AttentionRuntimeConfig = field(default_factory=AttentionRuntimeConfig)
+    attention_backend: AttentionBackend = "blocksparse"
     learning_rate: float = 1e-3
     weight_decay: float = 0.01
     seed: int = 0
@@ -77,9 +69,9 @@ def validate_config(cfg: GrugModelConfig) -> None:
 
 
 __all__ = [
+    "AttentionBackend",
     "RotaryConfig",
     "GrugModelConfig",
-    "AttentionRuntimeConfig",
     "GrugTrainingConfig",
     "validate_config",
 ]

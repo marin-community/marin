@@ -1,6 +1,8 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
+
 from dataclasses import dataclass
 from functools import partial
 
@@ -12,7 +14,7 @@ from jax.sharding import PartitionSpec as P, reshard
 from jax.tree_util import register_dataclass
 
 from .attention import AttentionMask, apply_rotary_embedding, attention
-from .config import AttentionRuntimeConfig, GrugModelConfig
+from .config import AttentionBackend, GrugModelConfig
 
 
 @register_dataclass
@@ -138,13 +140,17 @@ def forward(
     params: GrugModelParameters,
     token_ids: jax.Array,
     cfg: GrugModelConfig,
-    runtime: AttentionRuntimeConfig,
+    attention_backend: AttentionBackend,
     *,
     mask: AttentionMask | jax.Array | None = None,
-    causal: bool = True,
 ) -> jax.Array:
     head_dim = cfg.inferred_head_dim
     seq_len = token_ids.shape[1]
+
+    if mask is None:
+        mask = AttentionMask.causal()
+    elif isinstance(mask, AttentionMask) and not mask.is_causal:
+        mask = dataclasses.replace(mask, is_causal=True)
 
     hidden = params.token_embed.at[token_ids].get(out_sharding=_Pbatch)
 
@@ -154,7 +160,7 @@ def forward(
         k = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_v), "... (m d) -> ... m d", d=head_dim)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=cfg.rope)
-        attn_out = attention(q, k, v, mask, causal=causal, runtime=runtime)
+        attn_out = attention(q, k, v, mask, backend=attention_backend)
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         attn_out = jnp.einsum("bsh,hd->bsd", attn_out, block.attn.w_o, out_sharding=_Pbatch)
 

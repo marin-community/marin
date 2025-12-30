@@ -7,8 +7,8 @@ This package intentionally exposes only the "grug core" (raw-array model + kerne
 Levanter integration adapters live under `levanter.models`.
 """
 
-from .attention import apply_rotary_embedding, attention, default_attention_mask
-from .config import AttentionRuntimeConfig, GrugModelConfig, GrugTrainingConfig, RotaryConfig
+from .attention import apply_rotary_embedding, attention
+from .config import AttentionBackend, GrugModelConfig, GrugTrainingConfig, RotaryConfig
 from .data import build_token_loader, make_dataloader, make_token_dataset
 from .model import (
     GrugAttentionParams,
@@ -19,7 +19,7 @@ from .model import (
 )
 
 __all__ = [
-    "AttentionRuntimeConfig",
+    "AttentionBackend",
     "GrugTrainingConfig",
     "GrugModelConfig",
     "RotaryConfig",
@@ -28,7 +28,6 @@ __all__ = [
     "GrugModelParameters",
     "apply_rotary_embedding",
     "attention",
-    "default_attention_mask",
     "forward",
     "init_parameters",
     "make_token_dataset",

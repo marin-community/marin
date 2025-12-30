@@ -5,15 +5,10 @@ import math
 from dataclasses import dataclass
 
 import jax
-import jax.numpy as jnp
+from jax import numpy as jnp
 from jax.tree_util import register_dataclass
 
-from .config import AttentionRuntimeConfig, RotaryConfig
-
-
-def default_attention_mask(seq_len: int) -> jax.Array:
-    """Boolean causal mask with shape (seq, seq). True == keep, False == block."""
-    return jnp.tril(jnp.ones((seq_len, seq_len), dtype=bool))
+from .config import AttentionBackend, RotaryConfig
 
 
 @functools.partial(
@@ -114,7 +109,6 @@ def reference_attention(
     v: jax.Array,
     mask: AttentionMask | jax.Array | None,
     *,
-    causal: bool,
     logits_dtype: jnp.dtype | None,
 ) -> jax.Array:
     head_dim = q.shape[-1]
@@ -133,9 +127,6 @@ def reference_attention(
     if isinstance(mask, AttentionMask):
         mask = mask.materialize_mask(scores.shape[-2], scores.shape[-1])
 
-    if mask is None and causal:
-        mask = default_attention_mask(scores.shape[-2])
-
     if mask is not None:
         if mask.dtype == jnp.bool_:
             scores = jnp.where(mask[None, None, :, :], scores, jnp.array(-1e9, dtype=scores.dtype))
@@ -153,14 +144,13 @@ def _blocksparse_attention(
     k: jax.Array,
     v: jax.Array,
     mask: AttentionMask | jax.Array | None,
-    *,
-    causal: bool,
 ) -> jax.Array:
     from ejkernel.modules.operations import blocksparse_attention as ej_blocksparse_attention
 
     q_segment_ids = None
     kv_segment_ids = None
     sliding_window = None
+    causal = False
 
     if isinstance(mask, AttentionMask):
         if mask.causal_offset != 0:
@@ -170,7 +160,7 @@ def _blocksparse_attention(
             q_segment_ids, kv_segment_ids = mask.segment_ids
 
         sliding_window = mask.sliding_window
-        causal = causal or mask.is_causal
+        causal = mask.is_causal
 
     if isinstance(mask, jax.Array):
         # Grug sometimes passes an explicit (q,k) boolean mask. ejkernel blocksparse_attention
@@ -198,27 +188,18 @@ def attention(
     v: jax.Array,
     mask: AttentionMask | jax.Array | None,
     *,
-    causal: bool,
-    runtime: AttentionRuntimeConfig,
+    backend: AttentionBackend,
 ) -> jax.Array:
-    if runtime.backend == "reference":
-        return reference_attention(q, k, v, mask, causal=causal, logits_dtype=runtime.logits_dtype)
-
-    if runtime.backend not in ("auto", "blocksparse"):
-        raise ValueError(f"Unknown attention backend: {runtime.backend}")
-
-    try:
-        return _blocksparse_attention(q, k, v, mask, causal=causal)
-    except Exception:
-        if runtime.backend == "blocksparse":
-            raise
-        return reference_attention(q, k, v, mask, causal=causal, logits_dtype=runtime.logits_dtype)
+    if backend == "reference":
+        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
+    if backend != "blocksparse":
+        raise ValueError(f"Unknown attention backend: {backend}")
+    return _blocksparse_attention(q, k, v, mask)
 
 
 __all__ = [
     "AttentionMask",
     "apply_rotary_embedding",
     "attention",
-    "default_attention_mask",
     "reference_attention",
 ]
