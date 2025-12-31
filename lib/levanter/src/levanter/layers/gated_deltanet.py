@@ -984,7 +984,7 @@ def _gdn_chunk_step_fwd_kernel_tpu(
     q_ref,
     k_ref,
     v_ref,
-    g_ref,
+    gcum_ref,
     b_ref,
     Sprev_ref,
     out_ref,
@@ -994,19 +994,16 @@ def _gdn_chunk_step_fwd_kernel_tpu(
     K_pad: int,
     V_pad: int,
 ):
-    """Compute one chunk step for one (b,h) program.
+    """Forward chunk step (TPU TC) using *precomputed* g_cum.
 
-    IMPORTANT (TPU TC kernels):
-      - Do NOT use arr[i], arr[-1], row = A[i], rhs[i], etc. (lowers to dynamic_slice).
-      - Instead use one-hot masks + reductions to “select” rows/scalars.
+    NOTE: No arr[i] / arr[-1] indexing; no cumsum.
     """
 
-    # ----- Load whole tiles without scalar indexing -----
     q = q_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)].astype(jnp.float32).reshape(Ct, K_pad)
     k = k_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)].astype(jnp.float32).reshape(Ct, K_pad)
     v = v_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)].astype(jnp.float32).reshape(Ct, V_pad)
-    g = (
-        g_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, 1)]
+    g_cum = (
+        gcum_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, 1)]
         .astype(jnp.float32)
         .reshape(
             Ct,
@@ -1025,87 +1022,65 @@ def _gdn_chunk_step_fwd_kernel_tpu(
         .reshape(K_pad, V_pad)
     )
 
-    # ----- Masks (no jnp.tril to avoid any weird lowering) -----
     idx = jnp.arange(Ct, dtype=jnp.int32)
     ii = idx[:, None]
     jj = idx[None, :]
-    tril_strict = (ii > jj).astype(jnp.float32)  # strict lower
-    causal_mask = (ii >= jj).astype(jnp.float32)  # lower incl diag
+    tril_strict = (ii > jj).astype(jnp.float32)
+    causal_mask = (ii >= jj).astype(jnp.float32)
 
-    # ----- v_beta, k_beta -----
-    v_beta = v * beta[:, None]  # (Ct, V)
-    k_beta = k * beta[:, None]  # (Ct, K)
+    v_beta = v * beta[:, None]
+    k_beta = k * beta[:, None]
 
-    # ----- g_cum via explicit prefix sum without g[i] -----
-    g_cum = jnp.zeros((Ct,), dtype=jnp.float32)
-    acc = jnp.asarray(0.0, dtype=jnp.float32)  # running sum; will end as g_tail
-
-    for i in range(Ct):
-        mask_i = (idx == jnp.int32(i)).astype(jnp.float32)  # (Ct,)
-        g_i = jnp.sum(g * mask_i)  # scalar (select g[i] without slicing)
-        acc = acc + g_i
-        g_cum = g_cum + mask_i * acc
-
-    g_tail = acc  # scalar tail (no g_cum[-1])
-
-    # exp(g_cum) and exp(diff)
     g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-    exp_g = jnp.exp(g_cum_cl)  # (Ct,)
+    exp_g = jnp.exp(g_cum_cl)
 
     diff = g_cum[:, None] - g_cum[None, :]
     diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
     exp_diff = jnp.exp(diff_cl)
 
-    # A = -(k_beta @ k^T) * exp_diff * tril_strict
-    KKT = jnp.matmul(k_beta, k.T)  # (Ct, Ct)
+    KKT = jnp.matmul(k_beta, k.T)
     A = -KKT * exp_diff * tril_strict
 
-    # ----- Forward substitution solve without row indexing -----
-    # Solve (I - A) X = RHS, where A is strictly lower.
-    # => X[i] = RHS[i] + sum_{j<i} A[i,j] X[j]
-    def _solve_unit_lower(A_strict, rhs):  # rhs: (Ct, R)
+    def _solve_unit_lower(A_strict, rhs):
         R = rhs.shape[-1]
         X = jnp.zeros((Ct, R), dtype=jnp.float32)
-
         for i in range(Ct):
-            mask_i = (idx == jnp.int32(i)).astype(jnp.float32)  # (Ct,)
-            rhs_i = jnp.sum(rhs * mask_i[:, None], axis=0)  # (R,)
-            A_i = jnp.sum(A_strict * mask_i[:, None], axis=0)  # (Ct,) == row i
-            contrib = jnp.sum(A_i[:, None] * X, axis=0)  # (R,)
-            x_i = rhs_i + contrib  # (R,)
-            X = X + mask_i[:, None] * x_i[None, :]  # write row i without X[i]
+            mask_i = (idx == jnp.int32(i)).astype(jnp.float32)
+            rhs_i = jnp.sum(rhs * mask_i[:, None], axis=0)
+            A_i = jnp.sum(A_strict * mask_i[:, None], axis=0)
+            contrib = jnp.sum(A_i[:, None] * X, axis=0)
+            x_i = rhs_i + contrib
+            X = X + mask_i[:, None] * x_i[None, :]
         return X
 
-    v_pseudo = _solve_unit_lower(A, v_beta)  # (Ct, V)
-    k_scaled = k_beta * exp_g[:, None]  # (Ct, K)
-    k_cumdecay = _solve_unit_lower(A, k_scaled)  # (Ct, K)
+    v_pseudo = _solve_unit_lower(A, v_beta)
+    k_scaled = k_beta * exp_g[:, None]
+    k_cumdecay = _solve_unit_lower(A, k_scaled)
 
-    # attn = (q @ k^T) * exp_diff * causal_mask
     QK = jnp.matmul(q, k.T)
     attn = QK * exp_diff * causal_mask
 
-    # v_new = v_pseudo - k_cumdecay @ S_prev
-    v_prime = jnp.matmul(k_cumdecay, S_prev)  # (Ct, V)
+    v_prime = jnp.matmul(k_cumdecay, S_prev)
     v_new = v_pseudo - v_prime
 
-    # out = (q*exp_g)@S_prev + attn@v_new
-    inter = jnp.matmul(q * exp_g[:, None], S_prev)  # (Ct, V)
-    intra = jnp.matmul(attn, v_new)  # (Ct, V)
+    inter = jnp.matmul(q * exp_g[:, None], S_prev)
+    intra = jnp.matmul(attn, v_new)
     out = inter + intra
 
-    # ----- State update using g_tail (no g_cum[-1]) -----
-    g_tail_cl = jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-    decay_tail = jnp.exp(g_tail_cl)  # scalar
+    # g_tail = g_cum[-1] without indexing
+    mask_last = (idx == jnp.int32(Ct - 1)).astype(jnp.float32)
+    g_tail = jnp.sum(g_cum * mask_last)
 
-    diff_tail = g_tail - g_cum  # (Ct,)
+    decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
+
+    diff_tail = g_tail - g_cum
     diff_tail_cl = jnp.clip(diff_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-    decay_w = jnp.exp(diff_tail_cl)  # (Ct,)
-    k_w = k * decay_w[:, None]  # (Ct, K)
+    decay_w = jnp.exp(diff_tail_cl)
 
-    add = jnp.matmul(k_w.T, v_new)  # (K, V)
+    k_w = k * decay_w[:, None]
+    add = jnp.matmul(k_w.T, v_new)
     S_next = S_prev * decay_tail + add
 
-    # ----- Stores using dslice (avoid any indexing that may lower to dynamic_slice) -----
     out_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)] = out[None, None, :, :].astype(out_ref.dtype)
     Snext_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)] = S_next[None, None, :, :].astype(
         Snext_ref.dtype
@@ -1113,12 +1088,12 @@ def _gdn_chunk_step_fwd_kernel_tpu(
 
 
 def _gdn_chunk_step_fwd_pallas(
-    q_bhck: jnp.ndarray,  # [B,H,Ct,K_pad]
-    k_bhck: jnp.ndarray,  # [B,H,Ct,K_pad]
-    v_bhcv: jnp.ndarray,  # [B,H,Ct,V_pad]
-    g_bhc: jnp.ndarray,  # [B,H,Ct]
-    b_bhc: jnp.ndarray,  # [B,H,Ct]
-    S_prev_bhkv: jnp.ndarray,  # [B,H,K_pad,V_pad]
+    q_bhck,
+    k_bhck,
+    v_bhcv,
+    g_cum_bhc,
+    b_bhc,
+    S_prev_bhkv,
     *,
     Ct: int,
     K_pad: int,
@@ -1127,18 +1102,13 @@ def _gdn_chunk_step_fwd_pallas(
     B, H = q_bhck.shape[0], q_bhck.shape[1]
     NH = B * H
 
-    g4 = g_bhc[..., None]
+    gcum4 = g_cum_bhc[..., None]
     b4 = b_bhc[..., None]
 
     out_struct = jax.ShapeDtypeStruct((B, H, Ct, V_pad), jnp.float32)
     st_struct = jax.ShapeDtypeStruct((B, H, K_pad, V_pad), jnp.float32)
 
-    kernel = functools.partial(
-        _gdn_chunk_step_fwd_kernel_tpu,
-        Ct=int(Ct),
-        K_pad=int(K_pad),
-        V_pad=int(V_pad),
-    )
+    kernel = functools.partial(_gdn_chunk_step_fwd_kernel_tpu, Ct=int(Ct), K_pad=int(K_pad), V_pad=int(V_pad))
 
     compiler_params = None
     try:
@@ -1157,7 +1127,7 @@ def _gdn_chunk_step_fwd_pallas(
         in_specs=in_specs,
         out_specs=out_specs,
         compiler_params=compiler_params,
-    )(q_bhck, k_bhck, v_bhcv, g4, b4, S_prev_bhkv)
+    )(q_bhck, k_bhck, v_bhcv, gcum4, b4, S_prev_bhkv)
 
     return out, S_next
 
@@ -1165,240 +1135,6 @@ def _gdn_chunk_step_fwd_pallas(
 # -----------------------------------------------------------------------------
 # Chunkwise flash: TPU pallas forward + analytic backward (reverse scan)
 # -----------------------------------------------------------------------------
-
-
-def _gdn_chunk_state_update_jax(
-    k_bhck: jnp.ndarray,  # (B,H,C,K_pad)
-    v_bhcv: jnp.ndarray,  # (B,H,C,V_pad)
-    g_bhc: jnp.ndarray,  # (B,H,C)
-    b_bhc: jnp.ndarray,  # (B,H,C)
-    S_prev_bhkv: jnp.ndarray,  # (B,H,K_pad,V_pad)
-    *,
-    use_triangular_solve: bool,
-) -> jnp.ndarray:
-    if not use_triangular_solve:
-        raise ValueError("state_update_jax currently assumes use_triangular_solve=True")
-
-    k = k_bhck.astype(jnp.float32)
-    v = v_bhcv.astype(jnp.float32)
-    g = g_bhc.astype(jnp.float32)
-    beta = b_bhc.astype(jnp.float32)
-    S_prev = S_prev_bhkv.astype(jnp.float32)
-
-    B, H, C, K_pad = k.shape
-    V_pad = v.shape[-1]
-
-    tril_strict = jnp.tril(jnp.ones((C, C), dtype=jnp.float32), k=-1)
-
-    v_beta = v * beta[..., :, None]
-    k_beta = k * beta[..., :, None]
-
-    g_cum = jnp.cumsum(g, axis=-1)
-    g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-    exp_g = jnp.exp(g_cum_cl)
-
-    diff = g_cum[..., :, None] - g_cum[..., None, :]
-    diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-    exp_diff = jnp.exp(diff_cl)
-
-    KKT = jnp.einsum("bhid,bhjd->bhij", k_beta, k)
-    A = -KKT * exp_diff * tril_strict
-    L_off = -A
-
-    v_pseudo = lax.linalg.triangular_solve(L_off, v_beta, left_side=True, lower=True, unit_diagonal=True)
-
-    k_scaled = k_beta * exp_g[..., :, None]
-    k_cumdecay = lax.linalg.triangular_solve(L_off, k_scaled, left_side=True, lower=True, unit_diagonal=True)
-
-    v_prime = jnp.einsum("bhid,bhdm->bhim", k_cumdecay, S_prev)
-    v_new = v_pseudo - v_prime
-
-    decay_tail = jnp.exp(jnp.clip(g_cum[..., -1], -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
-    decay_w = jnp.exp(jnp.clip(g_cum[..., -1, None] - g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
-
-    add = jnp.einsum("bhid,bhim->bhdm", k * decay_w[..., :, None], v_new)
-    return S_prev * decay_tail[..., None, None] + add
-
-
-def _gdn_chunk_step_bwd_jax(
-    q_bhck: jnp.ndarray,  # (B,H,C,K_pad)
-    k_bhck: jnp.ndarray,  # (B,H,C,K_pad)
-    v_bhcv: jnp.ndarray,  # (B,H,C,V_pad)
-    g_bhc: jnp.ndarray,  # (B,H,C)
-    b_bhc: jnp.ndarray,  # (B,H,C)
-    S_prev_bhkv: jnp.ndarray,  # (B,H,K_pad,V_pad)
-    d_out_bhcv: jnp.ndarray,  # (B,H,C,V_pad)
-    dS_next_bhkv: jnp.ndarray,  # (B,H,K_pad,V_pad)
-    *,
-    use_triangular_solve: bool,
-):
-    if not use_triangular_solve:
-        raise ValueError("bwd currently assumes use_triangular_solve=True")
-
-    q = q_bhck.astype(jnp.float32)
-    k = k_bhck.astype(jnp.float32)
-    v = v_bhcv.astype(jnp.float32)
-    g = g_bhc.astype(jnp.float32)
-    beta = b_bhc.astype(jnp.float32)
-    S_prev = S_prev_bhkv.astype(jnp.float32)
-    d_out = d_out_bhcv.astype(jnp.float32)
-    dS_next = dS_next_bhkv.astype(jnp.float32)
-
-    B, H, C, K_pad = q.shape
-    V_pad = v.shape[-1]
-
-    tril_strict = jnp.tril(jnp.ones((C, C), dtype=jnp.float32), k=-1)
-    causal_mask = jnp.tril(jnp.ones((C, C), dtype=jnp.float32), k=0)
-
-    # -------- forward recompute --------
-    v_beta = v * beta[..., :, None]
-    k_beta = k * beta[..., :, None]
-
-    g_cum = jnp.cumsum(g, axis=-1)
-    g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-    gcum_inrange = ((g_cum >= -_GDN_EXP_CLIP) & (g_cum <= _GDN_EXP_CLIP)).astype(jnp.float32)
-    exp_g = jnp.exp(g_cum_cl)
-
-    diff = g_cum[..., :, None] - g_cum[..., None, :]
-    diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-    diff_inrange = ((diff >= -_GDN_EXP_CLIP) & (diff <= _GDN_EXP_CLIP)).astype(jnp.float32)
-    exp_diff = jnp.exp(diff_cl)
-
-    QK = jnp.einsum("bhid,bhjd->bhij", q, k)
-    attn = QK * exp_diff * causal_mask
-
-    KKT = jnp.einsum("bhid,bhjd->bhij", k_beta, k)
-    A = -KKT * exp_diff * tril_strict
-    L_off = -A
-
-    v_pseudo = lax.linalg.triangular_solve(L_off, v_beta, left_side=True, lower=True, unit_diagonal=True)
-    k_scaled = k_beta * exp_g[..., :, None]
-    k_cumdecay = lax.linalg.triangular_solve(L_off, k_scaled, left_side=True, lower=True, unit_diagonal=True)
-
-    v_prime = jnp.einsum("bhid,bhdm->bhim", k_cumdecay, S_prev)
-    v_new = v_pseudo - v_prime
-
-    q_scaled = q * exp_g[..., :, None]
-    inter = jnp.einsum("bhid,bhdm->bhim", q_scaled, S_prev)
-    intra = jnp.einsum("bhij,bhjm->bhim", attn, v_new)
-    # out = inter + intra
-
-    g_tail = g_cum[..., -1]
-    g_tail_cl = jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-    gt_inrange = ((g_tail >= -_GDN_EXP_CLIP) & (g_tail <= _GDN_EXP_CLIP)).astype(jnp.float32)
-    decay_tail = jnp.exp(g_tail_cl)
-
-    raw_decay_diff = g_tail[..., None] - g_cum
-    decay_diff = jnp.clip(raw_decay_diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
-    decay_diff_inrange = ((raw_decay_diff >= -_GDN_EXP_CLIP) & (raw_decay_diff <= _GDN_EXP_CLIP)).astype(jnp.float32)
-    decay_w = jnp.exp(decay_diff)
-    k_w = k * decay_w[..., :, None]
-
-    add = jnp.einsum("bhid,bhim->bhdm", k_w, v_new)
-    # S_next = S_prev * decay_tail + add
-
-    # -------- backward --------
-    d_inter = d_out
-    d_intra = d_out
-
-    # intra = attn @ v_new
-    d_attn = jnp.einsum("bhim,bhjm->bhij", d_intra, v_new)
-    # d_v_new = attn^T @ d_intra
-    d_v_new = jnp.einsum("bhij,bhim->bhjm", attn, d_intra)
-
-    # inter = q_scaled @ S_prev
-    d_q_scaled = jnp.einsum("bhim,bhdm->bhid", d_inter, S_prev)
-    dS_prev = jnp.einsum("bhid,bhim->bhdm", q_scaled, d_inter)
-
-    # S_next = S_prev*decay_tail + add
-    dS_prev = dS_prev + dS_next * decay_tail[..., None, None]
-    d_decay_tail = jnp.sum(dS_next * S_prev, axis=(-2, -1))
-    d_add = dS_next
-
-    # add = k_w^T @ v_new
-    d_k_w = jnp.einsum("bhim,bhdm->bhid", v_new, d_add)
-    d_v_new = d_v_new + jnp.einsum("bhid,bhdm->bhim", k_w, d_add)
-
-    # k_w = k * decay_w
-    d_k = d_k_w * decay_w[..., :, None]
-    d_decay_w = jnp.sum(d_k_w * k, axis=-1)
-
-    # decay_w = exp(clip(g_tail - g_cum))
-    d_decay_diff = d_decay_w * decay_w
-    d_decay_diff = d_decay_diff * decay_diff_inrange
-    d_g_tail = jnp.sum(d_decay_diff, axis=-1)
-    d_g_cum = -d_decay_diff
-
-    # decay_tail = exp(clip(g_tail))
-    d_g_tail = d_g_tail + d_decay_tail * decay_tail * gt_inrange
-    d_g_cum = d_g_cum.at[..., -1].add(d_g_tail)
-
-    # v_new = v_pseudo - v_prime
-    d_v_pseudo = d_v_new
-    d_v_prime = -d_v_new
-
-    # v_prime = k_cumdecay @ S_prev
-    d_k_cumdecay = jnp.einsum("bhim,bhdm->bhid", d_v_prime, S_prev)
-    dS_prev = dS_prev + jnp.einsum("bhid,bhim->bhdm", k_cumdecay, d_v_prime)
-
-    # attn = QK * exp_diff * causal_mask
-    d_QK = d_attn * (exp_diff * causal_mask)
-    d_exp_diff = d_attn * QK * causal_mask
-
-    # QK = q @ k^T
-    d_q = jnp.einsum("bhij,bhjd->bhid", d_QK, k)
-    d_k = d_k + jnp.einsum("bhij,bhid->bhjd", d_QK, q)  # <-- FIXED
-
-    # q_scaled = q * exp_g
-    d_q = d_q + d_q_scaled * exp_g[..., :, None]
-    d_exp_g = jnp.sum(d_q_scaled * q, axis=-1)
-
-    # ---- triangular solve backward ----
-    tmp_v = lax.linalg.triangular_solve(
-        L_off, d_v_pseudo, left_side=True, lower=True, transpose_a=True, unit_diagonal=True
-    )
-    d_v_beta = tmp_v
-    dA = jnp.einsum("bhir,bhjr->bhij", tmp_v, v_pseudo)
-
-    tmp_k = lax.linalg.triangular_solve(
-        L_off, d_k_cumdecay, left_side=True, lower=True, transpose_a=True, unit_diagonal=True
-    )
-    d_k_scaled = tmp_k
-    dA = dA + jnp.einsum("bhid,bhjd->bhij", tmp_k, k_cumdecay)
-
-    # k_scaled = k_beta * exp_g
-    d_k_beta = d_k_scaled * exp_g[..., :, None]
-    d_exp_g = d_exp_g + jnp.sum(d_k_scaled * k_beta, axis=-1)
-
-    # A = -KKT * exp_diff * tril_strict
-    dA = dA * tril_strict
-    dKKT = -dA * exp_diff
-    d_exp_diff = d_exp_diff + (-dA * KKT)
-
-    # KKT = k_beta @ k^T
-    d_k_beta = d_k_beta + jnp.einsum("bhij,bhjd->bhid", dKKT, k)
-    d_k = d_k + jnp.einsum("bhij,bhid->bhjd", dKKT, k_beta)  # <-- FIXED
-
-    # exp_diff = exp(clip(diff))
-    d_diff_cl = d_exp_diff * exp_diff
-    d_diff = d_diff_cl * diff_inrange
-    d_g_cum = d_g_cum + d_diff.sum(axis=-1) - d_diff.sum(axis=-2)
-
-    # exp_g = exp(clip(g_cum))
-    d_g_cum = d_g_cum + d_exp_g * exp_g * gcum_inrange
-
-    # g_cum = cumsum(g)
-    d_g = jnp.flip(jnp.cumsum(jnp.flip(d_g_cum, axis=-1), axis=-1), axis=-1)
-
-    # v_beta = v * beta
-    d_v = d_v_beta * beta[..., :, None]
-    d_beta = jnp.sum(d_v_beta * v, axis=-1)
-
-    # k_beta = k * beta
-    d_k = d_k + d_k_beta * beta[..., :, None]
-    d_beta = d_beta + jnp.sum(d_k_beta * k, axis=-1)
-
-    return d_q, d_k, d_v, d_g, d_beta, dS_prev
 
 
 def _chunk_gated_delta_rule_flash_pallas_impl(
@@ -1469,6 +1205,8 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
         g_c = jnp.pad(g_c, ((0, 0), (0, 0), (0, 0), (0, Ct - C)))
         b_c = jnp.pad(b_c, ((0, 0), (0, 0), (0, 0), (0, Ct - C)))
 
+    g_cum = jnp.cumsum(g_c, axis=-1)
+
     # init state
     if initial_state is None:
         S0 = jnp.zeros((B, H, K_pad, V_pad), dtype=jnp.float32)
@@ -1480,7 +1218,7 @@ def _chunk_gated_delta_rule_flash_pallas_impl(
     q_s = q_c.reshape(B, H, n_segments, seg, Ct, K_pad)
     k_s = k_c.reshape(B, H, n_segments, seg, Ct, K_pad)
     v_s = v_c.reshape(B, H, n_segments, seg, Ct, V_pad)
-    g_s = g_c.reshape(B, H, n_segments, seg, Ct)
+    g_s = g_cum.reshape(B, H, n_segments, seg, Ct)
     b_s = b_c.reshape(B, H, n_segments, seg, Ct)
 
     # time-major over segments
@@ -1579,179 +1317,806 @@ def _chunk_gated_delta_rule_flash_pallas_fwd(
     return (out, S), residuals
 
 
-def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size, segment_size, use_triangular_solve, residuals, cotangents):
+def _in_specs_chunk_state_tpu(B: int, H: int, Ct: int, K_pad: int, V_pad: int):
+    def _bh(nh):
+        b = nh // H
+        h = nh - b * H
+        return (b, h)
+
+    in_specs = (
+        pl.BlockSpec((1, 1, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0)),  # k
+        pl.BlockSpec((1, 1, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # v
+        pl.BlockSpec((1, 1, Ct, 1), lambda nh: (*_bh(nh), 0, 0)),  # g_cum
+        pl.BlockSpec((1, 1, Ct, 1), lambda nh: (*_bh(nh), 0, 0)),  # beta
+        pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # S_prev
+    )
+    out_specs = pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0))  # S_next
+    return in_specs, out_specs
+
+
+def _gdn_chunk_state_fwd_kernel_tpu(
+    k_ref,
+    v_ref,
+    gcum_ref,
+    b_ref,
+    Sprev_ref,
+    Snext_ref,
+    *,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+):
+    k = k_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)].astype(jnp.float32).reshape(Ct, K_pad)
+    v = v_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)].astype(jnp.float32).reshape(Ct, V_pad)
+    g_cum = (
+        gcum_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, 1)]
+        .astype(jnp.float32)
+        .reshape(
+            Ct,
+        )
+    )
+    beta = (
+        b_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, 1)]
+        .astype(jnp.float32)
+        .reshape(
+            Ct,
+        )
+    )
+    S_prev = (
+        Sprev_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)]
+        .astype(jnp.float32)
+        .reshape(K_pad, V_pad)
+    )
+
+    idx = jnp.arange(Ct, dtype=jnp.int32)
+    ii = idx[:, None]
+    jj = idx[None, :]
+    tril_strict = (ii > jj).astype(jnp.float32)
+
+    v_beta = v * beta[:, None]
+    k_beta = k * beta[:, None]
+
+    g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+    exp_g = jnp.exp(g_cum_cl)
+
+    diff = g_cum[:, None] - g_cum[None, :]
+    diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+    exp_diff = jnp.exp(diff_cl)
+
+    KKT = jnp.matmul(k_beta, k.T)
+    A = -KKT * exp_diff * tril_strict
+
+    def _solve_unit_lower(A_strict, rhs):
+        R = rhs.shape[-1]
+        X = jnp.zeros((Ct, R), dtype=jnp.float32)
+        for i in range(Ct):
+            mask_i = (idx == jnp.int32(i)).astype(jnp.float32)
+            rhs_i = jnp.sum(rhs * mask_i[:, None], axis=0)
+            A_i = jnp.sum(A_strict * mask_i[:, None], axis=0)
+            contrib = jnp.sum(A_i[:, None] * X, axis=0)
+            x_i = rhs_i + contrib
+            X = X + mask_i[:, None] * x_i[None, :]
+        return X
+
+    v_pseudo = _solve_unit_lower(A, v_beta)
+    k_scaled = k_beta * exp_g[:, None]
+    k_cumdecay = _solve_unit_lower(A, k_scaled)
+
+    v_prime = jnp.matmul(k_cumdecay, S_prev)
+    v_new = v_pseudo - v_prime
+
+    mask_last = (idx == jnp.int32(Ct - 1)).astype(jnp.float32)
+    g_tail = jnp.sum(g_cum * mask_last)
+    decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
+
+    diff_tail = g_tail - g_cum
+    diff_tail_cl = jnp.clip(diff_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+    decay_w = jnp.exp(diff_tail_cl)
+
+    add = jnp.matmul((k * decay_w[:, None]).T, v_new)
+    S_next = S_prev * decay_tail + add
+
+    Snext_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)] = S_next[None, None, :, :].astype(
+        Snext_ref.dtype
+    )
+
+
+def _gdn_chunk_state_update_pallas(
+    k_bhck: jnp.ndarray,
+    v_bhcv: jnp.ndarray,
+    g_cum_bhc: jnp.ndarray,
+    b_bhc: jnp.ndarray,
+    S_prev_bhkv: jnp.ndarray,
+    *,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+) -> jnp.ndarray:
+    B, H = k_bhck.shape[0], k_bhck.shape[1]
+    NH = B * H
+
+    gcum4 = g_cum_bhc[..., None]
+    b4 = b_bhc[..., None]
+
+    st_struct = jax.ShapeDtypeStruct((B, H, K_pad, V_pad), jnp.float32)
+
+    kernel = functools.partial(_gdn_chunk_state_fwd_kernel_tpu, Ct=int(Ct), K_pad=int(K_pad), V_pad=int(V_pad))
+
+    compiler_params = None
+    try:
+        from jax.experimental.pallas import tpu as pltpu
+
+        compiler_params = pltpu.CompilerParams(dimension_semantics=["parallel"])
+    except Exception:
+        pass
+
+    in_specs, out_specs = _in_specs_chunk_state_tpu(B, H, Ct, K_pad, V_pad)
+
+    (S_next,) = pl.pallas_call(
+        kernel,
+        out_shape=(st_struct,),
+        grid=(NH,),
+        in_specs=in_specs,
+        out_specs=(out_specs,),
+        compiler_params=compiler_params,
+    )(k_bhck, v_bhcv, gcum4, b4, S_prev_bhkv)
+
+    return S_next
+
+
+def _in_specs_chunk_bwd_tpu(B: int, H: int, Ct: int, K_pad: int, V_pad: int):
+    def _bh(nh):
+        b = nh // H
+        h = nh - b * H
+        return (b, h)
+
+    in_specs = (
+        pl.BlockSpec((1, 1, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0)),  # q
+        pl.BlockSpec((1, 1, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0)),  # k
+        pl.BlockSpec((1, 1, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # v
+        pl.BlockSpec((1, 1, Ct, 1), lambda nh: (*_bh(nh), 0, 0)),  # g_cum
+        pl.BlockSpec((1, 1, Ct, 1), lambda nh: (*_bh(nh), 0, 0)),  # beta
+        pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # S_prev
+        pl.BlockSpec((1, 1, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # d_out
+        pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # dS_next
+    )
+
+    out_specs = (
+        pl.BlockSpec((1, 1, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0)),  # dq
+        pl.BlockSpec((1, 1, Ct, K_pad), lambda nh: (*_bh(nh), 0, 0)),  # dk
+        pl.BlockSpec((1, 1, Ct, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # dv
+        pl.BlockSpec((1, 1, Ct, 1), lambda nh: (*_bh(nh), 0, 0)),  # dg
+        pl.BlockSpec((1, 1, Ct, 1), lambda nh: (*_bh(nh), 0, 0)),  # db
+        pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # dS_prev
+    )
+    return in_specs, out_specs
+
+
+def _gdn_chunk_step_bwd_kernel_tpu(
+    q_ref,
+    k_ref,
+    v_ref,
+    gcum_ref,
+    b_ref,
+    Sprev_ref,
+    dOut_ref,
+    dSnext_ref,
+    dq_ref,
+    dk_ref,
+    dv_ref,
+    dg_ref,
+    db_ref,
+    dSprev_ref,
+    *,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+):
+    # ---- loads ----
+    q = q_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)].astype(jnp.float32).reshape(Ct, K_pad)
+    k = k_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)].astype(jnp.float32).reshape(Ct, K_pad)
+    v = v_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)].astype(jnp.float32).reshape(Ct, V_pad)
+    g_cum = (
+        gcum_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, 1)]
+        .astype(jnp.float32)
+        .reshape(
+            Ct,
+        )
+    )
+    beta = (
+        b_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, 1)]
+        .astype(jnp.float32)
+        .reshape(
+            Ct,
+        )
+    )
+    S_prev = (
+        Sprev_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)]
+        .astype(jnp.float32)
+        .reshape(K_pad, V_pad)
+    )
+    d_out = (
+        dOut_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)].astype(jnp.float32).reshape(Ct, V_pad)
+    )
+    dS_next = (
+        dSnext_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)]
+        .astype(jnp.float32)
+        .reshape(K_pad, V_pad)
+    )
+
+    idx = jnp.arange(Ct, dtype=jnp.int32)
+    ii = idx[:, None]
+    jj = idx[None, :]
+    tril_strict = (ii > jj).astype(jnp.float32)
+    causal_mask = (ii >= jj).astype(jnp.float32)
+
+    # clip masks
+    gcum_inrange = ((g_cum >= -_GDN_EXP_CLIP) & (g_cum <= _GDN_EXP_CLIP)).astype(jnp.float32)
+
+    # exp(g_cum)
+    g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+    exp_g = jnp.exp(g_cum_cl)
+
+    # diff + exp(diff)
+    diff = g_cum[:, None] - g_cum[None, :]
+    diff_inrange = ((diff >= -_GDN_EXP_CLIP) & (diff <= _GDN_EXP_CLIP)).astype(jnp.float32)
+    diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+    exp_diff = jnp.exp(diff_cl)
+
+    # ---- forward recompute ----
+    v_beta = v * beta[:, None]
+    k_beta = k * beta[:, None]
+
+    QK = jnp.matmul(q, k.T)
+    attn = QK * exp_diff * causal_mask
+
+    KKT = jnp.matmul(k_beta, k.T)
+    A = -KKT * exp_diff * tril_strict
+
+    def _solve_unit_lower(A_strict, rhs):
+        R = rhs.shape[-1]
+        X = jnp.zeros((Ct, R), dtype=jnp.float32)
+        for i in range(Ct):
+            mask_i = (idx == jnp.int32(i)).astype(jnp.float32)
+            rhs_i = jnp.sum(rhs * mask_i[:, None], axis=0)
+            A_i = jnp.sum(A_strict * mask_i[:, None], axis=0)
+            contrib = jnp.sum(A_i[:, None] * X, axis=0)
+            x_i = rhs_i + contrib
+            X = X + mask_i[:, None] * x_i[None, :]
+        return X
+
+    def _solve_unit_upper_from_A(A_strict_lower, rhs):
+        # solves (I - A)^T x = rhs  (unit upper)
+        R = rhs.shape[-1]
+        X = jnp.zeros((Ct, R), dtype=jnp.float32)
+        for i in range(Ct - 1, -1, -1):
+            mask_i = (idx == jnp.int32(i)).astype(jnp.float32)
+            rhs_i = jnp.sum(rhs * mask_i[:, None], axis=0)
+            # column i of A: A[:,i]
+            mask_col = (idx == jnp.int32(i)).astype(jnp.float32)
+            A_col_i = jnp.sum(A_strict_lower * mask_col[None, :], axis=1)  # (Ct,)
+            contrib = jnp.sum(A_col_i[:, None] * X, axis=0)
+            x_i = rhs_i + contrib
+            X = X + mask_i[:, None] * x_i[None, :]
+        return X
+
+    v_pseudo = _solve_unit_lower(A, v_beta)
+    k_scaled = k_beta * exp_g[:, None]
+    k_cumdecay = _solve_unit_lower(A, k_scaled)
+
+    v_prime = jnp.matmul(k_cumdecay, S_prev)
+    v_new = v_pseudo - v_prime
+
+    q_scaled = q * exp_g[:, None]
+    inter = jnp.matmul(q_scaled, S_prev)
+    intra = jnp.matmul(attn, v_new)
+    # out = inter + intra
+
+    mask_last = (idx == jnp.int32(Ct - 1)).astype(jnp.float32)
+    g_tail = jnp.sum(g_cum * mask_last)
+    gt_inrange = ((g_tail >= -_GDN_EXP_CLIP) & (g_tail <= _GDN_EXP_CLIP)).astype(jnp.float32)
+    decay_tail = jnp.exp(jnp.clip(g_tail, -_GDN_EXP_CLIP, _GDN_EXP_CLIP))
+
+    raw_decay_diff = g_tail - g_cum
+    decay_diff_inrange = ((raw_decay_diff >= -_GDN_EXP_CLIP) & (raw_decay_diff <= _GDN_EXP_CLIP)).astype(jnp.float32)
+    decay_diff_cl = jnp.clip(raw_decay_diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
+    decay_w = jnp.exp(decay_diff_cl)
+    k_w = k * decay_w[:, None]
+
+    add = jnp.matmul(k_w.T, v_new)
+    # S_next = S_prev * decay_tail + add
+
+    # ---- backward ----
+    d_inter = d_out
+    d_intra = d_out
+
+    # intra = attn @ v_new
+    d_attn = jnp.matmul(d_intra, v_new.T)
+    d_v_new = jnp.matmul(attn.T, d_intra)  # IMPORTANT: transpose (fixed)
+
+    # inter = q_scaled @ S_prev
+    d_q_scaled = jnp.matmul(d_inter, S_prev.T)
+    dS_prev = jnp.matmul(q_scaled.T, d_inter)
+
+    # S_next = S_prev*decay_tail + add
+    dS_prev = dS_prev + dS_next * decay_tail
+    d_decay_tail = jnp.sum(dS_next * S_prev)
+
+    # add = k_w^T @ v_new
+    d_add = dS_next
+    d_k_w = jnp.matmul(v_new, d_add.T)
+    d_v_new = d_v_new + jnp.matmul(k_w, d_add)
+
+    d_k = d_k_w * decay_w[:, None]
+    d_decay_w = jnp.sum(d_k_w * k, axis=-1)
+
+    # decay_w = exp(clip(g_tail - g_cum))
+    d_decay_diff = d_decay_w * decay_w
+    d_decay_diff = d_decay_diff * decay_diff_inrange
+    d_g_tail = jnp.sum(d_decay_diff)
+    d_g_cum = -d_decay_diff
+
+    # decay_tail = exp(clip(g_tail))
+    d_g_tail = d_g_tail + d_decay_tail * decay_tail * gt_inrange
+    d_g_cum = d_g_cum + mask_last * d_g_tail
+
+    # v_new = v_pseudo - v_prime
+    d_v_pseudo = d_v_new
+    d_v_prime = -d_v_new
+
+    # v_prime = k_cumdecay @ S_prev
+    d_k_cumdecay = jnp.matmul(d_v_prime, S_prev.T)
+    dS_prev = dS_prev + jnp.matmul(k_cumdecay.T, d_v_prime)
+
+    # attn = QK * exp_diff * causal_mask
+    d_QK = d_attn * (exp_diff * causal_mask)
+    d_exp_diff = d_attn * QK * causal_mask
+
+    # QK = q @ k^T
+    d_q = jnp.matmul(d_QK, k)
+    d_k = d_k + jnp.matmul(d_QK.T, q)
+
+    # q_scaled = q * exp_g
+    d_q = d_q + d_q_scaled * exp_g[:, None]
+    d_exp_g = jnp.sum(d_q_scaled * q, axis=-1)
+
+    # ---- backprop through solves ----
+    tmp_v = _solve_unit_upper_from_A(A, d_v_pseudo)  # (I - A)^(-T) d
+    d_v_beta = tmp_v
+    dA = jnp.matmul(tmp_v, v_pseudo.T)
+
+    tmp_k = _solve_unit_upper_from_A(A, d_k_cumdecay)
+    d_k_scaled = tmp_k
+    dA = dA + jnp.matmul(tmp_k, k_cumdecay.T)
+
+    # k_scaled = k_beta * exp_g
+    d_k_beta = d_k_scaled * exp_g[:, None]
+    d_exp_g = d_exp_g + jnp.sum(d_k_scaled * k_beta, axis=-1)
+
+    # A = -KKT * exp_diff * tril_strict
+    dA = dA * tril_strict
+    dKKT = -dA * exp_diff
+    d_exp_diff = d_exp_diff + (-dA * KKT)
+
+    # KKT = k_beta @ k^T
+    d_k_beta = d_k_beta + jnp.matmul(dKKT, k)
+    d_k = d_k + jnp.matmul(dKKT.T, k_beta)
+
+    # exp_diff = exp(clip(diff))
+    d_diff = (d_exp_diff * exp_diff) * diff_inrange
+    d_g_cum = d_g_cum + jnp.sum(d_diff, axis=-1) - jnp.sum(d_diff, axis=-2)
+
+    # exp_g = exp(clip(g_cum))
+    d_g_cum = d_g_cum + d_exp_g * exp_g * gcum_inrange
+
+    # g_cum = cumsum(g)  => d_g = reverse_cumsum(d_g_cum)
+    d_g = jnp.zeros((Ct,), dtype=jnp.float32)
+    acc = jnp.asarray(0.0, dtype=jnp.float32)
+    for i in range(Ct - 1, -1, -1):
+        mask_i = (idx == jnp.int32(i)).astype(jnp.float32)
+        di = jnp.sum(d_g_cum * mask_i)
+        acc = acc + di
+        d_g = d_g + mask_i * acc
+
+    # v_beta = v * beta
+    d_v = d_v_beta * beta[:, None]
+    d_beta = jnp.sum(d_v_beta * v, axis=-1)
+
+    # k_beta = k * beta
+    d_k = d_k + d_k_beta * beta[:, None]
+    d_beta = d_beta + jnp.sum(d_k_beta * k, axis=-1)
+
+    # ---- stores ----
+    dq_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)] = d_q[None, None, :, :].astype(dq_ref.dtype)
+    dk_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)] = d_k[None, None, :, :].astype(dk_ref.dtype)
+    dv_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)] = d_v[None, None, :, :].astype(dv_ref.dtype)
+    dg_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, 1)] = d_g[None, None, :, None].astype(dg_ref.dtype)
+    db_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, 1)] = d_beta[None, None, :, None].astype(db_ref.dtype)
+    dSprev_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)] = dS_prev[None, None, :, :].astype(
+        dSprev_ref.dtype
+    )
+
+
+def _gdn_chunk_step_bwd_pallas(
+    q_bhck: jnp.ndarray,
+    k_bhck: jnp.ndarray,
+    v_bhcv: jnp.ndarray,
+    g_cum_bhc: jnp.ndarray,
+    b_bhc: jnp.ndarray,
+    S_prev_bhkv: jnp.ndarray,
+    d_out_bhcv: jnp.ndarray,
+    dS_next_bhkv: jnp.ndarray,
+    *,
+    Ct: int,
+    K_pad: int,
+    V_pad: int,
+):
+    B, H = q_bhck.shape[0], q_bhck.shape[1]
+    NH = B * H
+
+    gcum4 = g_cum_bhc[..., None]
+    b4 = b_bhc[..., None]
+
+    out_shapes = (
+        jax.ShapeDtypeStruct((B, H, Ct, K_pad), jnp.float32),  # dq
+        jax.ShapeDtypeStruct((B, H, Ct, K_pad), jnp.float32),  # dk
+        jax.ShapeDtypeStruct((B, H, Ct, V_pad), jnp.float32),  # dv
+        jax.ShapeDtypeStruct((B, H, Ct, 1), jnp.float32),  # dg
+        jax.ShapeDtypeStruct((B, H, Ct, 1), jnp.float32),  # db
+        jax.ShapeDtypeStruct((B, H, K_pad, V_pad), jnp.float32),  # dS_prev
+    )
+
+    kernel = functools.partial(_gdn_chunk_step_bwd_kernel_tpu, Ct=int(Ct), K_pad=int(K_pad), V_pad=int(V_pad))
+
+    compiler_params = None
+    try:
+        from jax.experimental.pallas import tpu as pltpu
+
+        compiler_params = pltpu.CompilerParams(dimension_semantics=["parallel"])
+    except Exception:
+        pass
+
+    in_specs, out_specs = _in_specs_chunk_bwd_tpu(B, H, Ct, K_pad, V_pad)
+
+    return pl.pallas_call(
+        kernel,
+        out_shape=out_shapes,
+        grid=(NH,),
+        in_specs=in_specs,
+        out_specs=out_specs,
+        compiler_params=compiler_params,
+    )(q_bhck, k_bhck, v_bhcv, gcum4, b4, S_prev_bhkv, d_out_bhcv, dS_next_bhkv)
+
+
+def _chunk_gated_delta_rule_flash_pallas_bwd(chunk_size: int, seg: int, use_triangular_solve: bool, residuals, g_out):
+    """Backward for flash chunk kernel (TPU).
+
+    Robust to residual packing:
+      - may include seg_starts (5D) and/or initial_state (4D or 3D) in either order.
+    Uses:
+      - g_cum precomputed outside Pallas
+      - Pallas kernels for per-chunk state update and per-chunk backward
+      - only scans over segments/chunks for the *state gradient* dependency
+    """
     from jax.interpreters import ad
 
-    q_arr, k_arr, v_arr, g_arr, b_arr, seg_starts, initial_state = residuals
-    d_out, dS_final = cotangents
+    # -----------------------
+    # Unpack required primals
+    # -----------------------
+    if not isinstance(residuals, (tuple, list)) or len(residuals) < 5:
+        raise ValueError("Unexpected residuals structure for flash chunk backward.")
 
+    q_arr = residuals[0]
+    k_arr = residuals[1]
+    v_arr = residuals[2]
+    g_arr = residuals[3]
+    b_arr = residuals[4]
+    tail = list(residuals[5:])
+
+    # -----------------------
+    # Unpack cotangents
+    # -----------------------
+    if isinstance(g_out, tuple):
+        if len(g_out) >= 2:
+            d_out, dS_final = g_out[0], g_out[1]
+        else:
+            d_out, dS_final = g_out[0], ad.Zero.from_value(0.0)
+    else:
+        d_out, dS_final = g_out, ad.Zero.from_value(0.0)
+
+    # -----------------------
+    # Shapes / static params
+    # -----------------------
     B, H, L, dk_dim = q_arr.shape
     dv_dim = v_arr.shape[-1]
     C = int(chunk_size)
+    seg = int(seg)
 
-    # materialize ad.Zero cotangents
+    TPU_MULT = 8
+
+    def _round_up_to(x: int, m: int) -> int:
+        return int(((int(x) + m - 1) // m) * m)
+
+    Ct = _round_up_to(C, TPU_MULT)
+    K_pad = _round_up_to(dk_dim, TPU_MULT)
+    V_pad = _round_up_to(dv_dim, TPU_MULT)
+
+    # Token padding -> chunk padding -> segment padding
+    pad_tok = (C - (L % C)) % C
+    Lt = L + pad_tok
+    Nc = Lt // C
+    if seg <= 0:
+        seg = Nc if Nc > 0 else 1
+    n_segments = (Nc + seg - 1) // seg
+    n_chunks_pad = n_segments * seg
+    L1 = n_chunks_pad * C  # length after chunk+segment padding
+
+    # -----------------------
+    # Parse optional residuals robustly
+    # -----------------------
+    seg_starts_res = None
+    init_res = None
+
+    for x in tail:
+        if x is None:
+            continue
+        if hasattr(x, "ndim"):
+            if x.ndim == 5:
+                seg_starts_res = x
+            elif x.ndim == 4 and x.shape[0] == B and x.shape[1] == H:
+                init_res = x
+            elif x.ndim == 3 and x.shape[0] == B * H:
+                init_res = x.reshape(B, H, x.shape[1], x.shape[2])
+
+    initial_state = init_res  # may be None
+
+    # -----------------------
+    # Materialize cotangents
+    # -----------------------
     if isinstance(d_out, ad.Zero):
         d_out = jnp.zeros((B, H, L, dv_dim), dtype=jnp.float32)
-    if isinstance(dS_final, ad.Zero):
-        dS_final = jnp.zeros((B, H, dk_dim, dv_dim), dtype=jnp.float32)
-
-    # forward padding params (must mirror impl)
-    pad_tok = (C - (L % C)) % C
-    L1 = L + pad_tok
-    Nc = L1 // C
-
-    seg = int(segment_size)
-    seg = 1 if seg < 1 else seg
-    seg = min(seg, Nc) if Nc > 0 else 1
-    n_chunks_pad = _round_up_to(Nc, seg)
-    pad_chunks = n_chunks_pad - Nc
-    n_segments = n_chunks_pad // seg
-
-    # pad tokens to L1
-    if pad_tok:
-        q_p = jnp.pad(q_arr, ((0, 0), (0, 0), (0, pad_tok), (0, 0)))
-        k_p = jnp.pad(k_arr, ((0, 0), (0, 0), (0, pad_tok), (0, 0)))
-        v_p = jnp.pad(v_arr, ((0, 0), (0, 0), (0, pad_tok), (0, 0)))
-        g_p = jnp.pad(g_arr, ((0, 0), (0, 0), (0, pad_tok)))
-        b_p = jnp.pad(b_arr, ((0, 0), (0, 0), (0, pad_tok)))
-        d_out_p = jnp.pad(d_out, ((0, 0), (0, 0), (0, pad_tok), (0, 0)))
     else:
-        q_p, k_p, v_p, g_p, b_p, d_out_p = q_arr, k_arr, v_arr, g_arr, b_arr, d_out
+        d_out = d_out.astype(jnp.float32)
 
-    # chunk reshape (B,H,Nc,C,*)
-    q_c = q_p.reshape(B, H, Nc, C, dk_dim)
-    k_c = k_p.reshape(B, H, Nc, C, dk_dim)
-    v_c = v_p.reshape(B, H, Nc, C, dv_dim)
-    g_c = g_p.reshape(B, H, Nc, C)
-    b_c = b_p.reshape(B, H, Nc, C)
-    d_out_c = d_out_p.reshape(B, H, Nc, C, dv_dim)
+    if isinstance(dS_final, ad.Zero) or dS_final is None:
+        dS_final = jnp.zeros((B, H, dk_dim, dv_dim), dtype=jnp.float32)
+    else:
+        dS_final = dS_final.astype(jnp.float32)
 
-    # pad chunk axis to n_chunks_pad
-    if pad_chunks:
-        q_c = jnp.pad(q_c, ((0, 0), (0, 0), (0, pad_chunks), (0, 0), (0, 0)))
-        k_c = jnp.pad(k_c, ((0, 0), (0, 0), (0, pad_chunks), (0, 0), (0, 0)))
-        v_c = jnp.pad(v_c, ((0, 0), (0, 0), (0, pad_chunks), (0, 0), (0, 0)))
-        g_c = jnp.pad(g_c, ((0, 0), (0, 0), (0, pad_chunks), (0, 0)))
-        b_c = jnp.pad(b_c, ((0, 0), (0, 0), (0, pad_chunks), (0, 0)))
-        d_out_c = jnp.pad(d_out_c, ((0, 0), (0, 0), (0, pad_chunks), (0, 0), (0, 0)))
+    # -----------------------
+    # Pad primals to (L1, K_pad/V_pad) and reshape to chunk/segment views
+    # -----------------------
+    q32 = q_arr.astype(jnp.float32)
+    k32 = k_arr.astype(jnp.float32)
+    v32 = v_arr.astype(jnp.float32)
+    g32 = g_arr.astype(jnp.float32)
+    b32 = b_arr.astype(jnp.float32)
 
-    # pad feature dims for state math
-    K_pad = _round_up_to(dk_dim, _GDN_TPU_MULT)
-    V_pad = _round_up_to(dv_dim, _GDN_TPU_MULT)
-    q_c = _pad_axis_right(q_c, axis=-1, new_size=K_pad)
-    k_c = _pad_axis_right(k_c, axis=-1, new_size=K_pad)
-    v_c = _pad_axis_right(v_c, axis=-1, new_size=V_pad)
-    d_out_c = _pad_axis_right(d_out_c, axis=-1, new_size=V_pad)
+    q_pad = jnp.pad(q32, ((0, 0), (0, 0), (0, L1 - L), (0, K_pad - dk_dim)))
+    k_pad = jnp.pad(k32, ((0, 0), (0, 0), (0, L1 - L), (0, K_pad - dk_dim)))
+    v_pad = jnp.pad(v32, ((0, 0), (0, 0), (0, L1 - L), (0, V_pad - dv_dim)))
+    g_pad = jnp.pad(g32, ((0, 0), (0, 0), (0, L1 - L)))
+    b_pad = jnp.pad(b32, ((0, 0), (0, 0), (0, L1 - L)))
 
-    # segment reshape (B,H,n_segments,seg,C,*)
-    q_s = q_c.reshape(B, H, n_segments, seg, C, K_pad)
-    k_s = k_c.reshape(B, H, n_segments, seg, C, K_pad)
-    v_s = v_c.reshape(B, H, n_segments, seg, C, V_pad)
-    g_s = g_c.reshape(B, H, n_segments, seg, C)
-    b_s = b_c.reshape(B, H, n_segments, seg, C)
-    d_out_s = d_out_c.reshape(B, H, n_segments, seg, C, V_pad)
+    d_out_pad = jnp.pad(d_out, ((0, 0), (0, 0), (0, L1 - L), (0, V_pad - dv_dim)))
 
-    # dS_final pad
-    dS_fin_pad = _pad_kv_state_bh(dS_final.astype(jnp.float32), K_pad=K_pad, V_pad=V_pad)
+    q_c = q_pad.reshape(B, H, n_chunks_pad, C, K_pad)
+    k_c = k_pad.reshape(B, H, n_chunks_pad, C, K_pad)
+    v_c = v_pad.reshape(B, H, n_chunks_pad, C, V_pad)
+    g_c = g_pad.reshape(B, H, n_chunks_pad, C)
+    b_c = b_pad.reshape(B, H, n_chunks_pad, C)
+    dO_c = d_out_pad.reshape(B, H, n_chunks_pad, C, V_pad)
 
-    # reverse segments
-    q_tm = jnp.moveaxis(q_s, 2, 0)[::-1]  # (n_segments,B,H,seg,C,K)
-    k_tm = jnp.moveaxis(k_s, 2, 0)[::-1]
-    v_tm = jnp.moveaxis(v_s, 2, 0)[::-1]
-    g_tm = jnp.moveaxis(g_s, 2, 0)[::-1]
-    b_tm = jnp.moveaxis(b_s, 2, 0)[::-1]
-    d_out_tm = jnp.moveaxis(d_out_s, 2, 0)[::-1]
-    seg_starts_rev = seg_starts[::-1]
+    # Pad within-chunk axis from C -> Ct (TPU-friendly)
+    if Ct != C:
+        q_c = jnp.pad(q_c, ((0, 0), (0, 0), (0, 0), (0, Ct - C), (0, 0)))
+        k_c = jnp.pad(k_c, ((0, 0), (0, 0), (0, 0), (0, Ct - C), (0, 0)))
+        v_c = jnp.pad(v_c, ((0, 0), (0, 0), (0, 0), (0, Ct - C), (0, 0)))
+        g_c = jnp.pad(g_c, ((0, 0), (0, 0), (0, 0), (0, Ct - C)))
+        b_c = jnp.pad(b_c, ((0, 0), (0, 0), (0, 0), (0, Ct - C)))
+        dO_c = jnp.pad(dO_c, ((0, 0), (0, 0), (0, 0), (0, Ct - C), (0, 0)))
 
-    def seg_bwd_body(dS_end, seg_inp):
-        q_seg, k_seg, v_seg, g_seg, b_seg, d_out_seg, S_start = seg_inp  # each (B,H,seg,C,*)
+    # Precompute g_cum outside Pallas: (B,H,n_chunks_pad,Ct)
+    g_cum_c = jnp.cumsum(g_c, axis=-1)
 
-        # Recompute S_prev per chunk inside this segment
-        k_ctm = jnp.moveaxis(k_seg, 2, 0)  # (seg,B,H,C,K)
-        v_ctm = jnp.moveaxis(v_seg, 2, 0)
-        g_ctm = jnp.moveaxis(g_seg, 2, 0)
-        b_ctm = jnp.moveaxis(b_seg, 2, 0)
+    # Segment views:
+    #   (n_segments, seg, B, H, Ct, feat) and (n_segments, seg, B, H, Ct)
+    def _to_seg(x, has_feat: bool):
+        if has_feat:
+            x = x.reshape(B, H, n_segments, seg, Ct, x.shape[-1])
+            return jnp.transpose(x, (2, 3, 0, 1, 4, 5))
+        else:
+            x = x.reshape(B, H, n_segments, seg, Ct)
+            return jnp.transpose(x, (2, 3, 0, 1, 4))
 
-        def fwd_state_body(S_prev, kvgb):
-            k_i, v_i, g_i, b_i = kvgb
-            S_next = _gdn_chunk_state_update_jax(k_i, v_i, g_i, b_i, S_prev, use_triangular_solve=use_triangular_solve)
-            return S_next, S_prev
+    q_seg = _to_seg(q_c, True)
+    k_seg = _to_seg(k_c, True)
+    v_seg = _to_seg(v_c, True)
+    gcum_seg = _to_seg(g_cum_c, False)
+    b_seg = _to_seg(b_c, False)
+    dO_seg = _to_seg(dO_c, True)
 
-        _, S_prev_list = lax.scan(fwd_state_body, S_start, (k_ctm, v_ctm, g_ctm, b_ctm), length=seg)
-        # S_prev_list: (seg,B,H,K_pad,V_pad)
+    # -----------------------
+    # Initial / final state pads
+    # -----------------------
+    init_shape_for_return = None
+    init_dtype_for_return = None
+    init_is_padded = False
 
-        # reverse chunks for backward
-        q_r = jnp.moveaxis(q_seg, 2, 0)[::-1]
-        k_r = k_ctm[::-1]
-        v_r = v_ctm[::-1]
-        g_r = g_ctm[::-1]
-        b_r = b_ctm[::-1]
-        d_out_r = jnp.moveaxis(d_out_seg, 2, 0)[::-1]
-        S_prev_r = S_prev_list[::-1]
+    if initial_state is None:
+        S0_pad = jnp.zeros((B, H, K_pad, V_pad), dtype=jnp.float32)
+    else:
+        init_dtype_for_return = initial_state.dtype
+        init_shape_for_return = initial_state.shape
 
-        def chunk_bwd_body(dS_next, inp):
-            S_prev_i, q_i, k_i, v_i, g_i, b_i, d_out_i = inp
-            dq_i, dk_i, dv_i, dg_i, db_i, dS_prev_i = _gdn_chunk_step_bwd_jax(
-                q_i, k_i, v_i, g_i, b_i, S_prev_i, d_out_i, dS_next, use_triangular_solve=use_triangular_solve
-            )
-            return dS_prev_i, (dq_i, dk_i, dv_i, dg_i, db_i)
+        init32 = initial_state.astype(jnp.float32)
+        if init32.shape[-2] == K_pad and init32.shape[-1] == V_pad:
+            S0_pad = init32
+            init_is_padded = True
+        else:
+            pad_k = K_pad - init32.shape[-2]
+            pad_v = V_pad - init32.shape[-1]
+            if pad_k < 0 or pad_v < 0:
+                raise ValueError(f"initial_state larger than pads: {init32.shape} vs {(K_pad, V_pad)}")
+            S0_pad = jnp.pad(init32, ((0, 0), (0, 0), (0, pad_k), (0, pad_v)))
+            init_is_padded = False
 
-        dS_start, grads_rev = lax.scan(
-            chunk_bwd_body, dS_end, (S_prev_r, q_r, k_r, v_r, g_r, b_r, d_out_r), length=seg
+    dS_final_pad = jnp.pad(dS_final, ((0, 0), (0, 0), (0, K_pad - dk_dim), (0, V_pad - dv_dim)))
+
+    # -----------------------
+    # Phase 1: compute segment-start states S_starts[s]
+    # -----------------------
+    use_stashed_seg_starts = False
+    if seg_starts_res is not None and hasattr(seg_starts_res, "shape") and seg_starts_res.ndim == 5:
+        if seg_starts_res.shape[0] == n_segments and seg_starts_res.shape[1] == B and seg_starts_res.shape[2] == H:
+            use_stashed_seg_starts = True
+
+    if use_stashed_seg_starts:
+        S_starts = seg_starts_res.astype(jnp.float32)
+
+        # >>> IMPORTANT FIX: reconcile stashed (K,V) with our (K_pad,V_pad) without negative pad <<<
+        k_cur = int(S_starts.shape[-2])
+        v_cur = int(S_starts.shape[-1])
+        k_use = min(k_cur, K_pad)
+        v_use = min(v_cur, V_pad)
+
+        # truncate down if stashed is larger
+        if k_use != k_cur or v_use != v_cur:
+            S_starts = S_starts[..., :k_use, :v_use]
+
+        # pad up if stashed is smaller
+        pad_k = K_pad - k_use
+        pad_v = V_pad - v_use
+        if pad_k > 0 or pad_v > 0:
+            S_starts = jnp.pad(S_starts, ((0, 0), (0, 0), (0, 0), (0, pad_k), (0, pad_v)))
+
+    else:
+        def _seg_state_fwd(S_in, seg_inps):
+            k_s, v_s, gc_s, b_s = seg_inps
+
+            def _chunk_state_body(S_prev, inp):
+                k_i, v_i, gc_i, b_i = inp
+                S_next = _gdn_chunk_state_update_pallas(
+                    k_i, v_i, gc_i, b_i, S_prev,
+                    Ct=Ct, K_pad=K_pad, V_pad=V_pad,
+                )
+                return S_next, S_prev
+
+            S_out, _ = lax.scan(_chunk_state_body, S_in, (k_s, v_s, gc_s, b_s), length=seg)
+            return S_out, S_in
+
+        _, S_starts = lax.scan(
+            _seg_state_fwd,
+            S0_pad,
+            (k_seg, v_seg, gcum_seg, b_seg),
+            length=n_segments,
         )
 
-        dq_r, dk_r, dv_r, dg_r, db_r = grads_rev
+    # -----------------------
+    # Phase 2: reverse over segments, and within each segment reverse over chunks
+    # -----------------------
+    S_starts_rev = S_starts[::-1]
+    q_seg_rev = q_seg[::-1]
+    k_seg_rev = k_seg[::-1]
+    v_seg_rev = v_seg[::-1]
+    gcum_seg_rev = gcum_seg[::-1]
+    b_seg_rev = b_seg[::-1]
+    dO_seg_rev = dO_seg[::-1]
 
-        # back to forward order, then to (B,H,seg,C,*)
-        dq_f = dq_r[::-1]
-        dk_f = dk_r[::-1]
-        dv_f = dv_r[::-1]
-        dg_f = dg_r[::-1]
-        db_f = db_r[::-1]
+    def _seg_bwd_body(dS_after_seg, seg_inps):
+        S_start, q_s, k_s, v_s, gc_s, b_s, dO_s = seg_inps
 
-        dq_seg = jnp.transpose(dq_f, (1, 2, 0, 3, 4))
-        dk_seg = jnp.transpose(dk_f, (1, 2, 0, 3, 4))
-        dv_seg = jnp.transpose(dv_f, (1, 2, 0, 3, 4))
-        dg_seg = jnp.transpose(dg_f, (1, 2, 0, 3))
-        db_seg = jnp.transpose(db_f, (1, 2, 0, 3))
+        def _chunk_state_body(S_prev, inp):
+            k_i, v_i, gc_i, b_i = inp
+            S_next = _gdn_chunk_state_update_pallas(
+                k_i, v_i, gc_i, b_i, S_prev,
+                Ct=Ct, K_pad=K_pad, V_pad=V_pad,
+            )
+            return S_next, S_prev
 
-        return dS_start, (dq_seg, dk_seg, dv_seg, dg_seg, db_seg)
+        _, S_prev_list = lax.scan(_chunk_state_body, S_start, (k_s, v_s, gc_s, b_s), length=seg)
 
-    dS0, grads_segs_rev = lax.scan(
-        seg_bwd_body,
-        dS_fin_pad,
-        (q_tm, k_tm, v_tm, g_tm, b_tm, d_out_tm, seg_starts_rev),
+        q_r = q_s[::-1]
+        k_r = k_s[::-1]
+        v_r = v_s[::-1]
+        gc_r = gc_s[::-1]
+        b_r = b_s[::-1]
+        dO_r = dO_s[::-1]
+        Sprev_r = S_prev_list[::-1]
+
+        def _chunk_bwd_body(dS_next, inp):
+            q_i, k_i, v_i, gc_i, b_i, S_prev_i, dO_i = inp
+            dq_i, dk_i, dv_i, dg_i4, db_i4, dS_prev_i = _gdn_chunk_step_bwd_pallas(
+                q_i, k_i, v_i, gc_i, b_i, S_prev_i, dO_i, dS_next,
+                Ct=Ct, K_pad=K_pad, V_pad=V_pad,
+            )
+            dg_i = dg_i4.reshape(B, H, Ct)
+            db_i = db_i4.reshape(B, H, Ct)
+            return dS_prev_i, (dq_i, dk_i, dv_i, dg_i, db_i)
+
+        dS_start_grad, (dq_r, dk_r, dv_r, dg_r, db_r) = lax.scan(
+            _chunk_bwd_body,
+            dS_after_seg,
+            (q_r, k_r, v_r, gc_r, b_r, Sprev_r, dO_r),
+            length=seg,
+        )
+
+        return dS_start_grad, (dq_r[::-1], dk_r[::-1], dv_r[::-1], dg_r[::-1], db_r[::-1])
+
+    dS0_pad, (dq_segs_rev, dk_segs_rev, dv_segs_rev, dg_segs_rev, db_segs_rev) = lax.scan(
+        _seg_bwd_body,
+        dS_final_pad,
+        (S_starts_rev, q_seg_rev, k_seg_rev, v_seg_rev, gcum_seg_rev, b_seg_rev, dO_seg_rev),
         length=n_segments,
     )
 
-    dq_segs_r, dk_segs_r, dv_segs_r, dg_segs_r, db_segs_r = grads_segs_rev
-    dq_segs = dq_segs_r[::-1]
-    dk_segs = dk_segs_r[::-1]
-    dv_segs = dv_segs_r[::-1]
-    dg_segs = dg_segs_r[::-1]
-    db_segs = db_segs_r[::-1]
+    dq_segs = dq_segs_rev[::-1]
+    dk_segs = dk_segs_rev[::-1]
+    dv_segs = dv_segs_rev[::-1]
+    dg_segs = dg_segs_rev[::-1]
+    db_segs = db_segs_rev[::-1]
 
-    # assemble back to (B,H,n_chunks_pad,C,*)
-    dq_g = jnp.transpose(dq_segs, (1, 2, 0, 3, 4, 5)).reshape(B, H, n_chunks_pad, C, K_pad)
-    dk_g = jnp.transpose(dk_segs, (1, 2, 0, 3, 4, 5)).reshape(B, H, n_chunks_pad, C, K_pad)
-    dv_g = jnp.transpose(dv_segs, (1, 2, 0, 3, 4, 5)).reshape(B, H, n_chunks_pad, C, V_pad)
-    dg_g = jnp.transpose(dg_segs, (1, 2, 0, 3, 4)).reshape(B, H, n_chunks_pad, C)
-    db_g = jnp.transpose(db_segs, (1, 2, 0, 3, 4)).reshape(B, H, n_chunks_pad, C)
+    # -----------------------
+    # Assemble back to (B,H,L,dim)
+    # -----------------------
+    def _seg_to_chunks_kt(x):
+        x = jnp.transpose(x, (2, 3, 0, 1, 4, 5))
+        return x.reshape(B, H, n_chunks_pad, Ct, x.shape[-1])
 
-    # Drop padded chunks, flatten tokens, drop token pad, drop feature pad
-    dq_g = dq_g[:, :, :Nc].reshape(B, H, L1, K_pad)[:, :, :L, :dk_dim]
-    dk_g = dk_g[:, :, :Nc].reshape(B, H, L1, K_pad)[:, :, :L, :dk_dim]
-    dv_g = dv_g[:, :, :Nc].reshape(B, H, L1, V_pad)[:, :, :L, :dv_dim]
-    dg_g = dg_g[:, :, :Nc].reshape(B, H, L1)[:, :, :L]
-    db_g = db_g[:, :, :Nc].reshape(B, H, L1)[:, :, :L]
+    def _seg_to_chunks_t(x):
+        x = jnp.transpose(x, (2, 3, 0, 1, 4))
+        return x.reshape(B, H, n_chunks_pad, Ct)
 
+    dq_chunks = _seg_to_chunks_kt(dq_segs)
+    dk_chunks = _seg_to_chunks_kt(dk_segs)
+    dv_chunks = _seg_to_chunks_kt(dv_segs)
+    dg_chunks = _seg_to_chunks_t(dg_segs)
+    db_chunks = _seg_to_chunks_t(db_segs)
+
+    dq_flat = dq_chunks[:, :, :, :C, :].reshape(B, H, L1, K_pad)[:, :, :L, :dk_dim]
+    dk_flat = dk_chunks[:, :, :, :C, :].reshape(B, H, L1, K_pad)[:, :, :L, :dk_dim]
+    dv_flat = dv_chunks[:, :, :, :C, :].reshape(B, H, L1, V_pad)[:, :, :L, :dv_dim]
+    dg_flat = dg_chunks[:, :, :, :C].reshape(B, H, L1)[:, :, :L]
+    db_flat = db_chunks[:, :, :, :C].reshape(B, H, L1)[:, :, :L]
+
+    dq_ret = dq_flat.astype(q_arr.dtype)
+    dk_ret = dk_flat.astype(k_arr.dtype)
+    dv_ret = dv_flat.astype(v_arr.dtype)
+    dg_ret = dg_flat.astype(g_arr.dtype)
+    db_ret = db_flat.astype(b_arr.dtype)
+
+    # initial_state grad: must match the primal initial_state shape if it was present
     if initial_state is None:
         dS0_ret = None
     else:
-        # dS0 is (B,H,K_pad,V_pad); trim to the real dk/dv
-        dS0_ret = dS0[:, :, :dk_dim, :dv_dim].astype(initial_state.dtype)
+        if init_is_padded:
+            dS0_ret = dS0_pad.astype(init_dtype_for_return)
+        else:
+            dk0 = init_shape_for_return[-2]
+            dv0 = init_shape_for_return[-1]
+            dS0_ret = dS0_pad[:, :, :dk0, :dv0].astype(init_dtype_for_return)
 
-    return dq_g, dk_g, dv_g, dg_g, db_g, dS0_ret
+    return dq_ret, dk_ret, dv_ret, dg_ret, db_ret, dS0_ret
 
 
 _chunk_gated_delta_rule_flash_pallas.defvjp(
