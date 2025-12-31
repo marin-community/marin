@@ -8,7 +8,7 @@ import jax
 from jax import numpy as jnp
 from jax.tree_util import register_dataclass
 
-from .config import AttentionBackend, RotaryConfig
+from .config import RotaryConfig
 
 
 @functools.partial(
@@ -187,13 +187,7 @@ def attention(
     k: jax.Array,
     v: jax.Array,
     mask: AttentionMask | jax.Array | None,
-    *,
-    backend: AttentionBackend,
 ) -> jax.Array:
-    if backend == "reference":
-        return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
-    if backend != "blocksparse":
-        raise ValueError(f"Unknown attention backend: {backend}")
     return _blocksparse_attention(q, k, v, mask)
 
 

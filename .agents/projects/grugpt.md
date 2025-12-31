@@ -11,7 +11,7 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 
 - **Few methods, keep arrays out of them inside jit.** We still prefer top-level functions, but lightweight dataclass helpers/property accessors—and any method that only touches metadata, not arrays—are fine even inside jit-traced regions. Once a method would manipulate `jax.Array`s, implement it as a standalone function instead.
 - **Keep dependencies small.** Prefer `einshard`, `einops`, `optax`, JAX core libs, HF tokenizers, and Levanter’s `data` + `tracker` + TensorStore serialization APIs. Grug doesn't want to reinvent wheels, but we also don't want heavy frameworks obscuring the core logic.
-- **Fast attention kernels are allowed, but keep the surface simple.** For now, we standardize on `ejkernel` block-sparse attention (`ejkernel.modules.operations.blocksparse_attention`) with a reference fallback.
+- **Fast attention kernels are allowed, but keep the surface simple.** For now, grug core hard-depends on `ejkernel` block-sparse attention (`ejkernel.modules.operations.blocksparse_attention`) and keeps a separate reference implementation for debugging/regressions.
 - **Serializable state.** Trainer state must round-trip through `levanter.tensorstore_serialization.tree_{de,}serialize_leaves_tensorstore` with no custom logic.
 - **Consumption-ready.** Provide a `uv run python -m marin.grugpt.train` entrypoint plus tests. Tracking hooks log loss/perplexity through Levanter’s tracker interface.
 
@@ -28,100 +28,12 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 - **Mask spec is simple.** Grug’s attention mask is a small spec (`levanter.grug.attention.AttentionMask`) storing only raw JAX arrays/ints (no NamedArray fields and no explicit dense masks yet).
 
 
-## Proposed Directory Layout
+## Misc Style
 
-| Path | Purpose |
-| --- | --- |
-| `lib/grugpt/pyproject.toml` | `uv`-managed package metadata; declares dependencies on `jax`, `einshard`, `einops`, `optax`, `levanter`. |
-| `lib/grugpt/src/grugpt/__init__.py` | Re-export configs and public helpers for downstream scripts. |
-| `lib/grugpt/src/grugpt/config.py` | Pure dataclasses defining model/data/runtime configs; registered as pytrees so they can flow through `jax.jit`. |
-| `lib/grugpt/src/grugpt/attention.py` | Reference attention + rotary helpers + backend dispatcher (splash stubbed). |
-| `lib/grugpt/src/grugpt/model.py` | Parameter init + forward pass using `jnp.einsum`, `einops.rearrange`, and `jax.sharding.PartitionSpec` to place weights. |
-| `lib/grugpt/src/grugpt/data.py` | Glue around Levanter datasets/tokenizers; config-driven creation of iterable batches that already respect the mesh sharding. |
-| `lib/grugpt/src/grugpt/train.py` | Training loop + CLI: builds mesh, data, optimizer, trackers, compiles `train_step`, handles checkpoints. |
-| `tests/grugpt/test_model.py` | Shape & sharding tests for forward pass. |
-| `tests/grugpt/test_train_step.py` | Golden-step test covering loss, grads, and tracker logging. |
-
-## Detailed Design
-
-### Configuration & Dataclasses
-
-- `ModelConfig`, `DataConfig`, `OptimizerConfig`, `RunConfig` defined in `config.py` using `@dataclass(frozen=True)`. After definition we call `register_dataclass(ModelConfig)` so configs can live in pytrees.
-- Each config only stores data—no helper methods. Convenience functions live in `config.py` (e.g., `def validate_config(cfg)`), returning new configs instead of mutating.
-- `TrainingState` dataclass contains `(params, opt_state, step, rng)` and is registered as a pytree. Parameters are themselves a dataclass (`ModelParameters`) mirroring module structure (token embedding, attention weights, etc.).
-- Provide `default_run_config()` helper that builds a small LM spec for smoke tests (e.g., 4 layers, 256 hidden size).
-- Attention backend selection is a single string: `AttentionBackend = Literal["reference", "blocksparse"]`. This keeps the surface small and avoids runtime config objects in hot paths.
-
-- `mesh.py` exposes `def create_mesh(cfg: RunConfig) -> Mesh` which:
-  1. Discovers available devices.
-  2. Reshapes them into `(replica, data, tensor)` dims specified by `cfg.mesh_shape` (default `(1, 1, num_devices)`).
-  3. Calls `jax.make_mesh(shape, axis_names=("replica", "data", "tensor"), axis_types=(AxisType.Explicit, ...)` and `jax.set_mesh(mesh)`.
-- We attach shardings explicitly via `jax.sharding.PartitionSpec` during parameter init (e.g., embeddings on `('data', None)`, attention weights on `('data','tensor')`). No separate sharding helper module is needed; everything flows through `jax.sharding.reshard`.
-
-### Llama-Style Model Sketch
-
-```python
-@dataclass
-class GrugAttentionParams:
-    w_q: jax.Array  # [hidden, num_heads * head_dim]
-    w_k: jax.Array  # [hidden, num_kv_heads * head_dim]
-    w_v: jax.Array
-    w_o: jax.Array  # [num_heads * head_dim, hidden]
-
-@dataclass
-class GrugBlockParams:
-    attn: GrugAttentionParams
-    rms_attn: jax.Array  # RMSNorm weights (bias optional)
-    rms_mlp: jax.Array
-    mlp_gate: jax.Array  # [hidden, intermediate]
-    mlp_up: jax.Array
-    mlp_down: jax.Array  # [intermediate, hidden]
-
-@dataclass
-class GrugModelParameters:
-    token_embed: jax.Array  # [vocab, hidden]
-    output_proj: jax.Array  # shared with token_embed if tie_embeddings
-    blocks: tuple[GrugBlockParams, ...]
-    final_norm: jax.Array
-
-def rms_norm(x, weight, eps):
-    var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-    return x * weight / jnp.sqrt(var + eps)
-
-def apply_attention(params, hidden, mask, rotary, backend):
-    q = einsum("b s h, h (n d) -> b s n d", hidden, params.attn.w_q)
-    k = einsum("b s h, h (m d) -> b s m d", hidden, params.attn.w_k)
-    v = einsum("b s h, h (m d) -> b s m d", hidden, params.attn.w_v)
-    q, k = apply_rotary_embedding(q, k, rotary)
-    attn = attention(q, k, v, mask, backend=backend)
-    return einsum("b s n d, (n d) h -> b s h", attn, params.attn.w_o)
-
-def transformer_block(block, hidden, mask, rotary, runtime, eps):
-    attn_in = rms_norm(hidden, block.rms_attn, eps)
-    attn_out = apply_attention(block, attn_in, mask, rotary, runtime)
-    hidden = hidden + attn_out
-    mlp_in = rms_norm(hidden, block.rms_mlp, eps)
-    gate = einsum("b s h, h m -> b s m", mlp_in, block.mlp_gate)
-    up = einsum("b s h, h m -> b s m", mlp_in, block.mlp_up)
-    act = jnp.silu(gate) * up
-    mlp_out = einsum("b s m, m h -> b s h", act, block.mlp_down)
-    return hidden + mlp_out
-
-def forward(params, tokens, mask, rotary, runtime, eps):
-    hidden = params.token_embed[tokens]
-    for block in params.blocks:
-        hidden = transformer_block(block, hidden, mask, rotary, runtime, eps)
-    hidden = rms_norm(hidden, params.final_norm, eps)
-    logits = hidden @ params.output_proj.T
-    return logits
-```
 
 - Use `einops.rearrange` for `[batch, seq, heads, head_dim]` manipulations where it improves clarity.
 - Use `jnp.einsum` and explicit `PartitionSpec` annotations to keep matmuls consistent with the mesh layout.
-- Attention backend selection lives in `attention.py` as a single `attention(q, k, v, mask, *, backend=...)` function:
-  - `backend="blocksparse"` uses ejkernel blocksparse attention.
-  - `backend="reference"` uses `einsum` + softmax.
-  - The reference path exists for debugging; blocksparse is the default for real runs.
+- Grug core attention is a single `attention(q, k, v, mask)` that calls ejkernel block-sparse attention; `reference_attention(...)` exists for debugging/regressions but is not selected at runtime.
 - Attention masks are a small spec dataclass (`levanter.grug.attention.AttentionMask`) rather than a dense mask/bias array. Grug defaults to causal masking.
 - Layer norm: implement epsilon-stabilized RMSNorm using `jnp.mean/var` and explicit shardings.
 - Residual dropouts remain optional and implemented via `jax.random.bernoulli` (with `out_sharding=P(None)` to keep them replicated).
@@ -182,10 +94,75 @@ def forward(params, tokens, mask, rotary, runtime, eps):
 ## Implementation Tasks
 
 1. **Data + tracker integration.** Swap the synthetic batch generator for a real tokenizer/dataset pipeline (leveraging Levanter loaders) and pipe metrics through the tracker API.
-2. **Attention backends.** Implement the TPU splash backend (or other hardware-accelerated kernels) and keep the reference path as a fallback.
+2. **Attention + masks.** Extend the structured mask surface (segments/windows) and keep the reference implementation available for debugging/regressions.
 3. **Checkpointing.** Hook `tree_{de}serialize_leaves_tensorstore` into the training loop so state/rng/optimizer snapshots can be saved/restored.
 4. **Evaluation + CLI polish.** Add validation hooks, flag parsing (YAML/Draccus), and a proper entry point under `uv run` instead of the current hard-coded config.
 5. **Testing.** Port the sketched unit tests (`test_model`, `test_mesh`, `test_train_step`) into `tests/grugpt/` and wire them into CI.
+
+## Speedrun Milestone: Hackable Transformer Gauntlet
+
+Goal: use Grug as a “copy-pasteable” reference implementation inside a single speedrun script (e.g.
+`experiments/speedrun/hackable_transformer_starter/hackable_transformer_attn_sink.py`), so the workflow is:
+
+1) copy/paste the Grug core into the file
+2) modify it (e.g. add attention sinks)
+3) run it through a standard gauntlet (correctness + compile + throughput + memory)
+
+### Constraints
+
+- Single-file friendly: minimal imports, no class-heavy APIs, top-level functions.
+- Keep an accelerated path (ejkernel blocksparse) + a reference fallback path.
+- Make the “hack points” obvious: attention sinks, masks, sharding, and config.
+
+### Plan (concrete)
+
+1) **Define a “Grug-In-File” template section in the speedrun script**
+   - Put it near the top of the file under a clear header like `# === GRUG CORE (COPY-PASTE) ===`.
+   - Include only:
+     - param dataclasses (`GrugAttentionParams`, `GrugBlockParams`, `GrugModelParameters`)
+     - `init_parameters(cfg, *, key)`
+     - `forward(params, tokens, cfg, *, mask=None)`
+     - `attention(q, k, v, mask)`
+     - `AttentionMask` (Grug-local, raw arrays only)
+
+2) **Make sinks a deliberate edit point**
+   - Do not bake “sinks”/`softmax_aux` into the stable grug API.
+   - In the hackable speedrun script, add sinks by directly editing the ejkernel block-sparse attention callsite (or by copy-pasting a slightly modified `attention()` helper into the file).
+
+3) **Keep the mask surface minimal and explicit**
+   - Use the Grug-local `AttentionMask` spec (causal + sliding window + segment ids).
+   - Avoid accepting dense boolean masks in accelerated mode (raise loudly).
+   - Default to causal masking in `forward()` when `mask is None`.
+
+4) **Define the gauntlet API in the speedrun script**
+   - Standardize a small set of functions the harness calls:
+     - `build_cfg()` (or constants) that define model hyperparams.
+     - `init_fn(key) -> params`
+     - `fwd_fn(params, batch) -> logits`
+     - `loss_fn(logits, labels) -> loss`
+     - `train_step(state, batch) -> (new_state, metrics)`
+   - Keep all state as plain pytrees so it’s easy to serialize/inspect.
+
+5) **Gauntlet checks to run every time**
+   - **Correctness sanity** (small shapes):
+     - reference vs blocksparse forward (match within a tolerance)
+     - gradients exist and are finite
+   - **Compile sanity**:
+     - time-to-first-step (TTFS) for `train_step`
+   - **Throughput sanity**:
+     - tokens/sec and step time for a fixed number of warmup+iters
+   - **Memory sanity**:
+     - optional: track max HBM/VMEM if available in the speedrun harness
+
+6) **Keep Levanter adapters out of the speedrun file**
+   - Do not rely on `LmHeadModel`/`NamedArray` in the hackable file.
+   - If you need to run the same model inside Levanter, use the adapter in `levanter.models.grug_wrapper`.
+
+7) **Document the expected “edit surface” inside the file**
+   - Put a short list at the top:
+     - “To add sinks: edit the ejkernel block-sparse attention call in `attention()`.”
+     - “To change masking: edit `AttentionMask` / `mask` construction in `forward()`.”
+     - “To change sharding: edit `PartitionSpec`s in init + `out_sharding=` callsites.”
 
 ## Future Integration with Levanter Trainer
 

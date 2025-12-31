@@ -13,7 +13,6 @@ from haliax import Axis, NamedArray
 from jaxtyping import PRNGKeyArray, PyTree
 
 from levanter.grug.attention import AttentionMask
-from levanter.grug.config import AttentionBackend
 from levanter.grug.model import forward, init_parameters
 from levanter.layers.attention import AttentionMask as LevanterAttentionMask
 from levanter.models.lm_model import LmHeadModel
@@ -30,7 +29,6 @@ class GrugForwardFn(Protocol):
         params: PyTree,
         tokens: jax.Array,
         cfg: GrugConfigLike,
-        attention_backend: AttentionBackend,
         *,
         mask: AttentionMask | jax.Array | None = None,
     ) -> jax.Array: ...
@@ -45,7 +43,6 @@ class GrugWrapper(LmHeadModel[Any]):
 
     params: PyTree
     grug_config: GrugConfigLike
-    attention_backend: AttentionBackend
     init_fn: GrugInitFn = eqx.field(static=True)
     forward_fn: GrugForwardFn = eqx.field(static=True)
 
@@ -85,16 +82,13 @@ class GrugWrapper(LmHeadModel[Any]):
         key: PRNGKeyArray,
         init_fn: GrugInitFn | None = None,
         forward_fn: GrugForwardFn | None = None,
-        attention_backend: AttentionBackend | None = None,
     ) -> "GrugWrapper":
         cfg = config
         chosen_init = init_fn or init_parameters
         params = chosen_init(cfg, key=key)
-        backend = attention_backend or "blocksparse"
         return cls(
             params=params,
             grug_config=cfg,
-            attention_backend=backend,
             init_fn=chosen_init,
             forward_fn=forward_fn or forward,
         )
@@ -125,17 +119,14 @@ class GrugWrapper(LmHeadModel[Any]):
                 sliding_window=attn_mask.sliding_window,
             )
         elif isinstance(attn_mask, NamedArray):
-            if self.attention_backend != "reference":
-                raise NotImplementedError(
-                    "NamedArray attention masks are only supported with the reference Grug attention backend."
-                )
-            mask = attn_mask.array
+            raise NotImplementedError(
+                "NamedArray attention masks are not supported by Grug (pass a Levanter AttentionMask)."
+            )
 
         logits = self.forward_fn(
             self.params,
             input_ids.array,
             self.grug_config,
-            self.attention_backend,
             mask=mask,
         )
 

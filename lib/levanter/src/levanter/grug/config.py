@@ -2,9 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
-from typing import Literal
-
-AttentionBackend = Literal["reference", "blocksparse"]
 
 
 @dataclass(frozen=True)
@@ -50,7 +47,6 @@ class GrugTrainingConfig:
     """Full training recipe, nested around a model + attention backend."""
 
     model: GrugModelConfig = field(default_factory=GrugModelConfig)
-    attention_backend: AttentionBackend = "blocksparse"
     learning_rate: float = 1e-3
     weight_decay: float = 0.01
     seed: int = 0
@@ -69,7 +65,6 @@ def validate_config(cfg: GrugModelConfig) -> None:
 
 
 __all__ = [
-    "AttentionBackend",
     "RotaryConfig",
     "GrugModelConfig",
     "GrugTrainingConfig",

@@ -14,7 +14,7 @@ from jax.sharding import AxisType
 
 from levanter.store.cache import TreeCache
 
-from .config import AttentionBackend, GrugModelConfig, GrugTrainingConfig, validate_config
+from .config import GrugModelConfig, GrugTrainingConfig, validate_config
 from .data import DEFAULT_AXIS_MAPPING, build_token_loader
 from .model import GrugModelParameters, forward, init_parameters
 
@@ -63,11 +63,10 @@ def create_mesh() -> jax.sharding.Mesh:
 
 def make_train_step(
     model_cfg: GrugModelConfig,
-    attention_backend: AttentionBackend,
     optimizer: optax.GradientTransformation,
 ):
     def loss_and_metrics(params: GrugModelParameters, batch: dict[str, jax.Array]):
-        logits = forward(params, batch["tokens"], model_cfg, attention_backend, mask=None)
+        logits = forward(params, batch["tokens"], model_cfg, mask=None)
         loss = cross_entropy_loss(logits, batch["labels"])
         metrics = {"loss": loss, "ppl": jnp.exp(loss)}
         return loss, metrics
@@ -105,7 +104,7 @@ def run_training(train_cfg: GrugTrainingConfig, *, cache_dir: str | None = None)
     state = TrainingState(step=0, params=params, opt_state=opt_state)
 
     seq_len = train_cfg.model.max_seq_len
-    train_step = make_train_step(train_cfg.model, train_cfg.attention_backend, optimizer)
+    train_step = make_train_step(train_cfg.model, optimizer)
 
     if cache_dir:
         cache = load_cache(cache_dir, seq_len=seq_len)
@@ -166,7 +165,6 @@ def build_training_config(args: argparse.Namespace) -> GrugTrainingConfig:
     )
     train_cfg = GrugTrainingConfig(
         model=model_cfg,
-        attention_backend="reference",
         learning_rate=1e-3,
         weight_decay=0.01,
         steps=args.steps,

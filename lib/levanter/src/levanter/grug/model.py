@@ -14,7 +14,7 @@ from jax.sharding import PartitionSpec as P, reshard
 from jax.tree_util import register_dataclass
 
 from .attention import AttentionMask, apply_rotary_embedding, attention
-from .config import AttentionBackend, GrugModelConfig
+from .config import GrugModelConfig
 
 
 @register_dataclass
@@ -140,7 +140,6 @@ def forward(
     params: GrugModelParameters,
     token_ids: jax.Array,
     cfg: GrugModelConfig,
-    attention_backend: AttentionBackend,
     *,
     mask: AttentionMask | jax.Array | None = None,
 ) -> jax.Array:
@@ -160,7 +159,7 @@ def forward(
         k = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_v), "... (m d) -> ... m d", d=head_dim)
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=cfg.rope)
-        attn_out = attention(q, k, v, mask, backend=attention_backend)
+        attn_out = attention(q, k, v, mask)
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
         attn_out = jnp.einsum("bsh,hd->bsd", attn_out, block.attn.w_o, out_sharding=_Pbatch)
 

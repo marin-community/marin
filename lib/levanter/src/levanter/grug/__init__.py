@@ -8,7 +8,7 @@ Levanter integration adapters live under `levanter.models`.
 """
 
 from .attention import apply_rotary_embedding, attention
-from .config import AttentionBackend, GrugModelConfig, GrugTrainingConfig, RotaryConfig
+from .config import GrugModelConfig, GrugTrainingConfig, RotaryConfig
 from .data import build_token_loader, make_dataloader, make_token_dataset
 from .model import (
     GrugAttentionParams,
@@ -19,7 +19,6 @@ from .model import (
 )
 
 __all__ = [
-    "AttentionBackend",
     "GrugTrainingConfig",
     "GrugModelConfig",
     "RotaryConfig",
