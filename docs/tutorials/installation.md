@@ -67,7 +67,9 @@ For example, training checkpoints usually will be written to
 (e.g., a GCS bucket) or a directory on your machine. See [Understanding
 `MARIN_PREFIX` and `--prefix`](../explanations/marin-prefix.md) for details.
 
-You might find it convenient to store `WANDB_API_KEY` and `HF_TOKEN` and `MARIN_PREFIX` in an `.env` file.
+You might find it convenient to store `WANDB_API_KEY` and `HF_TOKEN` and
+`MARIN_PREFIX` in an `.env` file, which you can load in one go with `source
+.env`.
 
 ## Hardware-specific Setup
 

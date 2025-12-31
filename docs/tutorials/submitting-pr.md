@@ -37,3 +37,7 @@ Then pull changes from the upstream repository to your local repository and push
 git pull upstream main
 git push origin <my-branch>
 ```
+
+Finally, go to
+[https://github.com/<your-username>/marin/pulls](https://github.com/<your-username>/marin/pulls)
+and click on the "New pull request" button to make the actual pull request.
