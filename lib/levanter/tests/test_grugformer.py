@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from levanter.grug.config import AttentionRuntimeConfig, GrugModelConfig, GrugTrainingConfig
+from levanter.grug.config import GrugModelConfig, GrugTrainingConfig
 from levanter.grug.main import run_training
 
 
@@ -30,7 +30,6 @@ def test_synthetic_training_step_runs():
             num_kv_heads=4,
             max_seq_len=16,
         ),
-        attention=AttentionRuntimeConfig(backend="reference"),
         learning_rate=1e-3,
         weight_decay=0.01,
         steps=1,

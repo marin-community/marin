@@ -14,9 +14,9 @@ from jax.sharding import AxisType
 
 from levanter.store.cache import TreeCache
 
-from .config import GrugModelConfig, GrugTrainingConfig, validate_config
-from .data import DEFAULT_AXIS_MAPPING, build_token_loader
-from .model import GrugModelParameters, forward, init_parameters
+from levanter.grug.config import GrugModelConfig, GrugTrainingConfig, validate_config
+from levanter.grug.data import DEFAULT_AXIS_MAPPING, build_token_loader
+from levanter.grug.model import GrugModelParameters, forward, init_parameters
 
 
 def synthetic_batch_iterator(

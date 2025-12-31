@@ -5,6 +5,7 @@ import math
 from dataclasses import dataclass
 
 import jax
+from ejkernel.types import MaskInfo
 from jax import numpy as jnp
 from jax.tree_util import register_dataclass
 
@@ -145,7 +146,7 @@ def _blocksparse_attention(
     v: jax.Array,
     mask: AttentionMask | jax.Array | None,
 ) -> jax.Array:
-    from ejkernel.modules.operations import blocksparse_attention as ej_blocksparse_attention
+    from ejkernel.modules.operations.blocksparse_attention import blocksparse_attention as ej_blocksparse_attention
 
     q_segment_ids = None
     kv_segment_ids = None
@@ -168,14 +169,15 @@ def _blocksparse_attention(
         # (causal/window/segments) and block-sparse patterns.
         raise NotImplementedError("Dense boolean masks are not supported by ejkernel blocksparse attention.")
 
-    out = ej_blocksparse_attention.blocksparse_attention(
+    mask_info = MaskInfo.from_segments(q_segment_ids, kv_segment_ids) if q_segment_ids is not None else None
+
+    out = ej_blocksparse_attention(
         q.transpose(0, 2, 1, 3),
         k.transpose(0, 2, 1, 3),
         v.transpose(0, 2, 1, 3),
-        softmax_aux=None,
-        bias=None,
-        q_segment_ids=q_segment_ids,
-        kv_segment_ids=kv_segment_ids,
+        None,
+        None,
+        mask_info=mask_info,
         sliding_window=sliding_window,
         causal=causal,
     )
