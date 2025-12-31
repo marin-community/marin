@@ -487,7 +487,8 @@ def test_recurrent_kernel_matches_hf(use_flash: bool):
 @skip_if_no_torch
 @pytest.mark.parametrize("use_flash", USE_FLASH_CASES)
 @pytest.mark.parametrize("use_triangular_solve", [True, False])
-def test_chunk_kernel_matches_hf(use_flash: bool, use_triangular_solve: bool):
+@pytest.mark.parametrize("segment_size", [1, 8, 16])
+def test_chunk_kernel_matches_hf(use_flash: bool, use_triangular_solve: bool, segment_size: int):
     import torch
 
     hf_chunk, hf_recur = _get_hf_kernels()
@@ -506,6 +507,7 @@ def test_chunk_kernel_matches_hf(use_flash: bool, use_triangular_solve: bool):
         output_final_state=False,
         use_flash=use_flash,
         use_triangular_solve=use_triangular_solve,
+        segment_size=segment_size,
     )
 
     def to_t(arr: jnp.ndarray):
@@ -1323,8 +1325,7 @@ def test_chunk_varlen_nondivisible_and_parity_with_recurrent(chunk_size):
             np.testing.assert_allclose(S_chunk_arr[b, h, :, :], S_ref[b, h, :, :], rtol=1e-4, atol=1e-4)
 
 
-@pytest.mark.parametrize("backward_mode", ["checkpoint", "custom_vjp"])
-def test_backward_mode_gradients_exist(backward_mode):
+def test_backward_mode_gradients_exist():
     """Test that both backward modes produce finite gradients."""
     key = jax.random.PRNGKey(42)
     B, H, L, dk, dv = 2, 3, 32, 8, 8
@@ -1347,61 +1348,10 @@ def test_backward_mode_gradients_exist(backward_mode):
             chunk_size=chunk_size,
             output_final_state=False,
             use_qk_l2norm_in_kernel=True,
-            backward_mode=backward_mode,
         )
         return jnp.sum(out.array)
 
     # Verify gradients exist and are finite
     grads = jax.grad(loss_fn, argnums=(0, 1, 2, 3, 4))(q.array, k.array, v.array, g.array, beta.array)
     for i, grad in enumerate(grads):
-        assert jnp.all(jnp.isfinite(grad)), f"Gradient {i} has non-finite values for {backward_mode}"
-
-
-@pytest.mark.parametrize("use_triangular_solve", [True, False])
-def test_backward_modes_produce_same_gradients(use_triangular_solve: bool):
-    """Test that checkpoint and custom_vjp backward modes produce identical gradients."""
-    key = jax.random.PRNGKey(123)
-    B, H, L, dk, dv = 2, 3, 32, 8, 8
-    chunk_size = 8
-
-    q, k, v, g, beta = _named_kernels_inputs(B, H, L, dk, dv, key)
-
-    def loss_fn(q_arr, k_arr, v_arr, g_arr, b_arr, mode):
-        qn = hax.named(q_arr, q.axes)
-        kn = hax.named(k_arr, k.axes)
-        vn = hax.named(v_arr, v.axes)
-        gn = hax.named(g_arr, g.axes)
-        bn = hax.named(b_arr, beta.axes)
-        out, _ = chunk_gated_delta_rule(
-            qn,
-            kn,
-            vn,
-            gn,
-            bn,
-            chunk_size=chunk_size,
-            output_final_state=False,
-            use_qk_l2norm_in_kernel=True,
-            backward_mode=mode,
-            use_triangular_solve=use_triangular_solve,
-        )
-        return jnp.sum(out.array)
-
-    # Gradients with checkpoint mode
-    grads_checkpoint = jax.grad(lambda *args: loss_fn(*args, "checkpoint"), argnums=(0, 1, 2, 3, 4))(
-        q.array, k.array, v.array, g.array, beta.array
-    )
-
-    # Gradients with custom_vjp mode
-    grads_custom_vjp = jax.grad(lambda *args: loss_fn(*args, "custom_vjp"), argnums=(0, 1, 2, 3, 4))(
-        q.array, k.array, v.array, g.array, beta.array
-    )
-
-    # Compare gradients
-    for i, (g_ckpt, g_vjp) in enumerate(zip(grads_checkpoint, grads_custom_vjp)):
-        np.testing.assert_allclose(
-            np.array(g_ckpt),
-            np.array(g_vjp),
-            rtol=1e-5,
-            atol=1e-6,
-            err_msg=f"Gradient {i} differs between checkpoint and custom_vjp modes",
-        )
+        assert jnp.all(jnp.isfinite(grad)), f"Gradient {i} has non-finite values"
