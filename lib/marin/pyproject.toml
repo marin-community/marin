@@ -115,11 +115,11 @@ conflicts = [
 
 [project.optional-dependencies]
 
-gpu = ["jax[cuda12]==0.8.0", "torch>=2.7.0"]
+gpu = ["jax[cuda12]==0.8.2", "torch>=2.7.0"]
 
-tpu = ["jax[tpu]==0.8.0", "torch>=2.7.0"]
+tpu = ["jax[tpu]==0.8.2", "torch>=2.7.0"]
 
-cpu = ["jax==0.8.0", "torch>=2.7.0"]
+cpu = ["jax==0.8.2", "torch>=2.7.0"]
 
 rl = [
     "prime",

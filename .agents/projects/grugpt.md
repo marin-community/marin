@@ -1,0 +1,184 @@
+# Grug: Explicit-Sharding LM Trainer
+
+## Background
+
+Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [NanoGPT](https://github.com/karpathy/nanoGPT), we want a “grug-simple” causal LM trainer that showcases JAX’s explicit sharding mode while relying only on primitive building blocks: `jax`, `einops`, and JAX dataclasses (via `jax.tree_util.register_dataclass`). Training utilities stay minimal—optax for optimization, Levanter’s data loading/trackers for ingestion + logging, HuggingFace tokenizers (or Levanter’s serializer) for text, and TensorStore serialization for checkpoints. We explicitly do **not** want Haliax abstractions or class-heavy APIs—every computation lives in straightforward top-level functions so the trainer reads like a notebook.
+
+
+## Grug Principles
+
+### Software Principles
+
+- **Few methods, keep arrays out of them inside jit.** We still prefer top-level functions, but lightweight dataclass helpers/property accessors—and any method that only touches metadata, not arrays—are fine even inside jit-traced regions. Once a method would manipulate `jax.Array`s, implement it as a standalone function instead.
+- **Keep dependencies small.** Prefer `einshard`, `einops`, `optax`, JAX core libs, HF tokenizers, and Levanter’s `data` + `tracker` + TensorStore serialization APIs. Grug doesn't want to reinvent wheels, but we also don't want heavy frameworks obscuring the core logic.
+- **Fast attention kernels are allowed, but keep the surface simple.** For now, grug core hard-depends on `ejkernel` block-sparse attention (`ejkernel.modules.operations.blocksparse_attention`) and keeps a separate reference implementation for debugging/regressions.
+- **Serializable state.** Trainer state must round-trip through `levanter.tensorstore_serialization.tree_{de,}serialize_leaves_tensorstore` with no custom logic.
+- **Consumption-ready.** Provide a `uv run python -m marin.grugpt.train` entrypoint plus tests. Tracking hooks log loss/perplexity through Levanter’s tracker interface.
+
+### JAX/ML Principles
+
+- **Mesh-first mental model.** We always create one mesh axis per logical unit. For now, `['replica', 'data', 'tensor']`. Work must still run on a single GPU (mesh axes collapse to size 1) but should seamlessly extend to 4-device TPU v4-8 pods for CI. Mesh creation and validation live in one place.
+- **Use good kernels when available.** Grug is happy to call out to other people's fast attention kernels (ejkernel blocksparse today; Tokamax later) as long as the surface stays simple and the fallback reference path remains.
+- **Explicit sharding everywhere.** Arrays carry `PartitionSpec`s in their types using `jax.set_mesh`, `AxisType.Explicit`, and `einshard` helpers. Any op with ambiguous shardings must either supply `out_sharding=` or run inside `auto_axes`.
+
+### Code Organization Principles
+
+- **Keep `levanter.grug` core-only.** The `levanter.grug` package should stay “notebook-like”: raw `jax.Array` inputs/outputs, top-level functions, small dataclasses, and minimal plumbing.
+- **Adapters live outside grug.** Integration with Levanter model interfaces (`LmHeadModel`, `NamedArray`, etc.) lives in `levanter.models`, currently `levanter.models.grug_wrapper`.
+- **Mask spec is simple.** Grug’s attention mask is a small spec (`levanter.grug.attention.AttentionMask`) storing only raw JAX arrays/ints (no NamedArray fields and no explicit dense masks yet).
+
+
+## Misc Style
+
+
+- Use `einops.rearrange` for `[batch, seq, heads, head_dim]` manipulations where it improves clarity.
+- Use `jnp.einsum` and explicit `PartitionSpec` annotations to keep matmuls consistent with the mesh layout.
+- Grug core attention is a single `attention(q, k, v, mask)` that calls ejkernel block-sparse attention; `reference_attention(...)` exists for debugging/regressions but is not selected at runtime.
+- Attention masks are a small spec dataclass (`levanter.grug.attention.AttentionMask`) rather than a dense mask/bias array. Grug defaults to causal masking.
+- Layer norm: implement epsilon-stabilized RMSNorm using `jnp.mean/var` and explicit shardings.
+- Residual dropouts remain optional and implemented via `jax.random.bernoulli` (with `out_sharding=P(None)` to keep them replicated).
+
+### Loss & Training Step
+
+- `loss_fn(params, batch, *, cfg, mesh)` runs forward pass and computes token-level cross-entropy (optionally ignoring padding tokens). Output sharding uses `(Batch @ data, None)` so reductions stay deterministic.
+- Optimizer: `optax.adamw` built from `TrainingConfig`. `TrainingState` carries `opt_state`. We wrap the optimizer in `optax.apply_updates`.
+- `@jax.jit` (or `jax.jit(static_argnames=("cfg",))`) compiled `train_step(state, batch, tracker)`:
+  1. `loss, grads = jax.value_and_grad(loss_fn)(state.params, batch)`
+  2. `grads = reshard(grads, param_spec)` so updates stay model-sharded.
+  3. `updates, new_opt_state = optimizer.update(grads, state.opt_state, state.params)`
+  4. `new_params = optax.apply_updates(state.params, updates)`
+  5. `tracker.log({"train/loss": loss, "train/ppl": jnp.exp(loss)}, step=state.step)`
+  6. Return updated `TrainingState(step + 1, rng=next_rng)`
+- Provide `eval_step` mirroring `train_step` without optimizer updates for validation.
+
+### Data & Tokenization
+
+- `DataConfig` picks between HuggingFace tokenizer (`transformers.AutoTokenizer`) or a Levanter `TreeCache` path. We default to HF and fall back to Levanter’s `deserialize_leaves_tensorstore` when resuming vocab.
+- `data.py` exposes `build_dataloader(cfg, mesh)` that:
+  - Builds/loads tokenizer.
+  - Constructs a `levanter.data.text.TokenSeqDataset` (or other AsyncDataset) using seq length + sharding info.
+  - Wraps it in a lightweight async background iterator returning dictionaries `{"input_ids": sharded_array, "labels": sharded_array}` already resharded to `(Batch@data, Seq)`.
+- Because Levanter’s loader internally uses Haliax, grugpt never imports haliax directly—all adapters convert outputs to plain `jax.Array`s via `jnp.asarray` before feeding the model.
+
+### Checkpointing & Tracking
+
+- `checkpoint_path = cfg.run_dir / f"step_{state.step:07d}"`.
+- Saving uses `tree_serialize_leaves_tensorstore(path, (state, cfg))` inside host 0 guard; loading uses matching `tree_deserialize...`.
+- Trackers: `levanter.tracker` configs are CLI-selectable (noop vs wandb). `train.py` enters `with current_tracker(tracker):` before training.
+- On resume, we log hyperparameters once and emit `train/time_per_step`, `train/tok_per_sec` metrics every `cfg.log_every` steps.
+
+### CLI Entrypoint
+
+- `src/marin/grugpt/train.py` implements `def main(argv=None): ...` using `argparse` (no click). Steps:
+  1. Parse YAML/JSON or CLI flags into `RunConfig` (we can reuse Levanter’s draccus parser if convenient).
+  2. Build mesh and set it globally.
+  3. Initialize tokenizer + dataloader + tracker.
+  4. Initialize or restore `TrainingState`.
+  5. Compile `train_step`/`eval_step` once per process.
+  6. Run training loop with periodic evaluation/checkpointing.
+- Provide `if __name__ == "__main__": uvicorn.main()` guard and register console script in `pyproject.toml`.
+
+- `tests/grugpt/test_model.py` creates a toy mesh (1×1×1), initializes params, runs forward pass, and asserts:
+  - logits shape `[batch, seq, vocab]`
+  - `jax.typeof(hidden).sharding` matches expected `PartitionSpec`
+- `tests/grugpt/test_mesh.py` spins up synthetic mesh metadata (e.g., 4-device v4-8) to ensure axis naming/resizing works when devices >= 4.
+- `tests/grugpt/test_train_step.py` runs two train steps on random tokens, verifying loss decreases and tracker receives entries (with splash attention disabled for determinism).
+- All tests run under `uv run pytest tests/grugpt -n auto`; TPU-specific splash kernels get smoke-tested behind a flag if CI has TPU runtime, otherwise stub out gracefully.
+
+### Current Status
+
+- The current prototype lives under `lib/levanter/src/levanter/grug/` (not yet extracted to `lib/grugpt/`).
+- Attention uses ejkernel blocksparse by default; reference attention remains available for debugging.
+- Levanter integration lives in `lib/levanter/src/levanter/models/grug_wrapper.py` (kept out of `levanter.grug` intentionally).
+
+## Implementation Tasks
+
+1. **Data + tracker integration.** Swap the synthetic batch generator for a real tokenizer/dataset pipeline (leveraging Levanter loaders) and pipe metrics through the tracker API.
+2. **Attention + masks.** Extend the structured mask surface (segments/windows) and keep the reference implementation available for debugging/regressions.
+3. **Checkpointing.** Hook `tree_{de}serialize_leaves_tensorstore` into the training loop so state/rng/optimizer snapshots can be saved/restored.
+4. **Evaluation + CLI polish.** Add validation hooks, flag parsing (YAML/Draccus), and a proper entry point under `uv run` instead of the current hard-coded config.
+5. **Testing.** Port the sketched unit tests (`test_model`, `test_mesh`, `test_train_step`) into `tests/grugpt/` and wire them into CI.
+
+## Speedrun Milestone: Hackable Transformer Gauntlet
+
+Goal: use Grug as a “copy-pasteable” reference implementation inside a single speedrun script (e.g.
+`experiments/speedrun/hackable_transformer_starter/hackable_transformer_attn_sink.py`), so the workflow is:
+
+1) copy/paste the Grug core into the file
+2) modify it (e.g. add attention sinks)
+3) run it through a standard gauntlet (correctness + compile + throughput + memory)
+
+### Constraints
+
+- Single-file friendly: minimal imports, no class-heavy APIs, top-level functions.
+- Keep an accelerated path (ejkernel blocksparse) + a reference fallback path.
+- Make the “hack points” obvious: attention sinks, masks, sharding, and config.
+
+### Plan (concrete)
+
+1) **Define a “Grug-In-File” template section in the speedrun script**
+   - Put it near the top of the file under a clear header like `# === GRUG CORE (COPY-PASTE) ===`.
+   - Include only:
+     - param dataclasses (`GrugAttentionParams`, `GrugBlockParams`, `GrugModelParameters`)
+     - `init_parameters(cfg, *, key)`
+     - `forward(params, tokens, cfg, *, mask=None)`
+     - `attention(q, k, v, mask)`
+     - `AttentionMask` (Grug-local, raw arrays only)
+
+2) **Make sinks a deliberate edit point**
+   - Do not bake “sinks”/`softmax_aux` into the stable grug API.
+   - In the hackable speedrun script, add sinks by directly editing the ejkernel block-sparse attention callsite (or by copy-pasting a slightly modified `attention()` helper into the file).
+
+3) **Keep the mask surface minimal and explicit**
+   - Use the Grug-local `AttentionMask` spec (causal + sliding window + segment ids).
+   - Avoid accepting dense boolean masks in accelerated mode (raise loudly).
+   - Default to causal masking in `forward()` when `mask is None`.
+
+4) **Define the gauntlet API in the speedrun script**
+   - Standardize a small set of functions the harness calls:
+     - `build_cfg()` (or constants) that define model hyperparams.
+     - `init_fn(key) -> params`
+     - `fwd_fn(params, batch) -> logits`
+     - `loss_fn(logits, labels) -> loss`
+     - `train_step(state, batch) -> (new_state, metrics)`
+   - Keep all state as plain pytrees so it’s easy to serialize/inspect.
+
+5) **Gauntlet checks to run every time**
+   - **Correctness sanity** (small shapes):
+     - reference vs blocksparse forward (match within a tolerance)
+     - gradients exist and are finite
+   - **Compile sanity**:
+     - time-to-first-step (TTFS) for `train_step`
+   - **Throughput sanity**:
+     - tokens/sec and step time for a fixed number of warmup+iters
+   - **Memory sanity**:
+     - optional: track max HBM/VMEM if available in the speedrun harness
+
+6) **Keep Levanter adapters out of the speedrun file**
+   - Do not rely on `LmHeadModel`/`NamedArray` in the hackable file.
+   - If you need to run the same model inside Levanter, use the adapter in `levanter.models.grug_wrapper`.
+
+7) **Document the expected “edit surface” inside the file**
+   - Put a short list at the top:
+     - “To add sinks: edit the ejkernel block-sparse attention call in `attention()`.”
+     - “To change masking: edit `AttentionMask` / `mask` construction in `forward()`.”
+     - “To change sharding: edit `PartitionSpec`s in init + `out_sharding=` callsites.”
+
+## Future Integration with Levanter Trainer
+
+To plug a “grug-defined” model into Levanter’s trainer (`lib/levanter/src/levanter/trainer.py`), we’d need:
+
+1. **Model interface parity.** Implement a wrapper that presents `forward(batch, *, train)` and exposes parameter/state PyTrees the way Levanter expects (see `lib/levanter/src/levanter/models/lm_model.py`). Our current dataclasses are close; we’d just need adapters for attention masks, loss computation, and optional KV cache state.
+2. **Loss adapter.** The trainer takes arbitrary batches and a loss function. We’d supply a simple callable that takes the trainer’s batch (whatever structure we choose) plus model params/rng and returns `(loss, metrics)`. No need to emit `LmExample`s if we keep the batch format consistent.
+3. **Config plumbing.** Expose the grug model config via Levanter’s config system (Draccus). That means a small adapter class registered under `LmConfig` that instantiates `GrugModelParameters` and returns the forward/loss function pointers. See `lib/levanter/src/levanter/models/llama.py` for reference.
+4. **Optimizer/state hooks.** Levanter’s trainer manages optimizer state, gradient accumulation, and checkpointing. Our `TrainingState` would need to slot into that (likely by reusing Levanter’s `OptimizerState` structures) so serialization and resume work seamlessly.
+5. **Sharding compatibility.** Ensure our explicit `PartitionSpec`s line up with Levanter’s mesh/resource mapping. Either reuse Levanter’s mapping utilities or provide a translation layer so both sides agree on axis names.
+
+With those pieces, defining a “grug” model could be as simple as providing the dataclasses + forward function, and letting Levanter’s trainer handle data flow, logging, checkpointing, and multi-host orchestration.
+
+## Open Questions & Follow-Ups
+
+- Do we want gradient accumulation/microbatching in v1, or stick to per-step full batches?
+- Should we support tensor parallel axes beyond `('model',)` at launch, or gate behind a flag until we verify the explicit-sharding rules?
+- For tokenizer caching, is it acceptable to rely solely on HF local cache, or should we add explicit `deserialize_leaves_tensorstore` support for tokenizers stored in checkpoints?
+- What minimum TPU/GPU topology should the CI tests assume (2 devices vs 4)?
