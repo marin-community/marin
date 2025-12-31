@@ -101,40 +101,40 @@ def _fused_rmsnorm_gated_pallas(
     n_rows, hidden_size = x_2d.shape
 
     # TPU blocked-indexing constraints: BM should be divisible by 8 unless it equals n_rows
-    # (see TPU block_shape restrictions).
     if BM % 8 != 0:
         raise ValueError("BM must be a multiple of 8 on TPU")
 
     # Pad only the OUTPUT shape so stores are always in-bounds.
-    # We avoid padding the INPUTS to prevent a full extra copy.
     n_rows_pad = ((n_rows + BM - 1) // BM) * BM
-
-    inv_scale = jnp.asarray(1.0 / hidden_size, dtype=jnp.float32)
-    eps32 = jnp.asarray(eps, dtype=jnp.float32)
 
     def kernel(x_ref, gate_ref, w_ref, out_ref):
         pid = pl.program_id(axis=0)  # block id along rows
         row_ids = pid * BM + jnp.arange(BM)
-        row_mask = row_ids < n_rows  # (BM,)
+
+        # Cast boolean mask to float32 immediately
+        row_mask_bool = row_ids < n_rows  # (BM,)
+        mask_f32 = row_mask_bool.astype(jnp.float32)[:, None]  # (BM, 1)
 
         # Load the whole (BM, D) tile; OOB rows may be garbage => mask them out
         x = x_ref[:, :].astype(jnp.float32)
         g = gate_ref[:, :].astype(jnp.float32)
 
-        x = jnp.where(row_mask[:, None], x, 0.0)
-        g = jnp.where(row_mask[:, None], g, 0.0)
+        x = x * mask_f32
+        g = g * mask_f32
 
         w = w_ref[:].astype(jnp.float32)
 
+        scale = 1.0 / hidden_size
+
         # RMS per row
-        ss = jnp.sum(x * x, axis=-1, keepdims=True) * inv_scale  # (BM, 1)
-        inv = lax.rsqrt(ss + eps32)  # (BM, 1)
+        ss = jnp.sum(x * x, axis=-1, keepdims=True) * scale  # (BM, 1)
+        inv = lax.rsqrt(ss + eps)  # (BM, 1)
 
         y = x * inv * w[None, :]  # (BM, D)
         out = y * jax.nn.silu(g)
 
         # Optional: keep padded rows deterministic
-        out = jnp.where(row_mask[:, None], out, 0.0)
+        out = out * mask_f32
 
         out_ref[:, :] = out.astype(out_ref.dtype)
 
@@ -745,48 +745,6 @@ def _in_specs_head_first_tpu_bh_out(B, H, T, K_pad, V_pad, is_beta_headwise):
     out_specs = (
         pl.BlockSpec((1, 1, T, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # out [B,H,T,V_pad]
         pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # final [B,H,K,V]
-    )
-    return in_specs, out_specs
-
-
-def _in_specs_head_first_tpu(B, H, T, K_pad, V_pad, is_beta_headwise):
-    """HEAD_FIRST layout with full-window last-two dims to satisfy TPU block-shape rules.
-
-    Inputs (HEAD_FIRST):
-      q,k:  [B, H, T, K_pad]
-      v:    [B, H, T, V_pad]
-      g:    [B, H, T]  -> passed as [B, H, T, 1] to keep 4-D (last-two = T×1)
-      β:    [B, H, T] (headwise) or [B, H, T, V_pad] (per-V)
-    State:
-      init, final: [B, H, K_pad, V_pad]
-
-    Notes:
-      - The last two dims of every *block window* must be either equal to the array dims
-        or divisible by 8 (second-last) and 128 (last) on TPU. Using full windows avoids
-        the divisibility constraint while still enabling good vectorization.
-      - Grid is 1-D over NH (= B·H), each program handles a distinct (b,h).
-    """
-
-    def _bh(nh):
-        b = nh // H
-        h = nh - b * H
-        return (b, h)
-
-    in_specs = (
-        pl.BlockSpec((1, 1, T, K_pad), lambda nh: (*_bh(nh), 0, 0)),  # q
-        pl.BlockSpec((1, 1, T, K_pad), lambda nh: (*_bh(nh), 0, 0)),  # k
-        pl.BlockSpec((1, 1, T, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # v
-        pl.BlockSpec((1, 1, T, 1), lambda nh: (*_bh(nh), 0, 0)),  # g as [B,H,T,1]
-        (
-            pl.BlockSpec((1, 1, T, 1), lambda nh: (*_bh(nh), 0, 0))  # β headwise [B,H,T,1]
-            if is_beta_headwise
-            else pl.BlockSpec((1, 1, T, V_pad), lambda nh: (*_bh(nh), 0, 0))  # β per-V [B,H,T,V_pad]
-        ),
-        pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # init state
-    )
-    out_specs = (
-        pl.BlockSpec((1, T, V_pad), lambda nh: (nh, 0, 0)),  # out [NH, T, V_pad]
-        pl.BlockSpec((1, 1, K_pad, V_pad), lambda nh: (*_bh(nh), 0, 0)),  # final state
     )
     return in_specs, out_specs
 
@@ -1875,7 +1833,7 @@ def _chunk_gated_delta_rule_with_custom_vjp_impl(
     return out_arr, S_final
 
 
-@jax.custom_vjp
+@functools.partial(jax.custom_vjp, nondiff_argnums=(5, 7))
 def _chunk_gated_delta_rule_custom_vjp(
     q_arr: jnp.ndarray,
     k_arr: jnp.ndarray,
@@ -1911,12 +1869,13 @@ def _chunk_gated_delta_rule_custom_vjp_fwd(
         initial_state,
         use_triangular_solve=use_triangular_solve,
     )
-    residuals = (q_arr, k_arr, v_arr, g_arr, b_arr, chunk_size, initial_state, use_triangular_solve)
+    # Don't need to stash chunk_size/use_triangular_solve; they're nondiff (static) args.
+    residuals = (q_arr, k_arr, v_arr, g_arr, b_arr, initial_state)
     return (out_arr, S_final), residuals
 
 
-def _chunk_gated_delta_rule_custom_vjp_bwd(residuals, g_out):
-    q_arr, k_arr, v_arr, g_arr, b_arr, chunk_size, initial_state, use_triangular_solve = residuals
+def _chunk_gated_delta_rule_custom_vjp_bwd(chunk_size, use_triangular_solve, residuals, g_out):
+    q_arr, k_arr, v_arr, g_arr, b_arr, initial_state = residuals
     d_out, d_S_final = g_out
 
     def fwd_for_grad(q, k, v, g, b):
@@ -1936,8 +1895,8 @@ def _chunk_gated_delta_rule_custom_vjp_bwd(residuals, g_out):
     _, vjp_fn = jax.vjp(fwd_for_grad, *primals)
     dq, dk, dv, dg, db = vjp_fn((d_out, d_S_final))
 
-    # No grads for chunk_size / initial_state / use_triangular_solve
-    return dq, dk, dv, dg, db, None, None, None
+    # Return grads for differentiable args only: (q,k,v,g,b,initial_state)
+    return dq, dk, dv, dg, db, None
 
 
 _chunk_gated_delta_rule_custom_vjp.defvjp(
@@ -2037,6 +1996,10 @@ def _chunk_gated_delta_rule_flash(
         v_arr = v_arr * valid[..., None]
         b_arr = b_arr * valid
         g_arr = g_arr * valid
+
+    # Ensure chunk_size and use_triangular_solve are Python types (not tracers)
+    chunk_size = int(chunk_size)
+    use_triangular_solve = bool(use_triangular_solve)
 
     # Dispatch core
     if backward_mode == "checkpoint":
@@ -2213,7 +2176,7 @@ class GatedDeltaNet(eqx.Module):
         )
         dt_bias = hax.named(jnp.ones((config.Heads.size,), dtype=jnp.float32), (config.Heads.name,))
 
-        o_norm = FusedRMSNormGated.init(config.VHeadDim, eps=config.rms_norm_eps, use_flash=False)
+        o_norm = FusedRMSNormGated.init(config.VHeadDim, eps=config.rms_norm_eps, use_flash=use_flash)
         out_proj = hnn.Linear.init(
             In=(config.Heads, config.VHeadDim), Out=config.Embed, out_first=True, use_bias=False, key=k_out
         )
