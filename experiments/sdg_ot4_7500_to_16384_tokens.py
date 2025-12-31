@@ -48,7 +48,7 @@ qwen_32B_annotated_open_thoughts_4_math = ExecutorStep(
         model_type="vllm",
         attribute_name="open_thoughts_4_30k_math_qwen3_32b_annotated",
         filetype="parquet",
-        batch_size=512,
+        batch_size=8,
         resume=True,
         runtime=RuntimeConfig(memory_limit_gb=16),
         num_batches_per_upload=1,
@@ -76,7 +76,7 @@ qwen_32B_annotated_open_thoughts_4_math = ExecutorStep(
         ),
         autoscaling_actor_pool_config=AutoscalingActorPoolConfig(
             min_actors=1,
-            max_actors=32,
+            max_actors=1,
             scale_up_threshold=0.8,
             scale_down_threshold=0.2,
             scale_check_interval=1.0,

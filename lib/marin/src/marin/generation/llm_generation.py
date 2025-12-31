@@ -51,7 +51,7 @@ class BaseLLMProvider(ABC):
 class vLLMProvider(BaseLLMProvider):
     DEFAULT_ENGINE_KWARGS: ClassVar[dict[str, Any]] = {
         "tensor_parallel_size": 1,
-        "enforce_eager": True,
+        "enforce_eager": False,
     }
 
     DEFAULT_GENERATION_KWARGS: ClassVar[dict[str, Any]] = {
