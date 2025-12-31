@@ -15,7 +15,7 @@ Before you begin, ensure you have the following installed:
     - If you hit an `edition2024` error from Cargo (e.g., when building Arrow), use nightly: `rustup default nightly`
 - On macOS, install additional build tools for SentencePiece: ```brew install cmake pkg-config coreutils```
 
-In addition, you might find having the following accounts:
+In addition, you might find it useful to have the following accounts:
 - [GitHub](https://github.com) for submitting pull requests or speedruns
 - [Weights & Biases](https://wandb.ai) for experiment tracking
 - [Hugging Face](https://huggingface.co) for accessing gated models/tokenizers (such as [Meta's Llama 3.1 8B model](https://huggingface.co/meta-llama/Llama-3.1-8B))
