@@ -3,9 +3,17 @@ on:
   push:
     branches:
       - main
+    paths:
+      - lib/zephyr/**
+      - uv.lock
+      - .github/workflows/zephyr-unit-tests.yaml
   pull_request:
     branches:
       - main
+    paths:
+      - lib/zephyr/**
+      - uv.lock
+      - .github/workflows/zephyr-unit-tests.yaml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -42,5 +50,6 @@ jobs:
         env:
           CI: true
         run: |
+          
           # important: don't cd into lib/zephyr so that ray uv integration doesn't freak out
           uv run --package zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
