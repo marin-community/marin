@@ -45,39 +45,39 @@ remembering the IP address of the cluster head node, what port the dashboard is 
 Marin clusters use Ray token authentication (Ray >= 2.53). You will typically interact with clusters through SSH
 port-forwarding on `localhost`, but you still need the token.
 
-For the staging cluster (`marin-us-central2-staging`), the easiest flow is:
+This is the easiest flow:
+
+1. Install the default token locally (or re-run `make dev_setup`):
+    ```bash
+    make get_ray_auth_token
+    ```
+    If this fails because the Secret Manager secret doesn’t exist yet, someone needs to create it once (see
+    `infra/README.md`).
+2. Authenticate to the cluster dashboard:
+    ```bash
+    # Starts SSH port-forwarding, copies the token to clipboard, and opens the dashboard.
+    uv run scripts/ray/cluster.py --cluster us-central2 auth
+    ```
+
+#### Using Ray CLI/SDK with token auth
+
+If you are using `uv run scripts/ray/cluster.py ...`, you generally don’t need to set any Ray auth env vars manually.
+
+However, if you want to use Ray’s CLI/SDK directly (e.g. `ray job submit ...`), you will need to set the appropriate
+environment variables for Ray token authentication.
+
+To set them for your current shell (sets `RAY_AUTH_MODE=token` and `RAY_AUTH_TOKEN_PATH=...`), ensure you have a Ray auth
+token locally at `~/.ray/auth_token` (or set `RAY_AUTH_TOKEN_PATH`) and then:
 
 ```bash
-# Starts SSH port-forwarding, copies the token to clipboard, and opens the dashboard.
-uv run scripts/ray/cluster.py --cluster us-central2-staging auth
+export RAY_AUTH_MODE=token
+export RAY_AUTH_TOKEN_PATH="${RAY_AUTH_TOKEN_PATH:-$HOME/.ray/auth_token}"
 ```
 
-For non-staging clusters, install the default token locally (or re-run `make dev_setup`):
+You can add these lines to your shell profile (e.g. `~/.bashrc` or `~/.zshrc`) if you want them to be set
+automatically in future terminal sessions.
 
-```bash
-make get_ray_auth_token
-```
-
-If this fails because the Secret Manager secret doesn’t exist yet, someone needs to create it once (see
-`infra/README.md`).
-
-If you prefer ssh-agent style exports for the current shell session (sets `RAY_AUTH_MODE=token` and `RAY_AUTH_TOKEN_PATH=...`), you can do:
-
-```bash
-eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
-```
-
-You can put that in your shell profile (e.g. `~/.zshrc`) if you want it in every terminal. You'll want to do something like:
-
-```bash
-MARIN_HOME="${MARIN_HOME:-$HOME/marin}"  # TODO: set this where you checkout marin
-if [[ -z "${RAY_AUTH_TOKEN_PATH:-}" ]]; then
-    cd "$MARIN_HOME" && eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
-fi
-```
-
-
-All clusters (including staging) use the same Ray token; `make get_ray_auth_token` is sufficient for CLI + SDK usage.
+### Connecting to the Ray Cluster Dashboard and Submitting Jobs
 
 There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the
 cluster. **You will need at least two terminal processes running for the following steps** (make sure to activate your
@@ -87,7 +87,7 @@ cluster. **You will need at least two terminal processes running for the followi
 # [Terminal 1] Establish Ray dashboard connections (port-forwarding)
 uv run scripts/ray/cluster.py dashboard
 
-# [Browser] Navigate to the URL printed above (typically http://localhost:9999) for the overall dashboard.
+# [Browser] Navigate to the URL printed above for the overall dashboard.
 # Clicking a cluster opens its overview page with jobs/nodes/resources.
 ```
 

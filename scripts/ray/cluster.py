@@ -26,7 +26,6 @@ from dataclasses import dataclass
 import json
 import logging
 import os
-import shlex
 import shutil
 import subprocess
 import sys
@@ -880,52 +879,6 @@ def auth(ctx, secret: str | None, copy: bool, open_browser: bool):
             time.sleep(86400)
         except KeyboardInterrupt:
             print("\nShutting down...")
-
-
-@cli.command("auth-env")
-@click.option(
-    "--secret",
-    default=None,
-    help="GCP Secret Manager secret containing the Ray auth token (default: RAY_AUTH_TOKEN).",
-)
-@click.option(
-    "--inline-token/--token-path",
-    default=False,
-    help="Export RAY_AUTH_TOKEN directly (less secure) instead of exporting RAY_AUTH_TOKEN_PATH (default: token-path).",
-)
-@click.pass_context
-def auth_env(ctx, secret: str | None, inline_token: bool):
-    """Emit shell exports for Ray token authentication.
-
-    Intended usage:
-
-      eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
-
-    By default, this exports RAY_AUTH_MODE=token and RAY_AUTH_TOKEN_PATH pointing
-    at a cached token file under ~/.ray/. Use --inline-token to export the token
-    value directly as RAY_AUTH_TOKEN.
-    """
-    secret = ray_auth_secret(secret)
-
-    token = subprocess.check_output(
-        ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"],
-        text=True,
-    ).strip()
-    if not token:
-        raise RuntimeError(f"Secret {secret} returned empty token")
-
-    print("export RAY_AUTH_MODE=token")
-
-    if inline_token:
-        print(f"export RAY_AUTH_TOKEN={shlex.quote(token)}")
-        return
-
-    token_dir = Path.home() / ".ray"
-    token_dir.mkdir(parents=True, exist_ok=True)
-    token_path = token_dir / "auth_token"
-    token_path.write_text(token)
-    token_path.chmod(0o600)
-    print(f"export RAY_AUTH_TOKEN_PATH={shlex.quote(str(token_path))}")
 
 
 @cli.command("show-logs")

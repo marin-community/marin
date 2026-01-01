@@ -45,22 +45,22 @@ Marin clusters use Ray token authentication (Ray >= 2.53). Ray APIs (dashboard, 
   connect to a specific cluster config. You can also install tokens explicitly (see below).
 
 All clusters use the same `RAY_AUTH_TOKEN` Secret Manager secret, and clients use the standard Ray token file path
-`~/.ray/auth_token`.
-
-Install the token locally:
+`~/.ray/auth_token`. To install the default token locally (or re-run `make dev_setup`):
 
 ```bash
 make get_ray_auth_token
 ```
 
-If you prefer ssh-agent style exports (sets `RAY_AUTH_MODE=token` and `RAY_AUTH_TOKEN_PATH=...` for the current shell):
+
+To connect + authenticate (recommended), use the cluster helper (fetches/caches the token, sets up port-forwarding, and can
+open the dashboard):
 
 ```bash
-eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
+uv run scripts/ray/cluster.py --cluster us-central2 auth
 ```
 
-Note: the Ray dashboard stores the token in a `ray-authentication-token` cookie scoped to the host (e.g. `localhost`).
-If the token is rotated, you may need to clear that cookie or use an incognito window.
+For the full developer workflow (including other clusters and using "raw" Ray CLIs), see
+[`docs/dev-guide/guidelines-internal.md`](../docs/dev-guide/guidelines-internal.md#ray-token-authentication).
 
 #### One-time: create the production token secret
 

@@ -198,20 +198,9 @@ You can also install the token locally with:
 make get_ray_auth_token
 ```
 
-#### `auth-env`
-Emit shell exports for Ray token authentication (ssh-agent style).
+#### Ray token auth environment
 
-Recommended usage (exports `RAY_AUTH_MODE=token` and `RAY_AUTH_TOKEN_PATH=...`):
-
-```bash
-eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env)"
-```
-
-To export the token value directly (less secure):
-
-```bash
-eval "$(uv run scripts/ray/cluster.py --cluster us-central2 auth-env --inline-token)"
-```
+Most tooling will “just work” if you have a token file at `~/.ray/auth_token` (or set `RAY_AUTH_TOKEN_PATH`).
 
 #### `monitor-cluster`
 Monitor cluster health with optional wandb logging.
