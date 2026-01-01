@@ -47,9 +47,6 @@ jobs:
           uv sync --package zephyr --group test --frozen
 
       - name: Test with pytest
-        env:
-          CI: true
         run: |
-          
           # important: don't cd into lib/zephyr so that ray uv integration doesn't freak out
           uv run --package zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
