@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
-from typing import Literal
 
 from fray.cluster.base import Cluster, EnvironmentConfig, JobId, JobInfo, JobRequest, TaskStatus
 from fray.isolated_env import TemporaryVenv
@@ -33,17 +32,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class LocalClusterConfig:
-    isolated_env_mode: Literal["shared", "per_job"] | None = None
-    """How to run jobs:
-
-    - None: run jobs in the local process (no isolated venv).
-    - "shared": run jobs in a shared isolated venv (cached per env config).
-    - "per_job": run jobs in a fresh isolated venv per job.
-    """
-
-    def __post_init__(self) -> None:
-        if self.isolated_env_mode not in {None, "shared", "per_job"}:
-            raise ValueError(f"Invalid isolated_env_mode={self.isolated_env_mode!r}; expected None|'shared'|'per_job'")
+    use_isolated_env: bool = False
+    """If set, run each job in an isolated venv. Otherwise, jobs are launched from the local process."""
 
 
 class FakeProcess(Thread):
@@ -83,24 +73,18 @@ class LocalCluster(Cluster):
     def __init__(self, config: LocalClusterConfig = LocalClusterConfig()):
         """Initialize local cluster."""
         self._jobs: dict[JobId, _LocalJob] = {}
-        self._shared_envs: dict[tuple[str, tuple[str, ...], tuple[str, ...]], TemporaryVenv] = {}
         self.config = config
 
     @staticmethod
     def from_spec(spec: dict[str, list[str]]) -> Cluster:
         logger.info(f"Creating local cluster with spec: {spec}")
-        isolated_env_mode = spec.get("isolated_env_mode", [None])[0]
-        if isolated_env_mode is not None:
-            isolated_env_mode = isolated_env_mode.strip().lower() or None
-
-        config = LocalClusterConfig(isolated_env_mode=isolated_env_mode)
+        use_isolated_env = spec.get("use_isolated_env", ["false"])[0].lower() == "true"
+        config = LocalClusterConfig(use_isolated_env=use_isolated_env)
         logger.info(f"Local cluster config: {config}")
         return LocalCluster(config=config)
 
     def _get_cluster_spec(self) -> str:
-        if self.config.isolated_env_mode is None:
-            return "local"
-        return f"local?isolated_env_mode={self.config.isolated_env_mode}"
+        return f"local?use_isolated_env={self.config.use_isolated_env}"
 
     def __enter__(self):
         return self
@@ -117,37 +101,6 @@ class LocalCluster(Cluster):
             except Exception as e:
                 logger.warning(f"Error cleaning up job {job_id}: {e}")
         self._jobs.clear()
-        for env in self._shared_envs.values():
-            try:
-                env.__exit__(None, None, None)
-            except Exception as e:
-                logger.warning(f"Error cleaning up shared venv: {e}")
-        self._shared_envs.clear()
-
-    def _shared_env_key(self, env_config: EnvironmentConfig) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
-        if not env_config.workspace:
-            raise ValueError("LocalCluster isolated execution requires environment.workspace")
-        return (
-            str(Path(env_config.workspace).resolve()),
-            tuple(env_config.pip_packages),
-            tuple(env_config.extras),
-        )
-
-    def _get_or_create_shared_env(self, env_config: EnvironmentConfig) -> TemporaryVenv:
-        key = self._shared_env_key(env_config)
-        existing = self._shared_envs.get(key)
-        if existing is not None:
-            return existing
-
-        venv = TemporaryVenv(
-            workspace=env_config.workspace,
-            pip_install_args=list(env_config.pip_packages),
-            extras=list(env_config.extras),
-            prefix="fray-shared-env-",
-        )
-        venv.__enter__()
-        self._shared_envs[key] = venv
-        return venv
 
     def launch(self, request: JobRequest) -> JobId:
         """Launch a job as a local subprocess."""
@@ -161,8 +114,7 @@ class LocalCluster(Cluster):
 
         processes = []
         process_env = None
-        owns_process_env = False
-        if self.config.isolated_env_mode is None:
+        if not self.config.use_isolated_env:
             if request.environment.env_vars:
                 logger.warning(
                     "LocalCluster does not support custom environment variables in non-isolated mode, ignored."
@@ -181,20 +133,13 @@ class LocalCluster(Cluster):
                 process.start()
                 processes.append(process)
         else:
-            owns_process_env = True
-            if self.config.isolated_env_mode == "shared":
-                process_env = self._get_or_create_shared_env(request.environment)
-                owns_process_env = False
-            else:
-                if self.config.isolated_env_mode != "per_job":
-                    raise RuntimeError(f"Unknown isolated_env_mode: {self.config.isolated_env_mode!r}")
-                process_env = TemporaryVenv(
-                    workspace=request.environment.workspace,
-                    pip_install_args=list(request.environment.pip_packages),
-                    extras=list(request.environment.extras),
-                    prefix=f"fray-job-{job_id}-",
-                )
-                process_env.__enter__()
+            process_env = TemporaryVenv(
+                workspace=request.environment.workspace,
+                pip_install_args=list(request.environment.pip_packages),
+                extras=list(request.environment.extras),
+                prefix=f"fray-job-{job_id}-",
+            )
+            process_env.__enter__()
             cmd = self._build_command(request, process_env)
             logger.info(f"Command: {' '.join(cmd)}")
             # Launch all replicas using shared venv
@@ -215,8 +160,7 @@ class LocalCluster(Cluster):
                     logger.info(f"Replica {replica_id}/{replica_count} started (PID {process.pid})")
 
             except Exception as e:
-                if owns_process_env and process_env is not None:
-                    process_env.__exit__(None, None, None)
+                process_env.__exit__(None, None, None)
                 raise RuntimeError(f"Failed to launch job: {e}") from e
 
         local_job = _LocalJob(
@@ -224,7 +168,6 @@ class LocalCluster(Cluster):
             request=request,
             processes=processes,
             process_env=process_env,
-            owns_process_env=owns_process_env,
             start_time=time.time(),
         )
         self._jobs[job_id] = local_job
@@ -306,7 +249,6 @@ class _LocalJob:
     request: JobRequest
     processes: list[subprocess.Popen]
     process_env: TemporaryVenv | None
-    owns_process_env: bool
     replica_count: int
     start_time: float
     log_queue: Queue[str]
@@ -318,14 +260,12 @@ class _LocalJob:
         request: JobRequest,
         processes: list[subprocess.Popen],
         process_env: TemporaryVenv | None,
-        owns_process_env: bool,
         start_time: float,
     ):
         self.job_id = job_id
         self.request = request
         self.processes = processes
         self.process_env = process_env
-        self.owns_process_env = owns_process_env
         self.replica_count = len(processes)
         self.start_time = start_time
         self.log_queue: Queue[str] = Queue()
@@ -334,7 +274,7 @@ class _LocalJob:
     def cleanup(self):
         """Clean up venv and all tracked processes."""
         logger.info(f"Cleaning up job {self.job_id}")
-        if self.process_env is not None and self.owns_process_env:
+        if self.process_env is not None:
             self.process_env.__exit__(None, None, None)
             self.process_env = None
 
