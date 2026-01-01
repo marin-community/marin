@@ -30,7 +30,7 @@ import requests
 import yaml
 
 from .dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
-from .auth import ray_auth_secret
+from .auth import maybe_fetch_local_ray_token
 
 logger = logging.getLogger(__name__)
 
@@ -314,10 +314,7 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def check_dashboard(cluster_name: str, dashboard_port: int) -> tuple[str, bool]:
-        """Check if a dashboard is reachable through the local tunnel.
-
-        A TCP connect can succeed even when the remote end of an SSH `-L` forward
-        is refusing connections, so use a lightweight HTTP request instead.
+        """Check if dashboard is reachable via the HTTP interface.
 
         With token auth enabled, this may return 401/403 without a token; that's
         still a useful signal that the tunnel is correctly targeting a live
@@ -356,43 +353,6 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
     for cluster_name, is_ready in results.items():
         if not is_ready:
             logger.error(f"Dashboard for cluster {cluster_name} is not accessible")
-
-
-def _maybe_fetch_local_ray_token(*, config_path: str | None) -> str:
-    """Ensure a Ray auth token is available locally and return a token file path.
-
-    Priority:
-    - Respect an existing RAY_AUTH_TOKEN_PATH if it points to a file.
-    - If a token exists at the default path (~/.ray/auth_token), use it.
-    - Otherwise, fetch it with `gcloud` into the default path (~/.ray/auth_token).
-    """
-    token_path_env = os.environ.get("RAY_AUTH_TOKEN_PATH")
-    if token_path_env and Path(token_path_env).expanduser().exists():
-        return str(Path(token_path_env).expanduser())
-
-    default_path = Path.home() / ".ray" / "auth_token"
-    if default_path.exists():
-        return str(default_path)
-
-    if not config_path:
-        raise RuntimeError(
-            "Ray token authentication is enabled but no local token was found. "
-            "Create a token file at ~/.ray/auth_token or set RAY_AUTH_TOKEN_PATH."
-        )
-
-    secret = ray_auth_secret()
-    default_path.parent.mkdir(parents=True, exist_ok=True)
-
-    token = subprocess.check_output(
-        ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"],
-        text=True,
-    ).strip()
-    if not token:
-        raise RuntimeError(f"Secret {secret} returned empty token")
-
-    default_path.write_text(token)
-    default_path.chmod(0o600)
-    return str(default_path)
 
 
 @contextmanager
@@ -466,7 +426,7 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
     config_path_for_token = None
     if len(clusters) == 1:
         config_path_for_token = next(iter(clusters.values())).config_path
-    token_path = _maybe_fetch_local_ray_token(config_path=config_path_for_token)
+    token_path = maybe_fetch_local_ray_token(config_path=config_path_for_token)
     os.environ["RAY_AUTH_TOKEN_PATH"] = token_path
     os.environ["RAY_AUTH_MODE"] = "token"
 
