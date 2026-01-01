@@ -71,9 +71,6 @@ class InferenceConfig:
         default_factory=lambda: DEFAULT_AUTOSCALING_ACTOR_POOL_CONFIG
     )
 
-    # Whether to use Ray for distributed execution. Set False to run in-process (useful for unit tests).
-    use_ray: bool = True
-
     # Dataset schema configuration (input/output columns)
     dataset_schema: DatasetSchemaConfig = field(default_factory=DatasetSchemaConfig)
 
