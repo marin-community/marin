@@ -28,7 +28,7 @@ def ray_auth_secret(secret_override: str | None = None) -> str:
     return secret_override or DEFAULT_RAY_AUTH_TOKEN_SECRET
 
 
-def maybe_fetch_local_ray_token(*, config_path: str | None) -> str:
+def maybe_fetch_local_ray_token(*, gcp_project: str | None = None) -> str:
     """Ensure a Ray auth token is available locally and return a token file path.
 
     Priority:
@@ -44,7 +44,7 @@ def maybe_fetch_local_ray_token(*, config_path: str | None) -> str:
     if default_path.exists():
         return str(default_path)
 
-    if not config_path:
+    if not gcp_project:
         raise RuntimeError(
             "Ray token authentication is enabled but no local token was found. "
             "Create a token file at ~/.ray/auth_token or set RAY_AUTH_TOKEN_PATH."
@@ -53,10 +53,10 @@ def maybe_fetch_local_ray_token(*, config_path: str | None) -> str:
     secret = ray_auth_secret()
     default_path.parent.mkdir(parents=True, exist_ok=True)
 
-    token = subprocess.check_output(
-        ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"],
-        text=True,
-    ).strip()
+    cmd = ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"]
+    if gcp_project:
+        cmd.append(f"--project={gcp_project}")
+    token = subprocess.check_output(cmd, text=True).strip()
     if not token:
         raise RuntimeError(f"Secret {secret} returned empty token")
 

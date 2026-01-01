@@ -419,14 +419,11 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
         os.environ["RAY_GCS_ADDRESS"] = f"localhost:{ports.gcs_port}"
 
     # Marin clusters assume token auth; always enable token mode client-side and
-    # ensure a token is available. For explicit single-cluster connections, we
-    # can fetch the token from Secret Manager automatically (default secret:
-    # RAY_AUTH_TOKEN). For multi-cluster autodiscovery, require the token file
-    # to already exist locally.
-    config_path_for_token = None
-    if len(clusters) == 1:
-        config_path_for_token = next(iter(clusters.values())).config_path
-    token_path = maybe_fetch_local_ray_token(config_path=config_path_for_token)
+    # ensure a token is available. We assume all Marin clusters use the same
+    # Secret Manager secret within the same GCP project, so it's OK to auto-fetch
+    # the token if it isn't already present locally.
+    gcp_project = next(iter(clusters.values())).project
+    token_path = maybe_fetch_local_ray_token(gcp_project=gcp_project)
     os.environ["RAY_AUTH_TOKEN_PATH"] = token_path
     os.environ["RAY_AUTH_MODE"] = "token"
 
