@@ -17,7 +17,6 @@ trainer:
   per_device_parallelism: 4  # set for a 40GB device, but can go up a lot if you have multiple devices or a bigger device
 
   # if using model parallelism, this is useful:
-  tensor_parallel_axes: ["mlp", "heads"]
 optimizer:
   learning_rate: 3e-4
   weight_decay: 0.1

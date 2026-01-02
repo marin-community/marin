@@ -18,19 +18,18 @@ A script to download a HuggingFace dataset and upload it to a specified fsspec p
 using HfFileSystem for direct streaming of data transfer.
 """
 
-import dataclasses
 import logging
 import os
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import draccus
 import fsspec
 from huggingface_hub import HfFileSystem
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
-from zephyr import Dataset, flow_backend
+from zephyr import Backend, Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,7 @@ class DownloadConfig:
     hf_dataset_id: str                                      # HF Dataset to Download (as `$ORG/$DATASET` on HF Hub)
 
     revision: str  # (Short) Commit Hash (from HF Dataset Repo; 7 characters)
-    hf_urls_glob: list[str] = dataclasses.field(default_factory=list)
+    hf_urls_glob: list[str] = field(default_factory=list)
     # List of Glob Patterns to Match Files in HF Dataset, If empty we get all the files in a hf repo
 
     gcs_output_path: str = THIS_OUTPUT_PATH
@@ -153,7 +152,6 @@ def download_hf(cfg: DownloadConfig) -> None:
     total_files = len(download_tasks)
     logger.info(f"Total number of files to process: {total_files}")
 
-    backend = flow_backend(max_parallelism=16)
     pipeline = (
         Dataset.from_list(download_tasks)
         .map(lambda task: stream_file_to_fsspec(*task))
@@ -161,7 +159,7 @@ def download_hf(cfg: DownloadConfig) -> None:
             f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline)
 
     # Write Provenance JSON
     write_provenance_json(

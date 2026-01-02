@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 
 import fsspec
 import numpy as np
-from fray.job import fray_job_ctx
+from fray.job import get_default_job_ctx
 from marin.rl.environments.base import EnvConfig
 from marin.rl.types import RolloutStats
 
@@ -608,7 +608,7 @@ class Curriculum:
 
 
 def get_or_create_curriculum_actor(config: CurriculumConfig, checkpoint_path: str | None = None):
-    job_ctx = fray_job_ctx()
+    job_ctx = get_default_job_ctx()
     actor = job_ctx.create_actor(Curriculum, actor_name=config.actor_name, actor_args=(config,), preemptible=False)
 
     # Auto-restore from checkpoint if path provided

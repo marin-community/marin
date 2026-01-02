@@ -30,6 +30,7 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from transformers import AutoConfig
 
+from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import (
     ExecutorStep,
     OutputName,
@@ -297,9 +298,10 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             base_path=OutputName("checkpoints"),
             save_interval=datetime.timedelta(seconds=600),
         ),
-        tensor_parallel_axes=["mlp", "heads"],
-        fsdp_axis="embed",
-        batch_axis="batch",
+        mesh=MeshConfig(
+            axes={"context": 1, "model": 1},
+            shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
+        ),
         ray=RayConfig(auto_start_cluster=False),
         # distributed=DistributedConfig(
         #     initialize_jax_distributed=False,
