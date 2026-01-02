@@ -44,12 +44,6 @@ def maybe_fetch_local_ray_token(*, gcp_project: str | None = None) -> str:
     if default_path.exists():
         return str(default_path)
 
-    if not gcp_project:
-        raise RuntimeError(
-            "Ray token authentication is enabled but no local token was found. "
-            "Create a token file at ~/.ray/auth_token or set RAY_AUTH_TOKEN_PATH."
-        )
-
     secret = ray_auth_secret()
     default_path.parent.mkdir(parents=True, exist_ok=True)
 
