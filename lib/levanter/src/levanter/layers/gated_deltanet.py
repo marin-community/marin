@@ -32,7 +32,7 @@ from dataclasses import dataclass
 import dataclasses
 import functools
 import os
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple
 
 import equinox as eqx
 import jax
@@ -1036,75 +1036,132 @@ def _in_specs_chunk_step_tpu(B: int, H: int, Ct: int, K_pad: int, V_pad: int):
     return in_specs, out_specs
 
 
-def _pick_Br(Ct_: int) -> int:
-    # Heuristic: Ct=64 -> 16, Ct>=128 -> 32, otherwise 8 if divisible.
-    if Ct_ >= 128 and (Ct_ % 32 == 0):
-        return 32
-    if Ct_ >= 16 and (Ct_ % 16 == 0):
-        return 16
-    if Ct_ >= 8 and (Ct_ % 8 == 0):
-        return 8
-    return Ct_
+_MXU_TILE = 128  # TPU Mosaic BF16 matmul tile size
 
 
-def _solve_unit_lower_small_masked(A_blk: jnp.ndarray, B_blk: jnp.ndarray) -> jnp.ndarray:
-    """Solve (I - A_blk)^-1 B_blk for strictly-lower A_blk (Br×Br), no integer indexing."""
-    Br_ = A_blk.shape[0]
-    R_ = B_blk.shape[1]
-    idxb = jnp.arange(Br_, dtype=jnp.int32)
+def _mxu_matmul_f32(
+    a: jnp.ndarray,
+    b: jnp.ndarray,
+    *,
+    precision_mode: Literal["fp32", "bf16"] = "fp32",
+) -> jnp.ndarray:
+    """2D matmul that returns fp32, with selectable precision mode.
 
-    X = jnp.zeros((Br_, R_), dtype=jnp.float32)
-    for i in range(Br_):
-        oh = (idxb == jnp.int32(i)).astype(jnp.float32)  # (Br,)
+    precision_mode="fp32":
+      - operands: float32
+      - dot precision: lax.Precision.HIGHEST
 
-        rhs_i = jnp.sum(B_blk * oh[:, None], axis=0)  # (R,)
-        A_i = jnp.sum(A_blk * oh[:, None], axis=0)  # (Br,)
+    precision_mode="bf16":
+      - operands: bfloat16
+      - dot precision: lax.Precision.DEFAULT
+      - (Mosaic-safe; avoids contract_precision<fp32> on bf16)
 
-        m = (idxb < jnp.int32(i)).astype(jnp.float32)  # (Br,)
-        Ai = A_i * m
+    On TPU we pad to 128x128 tiles and do a blocked matmul to satisfy Mosaic tiling constraints.
+    """
+    if precision_mode not in ("fp32", "bf16"):
+        raise ValueError(f"precision_mode must be 'fp32' or 'bf16', got {precision_mode!r}")
 
-        contrib_1r = jnp.matmul(Ai[None, :], X)  # (1,R)
-        contrib = jnp.reshape(contrib_1r, (R_,))  # reshape, not indexing
+    if a.ndim != 2 or b.ndim != 2:
+        raise ValueError(f"_mxu_matmul_f32 expects 2D arrays, got {a.ndim}D and {b.ndim}D")
 
-        xi = rhs_i + contrib  # (R,)
-        X = X + oh[:, None] * xi[None, :]  # write row i
+    m, k = a.shape
+    k2, n = b.shape
+    if k != k2:
+        raise ValueError(f"_mxu_matmul_f32 shape mismatch: a is {a.shape}, b is {b.shape}")
 
-    return X
+    # Non-TPU fallback (CPU/GPU tests/dev)
+    if jax.devices()[0].platform != "tpu":
+        if precision_mode == "bf16":
+            return (a.astype(jnp.bfloat16) @ b.astype(jnp.bfloat16)).astype(jnp.float32)
+        else:
+            return (a.astype(jnp.float32) @ b.astype(jnp.float32)).astype(jnp.float32)
+
+    # TPU path: pad/tiling to Mosaic-friendly 128x128
+    mp = _round_up_to(int(m), _MXU_TILE)
+    kp = _round_up_to(int(k), _MXU_TILE)
+    np = _round_up_to(int(n), _MXU_TILE)
+
+    a_f32 = a.astype(jnp.float32)
+    b_f32 = b.astype(jnp.float32)
+
+    a_pad = jnp.pad(a_f32, ((0, mp - m), (0, kp - k)))
+    b_pad = jnp.pad(b_f32, ((0, kp - k), (0, np - n)))
+
+    if precision_mode == "bf16":
+        a_op = a_pad.astype(jnp.bfloat16)
+        b_op = b_pad.astype(jnp.bfloat16)
+        dot_prec = lax.Precision.DEFAULT
+    else:
+        a_op = a_pad.astype(jnp.float32)
+        b_op = b_pad.astype(jnp.float32)
+        dot_prec = lax.Precision.HIGHEST
+
+    dn = (((1,), (0,)), ((), ()))  # (m,k) @ (k,n) -> (m,n)
+
+    def _dot128(x, y):
+        # IMPORTANT: in bf16 mode, dot_prec must be DEFAULT to avoid Mosaic "Bad lhs type"
+        try:
+            return lax.dot_general(
+                x,
+                y,
+                dn,
+                precision=dot_prec,
+                preferred_element_type=jnp.float32,
+            )
+        except TypeError:
+            # Older JAX: no preferred_element_type
+            return lax.dot_general(
+                x,
+                y,
+                dn,
+                precision=dot_prec,
+            ).astype(jnp.float32)
+
+    row_blocks = []
+    for i in range(0, mp, _MXU_TILE):
+        col_blocks = []
+        for j in range(0, np, _MXU_TILE):
+            acc = jnp.zeros((_MXU_TILE, _MXU_TILE), dtype=jnp.float32)
+            for p in range(0, kp, _MXU_TILE):
+                a_tile = lax.slice(a_op, (i, p), (i + _MXU_TILE, p + _MXU_TILE))
+                b_tile = lax.slice(b_op, (p, j), (p + _MXU_TILE, j + _MXU_TILE))
+                acc = acc + _dot128(a_tile, b_tile)
+            col_blocks.append(acc)
+        row_blocks.append(lax.concatenate(col_blocks, dimension=1))
+
+    out_pad = lax.concatenate(row_blocks, dimension=0)
+    return lax.slice(out_pad, (0, 0), (int(m), int(n)))
 
 
-def _solve_unit_lower_trsm_blocked(A_strict: jnp.ndarray, B_in: jnp.ndarray, Br_: int) -> jnp.ndarray:
-    """Blocked TRSM for unit-lower (I - A_strict), A_strict strictly lower.
-    Operates on B like a work buffer and returns X in the same array.
-    Uses only static lax.slice/lax.concatenate (no dynamic_slice)."""
-    Ct_ = A_strict.shape[0]
-    R_ = B_in.shape[1]
-    B_work = B_in
+def _invert_I_minus_strict_lower_doubling(
+    A_strict: jnp.ndarray, *, iters: int | None = None
+) -> jnp.ndarray:
+    """
+    Compute (I - A_strict)^(-1) for strictly-lower-triangular A_strict using an exact
+    Neumann/doubling product:
+        (I - A)^(-1) = (I + A)(I + A^2)(I + A^4)...  (exact once 2^k >= N)
+    Since A is strictly lower triangular NxN, A^N = 0, so the series/product is finite.
 
-    for j in range(0, Ct_, Br_):
-        # Panel solve
-        Bj = lax.slice(B_work, (j, 0), (j + Br_, R_))  # (Br,R)
-        Ajj = lax.slice(A_strict, (j, j), (j + Br_, j + Br_))  # (Br,Br)
-        Xj = _solve_unit_lower_small_masked(Ajj, Bj)  # (Br,R)
+    If iters is None, uses the minimal exact count: ceil(log2(N)).
+    If iters is smaller, this becomes an approximation (sometimes OK, but exact is cheap here).
+    """
+    N = int(A_strict.shape[0])
+    # Minimal k such that 2^k >= N  (also works for N=1)
+    k = max(1, int((N - 1).bit_length())) if iters is None else max(1, int(iters))
 
-        # Write back solved block into B_work[j:j+Br]
-        parts = []
-        if j > 0:
-            parts.append(lax.slice(B_work, (0, 0), (j, R_)))
-        parts.append(Xj)
-        if j + Br_ < Ct_:
-            parts.append(lax.slice(B_work, (j + Br_, 0), (Ct_, R_)))
-        B_work = lax.concatenate(parts, dimension=0)
+    idx = jnp.arange(N, dtype=jnp.int32)
+    I = (idx[:, None] == idx[None, :]).astype(jnp.float32)
 
-        # Trailing update: B_tail += A_tail,j @ Xj
-        if j + Br_ < Ct_:
-            At = lax.slice(A_strict, (j + Br_, j), (Ct_, j + Br_))  # (Ct-j-Br, Br)
-            upd = jnp.matmul(At, Xj)  # (Ct-j-Br, R)
+    A = A_strict.astype(jnp.float32)
+    Inv = I + A          # (I + A)
+    Term = A             # A^(2^0)
 
-            B_head = lax.slice(B_work, (0, 0), (j + Br_, R_))
-            B_tail = lax.slice(B_work, (j + Br_, 0), (Ct_, R_)) + upd
-            B_work = lax.concatenate([B_head, B_tail], dimension=0)
+    # Multiply by (I + A^2), (I + A^4), ... up to needed power
+    for _ in range(k - 1):
+        Term = _mxu_matmul_f32(Term, Term)       # A^(2^i) -> A^(2^(i+1))
+        Inv = _mxu_matmul_f32(Inv, I + Term)     # Inv *= (I + A^(2^(i+1)))
 
-    return B_work
+    return Inv
 
 
 def _gdn_chunk_step_fwd_kernel_tpu(
@@ -1169,13 +1226,12 @@ def _gdn_chunk_step_fwd_kernel_tpu(
     # Blocked unit-lower solve: X = (I - A)^-1 RHS, with strictly-lower A (diag is implicit 1)
     # -------------------------
 
-    Br = _pick_Br(int(Ct))
-
     # Multi-RHS: solve once for [βV | (βK⊙exp_g)]
     k_scaled = k_beta * exp_g[:, None]  # (Ct, K)
     rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)  # (Ct, V+K)
 
-    sol_all = _solve_unit_lower_trsm_blocked(A, rhs_all, Br)  # (Ct, V+K)
+    Inv = _invert_I_minus_strict_lower_doubling(A)
+    sol_all = _mxu_matmul_f32(Inv, rhs_all)
 
     v_pseudo = lax.slice(sol_all, (0, 0), (Ct, V_pad))  # (Ct, V)
     k_cumdecay = lax.slice(sol_all, (0, V_pad), (Ct, V_pad + K_pad))  # (Ct, K)
@@ -1506,41 +1562,34 @@ def _gdn_chunk_step_bwd_kernel_tpu(
     q = q_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)].astype(jnp.float32).reshape(Ct, K_pad)
     k = k_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, K_pad)].astype(jnp.float32).reshape(Ct, K_pad)
     v = v_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)].astype(jnp.float32).reshape(Ct, V_pad)
-    g_cum = (
-        gcum_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, 1)]
-        .astype(jnp.float32)
-        .reshape(
-            Ct,
-        )
-    )
-    beta = (
-        b_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, 1)]
-        .astype(jnp.float32)
-        .reshape(
-            Ct,
-        )
-    )
+
+    g_cum = gcum_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, 1)].astype(jnp.float32).reshape((Ct,))
+    beta = b_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, 1)].astype(jnp.float32).reshape((Ct,))
+
     S_prev = (
         Sprev_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)]
         .astype(jnp.float32)
         .reshape(K_pad, V_pad)
     )
+
     d_out = (
         dOut_ref[dslice(0, 1), dslice(0, 1), dslice(0, Ct), dslice(0, V_pad)].astype(jnp.float32).reshape(Ct, V_pad)
     )
+
     dS_next = (
         dSnext_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)]
         .astype(jnp.float32)
         .reshape(K_pad, V_pad)
     )
 
+    # ---- masks ----
     idx = jnp.arange(Ct, dtype=jnp.int32)
     ii = idx[:, None]
     jj = idx[None, :]
     tril_strict = (ii > jj).astype(jnp.float32)
     causal_mask = (ii >= jj).astype(jnp.float32)
 
-    # clip masks
+    # ---- clip masks ----
     gcum_inrange = ((g_cum >= -_GDN_EXP_CLIP) & (g_cum <= _GDN_EXP_CLIP)).astype(jnp.float32)
 
     # exp(g_cum)
@@ -1554,50 +1603,32 @@ def _gdn_chunk_step_bwd_kernel_tpu(
     exp_diff = jnp.exp(diff_cl)
 
     # ---- forward recompute ----
-    v_beta = v * beta[:, None]
-    k_beta = k * beta[:, None]
+    v_beta = v * beta[:, None]  # (Ct, V)
+    k_beta = k * beta[:, None]  # (Ct, K)
 
-    QK = jnp.matmul(q, k.T)
+    QK = jnp.matmul(q, k.T)  # (Ct, Ct)
     attn = QK * exp_diff * causal_mask
 
-    KKT = jnp.matmul(k_beta, k.T)
-    A = -KKT * exp_diff * tril_strict
+    KKT = jnp.matmul(k_beta, k.T)  # (Ct, Ct)
+    A = -KKT * exp_diff * tril_strict  # strictly lower
 
-    def _solve_unit_lower(A_strict, rhs):
-        R = rhs.shape[-1]
-        X = jnp.zeros((Ct, R), dtype=jnp.float32)
-        for i in range(Ct):
-            mask_i = (idx == jnp.int32(i)).astype(jnp.float32)
-            rhs_i = jnp.sum(rhs * mask_i[:, None], axis=0)
-            A_i = jnp.sum(A_strict * mask_i[:, None], axis=0)
-            contrib = jnp.sum(A_i[:, None] * X, axis=0)
-            x_i = rhs_i + contrib
-            X = X + mask_i[:, None] * x_i[None, :]
-        return X
+    # ------------------------------------------------------------
+    # Neumann/doubling inverse (MXU) used for BOTH recompute and adjoint solves
+    # ------------------------------------------------------------
+    Inv = _invert_I_minus_strict_lower_doubling(A)  # (Ct, Ct)
 
-    def _solve_unit_upper_from_A(A_strict_lower, rhs):
-        # solves (I - A)^T x = rhs  (unit upper)
-        R = rhs.shape[-1]
-        X = jnp.zeros((Ct, R), dtype=jnp.float32)
-        for i in range(Ct - 1, -1, -1):
-            mask_i = (idx == jnp.int32(i)).astype(jnp.float32)
-            rhs_i = jnp.sum(rhs * mask_i[:, None], axis=0)
-            # column i of A: A[:,i]
-            mask_col = (idx == jnp.int32(i)).astype(jnp.float32)
-            A_col_i = jnp.sum(A_strict_lower * mask_col[None, :], axis=1)  # (Ct,)
-            contrib = jnp.sum(A_col_i[:, None] * X, axis=0)
-            x_i = rhs_i + contrib
-            X = X + mask_i[:, None] * x_i[None, :]
-        return X
+    # sol_all = Inv @ [v_beta | (k_beta * exp_g)]
+    k_scaled = k_beta * exp_g[:, None]  # (Ct, K)
+    rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)  # (Ct, V+K)
+    sol_all = _mxu_matmul_f32(Inv, rhs_all)  # (Ct, V+K)
 
-    v_pseudo = _solve_unit_lower(A, v_beta)
-    k_scaled = k_beta * exp_g[:, None]
-    k_cumdecay = _solve_unit_lower(A, k_scaled)
+    v_pseudo = lax.slice(sol_all, (0, 0), (Ct, V_pad))  # (Ct, V)
+    k_cumdecay = lax.slice(sol_all, (0, V_pad), (Ct, V_pad + K_pad))  # (Ct, K)
 
-    v_prime = jnp.matmul(k_cumdecay, S_prev)
-    v_new = v_pseudo - v_prime
+    v_prime = jnp.matmul(k_cumdecay, S_prev)  # (Ct, V)
+    v_new = v_pseudo - v_prime  # (Ct, V)
 
-    q_scaled = q * exp_g[:, None]
+    q_scaled = q * exp_g[:, None]  # (Ct, K)
 
     mask_last = (idx == jnp.int32(Ct - 1)).astype(jnp.float32)
     g_tail = jnp.sum(g_cum * mask_last)
@@ -1610,19 +1641,17 @@ def _gdn_chunk_step_bwd_kernel_tpu(
     decay_w = jnp.exp(decay_diff_cl)
     k_w = k * decay_w[:, None]
 
-    # S_next = S_prev * decay_tail + add
-
     # ---- backward ----
     d_inter = d_out
     d_intra = d_out
 
     # intra = attn @ v_new
-    d_attn = jnp.matmul(d_intra, v_new.T)
-    d_v_new = jnp.matmul(attn.T, d_intra)  # IMPORTANT: transpose (fixed)
+    d_attn = jnp.matmul(d_intra, v_new.T)  # (Ct, Ct)
+    d_v_new = jnp.matmul(attn.T, d_intra)  # (Ct, V)
 
     # inter = q_scaled @ S_prev
-    d_q_scaled = jnp.matmul(d_inter, S_prev.T)
-    dS_prev = jnp.matmul(q_scaled.T, d_inter)
+    d_q_scaled = jnp.matmul(d_inter, S_prev.T)  # (Ct, K)
+    dS_prev = jnp.matmul(q_scaled.T, d_inter)  # (K, V)
 
     # S_next = S_prev*decay_tail + add
     dS_prev = dS_prev + dS_next * decay_tail
@@ -1630,8 +1659,8 @@ def _gdn_chunk_step_bwd_kernel_tpu(
 
     # add = k_w^T @ v_new
     d_add = dS_next
-    d_k_w = jnp.matmul(v_new, d_add.T)
-    d_v_new = d_v_new + jnp.matmul(k_w, d_add)
+    d_k_w = jnp.matmul(v_new, d_add.T)  # (Ct, K)
+    d_v_new = d_v_new + jnp.matmul(k_w, d_add)  # (Ct, V)
 
     d_k = d_k_w * decay_w[:, None]
     d_decay_w = jnp.sum(d_k_w * k, axis=-1)
@@ -1651,8 +1680,8 @@ def _gdn_chunk_step_bwd_kernel_tpu(
     d_v_prime = -d_v_new
 
     # v_prime = k_cumdecay @ S_prev
-    d_k_cumdecay = jnp.matmul(d_v_prime, S_prev.T)
-    dS_prev = dS_prev + jnp.matmul(k_cumdecay.T, d_v_prime)
+    d_k_cumdecay = jnp.matmul(d_v_prime, S_prev.T)  # (Ct, K)
+    dS_prev = dS_prev + jnp.matmul(k_cumdecay.T, d_v_prime)  # (K, V)
 
     # attn = QK * exp_diff * causal_mask
     d_QK = d_attn * (exp_diff * causal_mask)
@@ -1666,14 +1695,18 @@ def _gdn_chunk_step_bwd_kernel_tpu(
     d_q = d_q + d_q_scaled * exp_g[:, None]
     d_exp_g = jnp.sum(d_q_scaled * q, axis=-1)
 
-    # ---- backprop through solves ----
-    tmp_v = _solve_unit_upper_from_A(A, d_v_pseudo)  # (I - A)^(-T) d
-    d_v_beta = tmp_v
-    dA = jnp.matmul(tmp_v, v_pseudo.T)
+    # ------------------------------------------------------------
+    # Backprop through solve: sol_all = Inv @ rhs_all
+    #   d_rhs_all = Inv^T @ d_sol_all
+    #   dA = (Inv^T d_sol_all) @ sol_all^T
+    # ------------------------------------------------------------
+    d_sol_all = jnp.concatenate([d_v_pseudo, d_k_cumdecay], axis=1)  # (Ct, V+K)
+    tmp_all = _mxu_matmul_f32(jnp.transpose(Inv), d_sol_all)  # (Ct, V+K)
 
-    tmp_k = _solve_unit_upper_from_A(A, d_k_cumdecay)
-    d_k_scaled = tmp_k
-    dA = dA + jnp.matmul(tmp_k, k_cumdecay.T)
+    d_v_beta = lax.slice(tmp_all, (0, 0), (Ct, V_pad))  # (Ct, V)
+    d_k_scaled = lax.slice(tmp_all, (0, V_pad), (Ct, V_pad + K_pad))  # (Ct, K)
+
+    dA = _mxu_matmul_f32(tmp_all, jnp.transpose(sol_all))  # (Ct, Ct)
 
     # k_scaled = k_beta * exp_g
     d_k_beta = d_k_scaled * exp_g[:, None]
@@ -2237,11 +2270,17 @@ def chunk_gated_delta_rule(
         return hax.rearrange(x, target_layout).array
 
     # Promote + optional L2 norm + scale
-    q32 = query.astype(jnp.float32)
-    k32 = key.astype(jnp.float32)
-    v32 = value.astype(jnp.float32)
-    g32 = g.astype(jnp.float32)
-    b32 = beta.astype(jnp.float32)
+    q32 = query
+    k32 = key
+    v32 = value
+    g32 = g
+    b32 = beta
+
+    # q32 = query.astype(jnp.float32)
+    # k32 = key.astype(jnp.float32)
+    # v32 = value.astype(jnp.float32)
+    # g32 = g.astype(jnp.float32)
+    # b32 = beta.astype(jnp.float32)
 
     if use_qk_l2norm_in_kernel:
         q32 = _l2norm(q32, axis=Dk)
