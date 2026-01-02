@@ -1,0 +1,567 @@
+# This is a dag structured plan formatted as a yaml file. It is not actually code but high-level instructions for us as a team
+# Vaguely top-down
+
+# Schema:
+# id:
+# issue: int | str | None
+#  title: <string>
+#  type: literal[epic, task, experiment, milestone] | None
+#  description: <string>
+#  dependencies:
+#    - <id>
+#  definition_of_done: <string>
+
+frontier:
+  title: "Get to the mid-2025 open weight frontier"
+  dependencies:
+    - mega_reasoning_model
+
+
+mega_reasoning_model:
+  title: "have a deepseek v3 tier model"
+  dependencies:
+    - rl_big_model
+    - eval_big_model
+
+
+eval_big_model:
+  title: "be ~SOTA on same benchmarks as ~deepseek v3"
+  dependencies:
+    - rl_big_model
+    - frontier_evals_wired
+
+
+rl_big_model:
+  title: "RL a pretrained model on a bunch of agentic reasoning tasks"
+  dependencies:
+    - trained_base_model
+    - scalable_rl_framework
+    - full_rl_environments
+    - rl_recipe
+
+
+scalable_rl_framework:
+  title: "have a framework for scalable RL"
+  dependencies:
+    - lots
+
+
+# Pretraining
+
+# three phase pre-training process
+# 1. broad coverage web etc base training. probably 80% english web, 10% other language web, 5% code, 5% hq data
+# 2. HQ data training ~60% english web, ~10% other language web, ~15% english HQ, 5% code/reasoning HQ, 10% other language HQ
+# 3. SFT/Length extension. ~80% previous mix, 20% reasoning/length/chat data.
+trained_base_model:
+  title: "Have a very large pretrained model that is a good base for agentic/reasoning RL"
+  type: milestone
+  description: |
+    Our major milestone for 2026 is to make a competitive-with-best-2025-open-weights model.
+    This issue is for building the base model.
+
+    These days "base model" as distinct from "SFTed model" doesn't really mean anything.
+    Instead, we should aim to build a model using ~the next token objective that has:
+
+    - Excellent performance on base model tasks (like MMLU, MMLU PRO, etc)
+    - Good performance on chat tasks (alpaca eval, if-eval)
+    - Good at prompt following and tool-calling.
+    - Safe on critical safety issues (biological, nuclear, etc)
+    - not too toxic otherwise
+
+    More over (and more importantly), it should serve as a strong base for RL and last-mile SFT.
+
+    In broad strokes, we're talking a large MOE-style model trained on ~1-3e24 flops (~15T tokens).
+
+    ## Pre-Training Phases
+
+    As a strawman of a recipe, we're planning something like:
+
+    - [Phase 1](#pt_data): Broad coverage web etc base training. probably 80% english web, 10% other language web, 5% code, 5% hq data (~11T tokens)
+    - [Phase 2](#hq_data): HQ data training ~60% english web, ~10% other language web, ~15% english HQ, 5% code/reasoning HQ, 10% other language HQ (~3T tokens)
+    - [Phase 3](#sft_data): SFT/Length extension. ~80% previous mix, 20% reasoning/length/chat data (~2T tokens)
+
+    The SFT'd model is not intended to be a fully aligned chat model, but rather one that is aware of chat templates and can follow them and other tasks.
+
+    This splits the data into three broad groups:
+    - Phase 1: ["Pretraining data"](#pt_data):
+    - Phase 2:["HQ data"](#hq_data)
+    - Phase 3:["SFT data"](#sft_data)
+
+    We should plan to release checkpoints for each phase, but only the final will be cooled down.
+
+    ## Architecture
+
+    Strawman architecture is a big ol MOE balanced in terms of training and inference throughput.
+    Because we're aiming to do substantial RL on the model, inference throughput matters a lot.
+    Training throughput is still more important for this model.
+
+
+  dependencies:
+    - training_recipe
+    - base_model_evals
+    - sft_evals
+    - sft_big_model
+
+sft_big_model:
+  title: "SFT a pretrained model on a bunch of agentic, long-context, and high quality data"
+  dependencies:
+    - midtrain_model
+    - sft_data
+    - sft_evals
+
+
+midtrain_model:
+  title: "high quality model pretrained on HQ data"
+  dependencies:
+    - pretrained_model
+    - hq_data
+
+
+pretrained_model:
+  title: "have a pretrained model"
+  dependencies:
+    - pt_data
+    - pt_evals
+    - model_architecture
+    - pt_recipe
+
+
+## Datasets
+sft_data:
+  title: "Make a Stage 3 training mixture"
+  description: |
+    We need to make a Stage 3 training mixture.
+    We should consider the following datasets:
+    - chat_data
+    - reasoning_data
+    - long_context_data
+    - format_following_data
+
+  dependencies:
+     - chat_data
+     - reasoning_data
+     - long_context_data
+     - format_following_data
+
+
+chat_data:
+  title: "Decide on a moderate collection of chat data"
+  description: |
+    Perhaps this will be mainly handled by #1880 and related work.
+
+    We need to decide on a moderate collection of chat data to be used for the "SFT" phase of training.
+    We should consider the following datasets:
+
+    - smoltalk v2 (the chat portions)
+    - llama-nemotron posttraining datasets (the chat portions)
+    - tulu v3 (once we remove the AllenAI branding parts)
+
+    Most likely, we can just use smoltalk v2 + llama-nemotron posttraining datasets. We should also investigate the data from Olmo 3.
+  definition_of_done: |
+    We've wired up the datasets (See #1880)
+
+
+midtrain_data:
+   title: "Mid-train data"
+   description: |
+      We need ~3-4T tokens of midtraining data. Olmo 3 has roughly 2 and is a good starting point!
+
+      If we look at its gaps compared to say Qwen 2.5 it's mostly:
+
+      - Some math
+      - Code: BigCodeBench, MultiPL HumanEval, DeepSeek Leetcode
+      - Medical knowledge: MedQA, MedMCQA
+      - Reasoning tasks (ANLI, MUSR)
+
+      We should focus our efforts on extending Olmo 3's data with these gaps in mind, and also look for other gaps.
+   dependencies:
+    - medical_data
+    - code_data
+    - reasoning_data
+
+long_context_data:
+    title: "Decide on a moderate collection of long context data"
+    description: |
+        We need to decide on a moderate collection of long context data to be used for the "SFT" phase of training.
+        We should consider the following datasets:
+
+        In #2062, I wired up olmo3 longmino and hf finepdfs. We should also consider:
+        - [institutional books](#institutional_books)
+        - [long code bases (stitched together)](#long_code_data)
+
+    dependencies:
+        - institutional_books
+        - long_code_data
+
+long_code_data:
+    title: "Long code data"
+    description: |
+        We need to stitch together some long code bases to get long context code data.
+        We can look at bigcodebench repos, github repos, etc.
+
+        First step is a survey of existing code datasets to see how best to stitch them together.
+        I think also going through and making a coarse/pre-training version of SWEBench or similar would be good.
+        (The idea there is to take GH issues and pair them with code repo and patches).
+
+
+pt_data:
+  title: "Large collection of pretraining data covering web, code, and HQ data"
+  description: |
+    For our larger models, we need to scale up the pretraining data.
+    Right now, we have, generously, ~6-7T tokens of pretraining data for English, and maybe 3-4T tokens of other language data.
+    (FineWeb nominally has more but it has a ton of duplicates.)
+
+    We'd like to get to 15-20T, split roughly as:
+
+    - 10T english web data
+      - of which 500B focused on math
+    - 2T other language web data (might be set here? need to dedupe)
+    - 2T code data (~stack v2, but maybe do some quality work)
+    - 1T HQ data (including ~)
+
+    We need to dedupe this data and ideally get to a point where it is ~on par with nemotron-cc. (We're including nemo)
+
+  dependencies:
+    - web_data
+    - code_data
+    - hq_data
+    - data_pipeline
+
+web_data:
+  title: "12T tokens of ~good web data. ~85% english, ~15% other languages"
+  description: |
+    See also [#pt_data] for more details.
+
+    We need to get to 12T tokens of web data, split roughly as:
+      - 10T english web data
+      - 2T other language web data
+
+    We need to [dedupe this data](#scalable_dedupe) and ideally get to a point where it is ~on par with nemotron-cc. (We're including nemotron-cc as well, but we want our additional data to be at least as good.)
+
+    We may need to do some [crawling](#crawl_data) or [rephrasing](#rephrasing_pipeline) to get to this goal.
+  dependencies:
+    - union_existing_web_data
+    - crawl_data
+    - rephrasing_pipeline
+
+union_existing_web_data:
+  title: "union/dedupe existing web data from various sources"
+  description: |
+    See also [#pt_data] for more details.
+    This isn't particularly deep: there are a bunch of web datasets:
+
+    - GneissWeb
+    - Nemotron-CC (v1 and v2)
+    - Comma
+    - DCLM
+    - FineWeb-EDU
+    - Olmo 3
+
+    We need to union/dedupe these datasets into a single dataset. Then:
+
+    1) see how many tokens we actually have
+    2) compare the quality of the unioned data to nemotron-cc with an isoflop suite.
+  dependencies:
+    - scalable_dedupe
+
+
+data_pipeline:
+  title: "have a pipeline for data curation and preprocessing"
+  dependencies:
+    - scalable_dedupe
+
+
+scalable_dedupe:
+  title: "build a scalable inexact deduplication pipeline"
+  dependencies:
+    - fray
+
+# evals
+frontier_evals:
+  title: "have a set of evals for the final rl model"
+
+sft_evals:
+  title: "have a set of evals for SFTed models"
+  dependencies:
+    - chat_evals
+    - reasoning_evals
+    - long_context_evals
+
+pretraining_evals:
+  title: "have a set of evals for pretrained models"
+  dependencies:
+    - chat_evals
+    - reasoning_evals
+    - long_context_evals
+
+
+loss_datasets:
+  title: Fill out our perplexity loss datasets
+  description: |
+    We currently use the following datasets for perplexity loss:
+    - a good chunk of paloma (including c4en)
+    - uncheatable eval (a fixed snapshot)
+
+    This provides decent coverage of:
+
+    - english web
+    - other language web
+    - code
+    - arxiv/academic articles
+    - wiki
+    - stack exchange
+
+    This is pretty good but we need more. In general, we want PPL proxies for any conceivable eval or use case.
+    As a general principle, we want to avoid using actual evals as ppl proxies, but we do we want a loss
+    dataset that is correlated with any conceivable eval or use case.
+
+    A surely incomplete list of things we want to add:
+
+    - [natural long context data](#natural_long_context_ppl_data)
+    - [reasoning data](#reasoning_ppl_data)
+    - [format following data](#format_following_ppl_data)
+    - [chat data](#chat_ppl_data)
+
+    Generally speaking, we should [establish a process for supporting new tasks](#task_support_process).
+
+  dependencies:
+    - natural_long_context_ppl_data
+    - reasoning_ppl_data
+    - format_following_ppl_data
+    - chat_ppl_data
+    - task_support_process
+
+
+natural_long_context_ppl_data:
+  title: "natural long context ppl eval data"
+  description: |
+    We need to find a good collection of natural long context ppl eval data.
+    Obvious sources include books, scientific articles, stitched together code bases, wikipedia articles, etc.
+
+    The challenge with long context is that almost all generation is in fact local. NIAH and other tasks are fairly synthetic retrieval tasks.
+    Olmo 3 has a simple heuristic for filtering: use gzip compressibility (which we have also looked at in #633, though not for long context), preferring
+    data in the middle of the distribution.
+
+    In particular, we should consider the following datasets:
+
+    - Olmo 3's ocr data
+    - institutional books
+    - stitch together some code bases
+    - ...
+
+    32K context is about 50 pages of text. This is a lot! Longer than most academic articles.
+
+    We may also need to use synthetic data to supplement this.
+
+  dependencies:
+    - olmo_3_ocr_data
+    - institutional_books
+    - long_code_data
+
+reasoning_ppl_data:
+  title: "reasoning ppl eval data"
+  description: |
+    We need to find a good collection of reasoning ppl eval data. Ideally this would be natural data that correlates reasonably with ANLI, MUSR, etc.
+
+    It's not obvious to me what natural data would be good here and we may need to lean on synthetic/task data.
+
+
+institutional_books:
+  title: "Add Harvard Institutional Books dataset"
+  issue: 1394
+
+
+task_support_process:
+  title: "Establish a process for supporting new tasks/use cases"
+  description: |
+    On an ongoing basis, the model development process should look like this:
+
+    1. A new use-case/task comes in. Pick some development data.
+    2. We take our existing scaling suites and see if any of our existing ppl datasets correlate with the new task.
+    3. If there's strong correlation, we're done.
+    4. If there's no strong correlation, we need to add a new ppl dataset to our scaling suites.
+    5. (the hard part): source ppl data for the new task.
+    6. Add the new ppl dataset to our scaling suites.
+
+    We should make a recipe for this process (similar to our other agent recipes) and exercise it.
+
+  definition_of_done: |
+    We have added a recipe for this process and followed it for a new task, adding a new ppl dataset and getting good correlation with the new task.
+
+
+
+
+# Architecture
+model_architecture:
+  title: "Settle on MoE architecture"
+  type: milestone
+  description: |
+    We know we want to use an MOE architecture for our next series of models.
+
+    Desiderata:
+      - Fast enough MFU for training
+      - Fast enough inference throughput for inference. Ideally on multiple hardware platforms.
+      - Amenability to param transfer
+
+
+  dependencies:
+    - fast_moe
+    - moe_scaling_laws
+
+
+moe_scaling_laws:
+  title: "apply the scaling laws framework to find the optimal configuration for a 1e24 flop model"
+  dependencies:
+    - scaling_law_framework
+
+fast_moe:
+  title: "Fast enough MFU training for MOEs"
+  description: |
+    We need to profile our existing MOE implementation and MaxText's and identify suboptimalities in ours.
+    Then, we should consider ways to improve throughput through architectural changes without compromising quality.
+    To do that, we'll want to study the existing TPU inference kernels for MOEs and see what changes we could
+    make to the architecture to alleviate bottlenecks.
+
+    We also need to consider inference throughput. But, as a starting point, we should focus on training throughput.
+  dependencies:
+    - profile_existing_moes
+    - moe_mlp_kernel
+
+
+profile_existing_moes:
+  title: "Profile our existing MOE implementation and MaxText's and identify suboptimalities in ours"
+  dependencies:
+    - profile_maxtext_moe
+    - profile_levanter_moe
+
+
+moe_mlp_kernel:
+  title: "implement a custom MLP kernel for our MOE architecture"
+  dependencies:
+    - understand_existing_moe_kernels
+
+
+understand_inference_moe_kernels:
+  title: "understand the inference kernels for MOEs"
+  description: |
+    We should look at existing inference kernels for MOEs and see what we can learn from them.
+
+    Things to look at
+       -  https://github.com/vllm-project/tpu-inference/tree/main/tpu_inference/kernels/fused_moe
+
+    Goals are to understand what makes it fast and where we can make architectural changes to make things faster. We don't
+    need to tie ourselves to existing architectures, though obviously we should take them very seriously.
+
+
+
+# Scaling Laws
+
+scaling_law_framework:
+  title: "Scaling Law Framework"
+  description: |
+    Our goal is  XXX
+  dependencies:
+    - relaible_training_infra
+    - loss_datasets
+
+
+# Process
+ferries:
+  title: "train models regularly of increasing scale and quality."
+  description: |
+    Daily 1e17, Weekly 1e21 models, monthly 1e22 models, quarterly 1e23 models, yearly 1e24 models.
+  dependencies:
+    - ferry_framework
+    - reliable_training_infra
+    - automated_daily_ferry_launch
+    - automated_weekly_ferry_launch
+    - automated_monthly_ferry_launch
+
+
+
+
+hparam_transfer:
+  title: "Reliable hparam transfer across scales"
+  description: |
+    XXX
+  dependencies:
+    - reliable_training_infra
+
+
+
+## Leverage Community
+
+midtraining_dataset_flow:
+    title: "Establish a flow for community contributions of midtraining datasets"
+    description: |
+        We should establish a flow for community contributions of midtraining datasets.
+        This should include:
+
+        - A clear specification of the data format and quality requirements
+        - A process for submitting datasets
+        - A review process for evaluating and accepting datasets
+        - A way to track contributions and give credit to contributors
+
+
+      Key challenge is how do we know the data is good quality and high value? Various checks:
+      To first order, it seems like most specific natural datasets are likely to be more valuable than web data.
+      But we should have some process for evaluating the data.
+
+
+
+
+## Grug
+
+grugformer:
+    title: 'Grugformer: "pure JAX" transformer implementation'
+    description: |
+
+      I (@dlwh) like my named tensors and stuff, but increasingly I think that the overhead of nn libraries isn't
+      worth it in JAX. Gotta use kernels, of course, but the need for Linear, Conv, etc abstractions seems less
+      important, and coding agents don't seem to care.
+
+      Haliax was designed around named axes, with the idea that every array should have semantic names. Partially
+      this was about "legibility" (I get confused about what `.sum(axis=1)` means, and have been bitten
+      by positional axes before), but also about making it easier to do complex sharding. In Haliax,
+      array axis names can be mapped to JAX's mesh axes, making it easier to reason about sharding. These
+      names get mapped to different mesh axes in different contexts (computation, parameters, etc).
+      Crucially, this meant that all arrays knew their "correct" sharding at all times.
+      At the time I thought it would be natural to experiment with different sharding strategies by remapping
+      axes. Now I understand that usually you just want to create a physical mesh axis for each kind of parallelism
+      you might want, and "logical" axes always map to the same physical axis (during computation, at least.)
+
+      But now that JAX has added [explicit mesh axes](https://docs.jax.dev/en/latest/notebooks/explicit-sharding.html),
+      that latter case for named axes seems less important: arrays will always know their shardings.
+
+      In #2171, I started a "pure JAX" transformer implementation that doesn't use any nn library.
+
+      We need to finish fitting it into the framework.
+
+    definition_of_done: |
+      We have a grugformer model that can be trained and evaluated in the levanter training framework.
+
+
+grugformer_speedrun:
+    title: [Grug] speedrun grugformer
+    description: |
+      We need to do a speedrun of [grugformer](#grugformer) to make sure it works end to end.
+    dependencies:
+        - grugformer
+
+
+grug_attention:
+    title: [Grug] wire up attention kernels
+    description: |
+      We need to wire up attention kernels for grugformer.
+    dependencies:
+        - grugformer
+
+
+grug_moe:
+    title: [Grug] wire up MOE for grugformer
+    description: |
+      We need to wire up MOE for grugformer. Goal is high MFU, load balancing, etc.
+    dependencies:
+        - grugformer
+        - fast_moe
+
