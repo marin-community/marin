@@ -40,6 +40,45 @@ Once authenticated for GCP, all other work happens through our
 truth for all cluster operations** -- you can think of this file as an alternative to managing your own SSH keys,
 remembering the IP address of the cluster head node, what port the dashboard is running on, etc. For more info about this template and connecting to specific clusters, see [README.md](https://github.com/marin-community/marin/blob/main/infra/README.md).
 
+### Ray token authentication
+
+Marin clusters use Ray token authentication (Ray >= 2.53). You will typically interact with clusters through SSH
+port-forwarding on `localhost`, but you still need the token.
+
+This is the easiest flow:
+
+1. Install the default token locally (or re-run `make dev_setup`):
+    ```bash
+    make get_ray_auth_token
+    ```
+    If this fails because the Secret Manager secret doesn’t exist yet, someone needs to create it once (see
+    `infra/README.md`).
+2. Authenticate to the cluster dashboard:
+    ```bash
+    # Starts SSH port-forwarding, copies the token to clipboard, and opens the dashboard.
+    uv run scripts/ray/cluster.py --cluster us-central2 auth
+    ```
+
+#### Using Ray CLI/SDK with token auth
+
+If you are using `uv run scripts/ray/cluster.py ...`, you generally don’t need to set any Ray auth env vars manually.
+
+However, if you want to use Ray’s CLI/SDK directly (e.g. `ray job submit ...`), you will need to set the appropriate
+environment variables for Ray token authentication.
+
+To set them for your current shell (sets `RAY_AUTH_MODE=token` and `RAY_AUTH_TOKEN_PATH=...`), ensure you have a Ray auth
+token locally at `~/.ray/auth_token` (or set `RAY_AUTH_TOKEN_PATH`) and then:
+
+```bash
+export RAY_AUTH_MODE=token
+export RAY_AUTH_TOKEN_PATH="${RAY_AUTH_TOKEN_PATH:-$HOME/.ray/auth_token}"
+```
+
+You can add these lines to your shell profile (e.g. `~/.bashrc` or `~/.zshrc`) if you want them to be set
+automatically in future terminal sessions.
+
+### Connecting to the Ray Cluster Dashboard and Submitting Jobs
+
 There are two steps necessary for 1) establishing a connection to the cluster and 2) submitting/monitoring jobs on the
 cluster. **You will need at least two terminal processes running for the following steps** (make sure to activate your
 `marin` Python environment as well):
@@ -48,7 +87,7 @@ cluster. **You will need at least two terminal processes running for the followi
 # [Terminal 1] Establish Ray dashboard connections (port-forwarding)
 uv run scripts/ray/cluster.py dashboard
 
-# [Browser] Navigate to the URL printed above (typically http://localhost:9999) for the overall dashboard.
+# [Browser] Navigate to the URL printed above for the overall dashboard.
 # Clicking a cluster opens its overview page with jobs/nodes/resources.
 ```
 
@@ -64,7 +103,7 @@ launching tasks -- see [test_integration_test.py](https://github.com/marin-commu
 ```bash
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
-uv run python marin/run/ray_run.py --no_wait --env_vars WANDB_API_KEY=${WANDB_API_KEY} -- python experiments/hello_world.py
+uv run lib/marin/src/marin/run/ray_run.py --no_wait --env_vars WANDB_API_KEY=${WANDB_API_KEY} -- python experiments/hello_world.py
 
 # Get Job Status
 uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml list-jobs
