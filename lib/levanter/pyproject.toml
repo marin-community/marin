@@ -108,7 +108,7 @@ test = [
   "pytest-asyncio",
   "soundfile",
   "librosa>=0.11.0",
-  "numba>=0.63.1",
+  "numba>=0.62.1",
   "tensorboardX>=2.6",
   "chex>=0.1.86",
   "httpx>=0.28.1",
@@ -133,9 +133,6 @@ dev = [
   "click>=8.0.0",
   "prompt_toolkit>=3.0.0",
 ]
-
-
-
 
 [tool.uv]
 default-groups = ["test", "docs", "dev"]

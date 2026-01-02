@@ -27,7 +27,7 @@ dependencies = [
     "jax==0.8.0",  # vllm-tpu currently requires this exact version
     "haliax",
     "levanter[serve]",
-    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "lm-eval@git+https://github.com/stanford-crfm/lm-evaluation-harness@03fa048e86c83855d4d5e270cbaac21196454ea8",
     "lxml[html_clean]",
     "lz4",
     "markdownify==0.12.1",
@@ -122,6 +122,14 @@ conflicts = [
         { extra = "vllm" },
         { extra = "cuda12" },
     ],
+    [
+        { extra = "cpu" },
+        { extra = "cuda12" },
+    ],
+    [
+        { extra = "tpu" },
+        { extra = "cuda12" },
+    ],
 ]
 
 
@@ -140,7 +148,7 @@ rl = [
 ]
 
 eval = [
-    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
+    "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@03fa048e86c83855d4d5e270cbaac21196454ea8",
 ]
 
 cuda12 = ["jax[cuda12]==0.8.0", "torch>=2.7.0"]
@@ -157,12 +165,10 @@ torch = [
     { index = "pytorch-cpu", extra="tpu" },
     # CUDA12 index only when --extra cuda12
     { index = "pytorch-cu128", extra = "cuda12" },
-    { index = "pytorch-cu128", extra = "vllm" },
-    # GPU index only when --extra gpu
     { index = "pytorch-cu128", extra = "gpu" },
+    { index = "pytorch-cu128", extra = "vllm" },
 ]
 resiliparse = { index = "marin-resiliparse" }
-
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
