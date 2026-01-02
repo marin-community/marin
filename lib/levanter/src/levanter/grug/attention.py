@@ -169,7 +169,15 @@ def _blocksparse_attention(
         # (causal/window/segments) and block-sparse patterns.
         raise NotImplementedError("Dense boolean masks are not supported by ejkernel blocksparse attention.")
 
-    mask_info = MaskInfo.from_segments(q_segment_ids, kv_segment_ids) if q_segment_ids is not None else None
+    mask_info = (
+        MaskInfo.from_segments(
+            q_segment_ids,
+            kv_segment_ids,
+            batch_axis_name=("replica", "data"),
+        )
+        if q_segment_ids is not None
+        else None
+    )
 
     out = ej_blocksparse_attention(
         q.transpose(0, 2, 1, 3),
