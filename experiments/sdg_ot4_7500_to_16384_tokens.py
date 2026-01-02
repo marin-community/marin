@@ -30,11 +30,13 @@ open_thoughts_4_math = ExecutorStep(
     fn=download_hf,
     config=DownloadConfig(
         hf_dataset_id="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated",
-        revision="0d6d1f4",
+        # revision="0d6d1f4",  # 4 parquets version
+        revision="6683ed6",  # 100 parquets version
         gcs_output_path=this_output_path(),
         wait_for_completion=True,
     ),
-    override_output_path="raw/marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-0d6d1f4",
+    # override_output_path="raw/marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-0d6d1f4",  # 4 parquets version
+    override_output_path="raw/marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-6683ed6",  # 100 parquets version
     pip_dependency_groups=["vllm"],
 ).cd("data")
 
