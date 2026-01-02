@@ -553,7 +553,7 @@ def run_inference(prompts: list[str]):
     model_name = "meta-llama/Llama-3.1-8B-Instruct"
     model_type = "llama"
     max_input_tokens = 4096
-    max_output_tokens = 512
+    max_output_tokens = 1024
 
     logger.info(f"Initializing vLLM with model: {model_name}")
 
