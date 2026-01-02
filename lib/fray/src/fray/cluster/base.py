@@ -377,7 +377,7 @@ class ResourceConfig:
         return ResourceConfig(device=CpuConfig(), **kwargs)
 
 
-@dataclass
+@dataclass(frozen=True)
 class EnvironmentConfig:
     """Job environment configuration.
 

@@ -1,12 +1,19 @@
-name: Marin - Tests
+name: Zephyr - Tests
 on:
   push:
     branches:
       - main
+    paths:
+      - lib/zephyr/**
+      - uv.lock
+      - .github/workflows/zephyr-unit-tests.yaml
   pull_request:
     branches:
       - main
-
+    paths:
+      - lib/zephyr/**
+      - uv.lock
+      - .github/workflows/zephyr-unit-tests.yaml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -19,11 +26,10 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.12"]
-        node-version: ["20.10.0"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-      
+
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v4
         with:
@@ -38,16 +44,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          uv sync --package marin --extra cpu --group test --frozen
+          uv sync --package zephyr --group test --frozen
 
-      - name: Set up Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v3
-        with:
-          node-version: ${{ matrix.node-version }}
-      
       - name: Test with pytest
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # Ensure we select the CPU torch wheels (and JAX CPU) for unit tests on GitHub runners.
-          PYTHONPATH=tests:. uv run --package marin --extra cpu --frozen pytest -n 2 --dist=worksteal --durations=5 --tb=short -m 'not slow and not tpu_ci' -v tests/
+          # important: don't cd into lib/zephyr so that ray uv integration doesn't freak out
+          uv run --package zephyr --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v lib/zephyr/tests/
