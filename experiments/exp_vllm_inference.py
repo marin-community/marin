@@ -71,7 +71,8 @@ def run_inference(prompts: list[str]):
 
     # Create sampling params
     sampling_params = SamplingParams(
-        temperature=0.0,
+        temperature=1.0,
+        top_k=4096,
         n=1,
         max_tokens=max_output_tokens,
         stop=get_stop_tokens(model_type),
@@ -80,6 +81,7 @@ def run_inference(prompts: list[str]):
     )
 
     logger.info(f"{sampling_params.temperature=}")
+    logger.info(f"{sampling_params.top_k=}")
     outputs = llm.generate(prompts, sampling_params)
 
     results = []
