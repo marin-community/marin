@@ -30,6 +30,7 @@ import requests
 import yaml
 
 from .dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
+from .auth import maybe_fetch_local_ray_token
 
 logger = logging.getLogger(__name__)
 
@@ -313,10 +314,15 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def check_dashboard(cluster_name: str, dashboard_port: int) -> tuple[str, bool]:
-        """Check if a dashboard is accessible."""
+        """Check if dashboard is reachable via the HTTP interface.
+
+        With token auth enabled, this may return 401/403 without a token; that's
+        still a useful signal that the tunnel is correctly targeting a live
+        dashboard process.
+        """
         try:
             response = requests.get(f"http://localhost:{dashboard_port}/api/version", timeout=3)
-            return (cluster_name, response.status_code == 200)
+            return (cluster_name, response.status_code in {200, 401, 403})
         except (requests.ConnectionError, requests.Timeout):
             return (cluster_name, False)
 
@@ -396,9 +402,10 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
     # Save original environment variables
     original_env = {
         "RAY_ADDRESS": os.environ.get("RAY_ADDRESS"),
-        "RAY_API_SERVER_ADDRESS": os.environ.get("RAY_API_SERVER_ADDRESS"),
         "RAY_DASHBOARD_ADDRESS": os.environ.get("RAY_DASHBOARD_ADDRESS"),
         "RAY_GCS_ADDRESS": os.environ.get("RAY_GCS_ADDRESS"),
+        "RAY_AUTH_MODE": os.environ.get("RAY_AUTH_MODE"),
+        "RAY_AUTH_TOKEN_PATH": os.environ.get("RAY_AUTH_TOKEN_PATH"),
     }
 
     # For single cluster, set Ray environment variables
@@ -408,9 +415,17 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
 
         # Set new values
         os.environ["RAY_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
-        os.environ["RAY_API_SERVER_ADDRESS"] = f"ray://localhost:{ports.api_port}"
         os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
         os.environ["RAY_GCS_ADDRESS"] = f"localhost:{ports.gcs_port}"
+
+    # Marin clusters assume token auth; always enable token mode client-side and
+    # ensure a token is available. We assume all Marin clusters use the same
+    # Secret Manager secret within the same GCP project, so it's OK to auto-fetch
+    # the token if it isn't already present locally.
+    gcp_project = next(iter(clusters.values())).project
+    token_path = maybe_fetch_local_ray_token(gcp_project=gcp_project)
+    os.environ["RAY_AUTH_TOKEN_PATH"] = token_path
+    os.environ["RAY_AUTH_MODE"] = "token"
 
     try:
         # Initialize Ray if requested

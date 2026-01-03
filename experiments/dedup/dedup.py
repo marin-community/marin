@@ -90,7 +90,6 @@ def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
         fn=run_dedup,
         config=config,
         description=f"Run dedupe on {dataset.name}",
-        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
 

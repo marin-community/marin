@@ -183,7 +183,6 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
         config=config,
-        pip_dependency_groups=["tokenize_train"],
     )
 
 
@@ -428,7 +427,6 @@ def default_train(
         ),
         fn=run_levanter_train_lm,
         config=config,
-        pip_dependency_groups=["tokenize_train"],
         override_output_path=override_output_path,
     )
 
