@@ -83,11 +83,12 @@ impl ActorHost {
             }
 
             // Create a tuple of arguments
-            let args_tuple = PyTuple::new(py, &unpickled_args);
+            let args_tuple = PyTuple::new(py, &unpickled_args)
+                .map_err(|e| format!("Failed to create args tuple: {}", e))?;
 
             // Instantiate the class
             let instance = class
-                .call1(args_tuple)
+                .call1(&args_tuple)
                 .map_err(|e| format!("Failed to instantiate class: {}", e))?;
 
             // Pickle the instance
@@ -95,8 +96,8 @@ impl ActorHost {
                 .call1((instance,))
                 .map_err(|e| format!("Failed to pickle instance: {}", e))?;
 
-            let instance_bytes: &PyBytes = pickled_instance
-                .downcast()
+            let instance_bytes = pickled_instance
+                .downcast::<PyBytes>()
                 .map_err(|e| format!("Failed to convert pickled instance to bytes: {}", e))?;
 
             // Create the actor instance
@@ -230,10 +231,17 @@ impl ActorHost {
             };
 
             // Create a tuple of arguments
-            let args_tuple = PyTuple::new(py, &unpickled_args);
+            let args_tuple = match PyTuple::new(py, &unpickled_args) {
+                Ok(tuple) => tuple,
+                Err(err) => {
+                    return TaskResult::Error {
+                        traceback: format!("Failed to create args tuple: {}", err),
+                    };
+                }
+            };
 
             // Call the method
-            let result = match method.call1(args_tuple) {
+            let result = match method.call1(&args_tuple) {
                 Ok(res) => res,
                 Err(err) => {
                     return TaskResult::Error {
@@ -252,7 +260,7 @@ impl ActorHost {
                 }
             };
 
-            let result_bytes: &PyBytes = match pickled_result.downcast() {
+            let result_bytes = match pickled_result.downcast::<PyBytes>() {
                 Ok(bytes) => bytes,
                 Err(err) => {
                     return TaskResult::Error {
@@ -271,7 +279,7 @@ impl ActorHost {
                 }
             };
 
-            let instance_bytes: &PyBytes = match pickled_instance.downcast() {
+            let instance_bytes = match pickled_instance.downcast::<PyBytes>() {
                 Ok(bytes) => bytes,
                 Err(err) => {
                     return TaskResult::Error {

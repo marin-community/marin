@@ -10,6 +10,7 @@ pub use server::{run_coordinator_server, CoordinatorImpl};
 pub use task_scheduler::{TaskScheduler, TaskState};
 pub use worker_pool::{WorkerPool, WorkerState};
 
+use crate::worker::actor_host::ActorHost;
 use std::sync::Arc;
 
 /// Main coordinator struct aggregating all component subsystems
@@ -19,6 +20,7 @@ pub struct Coordinator {
     pub task_scheduler: TaskScheduler,
     pub actor_registry: ActorRegistry,
     pub worker_pool: WorkerPool,
+    pub actor_host: Arc<ActorHost>,
 }
 
 impl Coordinator {
@@ -29,6 +31,7 @@ impl Coordinator {
             task_scheduler: TaskScheduler::new(),
             actor_registry: ActorRegistry::new(),
             worker_pool: WorkerPool::new(),
+            actor_host: Arc::new(ActorHost::new()),
         }
     }
 

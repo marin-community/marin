@@ -16,6 +16,8 @@
 
 
 import logging
+import socket
+import time
 
 import pytest
 import ray
@@ -50,3 +52,26 @@ def cluster(request, local_cluster, ray_cluster):
         return local_cluster
     elif request.param == "ray":
         return ray_cluster
+
+
+@pytest.fixture(scope="module")
+def rpc_coordinator():
+    """Start RPC coordinator server for testing."""
+    # Find free port
+    with socket.socket() as s:
+        s.bind(("", 0))
+        port = s.getsockname()[1]
+
+    addr = f"127.0.0.1:{port}"
+
+    # Start coordinator using the Rust function
+    from fray_rpc import start_coordinator_server
+
+    start_coordinator_server(addr)
+
+    # Wait a bit more for server to be fully ready
+    time.sleep(1)
+
+    yield addr
+
+    # Cleanup happens automatically with daemon thread

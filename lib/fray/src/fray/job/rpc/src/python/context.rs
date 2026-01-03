@@ -42,7 +42,10 @@ impl RustyContext {
 
         // Connect to coordinator (allow Python to handle potential blocking)
         py.allow_threads(|| {
-            let client = runtime.block_on(async { CoordinatorClient::connect(addr).await });
+            let client = runtime.block_on(async {
+                CoordinatorClient::connect(addr).await
+                    .map_err(|e| e.to_string())
+            });
 
             client.map(|c| Self {
                 coordinator_addr: coordinator_addr.clone(),
@@ -74,7 +77,7 @@ impl RustyContext {
         let cloudpickle = PyModule::import(py, "cloudpickle")?;
         let dumps = cloudpickle.getattr("dumps")?;
         let pickled = dumps.call1((obj,))?;
-        let pickled_bytes: &PyBytes = pickled.downcast()?;
+        let pickled_bytes = pickled.downcast::<PyBytes>()?;
         let data = pickled_bytes.as_bytes().to_vec();
 
         // Send to coordinator
@@ -82,7 +85,10 @@ impl RustyContext {
         let object_id = py
             .allow_threads(|| {
                 self.runtime
-                    .block_on(async move { client.lock().put(data).await })
+                    .block_on(async move {
+                        client.lock().put(data).await
+                            .map_err(|e| e.to_string())
+                    })
             })
             .map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("put failed: {}", e))
@@ -128,7 +134,10 @@ impl RustyContext {
                     let data = py
                         .allow_threads(|| {
                             self.runtime
-                                .block_on(async move { client.lock().get(object_id).await })
+                                .block_on(async move {
+                                    client.lock().get(object_id).await
+                                        .map_err(|e| e.to_string())
+                                })
                         })
                         .map_err(|e| {
                             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
@@ -158,7 +167,10 @@ impl RustyContext {
         let result_data = py
             .allow_threads(|| {
                 self.runtime
-                    .block_on(async move { client.lock().get_task_result(task_id).await })
+                    .block_on(async move {
+                        client.lock().get_task_result(task_id).await
+                            .map_err(|e| e.to_string())
+                    })
             })
             .map_err(|e| {
                 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
@@ -203,7 +215,7 @@ impl RustyContext {
         }
 
         let pickled = dumps.call1((payload_list,))?;
-        let pickled_bytes: &PyBytes = pickled.downcast()?;
+        let pickled_bytes = pickled.downcast::<PyBytes>()?;
         let payload = pickled_bytes.as_bytes().to_vec();
 
         // Submit task
@@ -212,7 +224,10 @@ impl RustyContext {
 
         py.allow_threads(|| {
             self.runtime
-                .block_on(async move { client.lock().submit_task(task_id, payload).await })
+                .block_on(async move {
+                    client.lock().submit_task(task_id, payload).await
+                        .map_err(|e| e.to_string())
+                })
         })
         .map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
@@ -233,7 +248,7 @@ impl RustyContext {
     ///
     /// Returns:
     ///     A tuple of (ready, pending) future lists.
-    #[pyo3(signature = (futures, num_returns=1, timeout=None))]
+    #[pyo3(signature = (futures, num_returns=1, _timeout=None))]
     fn wait(
         &self,
         py: Python,
@@ -250,10 +265,12 @@ impl RustyContext {
 
         // Call coordinator wait
         let client = self.client.clone();
+        let task_ids_clone = task_ids.clone();
         let ready_ids = py
             .allow_threads(|| {
                 self.runtime.block_on(async move {
-                    client.lock().wait_tasks(task_ids.clone(), num_returns as u32).await
+                    client.lock().wait_tasks(task_ids_clone, num_returns as u32).await
+                        .map_err(|e| e.to_string())
                 })
             })
             .map_err(|e| {
@@ -291,7 +308,7 @@ impl RustyContext {
     ///
     /// Returns:
     ///     A RustyActorHandle for interacting with the actor.
-    #[pyo3(signature = (actor_class, *args, name=None, get_if_exists=false, lifetime=None, preemptible=true, **kwargs))]
+    #[pyo3(signature = (actor_class, *args, name=None, get_if_exists=false, _lifetime=None, _preemptible=true, **_kwargs))]
     fn create_actor(
         &self,
         py: Python,
@@ -305,20 +322,35 @@ impl RustyContext {
     ) -> PyResult<RustyActorHandle> {
         let actor_name = name.unwrap_or_else(|| format!("actor_{}", uuid::Uuid::new_v4()));
 
-        // Check if actor exists
-        if get_if_exists {
-            let client = self.client.clone();
-            let name_clone = actor_name.clone();
-            let existing = py
-                .allow_threads(|| {
-                    self.runtime
-                        .block_on(async move { client.lock().get_actor_by_name(&name_clone).await })
-                })
-                .ok()
-                .flatten();
+        // Check if actor with this name already exists
+        let client = self.client.clone();
+        let name_clone = actor_name.clone();
+        let existing = py
+            .allow_threads(|| {
+                self.runtime
+                    .block_on(async move {
+                        client.lock().get_actor_by_name(&name_clone).await
+                            .map_err(|e| e.to_string())
+                    })
+            })
+            .ok()
+            .flatten();
 
-            if let Some(actor_id) = existing {
-                return Ok(RustyActorHandle::new_from_actor_id(actor_id, actor_name));
+        if let Some(actor_id) = existing {
+            if get_if_exists {
+                // Return existing actor
+                return Ok(RustyActorHandle::new_from_actor_id(
+                    actor_id,
+                    actor_name,
+                    self.coordinator_addr.clone(),
+                    self.runtime.clone(),
+                    self.client.clone(),
+                ));
+            } else {
+                // get_if_exists=False but actor exists - raise error
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    format!("Actor with name '{}' already exists", actor_name)
+                ));
             }
         }
 
@@ -326,16 +358,16 @@ impl RustyContext {
         let cloudpickle = PyModule::import(py, "cloudpickle")?;
         let dumps = cloudpickle.getattr("dumps")?;
 
-        // Serialize class and args
-        let class_name = actor_class
-            .getattr("__name__")?
-            .extract::<String>()
-            .unwrap_or_else(|_| "UnknownActor".to_string());
+        // Pickle the class definition
+        let pickled_class = dumps.call1((actor_class,))?;
+        let class_bytes = pickled_class.downcast::<PyBytes>()?;
+        let class_data = class_bytes.as_bytes().to_vec();
 
+        // Pickle the arguments
         let mut arg_bytes = Vec::new();
         for arg in args.iter() {
             let pickled = dumps.call1((arg,))?;
-            let bytes: &PyBytes = pickled.downcast()?;
+            let bytes = pickled.downcast::<PyBytes>()?;
             arg_bytes.push(bytes.as_bytes().to_vec());
         }
 
@@ -345,7 +377,7 @@ impl RustyContext {
         let actor_id = py
             .allow_threads(|| {
                 self.runtime.block_on(async move {
-                    client.lock().create_actor(class_name, arg_bytes, name_clone).await
+                    client.lock().create_actor(class_data, arg_bytes, name_clone).await
                         .map_err(|e| e.to_string())
                 })
             })
@@ -356,7 +388,13 @@ impl RustyContext {
                 ))
             })?;
 
-        Ok(RustyActorHandle::new_from_actor_id(actor_id, actor_name))
+        Ok(RustyActorHandle::new_from_actor_id(
+            actor_id,
+            actor_name,
+            self.coordinator_addr.clone(),
+            self.runtime.clone(),
+            self.client.clone(),
+        ))
     }
 
     /// Get the coordinator address.

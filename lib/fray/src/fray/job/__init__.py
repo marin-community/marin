@@ -21,6 +21,7 @@ from fray.job.context import (
     GeneratorFuture,
     JobContext,
     RayContext,
+    RustyContext,
     SimpleActor,
     SyncContext,
     ThreadActorHandle,
@@ -31,6 +32,9 @@ from fray.job.context import (
     get_default_job_ctx,
 )
 
+# Alias for backwards compatibility
+RpcContext = RustyContext
+
 __all__ = [
     "ActorHandle",
     "ActorMethod",
@@ -38,6 +42,8 @@ __all__ = [
     "GeneratorFuture",
     "JobContext",
     "RayContext",
+    "RpcContext",
+    "RustyContext",
     "SimpleActor",
     "SyncContext",
     "ThreadActorHandle",

@@ -97,10 +97,17 @@ pub fn execute_task_impl(task: Task) -> TaskResult {
         }
 
         // Create a tuple of arguments
-        let args_tuple = PyTuple::new(py, &unpickled_args);
+        let args_tuple = match PyTuple::new(py, &unpickled_args) {
+            Ok(tuple) => tuple,
+            Err(err) => {
+                return TaskResult::Error {
+                    traceback: format!("Failed to create args tuple: {}", format_py_error(py, err)),
+                };
+            }
+        };
 
         // Call the function with the arguments
-        let result = match func.call1(args_tuple) {
+        let result = match func.call1(&args_tuple) {
             Ok(res) => res,
             Err(err) => {
                 return TaskResult::Error {
@@ -120,7 +127,7 @@ pub fn execute_task_impl(task: Task) -> TaskResult {
         };
 
         // Extract bytes from the pickled result
-        let result_bytes: &PyBytes = match pickled_result.downcast() {
+        let result_bytes = match pickled_result.downcast::<PyBytes>() {
             Ok(bytes) => bytes,
             Err(err) => {
                 return TaskResult::Error {

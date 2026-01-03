@@ -105,14 +105,14 @@ impl CoordinatorClient {
 
     pub async fn create_actor(
         &mut self,
-        class_name: String,
+        class_data: Vec<u8>,
         args: Vec<Vec<u8>>,
         name: String,
     ) -> Result<ActorId, Box<dyn std::error::Error>> {
         let response = self
             .client
             .create_actor(ActorSpec {
-                class_name,
+                class_def: class_data,
                 args,
                 kwargs: vec![],
                 name,
@@ -167,5 +167,25 @@ impl CoordinatorClient {
             .await?;
 
         Ok(())
+    }
+
+    pub async fn call_actor_method(
+        &mut self,
+        actor_id: ActorId,
+        method_name: String,
+        args: Vec<Vec<u8>>,
+    ) -> Result<TaskId, Box<dyn std::error::Error>> {
+        let response = self
+            .client
+            .call_actor_method(ActorMethodCall {
+                actor_id: actor_id.to_proto_bytes().to_vec(),
+                method_name,
+                args,
+                kwargs: vec![],
+            })
+            .await?;
+
+        let task_ref = response.into_inner();
+        Ok(TaskId::from_proto_bytes(&task_ref.id)?)
     }
 }

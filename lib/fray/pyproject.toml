@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "maturin>=1.0,<2.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -26,6 +26,7 @@ fray = "fray.cli:main"
 
 [project.optional-dependencies]
 ray = ["ray==2.45"]
+rpc = []  # Rust extension has no Python dependencies
 
 [dependency-groups]
 fray_test = [
@@ -33,7 +34,8 @@ fray_test = [
     "pip", # ray requires pip to be installed
     "pytest-timeout",
     "pytest>=8.3.2",
-    "ray[default]"
+    "ray[default]",
+    "maturin>=1.0,<2.0",
 ]
 fray_tpu_test = ["jax[tpu]", { include-group = "fray_test" }]
 
@@ -41,3 +43,8 @@ dev = [{ include-group = "fray_test" }]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fray"]
+
+[tool.maturin]
+module-name = "fray_rpc"
+python-source = "src"
+manifest-path = "src/fray/job/rpc/Cargo.toml"

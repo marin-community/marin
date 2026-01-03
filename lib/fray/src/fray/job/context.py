@@ -33,6 +33,11 @@ try:
 except ImportError:
     ray = None
 
+try:
+    from fray_rpc import RustyContext
+except ImportError:
+    RustyContext = None
+
 logger = logging.getLogger(__name__)
 
 # Context variable for the current job context, shared across all calls to fray_job_ctx().
@@ -475,21 +480,24 @@ def get_default_job_ctx() -> JobContext:
 
 
 def create_job_ctx(
-    context_type: Literal["ray", "threadpool", "sync", "auto"] = "auto",
+    context_type: Literal["ray", "threadpool", "sync", "rpc", "auto"] = "auto",
     max_workers: int = 1,
+    coordinator_addr: str = "127.0.0.1:50051",
     **ray_options,
 ) -> JobContext:
     """Create a new job context.
 
     Args:
-        context_type: Type of context (ray, threadpool, sync, or auto)
+        context_type: Type of context (ray, threadpool, sync, rpc, or auto)
         max_workers: Maximum number of worker threads (threadpool only)
+        coordinator_addr: Coordinator address for rpc backend (default: "127.0.0.1:50051")
         **ray_options: Additional Ray remote options
 
     Examples:
         >>> context = create_job_ctx("sync")
         >>> context = create_job_ctx("threadpool", max_workers=4)
         >>> context = create_job_ctx("ray")
+        >>> context = create_job_ctx("rpc", coordinator_addr="localhost:50051")
     """
     if context_type == "auto":
         if ray and ray.is_initialized():
@@ -504,8 +512,14 @@ def create_job_ctx(
         return ThreadContext(max_workers=workers)
     elif context_type == "ray":
         return RayContext(ray_options=ray_options)
+    elif context_type == "rpc":
+        if RustyContext is None:
+            raise ImportError(
+                "fray_rpc module not found. Build with: " "maturin develop --manifest-path src/fray/job/rpc/Cargo.toml"
+            )
+        return RustyContext(coordinator_addr)
     else:
-        raise ValueError(f"Unknown context type: {context_type}. Supported: 'ray', 'threadpool', 'sync'")
+        raise ValueError(f"Unknown context type: {context_type}. Supported: 'ray', 'threadpool', 'sync', 'rpc'")
 
 
 class SimpleActor:
