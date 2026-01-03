@@ -4,21 +4,561 @@
 # Schema:
 # id:
 # issue: int | str | None
+# candidate_id: int | None  # best-guess issue match; verify before copying into issue:
+# candidate_score: float | None  # match confidence (0..1)
 #  title: <string>
 #  type: literal[epic, task, experiment, milestone] | None
+#  status: literal[planned, active, done] | None
+#  owners: list[str] | None  # GitHub handles
+#  owner_names: list[str] | None  # free-form names when handle unknown
+#  target_date: YYYY-MM-DD | None
+#  labels: list[str] | None
 #  description: <string>
 #  dependencies:
 #    - <id>
 #  definition_of_done: <string>
 
+meta:
+  owner_aliases:
+    abhi: abhinavg4
+    abhinav: abhinavg4
+    ahmed: ahmeda14960
+    chris: BabyChouSr
+    david: dlwh
+    herumb: krypticmouse
+    kevin: AlienKevin
+    niki: nikil-ravi
+    percy: percyliang
+    will: Helw150
+    rohith: RohithKuditipudi
+    rafal: ravwojdyla
+    rav: ravwojdyla
+    romain: yonromai
+    russell: rjpower
+    rui: ruili33
+    calvin: Calvin-Xu
+    "moo jin": moojink
+
+milestone_2025_12_basic_ingredients:
+  title: "December 2025: Basic ingredients (evals, scaling laws, MoEs, long-context, SFT, RL)"
+  type: milestone
+  status: planned
+  target_date: "2025-12-31"
+  labels: [timeline]
+  dependencies:
+    - pretraining_evals_and_models
+    - dense_scaling_laws
+    - moe_scaling_laws_issue
+    - long_context_data_training_evals
+    - sft_existing_datasets_models
+    - dedup_pipeline_robust
+    - fluster_design_doc
+    - speedrun_polish
+    - marin_paper
+    - ferry_muhonh_feistel_comparison
+    - rl_math_llama_qwen_8b
+    - release_multilingual_8b
+
+
+milestone_2026_01_scaling_up:
+  title: "January 2026: Scaling up MoEs, new architectures, aggressive data mixing, SFT + RL"
+  type: milestone
+  status: planned
+  target_date: "2026-01-31"
+  labels: [timeline]
+  dependencies:
+    - modernized_pythia
+    - data_curation_100_experiments
+    - train_8x7b
+    - moe_mfu_match_maxtext_8x7b
+    - attention_sinks_gated_deltanet
+    - effective_gdn_implementation
+    - posttraining_evals_and_models
+    - sft_synthetic_datasets
+    - rl_marin_32b_more_envs
+    - vlms_multimodality
+    - support_nvidia_gpu_clusters
+    - fluster_scheduler_mvp
+    - data_ingestion_pipeline_scale
+    - rl_moes_multi_environment
+    - openthoughts_4_dataset
+    - gruggpt_experiment
+    - speedrun_multiple_tracks
+    - rl_speedrun
+    - data_efficiency_speedrun
+
+
+milestone_2026_02_beat_nemotron_3:
+  title: "February 2026: Beat Nemotron 3"
+  type: milestone
+  status: planned
+  target_date: "2026-02-28"
+  labels: [timeline]
+  dependencies:
+    - train_50b_moe
+
+
+milestone_2026_03_long_running_automation:
+  title: "March 2026: Large-model consistency + automated long-running experiments"
+  type: milestone
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline]
+  dependencies:
+    - regression_mix_optimization
+    - rl_on_50b_moe
+    - beat_qwen3_32b_with_32b
+    - automated_ingestion_datasets_environments
+    - automated_ingestion_architectures_algorithms
+    - agent_driven_parameter_sweep_demo
+
+
+milestone_2026_05_100b_moe:
+  title: "May 2026: Train and RL 100B MoE"
+  type: milestone
+  status: planned
+  target_date: "2026-05-31"
+  labels: [timeline]
+  dependencies:
+    - train_100b_moe
+    - data_tools_and_mixture_ready
+    - rl_100b_moe
+
+
+pretraining_evals_and_models:
+  title: "Comprehensive pretraining evals + models (blog post)"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-01-15"
+  issue: 1602
+  labels: [timeline, evals, pretraining, agent_friendly]
+
+
+dense_scaling_laws:
+  title: "Stable and usable scaling laws for dense models"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2025-12-16"
+  issue: 2166
+  labels: [timeline, scaling_laws, pretraining, agent_friendly]
+
+
+moe_scaling_laws_issue:
+  title: "Stable scaling laws for MoE"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2025-12-28"
+  issue: 2167
+  labels: [timeline, scaling_laws, moe, agent_friendly]
+
+
+ferry_muhonh_feistel_comparison:
+  title: "Ferry: comparison between 8B baseline and MuonH+feistel"
+  type: task
+  status: done
+  owners: [Helw150]
+  target_date: "2025-12-08"
+  issue: 1839
+  labels: [timeline, ferry]
+
+
+long_context_data_training_evals:
+  title: "Initial long context data + training + evals"
+  type: epic
+  status: active
+  owners: [dlwh]
+  target_date: "2025-12-10"
+  issue: 2062
+  labels: [timeline, long_context, posttraining]
+  dependencies:
+    - long_context_data
+    - long_context_evals
+
+
+sft_existing_datasets_models:
+  title: "SFT model on {Marin,Llama,Qwen} {8B,32B} on best existing datasets"
+  type: epic
+  status: planned
+  owners: [dlwh, moojink]
+  target_date: "2025-12-15"
+  issue: 2198
+  labels: [timeline, sft, posttraining]
+
+
+rl_math_llama_qwen_8b:
+  title: "RL Llama/Qwen 8B on math (match Tinker/verl)"
+  type: task
+  status: done
+  owners: [dlwh, AlienKevin]
+  target_date: "2025-12-15"
+  issue: 2169
+  labels: [timeline, rl]
+
+
+dedup_pipeline_robust:
+  title: "Dedup pipeline works robustly for basic configurations"
+  type: task
+  status: planned
+  target_date: "2025-12-31"
+  labels: [timeline, data_pipeline, newbie_friendly, agent_friendly]
+
+
+fluster_design_doc:
+  title: "Design doc for Fluster cluster platform"
+  type: task
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-01-07"
+  labels: [timeline, infra]
+
+
+speedrun_polish:
+  title: "Polished speedrun experience"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu, Helw150]
+  target_date: "2025-12-08"
+  labels: [timeline, community, speedrun]
+  dependencies:
+    - speedrun_polish_issue_2153
+    - speedrun_polish_issue_1981
+
+
+speedrun_polish_issue_2153:
+  title: "Speedrun polish (#2153)"
+  type: task
+  status: planned
+  owners: [Helw150]
+  issue: 2153
+  labels: [timeline, community, speedrun]
+
+
+speedrun_polish_issue_1981:
+  title: "Speedrun polish (#1981)"
+  type: task
+  status: planned
+  owners: [Helw150]
+  issue: 1981
+  labels: [timeline, community, speedrun]
+
+
+marin_paper:
+  title: "Marin paper"
+  type: epic
+  status: planned
+  owners: [percyliang]
+  target_date: "2025-12-31"
+  labels: [timeline, community]
+
+
+release_multilingual_8b:
+  title: "Release multilingual 8B"
+  type: task
+  status: done
+  owners: [Helw150]
+  target_date: "2025-12-08"
+  issue: 1457
+  labels: [timeline, release]
+
+
+modernized_pythia:
+  title: "Modernized Pythia"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-01-05"
+  issue: 1337
+  labels: [timeline, pretraining]
+
+
+data_curation_100_experiments:
+  title: "Run 100 data curation experiments, fit regression"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-01-31"
+  labels: [timeline, data, scaling_laws, agent_friendly]
+
+
+train_8x7b:
+  title: "Train 8x7B"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-01-31"
+  issue: 2165
+  labels: [timeline, pretraining, moe]
+
+
+moe_mfu_match_maxtext_8x7b:
+  title: "MoE MFU matches MaxText on 8x7B"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-01-15"
+  issue: 1608
+  labels: [timeline, moe, infra]
+
+
+attention_sinks_gated_deltanet:
+  title: "Attention sinks"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu]
+  target_date: "2026-01-15"
+  issue: 1593
+  labels: [timeline, architecture, speedrun]
+
+
+effective_gdn_implementation:
+  title: "Effective Gated DeltaNet (GDN) implementation"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu]
+  target_date: "2026-01-15"
+  issue: null
+  labels: [timeline, architecture, agent_friendly]
+  description: |
+    Make a high-performance, correct Gated DeltaNet implementation suitable for training runs and speedruns.
+
+    Key performance bottleneck tracking issue: #1884.
+  dependencies:
+    - gdn_perf_bottleneck
+
+
+gdn_perf_bottleneck:
+  title: "GDN performance bottleneck"
+  type: task
+  status: planned
+  owners: [Calvin-Xu]
+  issue: 1884
+  labels: [architecture, performance]
+
+
+posttraining_evals_and_models:
+  title: "Comprehensive post-training evals + models"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-01-15"
+  issue: 1601
+  labels: [timeline, evals, posttraining, agent_friendly]
+
+
+sft_synthetic_datasets:
+  title: "SFT on new synthetic datasets"
+  type: epic
+  status: planned
+  owners: [dlwh, moojink]
+  target_date: "2026-01-15"
+  issue: 2277
+  labels: [timeline, sft, synthetic_data, agent_friendly]
+
+
+rl_marin_32b_more_envs:
+  title: "RL works on Marin 32B with more environments"
+  type: epic
+  status: planned
+  owners: [dlwh, AlienKevin]
+  target_date: "2026-01-15"
+  labels: [timeline, rl]
+
+
+vlms_multimodality:
+  title: "Multimodality - VLMs"
+  type: epic
+  status: planned
+  owners: [dlwh, ruili33]
+  target_date: "2026-01-31"
+  labels: [timeline, multimodal]
+
+
+support_nvidia_gpu_clusters:
+  title: "Support NVIDIA GPU clusters"
+  type: epic
+  status: planned
+  target_date: "2026-01-31"
+  issue: null
+  labels: [timeline, infra]
+
+
+fluster_scheduler_mvp:
+  title: "Fluster: central scheduler; users request resources on any cluster"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-01-31"
+  labels: [timeline, infra]
+
+
+data_ingestion_pipeline_scale:
+  title: "Data ingestion pipeline works reliably & at scale"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-01-31"
+  labels: [timeline, infra, data_pipeline]
+
+
+rl_moes_multi_environment:
+  title: "RL using MoEs, multi-environment"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  target_date: "2026-01-31"
+  labels: [timeline, rl, infra]
+
+
+openthoughts_4_dataset:
+  title: "New OpenThoughts 4 dataset"
+  type: epic
+  status: planned
+  owners: [dlwh, moojink]
+  target_date: "2026-01-15"
+  issue: null
+  labels: [timeline, data, community]
+
+
+gruggpt_experiment:
+  title: "GrugGPT experiment"
+  type: experiment
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-01-31"
+  labels: [timeline, grug, community]
+
+
+speedrun_multiple_tracks:
+  title: "Generalize speedrun to multiple tracks"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu, Helw150]
+  target_date: "2026-01-31"
+  labels: [timeline, community, speedrun]
+
+
+rl_speedrun:
+  title: "RL speedrun"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu, Helw150]
+  target_date: "2026-01-31"
+  labels: [timeline, community, speedrun, rl]
+
+
+data_efficiency_speedrun:
+  title: "Data efficiency speedrun"
+  type: epic
+  status: planned
+  owners: [Calvin-Xu, Helw150]
+  target_date: "2026-01-31"
+  labels: [timeline, community, speedrun, data]
+
+
+train_50b_moe:
+  title: "Train 50B MoE"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-02-28"
+  labels: [timeline, pretraining, moe]
+
+
+regression_mix_optimization:
+  title: "Regression-based data mix optimization based on ablations"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-03-15"
+  labels: [timeline, data, scaling_laws, agent_friendly]
+
+
+rl_on_50b_moe:
+  title: "RL on 50B MoE"
+  type: epic
+  status: planned
+  owners: [dlwh, AlienKevin]
+  target_date: "2026-03-15"
+  labels: [timeline, rl, moe]
+
+
+beat_qwen3_32b_with_32b:
+  title: "Beat Qwen 3 32B at standard benchmarks with our 32B"
+  type: epic
+  status: planned
+  owners: [dlwh]
+  target_date: "2026-03-15"
+  labels: [timeline, evals, posttraining]
+
+
+automated_ingestion_datasets_environments:
+  title: "Automated ingestion of new datasets and environments"
+  type: epic
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline, infra, data_pipeline, agent_friendly]
+
+
+automated_ingestion_architectures_algorithms:
+  title: "Automated ingestion of new architectures and training algorithms"
+  type: epic
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline, infra, agent_friendly]
+
+
+agent_driven_parameter_sweep_demo:
+  title: "Demo: agent drives iterative parameter sweep across a 100M parameter model"
+  type: experiment
+  status: planned
+  target_date: "2026-03-31"
+  labels: [timeline, infra, agent_friendly]
+
+
+train_100b_moe:
+  title: "Train 100B MoE"
+  type: epic
+  status: planned
+  owners: [dlwh, Helw150]
+  target_date: "2026-05-15"
+  labels: [timeline, pretraining, moe]
+
+
+data_tools_and_mixture_ready:
+  title: "Really good data tools and resulting mixture"
+  type: epic
+  status: planned
+  owners: [Helw150]
+  target_date: "2026-05-15"
+  labels: [timeline, data_pipeline, data]
+
+
+rl_100b_moe:
+  title: "RL 100B MoE"
+  type: epic
+  status: planned
+  owners: [dlwh, Helw150]
+  target_date: "2026-05-31"
+  labels: [timeline, rl, moe]
+
+
 frontier:
   title: "Get to the mid-2025 open weight frontier"
+  type: milestone
+  status: planned
+  labels: [north_star]
   dependencies:
     - mega_reasoning_model
 
 
 mega_reasoning_model:
   title: "have a deepseek v3 tier model"
+  type: milestone
+  status: planned
+  labels: [north_star]
   dependencies:
     - rl_big_model
     - eval_big_model
@@ -26,6 +566,9 @@ mega_reasoning_model:
 
 eval_big_model:
   title: "be ~SOTA on same benchmarks as ~deepseek v3"
+  type: milestone
+  status: planned
+  labels: [north_star]
   dependencies:
     - rl_big_model
     - frontier_evals_wired
@@ -33,6 +576,9 @@ eval_big_model:
 
 rl_big_model:
   title: "RL a pretrained model on a bunch of agentic reasoning tasks"
+  type: milestone
+  status: planned
+  labels: [north_star, rl]
   dependencies:
     - trained_base_model
     - scalable_rl_framework
@@ -42,8 +588,318 @@ rl_big_model:
 
 scalable_rl_framework:
   title: "have a framework for scalable RL"
+  type: epic
+  status: planned
+  labels: [rl, infra]
+  issue: 1738
+  description: |
+    Make RL training and rollout generation reliable, testable, and scalable across clusters.
+    The codebase already has a functional RL stack (see `lib/marin/src/marin/rl/`), but key missing pieces are:
+    - productionization/reliability (failure handling, determinism, serialization)
+    - multi-env orchestration + observability
+    - throughput measurement + scaling work (async RL)
+    - local/test harnesses to iterate quickly
   dependencies:
-    - lots
+    - rl_job_api
+    - rl_rollout_system
+    - rl_training_system
+    - rl_inference_backends
+    - rl_weight_transfer_system
+    - rl_storage_and_serialization
+    - rl_multi_env_and_curriculum
+    - rl_observability
+    - rl_throughput_and_scaling
+    - rl_algorithms_and_losses
+
+
+rl_job_api:
+  title: "RL job API + local test harness"
+  type: epic
+  status: planned
+  labels: [rl, infra, agent_friendly]
+  description: |
+    Make it easy to run and test RL without deploying a full cluster job:
+    - A minimal local/dev workflow for rollouts + training
+    - Config validation and sharp error messages
+    - Small reproducible example runs
+  dependencies:
+    - rl_rollout_manager
+    - rl_rollout_callbacks
+    - rl_max_token_management
+
+
+rl_rollout_manager:
+  title: "RolloutManager for testing rollouts without worker overhead"
+  type: epic
+  status: planned
+  issue: 1746
+  labels: [rl, testing, agent_friendly]
+
+
+rl_rollout_callbacks:
+  title: "Hook/callback mechanism for rollout workers"
+  type: epic
+  status: planned
+  issue: 1740
+  labels: [rl, infra, agent_friendly]
+
+
+rl_max_token_management:
+  title: "Make RL max-token management less error-prone"
+  type: epic
+  status: planned
+  issue: 1707
+  labels: [rl, infra, agent_friendly, newbie_friendly]
+
+
+rl_rollout_system:
+  title: "Rollout generation system (workers, environments, sampling)"
+  type: epic
+  status: planned
+  labels: [rl, infra]
+  description: |
+    Hardening and scaling of rollout generation, including multi-env support and inference backends.
+  dependencies:
+    - rl_multi_env_rollout_support
+    - rl_vllm_rollout_worker
+    - rl_separate_inference_server
+    - rl_inference_ctx_refactor
+
+
+rl_multi_env_rollout_support:
+  title: "Multi-environment rollout support"
+  type: epic
+  status: done
+  issue: 1677
+  labels: [rl, environments]
+
+
+rl_vllm_rollout_worker:
+  title: "vLLM inference backend for rollout workers"
+  type: epic
+  status: done
+  issue: 1782
+  labels: [rl, inference]
+
+
+rl_separate_inference_server:
+  title: "Support separate inference server for RL training"
+  type: epic
+  status: planned
+  issue: 1633
+  labels: [rl, inference, infra]
+
+
+rl_inference_ctx_refactor:
+  title: "Refactor InferenceContext for easier OpenAI API usage"
+  type: task
+  status: done
+  issue: 1744
+  labels: [rl, inference]
+
+
+rl_training_system:
+  title: "Training worker system (replay, batching, training loop)"
+  type: epic
+  status: planned
+  labels: [rl, infra]
+  dependencies:
+    - rl_sync_mode
+    - rl_actor_failures
+    - rl_eval_response_logging
+    - rl_slow_tpu_copy
+
+
+rl_sync_mode:
+  title: "Sync-mode RL training"
+  type: task
+  status: done
+  issue: 1704
+  labels: [rl]
+
+
+rl_actor_failures:
+  title: "Handle actor failures in RL framework"
+  type: task
+  status: done
+  issue: 1719
+  labels: [rl, infra]
+
+
+rl_eval_response_logging:
+  title: "Add evaluation response logging to RL training"
+  type: task
+  status: done
+  issue: 1703
+  labels: [rl, evals]
+
+
+rl_slow_tpu_copy:
+  title: "Investigate slow copies off of TPU in training worker"
+  type: epic
+  status: planned
+  issue: 1747
+  labels: [rl, performance, infra]
+
+
+rl_inference_backends:
+  title: "Inference backends and serving for RL"
+  type: epic
+  status: planned
+  labels: [rl, inference, infra]
+  description: |
+    Ensure inference is fast and reliable across backends (Levanter inference server, vLLM, etc.).
+    Includes correctness (logprobs), determinism, and cluster compatibility.
+
+
+rl_weight_transfer_system:
+  title: "Weight transfer for RL (training -> rollout)"
+  type: epic
+  status: planned
+  labels: [rl, infra]
+  dependencies:
+    - rl_arrow_flight_bug
+
+
+rl_arrow_flight_bug:
+  title: "Arrow Flight model update bug"
+  type: task
+  status: done
+  issue: 1761
+  labels: [rl, infra]
+
+
+rl_storage_and_serialization:
+  title: "Stable rollout storage and datatypes"
+  type: epic
+  status: planned
+  labels: [rl, infra, agent_friendly, newbie_friendly]
+  dependencies:
+    - rl_stable_serialization
+
+
+rl_stable_serialization:
+  title: "RL datatypes should use stable serialization"
+  type: epic
+  status: planned
+  issue: 1689
+  labels: [rl, infra, agent_friendly]
+
+
+rl_multi_env_and_curriculum:
+  title: "Multi-env curriculum + environment suite"
+  type: epic
+  status: planned
+  labels: [rl, environments]
+  dependencies:
+    - full_rl_environments
+    - curriculum_env_observability
+
+
+curriculum_env_observability:
+  title: "Improve observability of environments in curriculum"
+  type: epic
+  status: planned
+  issue: 1808
+  labels: [rl, environments, infra, agent_friendly]
+
+
+rl_observability:
+  title: "RL observability (metrics, debugging, determinism)"
+  type: epic
+  status: planned
+  labels: [rl, infra]
+  description: |
+    Make it easy to answer: what envs are we sampling, what’s reward distribution, and why did training regress?
+
+
+rl_throughput_and_scaling:
+  title: "RL throughput measurement + async scaling"
+  type: epic
+  status: planned
+  labels: [rl, performance, infra, agent_friendly]
+  issue: 1966
+  dependencies:
+    - rl_throughput_measurement
+    - rl_throughput_scaling_study
+    - rl_in_flight_update_impact
+    - rl_profile_sync_overhead
+
+
+rl_throughput_measurement:
+  title: "Robust measurement method for e2e on-policy RL throughput"
+  type: epic
+  status: planned
+  issue: 1965
+  labels: [rl, performance, infra]
+
+
+rl_throughput_scaling_study:
+  title: "Study how e2e RL throughput scales with number of inference workers"
+  type: epic
+  status: planned
+  issue: 1964
+  labels: [rl, performance, infra]
+
+
+rl_in_flight_update_impact:
+  title: "Measure performance impact of in-flight updates in async RL"
+  type: epic
+  status: planned
+  issue: 2253
+  labels: [rl, performance, infra]
+
+
+rl_profile_sync_overhead:
+  title: "Profile RL communication and synchronization overhead"
+  type: task
+  status: done
+  issue: 1823
+  labels: [rl, performance]
+
+
+rl_algorithms_and_losses:
+  title: "RL losses + algorithmic improvements"
+  type: epic
+  status: planned
+  labels: [rl, algorithms]
+  dependencies:
+    - rl_loss_ablations
+    - rl_importance_sampling_fix
+    - rl_off_policy_eval
+    - rl_kl_penalty_fix
+
+
+rl_loss_ablations:
+  title: "RL loss ablations (DAPO, FlashRL)"
+  type: epic
+  status: planned
+  issue: 2043
+  labels: [rl, algorithms]
+
+
+rl_importance_sampling_fix:
+  title: "Fix importance sampling to compensate for temperature"
+  type: epic
+  status: planned
+  issue: 1741
+  labels: [rl, algorithms]
+
+
+rl_off_policy_eval:
+  title: "Evaluation of off-policy performance and parameter tuning"
+  type: epic
+  status: planned
+  issue: 1745
+  labels: [rl, algorithms, evals]
+
+
+rl_kl_penalty_fix:
+  title: "Fix incorrect KL penalty in RL loss"
+  type: task
+  status: done
+  issue: 1708
+  labels: [rl, algorithms]
 
 
 # Pretraining
@@ -55,6 +911,8 @@ scalable_rl_framework:
 trained_base_model:
   title: "Have a very large pretrained model that is a good base for agentic/reasoning RL"
   type: milestone
+  status: planned
+  labels: [pretraining, north_star]
   description: |
     Our major milestone for 2026 is to make a competitive-with-best-2025-open-weights model.
     This issue is for building the base model.
@@ -97,13 +955,16 @@ trained_base_model:
 
 
   dependencies:
-    - training_recipe
+    - moe_training_recipe
     - base_model_evals
     - sft_evals
     - sft_big_model
 
 sft_big_model:
   title: "SFT a pretrained model on a bunch of agentic, long-context, and high quality data"
+  type: epic
+  status: planned
+  labels: [posttraining, sft]
   dependencies:
     - midtrain_model
     - sft_data
@@ -112,6 +973,9 @@ sft_big_model:
 
 midtrain_model:
   title: "high quality model pretrained on HQ data"
+  type: milestone
+  status: planned
+  labels: [pretraining]
   dependencies:
     - pretrained_model
     - hq_data
@@ -119,9 +983,12 @@ midtrain_model:
 
 pretrained_model:
   title: "have a pretrained model"
+  type: milestone
+  status: planned
+  labels: [pretraining]
   dependencies:
     - pt_data
-    - pt_evals
+    - pretraining_evals
     - model_architecture
     - pt_recipe
 
@@ -129,6 +996,9 @@ pretrained_model:
 ## Datasets
 sft_data:
   title: "Make a Stage 3 training mixture"
+  type: epic
+  status: planned
+  labels: [data, sft]
   description: |
     We need to make a Stage 3 training mixture.
     We should consider the following datasets:
@@ -146,6 +1016,9 @@ sft_data:
 
 chat_data:
   title: "Decide on a moderate collection of chat data"
+  type: epic
+  status: planned
+  labels: [data, sft, chat]
   description: |
     Perhaps this will be mainly handled by #1880 and related work.
 
@@ -163,6 +1036,10 @@ chat_data:
 
 midtrain_data:
    title: "Mid-train data"
+   type: epic
+   status: planned
+   labels: [data, pretraining]
+   issue: null
    description: |
       We need ~3-4T tokens of midtraining data. Olmo 3 has roughly 2 and is a good starting point!
 
@@ -181,6 +1058,9 @@ midtrain_data:
 
 long_context_data:
     title: "Decide on a moderate collection of long context data"
+    type: epic
+    status: planned
+    labels: [data, sft, long_context]
     description: |
         We need to decide on a moderate collection of long context data to be used for the "SFT" phase of training.
         We should consider the following datasets:
@@ -195,6 +1075,9 @@ long_context_data:
 
 long_code_data:
     title: "Long code data"
+    type: epic
+    status: planned
+    labels: [data, long_context, code, newbie_friendly, agent_friendly]
     description: |
         We need to stitch together some long code bases to get long context code data.
         We can look at bigcodebench repos, github repos, etc.
@@ -206,6 +1089,9 @@ long_code_data:
 
 pt_data:
   title: "Large collection of pretraining data covering web, code, and HQ data"
+  type: epic
+  status: planned
+  labels: [data, pretraining]
   description: |
     For our larger models, we need to scale up the pretraining data.
     Right now, we have, generously, ~6-7T tokens of pretraining data for English, and maybe 3-4T tokens of other language data.
@@ -229,6 +1115,9 @@ pt_data:
 
 web_data:
   title: "12T tokens of ~good web data. ~85% english, ~15% other languages"
+  type: epic
+  status: planned
+  labels: [data, pretraining, web]
   description: |
     See also [#pt_data] for more details.
 
@@ -246,6 +1135,9 @@ web_data:
 
 union_existing_web_data:
   title: "union/dedupe existing web data from various sources"
+  type: task
+  status: planned
+  labels: [data, pretraining, web, agent_friendly]
   description: |
     See also [#pt_data] for more details.
     This isn't particularly deep: there are a bunch of web datasets:
@@ -267,21 +1159,34 @@ union_existing_web_data:
 
 data_pipeline:
   title: "have a pipeline for data curation and preprocessing"
+  type: milestone
+  status: planned
+  labels: [data_pipeline, infra]
   dependencies:
     - scalable_dedupe
 
 
 scalable_dedupe:
   title: "build a scalable inexact deduplication pipeline"
+  type: epic
+  status: planned
+  labels: [data_pipeline, infra]
+  issue: 2091
   dependencies:
     - fray
 
 # evals
 frontier_evals:
   title: "have a set of evals for the final rl model"
+  type: epic
+  status: planned
+  labels: [evals, rl]
 
 sft_evals:
   title: "have a set of evals for SFTed models"
+  type: epic
+  status: planned
+  labels: [evals, sft]
   dependencies:
     - chat_evals
     - reasoning_evals
@@ -289,6 +1194,10 @@ sft_evals:
 
 pretraining_evals:
   title: "have a set of evals for pretrained models"
+  type: epic
+  status: planned
+  labels: [evals, pretraining]
+  issue: null
   dependencies:
     - chat_evals
     - reasoning_evals
@@ -297,6 +1206,10 @@ pretraining_evals:
 
 loss_datasets:
   title: Fill out our perplexity loss datasets
+  type: epic
+  status: planned
+  labels: [evals, scaling_laws]
+  issue: null
   description: |
     We currently use the following datasets for perplexity loss:
     - a good chunk of paloma (including c4en)
@@ -334,6 +1247,9 @@ loss_datasets:
 
 natural_long_context_ppl_data:
   title: "natural long context ppl eval data"
+  type: task
+  status: planned
+  labels: [evals, long_context, newbie_friendly]
   description: |
     We need to find a good collection of natural long context ppl eval data.
     Obvious sources include books, scientific articles, stitched together code bases, wikipedia articles, etc.
@@ -347,7 +1263,7 @@ natural_long_context_ppl_data:
     - Olmo 3's ocr data
     - institutional books
     - stitch together some code bases
-    - ...
+    - FinePDFs Eval sets (wired up in #2148)
 
     32K context is about 50 pages of text. This is a lot! Longer than most academic articles.
 
@@ -360,6 +1276,9 @@ natural_long_context_ppl_data:
 
 reasoning_ppl_data:
   title: "reasoning ppl eval data"
+  type: task
+  status: planned
+  labels: [evals, reasoning, newbie_friendly]
   description: |
     We need to find a good collection of reasoning ppl eval data. Ideally this would be natural data that correlates reasonably with ANLI, MUSR, etc.
 
@@ -368,11 +1287,17 @@ reasoning_ppl_data:
 
 institutional_books:
   title: "Add Harvard Institutional Books dataset"
+  type: task
+  status: planned
+  labels: [data, long_context]
   issue: 1394
 
 
 task_support_process:
   title: "Establish a process for supporting new tasks/use cases"
+  type: task
+  status: planned
+  labels: [process, docs, agent_friendly]
   description: |
     On an ongoing basis, the model development process should look like this:
 
@@ -389,12 +1314,12 @@ task_support_process:
     We have added a recipe for this process and followed it for a new task, adding a new ppl dataset and getting good correlation with the new task.
 
 
-
-
 # Architecture
 model_architecture:
   title: "Settle on MoE architecture"
   type: milestone
+  status: planned
+  labels: [architecture, moe]
   description: |
     We know we want to use an MOE architecture for our next series of models.
 
@@ -403,7 +1328,6 @@ model_architecture:
       - Fast enough inference throughput for inference. Ideally on multiple hardware platforms.
       - Amenability to param transfer
 
-
   dependencies:
     - fast_moe
     - moe_scaling_laws
@@ -411,11 +1335,17 @@ model_architecture:
 
 moe_scaling_laws:
   title: "apply the scaling laws framework to find the optimal configuration for a 1e24 flop model"
+  type: epic
+  status: planned
+  labels: [scaling_laws, moe]
   dependencies:
     - scaling_law_framework
 
 fast_moe:
   title: "Fast enough MFU training for MOEs"
+  type: epic
+  status: planned
+  labels: [moe, infra]
   description: |
     We need to profile our existing MOE implementation and MaxText's and identify suboptimalities in ours.
     Then, we should consider ways to improve throughput through architectural changes without compromising quality.
@@ -430,6 +1360,9 @@ fast_moe:
 
 profile_existing_moes:
   title: "Profile our existing MOE implementation and MaxText's and identify suboptimalities in ours"
+  type: task
+  status: planned
+  labels: [moe, infra, agent_friendly]
   dependencies:
     - profile_maxtext_moe
     - profile_levanter_moe
@@ -437,17 +1370,25 @@ profile_existing_moes:
 
 moe_mlp_kernel:
   title: "implement a custom MLP kernel for our MOE architecture"
+  type: epic
+  status: planned
+  labels: [moe, kernels]
   dependencies:
     - understand_existing_moe_kernels
 
 
 understand_inference_moe_kernels:
   title: "understand the inference kernels for MOEs"
+  type: task
+  status: planned
+  labels: [moe, kernels, agent_friendly]
   description: |
     We should look at existing inference kernels for MOEs and see what we can learn from them.
 
     Things to look at
        -  https://github.com/vllm-project/tpu-inference/tree/main/tpu_inference/kernels/fused_moe
+       - MaxText's kernel
+       - ejkernel's GMM
 
     Goals are to understand what makes it fast and where we can make architectural changes to make things faster. We don't
     need to tie ourselves to existing architectures, though obviously we should take them very seriously.
@@ -458,16 +1399,23 @@ understand_inference_moe_kernels:
 
 scaling_law_framework:
   title: "Scaling Law Framework"
+  type: epic
+  status: planned
+  labels: [scaling_laws, infra]
+  issue: null
   description: |
     Our goal is  XXX
   dependencies:
-    - relaible_training_infra
+    - reliable_training_infra
     - loss_datasets
 
 
 # Process
 ferries:
   title: "train models regularly of increasing scale and quality."
+  type: epic
+  status: planned
+  labels: [process, infra]
   description: |
     Daily 1e17, Weekly 1e21 models, monthly 1e22 models, quarterly 1e23 models, yearly 1e24 models.
   dependencies:
@@ -478,42 +1426,44 @@ ferries:
     - automated_monthly_ferry_launch
 
 
-
-
 hparam_transfer:
   title: "Reliable hparam transfer across scales"
+  type: epic
+  status: planned
+  labels: [process, infra]
   description: |
     XXX
   dependencies:
     - reliable_training_infra
 
-
-
 ## Leverage Community
 
 midtraining_dataset_flow:
-    title: "Establish a flow for community contributions of midtraining datasets"
-    description: |
-        We should establish a flow for community contributions of midtraining datasets.
-        This should include:
+  title: "Establish a flow for community contributions of midtraining datasets"
+  type: epic
+  status: planned
+  labels: [community, data]
+  description: |
+    We should establish a flow for community contributions of midtraining datasets.
+    This should include:
 
-        - A clear specification of the data format and quality requirements
-        - A process for submitting datasets
-        - A review process for evaluating and accepting datasets
-        - A way to track contributions and give credit to contributors
+    - A clear specification of the data format and quality requirements
+    - A process for submitting datasets
+    - A review process for evaluating and accepting datasets
+    - A way to track contributions and give credit to contributors
 
-
-      Key challenge is how do we know the data is good quality and high value? Various checks:
-      To first order, it seems like most specific natural datasets are likely to be more valuable than web data.
-      But we should have some process for evaluating the data.
-
-
+    Key challenge is how do we know the data is good quality and high value? Various checks:
+    To first order, it seems like most specific natural datasets are likely to be more valuable than web data.
+    But we should have some process for evaluating the data.
 
 
 ## Grug
 
 grugformer:
     title: 'Grugformer: "pure JAX" transformer implementation'
+    type: epic
+    status: planned
+    labels: [grug, architecture]
     description: |
 
       I (@dlwh) like my named tensors and stuff, but increasingly I think that the overhead of nn libraries isn't
@@ -542,7 +1492,10 @@ grugformer:
 
 
 grugformer_speedrun:
-    title: [Grug] speedrun grugformer
+    title: "[Grug] speedrun grugformer"
+    type: task
+    status: planned
+    labels: [grug, speedrun]
     description: |
       We need to do a speedrun of [grugformer](#grugformer) to make sure it works end to end.
     dependencies:
@@ -550,7 +1503,10 @@ grugformer_speedrun:
 
 
 grug_attention:
-    title: [Grug] wire up attention kernels
+    title: "[Grug] wire up attention kernels"
+    type: epic
+    status: planned
+    labels: [grug, kernels]
     description: |
       We need to wire up attention kernels for grugformer.
     dependencies:
@@ -558,10 +1514,409 @@ grug_attention:
 
 
 grug_moe:
-    title: [Grug] wire up MOE for grugformer
+    title: "[Grug] wire up MOE for grugformer"
+    type: epic
+    status: planned
+    labels: [grug, moe]
     description: |
       We need to wire up MOE for grugformer. Goal is high MFU, load balancing, etc.
     dependencies:
         - grugformer
         - fast_moe
 
+
+# ---- Stub nodes to make the DAG well-formed ----
+
+lots:
+  title: "Scalable RL framework prerequisites"
+  type: epic
+  status: planned
+  labels: [rl, infra]
+  description: |
+    Placeholder for the (many) concrete pieces needed for scalable RL.
+    This exists so the DAG is well-formed; expand into concrete deps over time.
+
+
+reliable_training_infra:
+  title: "Reliable training infrastructure"
+  type: epic
+  status: planned
+  labels: [infra]
+  description: |
+    Placeholder for whatever we need so training runs are stable, restartable, observable, and reproducible.
+
+
+moe_training_recipe:
+  title: "Training recipe for large MoE base model"
+  type: epic
+  status: planned
+  labels: [pretraining, recipe]
+  description: |
+    Define (and document) the end-to-end recipe for Phase 1/2/3 training, including LR schedules,
+    tokenizer, packing, checkpoint cadence, eval cadence, and cluster assumptions.
+
+
+pt_recipe:
+  title: "Pretraining recipe (Phase 1)"
+  type: epic
+  status: planned
+  labels: [pretraining, recipe]
+
+
+base_model_evals:
+  title: "Base model eval suite"
+  type: epic
+  status: planned
+  labels: [evals, pretraining]
+  description: |
+    Define what we consider the base-model gates (e.g. MMLU/MMLU-Pro, etc.) and keep them tracked over time.
+
+
+frontier_evals_wired:
+  title: "Wire frontier eval suite into training/RL runs"
+  type: epic
+  status: planned
+  labels: [evals, rl, agent_friendly]
+
+
+full_rl_environments:
+  title: "Full set of RL environments for agentic reasoning"
+  type: epic
+  status: planned
+  labels: [rl]
+  description: |
+    A curated environment suite that supports training and evaluation of agentic reasoning.
+    This includes task definitions, reward functions, anti-cheating checks, and Train/Eval splits.
+  dependencies:
+    - rl_env_math
+    - rl_env_aime
+    - rl_env_swe_bench
+    - rl_env_ctf
+    - rl_env_lean
+    - rl_env_hub
+    - rl_env_prime_intellect_modes
+    - rl_env_prime_intellect_logprobs
+
+
+rl_recipe:
+  title: "RL recipe for big model"
+  type: epic
+  status: planned
+  labels: [rl, recipe]
+  description: |
+    A playbook-level recipe for doing RL on large models:
+    - success criteria and eval gates (agentic, math, tool use, etc.)
+    - which environments to run, with what curricula
+    - how we measure throughput and stability
+    - how we decide the next experiment
+  dependencies:
+    - rl_capability_playbook
+    - scalable_rl_framework
+    - full_rl_environments
+    - frontier_evals_wired
+
+
+rl_capability_playbook:
+  title: "Playbook: what does it mean to be good at agents/RL?"
+  type: task
+  status: planned
+  issue: null
+  labels: [process, docs, rl, agent_friendly]
+  definition_of_done: |
+    We have a written playbook that defines:
+    - target agentic capabilities and corresponding evals
+    - the RL environment suite and how each env maps to capabilities
+    - an experiment protocol (baselines, ablations, regression tests)
+    - success criteria for \"RL works\" at a given scale
+
+
+rl_env_math:
+  title: "Fix and test RL with the Math environment"
+  type: epic
+  status: planned
+  issue: 1743
+  labels: [rl, environments]
+
+
+rl_env_aime:
+  title: "AIME 2024/25 environment + reproduce DAPO on Qwen2.5-32B"
+  type: epic
+  status: planned
+  issue: 2241
+  labels: [rl, environments]
+
+
+rl_env_swe_bench:
+  title: "Adopt SWE-Bench single-step env for RL training"
+  type: task
+  status: done
+  issue: 1423
+  labels: [rl, environments, code]
+
+
+rl_env_ctf:
+  title: "Create a CTF RL env"
+  type: task
+  status: done
+  issue: 1439
+  labels: [rl, environments, security]
+
+
+rl_env_lean:
+  title: "Add interactive Lean environment"
+  type: task
+  status: done
+  issue: 1438
+  labels: [rl, environments]
+
+
+rl_env_hub:
+  title: "Integrate Environment Hub to Marin"
+  type: task
+  status: done
+  issue: 1623
+  labels: [rl, environments, infra]
+
+
+rl_env_prime_intellect_modes:
+  title: "Validate Train/Eval modes in Prime Intellect env and others"
+  type: task
+  status: done
+  issue: 1653
+  labels: [rl, environments]
+
+
+rl_env_prime_intellect_logprobs:
+  title: "PrimeIntellect env computes logprobs"
+  type: task
+  status: done
+  issue: 1684
+  labels: [rl, environments]
+
+
+fray:
+  title: "Fray"
+  type: epic
+  status: planned
+  labels: [infra]
+  description: |
+    Placeholder for the Fray abstraction layer (or its successor). Keep as a dependency anchor for now.
+
+
+hq_data:
+  title: "HQ / midtraining data mixture (Phase 2)"
+  type: epic
+  status: planned
+  labels: [data, pretraining]
+  dependencies:
+    - midtrain_data
+
+
+reasoning_data:
+  title: "Reasoning datasets"
+  type: epic
+  status: planned
+  labels: [data, reasoning]
+
+
+code_data:
+  title: "Code datasets"
+  type: epic
+  status: planned
+  labels: [data, code]
+  issue: null
+  dependencies:
+    - code_capability_playbook
+    - code_data_stack_v2
+
+
+code_capability_playbook:
+  title: "Playbook: what does it mean to be good at code?"
+  type: task
+  status: planned
+  issue: null
+  labels: [process, docs, code, agent_friendly]
+  definition_of_done: |
+    We have a written playbook that defines:
+    - code eval suite / metrics we care about
+    - code data strategy and how we measure quality
+    - minimal ablation plan to validate improvements
+
+
+code_data_stack_v2:
+  title: "Add more code data (The Stack v2)"
+  type: task
+  status: done
+  issue: 1752
+  labels: [data, code]
+
+
+medical_data:
+  title: "Medical datasets"
+  type: epic
+  status: planned
+  labels: [data, medical]
+  issue: null
+  dependencies:
+    - medical_data_quality_process
+    - medical_data_datashop
+
+
+medical_data_quality_process:
+  title: "Medical data: define quality checks and evaluation plan"
+  type: task
+  status: planned
+  issue: 1652
+  labels: [data, medical, evals, process]
+
+
+medical_data_datashop:
+  title: "Datashop for medical data"
+  type: task
+  status: planned
+  issue: 1361
+  labels: [data, medical]
+
+
+format_following_data:
+  title: "Format-following datasets"
+  type: epic
+  status: planned
+  labels: [data, sft]
+
+
+chat_evals:
+  title: "Chat evals"
+  type: epic
+  status: planned
+  labels: [evals, chat]
+
+
+reasoning_evals:
+  title: "Reasoning evals"
+  type: epic
+  status: planned
+  labels: [evals, reasoning]
+
+
+long_context_evals:
+  title: "Long-context evals"
+  type: epic
+  status: planned
+  labels: [evals, long_context]
+  description: |
+    Candidate long-context evals to wire up:
+    - Ruler (see #2064)
+    - ∞Bench
+    - HELMET
+    - OpenAI-MRCR
+    - NoCHA
+
+    Suggested initial scope: Ruler + HELMET.
+
+  issue: 2025
+
+  dependencies:
+    - ruler_eval
+    - helmet_eval
+
+
+ruler_eval:
+  title: "Wire up Ruler long-context eval"
+  type: task
+  status: planned
+  issue: 2064
+  labels: [evals, long_context]
+
+
+helmet_eval:
+  title: "Wire up HELMET long-context eval"
+  type: task
+  status: planned
+  issue: null
+  labels: [evals, long_context]
+
+
+
+chat_ppl_data:
+  title: "Chat perplexity-loss dataset"
+  type: task
+  status: planned
+  labels: [evals, data]
+
+
+format_following_ppl_data:
+  title: "Format-following perplexity-loss dataset"
+  type: task
+  status: planned
+  labels: [evals, data]
+
+
+olmo_3_ocr_data:
+  title: "Olmo 3 OCR data"
+  type: epic
+  status: planned
+  labels: [data, long_context]
+
+
+understand_existing_moe_kernels:
+  title: "Understand existing MoE kernels (training + inference)"
+  type: task
+  status: planned
+  labels: [moe, kernels, agent_friendly]
+
+
+profile_maxtext_moe:
+  title: "Profile MaxText MoE"
+  type: task
+  status: planned
+  labels: [moe, infra, agent_friendly]
+
+
+profile_levanter_moe:
+  title: "Profile Levanter MoE"
+  type: task
+  status: planned
+  labels: [moe, infra, agent_friendly]
+
+
+crawl_data:
+  title: "Crawl additional web data"
+  type: epic
+  status: planned
+  labels: [data, web]
+
+
+rephrasing_pipeline:
+  title: "Rephrasing pipeline for web data"
+  type: epic
+  status: planned
+  labels: [data, web, synthetic_data]
+
+
+ferry_framework:
+  title: "Ferry framework"
+  type: epic
+  status: planned
+  labels: [process, infra]
+
+
+automated_daily_ferry_launch:
+  title: "Automated daily ferry launch"
+  type: task
+  status: planned
+  labels: [process, infra, agent_friendly]
+
+
+automated_weekly_ferry_launch:
+  title: "Automated weekly ferry launch"
+  type: task
+  status: planned
+  labels: [process, infra, agent_friendly]
+
+
+automated_monthly_ferry_launch:
+  title: "Automated monthly ferry launch"
+  type: task
+  status: planned
+  labels: [process, infra, agent_friendly]
