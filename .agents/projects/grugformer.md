@@ -9,17 +9,18 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 
 ### Software Principles
 
-- **Few methods, keep arrays out of them inside jit.** We still prefer top-level functions, but lightweight dataclass helpers/property accessors—and any method that only touches metadata, not arrays—are fine even inside jit-traced regions. Once a method would manipulate `jax.Array`s, implement it as a standalone function instead.
-- **Keep dependencies small.** Prefer `einshard`, `einops`, `optax`, JAX core libs, HF tokenizers, and Levanter’s `data` + `tracker` + TensorStore serialization APIs. Grug doesn't want to reinvent wheels, but we also don't want heavy frameworks obscuring the core logic.
-- **Fast attention kernels are allowed, but keep the surface simple.** For now, grug core hard-depends on `ejkernel` block-sparse attention (`ejkernel.modules.operations.blocksparse_attention`) and keeps a separate reference implementation for debugging/regressions.
+- **Few methods**: prefer top level functions to lots of methods (i.e. torch-style class hierarchies). Use `@dataclass`es for parameter/state containers, but keep logic in functions. Accessors are okay for small helpers (e.g. `def get_attention_params(model_params): ...`).
+- **No array-involved methods in jit**: avoid class methods that operate on `jax.Array` fields inside `@jax.jit`-compiled functions. There are a few corner cases where they behave surprisingly. (Mostly we need to avoid `jit(module.compute_loss)`).
+- **Keep dependencies small.** Prefer `einshard`, `optax`, JAX core libs, HF tokenizers, and Levanter’s `data` + `tracker` + TensorStore serialization APIs. Grug doesn't want to reinvent wheels, but we also don't want heavy frameworks obscuring the core logic.
+- **Fast kernels are allowed, but keep the surface simple.** For now, grug core hard-depends on `ejkernel` for block-sparse attention (`ejkernel.modules.operations.blocksparse_attention`) and keeps a separate reference implementation for debugging/regressions.
 - **Serializable state.** Trainer state must round-trip through `levanter.tensorstore_serialization.tree_{de,}serialize_leaves_tensorstore` with no custom logic.
 - **Consumption-ready.** Provide a `uv run python -m marin.grugpt.train` entrypoint plus tests. Tracking hooks log loss/perplexity through Levanter’s tracker interface.
 
 ### JAX/ML Principles
 
 - **Mesh-first mental model.** We always create one mesh axis per logical unit. For now, `['replica', 'data', 'tensor']`. Work must still run on a single GPU (mesh axes collapse to size 1) but should seamlessly extend to 4-device TPU v4-8 pods for CI. Mesh creation and validation live in one place.
-- **Use good kernels when available.** Grug is happy to call out to other people's fast attention kernels (ejkernel blocksparse today; Tokamax later) as long as the surface stays simple and the fallback reference path remains.
-- **Explicit sharding everywhere.** Arrays carry `PartitionSpec`s in their types using `jax.set_mesh`, `AxisType.Explicit`, and `einshard` helpers. Any op with ambiguous shardings must either supply `out_sharding=` or run inside `auto_axes`.
+- **Use good kernels when available.** Grug is happy to call out to other people's fast attention kernels (ejkernel blocksparse today) as long as the surface stays simple and the fallback reference path remains.
+- **Explicit sharding everywhere.** Arrays carry `PartitionSpec`s in their types. By using `set_mesh` with `AxisType.Explicit` we'll always know every Array's sharding. Any op with ambiguous shardings must either supply `out_sharding=` or run inside `auto_axes`. Prefer the former.
 
 ### Code Organization Principles
 
@@ -27,10 +28,7 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 - **Adapters live outside grug.** Integration with Levanter model interfaces (`LmHeadModel`, `NamedArray`, etc.) lives in `levanter.models`, currently `levanter.models.grug_wrapper`.
 - **Mask spec is simple.** Grug’s attention mask is a small spec (`levanter.grug.attention.AttentionMask`) storing only raw JAX arrays/ints (no NamedArray fields and no explicit dense masks yet).
 
-
 ## Misc Style
-
-
 - Use `einops.rearrange` for `[batch, seq, heads, head_dim]` manipulations where it improves clarity.
 - Use `jnp.einsum` and explicit `PartitionSpec` annotations to keep matmuls consistent with the mesh layout.
 - Grug core attention is a single `attention(q, k, v, mask)` that calls ejkernel block-sparse attention; `reference_attention(...)` exists for debugging/regressions but is not selected at runtime.
@@ -98,6 +96,30 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 3. **Checkpointing.** Hook `tree_{de}serialize_leaves_tensorstore` into the training loop so state/rng/optimizer snapshots can be saved/restored.
 4. **Evaluation + CLI polish.** Add validation hooks, flag parsing (YAML/Draccus), and a proper entry point under `uv run` instead of the current hard-coded config.
 5. **Testing.** Port the sketched unit tests (`test_model`, `test_mesh`, `test_train_step`) into `tests/grugpt/` and wire them into CI.
+
+## Next Milestones (Current Plan)
+
+1) **PR what we have**
+   - Keep it focused: grug core simplicity + ejkernel blocksparse + adapter placement + doc updates.
+
+2) **Speedrun: hackable single-file gauntlet**
+   - Target: `experiments/speedrun/hackable_transformer_starter/hackable_transformer_attn_sink.py` (similar to `experiments/hackable_transformer_starter_template.py`).
+   - Copy-paste the grug core into the file and define a small “gauntlet API” (`init_fn`, `fwd_fn`, `loss_fn`, `train_step`).
+   - Include both `reference_attention` and ejkernel block-sparse paths and a tiny correctness check comparing them on small shapes.
+
+3) **Native datasets for grug**
+   - Add “grug-native” dataset analogs for `CausalLmDataset` and `MultiturnChatDataset` that yield plain `jax.Array` batches (`tokens`, `labels`, optional `segment_ids`).
+   - Reuse Levanter ingestion/tokenization internally via adapters until we decide to fully decouple.
+
+4) **Preemption + resume in the grug trainer**
+   - Follow the patterns in `lib/levanter/src/levanter/main/train_lm.py`: periodic checkpoints, resume-from-latest, and safe/atomic step dirs.
+   - Checkpoint `(state, cfg, tokenizer metadata)` with Levanter’s TensorStore serialization.
+
+5) **Lock the grug core surface with tests**
+   - Shapes + `jax.jit` compile sanity for `init_parameters`/`forward`.
+   - Sharding sanity: `PartitionSpec` expectations don’t explode when a mesh is active.
+   - Mask semantics for causal + sliding window + segment ids.
+   - (Optional) blocksparse vs reference numerical check on tiny shapes.
 
 ## Speedrun Milestone: Hackable Transformer Gauntlet
 

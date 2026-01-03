@@ -52,7 +52,12 @@ class AttentionMask:
         )
 
     def materialize_mask(self, q_len: int, k_len: int) -> jax.Array | None:
-        """Return a (q_len, k_len) boolean mask (True = allowed) or None."""
+        """Return a boolean mask (True = allowed) or None.
+
+        Shapes:
+          - If `segment_ids` is unset, returns `(q_len, k_len)` (broadcastable across batch).
+          - If `segment_ids` is set with per-batch IDs, returns `(batch, q_len, k_len)`.
+        """
         mask = None
 
         if self.is_causal:
@@ -69,7 +74,16 @@ class AttentionMask:
 
         if self.segment_ids is not None:
             q_seg, k_seg = self.segment_ids
-            allowed = q_seg[:, None] == k_seg[None, :]
+            if q_seg.ndim != k_seg.ndim:
+                raise ValueError(f"segment_ids ndim mismatch: q={q_seg.ndim}, k={k_seg.ndim}")
+            if q_seg.ndim == 1:
+                allowed = q_seg[:, None] == k_seg[None, :]
+            elif q_seg.ndim == 2:
+                if q_seg.shape[0] != k_seg.shape[0]:
+                    raise ValueError(f"segment_ids batch mismatch: q={q_seg.shape[0]}, k={k_seg.shape[0]}")
+                allowed = q_seg[:, :, None] == k_seg[:, None, :]
+            else:
+                raise ValueError(f"segment_ids must be 1D or 2D, got ndim={q_seg.ndim}")
             mask = allowed if mask is None else jnp.logical_and(mask, allowed)
 
         return mask
@@ -130,9 +144,21 @@ def reference_attention(
 
     if mask is not None:
         if mask.dtype == jnp.bool_:
-            scores = jnp.where(mask[None, None, :, :], scores, jnp.array(-1e9, dtype=scores.dtype))
+            if mask.ndim == 2:
+                mask = mask[None, None, :, :]
+            elif mask.ndim == 3:
+                mask = mask[:, None, :, :]
+            else:
+                raise ValueError(f"mask must be 2D or 3D, got shape={mask.shape}")
+            scores = jnp.where(mask, scores, jnp.array(-1e9, dtype=scores.dtype))
         else:
-            scores = scores + mask[None, None, :, :]
+            if mask.ndim == 2:
+                mask = mask[None, None, :, :]
+            elif mask.ndim == 3:
+                mask = mask[:, None, :, :]
+            else:
+                raise ValueError(f"mask must be 2D or 3D, got shape={mask.shape}")
+            scores = scores + mask
     if logits_dtype is not None:
         scores = scores.astype(logits_dtype)
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
