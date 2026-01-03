@@ -165,7 +165,7 @@ def build_runtime_env_for_packages(
     env_vars: dict | None = None,
 ) -> RuntimeEnv:
     """Inject the appropriate UV environment for the given packages."""
-    env_vars = env_vars or {}
+    env_vars = dict(env_vars or {})
     pip_packages = pip_packages or []
     extra = extra or []
 

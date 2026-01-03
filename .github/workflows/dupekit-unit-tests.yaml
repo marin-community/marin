@@ -37,7 +37,5 @@ jobs:
           cache-dependency-glob: "lib/dupekit/uv.lock"
 
       - name: Test dupekit
-        env:
-          CI: true
         run: |
           cd lib/dupekit && uv run --frozen --group test pytest tests/ -v

@@ -131,3 +131,16 @@ Zephyr consolidates 100+ ad-hoc Ray/HF dataset patterns in Marin into a simple a
 - Automatic chunking to prevent large object overhead
 - fsspec integration (GCS, S3, local)
 - Type-safe operation chaining
+
+
+
+### Notes
+
+#### MacOS
+
+Ray 2.53 enables a `uv run` runtime_env hook by default. When tests are executed
+via `uv run pytest`, that hook can (a) start local workers with a different
+Python version and (b) attempt to inspect the process tree with psutil, which
+may fail in sandboxed Codex environments, at least on MacOS. Disable it for tests.
+See https://github.com/ray-project/ray/issues/59639 for (a). (b) seems like a reasonable
+design choice.

@@ -35,6 +35,47 @@ cluster infrastructure for Marin. We use Ray for:
 - **Training**: Distributed model training via Levanter
 - **Inference**: GPU/TPU actor pools for model serving
 
+### Ray token authentication
+
+Marin clusters use Ray token authentication (Ray >= 2.53). Ray APIs (dashboard, jobs, status) require a shared token.
+
+- Cluster-side: the token is fetched from GCP Secret Manager into `/home/ray/.ray/auth_token` during `setup_commands`
+  (runs inside the Ray container) and `RAY_AUTH_MODE=token` is set via Docker run options.
+- Client-side (your laptop): `scripts/ray/cluster.py` will automatically fetch/cache the token into `~/.ray/` when you
+  connect to a specific cluster config. You can also install tokens explicitly (see below).
+
+All clusters use the same `RAY_AUTH_TOKEN` Secret Manager secret, and clients use the standard Ray token file path
+`~/.ray/auth_token`. To install the default token locally (or re-run `make dev_setup`):
+
+```bash
+make get_ray_auth_token
+```
+
+
+To connect + authenticate (recommended), use the cluster helper (fetches/caches the token, sets up port-forwarding, and can
+open the dashboard):
+
+```bash
+uv run scripts/ray/cluster.py --cluster us-central2 auth
+```
+
+For the full developer workflow (including other clusters and using "raw" Ray CLIs), see
+[`docs/dev-guide/guidelines-internal.md`](../docs/dev-guide/guidelines-internal.md#ray-token-authentication).
+
+#### One-time: create the production token secret
+
+You will only need to do this if setting up in a new GCP project or similar.
+
+Clusters read their token from the `RAY_AUTH_TOKEN` Secret Manager secret.
+
+If `make get_ray_auth_token` fails because the secret doesn’t exist yet, create it once:
+
+```bash
+export RAY_AUTH_MODE=token
+ray get-auth-token --generate  # writes ~/.ray/auth_token (don’t commit this)
+make init_ray_auth_token_secret
+```
+
 For **data processing** (downloads, transforms, deduplication), we use Zephyr instead of raw Ray.
 
 **Useful Documentation**:
