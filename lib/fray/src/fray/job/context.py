@@ -33,10 +33,7 @@ try:
 except ImportError:
     ray = None
 
-try:
-    from fray_rpc import RustyContext
-except ImportError:
-    RustyContext = None
+from fray_rpc import RustyContext
 
 logger = logging.getLogger(__name__)
 
@@ -513,10 +510,6 @@ def create_job_ctx(
     elif context_type == "ray":
         return RayContext(ray_options=ray_options)
     elif context_type == "rpc":
-        if RustyContext is None:
-            raise ImportError(
-                "fray_rpc module not found. Build with: " "maturin develop --manifest-path src/fray/job/rpc/Cargo.toml"
-            )
         return RustyContext(coordinator_addr)
     else:
         raise ValueError(f"Unknown context type: {context_type}. Supported: 'ray', 'threadpool', 'sync', 'rpc'")
