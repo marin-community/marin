@@ -23,6 +23,12 @@ import pytest
 import ray
 from fray.cluster.local_cluster import LocalCluster, LocalClusterConfig
 
+# Configure logging for RPC tests
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
+# Enable DEBUG logging for RPC during tests
+logging.getLogger("fray.rpc").setLevel(logging.DEBUG)
+
 
 @pytest.fixture(scope="module")
 def ray_cluster():

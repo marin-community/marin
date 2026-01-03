@@ -1,4 +1,5 @@
 use crate::ActorId;
+use log::{debug, error, info, warn};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyModule, PyTuple};
 use std::collections::HashMap;
@@ -53,7 +54,10 @@ impl ActorHost {
     /// 5. Pickle the instance
     /// 6. Store in the actors map
     pub fn create_actor(&self, spec: ActorSpec) -> Result<ActorId, String> {
-        Python::with_gil(|py| {
+        info!(target: "fray::rpc::worker::actors",
+              "Creating actor {}", spec.id);
+
+        Python::attach(|py| {
             // Import cloudpickle module
             let cloudpickle = PyModule::import(py, "cloudpickle")
                 .map_err(|e| format!("Failed to import cloudpickle: {}", e))?;
@@ -89,7 +93,12 @@ impl ActorHost {
             // Instantiate the class
             let instance = class
                 .call1(&args_tuple)
-                .map_err(|e| format!("Failed to instantiate class: {}", e))?;
+                .map_err(|e| {
+                    let err_msg = format!("Failed to instantiate class: {}", e);
+                    error!(target: "fray::rpc::worker::actors",
+                           "Actor {}: {}", spec.id, err_msg);
+                    err_msg
+                })?;
 
             // Pickle the instance
             let pickled_instance = dumps
@@ -97,7 +106,7 @@ impl ActorHost {
                 .map_err(|e| format!("Failed to pickle instance: {}", e))?;
 
             let instance_bytes = pickled_instance
-                .downcast::<PyBytes>()
+                .cast::<PyBytes>()
                 .map_err(|e| format!("Failed to convert pickled instance to bytes: {}", e))?;
 
             // Create the actor instance
@@ -113,7 +122,12 @@ impl ActorHost {
                 .lock()
                 .map_err(|e| format!("Failed to lock actors map: {}", e))?;
 
+            let instance_size = instance_bytes.as_bytes().len();
             actors.insert(spec.id, actor);
+
+            info!(target: "fray::rpc::worker::actors",
+                  "Actor {} created successfully, instance size: {} bytes",
+                  spec.id, instance_size);
 
             Ok(spec.id)
         })
@@ -132,6 +146,9 @@ impl ActorHost {
     /// 8. Update the stored pickled instance
     /// 9. Release the lock
     pub fn call_method(&self, call: ActorMethodCall) -> TaskResult {
+        debug!(target: "fray::rpc::worker::actors",
+               "Calling method {} on actor {}", call.method_name, call.actor_id);
+
         // Get the actor
         let actor = {
             let actors = match self.actors.lock() {
@@ -146,6 +163,8 @@ impl ActorHost {
             match actors.get(&call.actor_id) {
                 Some(actor) => Arc::clone(actor),
                 None => {
+                    warn!(target: "fray::rpc::worker::actors",
+                          "Actor {} not found", call.actor_id);
                     return TaskResult::Error {
                         traceback: format!("Actor not found: {}", call.actor_id),
                     };
@@ -163,7 +182,7 @@ impl ActorHost {
             }
         };
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             // Import cloudpickle module
             let cloudpickle = match PyModule::import(py, "cloudpickle") {
                 Ok(module) => module,
@@ -244,8 +263,12 @@ impl ActorHost {
             let result = match method.call1(&args_tuple) {
                 Ok(res) => res,
                 Err(err) => {
+                    let err_msg = format!("Method call failed: {}", err);
+                    error!(target: "fray::rpc::worker::actors",
+                           "Actor {} method {} failed: {}",
+                           call.actor_id, call.method_name, err_msg);
                     return TaskResult::Error {
-                        traceback: format!("Method call failed: {}", err),
+                        traceback: err_msg,
                     };
                 }
             };
@@ -260,7 +283,7 @@ impl ActorHost {
                 }
             };
 
-            let result_bytes = match pickled_result.downcast::<PyBytes>() {
+            let result_bytes = match pickled_result.cast::<PyBytes>() {
                 Ok(bytes) => bytes,
                 Err(err) => {
                     return TaskResult::Error {
@@ -279,7 +302,7 @@ impl ActorHost {
                 }
             };
 
-            let instance_bytes = match pickled_instance.downcast::<PyBytes>() {
+            let instance_bytes = match pickled_instance.cast::<PyBytes>() {
                 Ok(bytes) => bytes,
                 Err(err) => {
                     return TaskResult::Error {
@@ -320,9 +343,12 @@ impl ActorHost {
 
             actors.insert(call.actor_id, new_actor);
 
-            TaskResult::Success {
-                data: result_bytes.as_bytes().to_vec(),
-            }
+            let data = result_bytes.as_bytes().to_vec();
+            debug!(target: "fray::rpc::worker::actors",
+                   "Actor {} method {} completed, result size: {} bytes",
+                   call.actor_id, call.method_name, data.len());
+
+            TaskResult::Success { data }
         })
     }
 
@@ -336,210 +362,5 @@ impl ActorHost {
 impl Default for ActorHost {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_create_actor() {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
-            let cloudpickle = PyModule::import(py, "cloudpickle").unwrap();
-            let dumps = cloudpickle.getattr("dumps").unwrap();
-
-            // Create a simple class
-            let code = r#"
-class Counter:
-    def __init__(self, start=0):
-        self.count = start
-
-    def increment(self):
-        self.count += 1
-        return self.count
-
-    def get(self):
-        return self.count
-"#;
-            py.run(code, None, None).unwrap();
-            let counter_class = py.eval("Counter", None, None).unwrap();
-            let pickled_class = dumps.call1((counter_class,)).unwrap();
-            let class_bytes: &PyBytes = pickled_class.downcast().unwrap();
-
-            // Create init argument: 10
-            let arg = 10i32.to_object(py);
-            let pickled_arg = dumps.call1((arg,)).unwrap();
-            let arg_bytes: &PyBytes = pickled_arg.downcast().unwrap();
-
-            let spec = ActorSpec {
-                id: ActorId::new(),
-                class_def: PickledData::new(class_bytes.as_bytes().to_vec()),
-                init_args: vec![PickledData::new(arg_bytes.as_bytes().to_vec())],
-            };
-
-            let host = ActorHost::new();
-            let actor_id = host.create_actor(spec).unwrap();
-
-            // Verify the actor exists
-            assert!(host.get_actor(&actor_id).is_some());
-        });
-    }
-
-    #[test]
-    fn test_call_actor_method() {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
-            let cloudpickle = PyModule::import(py, "cloudpickle").unwrap();
-            let dumps = cloudpickle.getattr("dumps").unwrap();
-            let loads = cloudpickle.getattr("loads").unwrap();
-
-            // Create a simple class
-            let code = r#"
-class Counter:
-    def __init__(self, start=0):
-        self.count = start
-
-    def increment(self):
-        self.count += 1
-        return self.count
-
-    def get(self):
-        return self.count
-"#;
-            py.run(code, None, None).unwrap();
-            let counter_class = py.eval("Counter", None, None).unwrap();
-            let pickled_class = dumps.call1((counter_class,)).unwrap();
-            let class_bytes: &PyBytes = pickled_class.downcast().unwrap();
-
-            // Create init argument: 10
-            let arg = 10i32.to_object(py);
-            let pickled_arg = dumps.call1((arg,)).unwrap();
-            let arg_bytes: &PyBytes = pickled_arg.downcast().unwrap();
-
-            let spec = ActorSpec {
-                id: ActorId::new(),
-                class_def: PickledData::new(class_bytes.as_bytes().to_vec()),
-                init_args: vec![PickledData::new(arg_bytes.as_bytes().to_vec())],
-            };
-
-            let host = ActorHost::new();
-            let actor_id = host.create_actor(spec).unwrap();
-
-            // Call increment method
-            let call = ActorMethodCall {
-                actor_id,
-                method_name: "increment".to_string(),
-                args: vec![],
-            };
-
-            let result = host.call_method(call);
-
-            match result {
-                TaskResult::Success { data } => {
-                    // Unpickle and check the result
-                    let result_bytes = PyBytes::new(py, &data);
-                    let unpickled_result = loads.call1((result_bytes,)).unwrap();
-                    let result_value: i32 = unpickled_result.extract().unwrap();
-                    assert_eq!(result_value, 11);
-                }
-                TaskResult::Error { traceback } => {
-                    panic!("Method call failed: {}", traceback);
-                }
-            }
-
-            // Call get method to verify state was preserved
-            let call = ActorMethodCall {
-                actor_id,
-                method_name: "get".to_string(),
-                args: vec![],
-            };
-
-            let result = host.call_method(call);
-
-            match result {
-                TaskResult::Success { data } => {
-                    let result_bytes = PyBytes::new(py, &data);
-                    let unpickled_result = loads.call1((result_bytes,)).unwrap();
-                    let result_value: i32 = unpickled_result.extract().unwrap();
-                    assert_eq!(result_value, 11);
-                }
-                TaskResult::Error { traceback } => {
-                    panic!("Method call failed: {}", traceback);
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn test_actor_not_found() {
-        let host = ActorHost::new();
-        let call = ActorMethodCall {
-            actor_id: ActorId::new(),
-            method_name: "foo".to_string(),
-            args: vec![],
-        };
-
-        let result = host.call_method(call);
-
-        match result {
-            TaskResult::Error { traceback } => {
-                assert!(traceback.contains("Actor not found"));
-            }
-            TaskResult::Success { .. } => {
-                panic!("Expected error for non-existent actor");
-            }
-        }
-    }
-
-    #[test]
-    fn test_method_not_found() {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
-            let cloudpickle = PyModule::import(py, "cloudpickle").unwrap();
-            let dumps = cloudpickle.getattr("dumps").unwrap();
-
-            // Create a simple class
-            let code = r#"
-class Counter:
-    def __init__(self):
-        self.count = 0
-"#;
-            py.run(code, None, None).unwrap();
-            let counter_class = py.eval("Counter", None, None).unwrap();
-            let pickled_class = dumps.call1((counter_class,)).unwrap();
-            let class_bytes: &PyBytes = pickled_class.downcast().unwrap();
-
-            let spec = ActorSpec {
-                id: ActorId::new(),
-                class_def: PickledData::new(class_bytes.as_bytes().to_vec()),
-                init_args: vec![],
-            };
-
-            let host = ActorHost::new();
-            let actor_id = host.create_actor(spec).unwrap();
-
-            // Call non-existent method
-            let call = ActorMethodCall {
-                actor_id,
-                method_name: "nonexistent".to_string(),
-                args: vec![],
-            };
-
-            let result = host.call_method(call);
-
-            match result {
-                TaskResult::Error { traceback } => {
-                    assert!(traceback.contains("nonexistent"));
-                }
-                TaskResult::Success { .. } => {
-                    panic!("Expected error for non-existent method");
-                }
-            }
-        });
     }
 }

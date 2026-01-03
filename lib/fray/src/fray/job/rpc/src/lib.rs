@@ -42,7 +42,7 @@ fn start_coordinator_server(py: Python, addr: String) -> PyResult<()> {
     });
 
     // Give server time to start
-    py.allow_threads(|| std::thread::sleep(std::time::Duration::from_millis(500)));
+    py.detach(|| std::thread::sleep(std::time::Duration::from_millis(500)));
 
     Ok(())
 }
@@ -56,6 +56,9 @@ fn start_coordinator_server(py: Python, addr: String) -> PyResult<()> {
 /// - Future-based result handling
 #[pymodule]
 fn fray_rpc(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Initialize Python logging bridge
+    pyo3_log::init();
+
     // Add classes
     m.add_class::<RustyContext>()?;
     m.add_class::<RustyFuture>()?;

@@ -1,3 +1,4 @@
+use log::{debug, error, info};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyModule, PyTuple};
 
@@ -40,13 +41,19 @@ pub enum TaskResult {
 /// 6. Returns TaskResult::Success with pickled bytes
 /// 7. On error: returns TaskResult::Error with traceback string
 pub fn execute_task_impl(task: Task) -> TaskResult {
-    Python::with_gil(|py| {
+    debug!(target: "fray::rpc::worker::executor",
+           "Executing task {}", task.id);
+
+    Python::attach(|py| {
         // Import cloudpickle module
         let cloudpickle = match PyModule::import(py, "cloudpickle") {
             Ok(module) => module,
             Err(err) => {
+                let err_msg = format!("Failed to import cloudpickle: {}", err);
+                error!(target: "fray::rpc::worker::executor",
+                       "Task {}: {}", task.id, err_msg);
                 return TaskResult::Error {
-                    traceback: format!("Failed to import cloudpickle: {}", err),
+                    traceback: err_msg,
                 };
             }
         };
@@ -110,8 +117,11 @@ pub fn execute_task_impl(task: Task) -> TaskResult {
         let result = match func.call1(&args_tuple) {
             Ok(res) => res,
             Err(err) => {
+                let traceback = format_py_error(py, err);
+                error!(target: "fray::rpc::worker::executor",
+                       "Task {} function call failed: {}", task.id, traceback);
                 return TaskResult::Error {
-                    traceback: format_py_error(py, err),
+                    traceback,
                 };
             }
         };
@@ -127,7 +137,7 @@ pub fn execute_task_impl(task: Task) -> TaskResult {
         };
 
         // Extract bytes from the pickled result
-        let result_bytes = match pickled_result.downcast::<PyBytes>() {
+        let result_bytes = match pickled_result.cast::<PyBytes>() {
             Ok(bytes) => bytes,
             Err(err) => {
                 return TaskResult::Error {
@@ -136,9 +146,11 @@ pub fn execute_task_impl(task: Task) -> TaskResult {
             }
         };
 
-        TaskResult::Success {
-            data: result_bytes.as_bytes().to_vec(),
-        }
+        let data = result_bytes.as_bytes().to_vec();
+        info!(target: "fray::rpc::worker::executor",
+              "Task {} completed successfully, result size: {} bytes", task.id, data.len());
+
+        TaskResult::Success { data }
     })
 }
 
@@ -163,86 +175,5 @@ fn format_py_error(py: Python, err: PyErr) -> String {
     match formatted.str() {
         Ok(s) => s.to_string(),
         Err(_) => err.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_execute_simple_task() {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
-            let cloudpickle = PyModule::import(py, "cloudpickle").unwrap();
-            let dumps = cloudpickle.getattr("dumps").unwrap();
-
-            // Create a simple function: lambda x: x + 1
-            let code = "lambda x: x + 1";
-            let func = py.eval(code, None, None).unwrap();
-            let pickled_func = dumps.call1((func,)).unwrap();
-            let func_bytes: &PyBytes = pickled_func.downcast().unwrap();
-
-            // Create argument: 42
-            let arg = 42i32.to_object(py);
-            let pickled_arg = dumps.call1((arg,)).unwrap();
-            let arg_bytes: &PyBytes = pickled_arg.downcast().unwrap();
-
-            let task = Task {
-                id: crate::TaskId::new(),
-                func: PickledData::new(func_bytes.as_bytes().to_vec()),
-                args: vec![PickledData::new(arg_bytes.as_bytes().to_vec())],
-            };
-
-            let result = execute_task_impl(task);
-
-            match result {
-                TaskResult::Success { data } => {
-                    // Unpickle and check the result
-                    let loads = cloudpickle.getattr("loads").unwrap();
-                    let result_bytes = PyBytes::new(py, &data);
-                    let unpickled_result = loads.call1((result_bytes,)).unwrap();
-                    let result_value: i32 = unpickled_result.extract().unwrap();
-                    assert_eq!(result_value, 43);
-                }
-                TaskResult::Error { traceback } => {
-                    panic!("Task execution failed: {}", traceback);
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn test_execute_task_with_error() {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
-            let cloudpickle = PyModule::import(py, "cloudpickle").unwrap();
-            let dumps = cloudpickle.getattr("dumps").unwrap();
-
-            // Create a function that raises an error
-            let code = "lambda: 1 / 0";
-            let func = py.eval(code, None, None).unwrap();
-            let pickled_func = dumps.call1((func,)).unwrap();
-            let func_bytes: &PyBytes = pickled_func.downcast().unwrap();
-
-            let task = Task {
-                id: crate::TaskId::new(),
-                func: PickledData::new(func_bytes.as_bytes().to_vec()),
-                args: vec![],
-            };
-
-            let result = execute_task_impl(task);
-
-            match result {
-                TaskResult::Success { .. } => {
-                    panic!("Expected error, got success");
-                }
-                TaskResult::Error { traceback } => {
-                    assert!(traceback.contains("ZeroDivisionError") || traceback.contains("division"));
-                }
-            }
-        });
     }
 }

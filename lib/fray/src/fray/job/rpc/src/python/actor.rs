@@ -174,7 +174,7 @@ impl RustyActorMethod {
         let mut arg_bytes = Vec::new();
         for arg in args.iter() {
             let pickled = dumps.call1((arg,))?;
-            let bytes = pickled.downcast::<PyBytes>()?;
+            let bytes = pickled.cast::<PyBytes>()?;
             arg_bytes.push(bytes.as_bytes().to_vec());
         }
 
@@ -184,7 +184,7 @@ impl RustyActorMethod {
         let method_name = self.method_name.clone();
 
         let task_id = py
-            .allow_threads(|| {
+            .detach(|| {
                 self.runtime.block_on(async move {
                     client
                         .lock()

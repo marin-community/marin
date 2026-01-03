@@ -5,22 +5,24 @@ edition = "2021"
 
 [lib]
 name = "fray_rpc"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib"]
 
 [dependencies]
 parking_lot = "0.12"
-tonic = "0.12"
-prost = "0.13"
-prost-types = "0.13"
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+prost-types = "0.14"
 bytes = "1.8"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.11", features = ["v4"] }
-pyo3 = { version = "0.26", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py311"] }
 anyhow = "1.0"
 thiserror = "2.0"
 log = "0.4"
 env_logger = "0.11"
+pyo3-log = "0.13"
 futures = "0.3"
 
 [build-dependencies]
-tonic-build = "0.12"
+tonic-prost-build = "0.14"

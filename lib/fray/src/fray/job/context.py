@@ -21,8 +21,7 @@ import inspect
 import logging
 import os
 import threading
-from collections.abc import Callable, Generator
-from concurrent.futures import Future, ThreadPoolExecutor, wait
+from collections.abc import Callable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -196,240 +195,6 @@ class _ImmediateFuture:
         return next(self._iterator)
 
 
-class GeneratorFuture:
-    """Wrapper for a Future that yields items, making it iterable.
-
-    This wraps a Future whose result is a list/iterable, allowing
-    iteration via __next__ while maintaining the Future interface
-    for unwrapping in get() and wait().
-    """
-
-    def __init__(self, future: Future):
-        self._future = future
-        self._iterator = None
-
-    def result(self) -> Any:
-        """Get the underlying result from the future."""
-        return self._future.result()
-
-    def __next__(self):
-        """Iterate through the future's result."""
-        if self._iterator is None:
-            self._iterator = iter(self.result())
-        return next(self._iterator)
-
-
-class SyncContext:
-    """Execution context for synchronous (single-threaded) execution."""
-
-    def __init__(self):
-        self._actors: dict[str, Any] = {}
-        self._actor_locks: dict[str, threading.Lock] = {}
-
-    def put(self, obj: Any) -> Any:
-        """Identity operation - no serialization needed."""
-        return obj
-
-    def get(self, ref: Any) -> Any:
-        """Get result, unwrapping _ImmediateFuture if needed."""
-        if isinstance(ref, _ImmediateFuture):
-            return ref.result()
-        return ref
-
-    def run(self, fn: Callable, *args) -> _ImmediateFuture | Generator[_ImmediateFuture, None, None]:
-        """Execute function immediately and wrap result."""
-        result = fn(*args)
-        return _ImmediateFuture(result)
-
-    def wait(self, futures: list[_ImmediateFuture], num_returns: int = 1) -> tuple[list, list]:
-        """All futures are immediately ready."""
-        return futures[:num_returns], futures[num_returns:]
-
-    def create_actor(
-        self,
-        actor_class: type,
-        *args,
-        name: str | None = None,
-        get_if_exists: bool = False,
-        lifetime: Literal["non_detached", "detached"] = "non_detached",
-        preemptible: bool = True,
-        **kwargs,
-    ) -> ThreadActorHandle:
-        if name is not None and name in self._actors:
-            if get_if_exists:
-                return ThreadActorHandle(self._actors[name], self._actor_locks[name], self)
-            else:
-                raise ValueError(f"Actor {name} already exists")
-
-        instance = actor_class(*args, **kwargs)
-        actor_lock = threading.Lock()
-
-        if name is not None:
-            self._actors[name] = instance
-            self._actor_locks[name] = actor_lock
-
-        return ThreadActorHandle(instance, actor_lock, self)
-
-
-class ThreadContext:
-    """Execution context using ThreadPoolExecutor for parallel execution."""
-
-    def __init__(self, max_workers: int):
-        """Initialize thread pool context.
-
-        Args:
-            max_workers: Maximum number of worker threads
-        """
-        self.executor = ThreadPoolExecutor(max_workers=max_workers)
-        self._actors: dict[str, Any] = {}  # name -> instance
-        self._actor_locks: dict[str, threading.Lock] = {}  # per-actor locks
-        self._actors_lock = threading.Lock()  # protects _actors dict
-
-    def put(self, obj: Any) -> Any:
-        """Identity operation - in-process, no serialization needed."""
-        return obj
-
-    def get(self, ref: Any) -> Any:
-        """Get result, handling GeneratorFuture, Future objects and plain values."""
-        if isinstance(ref, GeneratorFuture):
-            return ref.result()
-        if isinstance(ref, Future):
-            return ref.result()
-        return ref
-
-    def run(self, fn: Callable, *args) -> Future | GeneratorFuture:
-        """Submit function to thread pool, returning GeneratorFuture for generator functions."""
-        if inspect.isgeneratorfunction(fn):
-            future = self.executor.submit(lambda: list(fn(*args)))
-            return GeneratorFuture(future)
-        else:
-            return self.executor.submit(fn, *args)
-
-    def wait(self, futures: list[Future | GeneratorFuture], num_returns: int = 1) -> tuple[list, list]:
-        """Wait for futures to complete, unwrapping GeneratorFuture objects."""
-        # Create mapping from raw futures to original (possibly wrapped) futures
-        raw_to_wrapped = {}
-        raw_futures = []
-        for f in futures:
-            if isinstance(f, GeneratorFuture):
-                raw_to_wrapped[f._future] = f
-                raw_futures.append(f._future)
-            else:
-                raw_to_wrapped[f] = f
-                raw_futures.append(f)
-
-        if num_returns >= len(raw_futures):
-            # Wait for all
-            done, pending = wait(raw_futures, return_when="ALL_COMPLETED")
-            return [raw_to_wrapped[f] for f in done], [raw_to_wrapped[f] for f in pending]
-
-        # Wait until at least num_returns are complete
-        done_set = set()
-        pending_set = set(raw_futures)
-
-        while len(done_set) < num_returns:
-            done, pending = wait(pending_set, return_when="FIRST_COMPLETED")
-            done_set.update(done)
-            pending_set = pending
-
-        # Split into ready and pending based on num_returns
-        done_list = list(done_set)[:num_returns]
-        pending_list = list(done_set)[num_returns:] + list(pending_set)
-
-        # Map back to wrapped futures
-        return [raw_to_wrapped[f] for f in done_list], [raw_to_wrapped[f] for f in pending_list]
-
-    def create_actor(
-        self,
-        actor_class: type,
-        *args,
-        name: str | None = None,
-        get_if_exists: bool = False,
-        lifetime: Literal["non_detached", "detached"] = "non_detached",
-        preemptible: bool = True,
-        **kwargs,
-    ) -> ThreadActorHandle:
-        with self._actors_lock:
-            if name is not None and name in self._actors:
-                if get_if_exists:
-                    return ThreadActorHandle(self._actors[name], self._actor_locks[name], self)
-                else:
-                    raise ValueError(f"Actor {name} already exists")
-
-            instance = actor_class(*args, **kwargs)
-            actor_lock = threading.Lock()
-
-            if name is not None:
-                self._actors[name] = instance
-                self._actor_locks[name] = actor_lock
-
-            return ThreadActorHandle(instance, actor_lock, self)
-
-
-class RayContext:
-    """Execution context using Ray for distributed execution."""
-
-    def __init__(self, ray_options: dict | None = None):
-        """Initialize Ray context.
-
-        Args:
-            ray_options: Options to pass to ray.remote() (e.g., memory, num_cpus, num_gpus)
-        """
-        self.ray_options = ray_options or {}
-
-    def put(self, obj: Any):
-        """Store object in Ray's object store."""
-        return ray.put(obj)
-
-    def get(self, ref):
-        """Retrieve an object from Ray's object store."""
-        return ray.get(ref)
-
-    def run(self, fn: Callable, *args):
-        """Execute function remotely with configured Ray options.
-
-        Uses SPREAD scheduling strategy to avoid running on head node.
-        """
-        if self.ray_options:
-            remote_fn = ray.remote(**self.ray_options)(fn)
-        else:
-            remote_fn = ray.remote(fn)
-
-        return remote_fn.options(scheduling_strategy="SPREAD").remote(*args)
-
-    def wait(self, futures: list, num_returns: int = 1) -> tuple[list, list]:
-        """Wait for Ray futures to complete."""
-        # NOTE: fetch_local=False is paramount to avoid copying the data to the Zephyr
-        # driver node, especially for the data futures.
-        ready, pending = ray.wait(futures, num_returns=num_returns, fetch_local=False)
-        return list(ready), list(pending)
-
-    def create_actor(
-        self,
-        actor_class: type,
-        *args,
-        name: str | None = None,
-        get_if_exists: bool = False,
-        lifetime: Literal["non_detached", "detached"] = "non_detached",
-        preemptible: bool = True,
-        **kwargs,
-    ) -> ActorHandle:
-        options = {}
-        if name is not None:
-            options["name"] = name
-        options["get_if_exists"] = get_if_exists
-        options["lifetime"] = lifetime
-
-        # run non-preemptible actors on the head node for persistence
-        if not preemptible:
-            options["resources"] = {"head_node": 0.0001}
-
-        remote_class = ray.remote(actor_class)
-        ray_actor = remote_class.options(**options).remote(*args, **kwargs)
-
-        return ray_actor
-
-
 @dataclass
 class ContextConfig:
     """Configuration for execution context creation.
@@ -503,11 +268,17 @@ def create_job_ctx(
             context_type = "threadpool"
 
     if context_type == "sync":
+        from fray.job.sync_ctx import SyncContext
+
         return SyncContext()
     elif context_type == "threadpool":
+        from fray.job.threadpool_ctx import ThreadContext
+
         workers = min(max_workers, os.cpu_count() or 1)
         return ThreadContext(max_workers=workers)
     elif context_type == "ray":
+        from fray.job.ray_ctx import RayContext
+
         return RayContext(ray_options=ray_options)
     elif context_type == "rpc":
         return RustyContext(coordinator_addr)

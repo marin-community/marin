@@ -16,6 +16,7 @@
 
 import pytest
 from fray.job import RayContext, SimpleActor, SyncContext, ThreadContext, create_job_ctx
+from fray_rpc import RustyContext
 
 
 @pytest.fixture(params=["sync", "threadpool", "ray", "rpc"])
@@ -27,8 +28,6 @@ def job_context(request, ray_cluster, rpc_coordinator):
     elif request.param == "ray":
         return RayContext()
     elif request.param == "rpc":
-        from fray_rpc import RustyContext
-
         return RustyContext(coordinator_addr=rpc_coordinator)
 
 

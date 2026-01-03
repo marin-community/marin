@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package fray;
 
-// ID types - using bytes to store full 16-byte UUIDs
 message ObjectRef {
   bytes id = 1;  // 16-byte UUID
 }

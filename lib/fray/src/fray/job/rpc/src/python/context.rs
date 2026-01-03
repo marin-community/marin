@@ -41,7 +41,7 @@ impl RustyContext {
         })?;
 
         // Connect to coordinator (allow Python to handle potential blocking)
-        py.allow_threads(|| {
+        py.detach(|| {
             let client = runtime.block_on(async {
                 CoordinatorClient::connect(addr).await
                     .map_err(|e| e.to_string())
@@ -72,18 +72,18 @@ impl RustyContext {
     ///
     /// Returns:
     ///     An ObjectRef that can be used to retrieve the object later.
-    fn put(&self, py: Python, obj: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn put(&self, py: Python, obj: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // Import cloudpickle and serialize object
         let cloudpickle = PyModule::import(py, "cloudpickle")?;
         let dumps = cloudpickle.getattr("dumps")?;
         let pickled = dumps.call1((obj,))?;
-        let pickled_bytes = pickled.downcast::<PyBytes>()?;
+        let pickled_bytes = pickled.cast::<PyBytes>()?;
         let data = pickled_bytes.as_bytes().to_vec();
 
         // Send to coordinator
         let client = self.client.clone();
         let object_id = py
-            .allow_threads(|| {
+            .detach(|| {
                 self.runtime
                     .block_on(async move {
                         client.lock().put(data).await
@@ -108,14 +108,14 @@ impl RustyContext {
     ///
     /// Returns:
     ///     The deserialized Python object.
-    fn get(&self, py: Python, object_ref: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn get(&self, py: Python, object_ref: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // Check if it's a RustyFuture
         if let Ok(future) = object_ref.extract::<PyRef<RustyFuture>>() {
             return self.get_future_result(py, &future);
         }
 
         // Check if it's an ObjectRef (dict with _type == "ObjectRef")
-        if let Ok(dict) = object_ref.downcast::<PyDict>() {
+        if let Ok(dict) = object_ref.cast::<PyDict>() {
             if let Ok(Some(ref_type)) = dict.get_item("_type") {
                 let type_str: String = ref_type.extract()?;
                 if type_str == "ObjectRef" {
@@ -132,7 +132,7 @@ impl RustyContext {
 
                     let client = self.client.clone();
                     let data = py
-                        .allow_threads(|| {
+                        .detach(|| {
                             self.runtime
                                 .block_on(async move {
                                     client.lock().get(object_id).await
@@ -150,7 +150,7 @@ impl RustyContext {
                     let cloudpickle = PyModule::import(py, "cloudpickle")?;
                     let loads = cloudpickle.getattr("loads")?;
                     let bytes = PyBytes::new(py, &data);
-                    return loads.call1((bytes,))?.extract();
+                    return Ok(loads.call1((bytes,))?.unbind());
                 }
             }
         }
@@ -160,12 +160,12 @@ impl RustyContext {
     }
 
     /// Get the result of a future (helper method)
-    fn get_future_result(&self, py: Python, future: &RustyFuture) -> PyResult<PyObject> {
+    fn get_future_result(&self, py: Python, future: &RustyFuture) -> PyResult<Py<PyAny>> {
         let task_id = future.get_task_id();
         let client = self.client.clone();
 
         let result_data = py
-            .allow_threads(|| {
+            .detach(|| {
                 self.runtime
                     .block_on(async move {
                         client.lock().get_task_result(task_id).await
@@ -185,7 +185,7 @@ impl RustyContext {
                 let cloudpickle = PyModule::import(py, "cloudpickle")?;
                 let loads = cloudpickle.getattr("loads")?;
                 let bytes = PyBytes::new(py, &data);
-                loads.call1((bytes,))?.extract()
+                Ok(loads.call1((bytes,))?.unbind())
             }
             None => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                 "Task result not available",
@@ -215,14 +215,14 @@ impl RustyContext {
         }
 
         let pickled = dumps.call1((payload_list,))?;
-        let pickled_bytes = pickled.downcast::<PyBytes>()?;
+        let pickled_bytes = pickled.cast::<PyBytes>()?;
         let payload = pickled_bytes.as_bytes().to_vec();
 
         // Submit task
         let task_id = TaskId::new();
         let client = self.client.clone();
 
-        py.allow_threads(|| {
+        py.detach(|| {
             self.runtime
                 .block_on(async move {
                     client.lock().submit_task(task_id, payload).await
@@ -255,7 +255,7 @@ impl RustyContext {
         futures: &Bound<'_, PyList>,
         num_returns: usize,
         _timeout: Option<f64>,
-    ) -> PyResult<(PyObject, PyObject)> {
+    ) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
         // Extract TaskIds from futures
         let mut task_ids = Vec::new();
         for future_obj in futures.iter() {
@@ -267,7 +267,7 @@ impl RustyContext {
         let client = self.client.clone();
         let task_ids_clone = task_ids.clone();
         let ready_ids = py
-            .allow_threads(|| {
+            .detach(|| {
                 self.runtime.block_on(async move {
                     client.lock().wait_tasks(task_ids_clone, num_returns as u32).await
                         .map_err(|e| e.to_string())
@@ -326,7 +326,7 @@ impl RustyContext {
         let client = self.client.clone();
         let name_clone = actor_name.clone();
         let existing = py
-            .allow_threads(|| {
+            .detach(|| {
                 self.runtime
                     .block_on(async move {
                         client.lock().get_actor_by_name(&name_clone).await
@@ -360,14 +360,14 @@ impl RustyContext {
 
         // Pickle the class definition
         let pickled_class = dumps.call1((actor_class,))?;
-        let class_bytes = pickled_class.downcast::<PyBytes>()?;
+        let class_bytes = pickled_class.cast::<PyBytes>()?;
         let class_data = class_bytes.as_bytes().to_vec();
 
         // Pickle the arguments
         let mut arg_bytes = Vec::new();
         for arg in args.iter() {
             let pickled = dumps.call1((arg,))?;
-            let bytes = pickled.downcast::<PyBytes>()?;
+            let bytes = pickled.cast::<PyBytes>()?;
             arg_bytes.push(bytes.as_bytes().to_vec());
         }
 
@@ -375,7 +375,7 @@ impl RustyContext {
         let client = self.client.clone();
         let name_clone = actor_name.clone();
         let actor_id = py
-            .allow_threads(|| {
+            .detach(|| {
                 self.runtime.block_on(async move {
                     client.lock().create_actor(class_data, arg_bytes, name_clone).await
                         .map_err(|e| e.to_string())

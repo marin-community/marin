@@ -8,7 +8,8 @@ This module provides Rust-based implementations of Fray's core primitives:
 - Future-based result handling
 """
 
-from typing import Any, Callable, Optional, TypeVar, overload
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
@@ -193,8 +194,8 @@ class RustyContext:
     def wait(
         self,
         futures: list[RustyFuture],
-        num_returns: Optional[int] = None,
-        timeout: Optional[float] = None,
+        num_returns: int | None = None,
+        timeout: float | None = None,
     ) -> tuple[list[RustyFuture], list[RustyFuture]]:
         """
         Wait for futures to complete.
@@ -213,8 +214,8 @@ class RustyContext:
         self,
         actor_class: type,
         *args: Any,
-        name: Optional[str] = None,
-        lifetime: Optional[str] = None,
+        name: str | None = None,
+        lifetime: str | None = None,
         **kwargs: Any,
     ) -> RustyActorHandle:
         """

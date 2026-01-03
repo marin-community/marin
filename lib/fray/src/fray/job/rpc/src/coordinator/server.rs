@@ -1,5 +1,6 @@
 use crate::coordinator::Coordinator;
 use crate::types::{ActorId, ObjectId, TaskId, WorkerId};
+use log::{debug, error, info, warn};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tonic::{transport::Server, Request, Response, Status};
@@ -30,6 +31,9 @@ impl CoordinatorTrait for CoordinatorImpl {
         let data = py_obj.data;
 
         let object_id = ObjectId::new();
+        debug!(target: "fray::rpc::coordinator::objects",
+               "Storing object {}, size: {} bytes", object_id, data.len());
+
         self.coordinator.object_store.insert(object_id, data);
 
         Ok(Response::new(ObjectRef {
@@ -42,11 +46,21 @@ impl CoordinatorTrait for CoordinatorImpl {
         let object_id = ObjectId::from_proto_bytes(&obj_ref.id)
             .map_err(|e| Status::invalid_argument(e))?;
 
+        debug!(target: "fray::rpc::coordinator::objects",
+               "Retrieving object {}", object_id);
+
         let data = self
             .coordinator
             .object_store
             .get(&object_id)
-            .ok_or_else(|| Status::not_found("Object not found"))?;
+            .ok_or_else(|| {
+                warn!(target: "fray::rpc::coordinator::objects",
+                      "Object {} not found", object_id);
+                Status::not_found("Object not found")
+            })?;
+
+        debug!(target: "fray::rpc::coordinator::objects",
+               "Retrieved object {}, size: {} bytes", object_id, data.len());
 
         Ok(Response::new(PyObject { data }))
     }
@@ -54,26 +68,43 @@ impl CoordinatorTrait for CoordinatorImpl {
     async fn submit_task(&self, request: Request<Task>) -> Result<Response<TaskRef>, Status> {
         let task = request.into_inner();
         let task_id = TaskId::from_proto_bytes(&task.id)
-            .map_err(|e| Status::invalid_argument(e))?;
+            .map_err(|e| {
+                error!(target: "fray::rpc::coordinator::tasks",
+                       "Invalid task ID: {}", e);
+                Status::invalid_argument(e)
+            })?;
+
+        info!(target: "fray::rpc::coordinator::tasks",
+              "Submitting task {}, payload size: {} bytes", task_id, task.payload.len());
 
         // The payload contains a pickled list: [func, arg1, arg2, ...]
         // We need to deserialize it to get the function and arguments
         use pyo3::Python;
         use pyo3::types::{PyBytes, PyList, PyModule};
 
-        let result = Python::with_gil(|py| {
+        let result = Python::attach(|py| {
             // Import cloudpickle
             let cloudpickle = PyModule::import(py, "cloudpickle")
-                .map_err(|e| format!("Failed to import cloudpickle: {}", e))?;
+                .map_err(|e| {
+                    let err_msg = format!("Failed to import cloudpickle: {}", e);
+                    error!(target: "fray::rpc::coordinator::tasks",
+                           "Task {}: {}", task_id, err_msg);
+                    err_msg
+                })?;
             let loads = cloudpickle.getattr("loads")
                 .map_err(|e| format!("Failed to get cloudpickle.loads: {}", e))?;
 
             // Unpickle the payload (should be a list)
             let payload_bytes = PyBytes::new(py, &task.payload);
             let payload_list = loads.call1((payload_bytes,))
-                .map_err(|e| format!("Failed to unpickle payload: {}", e))?;
+                .map_err(|e| {
+                    let err_msg = format!("Failed to unpickle payload: {}", e);
+                    error!(target: "fray::rpc::coordinator::tasks",
+                           "Task {}: {}", task_id, err_msg);
+                    err_msg
+                })?;
 
-            let list = payload_list.downcast::<PyList>()
+            let list = payload_list.cast::<PyList>()
                 .map_err(|e| format!("Payload is not a list: {}", e))?;
 
             if list.is_empty() {
@@ -96,20 +127,32 @@ impl CoordinatorTrait for CoordinatorImpl {
             let args_tuple = PyTuple::new(py, &args_vec)
                 .map_err(|e| format!("Failed to create args tuple: {}", e))?;
             let result = func.call1(&args_tuple)
-                .map_err(|e| format!("Function call failed: {}", e))?;
+                .map_err(|e| {
+                    let err_msg = format!("Function call failed: {}", e);
+                    error!(target: "fray::rpc::coordinator::tasks",
+                           "Task {}: {}", task_id, err_msg);
+                    err_msg
+                })?;
 
             // Pickle the result
             let dumps = cloudpickle.getattr("dumps")
                 .map_err(|e| format!("Failed to get cloudpickle.dumps: {}", e))?;
             let pickled_result = dumps.call1((result,))
                 .map_err(|e| format!("Failed to pickle result: {}", e))?;
-            let result_bytes = pickled_result.downcast::<PyBytes>()
+            let result_bytes = pickled_result.cast::<PyBytes>()
                 .map_err(|e| format!("Failed to convert pickled result to bytes: {}", e))?;
 
             Ok(result_bytes.as_bytes().to_vec())
         });
 
-        let result_data = result.map_err(|e| Status::internal(format!("Task execution failed: {}", e)))?;
+        let result_data = result.map_err(|e| {
+            error!(target: "fray::rpc::coordinator::tasks",
+                   "Task {} failed: {}", task_id, e);
+            Status::internal(format!("Task execution failed: {}", e))
+        })?;
+
+        info!(target: "fray::rpc::coordinator::tasks",
+              "Task {} completed, result size: {} bytes", task_id, result_data.len());
 
         // Store result in task scheduler
         let task_result = crate::types::TaskResult {
@@ -182,6 +225,12 @@ impl CoordinatorTrait for CoordinatorImpl {
         // Generate new actor ID
         let actor_id = ActorId::new();
 
+        info!(target: "fray::rpc::coordinator::actors",
+              "Creating actor {}, name: {:?}, class_def size: {} bytes",
+              actor_id,
+              if spec.name.is_empty() { None } else { Some(&spec.name) },
+              spec.class_def.len());
+
         // Convert protobuf spec to worker ActorSpec
         let worker_spec = crate::worker::actor_host::ActorSpec {
             id: actor_id,
@@ -197,7 +246,11 @@ impl CoordinatorTrait for CoordinatorImpl {
         self.coordinator
             .actor_host
             .create_actor(worker_spec)
-            .map_err(|e| Status::internal(format!("Failed to create actor: {}", e)))?;
+            .map_err(|e| {
+                error!(target: "fray::rpc::coordinator::actors",
+                       "Failed to create actor {}: {}", actor_id, e);
+                Status::internal(format!("Failed to create actor: {}", e))
+            })?;
 
         // Register in actor registry
         use crate::coordinator::{ActorLifetime, ActorMetadata};
@@ -250,13 +303,27 @@ impl CoordinatorTrait for CoordinatorImpl {
 
         // Parse actor ID
         let actor_id = ActorId::from_proto_bytes(&call.actor_id)
-            .map_err(|e| Status::invalid_argument(format!("Invalid actor ID: {}", e)))?;
+            .map_err(|e| {
+                error!(target: "fray::rpc::coordinator::actors",
+                       "Invalid actor ID: {}", e);
+                Status::invalid_argument(format!("Invalid actor ID: {}", e))
+            })?;
+
+        // Save method name for logging before moving call
+        let method_name = call.method_name.clone();
+
+        debug!(target: "fray::rpc::coordinator::actors",
+               "Calling method {} on actor {}", method_name, actor_id);
 
         // Verify actor exists
         self.coordinator
             .actor_registry
             .get(&actor_id)
-            .ok_or_else(|| Status::not_found(format!("Actor {} not found", actor_id)))?;
+            .ok_or_else(|| {
+                warn!(target: "fray::rpc::coordinator::actors",
+                      "Actor {} not found", actor_id);
+                Status::not_found(format!("Actor {} not found", actor_id))
+            })?;
 
         // Create task ID for the method call result
         let task_id = TaskId::new();
@@ -278,12 +345,18 @@ impl CoordinatorTrait for CoordinatorImpl {
         // Convert worker TaskResult to coordinator TaskResult
         let task_result = match result {
             crate::worker::executor::TaskResult::Success { data } => {
+                debug!(target: "fray::rpc::coordinator::actors",
+                       "Actor {} method {} succeeded, result size: {} bytes",
+                       actor_id, method_name, data.len());
                 crate::types::TaskResult {
                     task_id,
                     result: data,
                 }
             }
             crate::worker::executor::TaskResult::Error { traceback } => {
+                error!(target: "fray::rpc::coordinator::actors",
+                       "Actor {} method {} failed: {}",
+                       actor_id, method_name, traceback);
                 return Err(Status::internal(format!(
                     "Actor method failed: {}",
                     traceback
@@ -309,6 +382,9 @@ impl CoordinatorTrait for CoordinatorImpl {
         let worker_id = WorkerId::from_proto_bytes(&req.worker_id)
             .map_err(|e| Status::invalid_argument(e))?;
 
+        info!(target: "fray::rpc::coordinator",
+              "Registering worker {}", worker_id);
+
         self.coordinator.worker_pool.register_worker(worker_id, 10);
 
         Ok(Response::new(RegisterWorkerResponse {}))
@@ -321,6 +397,9 @@ impl CoordinatorTrait for CoordinatorImpl {
         let req = request.into_inner();
         let worker_id = WorkerId::from_proto_bytes(&req.worker_id)
             .map_err(|e| Status::invalid_argument(e))?;
+
+        debug!(target: "fray::rpc::coordinator",
+               "Heartbeat from worker {}", worker_id);
 
         self.coordinator.worker_pool.update_heartbeat(&worker_id);
 
