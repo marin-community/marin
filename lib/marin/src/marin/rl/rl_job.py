@@ -191,7 +191,7 @@ class RLJob:
     # Helper, as Ray doesn't accept method instances
     @staticmethod
     def make_step_fn():
-        return lambda config: RLJob(config).run()
+        return lambda config: RLJob(config).run(config.run_id)
 
     def run(self, name: str):
         """Run with TPU pod deployment."""

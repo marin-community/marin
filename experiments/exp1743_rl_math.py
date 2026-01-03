@@ -36,6 +36,7 @@ from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
 from marin.rl.rl_losses import RLOOLoss
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
+from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from transformers import AutoConfig, AutoTokenizer
 
@@ -131,7 +132,7 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
     trainer_config = TrainerConfig(
         # wandb is persistently crashing
         tracker=WandbConfig(
-            project="marin",
+            project="marin_post_training",
             name=name,
             tags=["rl", "math", model_config.model_name.split("/")[-1]],
         ),
@@ -205,6 +206,11 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
             num_train_slices=1,
             num_rollout_workers=1,
             inference_tpu_type="v4-8",
+        ),
+        rollout_tracker=RolloutTrackerConfig(
+            project="marin_post_training",
+            name=f"{name}-rollout",
+            tags=["rl", "math", "rollout", model_config.model_name.split("/")[-1]],
         ),
     )
 

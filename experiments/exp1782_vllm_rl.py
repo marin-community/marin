@@ -377,7 +377,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         ),
         inflight_weight_updates=experiment_config.inflight_weight_updates,
         rollout_tracker=RolloutTrackerConfig(
-            project="rl-mockenv-testing",
+            project="marin_post_training",
             name=f"{name}-rollout",
             tags=["rl", "math", "rollout", experiment_config.model_config.name.split("/")[-1]],
         ),
