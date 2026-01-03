@@ -2,21 +2,21 @@ data:
   configs:
     owt:
       train_urls:
-        - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz"
+      - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz
       validation_urls:
-        - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz"
+      - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz
     wikitext:
       id: dlwh/wikitext_103_detokenized
     tulu:
       id: allenai/tulu-3-sft-mixture
       format:
-        type: "chat"
+        type: chat
   train_weights:
     owt: 0.6
     wikitext: 0.3
     tulu: 0.1
   tokenizer: stanford-crfm/marin-tokenizer
-  cache_dir: "gs://marin-us-central2/scratch/dlwh/marin_small_fast_mix"
+  cache_dir: gs://marin-us-central2/scratch/dlwh/marin_small_fast_mix
 model:
   type: gpt2
   hidden_dim: 768
@@ -28,12 +28,12 @@ model:
 train_seq_len: 1024
 trainer:
   tracker:
-    project: "levanter"
-    tags: [ "openwebtext+wiki", "gpt2", "itest"]
-
+    project: levanter
+    tags:
+    - openwebtext+wiki
+    - gpt2
+    - itest
   mp: p=f32,c=bfloat16
-  model_axis_size: 1
-
   train_batch_size: 256
   num_train_steps: 20000
 optimizer:

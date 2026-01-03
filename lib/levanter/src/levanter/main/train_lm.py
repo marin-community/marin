@@ -248,11 +248,7 @@ def main(config: TrainLmConfig):
                 every=config.eval_harness_steps,
             )
 
-        @named_jit(
-            in_axis_resources=parameter_axis_mapping,
-            axis_resources=compute_axis_mapping,
-            out_axis_resources=compute_axis_mapping,
-        )
+        @named_jit(axis_resources=compute_axis_mapping)
         def compute_logits(model: LmHeadModel, example: LmExample):
             model = trainer.mp.cast_to_compute(model)
             activations = model.activations(example.tokens, key=None, attn_mask=example.attn_mask)
