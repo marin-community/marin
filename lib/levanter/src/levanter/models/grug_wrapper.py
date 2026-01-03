@@ -39,6 +39,17 @@ class GrugInitFn(Protocol):
     def __call__(self, cfg: GrugConfigLike, *, key: PRNGKeyArray) -> PyTree: ...
 
 
+class GrugLmHeadFn(Protocol):
+    def __call__(self, params: PyTree) -> jax.Array: ...
+
+
+def _default_lm_head_fn(params: PyTree) -> jax.Array:
+    output_proj = getattr(params, "output_proj", None)
+    if output_proj is None:
+        raise AttributeError("GrugWrapper params must have an output_proj field, or provide lm_head_fn.")
+    return output_proj
+
+
 class GrugWrapper(LmHeadModel[Any]):
     """Minimal LmHeadModel wrapper around the standalone Grug transformer."""
 
@@ -46,6 +57,7 @@ class GrugWrapper(LmHeadModel[Any]):
     grug_config: GrugConfigLike
     init_fn: GrugInitFn = eqx.field(static=True)
     forward_fn: GrugForwardFn = eqx.field(static=True)
+    lm_head_fn: GrugLmHeadFn = eqx.field(static=True, default=_default_lm_head_fn)
 
     @property
     def config(self) -> GrugConfigLike:
@@ -85,6 +97,7 @@ class GrugWrapper(LmHeadModel[Any]):
         key: PRNGKeyArray,
         init_fn: GrugInitFn | None = None,
         forward_fn: GrugForwardFn | None = None,
+        lm_head_fn: GrugLmHeadFn | None = None,
     ) -> "GrugWrapper":
         cfg = config
         chosen_init = init_fn or init_parameters
@@ -94,6 +107,7 @@ class GrugWrapper(LmHeadModel[Any]):
             grug_config=cfg,
             init_fn=chosen_init,
             forward_fn=forward_fn or grug_activations,
+            lm_head_fn=lm_head_fn or _default_lm_head_fn,
         )
 
     def activations(
@@ -138,10 +152,7 @@ class GrugWrapper(LmHeadModel[Any]):
         return hax.named(hidden, axes)
 
     def get_lm_head(self) -> NamedArray:
-        output_proj = getattr(self.params, "output_proj", None)
-        if output_proj is None:
-            raise AttributeError("GrugWrapper params must have an output_proj field.")
-        return hax.named(output_proj, (self.Embed, self.Vocab))
+        return hax.named(self.lm_head_fn(self.params), (self.Embed, self.Vocab))
 
     def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "GrugWrapper":
         raise NotImplementedError("GrugWrapper does not yet support resizing the vocabulary.")
