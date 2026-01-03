@@ -26,6 +26,7 @@ import hashlib
 import json
 import logging
 import os
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -38,7 +39,7 @@ import fsspec
 from marin.core.conversation import DolmaConversationOutput, OpenAIChatMessage
 from marin.execution import unwrap_versioned_value
 from marin.utils import fsspec_mkdirs, load_dataset_with_backoff
-from zephyr import Dataset, flow_backend, load_jsonl, write_jsonl_file
+from zephyr import Backend, Dataset, load_jsonl, write_jsonl_file
 
 from .adapters import TransformAdapter
 
@@ -60,6 +61,8 @@ class TransformSFTDatasetConfig:
         adapter (TransformAdapter): Adapter responsible for mapping raw rows into OpenAI chat format.
         subsets (list[str]): Data subsets (from HuggingFace config) to use. Empty list indicates all/default subset(s).
         splits (list[str]): Data splits (e.g., `train`, `validation`) to use. Empty list indicates all splits.
+        max_parallelism (int | None): Maximum number of concurrent shard processing tasks.
+            Set to lower values to avoid HF rate limits. Set to None for default behavior (full concurrency).
     """
 
     source: str
@@ -69,6 +72,7 @@ class TransformSFTDatasetConfig:
     adapter: TransformAdapter
     subsets: list[str] = field(default_factory=lambda: [])  # Default behavior is to use all subsets
     splits: list[str] = field(default_factory=lambda: ["train"])  # Set to train; empty set means everything
+    max_parallelism: int | None = None  # None means use default behavior (full concurrency)
 
 
 @dataclass(frozen=True)
@@ -385,7 +389,14 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
     Each shard is processed independently and written to a separate output file.
     Skips processing for shards with existing metrics files.
     """
-    backend = flow_backend()
+    # Get max_parallelism from config
+    max_parallelism = unwrap_versioned_value(cfg.max_parallelism)
+
+    # Configure backend with concurrency limit if specified
+    if max_parallelism is not None:
+        logger.info(f"Processing with max_parallelism={max_parallelism} to avoid HF rate limits")
+    else:
+        logger.info("Processing with default concurrency")
 
     all_tasks = list(get_dataset_tasks(cfg))
     logger.info(f"Found {len(all_tasks)} total shards across all subset/split combinations")
@@ -396,11 +407,9 @@ def transform_hf_dataset(cfg: TransformSFTDatasetConfig):
         .map(process_shard_task)
         .write_jsonl(f"{metrics_path}/{{shard:05d}}-transform.jsonl", skip_existing=True)
     )
-    metric_files = list(backend.execute(pipeline))
+    metric_files = Backend.execute(pipeline)
 
     # Log summary by subset/split
-    from collections import defaultdict
-
     by_subset_split = defaultdict(list)
     for metric_file in metric_files:
         result = next(iter(load_jsonl(metric_file)))

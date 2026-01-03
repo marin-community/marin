@@ -12,8 +12,9 @@ model:
   num_heads: 12
   num_kv_heads: 12
   num_layers: 12
-  seq_len: 1024
+  max_seq_len: 1024
   gradient_checkpointing: "nested"
+train_seq_len: 1024
 trainer:
   tracker:
     - type: wandb
@@ -21,9 +22,7 @@ trainer:
       tags: [ "openwebtext", "llama", "itest"]
 
   mp: p=f32,c=bfloat16
-  model_axis_size: 1
   per_device_parallelism: -1
-
   train_batch_size: 256
   num_train_steps: 20000
 optimizer:

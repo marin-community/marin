@@ -29,6 +29,9 @@ from pathlib import Path
 import requests
 import yaml
 
+from .dashboard_proxy import ClusterInfo, DashboardProxy, RayPortMapping
+from .auth import maybe_fetch_local_ray_token
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,67 +41,12 @@ class DashboardConfig:
 
     cluster_configs: list[str] = field(default_factory=list)  # Empty = auto-discover
     ray_init: bool = False  # Initialize Ray client
+    proxy_port: int = 9999  # Port for proxy dashboard when multiple clusters
 
     @classmethod
     def from_cluster(cls, cluster_name: str, ray_init: bool = False) -> "DashboardConfig":
         """Create config for a single cluster by name."""
         return cls(cluster_configs=[cluster_name], ray_init=ray_init)
-
-
-@dataclass
-class ResourceUsage:
-    """Resource usage information for a single resource type."""
-
-    used: str
-    total: str
-
-    def percentage(self) -> float:
-        """Calculate usage percentage, handling unit conversions."""
-        try:
-            # Strip common units for numeric comparison
-            used_val = float(self.used.replace("TiB", "").replace("GiB", "").replace("MiB", "").replace("KiB", ""))
-            total_val = float(self.total.replace("TiB", "").replace("GiB", "").replace("MiB", "").replace("KiB", ""))
-            return (used_val / total_val * 100) if total_val > 0 else 0.0
-        except (ValueError, ZeroDivisionError):
-            return 0.0
-
-
-@dataclass
-class ClusterStatus:
-    """Parsed Ray cluster status information."""
-
-    active_nodes: list[str] = field(default_factory=list)
-    pending_nodes: list[str] = field(default_factory=list)
-    resources: dict[str, ResourceUsage] = field(default_factory=dict)
-
-    def active_count(self) -> int:
-        """Number of active nodes."""
-        return len(self.active_nodes)
-
-    def pending_count(self) -> int:
-        """Number of pending nodes."""
-        return len(self.pending_nodes)
-
-
-@dataclass
-class ClusterInfo:
-    """Information about a Ray cluster."""
-
-    cluster_name: str
-    config_path: str
-    head_ip: str  # Internal IP address (10.x.x.x)
-    external_ip: str | None
-    zone: str
-    project: str
-
-
-@dataclass
-class RayPortMapping:
-    """Local port mappings for SSH tunnel to a Ray cluster."""
-
-    dashboard_port: int  # Ray dashboard (default 8265)
-    gcs_port: int  # Ray GCS (default 6379)
-    api_port: int  # Ray API server (default 10001)
 
 
 @dataclass
@@ -108,6 +56,7 @@ class DashboardConnection:
     clusters: dict[str, ClusterInfo]  # cluster_name -> info
     port_mappings: dict[str, RayPortMapping]  # cluster_name -> port mapping
     ssh_process: subprocess.Popen
+    proxy: DashboardProxy | None = None
 
 
 def find_free_port(start_port: int = 9000, max_attempts: int = 1000) -> int:
@@ -365,10 +314,15 @@ def wait_for_tunnel(clusters: dict[str, ClusterInfo], port_mappings: dict[str, R
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def check_dashboard(cluster_name: str, dashboard_port: int) -> tuple[str, bool]:
-        """Check if a dashboard is accessible."""
+        """Check if dashboard is reachable via the HTTP interface.
+
+        With token auth enabled, this may return 401/403 without a token; that's
+        still a useful signal that the tunnel is correctly targeting a live
+        dashboard process.
+        """
         try:
             response = requests.get(f"http://localhost:{dashboard_port}/api/version", timeout=3)
-            return (cluster_name, response.status_code == 200)
+            return (cluster_name, response.status_code in {200, 401, 403})
         except (requests.ConnectionError, requests.Timeout):
             return (cluster_name, False)
 
@@ -432,14 +386,26 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
     port_mappings = allocate_ports(clusters)
     ssh_process = create_ssh_proxy_chain(clusters, port_mappings)
     wait_for_tunnel(clusters, port_mappings)
-    connection = DashboardConnection(clusters=clusters, port_mappings=port_mappings, ssh_process=ssh_process)
+
+    proxy = None
+    if len(clusters) > 1:
+        proxy = DashboardProxy(clusters, port_mappings, config.proxy_port)
+        proxy.start()
+
+    connection = DashboardConnection(
+        clusters=clusters,
+        port_mappings=port_mappings,
+        ssh_process=ssh_process,
+        proxy=proxy,
+    )
 
     # Save original environment variables
     original_env = {
         "RAY_ADDRESS": os.environ.get("RAY_ADDRESS"),
-        "RAY_API_SERVER_ADDRESS": os.environ.get("RAY_API_SERVER_ADDRESS"),
         "RAY_DASHBOARD_ADDRESS": os.environ.get("RAY_DASHBOARD_ADDRESS"),
         "RAY_GCS_ADDRESS": os.environ.get("RAY_GCS_ADDRESS"),
+        "RAY_AUTH_MODE": os.environ.get("RAY_AUTH_MODE"),
+        "RAY_AUTH_TOKEN_PATH": os.environ.get("RAY_AUTH_TOKEN_PATH"),
     }
 
     # For single cluster, set Ray environment variables
@@ -449,9 +415,17 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
 
         # Set new values
         os.environ["RAY_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
-        os.environ["RAY_API_SERVER_ADDRESS"] = f"ray://localhost:{ports.api_port}"
         os.environ["RAY_DASHBOARD_ADDRESS"] = f"http://localhost:{ports.dashboard_port}"
         os.environ["RAY_GCS_ADDRESS"] = f"localhost:{ports.gcs_port}"
+
+    # Marin clusters assume token auth; always enable token mode client-side and
+    # ensure a token is available. We assume all Marin clusters use the same
+    # Secret Manager secret within the same GCP project, so it's OK to auto-fetch
+    # the token if it isn't already present locally.
+    gcp_project = next(iter(clusters.values())).project
+    token_path = maybe_fetch_local_ray_token(gcp_project=gcp_project)
+    os.environ["RAY_AUTH_TOKEN_PATH"] = token_path
+    os.environ["RAY_AUTH_MODE"] = "token"
 
     try:
         # Initialize Ray if requested
@@ -466,6 +440,9 @@ def ray_dashboard(config: DashboardConfig) -> Generator[DashboardConnection, Non
 
     finally:
         # Cleanup
+        if connection.proxy:
+            connection.proxy.stop()
+
         if ssh_process and ssh_process.poll() is None:
             ssh_process.terminate()
             ssh_process.wait()

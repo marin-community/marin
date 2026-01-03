@@ -36,13 +36,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
-import draccus
 from marin.utils import (
     fsspec_exists,
     fsspec_glob,
     rebase_file_path,
 )
-from zephyr import Dataset, flow_backend, load_file
+from zephyr import Backend, Dataset
+from zephyr.readers import InputFileSpec, load_file
 
 
 class FilterType(StrEnum):
@@ -214,10 +214,10 @@ def _compute_percentile_threshold(
             combined.merge(sketch)
         return combined
 
-    backend = flow_backend()
-    result = backend.execute(
+    result = Backend.execute(
         Dataset.from_list(attr_paths)
-        .flat_map(lambda p: load_file(p, columns=["attributes"]))
+        .load_file()
+        .select("attributes")
         .reduce(local_reducer=local_reducer, global_reducer=global_reducer)
     )
 
@@ -292,7 +292,8 @@ def process_file_shard(shard, filters: list[FilterConfig], input_base: str) -> I
 
         # Build dict mapping doc_id -> attributes
         attr_dict = {}
-        for row in load_file(final_attr_path, columns=[get_id_column_name(corpus_type), "attributes"]):
+        columns = [get_id_column_name(corpus_type), "attributes"]
+        for row in load_file(InputFileSpec(path=final_attr_path, columns=columns)):
             doc_id = extract_id(row, corpus_type)
             attr_dict[doc_id] = row["attributes"]
 
@@ -318,23 +319,18 @@ def process_file_shard(shard, filters: list[FilterConfig], input_base: str) -> I
             yield doc
 
 
-@draccus.wrap()
 def consolidate(config: ConsolidateConfig):
     """Consolidate documents by applying filters based on attributes."""
-    backend = flow_backend()
-
     filters = calculate_percentile_thresholds(config)
     input_paths = fsspec_glob(os.path.join(config.input_path, f"**/*.{config.filetype}"))
     logger.info(f"Consolidating {len(input_paths)} document files")
 
     output_pattern = f"{config.output_path}/part-{{shard:04d}}.{config.filetype}"
 
-    results = list(
-        backend.execute(
-            Dataset.from_list(input_paths)
-            .map_shard(lambda shard: process_file_shard(shard, filters, config.input_path))
-            .write_jsonl(output_pattern)
-        )
+    results = Backend.execute(
+        Dataset.from_list(input_paths)
+        .map_shard(lambda shard: process_file_shard(shard, filters, config.input_path))
+        .write_jsonl(output_pattern)
     )
 
     logger.info(f"Consolidation complete. Wrote {len(results)} output files")

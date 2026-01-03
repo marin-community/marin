@@ -36,6 +36,31 @@ logger = logging.getLogger(__name__)
 REMOTE_DASHBOARD_URL = "http://127.0.0.1:8265"
 
 
+def _maybe_enable_ray_token_auth(*, require_token: bool) -> None:
+    """Enable token auth client-side.
+
+    Ray only adds auth headers when `RAY_AUTH_MODE=token` is set in the client
+    process.
+    """
+    os.environ.setdefault("RAY_AUTH_MODE", "token")
+
+    if os.environ.get("RAY_AUTH_TOKEN"):
+        return
+
+    token_path = os.environ.get("RAY_AUTH_TOKEN_PATH")
+    if token_path and Path(token_path).expanduser().exists():
+        return
+
+    if (Path.home() / ".ray" / "auth_token").exists():
+        return
+
+    if require_token:
+        raise RuntimeError(
+            "Ray token authentication is enabled but no local token was found. "
+            "Create a token file at ~/.ray/auth_token, or set RAY_AUTH_TOKEN_PATH / RAY_AUTH_TOKEN."
+        )
+
+
 def parse_user_command_line(command: str) -> dict[str, str]:
     """Extract interesting parts from a user command line."""
     parts = command.strip().split()
@@ -76,11 +101,12 @@ def tpus_per_node(tpu_type: str) -> int:
 
 def make_client() -> JobSubmissionClient:
     """Create a JobSubmissionClient based on environment variables."""
-    if "RAY_ADDRESS" not in os.environ:
-        client = JobSubmissionClient(REMOTE_DASHBOARD_URL)
-    else:
-        client = JobSubmissionClient()
-    return client
+    address = os.environ.get("RAY_ADDRESS", REMOTE_DASHBOARD_URL)
+    # Always pass an explicit HTTP dashboard URL. If Ray has to infer the Jobs
+    # API endpoint (e.g. from a `ray://...` address), it can resolve to the head
+    # node's internal `webui_url`, which isn't reachable from a developer laptop
+    # when using SSH port forwarding.
+    return JobSubmissionClient(address)
 
 
 async def submit_and_track_job(
@@ -101,6 +127,9 @@ async def submit_and_track_job(
 
     # Inject GIT_COMMIT into the environment for logging
     env_vars["GIT_COMMIT"] = subprocess.getoutput("git rev-parse HEAD")
+
+    # Tell Fray to use Ray cluster for job execution
+    env_vars["FRAY_CLUSTER_SPEC"] = "ray"
 
     logger.info(f"Submitting job with entrypoint: {entrypoint}")
     logger.info(f"Extras: {extra}")
@@ -284,6 +313,8 @@ def main():
             cluster_config = args.cluster
         else:
             cluster_config = find_config_by_region(args.cluster)
+
+    _maybe_enable_ray_token_auth(require_token=cluster_config is None)
 
     # Submit the job and track it asynchronously
     if args.submission_id:

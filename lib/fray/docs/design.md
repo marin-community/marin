@@ -116,7 +116,7 @@ They are used in a few places in Marin for distributed coordination. We may
 phase them out but they are useful for compatibility with existing Ray code.
 
 ```python
-from fray import fray_job_ctx
+from fray.job import fray_job_ctx
 
 ctx = fray_job_ctx()
 

@@ -27,7 +27,6 @@ import logging
 import re
 from dataclasses import dataclass
 
-import draccus
 from bs4 import BeautifulSoup
 from marin.schemas.web.convert import ExtractionConfig
 from marin.transform.ar5iv.transform import (
@@ -48,7 +47,7 @@ from marin.transform.ar5iv.transform import (
 )
 from marin.utils import fsspec_glob
 from marin.web.convert import convert_page
-from zephyr import Dataset, flow_backend, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 logger = logging.getLogger("ray")
 
@@ -171,9 +170,7 @@ def process_record(
         raise
 
 
-@draccus.wrap()
 def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
-    backend = flow_backend()
     files = fsspec_glob(f"{cfg.input_path}/*.jsonl.gz")
 
     pipeline = (
@@ -189,4 +186,4 @@ def process_ar5iv_dump(cfg: Ar5ivExtractionConfig) -> None:
         )
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline)

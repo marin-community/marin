@@ -18,7 +18,7 @@ data:
 
 model:  # 8B llama3 class model from sft_tootsie_mixture.yaml
   type: llama
-  seq_len: 4096
+  max_seq_len: 4096
   hidden_dim: 4096
   intermediate_dim: 14336
   num_layers: 32
@@ -31,6 +31,7 @@ model:  # 8B llama3 class model from sft_tootsie_mixture.yaml
   rope:
     type: "llama3"
 
+train_seq_len: 4096
 trainer:
   seed: 0
   tracker:
@@ -45,9 +46,6 @@ trainer:
   train_batch_size: 128
   num_train_steps: 3834
   steps_per_eval: 1000 # Note: No eval dataset specified, so this might not do much unless one is added
-  tensor_parallel_axes: ["mlp", "heads"]
-  fsdp_axis: "embed"
-  batch_axis: "batch"
   checkpointer:
     base_path: "gs://marin-us-central2/checkpoints/llama3_tulu_sft_fixed_tokenizer/seed_0/" # Adjusted path
 

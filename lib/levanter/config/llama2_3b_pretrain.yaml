@@ -1,13 +1,14 @@
 data: !include data/rpv1_llama.yaml
 model:
   type: llama  # Llama2-3.4B
-  seq_len: 4096
+  max_seq_len: 4096
   hidden_dim: 4096
   intermediate_dim: 8640
   num_layers: 26
   num_heads: 32
   attn_backend: jax_flash
   flash_attention_block_size: 2048
+train_seq_len: 4096
 trainer:
   tracker:
     type: wandb
@@ -21,9 +22,6 @@ trainer:
   num_train_steps: 250000  # 3,000,000,000,000 / 4096 / 1024
   steps_per_eval: 1000
   max_eval_batches: 50
-  tensor_parallel_axes: ["mlp", "heads"]
-  fsdp_axis: "embed"
-  batch_axis: "batch"
 optimizer:
   learning_rate: 3E-4  # same as Llama2-7B
   weight_decay: 0.1

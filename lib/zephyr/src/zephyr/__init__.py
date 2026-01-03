@@ -16,28 +16,36 @@
 
 import logging
 
-from zephyr.backend_factory import create_backend, flow_backend, set_flow_backend
-from zephyr.backends import Backend, ExecutionHint
+from zephyr.backends import Backend, BackendConfig
 from zephyr.dataset import Dataset
-from zephyr.readers import load_file, load_jsonl, load_parquet, load_zip_members
-from zephyr.writers import atomic_rename, write_jsonl_file, write_levanter_cache, write_parquet_file
+from zephyr.expr import Expr, col, lit
+from zephyr.plan import ExecutionHint, PhysicalPlan, PhysicalStage, compute_plan
+from zephyr.readers import InputFileSpec, load_file, load_jsonl, load_parquet, load_vortex, load_zip_members
+from zephyr.writers import atomic_rename, write_jsonl_file, write_levanter_cache, write_parquet_file, write_vortex_file
 
 logger = logging.getLogger(__name__)
 
 
 __all__ = [
     "Backend",
+    "BackendConfig",
     "Dataset",
     "ExecutionHint",
+    "Expr",
+    "InputFileSpec",
+    "PhysicalPlan",
+    "PhysicalStage",
     "atomic_rename",
-    "create_backend",
-    "flow_backend",
+    "col",
+    "compute_plan",
+    "lit",
     "load_file",
     "load_jsonl",
     "load_parquet",
+    "load_vortex",
     "load_zip_members",
-    "set_flow_backend",
     "write_jsonl_file",
     "write_levanter_cache",
     "write_parquet_file",
+    "write_vortex_file",
 ]

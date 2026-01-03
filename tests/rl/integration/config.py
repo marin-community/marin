@@ -175,7 +175,7 @@ class DummyTokenizer:
 def create_nano_llama_config() -> LlamaConfig:
     """Create a tiny LlamaConfig for fast testing."""
     return LlamaConfig(
-        seq_len=64,
+        max_seq_len=64,
         hidden_dim=64,
         intermediate_dim=128,
         num_heads=8,
@@ -197,9 +197,6 @@ def create_nano_trainer_config(output_dir: str | Path) -> TrainerConfig:
             base_path=Path(output_dir) / "checkpoints",
             save_interval=datetime.timedelta(seconds=10),
         ),
-        tensor_parallel_axes=["mlp", "kv_heads"],
-        fsdp_axis="embed",
-        batch_axis="batch",
         ray=RayConfig(auto_start_cluster=False),
     )
 

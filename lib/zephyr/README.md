@@ -25,16 +25,21 @@ list(backend.execute(pipeline))
 - `Dataset.from_files(path, pattern)` - glob files
 - `Dataset.from_list(items)` - explicit list
 
+**Loading Files**
+- `.load_{file,parquet,jsonl,vortex}` - load rows from a file
+
 **Transformations:**
 - `.map(fn)` - transform each item
 - `.flat_map(fn)` - expand items (e.g., `load_jsonl`)
-- `.filter(fn)` - filter items
-- `.batch(n)` - group into batches
+- `.filter(fn)` - filter items by function or expression
+- `.select(columna, columnb)` - select out the given columns
+- `.window(n)` - group into batches
 - `.reshard(n)` - redistribute across n shards
 
 **Output:**
 - `.write_jsonl(pattern)` - write JSONL (gzip if `.gz`)
-- `.write_parquet(pattern, schema)` - write Parquet
+- `.write_parquet(pattern, schema)` - write to a Parquet file
+- `.write_vortx(pattern)` - write to a Vortex file
 
 **Backends:**
 - `RayBackend(max_parallelism=N)` - distributed Ray execution
@@ -51,7 +56,7 @@ from zephyr import Dataset, flow_backend, load_jsonl
 backend = flow_backend()
 pipeline = (
     Dataset.from_list(files)
-    .flat_map(load_jsonl)
+    .load_jsonl()
     .map(lambda row: process_record(row, config))
     .filter(lambda x: x is not None)
     .write_jsonl(f"{output}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
@@ -126,3 +131,16 @@ Zephyr consolidates 100+ ad-hoc Ray/HF dataset patterns in Marin into a simple a
 - Automatic chunking to prevent large object overhead
 - fsspec integration (GCS, S3, local)
 - Type-safe operation chaining
+
+
+
+### Notes
+
+#### MacOS
+
+Ray 2.53 enables a `uv run` runtime_env hook by default. When tests are executed
+via `uv run pytest`, that hook can (a) start local workers with a different
+Python version and (b) attempt to inspect the process tree with psutil, which
+may fail in sandboxed Codex environments, at least on MacOS. Disable it for tests.
+See https://github.com/ray-project/ray/issues/59639 for (a). (b) seems like a reasonable
+design choice.

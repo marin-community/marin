@@ -49,7 +49,7 @@ cd data_browser
 uv run python run-dev.py --config conf/local.conf
 ```
 
-This script sets `DEV=true`, starts the Flask backend on the `port` defined in your config (default `5000`, `5050` in `conf/local.conf`), and runs `npm start` for the React app on port 3000 (or the next free port if 3000 is busy). The React dev server automatically opens your browser window, and it proxies every `/api/...` call to the backend port from your config, so you normally do all browsing at `http://localhost:3000` regardless of the backend port. Press `Ctrl+C` once to stop both services. Pass `--backend-only` if you only need the API, or `--config conf/gcp.conf` to point at a different dataset configuration.
+This script sets `DEV=true`, starts the Flask backend on the `port` defined in your config (defaults to `5000`; `conf/local.conf` uses `5050`), and runs `npm start` for the React app on port 3000 (or the next free port if 3000 is busy). The React dev server automatically opens your browser window, and it proxies every `/api/...` call to the backend port from your config, so you normally do all browsing at `http://localhost:3000` regardless of the backend port. Press `Ctrl+C` once to stop both services. Pass `--backend-only` if you only need the API, or `--config conf/gcp.conf` to point at a different dataset configuration.
 
 ### Option 2: Manual Control
 
@@ -76,7 +76,7 @@ cd data_browser
 DEV=true uv run python server.py --config conf/local.conf
 ```
 
-**Access**: `http://localhost:<port>/api/view?path=../local_store` (replace `<port>` with the value from your config; `5050` for `conf/local.conf`).
+**Access**: `http://localhost:<port>/api/view?path=local_store` (replace `<port>` with the value from your config; `5050` for `conf/local.conf`).
 
 ## Configuration Details
 
@@ -84,6 +84,7 @@ DEV=true uv run python server.py --config conf/local.conf
 ```yaml
 root_paths:
 - ../local_store
+port: 5050
 ```
 
 ### GCP Storage (`conf/gcp.conf`)
@@ -96,7 +97,6 @@ blocked_paths:  # Optional: paths to block access to
 - gs://marin-us-central2/private-data/
 max_lines: 100
 max_size: 10000000
-port: 5050  # optional; defaults to 5000 when omitted
 ```
 
 **Note**: GCP configuration requires valid Google Cloud credentials (service account or gcloud auth).

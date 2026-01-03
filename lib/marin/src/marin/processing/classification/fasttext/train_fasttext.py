@@ -22,7 +22,7 @@ import os
 from dataclasses import dataclass, field
 
 import draccus
-
+from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
 from marin.classifiers.fasttext.training import train_model
 from marin.classifiers.utils import CreateDatasetConfig, DatasetConfig, create_dataset
 
@@ -64,14 +64,26 @@ def train(cfg: TrainFasttextClassifierConfig):
         )
 
     input_dataset_path = os.path.join(cfg.output_path, "data")
-    train_model(
-        input_path=input_dataset_path,
-        output_path=cfg.output_path,
-        seed=cfg.seed,
-        val_frac=cfg.val_frac,
-        memory_req=cfg.memory,
-        **cfg.fasttext_args,
+
+    job_request = JobRequest(
+        name=f"train-fasttext-{cfg.output_path}",
+        resources=ResourceConfig.with_cpu(ram=f"{cfg.memory}g", disk="10G", preemptible=True),
+        entrypoint=Entrypoint.from_callable(
+            train_model,
+            kwargs={
+                "input_path": input_dataset_path,
+                "output_path": cfg.output_path,
+                "seed": cfg.seed,
+                "val_frac": cfg.val_frac,
+                "memory_req": cfg.memory,
+                **cfg.fasttext_args,
+            },
+        ),
+        environment=EnvironmentConfig.create(),
     )
+    cluster = current_cluster()
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)
 
 
 @draccus.wrap()

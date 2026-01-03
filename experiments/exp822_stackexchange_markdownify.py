@@ -49,17 +49,13 @@ stackexchange_text_resiliparse_custom_fork = ExecutorStep(
         output_path=this_output_path(),
         extract_method="resiliparse",
         extract_config=ResiliparseConfig(
-            preserve_formatting=True,
-            main_content=True,
             links=False,
-            use_custom_variant=True,
             markdownify_config=HtmlToMarkdownConfig(
                 include_images=False,
                 include_links=False,
             ),
         ),
     ),
-    pip_dependency_groups=["download_transform"],
 ).with_output_path("documents/stackexchange-resiliparse-custom-fork-ab41ad")
 
 

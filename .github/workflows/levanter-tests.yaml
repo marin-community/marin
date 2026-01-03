@@ -26,7 +26,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11"]
-        jax-version: ["0.6.2"]
+        jax-version: ["0.8.0"]
     defaults:
       run:
         working-directory: lib/levanter
@@ -126,7 +126,7 @@ jobs:
 
       - name: Force CPU torch wheel
         run: |
-          TORCH_VERSION=$(sed -n '/^name = "torch"$/ {n; s/version = "\([^"]*\)"/\1/p; q}' uv.lock)
+          TORCH_VERSION=$(sed -n '/^name = "torch"$/ {n; s/version = "\([^"]*\)"/\1/p; q}' ../../uv.lock)
           echo $TORCH_VERSION
           if [[ -z "$TORCH_VERSION" ]]; then
             echo "Unable to determine torch version from uv.lock" >&2
@@ -147,7 +147,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        jax_version: ["0.6.2", "0.7.2", "0.8.0"]
+        jax_version: ["0.8.0"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -178,7 +178,6 @@ jobs:
             --ulimit memlock=68719476736:68719476736 \
             -e TPU_CI=true \
             -e JAX_COORDINATOR_ADDRESS=127.0.0.1 \
-            -e START_RAY_TPU_CLUSTER=true \
             -e TPU_STDERR_LOG_LEVEL=3 \
             -e TPU_MIN_LOG_LEVEL=3 \
             -e PYTHONPATH=/workspace \

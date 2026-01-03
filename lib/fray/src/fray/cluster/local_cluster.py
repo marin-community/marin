@@ -18,16 +18,48 @@ import logging
 import subprocess
 import time
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Thread
 
-from fray.cluster.base import Cluster, CpuConfig, EnvironmentConfig, JobId, JobInfo, JobRequest, TaskStatus
+from fray.cluster.base import Cluster, EnvironmentConfig, JobId, JobInfo, JobRequest, TaskStatus
 from fray.isolated_env import TemporaryVenv
+from fray.job.context import SyncContext, fray_default_job_ctx
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LocalClusterConfig:
+    use_isolated_env: bool = False
+    """If set, run each job in an isolated venv. Otherwise, jobs are launched from the local process."""
+
+
+class FakeProcess(Thread):
+    """Thread wrapper that mimics subprocess.Popen for non-isolated execution."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._exception: BaseException | None = None
+
+    def run(self):
+        try:
+            with fray_default_job_ctx(SyncContext()):
+                super().run()
+        except BaseException as e:
+            self._exception = e
+            raise
+
+    def poll(self) -> int | None:
+        if self.is_alive():
+            return None
+        # Return non-zero exit code if thread raised an exception
+        return 1 if self._exception is not None else 0
+
+    @property
+    def exception(self) -> BaseException | None:
+        return self._exception
 
 
 class LocalCluster(Cluster):
@@ -38,12 +70,21 @@ class LocalCluster(Cluster):
     execution or GPU/TPU resources.
     """
 
-    def __init__(self):
+    def __init__(self, config: LocalClusterConfig = LocalClusterConfig()):
         """Initialize local cluster."""
         self._jobs: dict[JobId, _LocalJob] = {}
+        self.config = config
+
+    @staticmethod
+    def from_spec(spec: dict[str, list[str]]) -> Cluster:
+        logger.info(f"Creating local cluster with spec: {spec}")
+        use_isolated_env = spec.get("use_isolated_env", ["false"])[0].lower() == "true"
+        config = LocalClusterConfig(use_isolated_env=use_isolated_env)
+        logger.info(f"Local cluster config: {config}")
+        return LocalCluster(config=config)
 
     def _get_cluster_spec(self) -> str:
-        return "local"
+        return f"local?use_isolated_env={self.config.use_isolated_env}"
 
     def __enter__(self):
         return self
@@ -62,10 +103,7 @@ class LocalCluster(Cluster):
         self._jobs.clear()
 
     def launch(self, request: JobRequest) -> JobId:
-        """Launch a job as a local subprocess using TemporaryVenv."""
-        if not isinstance(request.resources.device, CpuConfig):
-            raise ValueError("LocalCluster only supports CPU resources")
-
+        """Launch a job as a local subprocess."""
         if request.environment is None:
             raise ValueError("LocalCluster requires environment configuration")
 
@@ -74,46 +112,62 @@ class LocalCluster(Cluster):
 
         logger.info(f"Launching job {job_id} with {replica_count} replica(s)")
 
-        # Create venv with workspace (one-time setup)
-        venv = TemporaryVenv(
-            workspace=request.environment.workspace,
-            pip_install_args=list(request.environment.pip_packages),
-            extras=list(request.environment.extras),
-            prefix=f"fray-job-{job_id}-",
-        )
-        venv.__enter__()  # Creates venv, copies workspace, installs packages
-
-        # Build command (simple binary execution, no uv run wrapper)
-        cmd = self._build_command(request, venv)
-        logger.info(f"Command: {' '.join(cmd)}")
-
-        # Launch all replicas using shared venv
         processes = []
-        try:
-            for replica_id in range(replica_count):
-                replica_env = self._build_replica_env(venv, request.environment, replica_id, replica_count)
-
-                process = venv.run_async(
-                    cmd,
-                    env=replica_env,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
+        process_env = None
+        if not self.config.use_isolated_env:
+            if request.environment.env_vars:
+                logger.warning(
+                    "LocalCluster does not support custom environment variables in non-isolated mode, ignored."
                 )
-                processes.append(process)
-                logger.info(f"Replica {replica_id}/{replica_count} started (PID {process.pid})")
 
-        except Exception as e:
-            venv.__exit__(None, None, None)
-            raise RuntimeError(f"Failed to launch job: {e}") from e
+            # Run callable in parent process as a thread
+            callable_ep = request.entrypoint.callable_entrypoint
+            processes = []
+            for _ in range(replica_count):
+                logger.info(
+                    f"Running callable in parent process with args={callable_ep.args}, kwargs={callable_ep.kwargs}"
+                )
+                process = FakeProcess(
+                    target=callable_ep.callable, args=callable_ep.args, kwargs=callable_ep.kwargs, daemon=True
+                )
+                process.start()
+                processes.append(process)
+        else:
+            process_env = TemporaryVenv(
+                workspace=request.environment.workspace,
+                pip_install_args=list(request.environment.pip_packages),
+                extras=list(request.environment.extras),
+                prefix=f"fray-job-{job_id}-",
+            )
+            process_env.__enter__()
+            cmd = self._build_command(request, process_env)
+            logger.info(f"Command: {' '.join(cmd)}")
+            # Launch all replicas using shared venv
+            try:
+                for replica_id in range(replica_count):
+                    replica_env = self._build_replica_env(process_env, request.environment, replica_id, replica_count)
+
+                    process = process_env.run_async(
+                        cmd,
+                        env=replica_env,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                    )
+                    processes.append(process)
+                    logger.info(f"Replica {replica_id}/{replica_count} started (PID {process.pid})")
+
+            except Exception as e:
+                process_env.__exit__(None, None, None)
+                raise RuntimeError(f"Failed to launch job: {e}") from e
 
         local_job = _LocalJob(
             job_id=job_id,
             request=request,
             processes=processes,
-            venv=venv,
+            process_env=process_env,
             start_time=time.time(),
         )
         self._jobs[job_id] = local_job
@@ -146,39 +200,36 @@ class LocalCluster(Cluster):
     def list_jobs(self) -> list[JobInfo]:
         return [job.get_info() for job in self._jobs.values()]
 
-    @contextmanager
-    def connect(self) -> Iterator[None]:
-        """No-op connection for local cluster."""
-        yield
-
     def _get_job(self, job_id: JobId) -> "_LocalJob":
         if job_id not in self._jobs:
             raise KeyError(f"Job {job_id} not found")
         return self._jobs[job_id]
 
-    def _build_command(self, request: JobRequest, venv) -> list[str]:
+    def _build_command(self, request: JobRequest, process_env: TemporaryVenv) -> list[str]:
         from fray.fn_thunk import create_thunk_entrypoint
 
         entrypoint = request.entrypoint
 
-        if entrypoint.callable is not None:
+        if entrypoint.callable_entrypoint is not None:
             # Ensure tmp directory exists for thunk files
-            tmp_dir = Path(venv.workspace_path) / "tmp"
+            tmp_dir = Path(process_env.workspace_path) / "tmp"
             tmp_dir.mkdir(parents=True, exist_ok=True)
 
+            callable_ep = entrypoint.callable_entrypoint
             entrypoint = create_thunk_entrypoint(
-                entrypoint.callable,
-                prefix=f"{venv.workspace_path}/tmp/{request.name}",
-                function_args=entrypoint.function_args,
+                callable_ep.callable,
+                prefix=f"{process_env.workspace_path}/tmp/",
+                args=callable_ep.args,
+                kwargs=callable_ep.kwargs,
             )
 
-        assert entrypoint.binary is not None, "Entrypoint requires binary"
-        return [entrypoint.binary, *entrypoint.args]
+        assert entrypoint.binary_entrypoint is not None, "Entrypoint requires binary"
+        return [entrypoint.binary_entrypoint.command, *entrypoint.binary_entrypoint.args]
 
     def _build_replica_env(
-        self, venv, env_config: EnvironmentConfig, replica_id: int, replica_count: int
+        self, process_env: TemporaryVenv, env_config: EnvironmentConfig, replica_id: int, replica_count: int
     ) -> dict[str, str]:
-        env = venv.get_env()
+        env = process_env.get_env()
         env.update(
             {
                 "FRAY_CLUSTER_SPEC": self._get_cluster_spec(),
@@ -194,18 +245,27 @@ class LocalCluster(Cluster):
 class _LocalJob:
     """Internal job tracking for LocalCluster."""
 
+    job_id: JobId
+    request: JobRequest
+    processes: list[subprocess.Popen]
+    process_env: TemporaryVenv | None
+    replica_count: int
+    start_time: float
+    log_queue: Queue[str]
+    _log_threads: list[Thread]
+
     def __init__(
         self,
         job_id: JobId,
         request: JobRequest,
         processes: list[subprocess.Popen],
-        venv,
+        process_env: TemporaryVenv | None,
         start_time: float,
     ):
         self.job_id = job_id
         self.request = request
         self.processes = processes
-        self.venv = venv
+        self.process_env = process_env
         self.replica_count = len(processes)
         self.start_time = start_time
         self.log_queue: Queue[str] = Queue()
@@ -214,12 +274,14 @@ class _LocalJob:
     def cleanup(self):
         """Clean up venv and all tracked processes."""
         logger.info(f"Cleaning up job {self.job_id}")
-        if self.venv is not None:
-            self.venv.__exit__(None, None, None)
-            self.venv = None
+        if self.process_env is not None:
+            self.process_env.__exit__(None, None, None)
+            self.process_env = None
 
     def start_log_thread(self):
         """Start background threads to collect logs from all replicas."""
+        if self.process_env is None:
+            return
         thread_logger = logging.getLogger(__name__ + ".log_thread")
 
         def collect_logs_for_replica(replica_id: int, process: subprocess.Popen):
@@ -241,12 +303,19 @@ class _LocalJob:
 
     def get_info(self) -> JobInfo:
         returncodes = [process.poll() for process in self.processes]
+
         task_status = []
-        for rc in returncodes:
+        for i, rc in enumerate(returncodes):
             if rc is None:
                 task_status.append(TaskStatus(status="running", error_message=""))
             elif rc != 0:
-                task_status.append(TaskStatus(status="failed", error_message=f"Replica failed with exit code {rc}"))
+                # Try to get exception message from FakeProcess
+                process = self.processes[i]
+                if isinstance(process, FakeProcess) and process.exception is not None:
+                    error_msg = f"Replica failed: {process.exception}"
+                else:
+                    error_msg = f"Replica failed with exit code {rc}"
+                task_status.append(TaskStatus(status="failed", error_message=error_msg))
             else:
                 task_status.append(TaskStatus(status="succeeded", error_message=""))
 
@@ -257,7 +326,9 @@ class _LocalJob:
         elif any(ts.status == "failed" for ts in task_status):
             # At least one replica failed
             status = "failed"
-            error_message = "One or more replicas failed"
+            # Collect error messages from failed tasks
+            failed_msgs = [ts.error_message for ts in task_status if ts.status == "failed" and ts.error_message]
+            error_message = "; ".join(failed_msgs) if failed_msgs else "One or more replicas failed"
         else:
             status = "succeeded"
             error_message = None

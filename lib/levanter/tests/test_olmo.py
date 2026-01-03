@@ -20,7 +20,7 @@ from test_utils import skip_if_no_torch, use_test_mesh
 
 def _get_olmo2_config(use_flash=False, num_kv_heads=4, seq_len=128) -> Olmo2Config:
     return Olmo2Config(
-        seq_len=seq_len,
+        max_seq_len=seq_len,
         hidden_dim=16,
         intermediate_dim=32,
         num_layers=4,
@@ -37,7 +37,7 @@ def _get_random_inputs(config: Olmo2Config, override_Pos=None):
     if override_Pos is not None:
         Pos = override_Pos
     else:
-        Pos = config.Pos
+        Pos = config.max_Pos
     Batch = hax.Axis("batch", 2)
     x = hax.random.normal(random.PRNGKey(0), (Batch, Pos, Embed))
     mask = AttentionMask.causal()
@@ -51,7 +51,7 @@ def test_olmo2_config():
     config = _get_olmo2_config()
 
     # Check that model axes are properly set
-    assert config.Pos.size == 128
+    assert config.max_Pos.size == 128
     assert config.Embed.size == 16
     assert config.Heads.size == 4
     assert config.KVHeads.size == 4
@@ -71,7 +71,7 @@ def test_olmo2_config():
     config2 = Olmo2Config.from_hf_config(hf_config)
     assert config2.hidden_dim == 16
     assert config2.intermediate_dim == 32
-    assert config2.seq_len == 128
+    assert config2.max_seq_len == 128
     assert config2.num_heads == 4
     assert config2.num_kv_heads == 4
 
@@ -137,12 +137,12 @@ def test_olmo2_attention_vs_hf(use_flash, num_kv_heads):
     x, mask = _get_random_inputs(config)
     x_torch = torch.from_numpy(np.array(x.array))
     batch_size = x_torch.shape[0]
-    explicit_mask = torch.from_numpy(np.array(mask.materialize(config.Pos, config.KeyPos).array))
+    explicit_mask = torch.from_numpy(np.array(mask.materialize(config.max_Pos, config.KeyPos).array))
     mask_torch = explicit_mask.broadcast_to((batch_size, 1, -1, -1))
     mask_torch = (mask_torch == 0).float() * -1e9
 
     out = attention(x, mask)
-    position_ids = torch.arange(config.Pos.size).unsqueeze(0)  # [1, seq_len]
+    position_ids = torch.arange(config.max_Pos.size).unsqueeze(0)  # [1, seq_len]
     cos, sin = hf_rotary_emb(x_torch, position_ids)  # Pass x_torch instead of zeros tensor
     hf_out = hf_attention(
         x_torch, position_ids=position_ids, attention_mask=mask_torch, position_embeddings=(cos, sin)
@@ -171,11 +171,11 @@ def test_olmo2_decoder_layer_vs_hf(num_kv_heads):
     x, mask = _get_random_inputs(olmo2_config)
     x_torch = torch.from_numpy(np.array(x.array))
     batch_size = x_torch.shape[0]
-    explicit_mask = torch.from_numpy(np.array(mask.materialize(olmo2_config.Pos, olmo2_config.KeyPos).array))
+    explicit_mask = torch.from_numpy(np.array(mask.materialize(olmo2_config.max_Pos, olmo2_config.KeyPos).array))
     mask_torch = explicit_mask.broadcast_to((batch_size, 1, -1, -1))
     mask_torch = (mask_torch == 0).float() * -1e10
 
-    position_ids = torch.arange(olmo2_config.Pos.size).unsqueeze(0)
+    position_ids = torch.arange(olmo2_config.max_Pos.size).unsqueeze(0)
     hf_rotary_emb = HFOlmo2RotaryEmbedding(config=hf_config)
     cos, sin = hf_rotary_emb(x_torch, position_ids)
 
@@ -231,7 +231,7 @@ def test_olmo2_lm_head_model(num_kv_heads):
     config = _get_olmo2_config(num_kv_heads=num_kv_heads)
     Batch = hax.Axis("batch", 2)
     Vocab = hax.Axis("vocab", 1000)
-    Pos = config.Pos
+    Pos = config.max_Pos
     input_ids = hax.random.randint(random.PRNGKey(0), (Batch, Pos), 0, Vocab.size)
     mask = AttentionMask.causal()
 
@@ -246,7 +246,7 @@ def test_olmo2_lm_head_model_bwd(use_flash, num_kv_heads):
     config = _get_olmo2_config(use_flash=use_flash, num_kv_heads=num_kv_heads)
     Batch = hax.Axis("batch", 2)
     Vocab = hax.Axis("vocab", 1000)
-    Pos = config.Pos
+    Pos = config.max_Pos
     input_ids = hax.random.randint(random.PRNGKey(0), (Batch, Pos), 0, Vocab.size)
     mask = AttentionMask.causal()
 
@@ -272,7 +272,7 @@ def test_olmo2_roundtrip(scan_layers, num_kv_heads):
     converter = Olmo2Config().hf_checkpoint_converter()
 
     config = Olmo2Config(
-        seq_len=128,
+        max_seq_len=128,
         hidden_dim=16,
         intermediate_dim=32,
         num_heads=4,
@@ -286,7 +286,7 @@ def test_olmo2_roundtrip(scan_layers, num_kv_heads):
     hf_config = config.to_hf_config(Vocab.size)
 
     # Make input and attn_mask
-    input = hax.random.randint(random.PRNGKey(0), config.Pos, 0, Vocab.size)
+    input = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
     attn_mask = AttentionMask.causal()
     input_torch = torch.from_numpy(np.array(input.array)).to(torch.int32).unsqueeze(0)
 
@@ -356,7 +356,7 @@ def test_olmo2_state_dict_consistency(num_kv_heads):
     from transformers import Olmo2ForCausalLM
 
     config = Olmo2Config(
-        seq_len=128,
+        max_seq_len=128,
         hidden_dim=16,
         intermediate_dim=32,
         num_heads=4,
@@ -377,7 +377,7 @@ def test_olmo2_state_dict_consistency(num_kv_heads):
 @pytest.mark.parametrize("num_kv_heads", [2, 4])
 def test_olmo2_seq_len_doesnt_change_predictions(num_kv_heads):
     config = Olmo2Config(
-        seq_len=128,
+        max_seq_len=128,
         hidden_dim=16,
         num_heads=4,
         num_kv_heads=num_kv_heads,
@@ -386,8 +386,8 @@ def test_olmo2_seq_len_doesnt_change_predictions(num_kv_heads):
     Vocab = hax.Axis("vocab", 1000)
 
     # Make input and attn_mask
-    input_256 = hax.random.randint(random.PRNGKey(0), config.Pos, 0, Vocab.size)
-    input_128 = input_256[config.Pos, :128]
+    input_256 = hax.random.randint(random.PRNGKey(0), config.max_Pos, 0, Vocab.size)
+    input_128 = input_256[config.max_Pos, :128]
     attn_mask = AttentionMask.causal()
 
     model = Olmo2LMHeadModel.init(Vocab=Vocab, config=config, key=random.PRNGKey(0))
@@ -398,6 +398,6 @@ def test_olmo2_seq_len_doesnt_change_predictions(num_kv_heads):
         return model_output
 
     jax_out_1 = compute(model, input_128)
-    jax_out_2 = compute(model, input_256)[config.Pos, :128]
+    jax_out_2 = compute(model, input_256)[config.max_Pos, :128]
 
     assert np.allclose(jax_out_1.array, jax_out_2.array, rtol=1e-6, atol=1e-6)

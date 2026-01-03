@@ -30,11 +30,10 @@ import levanter
 import numpy
 from fray.cluster import (
     CpuConfig,
+    EnvironmentConfig,
     Entrypoint,
     JobRequest,
     ResourceConfig,
-    TpuConfig,
-    create_environment,
     current_cluster,
 )
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
@@ -42,6 +41,7 @@ from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.openai import InferenceServer, InferenceServerConfig
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution import ExecutorStep
 from marin.execution.executor import executor_main
 from marin.rl.environments.base import EnvConfig, load_environment_from_spec
@@ -121,11 +121,8 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     # Initialize Levanter with minimal trainer config
     trainer_config = TrainerConfig(
         mp=jmp.get_policy("p=f32,c=bfloat16"),
-        tensor_parallel_axes=["mlp", "heads"],
-        fsdp_axis="embed",
-        batch_axis="batch",
         ray=levanter.distributed.RayConfig(auto_start_cluster=False),
-        model_axis_size=model_axis_size,
+        mesh=MeshConfig(axes={"model": model_axis_size}),
     )
 
     # Setup environment variables
@@ -156,7 +153,7 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
             # Update seq_len for inference
             model_config = dataclasses.replace(
                 model_config,
-                seq_len=config.max_input_length + config.max_output_length,
+                max_seq_len=config.max_input_length + config.max_output_length,
             )
             logger.info(f"Model config: {model_config}")
 
@@ -183,9 +180,9 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
                 hax.axis_mapping(trainer_config.compute_axis_mapping),
             ):
                 inference_server_config = InferenceServerConfig(
-                    # Turn on tensor parallelism for inference
                     trainer=dataclasses.replace(
-                        trainer_config, tensor_parallel_axes=["mlp", "kv_head"], model_axis_size=model_axis_size
+                        trainer_config,
+                        mesh=dataclasses.replace(trainer_config.mesh, shared_mapping={"kv_head": "model"}),
                     ),
                     tokenizer=checkpoint_path,
                     temperature=1.0,
@@ -250,19 +247,13 @@ def _run_evaluation(config: EnvironmentEvalConfig) -> None:
     if config.tpu_type is None:
         resources = ResourceConfig(device=CpuConfig(), replicas=1)
     else:
-        resources = ResourceConfig(
-            device=TpuConfig(type=config.tpu_type),
-            replicas=1,
-            preemptible=True,
-        )
+        resources = ResourceConfig.with_tpu(config.tpu_type)
 
     job_request = JobRequest(
         name=f"evaluate-{config.env_config.env_class}",
-        entrypoint=Entrypoint(
-            callable=_run_inference,
-        ),
+        entrypoint=Entrypoint.from_callable(_run_inference),
         resources=resources,
-        environment=create_environment(
+        environment=EnvironmentConfig.create(
             extras=["post_training", "rl"],
             env_vars=env_vars,
         ),

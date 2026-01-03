@@ -1,10 +1,10 @@
 data:
   train_urls:
-    - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz"
+  - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_train.{1..128}-of-128.jsonl.gz
   validation_urls:
-    - "gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz"
-  cache_dir: "gs://levanter-data/tokenized/openwebtext_llama3/"
-  tokenizer: "nvidia/Llama-3.1-Nemotron-70B-Instruct-HF"
+  - gs://pubmed-mosaic/openwebtext-sharded/openwebtext_val.{1..8}-of-8.jsonl.gz
+  cache_dir: gs://levanter-data/tokenized/openwebtext_llama3/
+  tokenizer: nvidia/Llama-3.1-Nemotron-70B-Instruct-HF
 model:
   type: llama
   hidden_dim: 768
@@ -12,25 +12,26 @@ model:
   num_heads: 12
   num_kv_heads: 12
   num_layers: 12
-  seq_len: 4096
+  max_seq_len: 4096
   gradient_checkpointing: true
   rope:
     type: yarn
     factor: 1.0
     beta_fast: 32.0
     beta_slow: 1.0
-    original_max_position_embeddings: 256 # this is unreasonable just for testing
+    original_max_position_embeddings: 256
     mscale: 1.0
+train_seq_len: 4096
 trainer:
   tracker:
-    - type: wandb
-      project: "levanter"
-      tags: [ "openwebtext", "llama", "itest"]
-
+  - type: wandb
+    project: levanter
+    tags:
+    - openwebtext
+    - llama
+    - itest
   mp: p=f32,c=bfloat16
-  model_axis_size: 1
   per_device_parallelism: -1
-
   train_batch_size: 256
   num_train_steps: 20000
 optimizer:

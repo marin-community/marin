@@ -32,13 +32,12 @@ import os
 import re
 from dataclasses import dataclass
 
-import draccus
 import fsspec
 import requests
 import warcio
 from marin.utils import fsspec_glob
 from tqdm import tqdm
-from zephyr import Dataset, flow_backend
+from zephyr import Backend, Dataset
 from zephyr.writers import ensure_parent_dir
 
 CC_IDX_HOST_URL = "http://34.72.201.218:8080"
@@ -183,8 +182,6 @@ def process_file(task: FileTask) -> None:
         raise
 
 
-# TODO: add executor step for this in the experiments
-@draccus.wrap()
 def extract_dclm_hq_dump(cfg: DCLMHQDownloadConfig) -> None:
     """Process the DCLM HQ dump in the input path and save the results to the output path.
 
@@ -214,9 +211,8 @@ def extract_dclm_hq_dump(cfg: DCLMHQDownloadConfig) -> None:
     logger.info(f"Found {len(all_files)} files to process")
 
     # Single-level parallelism over all files
-    backend = flow_backend()
     pipeline = Dataset.from_list(all_files).map(process_file)
 
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline)
 
     logger.info("Processing completed successfully!")

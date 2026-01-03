@@ -35,6 +35,7 @@ class LmExample(eqx.Module):
         eos_id: Optional[int] = None,
         segment_ids: Optional[hax.NamedArray] = None,
         sliding_window: int | None = None,
+        block_cross_document_attention: bool = True,
     ) -> "LmExample":
         if tokens.ndim != 1:
             raise ValueError("tokens must be a 1D array")
@@ -63,15 +64,16 @@ class LmExample(eqx.Module):
 
         attn_mask = AttentionMask.causal(sliding_window=sliding_window)
 
-        if eos_id is not None and segment_ids is None:
-            # the next token after an eos token is in a new segment
-            eos_mask = hax.roll(tokens, 1, Pos) == eos_id
-            # first token is always in segment 0
-            eos_mask = eos_mask.at[Pos, 0].set(False).astype(jnp.int32)
-            segment_ids = hax.cumsum(eos_mask, axis=Pos)
-            attn_mask = attn_mask.with_segment_ids(segment_ids)
-        elif segment_ids is not None:
-            attn_mask = attn_mask.with_segment_ids(segment_ids)
+        if block_cross_document_attention:
+            if eos_id is not None and segment_ids is None:
+                # the next token after an eos token is in a new segment
+                eos_mask = hax.roll(tokens, 1, Pos) == eos_id
+                # first token is always in segment 0
+                eos_mask = eos_mask.at[Pos, 0].set(False).astype(jnp.int32)
+                segment_ids = hax.cumsum(eos_mask, axis=Pos)
+                attn_mask = attn_mask.with_segment_ids(segment_ids)
+            elif segment_ids is not None:
+                attn_mask = attn_mask.with_segment_ids(segment_ids)
 
         return LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask)
 
@@ -116,20 +118,20 @@ class LmExample(eqx.Module):
 # TODO: for some reason, mypy doesn't like the discover_packages_path argument?
 @dataclass(frozen=True)
 class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_path="levanter.models"):  # type: ignore
+    max_seq_len: int
+
     @property
     @abc.abstractmethod
     def model_type(cls) -> Type[LmT]:
         pass
 
     @property
-    @abc.abstractmethod
     def KeyPos(self) -> Axis:
-        pass
+        return self.max_Pos.alias("key_position")
 
     @property
-    @abc.abstractmethod
-    def Pos(self) -> Axis:
-        pass
+    def max_Pos(self) -> Axis:
+        return Axis("position", self.max_seq_len)
 
     @property
     @abc.abstractmethod
@@ -143,7 +145,7 @@ class LmConfig(draccus.PluginRegistry, abc.ABC, Generic[LmT], discover_packages_
     value because it usually faster to compute the loss in larger blocks.
     """
 
-    def flops_per_token(self, vocab_size: int) -> Optional[float]:
+    def flops_per_token(self, vocab_size: int, context_length: int) -> Optional[float]:
         return None
 
     def total_trainable_params(self, vocab_size: int) -> Optional[float]:
@@ -170,11 +172,16 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
 
     @property
     def Pos(self) -> Axis:
-        return self.config.Pos
+        return self.config.max_Pos
 
     @property
     def KeyPos(self) -> Axis:
         return self.config.KeyPos
+
+    @property
+    def max_length(self) -> int:
+        """Maximum sequence length the model supports for inputs."""
+        return self.config.max_seq_len
 
     @property
     def Embed(self) -> Axis:

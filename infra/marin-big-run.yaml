@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:5b9b77c"
+    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20260102"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -34,16 +34,24 @@ docker:
       - --privileged
       - --ulimit memlock=-1:-1  #
       - --ulimit nofile=1048576:1048576
-      - --shm-size=200gb
+      - --shm-size=100gb
       - -v
       - "/tmp:/tmp"
       # this lets the worker run docker commands and have them run as sibling containers
       - -v "/var/run/docker.sock:/var/run/docker.sock"
+
+      - -e RAY_AUTH_MODE=token
+      - -e RAY_AUTH_TOKEN_PATH=/home/ray/.ray/auth_token
+
     head_run_options:
       - --privileged
       - -v "/tmp:/tmp"
       - --ulimit nofile=1048576:1048576
       - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
+
+      - -e RAY_AUTH_MODE=token
+      - -e RAY_AUTH_TOKEN_PATH=/home/ray/.ray/auth_token
+
 
 
 initialization_commands:
@@ -66,6 +74,11 @@ setup_commands:
   - gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > $HOME/.ssh/marin_ray_cluster.pub
   - gcloud secrets versions access latest --secret=HF_TOKEN > $HOME/.cache/huggingface/token
   - gcloud secrets versions access latest --secret=OPENAI_API_KEY > $HOME/.cache/openai/token
+
+  - mkdir -p $HOME/.ray
+  - gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN > $HOME/.ray/auth_token
+  - chmod 600 $HOME/.ray/auth_token
+
   - echo 'export MARIN_PREFIX="gs://marin-us-central2"' >> $HOME/.bashrc
   - echo 'export BUCKET="marin-us-central2"' >> $HOME/.bashrc
   # cf https://github.com/ray-project/ray/blob/0bc6ec86ffd0fc0d4e43fb339ffe0ac03ee5531b/python/ray/autoscaler/_private/constants.py#L66

@@ -74,7 +74,7 @@ def llama_small_config() -> HFCompatConfig:
     hf_config = AutoConfig.from_pretrained(MODEL_NAME)
     hf_converter = HFCheckpointConverter.from_hf(MODEL_NAME)
     lev_config = hf_converter.config_from_hf_config(hf_config)
-    return dataclasses.replace(lev_config, seq_len=MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS, tokenizer=MODEL_TOKENIZER)
+    return dataclasses.replace(lev_config, max_seq_len=MAX_INPUT_TOKENS + MAX_OUTPUT_TOKENS, tokenizer=MODEL_TOKENIZER)
 
 
 def llama_small_trainer_config(output_dir: str) -> TrainerConfig:
@@ -93,9 +93,6 @@ def llama_small_trainer_config(output_dir: str) -> TrainerConfig:
             base_path=output_dir,
             save_interval=datetime.timedelta(seconds=600),
         ),
-        tensor_parallel_axes=["mlp", "heads"],
-        fsdp_axis="embed",
-        batch_axis="batch",
         ray=RayConfig(auto_start_cluster=False),
     )
 

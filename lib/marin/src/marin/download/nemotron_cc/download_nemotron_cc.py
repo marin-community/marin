@@ -26,13 +26,12 @@ import logging
 import os
 from dataclasses import dataclass
 
-import draccus
 import fsspec
 import requests
 from marin.download.nemotron_cc.utils import decompress_zstd_stream
 from marin.execution import THIS_OUTPUT_PATH
 from marin.utils import fsspec_exists
-from zephyr import Dataset, flow_backend
+from zephyr import Backend, Dataset
 from zephyr.writers import atomic_rename
 
 logger = logging.getLogger("ray")
@@ -90,7 +89,6 @@ class NemotronIngressConfig:
     chunk_size: int = 1048576
 
 
-@draccus.wrap()
 def download_nemotron_cc(cfg: NemotronIngressConfig):
     paths_file_path = os.path.join(cfg.output_path, "data-jsonl.paths")
     logger.info(f"Downloading Nemotron CC path file {paths_file_path}")
@@ -108,7 +106,6 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
 
     logger.info(f"Processing {len(all_files)} Nemotron CC files")
 
-    backend = flow_backend()
     pipeline = (
         Dataset.from_list(all_files)
         .filter(lambda file_info: not fsspec_exists(file_info[1]))
@@ -116,6 +113,6 @@ def download_nemotron_cc(cfg: NemotronIngressConfig):
         .write_jsonl(os.path.join(cfg.output_path, ".metrics/download-{shard:05d}.jsonl"), skip_existing=True)
     )
 
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline)
 
     logger.info(f"Downloaded Nemotron CC files to {cfg.output_path}")

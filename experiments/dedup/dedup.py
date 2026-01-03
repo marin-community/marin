@@ -23,7 +23,6 @@ Usage:
 import logging
 
 from marin.download.huggingface.download_hf import DownloadConfig, download_hf
-import ray
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.processing.classification.deduplication.pipeline import DedupeConfig, DedupMode, deduplicate
 
@@ -61,7 +60,6 @@ fineweb_edu_small_10bt = ExecutorStep(
 )
 
 
-@ray.remote(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "cpu"}})
 def run_dedup(config: DedupeConfig) -> str:
     logger.info(f"Starting dedupe with config: {config}")
 
@@ -82,7 +80,9 @@ def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
     input_path = dataset.cd("sample/10BT")
 
     config = DedupeConfig(
-        input_path=input_path, attribute_name="is_duplicate", mode=DedupMode.DEDUPLICATE, processes=max_parallelism
+        input_path=input_path,
+        mode=DedupMode.EXACT_PARAGRAPH_DEDUPLICATE,
+        processes=max_parallelism,
     )
 
     return ExecutorStep(
@@ -90,7 +90,6 @@ def build_dedup_step(dataset: InputName, max_parallelism: int) -> ExecutorStep:
         fn=run_dedup,
         config=config,
         description=f"Run dedupe on {dataset.name}",
-        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
 

@@ -27,7 +27,7 @@ llama3_tokenizer_vocab_size = 128_256
 llama3_instruct_tokenizer = "meta-llama/Meta-Llama-3.1-8B-Instruct"
 
 llama_nano = LlamaConfig(
-    seq_len=512,
+    max_seq_len=512,
     hidden_dim=32,
     intermediate_dim=128,
     num_heads=2,
@@ -36,16 +36,17 @@ llama_nano = LlamaConfig(
 )
 
 llama_30m = LlamaConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=128,
     intermediate_dim=448,
     num_heads=2,
     num_kv_heads=2,
     num_layers=4,
+    cross_entropy_block_size=32000,
 )
 
 llama_50m = LlamaConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=192,
     intermediate_dim=448,
     num_heads=2,
@@ -55,7 +56,7 @@ llama_50m = LlamaConfig(
 
 
 llama_75m = LlamaConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=256,
     intermediate_dim=896,
     num_heads=4,
@@ -64,7 +65,7 @@ llama_75m = LlamaConfig(
 )
 
 llama_150m = LlamaConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=512,
     intermediate_dim=1792,
     num_heads=8,
@@ -73,7 +74,7 @@ llama_150m = LlamaConfig(
 )
 
 llama_300m = LlamaConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=768,
     intermediate_dim=2688,
     num_heads=12,
@@ -82,7 +83,7 @@ llama_300m = LlamaConfig(
 )
 
 llama_600m = LlamaConfig(
-    seq_len=1024,
+    max_seq_len=1024,
     hidden_dim=1024,
     intermediate_dim=3584,
     num_heads=16,
@@ -91,7 +92,7 @@ llama_600m = LlamaConfig(
 )
 
 llama_1_4b = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2048,
     intermediate_dim=7168,
     num_heads=16,
@@ -100,7 +101,7 @@ llama_1_4b = LlamaConfig(
 )
 
 llama_1_9b = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2048,
     intermediate_dim=7168,
     num_heads=16,
@@ -110,7 +111,7 @@ llama_1_9b = LlamaConfig(
 
 # Llama-3.2-1B
 llama_3_2_1b = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2048,
     intermediate_dim=8192,
     num_heads=32,
@@ -121,7 +122,7 @@ llama_3_2_1b = LlamaConfig(
 )
 
 llama_3_5b = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=2560,
     intermediate_dim=8960,
     num_heads=20,
@@ -130,7 +131,7 @@ llama_3_5b = LlamaConfig(
 )
 
 llama_8b = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=4096,
     intermediate_dim=14336,
     num_heads=32,
@@ -141,7 +142,7 @@ llama_8b = LlamaConfig(
 
 
 llama_8b_old_rotary = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=4096,
     intermediate_dim=14336,
     num_heads=32,
@@ -153,7 +154,7 @@ llama_8b_old_rotary = LlamaConfig(
 
 
 llama_13b = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=5120,
     intermediate_dim=13824,
     num_heads=40,
@@ -165,7 +166,7 @@ llama_13b = LlamaConfig(
 
 # With Llama 3 tokenizer, this is 24B
 llama_24b = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=6144,
     intermediate_dim=16384,
     num_heads=48,
@@ -177,7 +178,7 @@ llama_24b = LlamaConfig(
 
 # same as olmo 32b
 llama_32b = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=5120,
     intermediate_dim=27648,
     num_heads=40,
@@ -188,7 +189,7 @@ llama_32b = LlamaConfig(
 
 
 llama_56b = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=8192,
     intermediate_dim=28672,
     num_heads=64,
@@ -199,7 +200,7 @@ llama_56b = LlamaConfig(
 
 
 llama_70b = LlamaConfig(
-    seq_len=4096,
+    max_seq_len=4096,
     hidden_dim=8192,
     intermediate_dim=28672,
     num_heads=64,

@@ -30,6 +30,7 @@ import draccus
 import jax
 import transformers
 from datasets import load_dataset_builder
+from fray.job import create_job_ctx, get_default_job_ctx
 from levanter.data.text import (
     HfDatasetSourceConfig,
     LmDatasetFormatBase,
@@ -39,11 +40,11 @@ from levanter.data.text import (
     preprocessor_for_format,
 )
 from levanter.store.cache import consolidate_shard_caches
-from zephyr import Dataset, create_backend, flow_backend
+from zephyr import Backend, Dataset
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
-from marin.utils import fsspec_glob, fsspec_isdir, fsspec_size
+from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
 
@@ -257,11 +258,6 @@ def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterat
         yield from batch_processor(batch)
 
 
-def cpu_only_backend():
-    """Return a Zephyr flow backend that uses only CPU devices."""
-    return flow_backend(runtime_env={"env_vars": {"JAX_PLATFORMS": "cpu", "PJRT_DEVICE": "CPU"}})
-
-
 def tokenize(config: TokenizeConfigBase):
     """Tokenize datasets using zephyr pipeline.
 
@@ -298,19 +294,28 @@ def tokenize(config: TokenizeConfigBase):
         raise ValueError("No input files specified. Nothing to do.")
 
     def run_pipeline(paths: list[str], split_name: str) -> None:
-        cluster_backend = cpu_only_backend()
+        prefix = os.path.join(config.cache_path, split_name)
+        ledger_path = os.path.join(prefix, "shard_ledger.json")
 
-        thread_backend = create_backend("threadpool")
+        if fsspec_exists(ledger_path):
+            logger.info(
+                "Shard ledger already exists for %s at %s; skipping tokenization step",
+                split_name,
+                ledger_path,
+            )
+            return
+
+        thread_ctx = create_job_ctx("threadpool")
         file_stats = list(
-            thread_backend.execute(
+            Backend.execute(
                 Dataset.from_list(paths).map(lambda path: {"filename": path, "size": fsspec_size(path)}),
+                context=thread_ctx,
                 verbose=False,
             )
         )
         file_groups = list(_bundle_files_by_size(file_stats, config.window_size_bytes))
         logger.info(f"Grouped {len(paths)} files into {len(file_groups)} groups by size.")
 
-        prefix = os.path.join(config.cache_path, split_name)
         ds = Dataset.from_list(file_groups).flat_map(lambda file_list: file_list).flat_map(load_file)
 
         if config.sample_count is not None:
@@ -318,27 +323,26 @@ def tokenize(config: TokenizeConfigBase):
             ds = ds.take_per_shard(config.sample_count)
 
         temp_shards = (
-            ds.batch(64)
+            ds.window(64)
             .map_shard(lambda batches: _tokenize_batches(config, batches))
             .write_levanter_cache(f"{prefix}/part-{{shard:05d}}", metadata={}, skip_existing=True)
         )
 
-        shard_paths = list(cluster_backend.execute(temp_shards))
+        cluster_ctx = get_default_job_ctx()
+        shard_paths = Backend.execute(temp_shards, context=cluster_ctx)
 
         logger.info("Computing exemplar for cache consolidation")
-        exemplar = cluster_backend.execute(
+        exemplar = Backend.execute(
             Dataset.from_list(paths[0:1])
             .flat_map(load_file)
             .take_per_shard(1)
-            .map_shard(lambda example: _tokenize_batches(config, [example]))
+            .map_shard(lambda example: _tokenize_batches(config, [example])),
+            context=cluster_ctx,
         )[0]
 
         logger.info(f"Tokenization complete, consolidating {len(shard_paths)} shards into {prefix}")
         consolidate_shard_caches(
-            shard_cache_paths=shard_paths,
-            output_path=prefix,
-            exemplar=exemplar,
-            backend=cpu_only_backend(),
+            shard_cache_paths=shard_paths, output_path=prefix, exemplar=exemplar, context=cluster_ctx
         )
 
     if train_paths:
