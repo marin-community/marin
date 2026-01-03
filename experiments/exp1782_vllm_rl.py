@@ -170,6 +170,7 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         n_prompts=experiment_config.n_prompts,  # Overdo it since we know there are some with no signal?
         n_generations_per_prompt=experiment_config.n_generations_per_prompt,
         max_output_tokens=experiment_config.max_output_tokens,
+        top_k=4096,
         # stop_tokens=stop_tokens(experiment_config.model_config.tokenizer),
         stop_tokens=None,
     )
@@ -264,10 +265,9 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
     hf_config = AutoConfig.from_pretrained(experiment_config.model_config.name)
     config = experiment_config.model_config.config_class.from_hf_config(hf_config)
 
-    # Adjust the max sequence length of the model to reduce memory usage.
     model_config = dataclasses.replace(
         config,
-        seq_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,
+        max_seq_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,
         tokenizer=experiment_config.model_config.tokenizer,
         attn_backend=AttentionBackend.SPLASH,
     )
@@ -360,6 +360,8 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
                 stop=get_stop_tokens(experiment_config.model_config.type),
                 include_stop_str_in_output=True,
                 logprobs=1,
+                # Workaround for vllm-project/tpu-inference#1386: default top_k forces greedy sampling
+                top_k=4096,
             ),
         ),
         initial_checkpoint=experiment_config.model_config.checkpoint,
