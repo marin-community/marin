@@ -143,7 +143,16 @@ def main(config: EvalLmConfig):
             for name, dataset in config.data.validation_sets(Pos).items():
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
-                loader = DataLoader(dataset, batch_size=config.trainer.eval_batch_size)
+                # DataLoader needs to know how the batch axis is sharded across the device mesh.
+                # When constructing a DataLoader outside of the evaluator, we must provide the
+                # axis resources mapping (and ensure the mapping context is active) so it can
+                # infer the data-axis size correctly.
+                with hax.axis_mapping(compute_axis_mapping):
+                    loader = DataLoader(
+                        dataset,
+                        batch_size=config.trainer.eval_batch_size,
+                        axis_resources=compute_axis_mapping,
+                    )
                 entropy_hist = levanter.analysis.compute_entropy_histogram(
                     model,
                     Vocab,
@@ -163,7 +172,12 @@ def main(config: EvalLmConfig):
             for name, dataset in config.data.validation_sets(Pos).items():
                 if config.trainer.max_eval_batches is not None:
                     dataset = dataset.take(config.trainer.max_eval_batches * config.trainer.eval_batch_size)
-                    loader = DataLoader(dataset, batch_size=config.trainer.eval_batch_size)
+                    with hax.axis_mapping(compute_axis_mapping):
+                        loader = DataLoader(
+                            dataset,
+                            batch_size=config.trainer.eval_batch_size,
+                            axis_resources=compute_axis_mapping,
+                        )
                     top2_gap_hist = levanter.analysis.compute_top2_gap_histogram(
                         model,
                         Vocab,

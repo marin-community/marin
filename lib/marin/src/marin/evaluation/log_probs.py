@@ -179,22 +179,6 @@ def do_eval_lm(config: LevanterEvalLmConfig) -> None:
     Args:
         config (EvalLmConfig): The configuration for visualizing log probabilities.
     """
-    # _separate_process_fn(eval_lm_main, (config,), {})
-    try:
-        if config.hf_checkpoint and is_remote_path(config.hf_checkpoint):
-            local_path = os.path.join("/dev/shm/levanter-lm-eval", ckpt_path_to_step_name(config.hf_checkpoint))
-            download_from_gcs(
-                gcs_path=config.hf_checkpoint,
-                destination_path=local_path,
-            )
-            config.hf_checkpoint = local_path
-            print(f"Downloaded model checkpoint to {local_path}: {os.listdir(local_path)}")
-        eval_lm_main(config)
-    finally:
-        if config.hf_checkpoint and os.path.exists(config.hf_checkpoint):
-            shutil.rmtree(config.hf_checkpoint, ignore_errors=True)
-            print(f"Deleted local checkpoint at {config.checkpoint_path}.")
-
     try:
         local_path = None
         # for hf checkpoints, levanter can read hf://, gs:// directly

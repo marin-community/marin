@@ -78,6 +78,10 @@ llama_3_2b_4096_config = dataclasses.replace(llama_3_2b_config, max_seq_len=SEQ_
 llama_3_2b_4096_config_all_norm = dataclasses.replace(llama_3_2b_config_all_norm, max_seq_len=SEQ_LEN)
 llama_3_2b_4096_config_qk_norm = dataclasses.replace(llama_3_2b_config_qk_norm, max_seq_len=SEQ_LEN)
 
+
+LONGER_SEQ_LEN = 16_384
+llama_300m_16384_config = dataclasses.replace(llama_300m, max_seq_len=LONGER_SEQ_LEN)
+
 llama_3b_config = LlamaConfig(
     max_seq_len=SEQ_LEN,  # Seq len set to reproduce Tulu SFT
     hidden_dim=3072,
@@ -167,6 +171,7 @@ moe_debug = MixtralConfig(
 model_dict = {
     "150m4k": llama_150m_4096_config,
     "300m4k": llama_300m_4096_config,
+    "300m16k": llama_300m_16384_config,
     "600m4k": llama_600m_4096_config,
     "1_4b4k": llama_1_4b_4096_config,
     "1_9b4k": llama_1_9b_4096_config,

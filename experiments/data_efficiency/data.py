@@ -513,6 +513,129 @@ dclm_train_1m300k_tsp_shuffled_tokenized = default_tokenize(
     tokenizer=llama3_tokenizer,
 )
 
+## wrap icpt
+
+hq_cpr4 = default_download(
+    name="raw/data_efficiency/hq_cpr4",
+    hf_dataset_id="konwoo/dclm-164k-8b-instruct-hq-cpr4-ml1024",
+    revision="c2f99ab",
+    override_output_path="raw/data_efficiency/hq_cpr4",
+)
+
+hq_cpr4_tokenized = default_tokenize(
+    name="data_efficiency/hq_cpr4",
+    dataset=hq_cpr4,
+    tokenizer=llama3_tokenizer,
+)
+
+wrap_icpt_cpr1_fixed = default_download(
+    name="raw/data_efficiency/wrap_icpt_cpr1_fixed",
+    hf_dataset_id="konwoo/wrap_icpt_cpr1_fixed",
+    revision="f688684",
+    override_output_path="raw/data_efficiency/wrap_icpt_cpr1_fixed",
+)
+
+wrap_icpt_cpr1_fixed_tokenized = default_tokenize(
+    name="data_efficiency/wrap_icpt_cpr1_fixed",
+    dataset=wrap_icpt_cpr1_fixed,
+    tokenizer=llama3_tokenizer,
+)
+
+train_as_val = default_download(
+    name="raw/data_efficiency/train_as_val",
+    hf_dataset_id="konwoo/dclm-1k-train-as-val",
+    revision="69dc3a0",
+    override_output_path="raw/data_efficiency/train_as_val",
+)
+
+train_as_val_tokenized = default_tokenize(
+    name="data_efficiency/train_as_val",
+    dataset=train_as_val,
+    tokenizer=llama3_tokenizer,
+    is_validation=True,
+)
+
+## wrap icpt fixed
+
+hq_cpr4_real = default_download(
+    name="raw/data_efficiency/hq_cpr4_real",
+    hf_dataset_id="konwoo/dclm-164k-real-train-8b-instruct-hq-cpr4-ml1024",
+    revision="9b7cdca",
+    override_output_path="raw/data_efficiency/hq_cpr4_real",
+)
+
+hq_cpr4_real_tokenized = default_tokenize(
+    name="data_efficiency/hq_cpr4_real",
+    dataset=hq_cpr4_real,
+    tokenizer=llama3_tokenizer,
+)
+
+hq_cpr4_shuffled = default_download(
+    name="raw/data_efficiency/hq_cpr4_shuffled",
+    hf_dataset_id="konwoo/dclm-hq-cpr4-shuffled",
+    revision="c680220",
+    override_output_path="raw/data_efficiency/hq_cpr4_shuffled",
+)
+
+hq_cpr4_shuffled_tokenized = default_tokenize(
+    name="data_efficiency/hq_cpr4_shuffled",
+    dataset=hq_cpr4_shuffled,
+    tokenizer=llama3_tokenizer,
+)
+
+wrap_icpt_cpr1_real = default_download(
+    name="raw/data_efficiency/wrap_icpt_cpr1_real",
+    hf_dataset_id="konwoo/wic_real_train_cpr1",
+    revision="851ce78",
+    override_output_path="raw/data_efficiency/wrap_icpt_cpr1_real",
+)
+
+wrap_icpt_cpr1_real_tokenized = default_tokenize(
+    name="data_efficiency/wrap_icpt_cpr1_real",
+    dataset=wrap_icpt_cpr1_real,
+    tokenizer=llama3_tokenizer,
+)
+
+wrap_icpt_cpr4_real = default_download(
+    name="raw/data_efficiency/wrap_icpt_cpr4_real",
+    hf_dataset_id="konwoo/wic_real_train_cpr4",
+    revision="d66b6b0",
+    override_output_path="raw/data_efficiency/wrap_icpt_cpr4_real",
+)
+
+wrap_icpt_cpr4_real_tokenized = default_tokenize(
+    name="data_efficiency/wrap_icpt_cpr4_real",
+    dataset=wrap_icpt_cpr4_real,
+    tokenizer=llama3_tokenizer,
+)
+
+
+wrap_icpt_cpr4_shuffled = default_download(
+    name="raw/data_efficiency/wrap_icpt_cpr4_shuffled",
+    hf_dataset_id="konwoo/dclm-hq-cpr4anddoc-shuffled",
+    revision="3f27b12",
+    override_output_path="raw/data_efficiency/wrap_icpt_cpr4_shuffled",
+)
+
+wrap_icpt_cpr4_shuffled_tokenized = default_tokenize(
+    name="data_efficiency/wrap_icpt_cpr4_shuffled",
+    dataset=wrap_icpt_cpr4_shuffled,
+    tokenizer=llama3_tokenizer,
+)
+
+dclm_real_train = default_download(
+    name="raw/data_efficiency/dclm_real_train",
+    hf_dataset_id="konwoo/dclm-164k-real-train",
+    revision="a982851",
+    override_output_path="raw/data_efficiency/dclm_real_train",
+)
+
+dclm_real_train_tokenized = default_tokenize(
+    name="data_efficiency/dclm_real_train",
+    dataset=dclm_real_train,
+    tokenizer=llama3_tokenizer,
+)
+
 data_dict = {
     "dclm": dclm_tokenized,
     "sd0715": sd0715_tokenized,
@@ -559,4 +682,16 @@ data_dict = {
     # 1.3M doc TSP data
     "dc_1_3m": dclm_train_1m300k_tsp_tokenized,
     "dc_1_3m_mix": dclm_train_1m300k_tsp_shuffled_tokenized,
+    # wrap icpt
+    "hq4": hq_cpr4_tokenized,
+    "wic1": wrap_icpt_cpr1_fixed_tokenized,
+    "wrap_ic1": wrap_icpt_cpr1_fixed_tokenized,
+    "tav": train_as_val_tokenized,
+    # fixed wrap icpt
+    "hqr": hq_cpr4_real_tokenized,
+    "wir": wrap_icpt_cpr1_real_tokenized,
+    "dcr": dclm_real_train_tokenized,
+    "hqs": hq_cpr4_shuffled_tokenized,
+    "w4": wrap_icpt_cpr4_real_tokenized,
+    "w4s": wrap_icpt_cpr4_shuffled_tokenized,
 }
