@@ -84,14 +84,14 @@ def init_parameters(cfg: GrugModelConfig, *, key: jax.Array) -> GrugModelParamet
         H, N, M, D, I = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, head_dim, cfg.intermediate_dim
 
         attn = GrugAttentionParams(
-            w_q=reshard(_init_weight(k_q, (H, N * D), cfg.initializer_std), P("data", "tensor")),
-            w_k=reshard(_init_weight(k_k, (H, M * D), cfg.initializer_std), P("data", "tensor")),
-            w_v=reshard(_init_weight(k_v, (H, M * D), cfg.initializer_std), P("data", "tensor")),
-            w_o=reshard(_init_weight(k_o, (N * D, H), cfg.initializer_std), P("tensor", "data")),
+            w_q=reshard(_init_weight(k_q, (H, N * D), cfg.initializer_std), P("data", "model")),
+            w_k=reshard(_init_weight(k_k, (H, M * D), cfg.initializer_std), P("data", "model")),
+            w_v=reshard(_init_weight(k_v, (H, M * D), cfg.initializer_std), P("data", "model")),
+            w_o=reshard(_init_weight(k_o, (N * D, H), cfg.initializer_std), P("model", "data")),
         )
-        mlp_gate = reshard(_init_weight(k_gate, (H, I), cfg.initializer_std), P("data", "tensor"))
-        mlp_up = reshard(_init_weight(k_up, (H, I), cfg.initializer_std), P("data", "tensor"))
-        mlp_down = reshard(_init_weight(k_down, (I, H), cfg.initializer_std), P("tensor", "data"))
+        mlp_gate = reshard(_init_weight(k_gate, (H, I), cfg.initializer_std), P("data", "model"))
+        mlp_up = reshard(_init_weight(k_up, (H, I), cfg.initializer_std), P("data", "model"))
+        mlp_down = reshard(_init_weight(k_down, (I, H), cfg.initializer_std), P("model", "data"))
         # keep rms replicated
         rms_attn = jnp.ones((H,), dtype=jnp.float32)
         rms_mlp = jnp.ones((H,), dtype=jnp.float32)

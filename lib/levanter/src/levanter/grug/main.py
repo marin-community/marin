@@ -54,7 +54,7 @@ def create_mesh() -> jax.sharding.Mesh:
         raise RuntimeError("No JAX devices available")
     mesh = jax.make_mesh(
         (1, 1, len(devices)),
-        axis_names=("replica", "data", "tensor"),
+        axis_names=("replica", "data", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
     )
     jax.set_mesh(mesh)
