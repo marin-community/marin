@@ -22,7 +22,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.11"]
-        jax-version: ["0.8.0"]
+        jax-version: ["0.8.2"]
 
     defaults:
       run:
