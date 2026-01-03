@@ -110,6 +110,18 @@ conflicts = [
         { extra = "gpu" },
         { extra = "cpu" },
     ],
+    [
+        { extra = "vllm" },
+        { extra = "cpu" },
+    ],
+    [
+        { extra = "vllm" },
+        { extra = "tpu" },
+    ],
+    [
+        { extra = "vllm" },
+        { extra = "cuda12" },
+    ],
 ]
 
 
@@ -130,6 +142,10 @@ rl = [
 eval = [
     "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
 ]
+
+vllm =["vllm-tpu==0.13.2post6"]
+
+math = ["pylatexenc", "sympy"]
 
 [[tool.uv.index]]
 name = "marin-resiliparse"

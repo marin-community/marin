@@ -20,6 +20,7 @@ import os
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
+from levanter.layers.attention import AttentionBackend
 from levanter.compat.hf_checkpoints import HFCompatConfig
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
@@ -27,7 +28,7 @@ from levanter.models.qwen import Qwen3Config
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig
 
 from levanter.utils.mesh import MeshConfig
 from marin.execution.executor import (
@@ -39,11 +40,16 @@ from marin.rl.curriculum import CurriculumConfig, LessonConfig
 from marin.rl.environments import EnvConfig
 from marin.rl.replay_buffer import ReplayBufferConfig
 from marin.rl.rl_job import RLJob, RLJobConfig, RunConfig, TrainParams
-from marin.rl.rl_losses import RLOOLoss, GRPOLoss, RLLossModule
+from marin.rl.rl_losses import RLOOLoss, RLLossModule
 from marin.rl.rollout_storage import RolloutStorageConfig, StorageType
+from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
-from vllm import SamplingParams
+
+try:
+    from vllm import SamplingParams
+except ImportError:
+    SamplingParams = None
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +88,15 @@ qwen3_1_7b = ModelConfig(
     checkpoint="Qwen/Qwen3-1.7B",
     config_class=Qwen3Config,
 )
+qwen3_8b = ModelConfig(
+    name="Qwen/Qwen3-8B",
+    type="qwen",
+    tokenizer="Qwen/Qwen3-8B",
+    checkpoint="Qwen/Qwen3-8B",
+    config_class=Qwen3Config,
+)
+
+
 qwen3_0_6b = ModelConfig(
     name="Qwen/Qwen3-0.6B",
     type="qwen",
@@ -96,6 +111,13 @@ llama_3_1_8b = ModelConfig(
     checkpoint="meta-llama/Llama-3.1-8B-Instruct",
     config_class=LlamaConfig,
 )
+marin_8b_instruct = ModelConfig(
+    name="marin-community/marin-8b-instruct",
+    type="llama",
+    tokenizer="marin-community/marin-8b-instruct",
+    checkpoint="marin-community/marin-8b-instruct",
+    config_class=LlamaConfig,
+)
 
 
 @dataclasses.dataclass
@@ -104,17 +126,37 @@ class ExperimentConfig:
     rl_loss: RLLossModule
     experiment_name_suffix: str
 
+    # trainer params
+    train_batch_size: int = 1024
+    per_device_parallelism: int = 16
 
-MODEL = llama1b
-WANDB_PROJECT = f"rl_testing_{MODEL.name.split('/')[-1].lower()}"
-MAX_TOKENS = 1024
-RUN_ID = f"test-{MODEL.name.split('/')[-1]}-curriculum"
+    # some sampling params
+    max_input_tokens: int = 4096
+    max_output_tokens: int = 512
+    n_prompts: int = 64
+    n_generations_per_prompt: int = 16
+
+    debug_mode: bool = False
+
+    inflight_weight_updates: bool = False
+    """Whether to use inflight weight updates."""
+
+    max_rollout_step_delay: int = 0
+    """Maximum number of steps to delay before applying weight updates."""
+
+    learning_rate: float = 1e-7
+
+    max_grad_norm: float = 1.00
 
 
-def stop_tokens(tokenizer_name: str):
-    """Infer the stop tokens from the given tokenizer."""
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    return [tokenizer.eos_token_id]
+def get_stop_tokens(model_type: str) -> list[str]:
+    """Get model-specific stop tokens."""
+    if model_type == "llama":
+        return ["<|eot_id|>"]
+    elif model_type == "qwen":
+        return ["<|im_end|>"]
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
 
 
 def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> CurriculumConfig:
@@ -125,11 +167,20 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
 
     default_sampling = SamplingParams(
         temperature=1.0,
-        n_prompts=32,
-        n_generations_per_prompt=8,
-        max_tokens=1024,
+        n_prompts=experiment_config.n_prompts,  # Overdo it since we know there are some with no signal?
+        n_generations_per_prompt=experiment_config.n_generations_per_prompt,
+        max_output_tokens=experiment_config.max_output_tokens,
+        # stop_tokens=stop_tokens(experiment_config.model_config.tokenizer),
         stop_tokens=None,
     )
+
+    # story_sampling = SamplingParams(
+    #     temperature=1.0,
+    #     n_prompts=8,
+    #     n_generations_per_prompt=8,
+    #     max_tokens=MAX_OUTPUT_TOKENS,
+    #     stop_tokens=None,
+    # )
 
     lessons = {
         # "number_comparison": LessonConfig(
@@ -178,13 +229,34 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
             # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
             sampling_params=default_sampling,
         ),
+        # "story_generation": LessonConfig(
+        #     lesson_id="story_generation",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.mock_env.MockEnv",
+        #         env_args={"task_type": "story_generation", "seed": 42},
+        #     ),
+        #     dependencies=[],
+        #     sampling_params=story_sampling,
+        # ),
+        # "gsm8k": LessonConfig(
+        #     lesson_id="gsm8k",
+        #     env_config=EnvConfig(
+        #         env_class="marin.rl.environments.gsm8k_env.GSM8KEnv",
+        #         env_args={"seed": 42},
+        #     ),
+        #     dependencies=[],
+        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
+        #     sampling_params=default_sampling,
+        # ),
     }
 
     return CurriculumConfig(
         lessons=lessons,
-        eval_frequency=100,
+        eval_frequency=1,  # Run full eval after every step
+        micro_eval_frequency=9999999,  # Effectively disable micro-eval
         actor_name=f"curriculum-{run_id}",
         eval_n_examples=500,  # for math500
+        max_seq_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,
     )
 
 
@@ -193,14 +265,19 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
     config = experiment_config.model_config.config_class.from_hf_config(hf_config)
 
     # Adjust the max sequence length of the model to reduce memory usage.
-    model_config = dataclasses.replace(config, seq_len=MAX_TOKENS, tokenizer=experiment_config.model_config.tokenizer)
+    model_config = dataclasses.replace(
+        config,
+        seq_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,
+        tokenizer=experiment_config.model_config.tokenizer,
+        attn_backend=AttentionBackend.SPLASH,
+    )
 
     _ = WandbConfig
 
     trainer_config = TrainerConfig(
         # wandb is persistently crashing
         tracker=WandbConfig(
-            project="rl-mockenv-testing",
+            project="marin_post_training",
             name=name,
             tags=["rl", "math", experiment_config.model_config.name.split("/")[-1]],
         ),
@@ -212,9 +289,9 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         mp=jmp.get_policy("p=f32,c=bfloat16"),
         # Set the train batch size to num_rollout_workers * n_generations * n_prompts
         # to ensure we accept an entire training batch from the rollout workers.
-        train_batch_size=256,
+        train_batch_size=experiment_config.train_batch_size,
         # microbatch to avoid OOM
-        per_device_parallelism=16,
+        per_device_parallelism=experiment_config.per_device_parallelism,
         num_train_steps=500,
         steps_per_eval=100,
         checkpointer=CheckpointerConfig(
@@ -226,13 +303,17 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
         ),
         ray=RayConfig(auto_start_cluster=False),
+        # distributed=DistributedConfig(
+        #     initialize_jax_distributed=False,
+        # )
     )
 
     opt_config = AdamConfig(
-        learning_rate=1e-7,
-        weight_decay=1e-2,
+        learning_rate=experiment_config.learning_rate,
+        weight_decay=0.0,
         warmup=0,
         lr_schedule="constant",
+        max_grad_norm=experiment_config.max_grad_norm,
     )
 
     rollout_storage = RolloutStorageConfig(
@@ -243,7 +324,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         mode=WeightTransferMode.ARROW_FLIGHT,
         sync_interval_steps=1,
         # We are running on-policy, so wait for new weights from the trainer after each episode.
-        max_weight_transfer_wait_time=120,
+        max_weight_transfer_wait_time=300,
         coordinator_name=f"weight_transfer_coordinator_{name}",
     )
 
@@ -260,22 +341,24 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
                 capacity=4096,
                 alpha=3,
                 max_samples=1,
-                max_rollout_step_delay=0,
+                max_rollout_step_delay=experiment_config.max_rollout_step_delay,
             ),
         ),
         curriculum=curriculum_config,
         tokenizer=experiment_config.model_config.tokenizer,
         inference_type="vllm",
+        # inference_type="levanter",
         inference_config=vLLMInferenceContextConfig(
             model_name=experiment_config.model_config.name,
-            max_model_len=4096,
+            max_model_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,
             tensor_parallel_size=8,
             gpu_memory_utilization=0.90,
             sampling_params=SamplingParams(
                 temperature=1.0,
                 n=8,
-                max_tokens=1024,
-                stop=None,
+                max_tokens=experiment_config.max_output_tokens,
+                stop=get_stop_tokens(experiment_config.model_config.type),
+                include_stop_str_in_output=True,
                 logprobs=1,
             ),
         ),
@@ -283,12 +366,18 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         rollout_storage=rollout_storage,
         weight_transfer=weight_transfer,
         run_id=name,
-        log_freq=10,
+        log_freq=1,
         run_config=RunConfig(
             train_tpu_type="v5p-8",
             num_train_slices=1,
             num_rollout_workers=1,
             inference_tpu_type="v5p-8",
+        ),
+        inflight_weight_updates=experiment_config.inflight_weight_updates,
+        rollout_tracker=RolloutTrackerConfig(
+            project="rl-mockenv-testing",
+            name=f"{name}-rollout",
+            tags=["rl", "math", "rollout", experiment_config.model_config.name.split("/")[-1]],
         ),
     )
 
@@ -306,31 +395,43 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    # experiment_configs = [llama1b, qwen4b, qwen3_1_7b, qwen3_0_6b]
-    experiment_configs = [
-        ExperimentConfig(
-            model_config=llama_3_1_8b, rl_loss=RLOOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="rloo"
+    llama_8b = ExperimentConfig(
+        model_config=llama_3_1_8b,
+        rl_loss=RLOOLoss(
+            kl_coef=0.0,
+            clip_epsilon_low=0.2,
+            clip_epsilon_high=0.28,
+            synchronous=True,
+            do_trainer_inference_mismatch_importance_sampling=True,
+            tis_importance_sampling_ratio_max=2.0,
+            do_overlong_filtering=True,
+            vocab_tile_size=32064,
         ),
-        ExperimentConfig(
-            model_config=llama_3_1_8b, rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2), experiment_name_suffix="grpo"
-        ),
-        ExperimentConfig(
-            model_config=llama_3_1_8b,
-            rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2, divide_by_entire_length=True),
-            experiment_name_suffix="grpo-div-len",
-        ),
-        ExperimentConfig(
-            model_config=llama_3_1_8b,
-            rl_loss=GRPOLoss(kl_coef=0.01, clip_epsilon=0.2, divide_by_std=False),
-            experiment_name_suffix="grpo-div-std",
-        ),
-    ]
+        experiment_name_suffix="math-lr=2e-6-bs=1024",
+        train_batch_size=1024,
+        per_device_parallelism=16,
+        learning_rate=2e-6,
+        max_input_tokens=1024,
+        max_output_tokens=1024,
+        n_prompts=64,
+        n_generations_per_prompt=16,
+        inflight_weight_updates=True,
+        max_rollout_step_delay=1,
+    )
+
+    experiment_configs = [llama_8b]
     experiments = []
+    datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     for experiment_config in experiment_configs:
         model_base_name = experiment_config.model_config.name.split("/")[-1].lower()
+        model_base_name = model_base_name.replace("-instruct", "i")
+
+        # Always include timestamp to avoid cache collisions between runs
+        name = f"{model_base_name}-{experiment_config.experiment_name_suffix}-{datestamp}"
+
         experiments.append(
             rl_train(
-                name=f"{model_base_name}-math-lr1e-7-bsz256-tok1024-sync-{experiment_config.experiment_name_suffix}-2",
+                name=name,
                 experiment_config=experiment_config,
             ),
         )

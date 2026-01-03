@@ -21,6 +21,11 @@ User -> Preset Prompt, Engine Kwargs, File -> Generate Text
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
+import os
+
+# Disable multiprocessing since running on Ray, easier to clean
+# resources if not using a multiprocess.
+os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
 logger = logging.getLogger(__name__)
 

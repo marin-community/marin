@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import jax
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -40,6 +41,7 @@ class MarinEnv(ABC):
         mode: str = "train",
         max_tokens: int | None = None,
         stop: list[str] | None = None,
+        system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
         """Sample examples, generate responses, and create rollouts.
 
@@ -81,3 +83,11 @@ def load_environment_from_spec(config: EnvConfig) -> MarinEnv:
 
     # TODO(power) - thread random seed from the rollout worker.
     return env_class(**env_args)
+
+
+def extract_seed(prng_key) -> int:
+    """Extract an integer seed from either a JAX PRNG key or an integer."""
+    if isinstance(prng_key, int):
+        return prng_key
+    # It's a JAX key - extract seed using JAX
+    return jax.random.randint(prng_key, (), 0, 1_000_000).item()

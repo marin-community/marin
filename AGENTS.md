@@ -93,3 +93,53 @@ You don't generate comments that merely restate the code, e.g.
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
 
 > This file will be expanded as agent workflows and best practices evolve.
+
+
+## Infrastructure Note: Ray TPU Worker Disk Cleanup
+This document summarizes the investigation and resolution of the "No space left on device" error encountered on the us-central1-vllm cluster on 2025-12-20.
+
+### Issue Summary
+Symptoms: Ray jobs failed during runtime environment setup with OSError: [Errno 28] No space left on device during pip install. Root Cause: The /tmp/gcsfuse_mount directory on several TPU workers was not correctly mounted to GCS, causing model downloads to write directly to the local boot disk (100GB). Specifically, /tmp/gcsfuse_mount/models was consuming ~62GB per worker.
+
+### Investigative Commands
+1. Identify Workers with Low Disk Space
+Use the provided cleanup script in dry-run mode to scan the cluster:
+
+```bash
+uv run scripts/ray/cleanup_disk.py --config infra/marin-us-central1-vllm.yaml --threshold 10 --dry-run
+```
+
+2. Inspect a Specific Worker
+SSH into a suspected worker to verify disk usage and mount status:
+
+```bash
+# Check disk usage
+gcloud compute tpus tpu-vm ssh <tpu_name> --zone us-central1-a --command "df -h /"
+# Check if gcsfuse is actually mounted
+gcloud compute tpus tpu-vm ssh <tpu_name> --zone us-central1-a --command "mount | grep gcsfuse"
+# Find largest directories in /tmp
+gcloud compute tpus tpu-vm ssh <tpu_name> --zone us-central1-a --command "sudo du -sh /tmp/* | sort -h"
+```
+
+### Resolution Commands
+1. Delete Misplaced Files
+If /tmp/gcsfuse_mount is verified to be a local directory (not a mount), delete it:
+
+```bash
+gcloud compute tpus tpu-vm ssh <tpu_name> --zone us-central1-a --command "sudo rm -rf /tmp/gcsfuse_mount"
+```
+
+2. Re-initialize Ray Worker
+After clearing space, the Ray container should be restarted to ensure a clean state:
+
+```bash
+uv run scripts/ray/cluster.py --config infra/marin-us-central1-vllm.yaml init-worker <tpu_name>
+```
+
+### Prevention & Maintenance
+* Threshold Monitoring: Run `scripts/ray/cleanup_disk.py` periodically to detect workers dropping below 20% free space.
+* Mount Verification: Ensure gcsfuse mounting logic in infra/*.yaml setup commands includes a check to ensure the mount point isn't written to if the mount fails.
+* Cleanup Cron: Ensure the automated cleanup job is running on the head node:
+```bash
+uv run scripts/ray/cluster.py --config infra/marin-us-central1-vllm.yaml start-cleanup
+```

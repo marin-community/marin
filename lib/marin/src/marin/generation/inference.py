@@ -49,7 +49,7 @@ class TextGenerationInferenceConfig:
     chunk_size: int | None = None
 
     # Ray data specific
-    num_instances: tuple[int, int] = (1, 4)
+    num_instances: tuple[int, int] = (1, 1)
     batch_size: int = 32
     tensor_parallel_size: int = 1
     preserve_order: bool = False
