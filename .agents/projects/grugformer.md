@@ -18,7 +18,7 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 
 ### JAX/ML Principles
 
-- **Mesh-first mental model.** We always create one mesh axis per logical unit. For now, `['replica', 'data', 'tensor']`. Work must still run on a single GPU (mesh axes collapse to size 1) but should seamlessly extend to 4-device TPU v4-8 pods for CI. Mesh creation and validation live in one place.
+- **Mesh-first mental model.** We always create one mesh axis per logical unit. For now, `['replica', 'data', 'model']`. Work must still run on a single GPU (mesh axes collapse to size 1) but should seamlessly extend to 4-device TPU v4-8 pods for CI. Mesh creation and validation live in one place.
 - **Use good kernels when available.** Grug is happy to call out to other people's fast attention kernels (ejkernel blocksparse today) as long as the surface stays simple and the fallback reference path remains.
 - **Explicit sharding everywhere.** Arrays carry `PartitionSpec`s in their types. By using `set_mesh` with `AxisType.Explicit` we'll always know every Array's sharding. Any op with ambiguous shardings must either supply `out_sharding=` or run inside `auto_axes`. Prefer the former.
 
