@@ -7,13 +7,13 @@ from typing import Any, Protocol
 
 import equinox as eqx
 import jax
-import jax.numpy as jnp
 import haliax as hax
 from haliax import Axis, NamedArray
 from jaxtyping import PRNGKeyArray, PyTree
 
 from levanter.grug.attention import AttentionMask
-from levanter.grug.model import forward, init_parameters
+from levanter.grug.model import activations as grug_activations
+from levanter.grug.model import init_parameters
 from levanter.layers.attention import AttentionMask as LevanterAttentionMask
 from levanter.models.lm_model import LmHeadModel
 
@@ -21,6 +21,7 @@ from levanter.models.lm_model import LmHeadModel
 class GrugConfigLike(Protocol):
     vocab_size: int
     max_seq_len: int
+    hidden_dim: int
 
 
 class GrugForwardFn(Protocol):
@@ -70,8 +71,10 @@ class GrugWrapper(LmHeadModel[Any]):
 
     @property
     def Embed(self) -> Axis:
-        # We return an Embed axis sized to the vocab so we can use an identity LM head.
-        return Axis("embed", self.Vocab.size)
+        hidden_dim = getattr(self.grug_config, "hidden_dim", None)
+        if hidden_dim is None:
+            raise AttributeError("grug_config must define hidden_dim.")
+        return Axis("embed", hidden_dim)
 
     @classmethod
     def init(
@@ -90,7 +93,7 @@ class GrugWrapper(LmHeadModel[Any]):
             params=params,
             grug_config=cfg,
             init_fn=chosen_init,
-            forward_fn=forward_fn or forward,
+            forward_fn=forward_fn or grug_activations,
         )
 
     def activations(
@@ -123,20 +126,22 @@ class GrugWrapper(LmHeadModel[Any]):
                 "NamedArray attention masks are not supported by Grug (pass a Levanter AttentionMask)."
             )
 
-        logits = self.forward_fn(
+        hidden = self.forward_fn(
             self.params,
             input_ids.array,
             self.grug_config,
             mask=mask,
         )
 
-        # Map raw logits to a NamedArray with the existing axes plus Vocab.
-        axes = (*input_ids.axes, self.Vocab)
-        return hax.named(logits, axes)
+        # Map raw hidden states to a NamedArray with the existing axes plus Embed.
+        axes = (*input_ids.axes, self.Embed)
+        return hax.named(hidden, axes)
 
     def get_lm_head(self) -> NamedArray:
-        eye = jnp.eye(self.Vocab.size, dtype=jnp.float32)
-        return hax.named(eye, (self.Embed, self.Vocab))
+        output_proj = getattr(self.params, "output_proj", None)
+        if output_proj is None:
+            raise AttributeError("GrugWrapper params must have an output_proj field.")
+        return hax.named(output_proj, (self.Embed, self.Vocab))
 
     def resize_vocab(self, new_size: int, key: PRNGKeyArray | None = None) -> "GrugWrapper":
         raise NotImplementedError("GrugWrapper does not yet support resizing the vocabulary.")

@@ -136,12 +136,12 @@ def _mlp(block: GrugBlockParams, x: jax.Array) -> jax.Array:
     return jnp.einsum("bsm,mh->bsh", activated, block.mlp_down, out_sharding=_Pbatch)
 
 
-def forward(
+def _transformer_hidden(
     params: GrugModelParameters,
     token_ids: jax.Array,
     cfg: GrugModelConfig,
     *,
-    mask: AttentionMask | jax.Array | None = None,
+    mask: AttentionMask | jax.Array | None,
 ) -> jax.Array:
     head_dim = cfg.inferred_head_dim
     seq_len = token_ids.shape[1]
@@ -169,8 +169,30 @@ def forward(
         hidden = hidden + mlp_out
 
     hidden = _rms_norm(hidden, params.final_norm, cfg.layer_norm_eps)
+    return hidden
+
+
+def forward(
+    params: GrugModelParameters,
+    token_ids: jax.Array,
+    cfg: GrugModelConfig,
+    *,
+    mask: AttentionMask | jax.Array | None = None,
+) -> jax.Array:
+    hidden = _transformer_hidden(params, token_ids, cfg, mask=mask)
     logits = jnp.einsum("bsh,hd->bsd", hidden, params.output_proj, out_sharding=_Pbatch)
     return logits
+
+
+def activations(
+    params: GrugModelParameters,
+    token_ids: jax.Array,
+    cfg: GrugModelConfig,
+    *,
+    mask: AttentionMask | jax.Array | None = None,
+) -> jax.Array:
+    """Return final hidden states with shape (batch, seq, hidden_dim)."""
+    return _transformer_hidden(params, token_ids, cfg, mask=mask)
 
 
 __all__ = [
@@ -178,5 +200,6 @@ __all__ = [
     "GrugBlockParams",
     "GrugModelParameters",
     "init_parameters",
+    "activations",
     "forward",
 ]
