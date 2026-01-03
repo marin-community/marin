@@ -20,7 +20,7 @@ def _make_grug_mesh() -> Mesh:
     mesh_devices = np.array(devices).reshape(1, 1, len(devices))
     return Mesh(
         mesh_devices,
-        axis_names=("replica", "data", "tensor"),
+        axis_names=("replica", "data", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
     )
 
@@ -66,7 +66,7 @@ def test_parameter_sharding_specs_are_named():
 
         assert getattr(params.token_embed.sharding, "spec", None) == P("data", None)
         assert getattr(params.output_proj.sharding, "spec", None) == P("data", None)
-        assert getattr(params.blocks[0].attn.w_q.sharding, "spec", None) == P("data", "tensor")
+        assert getattr(params.blocks[0].attn.w_q.sharding, "spec", None) == P("data", "model")
 
 
 def test_attentionmask_materialize_causal():
