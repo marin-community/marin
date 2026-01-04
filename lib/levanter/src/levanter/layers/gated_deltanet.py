@@ -49,6 +49,8 @@ import haliax.nn as hnn
 from haliax import Axis, NamedArray
 
 _GDN_DBG_SHARDING = bool(int(os.environ.get("GDN_DEBUG_SHARDING", "0")))
+# jax.config.update("jax_debug_nans", True)
+jax.config.update("jax_debug_infs", True)
 
 
 def _dbg(tag: str, arr):
@@ -139,7 +141,7 @@ def _fused_rmsnorm_gated_pallas(
     weight: jnp.ndarray,
     eps: float,
     *,
-    BM: int = 8,
+    BM: int = 128,
 ) -> jnp.ndarray:
     """TPU Mosaic pallas fused RMSNorm(x)*SiLU(gate), shard_map-safe under pjit.
 
@@ -1040,131 +1042,126 @@ def _in_specs_chunk_step_tpu(B: int, H: int, Ct: int, K_pad: int, V_pad: int):
 _MXU_TILE = 128  # TPU Mosaic BF16 matmul tile size
 
 
-def _mxu_matmul_f32(
-    a: jnp.ndarray,
-    b: jnp.ndarray,
-    *,
-    precision_mode: Literal["fp32", "bf16"] = "fp32",
-) -> jnp.ndarray:
-    """2D matmul that returns fp32, with selectable precision mode.
-
-    precision_mode="fp32":
-      - operands: float32
-      - dot precision: lax.Precision.HIGHEST
-
-    precision_mode="bf16":
-      - operands: bfloat16
-      - dot precision: lax.Precision.DEFAULT
-      - (Mosaic-safe; avoids contract_precision<fp32> on bf16)
-
-    On TPU we pad to 128x128 tiles and do a blocked matmul to satisfy Mosaic tiling constraints.
+def _mxu_matmul_f32(a, b, *, precision_mode: str = "fp32"):
     """
-    if precision_mode not in ("fp32", "bf16"):
-        raise ValueError(f"precision_mode must be 'fp32' or 'bf16', got {precision_mode!r}")
+    TPU/Pallas-safe matmul helper.
+
+    Parameters
+    ----------
+    a : jnp.ndarray, shape [M, K]
+    b : jnp.ndarray, shape [K, N]
+    precision_mode : {"fp32", "bf16"}
+        - "fp32" (default): uses float32 inputs and precision=lax.Precision.HIGHEST
+        - "bf16": casts inputs to bfloat16 and uses precision=lax.Precision.DEFAULT
+
+    Returns
+    -------
+    out : jnp.ndarray, shape [M, N], dtype float32
+    """
+    from jax import lax
+    import jax.numpy as jnp
 
     if a.ndim != 2 or b.ndim != 2:
         raise ValueError(f"_mxu_matmul_f32 expects 2D arrays, got {a.ndim}D and {b.ndim}D")
-
-    m, k = a.shape
-    k2, n = b.shape
-    if k != k2:
-        raise ValueError(f"_mxu_matmul_f32 shape mismatch: a is {a.shape}, b is {b.shape}")
-
-    # TPU path: pad/tiling to Mosaic-friendly 128x128
-    mp = _round_up_to(int(m), _MXU_TILE)
-    kp = _round_up_to(int(k), _MXU_TILE)
-    np = _round_up_to(int(n), _MXU_TILE)
-
-    a_f32 = a.astype(jnp.float32)
-    b_f32 = b.astype(jnp.float32)
-
-    a_pad = jnp.pad(a_f32, ((0, mp - m), (0, kp - k)))
-    b_pad = jnp.pad(b_f32, ((0, kp - k), (0, np - n)))
+    if a.shape[1] != b.shape[0]:
+        raise ValueError(f"shape mismatch: a={a.shape}, b={b.shape}")
 
     if precision_mode == "bf16":
-        a_op = a_pad.astype(jnp.bfloat16)
-        b_op = b_pad.astype(jnp.bfloat16)
-        dot_prec = lax.Precision.DEFAULT
+        a_in = a.astype(jnp.bfloat16)
+        b_in = b.astype(jnp.bfloat16)
+        prec = lax.Precision.DEFAULT
+    elif precision_mode == "fp32":
+        a_in = a.astype(jnp.float32)
+        b_in = b.astype(jnp.float32)
+        prec = lax.Precision.HIGHEST
     else:
-        a_op = a_pad.astype(jnp.float32)
-        b_op = b_pad.astype(jnp.float32)
-        dot_prec = lax.Precision.HIGHEST
+        raise ValueError(f"precision_mode must be 'fp32' or 'bf16', got {precision_mode!r}")
 
-    dn = (((1,), (0,)), ((), ()))  # (m,k) @ (k,n) -> (m,n)
-
-    def _dot128(x, y):
-        # IMPORTANT: in bf16 mode, dot_prec must be DEFAULT to avoid Mosaic "Bad lhs type"
-        try:
-            return lax.dot_general(
-                x,
-                y,
-                dn,
-                precision=dot_prec,
-                preferred_element_type=jnp.float32,
-            )
-        except TypeError:
-            # Older JAX: no preferred_element_type
-            return lax.dot_general(
-                x,
-                y,
-                dn,
-                precision=dot_prec,
-            ).astype(jnp.float32)
-
-    row_blocks = []
-    for i in range(0, mp, _MXU_TILE):
-        col_blocks = []
-        for j in range(0, np, _MXU_TILE):
-            acc = jnp.zeros((_MXU_TILE, _MXU_TILE), dtype=jnp.float32)
-            for p in range(0, kp, _MXU_TILE):
-                a_tile = lax.slice(a_op, (i, p), (i + _MXU_TILE, p + _MXU_TILE))
-                b_tile = lax.slice(b_op, (p, j), (p + _MXU_TILE, j + _MXU_TILE))
-                acc = acc + _dot128(a_tile, b_tile)
-            col_blocks.append(acc)
-        row_blocks.append(lax.concatenate(col_blocks, dimension=1))
-
-    out_pad = lax.concatenate(row_blocks, dimension=0)
-    return lax.slice(out_pad, (0, 0), (int(m), int(n)))
+    # Standard matmul: contract a's last dim with b's first dim.
+    dn = (((1,), (0,)), ((), ()))
+    out = lax.dot_general(a_in, b_in, dn, precision=prec)
+    return out.astype(jnp.float32)
 
 
 def _invert_I_minus_strict_lower_doubling(
-    A_strict: jnp.ndarray,
+    A_strict,
     *,
-    precision_mode: Literal["fp32", "bf16"] = "fp32",
-) -> jnp.ndarray:
-    if precision_mode not in ("fp32", "bf16"):
-        raise ValueError(f"precision_mode must be 'fp32' or 'bf16', got {precision_mode!r}")
-
-    """Compute (I - A_strict)^(-1) for strictly-lower A_strict via doubling/product formula.
-
-    For strictly-lower A (nilpotent), this is EXACT if we run enough squarings such that 2^s >= C,
-    where C is the matrix size.
-
-    Inv = (I + A)(I + A^2)(I + A^4)...  (up to A^(2^s))
-
-    Uses only matmuls + adds (MXU-friendly).
+    precision_mode: str = "fp32",
+    base_block: int = 16,
+):
     """
-    if A_strict.ndim != 2 or A_strict.shape[0] != A_strict.shape[1]:
-        raise ValueError(f"A_strict must be square 2D, got {A_strict.shape}")
+    Compute (I - A_strict)^(-1) where A_strict is strictly lower triangular.
 
-    C = int(A_strict.shape[0])
-    if C <= 1:
-        return jnp.ones_like(A_strict, dtype=jnp.float32)  # (1,1) inverse
+    Hybrid algorithm:
+      - For n <= base_block: exact Neumann/doubling series via matmuls:
+          (I - A)^(-1) = (I + A)(I + A^2)(I + A^4)...
+        (exact because A is nilpotent when strictly lower triangular)
+      - For n > base_block: recursive block inversion:
+          A = [[A11, 0],
+               [A21, A22]]
+          Inv = [[Inv11, 0],
+                 [Inv22 @ A21 @ Inv11, Inv22]]
+    """
+    import jax.numpy as jnp
 
-    eye = jnp.eye(C, dtype=jnp.float32)
-    A = A_strict.astype(jnp.float32)
+    n = A_strict.shape[0]
+    if A_strict.shape[0] != A_strict.shape[1]:
+        raise ValueError(f"A_strict must be square, got {A_strict.shape}")
 
-    Inv = eye + A
-    Term = A
+    # Always do math in f32 internally for stability.
+    A_strict = A_strict.astype(jnp.float32)
 
-    # smallest s with 2^s >= C
-    n_steps = int(math.ceil(math.log2(C)))
+    # Hard-enforce strict-lower structure on the diagonal blocks.
+    # (This prevents tiny diagonal/upper-tri leaks from breaking nilpotency.)
+    idx = jnp.arange(n)
+    strict_mask = idx[:, None] > idx[None, :]
+    A_strict = jnp.where(strict_mask, A_strict, 0.0)
 
-    for _ in range(n_steps):
-        Term = _mxu_matmul_f32(Term, Term, precision_mode=precision_mode)          # A^(2^i)
-        Inv = _mxu_matmul_f32(Inv, (eye + Term), precision_mode=precision_mode)   # accumulate product
+    # Base case: Neumann/doubling product on small blocks.
+    if n <= base_block:
+        # Identity built without jnp.eye to avoid potential layout weirdness.
+        eye = (idx[:, None] == idx[None, :]).astype(jnp.float32)
 
-    return Inv
+        Term = A_strict                      # A^(1)
+        Inv = eye + A_strict                 # I + A
+
+        # Number of steps needed so that highest exponent >= n-1.
+        # ceil_log2(n) = (n-1).bit_length()
+        steps = max(0, (n - 1).bit_length() - 1)
+
+        for _ in range(steps):
+            Term = _mxu_matmul_f32(Term, Term, precision_mode=precision_mode)           # A^(2^i)
+            Inv = _mxu_matmul_f32(Inv, eye + Term, precision_mode=precision_mode)      # multiply by (I + A^(2^i))
+
+        return Inv.astype(jnp.float32)
+
+    # Recursive case
+    if n % 2 != 0:
+        raise ValueError(
+            f"Hybrid recursive inversion expects even n (power-of-two chunks recommended). Got n={n}."
+        )
+
+    m = n // 2
+    A11 = A_strict[:m, :m]
+    A21 = A_strict[m:, :m]
+    A22 = A_strict[m:, m:]
+
+    Inv11 = _invert_I_minus_strict_lower_doubling(A11, precision_mode=precision_mode, base_block=base_block)
+    Inv22 = _invert_I_minus_strict_lower_doubling(A22, precision_mode=precision_mode, base_block=base_block)
+
+    # Inv21 = Inv22 @ A21 @ Inv11
+    tmp = _mxu_matmul_f32(Inv22, A21, precision_mode=precision_mode)
+    Inv21 = _mxu_matmul_f32(tmp, Inv11, precision_mode=precision_mode)
+
+    # Assemble:
+    # [[Inv11, 0],
+    #  [Inv21, Inv22]]
+    z12 = jnp.zeros_like(Inv11)  # layout-compatible zeros
+    top = jnp.concatenate([Inv11, z12], axis=1)
+    bot = jnp.concatenate([Inv21, Inv22], axis=1)
+    Inv = jnp.concatenate([top, bot], axis=0)
+
+    return Inv.astype(jnp.float32)
 
 
 def _in_specs_chunk_segment_fwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: int, V_pad: int):
@@ -2847,17 +2844,12 @@ def chunk_gated_delta_rule(
         return hax.rearrange(x, target_layout).array
 
     # Promote + optional L2 norm + scale
-    q32 = query
-    k32 = key
-    v32 = value
-    g32 = g
-    b32 = beta
 
-    # q32 = query.astype(jnp.float32)
-    # k32 = key.astype(jnp.float32)
-    # v32 = value.astype(jnp.float32)
-    # g32 = g.astype(jnp.float32)
-    # b32 = beta.astype(jnp.float32)
+    q32 = query.astype(jnp.float32)
+    k32 = key.astype(jnp.float32)
+    v32 = value.astype(jnp.float32)
+    g32 = g.astype(jnp.float32)
+    b32 = beta.astype(jnp.float32)
 
     if use_qk_l2norm_in_kernel:
         q32 = _l2norm(q32, axis=Dk)
@@ -3065,6 +3057,7 @@ class GatedDeltaNet(eqx.Module):
         *,
         inference: bool = True,
         chunk_size: int = 64,
+        segment_size: int = 8,
         attention_mask: Optional[NamedArray] = None,
         decode_state: Optional[Tuple[jnp.ndarray, jnp.ndarray]] = None,  # (conv_state, S_state)
     ) -> Tuple[NamedArray, Optional[Tuple[jnp.ndarray, jnp.ndarray]]]:
@@ -3214,7 +3207,7 @@ class GatedDeltaNet(eqx.Module):
                 g_h,
                 b_h,
                 chunk_size=chunk_size,
-                segment_size=64,
+                segment_size=segment_size,
                 initial_state=None,
                 output_final_state=inference,
                 use_qk_l2norm_in_kernel=True,

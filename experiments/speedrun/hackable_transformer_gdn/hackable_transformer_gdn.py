@@ -137,6 +137,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     gdn_block_size: int = 4
     gdn_conv_kernel_size: int = 4
     gdn_chunk_size: int = 128
+    gdn_segment_size: int = 8
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
     initializer_range: float = 0.02
@@ -343,6 +344,7 @@ class HackableDecoderLayer(eqx.Module):
     post_mlp_layernorm: hnn.RmsNorm | None = None
     use_gdn: bool = eqx.field(static=True, default=False)
     gdn_chunk_size: int = eqx.field(static=True, default=64)
+    gdn_segment_size: int = eqx.field(static=True, default=8)
 
     @staticmethod
     def init(config: HackableTransformerConfig, *, key, layer_index: int) -> "HackableDecoderLayer":
@@ -374,6 +376,7 @@ class HackableDecoderLayer(eqx.Module):
             ln2,
             use_gdn=use_gdn,
             gdn_chunk_size=config.gdn_chunk_size,
+            gdn_segment_size=config.gdn_segment_size,
         )
 
     @named_call
@@ -669,7 +672,7 @@ def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]
         profiler=True,
     )
 
-    run_name = f"hacktx_{size}_gdn_{seq_len}_flash_neumann_segments_fp32"
+    run_name = f"hacktx_{size}_gdn_{seq_len}_flash_neumann_chunk_{model_cfg.gdn_chunk_size}_seg_{model_cfg.gdn_segment_size}_hybrid_fp32"
     desc = f"Hackable Transformer ({size}) w/ hybrid Gated DeltaNet and standard attention layers (Muon)"
     cfg = SpeedrunConfig(author=AUTHOR, description=desc, model_config=model_cfg, train_config=train)
     return run_name, cfg
