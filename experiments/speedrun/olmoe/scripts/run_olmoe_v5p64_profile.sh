@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
 # Example run (from repo root, keep tmp artifacts local):
-#   TMPDIR=/tmp RAY_TMPDIR=/tmp ./scripts/run_olmoe_v5p64_profile.sh
+#   TMPDIR=/tmp RAY_TMPDIR=/tmp ./experiments/speedrun/olmoe/scripts/run_olmoe_v5p64_profile.sh
 #
 # Convenience wrapper for launching an OLMoE speedrun with profiling enabled.
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 cd "$REPO_ROOT"
 
 : "${TMPDIR:=/tmp}"
 : "${RAY_TMPDIR:=/tmp}"
 : "${UV_CACHE_DIR:=/tmp/uv-cache}"
-
-LIBTPU_INIT_ARGS_PROFILE_FLAGS="--xla_should_allow_loop_variant_parameter_in_chain=enabled --xla_should_add_loop_invariant_op_in_chain=enabled --xla_tpu_enable_ici_ag_pipelining=true"
 
 UV_CACHE_DIR="${UV_CACHE_DIR}" uv run python -m marin.run.ray_run \
   --cluster "infra/marin-us-central1.yaml" \
@@ -30,7 +28,6 @@ UV_CACHE_DIR="${UV_CACHE_DIR}" uv run python -m marin.run.ray_run \
   --env_vars JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS 0 \
   --env_vars JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES -1 \
   --env_vars JAX_RAGGED_DOT_USE_RAGGED_DOT_INSTRUCTION 1 \
-  --env_vars LIBTPU_INIT_ARGS "${LIBTPU_INIT_ARGS_PROFILE_FLAGS}" \
   -- \
   python experiments/speedrun/olmoe_1b7b_nemotron_40b.py \
     --model olmoe_1b7b \

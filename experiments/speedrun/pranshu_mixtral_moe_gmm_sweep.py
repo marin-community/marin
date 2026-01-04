@@ -16,6 +16,7 @@
 
 import logging
 from collections.abc import Sequence
+from typing import Any
 
 from experiments.speedrun.custom_mixtral import MixtralConfig
 from experiments.simple_train_config import SimpleTrainConfig
@@ -35,7 +36,7 @@ MODEL_ORDER: Sequence[str] = (
     "mixtral_1_5b",
 )
 
-BASE_MODEL_ARGS = dict(
+BASE_MODEL_ARGS: dict[str, Any] = dict(
     seq_len=SEQ_LEN,
     hidden_dim=768,
     intermediate_dim=768,
@@ -89,4 +90,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

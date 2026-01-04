@@ -65,7 +65,7 @@ def _log_libtpu_args_once():
 
 @LmConfig.register_subclass("custom_mixtral")
 @dataclass(frozen=True)
-class CustomMixtralConfig(MistralConfig):
+class MixtralConfig(MistralConfig):
     """Config for MistralModel
 
     Args:
@@ -324,20 +324,6 @@ class MixtralMoEMlp(ModuleWithStateDictSerialization):
 
         return out
 
-    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> "MixtralMoEMlp":
-        w: list[list[Array]] = [[], [], []]
-        num_experts = self.w1.Experts.size
-        for i in range(num_experts):
-            for j in range(3):
-                key = f"{prefix}.{i}.w{j + 1}.weight"
-                val = jnp.swapaxes(state_dict[key], -1, -2)[..., None, :, :]
-                w[j].append(val)
-
-        for j in range(3):
-            w[j] = jnp.concat(w[j], axis=1)
-
-        return eqx.tree_at(lambda m: [m.w1.weight.array, m.w2.weight.array, m.w3.weight.array], self, w)
-
 
 class MixtralSparseMoeBlock(eqx.Module):
     """Mixture-of-Experts"""
@@ -507,9 +493,6 @@ class MixtralSparseMoeBlock(eqx.Module):
             )
 
         return hax.unflatten_axis(out, axis=Token, new_axes=squash_axes), extras  # [Batch, Pos, Embed]
-
-
-MixtralConfig = CustomMixtralConfig
 
 
 class MixtralDecoderLayer(eqx.Module):

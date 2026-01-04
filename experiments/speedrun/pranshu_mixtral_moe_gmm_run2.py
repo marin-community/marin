@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Grouped-matmul Mixtral MoE speedrun (via CustomMixtralConfig.use_gmm)."""
+"""Grouped-matmul Mixtral MoE speedrun (via `MixtralConfig(use_gmm=True)`)."""
 
 # nodryrun
 
@@ -60,4 +60,3 @@ speedrun_config = SpeedrunConfig(
 
 if __name__ == "__main__":
     executor_main(steps=default_speedrun("pranshu_mixtral_moe_gmm2_v4_8", speedrun_config))
-

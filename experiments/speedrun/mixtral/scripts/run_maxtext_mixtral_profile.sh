@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Example run (from repo root, with tmp dirs on local SSD):
-#   TMPDIR=/tmp RAY_TMPDIR=/tmp ./scripts/run_maxtext_mixtral_profile.sh
+#   TMPDIR=/tmp RAY_TMPDIR=/tmp ./experiments/speedrun/mixtral/scripts/run_maxtext_mixtral_profile.sh
 # Run MaxText Mixtral profiling on v5p-64 via Marin's Ray launcher.
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 cd "$REPO_ROOT"
 
 VENV_PATH="${REPO_ROOT}/maxtext_marin"

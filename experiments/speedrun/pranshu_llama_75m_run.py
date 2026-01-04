@@ -49,4 +49,3 @@ speedrun_config = SpeedrunConfig(
 if __name__ == "__main__":
     logger.info("Launching Llama 75M speedrun on TPU v4-8.")
     executor_main(steps=default_speedrun("pranshu_llama_75m_speedrun_v4_8", speedrun_config))
-
