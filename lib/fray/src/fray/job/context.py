@@ -121,7 +121,7 @@ class JobContext(Protocol):
 class ActorHandle:
     """Base class for actor handles (used by ThreadContext and SyncContext).
 
-    Provides a unified interface for calling actor methods with .remote() and .call().
+    Provides a unified interface for calling actor methods with `.remote()`.
     """
 
     def __getattr__(self, method_name: str):
@@ -132,15 +132,12 @@ class ActorHandle:
 class ActorMethod:
     """Base class for actor method wrappers (used by ThreadContext and SyncContext).
 
-    Provides both async (.remote()) and sync (.call()) invocation patterns.
+    Provides async invocation via `.remote()`. For synchronous execution, use
+    `ctx.get(method.remote(...))`.
     """
 
     def remote(self, *args, **kwargs) -> Any:
         """Call method asynchronously, returning a future compatible with ctx.get()."""
-        raise NotImplementedError
-
-    def call(self, *args, **kwargs) -> Any:
-        """Call method synchronously and return the result."""
         raise NotImplementedError
 
 
@@ -187,36 +184,6 @@ class ThreadActorMethod(ActorMethod):
         avoids sprinkling backend conditionals across call sites.
         """
         return self
-
-    def call(self, *args, **kwargs) -> Any:
-        with self._lock:
-            return self._method(*args, **kwargs)
-
-
-class RayActorHandle(ActorHandle):
-    """Actor handle for RayContext that supports .remote() and .call() on methods."""
-
-    def __init__(self, ray_actor, context):
-        self._ray_actor = ray_actor
-        self._context = context
-
-    def __getattr__(self, method_name: str):
-        method = getattr(self._ray_actor, method_name)
-        return RayActorMethod(method, self._context)
-
-
-class RayActorMethod(ActorMethod):
-    """Method wrapper for Ray actor methods supporting .remote() and .call()."""
-
-    def __init__(self, ray_method, context):
-        self._ray_method = ray_method
-        self._context = context
-
-    def remote(self, *args, **kwargs):
-        return self._ray_method.remote(*args, **kwargs)
-
-    def call(self, *args, **kwargs) -> Any:
-        return self._context.get(self.remote(*args, **kwargs))
 
 
 class _ImmediateFuture:
