@@ -56,7 +56,6 @@ jobs:
         # https://github.com/ray-project/ray/issues/54344
         run: .venv/bin/python tests/integration_test.py
         env:
-          MARIN_CI_DISABLE_RUNTIME_ENVS: "1"
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           JAX_TRACEBACK_FILTERING: off
           WANDB_MODE: offline

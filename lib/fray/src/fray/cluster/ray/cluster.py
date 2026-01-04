@@ -15,11 +15,9 @@
 """Ray-based cluster implementation."""
 
 import asyncio
-import json
 import logging
 import os
 import time
-import threading
 import uuid
 from dataclasses import dataclass
 
@@ -109,49 +107,6 @@ class RayCluster(Cluster):
 
         self._dashboard_address = dashboard_address or self._get_dashboard_address()
         self._jobs: dict[JobId, RayJobInfo] = {}
-        self._runtime_env_events: dict[str, threading.Event] = {}
-        self._runtime_env_events_lock = threading.Lock()
-
-    def _runtime_env_cache_key(self, runtime_env: dict) -> str:
-        # Use JSON to get a stable hashable representation (paths/env_vars are strings).
-        return json.dumps(runtime_env, sort_keys=True, default=str)
-
-    def _ensure_runtime_env_ready(self, runtime_env: dict) -> None:
-        """Ensure Ray has fully materialized `runtime_env` before launching many tasks.
-
-        Ray runtime env setup can race when multiple tasks request the same env concurrently
-        (notably in the quickstart, where multiple steps share the same dependency group).
-        We proactively "warm" the env once and have subsequent launches wait for completion.
-        """
-        if "pip" not in runtime_env:
-            return
-
-        if not ray.is_initialized():
-            return
-
-        cache_key = self._runtime_env_cache_key(runtime_env)
-        with self._runtime_env_events_lock:
-            event = self._runtime_env_events.get(cache_key)
-            if event is None:
-                event = threading.Event()
-                self._runtime_env_events[cache_key] = event
-                do_warmup = True
-            else:
-                do_warmup = False
-
-        if not do_warmup:
-            event.wait()
-            return
-
-        try:
-
-            @ray.remote
-            def _runtime_env_warmup() -> int:
-                return 1
-
-            ray.get(_runtime_env_warmup.options(runtime_env=runtime_env).remote())
-        finally:
-            event.set()
 
         # Set default job context permanently to this cluster.
         ray_ctx = RayContext(ray_options={})
@@ -247,7 +202,6 @@ class RayCluster(Cluster):
         runtime_env = self._get_runtime_env(request)
         # strip out keys that can only be set at the Job level
         runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
-        self._ensure_runtime_env_ready(runtime_env)
 
         if isinstance(request.resources.device, GpuConfig):
             logger.info(
@@ -275,7 +229,6 @@ class RayCluster(Cluster):
 
         # strip out keys that can only be set at the Job level
         runtime_env = {k: v for k, v in runtime_env.items() if k not in ["excludes", "config", "working_dir"]}
-        self._ensure_runtime_env_ready(runtime_env)
 
         logger.info(f"Launching TPU job {request.name} with runtime env: {runtime_env}")
 
@@ -303,8 +256,6 @@ class RayCluster(Cluster):
         environment = request.environment if request.environment else EnvironmentConfig.create()
 
         env_vars = dict(environment.env_vars)
-        disable_runtime_envs = os.getenv("MARIN_CI_DISABLE_RUNTIME_ENVS", "").lower() in {"1", "true", "yes"}
-
         # disable access to the TPU if we're not a TPU job, otherwise
         # any import of JAX will claim the TPU and block other users.
         if isinstance(request.resources.device, CpuConfig):
@@ -331,7 +282,7 @@ class RayCluster(Cluster):
         logger.info(
             f"Building environment with {environment.pip_packages}, extras {environment.extras} for job: {request.name}"
         )
-        if (environment.pip_packages or environment.extras) and not disable_runtime_envs:
+        if environment.pip_packages or environment.extras:
             runtime_env = build_runtime_env_for_packages(
                 extra=list(environment.extras),
                 pip_packages=list(environment.pip_packages),
