@@ -22,7 +22,7 @@ import jinja2
 import yaml
 
 # Cluster configuration constants and templates
-LATEST = "20260102"  # The latest docker tag used for the clusters
+LATEST = "a4bafe7"  # The latest docker tag used for the clusters
 LATEST_VLLM = "20251209"
 DOCKER_TAG_TESTING = "latest"
 DEFAULT_IMAGE_NAME = "marin_cluster"
