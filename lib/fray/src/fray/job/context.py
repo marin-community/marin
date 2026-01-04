@@ -139,6 +139,10 @@ class ActorMethod:
         """Call method asynchronously, returning a future compatible with ctx.get()."""
         raise NotImplementedError
 
+    def call(self, *args, **kwargs) -> Any:
+        """Call method synchronously and return the result."""
+        raise NotImplementedError
+
 
 class ThreadActorHandle(ActorHandle):
     """Actor handle for ThreadContext - serializes all method calls with a lock."""
@@ -174,6 +178,45 @@ class ThreadActorMethod(ActorMethod):
             with self._lock:
                 result = self._method(*args, **kwargs)
             return _ImmediateFuture(result)
+
+    def options(self, **_kwargs) -> "ThreadActorMethod":
+        """No-op compatibility with Ray's `.options(...)` on actor methods.
+
+        RL code sometimes sets Ray-only execution options (e.g. `enable_task_events=False`).
+        In thread/sync contexts there is nothing to configure, but supporting the fluent API
+        avoids sprinkling backend conditionals across call sites.
+        """
+        return self
+
+    def call(self, *args, **kwargs) -> Any:
+        with self._lock:
+            return self._method(*args, **kwargs)
+
+
+class RayActorHandle(ActorHandle):
+    """Actor handle for RayContext that supports .remote() and .call() on methods."""
+
+    def __init__(self, ray_actor, context):
+        self._ray_actor = ray_actor
+        self._context = context
+
+    def __getattr__(self, method_name: str):
+        method = getattr(self._ray_actor, method_name)
+        return RayActorMethod(method, self._context)
+
+
+class RayActorMethod(ActorMethod):
+    """Method wrapper for Ray actor methods supporting .remote() and .call()."""
+
+    def __init__(self, ray_method, context):
+        self._ray_method = ray_method
+        self._context = context
+
+    def remote(self, *args, **kwargs):
+        return self._ray_method.remote(*args, **kwargs)
+
+    def call(self, *args, **kwargs) -> Any:
+        return self._context.get(self.remote(*args, **kwargs))
 
 
 class _ImmediateFuture:

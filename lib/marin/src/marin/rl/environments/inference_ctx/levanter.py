@@ -48,8 +48,8 @@ class LevanterInferenceContextConfig:
 class LevanterInferenceContext(BaseInferenceContext):
     """Concrete implementation using Levanter inference server."""
 
-    _inference_server: InferenceServer
-    _inference_thread: threading.Thread
+    _inference_server: InferenceServer | None
+    _inference_thread: threading.Thread | None
 
     def __init__(
         self,
@@ -61,18 +61,28 @@ class LevanterInferenceContext(BaseInferenceContext):
         self.max_tokens = inference_config.max_tokens
         self.mesh = inference_config.mesh
         self.axis_mapping = inference_config.axis_mapping
+        self._inference_server = None
+        self._inference_thread = None
+
+    def _require_server(self) -> InferenceServer:
+        if self._inference_server is None:
+            raise RuntimeError("Inference server has not been started. Call start_server() first.")
+        return self._inference_server
 
     def openai_client(self) -> AsyncOpenAI:
+        server = self._require_server()
         return AsyncOpenAI(
-            base_url=f"http://{self._inference_server.address()}/v1",
+            base_url=f"http://{server.address()}/v1",
             api_key="marin",
         )
 
     def openai_address(self) -> str:
-        return f"http://{self._inference_server.address()}/v1"
+        server = self._require_server()
+        return f"http://{server.address()}/v1"
 
     def reload_model(self, model: LmHeadModel) -> None:
-        self._inference_server.reload(lambda model: model)
+        server = self._require_server()
+        server.reload(lambda model: model)
 
     def start_server(self, model: LmHeadModel) -> None:
         with hax.set_mesh(self.mesh), hax.axis_mapping(self.axis_mapping):
@@ -81,8 +91,14 @@ class LevanterInferenceContext(BaseInferenceContext):
                 model=model,
                 tokenizer=self.tokenizer,
             )
-        self._inference_thread = threading.Thread(target=lambda: self._inference_server.serve(), daemon=True)
+        server = self._require_server()
+        self._inference_thread = threading.Thread(target=lambda: server.serve(), daemon=True)
         self._inference_thread.start()
+
+    def stop_server(self) -> None:
+        if self._inference_server is not None:
+            self._inference_server.shutdown()
+            self._inference_server = None
 
     # TODO: add support for ChatCompletion style [ { role, content} ] messages
     def batch_completions(

@@ -33,6 +33,7 @@ from levanter.optim import OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from transformers import PreTrainedTokenizer
 
+from fray.job import get_default_job_ctx
 from marin.rl import weight_transfer
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.model_utils import load_model_from_checkpoint
@@ -266,7 +267,8 @@ class TrainWorker:
         def _curriculum_checkpoint_hook(info: levanter.callbacks.StepInfo):
             checkpoint_dir = self.config.trainer.checkpointer.expanded_path(self.config.run_id)
             try:
-                self._curriculum_actor.save_checkpoint.call(checkpoint_dir)
+                job_ctx = get_default_job_ctx()
+                job_ctx.get(self._curriculum_actor.save_checkpoint.remote(checkpoint_dir))
             except Exception as e:
                 logger.error(f"Failed to save curriculum checkpoint: {e}")
 

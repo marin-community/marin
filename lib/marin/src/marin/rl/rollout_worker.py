@@ -34,13 +34,13 @@ import jax
 import jax.random as jrandom
 import levanter
 from jax.experimental import multihost_utils
-from levanter.inference.openai import InferenceServer
 from levanter.models.lm_model import LmConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import barrier_sync
 from transformers import PreTrainedTokenizer
 from typing import Literal
 
+from fray.job import get_default_job_ctx
 from levanter.utils.mesh import MeshConfig
 from marin.rl.curriculum import CurriculumConfig, get_or_create_curriculum_actor
 from marin.rl.environments import MarinEnv
@@ -171,8 +171,6 @@ class RolloutWorker:
     training job via a rollout queue.
     """
 
-    _inference_thread: threading.Thread
-    _inference_server: InferenceServer
     _policy_model: Any
     _transfer_client: WeightTransferClient
     _rollout_writer: RolloutWriter
@@ -318,9 +316,7 @@ class RolloutWorker:
         # Wait for the main loop to finish
         self._shutdown_complete.wait()
 
-        # Now shutdown the inference server
-        if self._inference_server:
-            self._inference_server.shutdown()
+        self._policy_ctx.stop_server()
 
     def _sync_weights(self):
         max_wait_time = self.config.weight_transfer.max_weight_transfer_wait_time
@@ -405,8 +401,11 @@ class RolloutWorker:
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, step, metrics)
         # only update curriculum for full evals
         if eval_type == "eval":
-            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
-                stats.rollout_stats, mode="eval", current_step=step
+            job_ctx = get_default_job_ctx()
+            job_ctx.get(
+                self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+                    stats.rollout_stats, mode="eval", current_step=step
+                )
             )
         return stats
 
@@ -448,7 +447,8 @@ class RolloutWorker:
             rng, seed_key = jax.random.split(rng)
             seed = int(seed_key[0])
             try:
-                lesson_id = self._curriculum_actor.sample_lesson.call(seed)
+                job_ctx = get_default_job_ctx()
+                lesson_id = job_ctx.get(self._curriculum_actor.sample_lesson.remote(seed))
             except Exception as e:
                 logger.warning(f"Failed to sample lesson from curriculum: {e}, will try again...")
                 time.sleep(10.0)
@@ -488,8 +488,11 @@ class RolloutWorker:
             self._rollout_writer.write_batch(rollout_batch)
 
             stats = _compute_batch_stats(rollout_batch, lesson_id)
-            self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).call(
-                stats.rollout_stats, mode="training", current_step=step
+            job_ctx = get_default_job_ctx()
+            job_ctx.get(
+                self._curriculum_actor.update_lesson_stats.options(enable_task_events=False).remote(
+                    stats.rollout_stats, mode="training", current_step=step
+                )
             )
             eval_metrics = self._build_eval_metrics(prefix="rollout", lesson_id=lesson_id, batch=rollout_batch)
 

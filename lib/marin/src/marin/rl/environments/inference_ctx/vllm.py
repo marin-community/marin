@@ -329,6 +329,10 @@ class vLLMInferenceContext(BaseInferenceContext):
     def start_server(self, model: LmHeadModel) -> None:
         pass
 
+    def stop_server(self) -> None:
+        # vLLM is fully in-process here; nothing to stop for unit tests / local runs.
+        return None
+
     def batch_completions(
         self,
         prompts: list[str],

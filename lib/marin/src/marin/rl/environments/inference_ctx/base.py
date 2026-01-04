@@ -36,6 +36,15 @@ class BaseInferenceContext:
     def reload_model(self, model: LmHeadModel) -> None:
         raise NotImplementedError
 
+    def stop_server(self) -> None:
+        """Stop any background inference server resources.
+
+        Some inference contexts spin up background servers/threads (e.g. Levanter's
+        OpenAI-compatible HTTP server). Others (e.g. vLLM) may be fully in-process.
+        Implementations should be idempotent.
+        """
+        raise NotImplementedError
+
     def batch_completions(
         self,
         prompts: list[str],
