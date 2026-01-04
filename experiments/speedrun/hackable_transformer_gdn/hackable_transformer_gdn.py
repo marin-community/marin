@@ -42,6 +42,9 @@ To edit this file for your speedrun:
 # nodryrun
 import sys
 import os
+
+os.environ["LIBTPU_INIT_ARGS"] = os.environ.get("LIBTPU_INIT_ARGS", "") + " --xla_tpu_scoped_vmem_limit_kib=26624"
+
 import dataclasses
 import logging
 from dataclasses import dataclass
@@ -133,7 +136,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     gdn_layers_per_block: int = 3
     gdn_block_size: int = 4
     gdn_conv_kernel_size: int = 4
-    gdn_chunk_size: int = 64
+    gdn_chunk_size: int = 128
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
     initializer_range: float = 0.02
@@ -533,7 +536,7 @@ def _get_num_train_steps(param_count: int, batch_size: int, seq_len: int, tpp: i
 
 def _size_presets() -> dict[str, HackableTransformerConfig]:
     base = dict(
-        max_seq_len=4096,
+        max_seq_len=2048,
         rope=DefaultRotaryEmbeddingsConfig(),  # e.g., Llama3RotaryEmbeddingsConfig()
         attn_backend=None,
         qk_norm=None,  # e.g. RmsNormConfig(use_weight=True, eps=1e-5)
@@ -630,7 +633,7 @@ def _resource_presets(use_gpu: bool = False):
         }
 
     return {
-        "130m": ResourceConfig.with_tpu("v5p-32"),
+        "130m": ResourceConfig.with_tpu("v5p-64"),
         "300m": ResourceConfig.with_tpu("v5p-64"),
         "520m": ResourceConfig.with_tpu("v5p-64"),
         "1_2b": ResourceConfig.with_tpu("v5p-64"),
@@ -663,9 +666,10 @@ def build_run(size: str, *, use_gpu: bool = False) -> tuple[str, SpeedrunConfig]
         learning_rate=muon.learning_rate,
         optimizer_config=muon,
         steps_per_hf_export=-1,  # disable checkpointing
+        profiler=True,
     )
 
-    run_name = f"hacktx_{size}_gdn_{seq_len}_flash_checkpointing_flash_rmsnorm"
+    run_name = f"hacktx_{size}_gdn_{seq_len}_flash_neumann_segments_fp32"
     desc = f"Hackable Transformer ({size}) w/ hybrid Gated DeltaNet and standard attention layers (Muon)"
     cfg = SpeedrunConfig(author=AUTHOR, description=desc, model_config=model_cfg, train_config=train)
     return run_name, cfg
@@ -688,6 +692,7 @@ if __name__ == "__main__":
     ###
 
     sizes = ["130m"]
+    # sizes = ["1_2b"]
     # sizes = ["300m", "520m", "1_2b"]
     # sizes = ["130m", "300m", "520m", "1_2b"]
     use_gpu = bool(int(os.environ.get("SR_USE_GPU", "0")))
