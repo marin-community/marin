@@ -15,15 +15,22 @@
 
 import pytest
 from fray.cluster import create_cluster, set_current_cluster
-from fray.job.context import set_job_ctx
+from fray.job.context import _job_context
 
 DEFAULT_BUCKET_NAME = "marin-us-east5"
 DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
 
 
 @pytest.fixture(autouse=True)
+def reset_fray_context():
+    """Reset fray context between tests for isolation."""
+    _job_context.set(None)
+    yield
+    _job_context.set(None)
+
+
+@pytest.fixture(autouse=True)
 def fray_cluster():
-    set_current_cluster(create_cluster("local?use_isolated_env=False"))
+    set_current_cluster(create_cluster("local"))
     yield
     set_current_cluster(None)
-    set_job_ctx(None)

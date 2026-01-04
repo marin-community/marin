@@ -5,12 +5,10 @@ import os
 import tempfile
 
 from levanter.data.sharded_datasource import (
-    AudioTextUrlDataSource,
     ParquetDataSource,
     TextUrlDataSource,
     _sniff_format_for_dataset,
 )
-from test_utils import skip_if_no_soundlibs
 
 
 def test_sniff_format_for_json():
@@ -44,11 +42,6 @@ def test_sniff_format_for_parquet():
         f.flush()
 
         assert _sniff_format_for_dataset(f.name) == ".parquet"
-
-
-@skip_if_no_soundlibs
-def test_resolve_audio_pointer():
-    AudioTextUrlDataSource.resolve_audio_pointer("https://ccrma.stanford.edu/~jos/mp3/trumpet.mp3", 16_000)
 
 
 def test_basic_parquet_datasource_read_row():

@@ -14,7 +14,7 @@ Marin is a framework for building reproducible language model training pipelines
 
 ```
 marin/
-├── pyproject.toml              # Dependencies, extras (crawl, tokenize_train, post_training, etc.)
+├── pyproject.toml              # Dependencies, extras (gpu, tpu, cpu, rl, eval)
 ├── README.md, CLAUDE.md, AGENTS.md
 │
 ├── lib/marin/src/marin/                  # Core library organized by function

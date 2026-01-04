@@ -27,7 +27,7 @@ uv run zephyr --backend=ray --max-parallelism=1000 --memory=10GB --num-cpus=2 \
 import dataclasses
 
 import draccus
-from zephyr import Dataset, flow_backend, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 
 @dataclasses.dataclass
@@ -49,7 +49,6 @@ class FilterDolminoConfig:
 
 def filter_dolmino(config: FilterDolminoConfig):
     """Filter dolmino dataset by minimum document length using streaming pipeline."""
-    backend = flow_backend()
 
     # Create filter function that captures min_length
     def meets_length_threshold(record: dict) -> bool:
@@ -67,7 +66,7 @@ def filter_dolmino(config: FilterDolminoConfig):
         .write_jsonl(f"{config.output_path}/{{shard:05d}}.jsonl.gz")
     )
 
-    list(backend.execute(pipeline))
+    Backend.execute(pipeline)
 
 
 @draccus.wrap()

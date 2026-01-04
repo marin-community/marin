@@ -9,14 +9,16 @@ Before you begin, ensure you have the following installed:
 - Python 3.11 or higher
 - uv (Python package manager)
 - Git
-- Rust toolchain via [rustup](https://rustup.rs) (needed for `lib/dupekit`, which is built with Maturin; see [`lib/dupekit/README.md`](https://github.com/marin-community/marin/blob/main/lib/dupekit/README.md) for background)
+- Rust toolchain via [rustup](https://rustup.rs) (needed for `lib/dupekit`, which is built with Maturin;
+  see [`lib/dupekit/README.md`](https://github.com/marin-community/marin/blob/main/lib/dupekit/README.md) for background)
     - Recommended: `rustup toolchain install 1.91.0 && rustup default 1.91.0` (matches the Docker pin)
     - If you hit an `edition2024` error from Cargo (e.g., when building Arrow), use nightly: `rustup default nightly`
-- On macOS, install additional build tools for SentencePiece:
-    ```bash
-    brew install cmake pkg-config coreutils
-    ```
-- A [Weights & Biases](https://wandb.ai) account for experiment tracking (optional but recommended)
+- On macOS, install additional build tools for SentencePiece: ```brew install cmake pkg-config coreutils```
+
+In addition, you might find it useful to have the following accounts:
+- [GitHub](https://github.com) for submitting pull requests or speedruns
+- [Weights & Biases](https://wandb.ai) for experiment tracking
+- [Hugging Face](https://huggingface.co) for accessing gated models/tokenizers (such as [Meta's Llama 3.1 8B model](https://huggingface.co/meta-llama/Llama-3.1-8B))
 
 This document focuses on basic setup and usage of Marin.
 If you're on a GPU, see [Local GPU Setup](local-gpu.md) for a GPU-specific walkthrough for getting started.
@@ -24,19 +26,19 @@ If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
 
 ## Installation
 
-1. Clone the repository:
+1. Clone the repository (~10s):
    ```bash
    git clone https://github.com/marin-community/marin.git
    cd marin
    ```
 
-2. Create and activate a virtual environment:
+2. Create and activate a virtual environment (~0s):
    ```bash
    uv venv --python 3.11
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    ```
 
-3. Install the package and dependencies.
+3. Install the package and dependencies (5-10m, mostly building packages from source):
 
     Use `uv sync` to install dependencies and the local Marin package (editable) in one step:
    ```bash
@@ -46,13 +48,28 @@ If you want to set up a TPU cluster, see [TPU Setup](tpu-cluster-setup.md).
 
 4. Setup [Weights and Biases (WandB)](https://wandb.ai) so you can monitor your runs:
    ```bash
-   wandb login
+   export WANDB_API_KEY=...  # Get this from https://wandb.ai/authorize
    ```
+You can also set `WANDB_ENTITY` and `WANDB_PROJECT`.
 
 5. Setup the Hugging Face CLI so you can use gated models/tokenizers (such as [Meta's Llama 3.1 8B model](https://huggingface.co/meta-llama/Llama-3.1-8B)):
    ```bash
-   hf auth login
+   export HF_TOKEN=...  # Get this from https://huggingface.co/settings/tokens
    ```
+
+6. Define the path to where all artifacts generated during execution will be stored (e.g., `local_store`):
+
+    ```bash
+    export MARIN_PREFIX=...
+    ```
+For example, training checkpoints usually will be written to
+`${MARIN_PREFIX}/checkpoints/`. You can set this to an fsspec-recognizable path
+(e.g., a GCS bucket) or a directory on your machine. See [Understanding
+`MARIN_PREFIX` and `--prefix`](../explanations/marin-prefix.md) for details.
+
+You might find it convenient to store `WANDB_API_KEY` and `HF_TOKEN` and
+`MARIN_PREFIX` in an `.env` file, which you can load in one go with `source
+.env`.
 
 ## Hardware-specific Setup
 
@@ -91,7 +108,7 @@ Marin runs on multiple types of hardware (CPU, GPU, TPU).
 
          ```bash
          # Install GPU-specific dependencies (local package included)
-         uv sync --all-packages --extra=cuda12
+         uv sync --all-packages --extra=gpu
          ```
 
     === "TPU"
@@ -108,14 +125,14 @@ you train a tiny language model on TinyStories on your CPU.  For a sneak preview
 
 ```bash
 wandb offline  # Disable WandB logging
-uv run experiments/tutorials/train_tiny_model_cpu.py --prefix local_store
+uv run experiments/tutorials/train_tiny_model_cpu.py
 ```
 
 This will:
 
-1. Download and tokenize the TinyStories dataset to `local_store/`
+1. Download and tokenize the TinyStories dataset to `${MARIN_PREFIX}/`
 2. Train a tiny language model
-3. Save the model checkpoint to `local_store/`
+3. Save the model checkpoint to `${MARIN_PREFIX}/`
 
 ## Next Steps
 
@@ -123,5 +140,6 @@ Now that you have Marin set up and running, you can either continue with the
 next hands-on tutorial or read more about how Marin is designed for building
 language models.
 
-1. Follow our [First Experiment](first-experiment.md) tutorial to run a training experiment
-2. Read our [Language Modeling Pipeline](../explanations/lm-pipeline.md) to understand Marin's approach to language models
+1. Follow our [First Experiment](first-experiment.md) tutorial to run a training experiment.
+2. Read our [Language Modeling Pipeline](../explanations/lm-pipeline.md) to understand Marin's approach to language models.
+3. Submit a [speedrun](submitting-speedrun.md) to the Marin speedrun leaderboard.
