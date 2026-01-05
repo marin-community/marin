@@ -371,8 +371,8 @@ class TrainWorker:
 
         # Add MFU (Model FLOPs Utilization) logging
         vocab_size = len(self.tokenizer)
-        flops_per_token = self.config.model.flops_per_token(vocab_size)
         tokens_per_example = self.config.curriculum_config.max_seq_len
+        flops_per_token = self.config.model.flops_per_token(vocab_size, tokens_per_example)
         flops_per_example = 3 * flops_per_token * tokens_per_example if flops_per_token is not None else None
         trainer.add_hook(
             callbacks.log_performance_stats(
