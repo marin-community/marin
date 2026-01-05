@@ -68,8 +68,8 @@ qwen_32B_annotated_open_thoughts_4_math = ExecutorStep(
         max_doc_tokens=16384,
 
         # Ray data specific
-        num_instances=(1, 2),
-        batch_size=8,
+        num_instances=(4, 32),  # Use between 4 and 32 parallel workers
+        batch_size=48,
         tensor_parallel_size=4,
         preserve_order=False,
 

@@ -20,7 +20,6 @@ from typing import Any
 import fsspec
 import ray
 from fray.cluster import ResourceConfig
-from fray.cluster.ray import get_scheduling_strategy
 from marin.generation.chunk_utils import ChunkStrategy
 from marin.generation.pipeline import vLLMTextGeneration
 from marin.utils import fsspec_glob
@@ -109,22 +108,24 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
     # for large models can take awhile.
     ctx.wait_for_min_actors_s = 60 * 10 * config.tensor_parallel_size
 
+    # Disable high memory usage warnings (vLLM uses lots of memory for model weights)
+    ctx.issue_detectors_config.high_memory_detector_config.detection_time_interval_s = -1
+
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
     # Clear JAX_PLATFORMS so TPU devices are detected correctly
     runtime_env = {"env_vars": {"JAX_PLATFORMS": ""}}
 
-    if config.tensor_parallel_size == 1:
-        return {"resources": {"TPU": 1}, "max_restarts": -1, "runtime_env": runtime_env}
-    else:
-
-        def scheduling_strategy_dict_fn():
-            return dict(
-                scheduling_strategy=get_scheduling_strategy(config.resource_config),
-                runtime_env=runtime_env,
-            )
-
-        return {"ray_remote_args_fn": scheduling_strategy_dict_fn}
+    # Request TPU resources directly without placement groups.
+    # For TPU nodes (e.g., v5p-8), all chips are co-located on the same node,
+    # so requesting TPU: N will naturally land on a node with N chips.
+    # This is compatible with Ray autoscaling.
+    tpu_count = config.tensor_parallel_size if config.tensor_parallel_size > 1 else 1
+    return {
+        "resources": {"TPU": tpu_count},
+        "max_restarts": -1,
+        "runtime_env": runtime_env,
+    }
 
 
 def get_ray_data_read_kwargs(config: TextGenerationInferenceConfig):
