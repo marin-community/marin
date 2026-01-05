@@ -36,10 +36,9 @@ jobs:
           enable-cache: true
 
       - name: Test fray
-        env:
-          CI: true
         run: |
-          cd lib/fray && uv run --group=fray-test --frozen pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/
+          # NOTE: do not use frozen here because it makes ray sad when it sets up venvs with uv
+          cd lib/fray && uv run --group=fray-test pytest --durations=5 --tb=short -m 'not slow and not tpu_ci' -v -s tests/
 
   tpu-test:
     runs-on: [tpu-ci]

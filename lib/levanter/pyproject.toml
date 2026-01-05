@@ -30,7 +30,7 @@ classifiers = [
 dependencies = [
     "haliax>=1.4.dev450",
     "equinox>=0.11.7,!=0.12.0",
-    "jax>=0.6.2,!=0.7.0,!=0.7.1",
+    "jax>=0.8.0",
     "fray",
     "zephyr",
     "jaxtyping>=0.2.34",
@@ -53,7 +53,7 @@ dependencies = [
     "matplotlib>=3.7.0",
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
-    "ray[default]==2.45.0",
+    "ray[default]==2.53.0",
     "pydantic<3",
     "filelock~=3.13",
     "async-lru~=2.0",
@@ -71,8 +71,8 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 "Bug Tracker" = "https://github.com/stanford-crfm/levanter/issues"
 
 [project.optional-dependencies]
-gpu = ["jax[cuda12]>=0.6.2"]
-tpu = ["jax[tpu]>=0.6.2"]
+gpu = ["jax[cuda12]>=0.8.0"]
+tpu = ["jax[tpu]>=0.8.0"]
 torch_test = [
   "torch>=2.7.0",
   "peft>=0.12.0",
