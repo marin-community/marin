@@ -37,6 +37,7 @@ from typing import Any
 import click
 import yaml
 
+from fray.cluster.ray.auth import ray_auth_secret
 from fray.cluster.ray.dashboard import DashboardConfig, ray_dashboard
 from marin.cluster import gcp
 from marin.cluster.config import (
@@ -778,6 +779,100 @@ def open_dashboard(ctx):
             api_url = f"localhost:{ports.api_port}"
             print(f"    Dashboard: {dashboard_url} | GCS: {gcs_url} | API: {api_url}")
             print()
+
+        print("\nPress Ctrl+C to stop")
+        try:
+            time.sleep(86400)
+        except KeyboardInterrupt:
+            print("\nShutting down...")
+
+
+@cli.command("auth")
+@click.option(
+    "--secret",
+    default=None,
+    help="GCP Secret Manager secret containing the Ray auth token (default: RAY_AUTH_TOKEN).",
+)
+@click.option(
+    "--copy/--no-copy",
+    default=True,
+    help="Copy the token to your clipboard (default: copy).",
+)
+@click.option(
+    "--open/--no-open",
+    "open_browser",
+    default=True,
+    help="Open the Ray dashboard in your browser (default: open).",
+)
+@click.pass_context
+def auth(ctx, secret: str | None, copy: bool, open_browser: bool):
+    """Open a cluster dashboard and copy the Ray auth token to clipboard.
+
+    This is a convenience wrapper for token-auth-enabled clusters to avoid
+    manually fetching/pasting tokens.
+    """
+    if not ctx.obj.config_obj:
+        raise click.UsageError("--config/--cluster is required for auth")
+
+    config_path = ctx.obj.config_file
+    secret = ray_auth_secret(secret)
+
+    token = subprocess.check_output(
+        ["gcloud", "secrets", "versions", "access", "latest", f"--secret={secret}"],
+        text=True,
+    ).strip()
+    if not token:
+        raise RuntimeError(f"Secret {secret} returned empty token")
+
+    if copy:
+        clipboard_commands: list[list[str]] = [
+            ["pbcopy"],
+            ["xclip", "-selection", "clipboard"],
+            ["xsel", "--clipboard", "--input"],
+        ]
+
+        used_clipboard_command: str | None = None
+        for clipboard_cmd in clipboard_commands:
+            if not shutil.which(clipboard_cmd[0]):
+                continue
+            try:
+                subprocess.run(clipboard_cmd, input=token, text=True, check=True)
+            except subprocess.CalledProcessError:
+                continue
+            used_clipboard_command = clipboard_cmd[0]
+            break
+
+        print()
+        print("Ray dashboard token auth")
+        print(f"- Token source: Secret Manager `{secret}`")
+        if used_clipboard_command:
+            print(f"- Token copied to clipboard via `{used_clipboard_command}` (paste when prompted).")
+        else:
+            print(token)
+            print("- Clipboard copy unavailable (install `xclip` or `xsel`); token printed above.")
+
+    with ray_dashboard(DashboardConfig.from_cluster(config_path)) as conn:
+        cluster_name = next(iter(conn.clusters.keys()))
+        ports = conn.port_mappings[cluster_name]
+        url = f"http://localhost:{ports.dashboard_port}"
+        print()
+        print(f"Dashboard: {url}")
+        print()
+        print("Auth steps (Ray token auth prompt):")
+        print("  1) Paste the token (already in your clipboard) into the prompt.")
+        print("  2) Click Submit.")
+        print()
+        print("If you are not prompted, you already have a `ray-authentication-token` cookie for this host.")
+        print("If the token has been rotated, clear that cookie or use an incognito window.")
+
+        if open_browser:
+            try:
+                if sys.platform == "darwin":
+                    subprocess.run(["open", url], check=False)
+                else:
+                    subprocess.run(["xdg-open", url], check=False)
+            except FileNotFoundError:
+                pass
 
         print("\nPress Ctrl+C to stop")
         try:

@@ -119,8 +119,10 @@ def out_qdq_bwd(compute_dtype, res, g):
 out_qdq.defvjp(out_qdq_fwd, out_qdq_bwd)
 
 
-@partial(custom_jvp, nondiff_argnums=(2, 3, 4))
-def dot_general_with_precision(lhs, rhs, dimension_numbers, precision=None, preferred_element_type=None, **kwargs):
+@partial(custom_jvp, nondiff_argnums=(2, 3, 4, 5))
+def dot_general_with_precision(
+    lhs, rhs, dimension_numbers, precision=None, preferred_element_type=None, out_sharding=None, **kwargs
+):
     if precision is not None or preferred_element_type is not None:
         # einsum sets preferred_element_type and so this is just noisy
         # warnings.warn(
@@ -133,7 +135,12 @@ def dot_general_with_precision(lhs, rhs, dimension_numbers, precision=None, pref
 
 
 @dot_general_with_precision.defjvp
-def dot_general_with_precision_jvp(dimension_numbers, precision, preferred_element_type, primals, tangents):
+def dot_general_with_precision_jvp(
+    dimension_numbers, precision, preferred_element_type, out_sharding, primals, tangents
+):
+    del preferred_element_type
+    del out_sharding
+    del precision
     lhs, rhs = primals
     lhs_dot, rhs_dot = tangents
 

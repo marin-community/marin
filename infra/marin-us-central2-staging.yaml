@@ -3,25 +3,28 @@
 # Update the template or the script, not this file! #
 #####################################################
 # Unique Identifier for the Head Node + Workers
-cluster_name: marin-us-east5-b-vllm
+cluster_name: marin-us-central2-staging
 
 # Maximum Workers (excluding Head Node)
 max_workers: 1024
+
 
 auth:
   ssh_private_key:  ~/.ssh/marin_ray_cluster.pem
   ssh_public_key:  ~/.ssh/marin_ray_cluster.pub
   ssh_user: ray
 
+
 # Configure GCP
 provider:
   type: gcp
-  region: us-east5
-  availability_zone: us-east5-b
+  region: us-central2
+  availability_zone: us-central2-b
   project_id: hai-gcp-models
 
+
 docker:
-    image: "us-east5-docker.pkg.dev/hai-gcp-models/marin/marin_vllm:6e804a10"
+    image: "us-central2-docker.pkg.dev/hai-gcp-models/marin/marin_cluster_test:latest"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -31,7 +34,7 @@ docker:
       - --privileged
       - --ulimit memlock=-1:-1  #
       - --ulimit nofile=1048576:1048576
-      - --shm-size=200gb
+      - --shm-size=100gb
       - -v
       - "/tmp:/tmp"
       # this lets the worker run docker commands and have them run as sibling containers
@@ -53,7 +56,7 @@ docker:
 
 initialization_commands:
   - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
-  - yes | gcloud auth configure-docker us-east5-docker.pkg.dev
+  - yes | gcloud auth configure-docker us-central2-docker.pkg.dev
   # always run this because ray doesn't run with sudo
   - sudo usermod -aG docker $USER
   # we want to launch docker containers from inside docker, which means we need to loosen the permissions on the docker
@@ -63,8 +66,8 @@ initialization_commands:
 setup_commands:
   # set the GCP project because it's not injected by default
   - gcloud config set project hai-gcp-models
-  - gcloud config set compute/region us-east5
-  - gcloud config set compute/zone us-east5-b
+  - gcloud config set compute/region us-central2
+  - gcloud config set compute/zone us-central2-b
   - mkdir $HOME/.cache/huggingface -p
   - mkdir $HOME/.cache/openai -p
   - mkdir -p $HOME/.ssh && gcloud compute project-info describe --format="value(commonInstanceMetadata.items[?key==\"ssh-keys\"].value)" > $HOME/.ssh/authorized_keys && chmod 600 $HOME/.ssh/authorized_keys
@@ -76,8 +79,8 @@ setup_commands:
   - gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN > $HOME/.ray/auth_token
   - chmod 600 $HOME/.ray/auth_token
 
-  - echo 'export MARIN_PREFIX="gs://marin-us-east5"' >> $HOME/.bashrc
-  - echo 'export BUCKET="marin-us-east5"' >> $HOME/.bashrc
+  - echo 'export MARIN_PREFIX="gs://marin-us-central2"' >> $HOME/.bashrc
+  - echo 'export BUCKET="marin-us-central2"' >> $HOME/.bashrc
   # cf https://github.com/ray-project/ray/blob/0bc6ec86ffd0fc0d4e43fb339ffe0ac03ee5531b/python/ray/autoscaler/_private/constants.py#L66
   # this is set to 30s by default, which is much too short for our use case
   - echo 'export AUTOSCALER_HEARTBEAT_TIMEOUT_S=600' >> $HOME/.bashrc
@@ -94,7 +97,6 @@ worker_setup_commands:
 
 # Set Head Node == `ray_head_default`
 head_node_type: head_default
-
 
 # List of Available Node Types
 available_node_types:
@@ -121,12 +123,120 @@ available_node_types:
             sourceImage: projects/ubuntu-os-cloud/global/images/family/ubuntu-2204-lts
   tpu_worker:
     max_workers: 1024
-    min_workers: 2
+    min_workers: 4
     node_config:
-      acceleratorType: v6e-8
-      runtimeVersion: v2-alpha-tpuv6e
+      acceleratorType: v4-8
+      runtimeVersion: tpu-ubuntu2204-base
       schedulingConfig:
         preemptible: true
     resources:
       CPU: 120
-      TPU: 8
+      TPU: 4
+
+  tpu_slice_v4_16:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-16
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_32:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-32
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_64:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-64
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_128:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-128
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_256:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-256
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_512:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-512
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_1024:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-1024
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_2048:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-2048
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4
+
+  tpu_slice_v4_4096:
+    max_workers: 1024
+    min_workers: 0
+    node_config:
+      acceleratorType: v4-4096
+      runtimeVersion: tpu-ubuntu2204-base
+      schedulingConfig:
+        preemptible: true
+    resources:
+      CPU: 120
+      TPU: 4

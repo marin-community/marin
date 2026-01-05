@@ -21,7 +21,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
 ]
 dependencies = [
-     "jax >= 0.6.2",
+     "jax >= 0.8.0",
     "equinox>=0.10.6",
     "jaxtyping>=0.2.20",
     "jmp>=0.0.4",

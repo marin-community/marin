@@ -181,6 +181,54 @@ def is_too_large(size: int) -> bool:
     return server.config.max_size is not None and size > server.config.max_size
 
 
+def read_executor_status_file(path: str, offset: int, count: int) -> dict:
+    # Ensure we only read a max of server.config.max_lines lines
+    if is_too_many_lines(offset, count):
+        return {"error": f"Only {server.config.max_lines} lines are allowed to be read at a time"}
+
+    # Read the lines from the file, enforcing max_size if configured.
+    with server.fs(path).open(path, "r") as f:
+        lines: list[str] = []
+        if server.config.max_size is None:
+            for raw_line in f:
+                line = raw_line.strip()
+                if line:
+                    lines.append(line)
+        else:
+            bytes_read = 0
+            for raw_line in f:
+                # Approximate byte size using UTF-8 encoding
+                bytes_read += len(raw_line.encode("utf-8"))
+                if is_too_large(bytes_read):
+                    return {
+                        "type": "jsonl",
+                        "error": f"File too large (exceeded {server.config.max_size} bytes)",
+                    }
+                line = raw_line.strip()
+                if line:
+                    lines.append(line)
+
+    if not lines:
+        return {"type": "jsonl", "items": []}
+
+    # new format: a single status token like SUCCESS/RUNNING/etc.
+    if len(lines) == 1 and not lines[0].startswith("{"):
+        if offset > 0:
+            return {"type": "jsonl", "items": []}
+        return {"type": "jsonl", "items": [{"status": lines[0]}]}
+
+    # legacy format: JSON-lines event log.
+    events: list[dict] = []
+    for line in lines[offset : offset + count]:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return {"type": "jsonl", "items": events}
+
+
 def read_text_file(
     path: str, get_json: bool, offset: int, count: int, gzipped: bool = False, zstded: bool = False
 ) -> dict:
@@ -373,8 +421,9 @@ def view():
             return jsonify(read_json_file(sanitized_path))
 
         # render .executor_status files as jsonl
+        # Note: there are two formats of .executor_status files; we convert both to jsonl.
         if sanitized_path.endswith(".executor_status"):
-            return jsonify(read_text_file(path=sanitized_path, get_json=True, offset=offset, count=count))
+            return jsonify(read_executor_status_file(path=sanitized_path, offset=offset, count=count))
 
         # Assume text file (treated as a list of lines)
         return jsonify(read_text_file(path=sanitized_path, gzipped=False, get_json=False, offset=offset, count=count))
@@ -413,7 +462,15 @@ def proxy_to_dev_server(path):
     be forwarded (these headers are meant only for a single transport-level connection).
     See https://www.rfc-editor.org/rfc/rfc2616#section-13.5.1
     """
-    resp = requests.get(f"http://localhost:3000/{path}")
+    try:
+        resp = requests.get(f"http://localhost:3000/{path}")
+    except requests.exceptions.RequestException:
+        return Response(
+            "React dev server not running on http://localhost:3000.\n"
+            "Run: cd data_browser && uv run python run-dev.py --config conf/local.conf\n",
+            status=502,
+            content_type="text/plain; charset=utf-8",
+        )
     excluded_headers = ["content-encoding", "content-length", "transfer-encoding", "connection"]
     headers = [(name, value) for (name, value) in resp.raw.headers.items() if name.lower() not in excluded_headers]
     return Response(resp.content, resp.status_code, headers)
