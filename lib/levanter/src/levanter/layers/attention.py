@@ -1572,9 +1572,9 @@ class AttentionConfig:
     gated: Literal["none", "headwise", "elementwise"] = "none"
 
     def __post_init__(self):
-        assert self.num_heads % self.num_kv_heads == 0, (
-            f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
-        )
+        assert (
+            self.num_heads % self.num_kv_heads == 0
+        ), f"num_heads={self.num_heads} not divisible by num_kv_heads={self.num_kv_heads}."
 
     @property
     def head_size(self) -> int:
@@ -2331,9 +2331,9 @@ class MultiHeadLatentAttention(eqx.Module):
         if self.config.q_lora_rank is None:
             q = self.q_proj(x, key=k_q_a)
         else:
-            assert self.q_a_proj is not None and self.q_a_norm is not None and self.q_b_proj is not None, (
-                "q_lora_rank defined, but LoRA matrices are not."
-            )
+            assert (
+                self.q_a_proj is not None and self.q_a_norm is not None and self.q_b_proj is not None
+            ), "q_lora_rank defined, but LoRA matrices are not."
             q = self.q_a_proj(x, key=k_q_a)
             q = self.q_a_norm(q)
             q = self.q_b_proj(q, key=k_q_b)

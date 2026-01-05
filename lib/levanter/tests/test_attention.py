@@ -605,9 +605,9 @@ def test_causal_offset_cross_attention(impl):
         precision=Precision.HIGHEST,
     )
 
-    assert not jnp.allclose(offset_out.array, wrong_out.array, atol=2e-3, rtol=2e-3), (
-        "Output should differ without offset"
-    )
+    assert not jnp.allclose(
+        offset_out.array, wrong_out.array, atol=2e-3, rtol=2e-3
+    ), "Output should differ without offset"
 
 
 # This is a bottleneck in tests
