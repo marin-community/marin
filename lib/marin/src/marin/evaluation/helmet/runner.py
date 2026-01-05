@@ -140,14 +140,14 @@ def _run_on_tpu(config: HelmetRunConfig) -> None:
         model = _model_config_for_vllm(run_name=config.run_name, model_name_or_path=config.model_name_or_path)
         model_name_or_path = VllmTpuEvaluator.download_model(model)
 
-        server_url = VllmTpuEvaluator.start_vllm_server_in_background(
+        vllm_server = VllmTpuEvaluator.start_vllm_server_in_background(
             model=model,
             host="127.0.0.1",
-            port=8000,
+            port=None,
             timeout_seconds=3600,
             extra_args=list(config.vllm_serve_args) if config.vllm_serve_args else None,
         )
-        endpoint_url = f"{server_url}/"
+        endpoint_url = f"{vllm_server.server_url}/"
 
         local_output_dir = os.path.join(tmpdir, "output")
 
@@ -191,7 +191,7 @@ def _run_on_tpu(config: HelmetRunConfig) -> None:
                 )
                 ran.append(eval_name)
         finally:
-            VllmTpuEvaluator.cleanup(model, vllm_port=8000)
+            VllmTpuEvaluator.cleanup(model, vllm_server=vllm_server)
 
         os.makedirs(local_output_dir, exist_ok=True)
         with open(os.path.join(local_output_dir, "marin_metadata.json"), "w") as f:
