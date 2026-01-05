@@ -33,12 +33,17 @@ from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers.models.apertus.configuration_apertus import ApertusConfig as HfApertusConfig  # noqa: E402
 
 
-class XIELUActivation(eqx.Module):
-    alpha_p: NamedArray
-    alpha_n: NamedArray
-    beta: NamedArray
-    eps: NamedArray
-    Param: Axis = eqx.field(static=True)
+class XIELUActivation(ModuleWithStateDictSerialization):
+    """xIELU activation with learnable parameters.
+
+    Parameters are stored as scalars internally. For HF checkpoint compatibility,
+    flatten_for_export/unflatten_from_export handle the () <-> (1,) conversion.
+    """
+
+    alpha_p: NamedArray  # scalar
+    alpha_n: NamedArray  # scalar
+    beta: NamedArray  # scalar (constant)
+    eps: NamedArray  # scalar (constant)
 
     @staticmethod
     def init(
@@ -49,19 +54,15 @@ class XIELUActivation(eqx.Module):
         eps: float = -1e-6,
         dtype=jnp.float32,
     ) -> "XIELUActivation":
-        Param = Axis("xielu_param", 1)
-        alpha_p = hax.log(hax.expm1(hax.full(Param, alpha_p_init, dtype=dtype)))
-        alpha_n = hax.log(hax.expm1(hax.full(Param, alpha_n_init - beta, dtype=dtype)))
+        alpha_p = hax.log(hax.expm1(hax.full((), alpha_p_init, dtype=dtype)))
+        alpha_n = hax.log(hax.expm1(hax.full((), alpha_n_init - beta, dtype=dtype)))
         beta_arr = hax.full((), beta, dtype=dtype)
         eps_arr = hax.full((), eps, dtype=dtype)
-        return XIELUActivation(alpha_p, alpha_n, beta_arr, eps_arr, Param)
-
-    def _as_scalar(self, value: NamedArray) -> NamedArray:
-        return hax.mean(value, axis=self.Param)
+        return XIELUActivation(alpha_p, alpha_n, beta_arr, eps_arr)
 
     def __call__(self, x: NamedArray) -> NamedArray:
-        alpha_p = self._as_scalar(hnn.softplus(self.alpha_p))
-        alpha_n = self._as_scalar(hnn.softplus(self.alpha_n))
+        alpha_p = hnn.softplus(self.alpha_p)
+        alpha_n = hnn.softplus(self.alpha_n)
         beta = self.beta
         eps = self.eps
         alpha_n = beta + alpha_n
@@ -69,6 +70,20 @@ class XIELUActivation(eqx.Module):
         positive = alpha_p * x * x + beta * x
         negative = (hax.expm1(hax.minimum(x, eps)) - x) * alpha_n + beta * x
         return hax.where(x > 0, positive, negative)
+
+    def flatten_for_export(self) -> "XIELUActivation":
+        """Expand scalar parameters to [1] shape for HF checkpoint compatibility."""
+        Param = Axis("xielu_param", 1)
+        alpha_p = hax.named(self.alpha_p.array.reshape(1), Param)
+        alpha_n = hax.named(self.alpha_n.array.reshape(1), Param)
+        return XIELUActivation(alpha_p, alpha_n, self.beta, self.eps)
+
+    def unflatten_from_export(self, template: "XIELUActivation") -> "XIELUActivation":
+        """Squeeze [1] parameters back to scalars."""
+        del template
+        alpha_p = hax.named(jnp.squeeze(self.alpha_p.array), ())
+        alpha_n = hax.named(jnp.squeeze(self.alpha_n.array), ())
+        return XIELUActivation(alpha_p, alpha_n, self.beta, self.eps)
 
 
 @LmConfig.register_subclass("apertus")
