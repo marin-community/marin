@@ -86,6 +86,13 @@ smollm2_1_7b_instruct = download_model_step(
 )
 
 # Note(Will): I don't think we actually support Qwen models in Levanter?
+qwen2_5_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-7B",
+        hf_revision="d149729398750b98c0af14eb82c78cfe92750796",
+    )
+)
+
 qwen2_5_7b_instruct = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen2.5-7B-Instruct",
