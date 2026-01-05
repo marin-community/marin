@@ -419,8 +419,10 @@ class RayContext:
         options["lifetime"] = lifetime
 
         # run non-preemptible actors on the head node for persistence
+        # head node has CPU: 0 to prevent regular tasks, so we need num_cpus=0
         if not preemptible:
             options["resources"] = {"head_node": 0.0001}
+            options["num_cpus"] = 0
 
         remote_class = ray.remote(actor_class)
         ray_actor = remote_class.options(**options).remote(*args, **kwargs)
