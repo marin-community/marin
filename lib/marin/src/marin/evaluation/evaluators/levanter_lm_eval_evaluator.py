@@ -113,6 +113,7 @@ class LevanterLmEvalEvaluator(LevanterTpuEvaluator):
                     apply_chat_template=model.apply_chat_template,
                     confirm_run_unsafe_code=True,
                     sample_logging=eval_harness.SampleLoggingConfig(max_samples_per_benchmark=20),
+                    metadata={"pretrained": model_path},
                 ),
                 tokenizer=model_path,  # levanter picks up the tokenizer from the model path
                 checkpoint_path=model_path,
