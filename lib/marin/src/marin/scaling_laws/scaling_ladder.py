@@ -115,10 +115,6 @@ class ScalingLadderRungConfig:
     This config references an IsoFLOP analysis step and specifies
     the target compute budget. At runtime, the optimal config is loaded
     from the analysis output.
-
-    Note: If you need validation sets, pass an LMMixtureDatasetConfig with
-    validation sets already configured. This module does not handle default
-    validation sets to avoid experiment-specific dependencies.
     """
 
     analysis_output_path: str
@@ -131,8 +127,7 @@ class ScalingLadderRungConfig:
     """Dataset label to use for scaling fit (e.g., 'nemo', 'comma', 'dclm')."""
 
     tokenized: InputName | str | LMMixtureDatasetConfig
-    """Tokenized dataset for training. Can be a path, InputName, or LMMixtureDatasetConfig.
-    If validation sets are needed, pass an LMMixtureDatasetConfig with them pre-configured."""
+    """Tokenized dataset for training. Can be a path, InputName, or LMMixtureDatasetConfig."""
 
     output_path: str
     """Where to write training outputs."""
@@ -145,6 +140,9 @@ class ScalingLadderRungConfig:
 
     sweep_config: IsoFlopSweepConfig | None = None
     """Optional sweep config for predict_optimal_config. Uses defaults if None."""
+
+    validation_sets: dict[str, TokenizerStep] | None = None
+    """Optional validation sets to add for eval loss tracking."""
 
 
 def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
@@ -197,9 +195,7 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
 
     optimizer_cfg = build_optimizer_config(candidate)
 
-    # Accepts both string paths and LMMixtureDatasetConfig.
-    # If validation sets are needed, they should be pre-configured in the LMMixtureDatasetConfig.
-    pretraining_data = _prepare_data_config(config.tokenized)
+    pretraining_data = _prepare_data_config(config.tokenized, config.validation_sets)
 
     train_config = TrainLmConfig(
         data=pretraining_data,
@@ -253,6 +249,7 @@ def scaling_ladder_rung_step(
     tokenizer: str = "stanford-crfm/marin-tokenizer",
     seq_len: int = 4096,
     override_output_path: str | None = None,
+    validation_sets: dict[str, TokenizerStep] | None = None,
 ) -> ExecutorStep:
     """Create an ExecutorStep for one rung of the scaling ladder.
 
@@ -265,11 +262,11 @@ def scaling_ladder_rung_step(
         target_budget: Target compute budget in FLOPs
         label: Dataset label to use for scaling fit (e.g., 'nemo', 'comma')
         tokenized: Tokenized dataset to train on. Can be an ExecutorStep, InputName,
-            or LMMixtureDatasetConfig. If validation sets are needed, pass an
-            LMMixtureDatasetConfig with them pre-configured.
+            or LMMixtureDatasetConfig.
         tokenizer: Tokenizer to use
         seq_len: Sequence length for training
         override_output_path: Optional override for the output path
+        validation_sets: Optional validation sets for eval loss tracking
 
     Returns:
         ExecutorStep configured to run one optimal training run
@@ -291,6 +288,7 @@ def scaling_ladder_rung_step(
         output_path=output_path,
         tokenizer=tokenizer,
         seq_len=seq_len,
+        validation_sets=validation_sets,
     )
 
     step = ExecutorStep(
@@ -343,6 +341,7 @@ def scaling_ladder_suite(
     upload_to_wandb: bool = True,
     wandb_entity: str = WANDB_ENTITY,
     wandb_project: str = f"{WANDB_PROJECT}-analysis",
+    validation_sets: dict[str, TokenizerStep] | None = None,
 ) -> ScalingLadderSuite:
     """Create a complete scaling ladder: IsoFLOP analysis + optimal training runs.
 
@@ -359,8 +358,7 @@ def scaling_ladder_suite(
         target_budgets: Target compute budgets (in FLOPs) for optimal training
         label: Dataset label to use for scaling fit (e.g., 'nemo', 'comma')
         tokenized: Tokenized dataset for optimal training runs. Can be an ExecutorStep,
-            InputName, or LMMixtureDatasetConfig. If validation sets are needed,
-            pass an LMMixtureDatasetConfig with them pre-configured.
+            InputName, or LMMixtureDatasetConfig.
         tokenizer: Tokenizer to use
         seq_len: Sequence length for training
         metric_key: Which metric to use for loss
@@ -369,6 +367,7 @@ def scaling_ladder_suite(
         upload_to_wandb: Whether to upload plots to WandB
         wandb_entity: WandB entity for uploads
         wandb_project: WandB project for uploads
+        validation_sets: Optional validation sets for eval loss tracking
 
     Returns:
         ScalingLadderSuite containing the analysis step and optimal training steps
@@ -405,6 +404,7 @@ def scaling_ladder_suite(
             tokenized=tokenized,
             tokenizer=tokenizer,
             seq_len=seq_len,
+            validation_sets=validation_sets,
         )
         optimal_runs.append(run_step)
 
