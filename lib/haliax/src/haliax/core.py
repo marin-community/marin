@@ -955,7 +955,14 @@ def take(array: NamedArray, axis: AxisSelector, index: int | NamedArray) -> Name
             return out
         else:
             new_axes = array.axes[:axis_index] + index.axes + array.axes[axis_index + 1 :]
-            new_array = jnp.take(array.array, index.array, axis=axis_index)
+            # Local import to avoid a circular import between core <-> partitioning.
+            from haliax.partitioning import pspec_for_axis
+
+            mesh = jax.sharding.get_abstract_mesh()
+            out_sharding = None if mesh is None or mesh.empty else pspec_for_axis(new_axes)
+            indexer = [py_slice(None)] * array.array.ndim
+            indexer[axis_index] = index.array
+            new_array = array.array.at[tuple(indexer)].get(out_sharding=out_sharding)
 
             # new axes come from splicing the old axis with
             return NamedArray(new_array, new_axes)
