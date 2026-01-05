@@ -76,7 +76,7 @@ class OneToOneFilenameProvider(FilenameProvider):
         self.files = files
         self.input_path = input_path
 
-    def get_filename_for_block(self, block, task_index, block_index):
+    def get_filename_for_block(self, block, task_index, block_index, file_format=None):
         input_filename = self.files[task_index]
         output_filename = os.path.basename(input_filename)
         return output_filename
@@ -87,7 +87,7 @@ class OverwriteOutputFiletypeFilenameProvider(FilenameProvider):
         self.file_format = file_format
         self.dataset_id = str(uuid.uuid4())
 
-    def get_filename_for_block(self, block, task_index, block_index):
+    def get_filename_for_block(self, block, task_index, block_index, file_format=None):
         return f"{self.dataset_id}_{task_index:06}_{block_index:06}.{self.file_format}"
 
 
@@ -111,12 +111,18 @@ def set_ray_data_config(config: TextGenerationInferenceConfig):
 
 
 def ray_resources_kwarg(config: TextGenerationInferenceConfig):
+    # Clear JAX_PLATFORMS so TPU devices are detected correctly
+    runtime_env = {"env_vars": {"JAX_PLATFORMS": ""}}
+
     if config.tensor_parallel_size == 1:
-        return {"resources": {"TPU": 1}, "max_restarts": -1}
+        return {"resources": {"TPU": 1}, "max_restarts": -1, "runtime_env": runtime_env}
     else:
 
         def scheduling_strategy_dict_fn():
-            return dict(scheduling_strategy=get_scheduling_strategy(config.resource_config))
+            return dict(
+                scheduling_strategy=get_scheduling_strategy(config.resource_config),
+                runtime_env=runtime_env,
+            )
 
         return {"ray_remote_args_fn": scheduling_strategy_dict_fn}
 
@@ -148,6 +154,7 @@ def get_ray_data_write_kwargs(config: TextGenerationInferenceConfig):
     return ray_data_write_kwargs
 
 
+@ray.remote
 def _find_finished_ids_for_file(checkpoint_filepath: str, id_column: str | dict[str, str]):
     from marin.processing.classification.dataset_utils import read_dataset
 
@@ -204,7 +211,10 @@ def run_inference(config: TextGenerationInferenceConfig):
     set_ray_data_config(config)
 
     ray_data_read_kwargs = get_ray_data_read_kwargs(config)
-    ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
+    if config.filetype == "parquet":
+        ds = ray.data.read_parquet(config.input_path, **ray_data_read_kwargs)
+    else:
+        ds = ray.data.read_json(config.input_path, **ray_data_read_kwargs)
 
     assert (config.template_path or config.template) and not (
         config.template_path and config.template
@@ -229,6 +239,7 @@ def run_inference(config: TextGenerationInferenceConfig):
                 ds = ds.filter(lambda x: x[dataset_column][metadata_key_column] not in finished_ids)
             else:
                 ds = ds.filter(lambda x: x[config.checkpoint_id_column] not in finished_ids)
+            print("Dataset count after checkpoint filter:", ds.count())
 
     ds = ds.map_batches(  # Apply batch inference for all input data.
         vLLMTextGeneration,
@@ -250,4 +261,8 @@ def run_inference(config: TextGenerationInferenceConfig):
         **ray_resources_kwarg(config),
     )
 
-    ds = ds.write_json(config.output_path, **get_ray_data_write_kwargs(config))
+    output_filetype = config.output_filetype_override or config.filetype
+    if output_filetype == "parquet":
+        ds = ds.write_parquet(config.output_path, **get_ray_data_write_kwargs(config))
+    else:
+        ds = ds.write_json(config.output_path, **get_ray_data_write_kwargs(config))
