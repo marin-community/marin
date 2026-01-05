@@ -26,6 +26,7 @@ The analysis steps depend on completed isoflop training runs from isoflop_sweep.
 Once complete, results are saved to the output path and uploaded to WandB.
 """
 
+from experiments.defaults import default_validation_sets
 from experiments.isoflop_sweep import MARIN_SCALING_SUITES, nemotron_mix
 from marin.execution.executor import executor_main
 from marin.scaling_laws import scaling_ladder_suite
@@ -42,12 +43,13 @@ TARGET_BUDGETS: list[float] = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
 
 
 nemotron_suite = scaling_ladder_suite(
-    name="exp2166-scaling-ladder-nemotron",
+    name="exp2166-scaling-ladder-nemotron-validation",
     training_runs=nemotron_training,
     target_budgets=TARGET_BUDGETS,
     label="nemo-wider-depth-adapt",
     tokenized=nemotron_mix,
     wandb_project="marin-analysis",
+    validation_sets=default_validation_sets(tokenizer="stanford-crfm/marin-tokenizer"),
 )
 
 all_steps = [*nemotron_suite.all_steps]
