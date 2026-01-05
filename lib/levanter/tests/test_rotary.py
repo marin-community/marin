@@ -126,7 +126,7 @@ def test_yarn_rotary_embedding():
 
 
 @skip_if_no_torch
-@pytest.mark.parametrize("factor", [2.0, 4.0, 8.0])
+@pytest.mark.parametrize("factor", [1.0, 2.0, 4.0, 8.0])
 def test_yarn_rotary_embedding_vs_hf(factor):
     """Test that YARN rotary embeddings match HuggingFace implementation."""
     import torch
@@ -197,47 +197,3 @@ def test_yarn_rotary_embedding_vs_hf(factor):
         atol=1e-5,
         err_msg=f"YARN rotary embeddings don't match HF for factor={factor}",
     )
-
-
-@skip_if_no_torch
-@pytest.mark.parametrize("factor", [1.0, 2.0, 4.0, 8.0])
-def test_yarn_attention_factor_matches_hf(factor):
-    """Test that YARN attention_factor matches HuggingFace's get_mscale formula."""
-    import math
-
-    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
-
-    # HF's get_mscale formula (from modeling_rope_utils.py)
-    def hf_get_mscale(scale, mscale=1):
-        if scale <= 1:
-            return 1.0
-        return 0.1 * mscale * math.log(scale) + 1.0
-
-    # Create YARN config matching OLMo3-like settings
-    yarn_config = YarnRotaryEmbeddingsConfig(
-        theta=500000.0,
-        factor=factor,
-        beta_fast=32.0,
-        beta_slow=1.0,
-        original_max_position_embeddings=8192,
-        mscale=1.0,
-    )
-
-    # The temperature is applied to cos/sin, so we can extract it by comparing
-    # rotated vs unrotated magnitude changes
-    # For simplicity, we directly verify the formula matches
-    if factor <= 1.0:
-        expected_attention_factor = 1.0
-    else:
-        expected_attention_factor = 0.1 * yarn_config.mscale * math.log(factor) + 1.0
-
-    hf_attention_factor = hf_get_mscale(factor, yarn_config.mscale)
-
-    assert (
-        abs(expected_attention_factor - hf_attention_factor) < 1e-10
-    ), f"Levanter attention_factor {expected_attention_factor} != HF {hf_attention_factor}"
-
-    # Also verify against OLMo3's actual config value for factor=8
-    if factor == 8.0:
-        olmo3_attention_factor = 1.2079441541679836
-        assert abs(hf_attention_factor - olmo3_attention_factor) < 1e-10
