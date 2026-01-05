@@ -129,9 +129,10 @@ def test_yarn_rotary_embedding():
 @pytest.mark.parametrize("factor", [2.0, 4.0, 8.0])
 def test_yarn_rotary_embedding_vs_hf(factor):
     """Test that YARN rotary embeddings match HuggingFace implementation."""
-    import math
-
     import torch
+    from transformers import LlamaConfig
+    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
+    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
 
     from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
 
@@ -165,63 +166,28 @@ def test_yarn_rotary_embedding_vs_hf(factor):
     # Apply Levanter YARN
     q_rotated = rope(q, position_ids)
 
-    # Now compute HuggingFace version manually
-    dim = head_dim
-    half_dim = dim // 2
-
-    # HF's get_mscale
-    def get_mscale(scale, mscale=1):
-        if scale <= 1:
-            return 1.0
-        return 0.1 * mscale * math.log(scale) + 1.0
-
-    attention_factor = get_mscale(factor, 1.0)
-
-    # HF's find_correction_dim
-    def find_correction_dim(num_rotations, dim, base, max_position_embeddings):
-        return (dim * math.log(max_position_embeddings / (num_rotations * 2 * math.pi))) / (2 * math.log(base))
-
-    low = max(int(math.floor(find_correction_dim(32.0, dim, theta, original_max_position_embeddings))), 0)
-    high = min(int(math.ceil(find_correction_dim(1.0, dim, theta, original_max_position_embeddings))), half_dim - 1)
-
-    # HF's linear_ramp_factor
-    def linear_ramp_factor(min_val, max_val, dim_size):
-        if min_val == max_val:
-            max_val += 0.001
-        linear_func = (torch.arange(dim_size, dtype=torch.float32) - min_val) / (max_val - min_val)
-        return torch.clamp(linear_func, 0, 1)
-
-    # HF's inv_freq computation
-    pos_freqs = theta ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim)
-    inv_freq_extrapolation = 1.0 / pos_freqs
-    inv_freq_interpolation = 1.0 / (factor * pos_freqs)
-
-    inv_freq_extrapolation_factor = 1 - linear_ramp_factor(low, high, half_dim)
-    hf_inv_freq = (
-        inv_freq_interpolation * (1 - inv_freq_extrapolation_factor)
-        + inv_freq_extrapolation * inv_freq_extrapolation_factor
+    # Create HF config with YARN rope_scaling
+    rope_theta, rope_scaling = yarn_config.to_hf_config()
+    hf_config = LlamaConfig(
+        hidden_size=head_dim * Heads.size,
+        num_attention_heads=Heads.size,
+        head_dim=head_dim,
+        max_position_embeddings=seq_len * int(factor),
+        rope_theta=rope_theta,
+        rope_scaling=rope_scaling,
     )
 
+    # Build HF rotary embeddings
+    hf_rope = HFLlamaRotaryEmbedding(config=hf_config)
+
     # Apply HF rotary embeddings
-    q_torch = torch.from_numpy(np.array(q.array))
-    position_ids_torch = torch.arange(seq_len)
+    # HF expects shape (batch, heads, seq, head_dim), so transpose
+    q_torch = torch.from_numpy(np.array(q.array)).transpose(1, 2)
+    position_ids_torch = torch.arange(seq_len).reshape(1, -1)
 
-    # freqs = position_ids @ inv_freq
-    freqs = position_ids_torch.unsqueeze(-1).float() * hf_inv_freq.unsqueeze(0)
-    emb = torch.cat((freqs, freqs), dim=-1)
-    cos = emb.cos() * attention_factor
-    sin = emb.sin() * attention_factor
-
-    # Apply rotation (q * cos + rotate_half(q) * sin)
-    def rotate_half(x):
-        x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
-        return torch.cat((-x2, x1), dim=-1)
-
-    # q_torch shape: (batch, seq, heads, head_dim)
-    # cos/sin shape: (seq, head_dim)
-    cos_expanded = cos.unsqueeze(0).unsqueeze(2)  # (1, seq, 1, head_dim)
-    sin_expanded = sin.unsqueeze(0).unsqueeze(2)
-    hf_q_rotated = q_torch * cos_expanded + rotate_half(q_torch) * sin_expanded
+    hf_cos, hf_sin = hf_rope(q_torch, position_ids_torch)
+    hf_q_rotated, _ = apply_rotary_pos_emb(q_torch, q_torch, hf_cos, hf_sin)
+    hf_q_rotated = hf_q_rotated.transpose(1, 2)  # Back to (batch, seq, heads, head_dim)
 
     # Compare
     np.testing.assert_allclose(
