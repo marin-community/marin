@@ -297,7 +297,6 @@ def data_efficiency_train_step(data_efficiency_config: DataEfficiencyConfig) -> 
             f"= {data_efficiency_config.total_tokens:,} total tokens."
         ),
         config=train_lm_on_pod_config,
-        pip_dependency_groups=["tokenize_train"],
     )
 
 
