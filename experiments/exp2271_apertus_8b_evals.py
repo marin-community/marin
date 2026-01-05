@@ -12,25 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""
+Evaluate Apertus-8B on MMLU 0-shot and 5-shot.
+"""
 
-import pytest
-from fray.cluster import create_cluster, set_current_cluster
-from fray.job.context import _job_context
+from fray.cluster import ResourceConfig
 
-DEFAULT_BUCKET_NAME = "marin-us-east5"
-DEFAULT_DOCUMENT_PATH = "documents/test-document-path"
+from experiments.evals.evals import default_eval
+from experiments.evals.task_configs import MMLU_0_SHOT, MMLU_5_SHOT
+from experiments.models import apertus_8b
+from marin.execution.executor import executor_main
 
-
-@pytest.fixture(autouse=True)
-def reset_fray_context():
-    """Reset fray context between tests for isolation."""
-    _job_context.set(None)
-    yield
-    _job_context.set(None)
-
-
-@pytest.fixture(autouse=True)
-def fray_cluster():
-    set_current_cluster(create_cluster("local"))
-    yield
-    set_current_cluster(None)
+if __name__ == "__main__":
+    mmlu_eval = default_eval(
+        step=apertus_8b,
+        resource_config=ResourceConfig.with_tpu("v5p-8"),
+        evals=(MMLU_0_SHOT, MMLU_5_SHOT),
+        discover_latest_checkpoint=False,
+    )
+    executor_main(steps=[mmlu_eval])
