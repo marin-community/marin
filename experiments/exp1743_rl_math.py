@@ -219,7 +219,7 @@ def rl_train(name: str, model_config: ModelConfig) -> ExecutorStep:
         description=f"Async RL training: {name}",
         fn=RLJob.make_step_fn(),
         config=lev_config,
-        pip_dependency_groups=["post_training"],
+        pip_dependency_groups=[],
     )
 
 

@@ -351,7 +351,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         inference_config=vLLMInferenceContextConfig(
             model_name=experiment_config.model_config.name,
             max_model_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,
-            tensor_parallel_size=8,
+            tensor_parallel_size=4,
             gpu_memory_utilization=0.90,
             sampling_params=SamplingParams(
                 temperature=1.0,
@@ -381,6 +381,11 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             name=f"{name}-rollout",
             tags=["rl", "math", "rollout", experiment_config.model_config.name.split("/")[-1]],
         ),
+        pip_dependency_groups=(
+            experiment_config.model_config.pip_dependency_groups
+            if hasattr(experiment_config.model_config, "pip_dependency_groups")
+            else ["vllm", "math"]
+        ),
     )
 
     return ExecutorStep(
@@ -388,7 +393,7 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         description=f"Async RL training: {name}",
         fn=RLJob.make_step_fn(),
         config=config,
-        pip_dependency_groups=["post_training", "vllm"],
+        pip_dependency_groups=["vllm", "math"],
     )
 
 

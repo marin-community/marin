@@ -189,6 +189,7 @@ class GSM8KEnv(MarinEnv):
         prng_key,
         mode: str = "train",
         max_tokens: int | None = None,
+        top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
@@ -213,6 +214,7 @@ class GSM8KEnv(MarinEnv):
             temperature=temperature,
             n=n_generations,
             max_tokens=max_tokens,
+            top_k=top_k,
             stop=stop,
             system_prompt=system_prompt,
         )
@@ -241,6 +243,7 @@ class GSM8KEnv(MarinEnv):
                     reward=token_reward,
                     correctness_reward=correct_score,
                     temperature=temperature,
+                    top_k=top_k,
                     system_prompt=system_prompt,
                 )
 

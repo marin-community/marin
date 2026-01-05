@@ -375,6 +375,8 @@ def rloo_loss_with_importance_sampling(
         "trainer_inference_importance_sampling_ratio_mean": Metric.from_value(
             trainer_inference_importance_sampling_ratio_mean.astype(jnp.float32), ReductionType.MEAN
         ),
+        "temperature": Metric.from_value(jnp.mean(batch.temperature.array).astype(jnp.float32), ReductionType.MEAN),
+        "top_k": Metric.from_value(jnp.mean(batch.top_k.array).astype(jnp.float32), ReductionType.MEAN),
         **compute_metadata_metrics(current_logprobs, policy_logprobs_array, loss_weights_array, loss_masks_array),
         **metadata,
     }

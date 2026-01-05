@@ -146,6 +146,9 @@ class RLJobConfig:
     rollout_tracker: RolloutTrackerConfig | None = None
     """Tracker configuration for rollout workers. Uses a standalone tracker to avoid JAX deadlocks."""
 
+    pip_dependency_groups: list[str] = field(default_factory=list)
+    """Extra pip dependency groups to include for all workers."""
+
     def with_on_policy_training(self) -> "RLJobConfig":
         """Configure for on-policy training.
 
@@ -236,7 +239,7 @@ class RLJob:
                     name=f"rl-train-{name}-train",
                     resources=train_resources,
                     entrypoint=Entrypoint.from_callable(train_worker_task),
-                    environment=EnvironmentConfig.create(env_vars=env),
+                    environment=EnvironmentConfig.create(env_vars=env, extras=self.config.pip_dependency_groups),
                 )
             )
         )
@@ -248,7 +251,7 @@ class RLJob:
                         name=f"rl-train-{name}-rollout-{i}",
                         resources=rollout_resources,
                         entrypoint=Entrypoint.from_callable(inference_worker_task),
-                        environment=EnvironmentConfig.create(env_vars=env),
+                        environment=EnvironmentConfig.create(env_vars=env, extras=self.config.pip_dependency_groups),
                     )
                 )
             )

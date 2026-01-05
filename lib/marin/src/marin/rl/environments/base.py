@@ -40,6 +40,7 @@ class MarinEnv(ABC):
         prng_key,
         mode: str = "train",
         max_tokens: int | None = None,
+        top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> tuple[list[RolloutGroup], dict[str, float]]:
@@ -53,7 +54,9 @@ class MarinEnv(ABC):
             prng_key: JAX random key for sampling
             mode: "train" or "eval" - which dataset to sample from
             max_tokens: Maximum number of tokens to generate
+            top_k: Top-k sampling parameter
             stop: Stop tokens to use for generation
+            system_prompt: Optional system prompt to use for generation
 
         Returns:
             Tuple of (rollout_groups, metrics)

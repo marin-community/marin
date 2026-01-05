@@ -60,7 +60,7 @@ def run_inference(prompts: list[str]):
     llm = LLM(
         model=model_name,
         max_model_len=max_input_tokens + max_output_tokens,
-        tensor_parallel_size=8,
+        tensor_parallel_size=4,
         gpu_memory_utilization=0.90,
     )
 
@@ -103,7 +103,7 @@ def main():
     # Skip jax precompile to speed up bootstrap time
     env["SKIP_JAX_PRECOMPILE"] = "1"
 
-    # Configure TPU resources (v5p-8 to match tensor_parallel_size=8)
+    # Configure TPU resources
     tpu_type = "v5p-8"
     inference_resources = ResourceConfig.with_tpu(tpu_type)
     inference_kwargs = dict(max_calls=1, **as_remote_kwargs(inference_resources, env_vars=env))

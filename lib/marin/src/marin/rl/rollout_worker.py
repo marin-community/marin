@@ -193,6 +193,8 @@ def _compute_batch_stats(batch: RolloutBatch, lesson_id: str):
                     lesson_id=lesson_id,
                     episode_reward=rollout.episode_reward,
                     env_example_id=rollout.env_example_id,
+                    temperature=rollout.temperature,
+                    top_k=rollout.top_k,
                 )
             )
 
@@ -346,6 +348,7 @@ class RolloutWorker:
 
         # Get sampling params from lesson config
         temperature = lesson_config.sampling_params.temperature
+        top_k = lesson_config.sampling_params.top_k
         stop_tokens = lesson_config.sampling_params.stop_tokens
         max_tokens = lesson_config.sampling_params.max_output_tokens
 
@@ -357,6 +360,7 @@ class RolloutWorker:
             prng_key=rng,
             mode=mode,
             max_tokens=max_tokens,
+            top_k=top_k,
             stop=stop_tokens,
             system_prompt=self.config.system_prompt,
         )
@@ -546,7 +550,13 @@ class RolloutWorker:
         logger.info(f"Logged {len(rows)} eval samples for lesson {lesson_id} at step {step}")
 
     def _build_eval_metrics(
-        self, prefix: str, lesson_id: str, batch: RolloutBatch, n_generations: int
+        self,
+        prefix: str,
+        lesson_id: str,
+        batch: RolloutBatch,
+        n_generations: int,
+        temperature: float,
+        top_k: int | None,
     ) -> dict[str, Any]:
         metrics = {}
         stats = _compute_batch_stats(batch, lesson_id)
@@ -559,9 +569,11 @@ class RolloutWorker:
         metrics[f"{prefix}/{lesson_id}/pass_at_one"] = stats.pass_at_one
         metrics[f"{prefix}/{lesson_id}/pass_at_{n_generations}"] = stats.pass_at_k
         metrics[f"{prefix}/{lesson_id}/avg_at_{n_generations}"] = stats.avg_at_k
+        metrics[f"{prefix}/{lesson_id}/temperature"] = temperature
+        metrics[f"{prefix}/{lesson_id}/top_k"] = top_k if top_k is not None else -1
         return metrics
 
-    def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> dict:
+    def _evaluate_lesson(self, lesson_id: str, n_examples: int, eval_type: str, rng, step: int) -> RolloutBatchStats:
         """Evaluate a single lesson and log metrics."""
         N_EVAL_GENERATIONS = 1
 
@@ -574,8 +586,14 @@ class RolloutWorker:
         )
         stats = _compute_batch_stats(batch, lesson_id)
         self._log_prompt_example(lesson_id, batch, step, eval_type=eval_type)
+        sampling_params = self.config.curriculum_config.lessons[lesson_id].sampling_params
         metrics = self._build_eval_metrics(
-            prefix=f"inference.{eval_type}", lesson_id=lesson_id, batch=batch, n_generations=N_EVAL_GENERATIONS
+            prefix=f"inference.{eval_type}",
+            lesson_id=lesson_id,
+            batch=batch,
+            n_generations=N_EVAL_GENERATIONS,
+            temperature=sampling_params.temperature,
+            top_k=sampling_params.top_k,
         )
         self.tracker.log(metrics, step=step)
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, step, metrics)
@@ -726,6 +744,8 @@ class RolloutWorker:
                 lesson_id=lesson_id,
                 batch=rollout_batch,
                 n_generations=lesson_config.sampling_params.n_generations_per_prompt,
+                temperature=lesson_config.sampling_params.temperature,
+                top_k=lesson_config.sampling_params.top_k,
             )
 
             step += 1

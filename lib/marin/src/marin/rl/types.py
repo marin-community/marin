@@ -38,6 +38,8 @@ class RolloutStats:
     episode_reward: float
     env_example_id: str
     lesson_id: str
+    temperature: float
+    top_k: int | None
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,9 @@ class Rollout(eqx.Module):
     temperature: float
     """The temperature used to sample the response."""
 
+    top_k: int | None
+    """The top_k used to sample the response."""
+
     is_truncated: bool
     """True if the rollout was truncated due to length. False otherwise."""
 
@@ -121,6 +126,7 @@ class TrainingBatch(eqx.Module):
     loss_masks: ht.Int[NamedArray, "batch position"]
     policy_logprobs: ht.Float[NamedArray, "batch position"]
     temperature: ht.Float[NamedArray, "batch"]  # noqa: F821
+    top_k: ht.Int[NamedArray, "batch"]  # noqa: F821
     truncated: jax.Array  # [batch] # Make this haxtyped array?
     max_output_tokens: int
 

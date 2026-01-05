@@ -303,6 +303,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         temperature: float,
         n: int,
         max_tokens: int | None = None,
+        top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
     ) -> list[ChatCompletion]:
@@ -323,6 +324,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             n=n,
             # NOTE(chris): We allow the override to take precedence over the default sampling params.
             max_tokens=max_tokens or self.sampling_params.max_tokens,
+            top_k=top_k or self.sampling_params.top_k,
             stop=stop or self.sampling_params.stop,
             logprobs=1,
             include_stop_str_in_output=self.sampling_params.include_stop_str_in_output,
