@@ -175,6 +175,11 @@ class ThreadActorMethod(ActorMethod):
                 result = self._method(*args, **kwargs)
             return _ImmediateFuture(result)
 
+    def call(self, *args, **kwargs):
+        """Call method synchronously, blocking until result is available."""
+        future = self.remote(*args, **kwargs)
+        return self._context.get(future)
+
 
 class _ImmediateFuture:
     """Wrapper for immediately available results to match Future interface."""
@@ -427,7 +432,37 @@ class RayContext:
         remote_class = ray.remote(actor_class)
         ray_actor = remote_class.options(**options).remote(*args, **kwargs)
 
-        return ray_actor
+        return RayActorHandle(ray_actor)
+
+
+class RayActorHandle(ActorHandle):
+    """Actor handle wrapper for Ray actors - provides unified .call() interface."""
+
+    def __init__(self, ray_actor):
+        self._ray_actor = ray_actor
+
+    def __getattr__(self, method_name: str):
+        ray_method = getattr(self._ray_actor, method_name)
+        return RayActorMethod(ray_method)
+
+
+class RayActorMethod(ActorMethod):
+    """Method wrapper for Ray actors - provides both .remote() and .call() interfaces."""
+
+    def __init__(self, ray_method):
+        self._ray_method = ray_method
+
+    def remote(self, *args, **kwargs):
+        """Call method asynchronously, returning a Ray ObjectRef."""
+        return self._ray_method.remote(*args, **kwargs)
+
+    def call(self, *args, **kwargs):
+        """Call method synchronously, blocking until result is available."""
+        return ray.get(self._ray_method.remote(*args, **kwargs))
+
+    def options(self, **opts):
+        """Forward Ray method options and return a new RayActorMethod."""
+        return RayActorMethod(self._ray_method.options(**opts))
 
 
 @dataclass
