@@ -640,32 +640,25 @@ def generate_isoflop_train_args(
 # ---------------- Helpers ----------------
 
 
-def parse_isoflop_run_name(run_name: str) -> dict | None:
-    """Parse metadata from isoflop run name.
+def parse_isoflop_run_name(run_name: str) -> str | None:
+    """Parse experiment name from isoflop run name.
 
     Expected format: isoflop-{budget}-d{hidden}-L{layers}-B{batch}-{experiment_name}
     Optionally with a trailing -<hash> which is ignored.
     E.g., 'isoflop-1e+19-d2048-L16-B1024-nemo-wider-depth-adapt'
     or 'isoflop-1e+19-d2048-L16-B1024-nemo-wider-depth-adapt-a1b2c3'
 
-    Returns dict with: flops, d, L, B, experiment_name or None if parsing fails.
+    Returns experiment_name or None if parsing fails.
     """
     # Strip optional -<hash> suffix
     run_name = re.sub(r"-[0-9a-fA-F]{6}$", "", run_name)
 
-    pattern = r"isoflop-([0-9.e+]+)-d(\d+)-L(\d+)-B(\d+)-(.+)"
+    pattern = r"isoflop-(?:[0-9.e+]+)-d(?:\d+)-L(?:\d+)-B(?:\d+)-(.+)"
     match = re.match(pattern, run_name)
     if not match:
         return None
 
-    flops_str, d, L, B, exp_name = match.groups()
-    return {
-        "flops": float(flops_str),
-        "d": int(d),
-        "L": int(L),
-        "B": int(B),
-        "experiment_name": exp_name,
-    }
+    return match.group(1)
 
 
 def robust_quad_logx(x: jnp.ndarray, y: jnp.ndarray, delta: float = 1.0) -> tuple[float, float, float]:
@@ -861,8 +854,7 @@ def transform_metrics_for_isoflop(
         batch_size = trainer_config.get("train_batch_size")
 
         # Determine experiment name and label from run name
-        meta = parse_isoflop_run_name(run_name)
-        exp_name = meta["experiment_name"] if meta else run_name
+        exp_name = parse_isoflop_run_name(run_name) or run_name
         if label_map and exp_name in label_map:
             label = label_map[exp_name]
         else:
