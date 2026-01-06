@@ -25,7 +25,7 @@ from test_utils import use_test_mesh  # noqa: E402
 from jax.sharding import Mesh  # noqa: E402
 from haliax.partitioning import ResourceAxis  # noqa: E402
 import numpy as np  # noqa: E402
-from test_data_utils import get_single_image  # noqa: E402
+from test_image_utils import get_single_image  # noqa: E402
 
 # Define skip_if_no_torch locally to avoid conftest dependencies
 try:

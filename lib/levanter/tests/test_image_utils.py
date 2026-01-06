@@ -9,9 +9,126 @@ Uses Levanter's BatchImageProcessor for consistent processing with grid_mask sup
 """
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Optional, Any
 import numpy as np
 from PIL import Image
+from PIL import Image as PILImage
+
+from datasets import load_dataset
+
+
+# =============================================================================
+# HuggingFace Test Dataset Loading
+# =============================================================================
+# Utility functions for loading test data from HuggingFace dataset.
+# Uses the dataset `ruili0/demo-vlm-test-dataset` instead of local files.
+#
+# Dataset splits:
+# - single_image: 4 samples with single image QA (Stanford University entrance)
+# - multi_image: 4 samples with multi-image QA (same image used twice)
+# - real_data: 20 samples from real multimodal dataset
+# =============================================================================
+
+HF_DATASET = "ruili0/demo-vlm-test-dataset"
+
+
+@lru_cache(maxsize=1)
+def _load_single_image_split():
+    """Cache the single_image split to avoid repeated downloads."""
+    return load_dataset(HF_DATASET, split="single_image")
+
+
+@lru_cache(maxsize=1)
+def _load_multi_image_split():
+    """Cache the multi_image split to avoid repeated downloads."""
+    return load_dataset(HF_DATASET, split="multi_image")
+
+
+@lru_cache(maxsize=1)
+def _load_real_data_split():
+    """Cache the real_data split to avoid repeated downloads."""
+    return load_dataset(HF_DATASET, split="real_data")
+
+
+def get_single_image() -> PILImage.Image:
+    """Get a single test image from HF dataset.
+
+    Returns:
+        PIL Image of Stanford University entrance.
+    """
+    ds = _load_single_image_split()
+    return ds[0]["images"][0]
+
+
+def get_multi_images() -> list[PILImage.Image]:
+    """Get multi-image test data from HF dataset.
+
+    Returns:
+        List of 2 PIL Images (same image twice, for multi-image testing).
+    """
+    ds = _load_multi_image_split()
+    return ds[0]["images"]
+
+
+def get_real_data(num_samples: int = 20):
+    """Get real test data from HF dataset.
+
+    Args:
+        num_samples: Number of samples to return (default 20, max 20).
+
+    Returns:
+        HuggingFace Dataset with messages and images columns.
+    """
+    ds = _load_real_data_split()
+    return ds.select(range(min(num_samples, len(ds))))
+
+
+def get_single_image_conversations():
+    """Get single image QA conversations.
+
+    Returns:
+        HuggingFace Dataset with 4 single-image QA samples.
+    """
+    return _load_single_image_split()
+
+
+def get_multi_image_conversations():
+    """Get multi-image QA conversations.
+
+    Returns:
+        HuggingFace Dataset with 4 multi-image QA samples.
+    """
+    return _load_multi_image_split()
+
+
+def get_test_conversation(split: str = "single_image", index: int = 0) -> dict:
+    """Get a specific test conversation.
+
+    Args:
+        split: One of "single_image", "multi_image", or "real_data".
+        index: Index of the sample to return.
+
+    Returns:
+        Dict with "messages" and "images" keys.
+    """
+    if split == "single_image":
+        ds = _load_single_image_split()
+    elif split == "multi_image":
+        ds = _load_multi_image_split()
+    elif split == "real_data":
+        ds = _load_real_data_split()
+    else:
+        raise ValueError(f"Unknown split: {split}. Use 'single_image', 'multi_image', or 'real_data'.")
+
+    return ds[index]
+
+
+def clear_cache():
+    """Clear the cached datasets (useful for testing)."""
+    _load_single_image_split.cache_clear()
+    _load_multi_image_split.cache_clear()
+    _load_real_data_split.cache_clear()
 
 
 # =============================================================================
@@ -104,7 +221,7 @@ def _create_processors(
     """
     # Try to import custom processor first (for proper do_pad support)
     try:
-        from levanter.data.processing_llava_onevision import create_custom_processor
+        from levanter.data.image import create_custom_processor
 
         # HF processor with do_pad=True and max_image_tiles for padding_mode support
         hf_processor = create_custom_processor(
@@ -162,7 +279,7 @@ def prepare_test_data(
     Uses Levanter's BatchImageProcessor for the Levanter format (with grid_mask),
     and raw HF processor for the HF format (no padding).
 
-    This function uses create_custom_processor from levanter.data.processing_llava_onevision
+    This function uses create_custom_processor from levanter.data.image
     to ensure proper do_pad handling for HF (do_pad=False) and Levanter (do_pad=True).
 
     Args:
@@ -192,7 +309,6 @@ def prepare_test_data(
         ...     print(f"Lev pixel_values shape: {pair.lev.pixel_values.shape}")
         ...     print(f"Lev grid_mask: {pair.lev.grid_mask.sum()} valid patches")
     """
-    from datasets import load_dataset
     from levanter.data.image import load_image
 
     # Use default grid_pinpoints if not provided

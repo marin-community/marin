@@ -33,7 +33,7 @@ jax.config.update("jax_enable_x64", False)
 jax.config.update("jax_default_matmul_precision", "float32")
 
 # Import test data utilities for loading from HuggingFace dataset
-from test_data_utils import get_real_data  # noqa: E402
+from test_image_utils import get_real_data  # noqa: E402
 
 import numpy as np  # noqa: E402
 
@@ -793,7 +793,7 @@ def test_llava_with_image_dataloader(processor, dataset):
     model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
 
     # Import custom processor for padding support
-    from levanter.data.processing_llava_onevision import create_custom_processor
+    from levanter.data.image import create_custom_processor
 
     # Get grid_pinpoints and related params from the standard processor
     image_processor = processor.image_processor
@@ -1316,7 +1316,7 @@ def test_llava_hf_levanter_consistency_no_padding(processor, dataset):
     from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision
 
     # Import custom processor for padding support
-    from levanter.data.processing_llava_onevision import create_custom_processor
+    from levanter.data.image import create_custom_processor
 
     print("\n=== Test: HF vs Levanter Consistency (with grid_mask API) ===")
 

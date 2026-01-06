@@ -33,7 +33,7 @@ from levanter.models.siglip2 import (
 )
 from levanter.utils.activation import ActivationFunctionEnum
 from test_utils import use_test_mesh
-from test_data_utils import get_single_image
+from test_image_utils import get_single_image
 
 # Enable float32 mode in JAX
 jax.config.update("jax_enable_x64", False)
