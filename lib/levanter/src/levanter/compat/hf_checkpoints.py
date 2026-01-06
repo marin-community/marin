@@ -682,7 +682,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         # Vocab: first we have to resize the vocab as loaded from the checkpoint
         tokenizer_Vocab = self.Vocab
-        Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
+        # For multimodal models like LlavaOnevision, vocab_size is in text_config
+        hf_vocab_size = getattr(hf_config, "vocab_size", None)
+        if hf_vocab_size is None and hasattr(hf_config, "text_config"):
+            hf_vocab_size = hf_config.text_config.vocab_size
+        if hf_vocab_size is None:
+            raise ValueError("Could not find vocab_size in hf_config or hf_config.text_config")
+        Vocab = tokenizer_Vocab.resize(hf_vocab_size)
 
         # TODO: in an ideal world, we would only load the part of the array we needed, but
         # AFAICT neither torch state dicts nor safetensors support this.

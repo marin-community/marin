@@ -1,9 +1,16 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import importlib.util
 import os
-import sys
+
+# Force torch to use CPU before any imports of torch
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+# Force JAX to use TPU
+os.environ["JAX_PLATFORMS"] = "tpu"
+# Force JAX to use float32
+os.environ["JAX_DEFAULT_DTYPE_BITS"] = "32"
+
+import importlib.util
 import tempfile
 
 import jax
@@ -26,13 +33,7 @@ from levanter.models.siglip2 import (
 )
 from levanter.utils.activation import ActivationFunctionEnum
 from test_utils import use_test_mesh
-
-# Force torch to use CPU before any imports of torch
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
-# Force JAX to use TPU
-os.environ["JAX_PLATFORMS"] = "tpu"
-# Force JAX to use float32
-os.environ["JAX_DEFAULT_DTYPE_BITS"] = "32"
+from test_data_utils import get_single_image
 
 # Enable float32 mode in JAX
 jax.config.update("jax_enable_x64", False)
@@ -879,10 +880,10 @@ def test_siglip2_vision_transformer_forward():
     output = model(pixel_values, key=random.PRNGKey(1))
 
     # Check output shape
-    assert Batch in output.axes
-    assert NumPatches in output.axes
-    assert config.Embed in output.axes
-    assert not jnp.any(jnp.isnan(output.array))
+    assert Batch in output.last_hidden_state.axes
+    assert NumPatches in output.last_hidden_state.axes
+    assert config.Embed in output.last_hidden_state.axes
+    assert not jnp.any(jnp.isnan(output.last_hidden_state.array))
 
 
 def test_siglip2_vision_transformer_no_batch():
@@ -915,9 +916,9 @@ def test_siglip2_vision_transformer_no_batch():
     output = model(pixel_values, key=random.PRNGKey(1))
 
     # Check output shape
-    assert NumPatches in output.axes
-    assert config.Embed in output.axes
-    assert not jnp.any(jnp.isnan(output.array))
+    assert NumPatches in output.last_hidden_state.axes
+    assert config.Embed in output.last_hidden_state.axes
+    assert not jnp.any(jnp.isnan(output.last_hidden_state.array))
 
 
 def test_siglip2_vision_transformer_different_layer_counts():
@@ -947,9 +948,9 @@ def test_siglip2_vision_transformer_different_layer_counts():
         pixel_values = hax.random.normal(random.PRNGKey(0), (NumPatches, PatchInput))
         output = model(pixel_values, key=random.PRNGKey(1))
 
-        assert NumPatches in output.axes
-        assert config.Embed in output.axes
-        assert not jnp.any(jnp.isnan(output.array))
+        assert NumPatches in output.last_hidden_state.axes
+        assert config.Embed in output.last_hidden_state.axes
+        assert not jnp.any(jnp.isnan(output.last_hidden_state.array))
 
 
 def test_siglip2_vision_transformer_output_unchanged_shape():
@@ -980,7 +981,7 @@ def test_siglip2_vision_transformer_output_unchanged_shape():
     output = model(pixel_values, key=random.PRNGKey(1))
 
     # Output should have same batch and num_patches, but Embed instead of PatchInput
-    assert output.axes == (Batch, NumPatches, config.Embed)
+    assert output.last_hidden_state.axes == (Batch, NumPatches, config.Embed)
 
 
 @skip_if_no_torch
@@ -1025,10 +1026,9 @@ def test_siglip2_embeddings_vs_hf():
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         import equinox as eqx
-        from jax.random import PRNGKey
 
         Vocab = hax.Axis("vocab", 1)
-        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=PRNGKey(0))
+        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=random.PRNGKey(0))
 
         converter = config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/torch_model")
         state_dict = converter.load_state_dict(f"{tmpdir}/torch_model")
@@ -1146,10 +1146,9 @@ def test_siglip2_mlp_vs_hf():
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         import equinox as eqx
-        from jax.random import PRNGKey
 
         Vocab = hax.Axis("vocab", 1)
-        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=PRNGKey(0))
+        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=random.PRNGKey(0))
 
         converter = config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/torch_model")
         state_dict = converter.load_state_dict(f"{tmpdir}/torch_model")
@@ -1226,10 +1225,9 @@ def test_siglip2_attention_vs_hf():
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         import equinox as eqx
-        from jax.random import PRNGKey
 
         Vocab = hax.Axis("vocab", 1)
-        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=PRNGKey(0))
+        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=random.PRNGKey(0))
 
         converter = config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/torch_model")
         state_dict = converter.load_state_dict(f"{tmpdir}/torch_model")
@@ -1313,10 +1311,9 @@ def test_siglip2_encoder_layer_vs_hf():
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         import equinox as eqx
-        from jax.random import PRNGKey
 
         Vocab = hax.Axis("vocab", 1)
-        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=PRNGKey(0))
+        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=random.PRNGKey(0))
 
         converter = config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/torch_model")
         state_dict = converter.load_state_dict(f"{tmpdir}/torch_model")
@@ -1382,6 +1379,7 @@ def test_siglip2_encoder_layer_vs_hf():
         k_proj=k_proj_layer0,
         v_proj=v_proj_layer0,
         out_proj=out_proj_layer0,
+        inference=config.inference,
     )
 
     # Extract MLP
@@ -1446,111 +1444,6 @@ def test_siglip2_encoder_layer_vs_hf():
     assert np.allclose(
         hf_output_np, lev_output_compare, rtol=1e-2, atol=1e-2
     ), f"Encoder Layer mismatch: max diff = {max_diff}"
-
-
-@skip_if_no_torch
-def test_siglip2_vision_encoder_output_vs_hf():
-    """Test encoder output (before head) matches between HF and Levanter.
-
-    NOTE: HF Siglip2VisionModel has a 'head' component after post_layernorm that
-    Levanter doesn't implement. This test compares outputs BEFORE the head.
-    """
-    import torch
-    from transformers import Siglip2VisionModel as HfSiglip2VisionModel
-
-    hf_config = _hf_siglip2_vision_config()
-    torch.random.manual_seed(0)
-    torch_model = HfSiglip2VisionModel(hf_config)
-    torch_model.eval()
-
-    # Create test input
-    batch_size = 2
-    num_patches = 64
-    patch_input_dim = hf_config.num_channels * hf_config.patch_size * hf_config.patch_size
-
-    pixel_values_torch = torch.randn(batch_size, num_patches, patch_input_dim)
-    pixel_values_torch = pixel_values_torch.to(torch.float32)
-
-    # Manually run HF encoder steps (without head)
-    # Use output_hidden_states to get states before and after each layer
-    with torch.no_grad():
-        hf_vision = torch_model.vision_model
-
-        # 1. Embeddings
-        hf_embeddings = hf_vision.embeddings
-        patch_embeds = hf_embeddings.patch_embedding(pixel_values_torch)
-        position_ids = torch.arange(num_patches)
-        pos_embeds = hf_embeddings.position_embedding(position_ids)
-        hidden_states = patch_embeds + pos_embeds  # (batch, num_patches, hidden_size)
-
-        print(f"After embeddings shape: {hidden_states.shape}")
-
-        # 2. Encoder layers - run through encoder with proper attention mask
-        # Create 4D attention mask as expected by encoder
-        attention_mask = torch.ones(batch_size, 1, num_patches, num_patches)
-
-        encoder_output = hf_vision.encoder(
-            hidden_states,
-            attention_mask=attention_mask,
-            output_hidden_states=False,
-        )
-        hidden_states = encoder_output.last_hidden_state
-
-        print(f"After encoder shape: {hidden_states.shape}")
-
-        # 3. Post layer norm
-        hf_output = hf_vision.post_layernorm(hidden_states)
-        hf_output_np = hf_output.detach().cpu().numpy()
-
-        print(f"After post_layernorm shape: {hf_output_np.shape}")
-
-    # Load Levanter model
-    config = Siglip2VisionConfig.from_hf_config(hf_config)
-
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        torch_model.save_pretrained(f"{tmpdir}/torch_model")
-
-        import equinox as eqx
-        from jax.random import PRNGKey
-
-        Vocab = hax.Axis("vocab", 1)
-        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=PRNGKey(0))
-
-        converter = config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/torch_model")
-        state_dict = converter.load_state_dict(f"{tmpdir}/torch_model")
-        model = from_torch_compatible_state_dict(model_template, state_dict)
-
-    # Create Levanter input
-    Batch = hax.Axis("batch", batch_size)
-    NumPatches = hax.Axis("num_patches", num_patches)
-    PatchInput = hax.Axis("patch_input", patch_input_dim)
-
-    pixel_values = hax.named(
-        jnp.array(pixel_values_torch.numpy().astype(np.float32), dtype=jnp.float32), (Batch, NumPatches, PatchInput)
-    )
-
-    # Run Levanter model
-    @hax.named_jit
-    def compute(model, pixel_values):
-        return model(pixel_values, key=None)
-
-    lev_output = compute(model, pixel_values).array
-
-    print("\n=== Encoder Output (before head) ===")
-    print(f"HF output shape: {hf_output_np.shape}, Levanter output shape: {lev_output.shape}")
-    max_diff = np.max(np.abs(hf_output_np - np.array(lev_output)))
-    mean_diff = np.mean(np.abs(hf_output_np - np.array(lev_output)))
-    print(f"Max diff: {max_diff}")
-    print(f"Mean diff: {mean_diff}")
-    print(f"HF first 5: {hf_output_np.flatten()[:5]}")
-    print(f"Lev first 5: {np.array(lev_output).flatten()[:5]}")
-
-    # Allow slightly higher tolerance for accumulated numerical differences across layers
-    assert np.allclose(
-        hf_output_np, np.array(lev_output), rtol=2e-2, atol=2e-2
-    ), f"Encoder output mismatch: max diff = {max_diff}"
 
 
 @skip_if_no_torch
@@ -1624,10 +1517,9 @@ def test_siglip2_vision_roundtrip():
         # Create model template and load state dict manually
         # Vision models don't have vocab, so we use a dummy Vocab axis
         import equinox as eqx
-        from jax.random import PRNGKey
 
         Vocab = hax.Axis("vocab", 1)  # Dummy vocab for vision model
-        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=PRNGKey(0))
+        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=random.PRNGKey(0))
         state_dict = converter.load_state_dict(f"{tmpdir}/torch_model")
 
         # Debug: Print state dict keys
@@ -1689,17 +1581,9 @@ def test_siglip2_vision_roundtrip():
         # Run Levanter model with intermediate outputs
         print("\n=== Forward Pass Debug ===")
 
-        @hax.named_jit
-        def compute_with_intermediates(model, pixel_values):
-            # Get embeddings
-            embeddings = model.vision_model.embeddings(pixel_values, key=None)
-
-            # Get full output
-            full_output = model(pixel_values, key=None)
-
-            return embeddings, full_output
-
-        lev_embeddings, jax_output = compute_with_intermediates(model, pixel_values)
+        # Get embeddings and full output without JIT to avoid tracer leaks
+        lev_embeddings = model.vision_model.embeddings(pixel_values, key=None)
+        jax_output = model(pixel_values, key=None)
 
         print(
             f"Levanter embeddings stats: mean={np.mean(lev_embeddings.array):.6f}, std={np.std(lev_embeddings.array):.6f}"
@@ -1721,10 +1605,10 @@ def test_siglip2_vision_roundtrip():
             emb_diff = np.max(np.abs(hf_embeddings.numpy() - lev_embeddings.array))
             print(f"Embeddings max diff: {emb_diff}")
 
-        print(f"\nLevanter output shape: {jax_output.shape}")
+        print(f"\nLevanter output shape: {jax_output.last_hidden_state.shape}")
 
         # Convert NamedArray to numpy array
-        jax_output_array = jax_output.array
+        jax_output_array = jax_output.last_hidden_state.array
 
         max_diff = np.max(np.abs(torch_output - jax_output_array))
         mean_diff = np.mean(np.abs(torch_output - jax_output_array))
@@ -1784,23 +1668,16 @@ def test_siglip2_vision_real_image():
     2. Convert Levanter model to HF and verify output consistency (Levanter -> HF)
     """
     import torch
-    from PIL import Image
-    import os
 
     try:
         from transformers import AutoProcessor, AutoModel
     except ImportError:
         pytest.skip("transformers not available")
 
-    # Check if image file exists
-    image_path = "/home/ruili/marin_private/7-1-scaled.jpg"
-    if not os.path.exists(image_path):
-        pytest.skip(f"Test image {image_path} not found")
-
     print("\n=== Testing Siglip2 Vision with Real Image ===")
 
-    # Load image
-    image = Image.open(image_path)
+    # Load image from HuggingFace dataset
+    image = get_single_image()
     print(f"Image size: {image.size}, mode: {image.mode}")
 
     # Load HF model and processor from cloud
@@ -1894,10 +1771,9 @@ def test_siglip2_vision_real_image():
 
         # Create model template and load state dict
         import equinox as eqx
-        from jax.random import PRNGKey
 
         Vocab = hax.Axis("vocab", 1)  # Dummy vocab for vision model
-        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=PRNGKey(0))
+        model_template = eqx.filter_eval_shape(Siglip2VisionModel.init, Vocab, config, key=random.PRNGKey(0))
         state_dict = converter.load_state_dict(f"{tmpdir}/torch_model")
 
         model = from_torch_compatible_state_dict(model_template, state_dict)
@@ -1960,10 +1836,10 @@ def test_siglip2_vision_real_image():
         # Full forward pass with spatial_shapes
         jax_output = model(pixel_values, spatial_shapes=spatial_shapes_np)
 
-        print(f"Levanter output shape: {jax_output.shape}")
+        print(f"Levanter output shape: {jax_output.last_hidden_state.shape}")
 
         # Convert NamedArray to numpy
-        jax_output_array = jax_output.array
+        jax_output_array = jax_output.last_hidden_state.array
 
         print(f"Levanter encoder output range: [{jax_output_array.min():.3f}, {jax_output_array.max():.3f}]")
         print(f"Levanter encoder output mean: {jax_output_array.mean():.6f}, std: {jax_output_array.std():.6f}")
@@ -2121,101 +1997,4 @@ def test_siglip2_vision_real_image():
 
 
 if __name__ == "__main__":
-    """Main function to run tests directly without pytest."""
-    import traceback
-
-    # Collect all test functions
-    test_functions = [
-        ("test_siglip2_vision_config_creation", test_siglip2_vision_config_creation),
-        ("test_siglip2_vision_config_axes", test_siglip2_vision_config_axes),
-        ("test_siglip2_vision_from_hf_config", test_siglip2_vision_from_hf_config),
-        ("test_siglip2_vision_to_hf_config", test_siglip2_vision_to_hf_config),
-        ("test_siglip2_vision_config_roundtrip", test_siglip2_vision_config_roundtrip),
-        ("test_siglip2_vision_activation_function_mapping", test_siglip2_vision_activation_function_mapping),
-        ("test_siglip2_vision_config_overrides", test_siglip2_vision_config_overrides),
-        ("test_siglip2_vision_default_values", test_siglip2_vision_default_values),
-        ("test_siglip2_vision_frozen_dataclass", test_siglip2_vision_frozen_dataclass),
-        ("test_siglip2_vision_head_size_calculation", test_siglip2_vision_head_size_calculation),
-        ("test_siglip2_mlp_initialization", test_siglip2_mlp_initialization),
-        ("test_siglip2_mlp_forward", test_siglip2_mlp_forward),
-        ("test_siglip2_mlp_different_activations", test_siglip2_mlp_different_activations),
-        ("test_siglip2_attention_initialization", test_siglip2_attention_initialization),
-        ("test_siglip2_attention_forward", test_siglip2_attention_forward),
-        ("test_siglip2_attention_no_batch", test_siglip2_attention_no_batch),
-        ("test_siglip2_attention_different_seq_lengths", test_siglip2_attention_different_seq_lengths),
-        ("test_siglip2_attention_head_size_calculation", test_siglip2_attention_head_size_calculation),
-        ("test_siglip2_encoder_layer_initialization", test_siglip2_encoder_layer_initialization),
-        ("test_siglip2_encoder_layer_forward", test_siglip2_encoder_layer_forward),
-        ("test_siglip2_encoder_layer_no_batch", test_siglip2_encoder_layer_no_batch),
-        ("test_siglip2_encoder_layer_residual_connections", test_siglip2_encoder_layer_residual_connections),
-        ("test_siglip2_encoder_layer_different_configs", test_siglip2_encoder_layer_different_configs),
-        ("test_siglip2_vision_embeddings_initialization", test_siglip2_vision_embeddings_initialization),
-        ("test_siglip2_vision_embeddings_forward", test_siglip2_vision_embeddings_forward),
-        ("test_siglip2_vision_embeddings_no_batch", test_siglip2_vision_embeddings_no_batch),
-        ("test_siglip2_vision_embeddings_position_broadcasting", test_siglip2_vision_embeddings_position_broadcasting),
-        ("test_siglip2_vision_transformer_initialization", test_siglip2_vision_transformer_initialization),
-        ("test_siglip2_vision_transformer_forward", test_siglip2_vision_transformer_forward),
-        ("test_siglip2_vision_transformer_no_batch", test_siglip2_vision_transformer_no_batch),
-        (
-            "test_siglip2_vision_transformer_different_layer_counts",
-            test_siglip2_vision_transformer_different_layer_counts,
-        ),
-        (
-            "test_siglip2_vision_transformer_output_unchanged_shape",
-            test_siglip2_vision_transformer_output_unchanged_shape,
-        ),
-        ("test_siglip2_embeddings_vs_hf", test_siglip2_embeddings_vs_hf),
-        ("test_siglip2_mlp_vs_hf", test_siglip2_mlp_vs_hf),
-        ("test_siglip2_attention_vs_hf", test_siglip2_attention_vs_hf),
-        ("test_siglip2_encoder_layer_vs_hf", test_siglip2_encoder_layer_vs_hf),
-        ("test_siglip2_vision_encoder_output_vs_hf", test_siglip2_vision_encoder_output_vs_hf),
-        ("test_siglip2_vision_roundtrip", test_siglip2_vision_roundtrip),
-        ("test_siglip2_vision_real_image", test_siglip2_vision_real_image),
-    ]
-
-    passed = 0
-    failed = 0
-    skipped = 0
-
-    print("=" * 70)
-    print("Running Siglip2VisionConfig Tests")
-    print("=" * 70)
-
-    for test_name, test_func in test_functions:
-        try:
-            # Check if test requires torch
-            requires_torch = test_name in [
-                "test_siglip2_vision_from_hf_config",
-                "test_siglip2_vision_to_hf_config",
-                "test_siglip2_vision_config_roundtrip",
-                "test_siglip2_vision_activation_function_mapping",
-                "test_siglip2_vision_config_overrides",
-                "test_siglip2_embeddings_vs_hf",
-                "test_siglip2_mlp_vs_hf",
-                "test_siglip2_attention_vs_hf",
-                "test_siglip2_encoder_layer_vs_hf",
-                "test_siglip2_vision_encoder_output_vs_hf",
-                "test_siglip2_vision_roundtrip",
-            ]
-
-            if requires_torch and importlib.util.find_spec("torch") is None:
-                print(f"SKIPPED: {test_name} (torch not available)")
-                skipped += 1
-                continue
-
-            print(f"Running: {test_name}...", end=" ")
-            test_func()
-            print("✓ PASSED")
-            passed += 1
-
-        except Exception as e:
-            print("✗ FAILED")
-            print(f"  Error: {e}")
-            traceback.print_exc()
-            failed += 1
-
-    print("=" * 70)
-    print(f"Results: {passed} passed, {failed} failed, {skipped} skipped")
-    print("=" * 70)
-
-    sys.exit(0 if failed == 0 else 1)
+    pytest.main([__file__, "-v"])

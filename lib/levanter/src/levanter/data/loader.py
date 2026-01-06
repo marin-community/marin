@@ -11,7 +11,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Generic, TypeVar
+from typing import Generic, Optional, TypeVar
 
 import haliax.partitioning
 import jax
@@ -39,12 +39,16 @@ from levanter.shapes import NamedShapeSpec, ShapeSpec, to_raw_shape
 from levanter.utils.background_iterable import BackgroundIterator
 from levanter.utils.jax_utils import local_cpu_mesh
 from levanter.utils.thread_utils import AsyncIteratorWrapper, blocking_wait
+from levanter.data.image import ImageTextDict, ImageTextExample
 
 
 Ex = TypeVar("Ex")
 
 _TensorSliceIndex = tuple[slice, ...]
 logger = logging.getLogger(__name__)
+
+# HuggingFace standard ignore index for labels (tokens with this label are ignored in loss computation)
+IGNORE_INDEX = -100
 
 
 # NOTE: In general there are a lot of different indices flying around. Here's a quick guide:
@@ -136,7 +140,7 @@ class DataLoader(Iterable[Ex]):
 
             initial_example = blocking_wait(self.data_store.getitem_async(0))
             self._ex_leaves, self._ex_structure = jax.tree.flatten(initial_example, is_leaf=is_named_array)
-            self._padding_example = _make_padding_example(initial_example)
+            self._padding_example = self._make_padding_example(initial_example)
 
         if not self._allow_non_divisible_batch_size:
             self._check_batch_size_divisibility()
@@ -232,6 +236,11 @@ class DataLoader(Iterable[Ex]):
         total_length = blocking_wait(self.data_store.current_len())
         step = self.scheduler.find_step_containing_offset(total_length) + 1
         return step
+
+    def _make_padding_example(self, ex: Ex) -> Ex:
+        """Create a padding example for incomplete batches. Can be overridden by subclasses."""
+        with local_cpu_mesh():
+            return tree_zeros_like(ex)
 
 
 class DataLoaderIterator(Iterator[Ex]):
@@ -631,10 +640,317 @@ def check_sharded_consistency(tree: PyTree, check_disjoint_indices_are_different
         check_array(leaf)
 
 
-def _make_padding_example(ex: Ex) -> Ex:
-    with local_cpu_mesh():
-        return tree_zeros_like(ex)
-
-
 def _round_to_nearest_multiple(x: int, multiple: int) -> int:
     return ((x + multiple - 1) // multiple) * multiple
+
+
+class ImageDataLoader(DataLoader):
+    """
+    Data loader for image-text (VLM) data.
+
+    This loader extends DataLoader with special handling for vision-language models:
+    - Variable number of image patches per example
+    - Multiple fields (pixel_values, input_ids, image_sizes, labels, loss_mask)
+    - Proper batching and padding for TPU efficiency
+
+    The loader expects data in ImageTextDict format from ProcessedImageCache.
+    """
+
+    def __init__(
+        self,
+        data: AsyncDataset[ImageTextDict],
+        batch_size: int | IntSchedule | hax.Axis,
+        *,
+        Pos: hax.Axis,
+        NumPatches: hax.Axis,
+        Channels: hax.Axis = hax.Axis("channels", 3),
+        Height: hax.Axis = hax.Axis("height", 384),
+        Width: hax.Axis = hax.Axis("width", 384),
+        batch_axis_name: str | None = None,
+        max_buffered_batches: int | None = 64,
+        mesh: Mesh | None = None,
+        axis_resources: ResourceMapping | None = None,
+        prefetch_size: int = 32,
+        pad_final_batch: bool = True,
+        allow_nondivisible_batch_size: bool = False,
+        pixel_dtype: Optional[numpy.dtype] = None,
+        NumImageTokens: Optional[hax.Axis] = None,
+    ):
+        """
+        Initialize ImageDataLoader.
+
+        Args:
+            data: AsyncDataset providing ImageTextDict examples
+            batch_size: Batch size or schedule
+            Pos: Position axis for sequence length
+            NumPatches: Axis for number of image patches
+            Channels: Axis for image channels (default: 3)
+            Height: Axis for patch height (default: 384)
+            Width: Axis for patch width (default: 384)
+            batch_axis_name: Name for batch axis
+            max_buffered_batches: Max batches to buffer
+            mesh: JAX mesh for sharding
+            axis_resources: Resource mapping for sharding
+            prefetch_size: Number of batches to prefetch
+            pad_final_batch: Whether to pad final batch
+            allow_nondivisible_batch_size: Allow non-divisible batch sizes
+            pixel_dtype: dtype for pixel values (default: float32). Set to bfloat16 to save memory.
+            NumImageTokens: Axis for number of image tokens (for unpad_indices). If provided,
+                           unpad_indices will be included in batches for HF-compatible feature ordering.
+
+        Note:
+            grid_mask is computed during batching and included in the ImageTextExample data
+            for JIT-compatible VLM training.
+        """
+        # Set image-specific attributes before calling super().__init__()
+        # because _make_padding_example (called in super) may need these
+        self.Pos = Pos
+        self.NumPatches = NumPatches
+        self.Channels = Channels
+        self.Height = Height
+        self.Width = Width
+        self.NumImageTokens = NumImageTokens
+        self.pixel_dtype = pixel_dtype if pixel_dtype is not None else numpy.float32
+
+        # Call parent constructor
+        super().__init__(
+            data=data,
+            batch_size=batch_size,
+            batch_axis_name=batch_axis_name,
+            max_buffered_batches=max_buffered_batches,
+            mesh=mesh,
+            axis_resources=axis_resources,
+            prefetch_size=prefetch_size,
+            pad_final_batch=pad_final_batch,
+            allow_nondivisible_batch_size=allow_nondivisible_batch_size,
+        )
+
+    def _make_padding_example(self, ex: ImageTextDict) -> ImageTextDict:
+        """Create a zero-padded example for padding incomplete batches."""
+        return {
+            "pixel_values": numpy.zeros_like(ex["pixel_values"]),
+            "input_ids": numpy.zeros_like(ex["input_ids"]),
+            "attention_mask": numpy.zeros_like(ex["attention_mask"]),
+            "image_sizes": numpy.zeros_like(ex["image_sizes"]),
+            "labels": numpy.full_like(ex["labels"], IGNORE_INDEX),
+        }
+
+    def iter_from_step(self, start_from_batch: int | None = None):
+        start_from_batch = int(start_from_batch) if start_from_batch is not None else None
+        return ImageDataLoaderIterator(self, start_from_batch=start_from_batch)
+
+
+class ImageDataLoaderIterator(DataLoaderIterator):
+    """Iterator for ImageDataLoader.
+
+    Inherits batch production and data retrieval from DataLoaderIterator,
+    overriding only the image-specific batching logic.
+    """
+
+    def _pad_pixel_values_to_num_patches(self, pixel_values: numpy.ndarray, target_num_patches: int) -> numpy.ndarray:
+        """Pad pixel_values to have target_num_patches along the first axis."""
+        current_patches = pixel_values.shape[0]
+        if current_patches > target_num_patches:
+            logger.warning(f"Truncating pixel_values from {current_patches} to {target_num_patches} patches")
+            return pixel_values[:target_num_patches]
+        if current_patches == target_num_patches:
+            return pixel_values
+
+        # Use numpy.pad instead of concatenate for better efficiency
+        pad_size = target_num_patches - current_patches
+        pad_width = [(0, pad_size)] + [(0, 0)] * (pixel_values.ndim - 1)
+        return numpy.pad(pixel_values, pad_width, mode="constant", constant_values=0)
+
+    def _pspec_for(self, shape_spec: ShapeSpec | NamedShapeSpec) -> PartitionSpec:
+        """Get partition spec for a given set of axes."""
+        if isinstance(shape_spec, NamedShapeSpec):
+            return hax.partitioning.pspec_for_axis(shape_spec.shape, self.dl.axis_resources)
+        else:
+            # ShapeSpec - shouldn't happen for image data, but handle it for type safety
+            batch_name = hax.partitioning.physical_axis_name(self.dl.batch_axis_name, self.dl.axis_resources)
+            return PartitionSpec(batch_name, *((None,) * (len(shape_spec.shape) - 1)))
+
+    def _batchify_local_data(self, batch: _Batch[ImageTextDict]) -> ImageTextExample:
+        """
+        Stack individual ImageTextDict examples into a batched ImageTextExample.
+        Uses jax.make_array_from_callback for proper device placement.
+        """
+        padded_batch_size = self.dl._round_batch_size(batch.global_size)
+        Batch = hax.Axis(self.dl.batch_axis_name, padded_batch_size)
+
+        # Get target sizes from the axes
+        target_num_patches = self.dl.NumPatches.size
+
+        # Determine axes for each field
+        if target_num_patches > 1:
+            pixel_axes = (Batch, self.dl.NumPatches, self.dl.Channels, self.dl.Height, self.dl.Width)
+        else:
+            pixel_axes = (Batch, self.dl.Channels, self.dl.Height, self.dl.Width)
+        input_axes = (Batch, self.dl.Pos)
+
+        # Cache for local data
+        local_data_cache: dict[int, ImageTextDict] = {}
+
+        def get_local_data(idx: int) -> ImageTextDict:
+            if idx not in local_data_cache:
+                if idx in batch.data_by_local_index:
+                    local_data_cache[idx] = batch.data_by_local_index[idx]
+                else:
+                    local_data_cache[idx] = self.dl._padding_example
+            return local_data_cache[idx]
+
+        # Helper to create sharded arrays
+        def make_sharded_array(
+            shape: tuple[int, ...],
+            axes: tuple[hax.Axis, ...],
+            dtype: numpy.dtype,
+            get_data_fn,
+        ) -> hax.NamedArray:
+            """Create a properly sharded NamedArray."""
+            pspec = self._pspec_for(axes)
+            sharding = jax.sharding.NamedSharding(self.dl.mesh, pspec)
+
+            def callback(indices):
+                batch_slice = indices[0]
+                begin, end, stride = batch_slice.indices(padded_batch_size)
+                assert stride == 1, "Stride must be 1"
+
+                # Collect data for this slice
+                data_list = []
+                for i in range(begin, end):
+                    data_list.append(get_data_fn(get_local_data(i)))
+
+                stacked = numpy.stack(data_list, axis=0)
+                # Apply remaining indices
+                other_indices = indices[1:]
+                if not all(idx == slice(None) for idx in other_indices):
+                    stacked = stacked[(..., *other_indices)]
+                return stacked
+
+            raw_array = jax.make_array_from_callback(shape, sharding, callback)
+            return hax.NamedArray(raw_array, axes)
+
+        # Create pixel_values
+        pixel_shape = tuple(ax.size for ax in pixel_axes)
+
+        def get_pixel_values(d: ImageTextDict) -> numpy.ndarray:
+            pv = d["pixel_values"]
+            if pv.ndim == 4 and target_num_patches > 1:
+                pv = self._pad_pixel_values_to_num_patches(pv, target_num_patches)
+            return pv.astype(self.dl.pixel_dtype)
+
+        pixel_values = make_sharded_array(pixel_shape, pixel_axes, self.dl.pixel_dtype, get_pixel_values)
+
+        # Create input_ids
+        input_shape = tuple(ax.size for ax in input_axes)
+
+        def get_input_ids(d: ImageTextDict) -> numpy.ndarray:
+            return d["input_ids"].astype(numpy.int32)
+
+        input_ids = make_sharded_array(input_shape, input_axes, numpy.int32, get_input_ids)
+
+        # Create loss_mask from labels (labels != IGNORE_INDEX indicates valid tokens for loss)
+        def get_loss_mask(d: ImageTextDict) -> numpy.ndarray:
+            labels = d["labels"]
+            # Create mask: 1.0 for valid tokens (labels != IGNORE_INDEX), 0.0 for ignored
+            return (labels != IGNORE_INDEX).astype(numpy.float32)
+
+        loss_mask = make_sharded_array(input_shape, input_axes, numpy.float32, get_loss_mask)
+
+        # Create grid_mask as a NamedArray for JIT-compatible VLM training
+        # grid_mask indicates which patches are valid (True) vs padding (False)
+        grid_mask_axes = (Batch, self.dl.NumPatches)
+        grid_mask_shape = (padded_batch_size, target_num_patches)
+
+        def get_grid_mask(d: ImageTextDict) -> numpy.ndarray:
+            # Use cached grid_mask from BatchImageProcessor if available
+            cached_mask = d.get("grid_mask")
+            if cached_mask is not None:
+                # Pad or truncate to target size if needed
+                if len(cached_mask) > target_num_patches:
+                    logger.warning(f"Truncating grid_mask from {len(cached_mask)} to {target_num_patches}")
+                    return cached_mask[:target_num_patches]
+                if len(cached_mask) == target_num_patches:
+                    return cached_mask
+                mask = numpy.zeros(target_num_patches, dtype=numpy.bool_)
+                mask[: len(cached_mask)] = cached_mask
+                return mask
+            # Fallback: compute from pixel_values shape (for backwards compatibility)
+            pv = d["pixel_values"]
+            actual_patches = pv.shape[0] if pv.ndim == 4 else 1
+            mask = numpy.zeros(target_num_patches, dtype=numpy.bool_)
+            mask[:actual_patches] = True
+            return mask
+
+        grid_mask = make_sharded_array(grid_mask_shape, grid_mask_axes, numpy.bool_, get_grid_mask)
+
+        # Create unpad_indices if NumImageTokens is configured
+        unpad_indices = None
+        if self.dl.NumImageTokens is not None:
+            unpad_axes = (Batch, self.dl.NumImageTokens)
+            unpad_shape = (padded_batch_size, self.dl.NumImageTokens.size)
+
+            def get_unpad_indices(d: ImageTextDict) -> numpy.ndarray:
+                indices = d.get("unpad_indices")
+                if indices is not None:
+                    target_size = self.dl.NumImageTokens.size
+                    # Pad or truncate to target size
+                    if len(indices) < target_size:
+                        padded = numpy.zeros(target_size, dtype=numpy.int32)
+                        padded[: len(indices)] = indices
+                        return padded
+                    if len(indices) > target_size:
+                        logger.warning(f"Truncating unpad_indices from {len(indices)} to {target_size}")
+                    return indices[:target_size].astype(numpy.int32)
+                return numpy.zeros(self.dl.NumImageTokens.size, dtype=numpy.int32)
+
+            unpad_indices = make_sharded_array(unpad_shape, unpad_axes, numpy.int32, get_unpad_indices)
+
+        return ImageTextExample(
+            pixel_values=pixel_values,
+            input_ids=input_ids,
+            loss_mask=loss_mask,
+            grid_mask=grid_mask,
+            unpad_indices=unpad_indices,
+        )
+
+    async def _do_retrieve_batch_of_batches(self, batch_specs: list[_Batch[None]]) -> list[_Batch[ImageTextDict]]:
+        """Retrieve the data for a batch of batches."""
+        global_indices_for_each_batch = []
+
+        for batch in batch_specs:
+            global_offset = batch.global_data_offset
+            local_indices_for_device = self.dl.local_data_indices_by_device_for_step(batch.index)
+
+            distinct_local_indices_this_batch = set()
+            for indices in local_indices_for_device.values():
+                for local_index in indices:
+                    if local_index >= batch.global_size:
+                        continue
+                    distinct_local_indices_this_batch.add(local_index)
+
+            global_indices_for_this_batch = [global_offset + i for i in distinct_local_indices_this_batch]
+            global_indices_for_each_batch.append(global_indices_for_this_batch)
+
+        indices_for_this_batch_of_batches: list[int] = [
+            i for indices in global_indices_for_each_batch for i in indices
+        ]
+
+        individual_datums = await self.run_and_report_slowness(
+            self.dl.data_store.get_batch(indices_for_this_batch_of_batches),
+            f"Waiting for {len(indices_for_this_batch_of_batches)} image items.",
+        )
+
+        global_map: dict[int, ImageTextDict] = dict(zip(indices_for_this_batch_of_batches, individual_datums))
+
+        out: list[_Batch[ImageTextDict]] = []
+
+        for batch, global_indices_batch in zip(batch_specs, global_indices_for_each_batch, strict=False):
+            local_index_to_example = {}
+            for global_index in global_indices_batch:
+                local_index = global_index - batch.global_data_offset
+                local_index_to_example[local_index] = global_map[global_index]
+
+            out.append(dataclasses.replace(batch, data_by_local_index=local_index_to_example))
+
+        return out
