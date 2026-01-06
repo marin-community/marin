@@ -761,10 +761,13 @@ class ImageDataLoaderIterator(DataLoaderIterator):
         pad_width = [(0, pad_size)] + [(0, 0)] * (pixel_values.ndim - 1)
         return numpy.pad(pixel_values, pad_width, mode="constant", constant_values=0)
 
-    def _pspec_for(self, shape_spec: ShapeSpec | NamedShapeSpec) -> PartitionSpec:
+    def _pspec_for(self, shape_spec: ShapeSpec | NamedShapeSpec | tuple) -> PartitionSpec:
         """Get partition spec for a given set of axes."""
         if isinstance(shape_spec, NamedShapeSpec):
             return hax.partitioning.pspec_for_axis(shape_spec.shape, self.dl.axis_resources)
+        elif isinstance(shape_spec, tuple) and len(shape_spec) > 0 and isinstance(shape_spec[0], hax.Axis):
+            # Handle tuple of hax.Axis objects directly
+            return hax.partitioning.pspec_for_axis(shape_spec, self.dl.axis_resources)
         else:
             # ShapeSpec - shouldn't happen for image data, but handle it for type safety
             batch_name = hax.partitioning.physical_axis_name(self.dl.batch_axis_name, self.dl.axis_resources)

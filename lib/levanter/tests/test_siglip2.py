@@ -34,6 +34,8 @@ from levanter.models.siglip2 import (
 from levanter.utils.activation import ActivationFunctionEnum
 from test_utils import use_test_mesh
 from test_image_utils import get_single_image
+from jax.sharding import Mesh
+from haliax.partitioning import ResourceAxis
 
 # Enable float32 mode in JAX
 jax.config.update("jax_enable_x64", False)
@@ -1022,7 +1024,7 @@ def test_siglip2_embeddings_vs_hf():
 
     import tempfile
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(tensor_parallelism=1):
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         import equinox as eqx
@@ -1142,7 +1144,7 @@ def test_siglip2_mlp_vs_hf():
 
     import tempfile
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(tensor_parallelism=1):
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         import equinox as eqx
@@ -1221,7 +1223,7 @@ def test_siglip2_attention_vs_hf():
 
     import tempfile
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(tensor_parallelism=1):
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         import equinox as eqx
@@ -1307,7 +1309,7 @@ def test_siglip2_encoder_layer_vs_hf():
 
     import tempfile
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(tensor_parallelism=1):
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
         import equinox as eqx
@@ -1506,7 +1508,10 @@ def test_siglip2_vision_roundtrip():
     print(f"HF encoder output shape: {torch_output.shape}")
 
     # Convert to Levanter format
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # Use single-device mesh to avoid sharding issues with small batch sizes
+    single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
+
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(mesh=single_device_mesh):
         # Save HF model
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 
@@ -1626,10 +1631,9 @@ def test_siglip2_vision_roundtrip():
         print("\n✓ HF to Levanter conversion successful!")
 
         # Test roundtrip: save Levanter model and load back as HF
-        # Use a mesh context to enable proper sharding for save
+        # Already in single-device mesh context from above
         print("\n=== Testing Levanter to HF roundtrip ===")
-        with use_test_mesh(tensor_parallelism=1):
-            converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
+        converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
         torch_model2 = HfSiglip2VisionModel.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
         print("✓ Levanter to HF conversion successful!")
@@ -1760,7 +1764,7 @@ def test_siglip2_vision_real_image():
     # Convert to Levanter format
     import tempfile
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(tensor_parallelism=1):
         # Save HF model
         torch_model.save_pretrained(f"{tmpdir}/torch_model")
 

@@ -514,8 +514,8 @@ def main():
         checkpointer=checkpointer_config,
         distributed=distributed_config,
         ray=RayConfig(auto_start_cluster=False),
-        # FSDP configuration
-        fsdp_axis=fsdp_axis,
+        # # FSDP configuration
+        # fsdp_axis=fsdp_axis,
         # Mixed precision configuration
         mp=mp_policy,
     )
