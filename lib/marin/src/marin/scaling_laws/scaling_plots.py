@@ -28,6 +28,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 
+from marin.scaling_laws.isoflop_analysis import QuadraticFitCoeffs, ScalingFit
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 import wandb
@@ -83,14 +84,14 @@ _SCALE_LINE = dict(dash="dot", width=2, color=PALETTE[0])
 def create_isoflop_plot(
     df: pd.DataFrame,
     minima_records: list,
-    fit_curves: dict[tuple[str, float], tuple[float, float, float, float, float]],
+    fit_curves: dict[tuple[str, float], QuadraticFitCoeffs],
 ) -> go.Figure:
     """Create the IsoFLOP plot showing loss vs tokens for each compute budget.
 
     Args:
         df: DataFrame with columns: tokens, loss, flops, params, name, label
-        minima_records: List of dicts with optimal config info per (label, flops)
-        fit_curves: Dict of {(label, flops): (a, b, c, token_min, token_max)} quadratic fit coefficients
+        minima_records: List of MinimaRecord with optimal config info per (label, flops)
+        fit_curves: Dict of {(label, flops): QuadraticFitCoeffs} quadratic fit coefficients
 
     Returns:
         Plotly Figure with the isoflop visualization
@@ -186,13 +187,13 @@ def create_isoflop_plot(
 
 def create_scaling_plot(
     minima_records: list,
-    scaling_fits: dict[str, tuple[float, float]],
+    scaling_fits: dict[str, ScalingFit],
 ) -> go.Figure:
     """Create the scaling law fit plot showing N* vs compute budget.
 
     Args:
         minima_records: List of MinimaRecord with optimal config info per (label, flops)
-        scaling_fits: Dict of {label: (alpha, A)} for N* ~ A * C^alpha
+        scaling_fits: Dict of {label: ScalingFit} for N* ~ A * C^alpha
 
     Returns:
         Plotly Figure with the scaling fit visualization
@@ -316,7 +317,7 @@ def upload_plots_to_wandb(
     )
     wandb.log(
         {
-            "isoFLOP_plot": wandb.Plotly(fig_isoflop),
+            "isoflop_plot": wandb.Plotly(fig_isoflop),
             "scaling_plot": wandb.Plotly(fig_scaling),
         }
     )
