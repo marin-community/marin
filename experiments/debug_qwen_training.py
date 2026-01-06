@@ -71,14 +71,14 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 5
-TRAIN_BATCH_SIZE = 512
+TRAIN_BATCH_SIZE = 32
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 # Part 2: Resume from last checkpoint of previous run
 part1_final_checkpoint = InputName.hardcoded("checkpoints/exp2199b_redo3_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-c05011/hf/step-11718/")
 
 mixture_sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v4-512"),
+    resources=ResourceConfig.with_tpu("v5p-64"),
     tokenizer=qwen2_5_7b_instruct_tokenizer,
     initialize_from_hf=part1_final_checkpoint,
     train_batch_size=TRAIN_BATCH_SIZE,
