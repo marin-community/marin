@@ -138,6 +138,10 @@ class LlavaOnevisionConfig:
         else:
             vision_config = SiglipVisionConfig.from_hf_config(hf_config.vision_config)
 
+        # Ensure no_bias attribute exists (Qwen2 default is True, meaning use_bias=False)
+        if not hasattr(hf_config.text_config, 'no_bias'):
+            hf_config.text_config.no_bias = True
+
         text_config = QwenConfig.from_hf_config(hf_config.text_config)
 
         # Parse activation function

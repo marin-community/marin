@@ -636,7 +636,7 @@ async def _extend_cache_metadata_with_other(
 
         async def _copy_one_array(dest_array: JaggedArrayStore, source_array: JaggedArrayStore, data_offset: int):
             if source_array.shapes is not None:
-                source_shapes = source_array.shapes
+                source_shapes = source_array.shapes[:source_num_rows]
                 async with ts.Transaction() as txn:
                     dest_shapes = dest_array.shapes
                     assert dest_shapes is not None

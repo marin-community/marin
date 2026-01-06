@@ -30,6 +30,7 @@ from test_image_utils import (
     DEFAULT_GRID_PINPOINTS,
 )
 from test_image_utils import get_real_data, get_single_image
+from test_utils import use_test_mesh
 
 # Define skip_if_no_torch locally to avoid conftest dependencies
 try:
@@ -154,115 +155,108 @@ def test_vlm_numerical_correctness():
 
     # ========== Load Levanter model ==========
     print("\n--- Loading Levanter model ---")
-    hf_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
-    lev_config = LlavaOnevisionConfig.from_hf_config(hf_config)
+    from levanter.trainer import TrainerConfig
 
-    # Disable flash attention for fair comparison
-    text_config_updated = dataclasses.replace(
-        lev_config.text_config, attn_backend="dot", flash_attention_block_size=None
-    )
-    lev_config = dataclasses.replace(lev_config, text_config=text_config_updated)
+    # Load model config (disable gradient checkpointing and use vanilla attention for testing)
+    lev_config = _load_levanter_config(model_name, enable_flash_attention=False, gradient_checkpointing=False)
 
-    from jax import random
+    # Configure trainer and load model with proper mesh context
+    trainer_config = TrainerConfig()
 
-    Vocab = Axis("vocab", hf_config.text_config.vocab_size)
-    model_template = eqx.filter_eval_shape(LlavaOnevisionModel.init, Vocab, lev_config, key=random.PRNGKey(0))
-    converter = lev_config.hf_checkpoint_converter(ref_checkpoint=model_name)
-    state_dict = converter.load_state_dict(model_name)
-    from levanter.compat.hf_checkpoints import from_torch_compatible_state_dict
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+        compute_dtype = jnp.float32
+        converter = lev_config.hf_checkpoint_converter(ref_checkpoint=model_name)
+        parameter_axis_mapping = trainer_config.parameter_axis_mapping
 
-    lev_model = from_torch_compatible_state_dict(model_template, state_dict)
+        lev_model = converter.load_pretrained(
+            LlavaOnevisionModel,
+            ref=model_name,
+            config=lev_config,
+            axis_mapping=parameter_axis_mapping,
+            dtype=compute_dtype,
+            resize_vocab_to_match_tokenizer=False,
+        )
 
-    # Convert model weights to float32
-    import jax.tree_util as jtu
+        # Forward function for Levanter
+        @eqx.filter_jit
+        def compute_forward(model, input_ids, pixel_values, grid_mask, unpad_indices):
+            return model(input_ids, pixel_values=pixel_values, grid_mask=grid_mask, unpad_indices=unpad_indices, key=None)
 
-    def to_float32(x):
-        if isinstance(x, jnp.ndarray) and jnp.issubdtype(x.dtype, jnp.floating):
-            return x.astype(jnp.float32)
-        return x
+        # ========== Test each sample ==========
+        all_max_diffs = []
+        all_mean_diffs = []
+        all_passed = []
 
-    lev_model = jtu.tree_map(to_float32, lev_model)
+        print(f"\n=== Testing {num_samples} samples ===")
 
-    # Forward function for Levanter
-    @eqx.filter_jit
-    def compute_forward(model, input_ids, pixel_values, grid_mask, unpad_indices):
-        return model(input_ids, pixel_values=pixel_values, grid_mask=grid_mask, unpad_indices=unpad_indices, key=None)
+        for sample_idx, pair in enumerate(test_pairs):
+            print(f"\n  Sample {sample_idx}:")
 
-    # ========== Test each sample ==========
-    all_max_diffs = []
-    all_mean_diffs = []
-    all_passed = []
+            # --- HF Forward Pass (using pair.hf data) ---
+            hf_input_ids = torch.from_numpy(pair.hf.input_ids).unsqueeze(0)
+            hf_pixel_values = torch.from_numpy(pair.hf.pixel_values).unsqueeze(0)
+            hf_image_sizes = torch.from_numpy(pair.hf.image_sizes).unsqueeze(0)
 
-    print(f"\n=== Testing {num_samples} samples ===")
+            print(f"    HF input_ids shape: {hf_input_ids.shape}")
+            print(f"    HF pixel_values shape: {hf_pixel_values.shape}")
 
-    for sample_idx, pair in enumerate(test_pairs):
-        print(f"\n  Sample {sample_idx}:")
+            with torch.no_grad():
+                hf_output = hf_model(
+                    input_ids=hf_input_ids,
+                    pixel_values=hf_pixel_values,
+                    image_sizes=hf_image_sizes,
+                )
+                hf_logits = hf_output.logits[0].numpy()
 
-        # --- HF Forward Pass (using pair.hf data) ---
-        hf_input_ids = torch.from_numpy(pair.hf.input_ids).unsqueeze(0)
-        hf_pixel_values = torch.from_numpy(pair.hf.pixel_values).unsqueeze(0)
-        hf_image_sizes = torch.from_numpy(pair.hf.image_sizes).unsqueeze(0)
+            print(f"    HF logits shape: {hf_logits.shape}")
 
-        print(f"    HF input_ids shape: {hf_input_ids.shape}")
-        print(f"    HF pixel_values shape: {hf_pixel_values.shape}")
+            # --- Levanter Forward Pass (using pair.lev data, already has grid_mask and padding) ---
+            print(f"    Lev input_ids shape: {pair.lev.input_ids.shape}")
+            print(f"    Lev pixel_values shape: {pair.lev.pixel_values.shape}")
+            print(f"    Lev grid_mask valid patches: {pair.lev.grid_mask.sum()}")
 
-        with torch.no_grad():
-            hf_output = hf_model(
-                input_ids=hf_input_ids,
-                pixel_values=hf_pixel_values,
-                image_sizes=hf_image_sizes,
+            # Create named arrays using create_lev_jax_tensors helper
+            # Use batch_size=1 since this test doesn't use device_mesh sharding
+            jax_tensors = create_lev_jax_tensors(pair.lev, batch_size=1)
+
+            lev_logits = compute_forward(
+                lev_model,
+                jax_tensors.input_ids,
+                jax_tensors.pixel_values,
+                jax_tensors.grid_mask,
+                jax_tensors.unpad_indices,
             )
-            hf_logits = hf_output.logits[0].numpy()
+            lev_logits_np = np.array(lev_logits.array)[0]
 
-        print(f"    HF logits shape: {hf_logits.shape}")
+            print(f"    Lev logits shape: {lev_logits_np.shape}")
 
-        # --- Levanter Forward Pass (using pair.lev data, already has grid_mask and padding) ---
-        print(f"    Lev input_ids shape: {pair.lev.input_ids.shape}")
-        print(f"    Lev pixel_values shape: {pair.lev.pixel_values.shape}")
-        print(f"    Lev grid_mask valid patches: {pair.lev.grid_mask.sum()}")
+            # Compare logits using region-based comparison
+            image_token_id = hf_model.config.image_token_index
+            result = compare_logits_by_region(
+                hf_logits=hf_logits,
+                lev_logits=lev_logits_np,
+                input_ids=pair.hf.input_ids,
+                image_token_id=image_token_id,
+                tolerance=1e-2,
+                verbose=True,
+            )
 
-        # Create named arrays using create_lev_jax_tensors helper
-        # Use batch_size=1 since this test doesn't use device_mesh sharding
-        jax_tensors = create_lev_jax_tensors(pair.lev, batch_size=1)
+            all_max_diffs.append(result.overall_max_diff)
+            all_mean_diffs.append(result.overall_mean_diff)
+            all_passed.append(result.passed)
 
-        lev_logits = compute_forward(
-            lev_model,
-            jax_tensors.input_ids,
-            jax_tensors.pixel_values,
-            jax_tensors.grid_mask,
-            jax_tensors.unpad_indices,
-        )
-        lev_logits_np = np.array(lev_logits.array)[0]
+        # --- Summary ---
+        print("\n--- Summary ---")
+        avg_max_diff = np.mean(all_max_diffs)
+        avg_mean_diff = np.mean(all_mean_diffs)
+        pass_rate = np.mean(all_passed)
+        print(f"  Average max diff: {avg_max_diff:.6f}")
+        print(f"  Average mean diff: {avg_mean_diff:.6f}")
+        print(f"  Pass rate: {pass_rate:.2%}")
 
-        print(f"    Lev logits shape: {lev_logits_np.shape}")
-
-        # Compare logits using region-based comparison
-        image_token_id = hf_model.config.image_token_index
-        result = compare_logits_by_region(
-            hf_logits=hf_logits,
-            lev_logits=lev_logits_np,
-            input_ids=pair.hf.input_ids,
-            image_token_id=image_token_id,
-            tolerance=1e-2,
-            verbose=True,
-        )
-
-        all_max_diffs.append(result.overall_max_diff)
-        all_mean_diffs.append(result.overall_mean_diff)
-        all_passed.append(result.passed)
-
-    # --- Summary ---
-    print("\n--- Summary ---")
-    avg_max_diff = np.mean(all_max_diffs)
-    avg_mean_diff = np.mean(all_mean_diffs)
-    pass_rate = np.mean(all_passed)
-    print(f"  Average max diff: {avg_max_diff:.6f}")
-    print(f"  Average mean diff: {avg_mean_diff:.6f}")
-    print(f"  Pass rate: {pass_rate:.2%}")
-
-    # Assert all samples passed
-    assert all(all_passed), f"Not all samples passed: {sum(all_passed)}/{len(all_passed)}"
-    print("\nNumerical correctness test passed!")
+        # Assert all samples passed
+        assert all(all_passed), f"Not all samples passed: {sum(all_passed)}/{len(all_passed)}"
+        print("\nNumerical correctness test passed!")
 
 
 # =====================
@@ -761,7 +755,6 @@ def test_vlm_gradient_consistency():
 
             print("\n=== Loading Levanter model ===")
             print(f"  Data axis size: {trainer_config.data_axis_size}")
-            print(f"  FSDP axis: {trainer_config.fsdp_axis}")
             lev_model = converter.load_pretrained(
                 LlavaOnevisionModel,
                 ref=model_name,
