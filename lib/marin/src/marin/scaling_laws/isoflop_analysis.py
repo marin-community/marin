@@ -14,19 +14,36 @@
 
 """IsoFLOP analysis for finding compute-optimal training configurations.
 
-Primary usage - create an ExecutorStep for your pipeline:
+Primary usage - create ExecutorSteps for your pipeline:
 
-    from marin.scaling_laws import isoflop_analysis_step
+    from marin.scaling_laws import (
+        isoflop_analysis_step,
+        isoflop_plots_step,
+        upload_isoflop_plots_to_wandb_step,
+    )
 
+    # Step 1: Compute metrics and fit scaling laws
     analysis = isoflop_analysis_step(
         name="my-scaling-analysis",
         training_runs=my_training_steps,  # list of ExecutorStep
     )
 
-The step will:
+    # Step 2: Generate HTML plots (optional)
+    plots = isoflop_plots_step(
+        name="my-scaling-plots",
+        analysis_step=analysis,
+    )
+
+    # Step 3: Upload to WandB (optional)
+    upload = upload_isoflop_plots_to_wandb_step(
+        name="upload-scaling-plots",
+        analysis_step=analysis,
+    )
+
+The analysis step will:
 1. Read eval metrics from completed training runs
 2. Fit scaling laws to find compute-optimal token counts
-3. Save plots and results to the output path
+3. Save results to JSON/parquet files
 
 For programmatic use, see `run_isoflop_analysis()` which returns a `IsoFlopAnalysisResult`.
 """
@@ -999,6 +1016,13 @@ class IsoFlopAnalysisResult:
         }
 
 
+def _parse_fit_curve_coeffs(coeffs: Sequence[float]) -> tuple[float, float, float, float, float]:
+    if len(coeffs) != 5:
+        raise ValueError(f"Expected 5 fit curve coefficients, got {len(coeffs)}")
+    a, b, c, token_min, token_max = coeffs
+    return (float(a), float(b), float(c), float(token_min), float(token_max))
+
+
 # ---------------- ExecutorStep Config ----------------
 
 
@@ -1012,14 +1036,27 @@ class IsoFlopAnalysisConfig(EvalMetricsAnalysisConfig):
     label_map: tuple[tuple[str, str], ...] | None = None
     """Optional mapping from experiment_name -> display label as tuple of pairs."""
 
-    save_plots: bool = True
-    """Whether to save HTML plots to output_path."""
 
-    upload_to_wandb: bool = True
-    """Whether to upload plots to WandB."""
+@dataclass(frozen=True)
+class IsoFlopPlotsConfig:
+    """Configuration for isoflop plots ExecutorStep."""
+
+    analysis_output_path: str
+    """Path to the isoflop analysis output (containing isoflop_analysis_result.json)."""
+
+    output_path: str
+    """Path to save the HTML plots."""
+
+
+@dataclass(frozen=True)
+class UploadPlotsToWandbConfig:
+    """Configuration for uploading plots to WandB."""
+
+    plots_path: str
+    """Path to the directory containing HTML plots."""
 
     wandb_entity: str = WANDB_ENTITY
-    """WandB entity for uploads (defaults to WANDB_ENTITY env var or 'marin-community')."""
+    """WandB entity for uploads."""
 
     wandb_project: str = f"{WANDB_PROJECT}-analysis"
     """WandB project for uploads."""
@@ -1071,27 +1108,102 @@ def _run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
         json.dump(result.to_json_dict(), f, indent=2)
     logger.info(f"Saved results to {result_path}")
 
-    if config.save_plots:
-        from marin.scaling_laws.scaling_plots import (
-            create_isoflop_plot,
-            create_scaling_plot,
-            save_plots,
-        )
+    # Also save the full dataframe and fit curves for downstream plotting
+    df_path = os.path.join(config.output_path, "isoflop_df.parquet")
+    isoflop_df.to_parquet(df_path)
+    logger.info(f"Saved dataframe to {df_path}")
 
-        fig_isoflop = create_isoflop_plot(isoflop_df, minima_records, fit_curves)
-        fig_scaling = create_scaling_plot(minima_records, scaling_fits)
-        save_plots(fig_isoflop, fig_scaling, config.output_path)
+    fit_curves_path = os.path.join(config.output_path, "fit_curves.json")
+    # Convert tuple keys to strings for JSON serialization
+    fit_curves_json = {f"{label}|{flops}": list(coeffs) for (label, flops), coeffs in fit_curves.items()}
+    with fs.open(fit_curves_path, "w") as f:
+        json.dump(fit_curves_json, f, indent=2)
+    logger.info(f"Saved fit curves to {fit_curves_path}")
 
-        if config.upload_to_wandb:
-            from marin.scaling_laws.scaling_plots import upload_plots_to_wandb
 
-            upload_plots_to_wandb(
-                fig_isoflop,
-                fig_scaling,
-                entity=config.wandb_entity,
-                project=config.wandb_project,
-                run_name=config.wandb_run_name,
-            )
+def _run_isoflop_plots_step(config: IsoFlopPlotsConfig) -> None:
+    """Generate and save isoflop plots (called by ExecutorStep)."""
+    from marin.scaling_laws.scaling_plots import (
+        create_isoflop_plot,
+        create_scaling_plot,
+        save_plots,
+    )
+
+    fs, _, _ = fsspec.get_fs_token_paths(config.analysis_output_path)
+
+    # Load the analysis results
+    result_path = os.path.join(config.analysis_output_path, "isoflop_analysis_result.json")
+    with fs.open(result_path, "r") as f:
+        result_dict = json.load(f)
+
+    # Load the dataframe
+    df_path = os.path.join(config.analysis_output_path, "isoflop_df.parquet")
+    isoflop_df = pd.read_parquet(df_path)
+
+    # Load fit curves and reconstruct tuple keys
+    fit_curves_path = os.path.join(config.analysis_output_path, "fit_curves.json")
+    with fs.open(fit_curves_path, "r") as f:
+        fit_curves_json = json.load(f)
+    fit_curves: dict[tuple[str, float], tuple[float, float, float, float, float]] = {}
+    for key_str, coeffs in fit_curves_json.items():
+        label, flops = key_str.rsplit("|", 1)
+        fit_curves[(label, float(flops))] = _parse_fit_curve_coeffs(coeffs)
+
+    # Reconstruct minima records
+    minima_records = [MinimaRecord(**r) for r in result_dict["minima_records"]]
+    scaling_fits = {k: tuple(v) for k, v in result_dict["scaling_fits"].items()}
+
+    # Create plots
+    fig_isoflop = create_isoflop_plot(isoflop_df, minima_records, fit_curves)
+    fig_scaling = create_scaling_plot(minima_records, scaling_fits)
+
+    # Save plots
+    save_plots(fig_isoflop, fig_scaling, config.output_path)
+
+
+def _run_upload_plots_to_wandb_step(config: UploadPlotsToWandbConfig) -> None:
+    """Upload plots to WandB (called by ExecutorStep)."""
+    from marin.scaling_laws.scaling_plots import (
+        create_isoflop_plot,
+        create_scaling_plot,
+        upload_plots_to_wandb,
+    )
+
+    fs, _, _ = fsspec.get_fs_token_paths(config.plots_path)
+
+    # Load the analysis results to regenerate plots
+    result_path = os.path.join(config.plots_path, "isoflop_analysis_result.json")
+    with fs.open(result_path, "r") as f:
+        result_dict = json.load(f)
+
+    # Load the dataframe
+    df_path = os.path.join(config.plots_path, "isoflop_df.parquet")
+    isoflop_df = pd.read_parquet(df_path)
+
+    # Load fit curves and reconstruct tuple keys
+    fit_curves_path = os.path.join(config.plots_path, "fit_curves.json")
+    with fs.open(fit_curves_path, "r") as f:
+        fit_curves_json = json.load(f)
+    fit_curves: dict[tuple[str, float], tuple[float, float, float, float, float]] = {}
+    for key_str, coeffs in fit_curves_json.items():
+        label, flops = key_str.rsplit("|", 1)
+        fit_curves[(label, float(flops))] = _parse_fit_curve_coeffs(coeffs)
+
+    # Reconstruct minima records
+    minima_records = [MinimaRecord(**r) for r in result_dict["minima_records"]]
+    scaling_fits = {k: tuple(v) for k, v in result_dict["scaling_fits"].items()}
+
+    # Create plots
+    fig_isoflop = create_isoflop_plot(isoflop_df, minima_records, fit_curves)
+    fig_scaling = create_scaling_plot(minima_records, scaling_fits)
+
+    upload_plots_to_wandb(
+        fig_isoflop,
+        fig_scaling,
+        entity=config.wandb_entity,
+        project=config.wandb_project,
+        run_name=config.wandb_run_name,
+    )
 
 
 # ---------------- Primary Export: ExecutorStep Factory ----------------
@@ -1102,40 +1214,31 @@ def isoflop_analysis_step(
     training_runs: Sequence[ExecutorStep | InputName],
     metric_key: str = DEFAULT_METRIC_KEY,
     label_map: dict[str, str] | None = None,
-    save_plots: bool = True,
-    upload_to_wandb: bool = True,
-    wandb_entity: str = WANDB_ENTITY,
-    wandb_project: str = f"{WANDB_PROJECT}-analysis",
-    wandb_run_name: str | None = None,
 ) -> ExecutorStep:
     """Create an ExecutorStep for scaling ladder analysis.
 
-    This is the primary interface for using scaling ladder analysis in a pipeline.
-    The step will:
-    1. Wait for all training runs to complete
-    2. Read eval metrics from the training runs
-    3. Fit scaling laws to find compute-optimal configurations
-    4. Save plots and results to the output path
+    This step computes scaling law fits and saves results to JSON/parquet files.
+    For plotting, use `isoflop_plots_step()`. For WandB upload, use
+    `upload_isoflop_plots_to_wandb_step()`.
 
     Args:
         name: Name for this executor step
         training_runs: Training run ExecutorSteps or InputNames to analyze
         metric_key: Which metric to use for loss (default: eval/paloma/c4_en/bpb)
         label_map: Optional mapping from experiment_name -> display label
-        save_plots: Whether to save HTML plots (default: True)
-        upload_to_wandb: Whether to upload plots to WandB (default: True)
-        wandb_entity: WandB entity for uploads
-        wandb_project: WandB project for uploads
-        wandb_run_name: Name for WandB run (defaults to step name)
 
     Returns:
         ExecutorStep configured to run the analysis
 
     Example:
-        >>> from marin.scaling_laws import isoflop_analysis_step
+        >>> from marin.scaling_laws import isoflop_analysis_step, isoflop_plots_step
         >>> analysis = isoflop_analysis_step(
         ...     name="my-scaling-analysis",
         ...     training_runs=my_training_steps,
+        ... )
+        >>> plots = isoflop_plots_step(
+        ...     name="my-scaling-plots",
+        ...     analysis_step=analysis,
         ... )
     """
     run_paths = [output_path_of(run) if isinstance(run, ExecutorStep) else run for run in training_runs]
@@ -1145,11 +1248,6 @@ def isoflop_analysis_step(
         output_path=this_output_path(),
         metric_key=metric_key,
         label_map=tuple(label_map.items()) if label_map else None,
-        save_plots=save_plots,
-        upload_to_wandb=upload_to_wandb,
-        wandb_entity=wandb_entity,
-        wandb_project=wandb_project,
-        wandb_run_name=wandb_run_name or name,
     )
 
     return ExecutorStep(
@@ -1157,6 +1255,86 @@ def isoflop_analysis_step(
         fn=_run_isoflop_analysis_step,
         config=config,
         description=f"Scaling ladder analysis for {len(training_runs)} training runs",
+    )
+
+
+def isoflop_plots_step(
+    name: str,
+    analysis_step: ExecutorStep | InputName,
+) -> ExecutorStep:
+    """Create an ExecutorStep to generate isoflop HTML plots.
+
+    This step reads the output from an isoflop_analysis_step and generates
+    HTML plots for the isoflop curves and scaling fits.
+
+    Args:
+        name: Name for this executor step
+        analysis_step: The isoflop_analysis_step to read results from
+
+    Returns:
+        ExecutorStep configured to generate plots
+
+    Example:
+        >>> analysis = isoflop_analysis_step(name="analysis", training_runs=runs)
+        >>> plots = isoflop_plots_step(name="plots", analysis_step=analysis)
+    """
+    analysis_path = output_path_of(analysis_step) if isinstance(analysis_step, ExecutorStep) else analysis_step
+
+    config = IsoFlopPlotsConfig(
+        analysis_output_path=analysis_path,
+        output_path=this_output_path(),
+    )
+
+    return ExecutorStep(
+        name=name,
+        fn=_run_isoflop_plots_step,
+        config=config,
+        description="Generate isoflop HTML plots",
+    )
+
+
+def upload_isoflop_plots_to_wandb_step(
+    name: str,
+    analysis_step: ExecutorStep | InputName,
+    wandb_entity: str = WANDB_ENTITY,
+    wandb_project: str = f"{WANDB_PROJECT}-analysis",
+    wandb_run_name: str | None = None,
+) -> ExecutorStep:
+    """Create an ExecutorStep to upload isoflop plots to WandB.
+
+    This step reads the analysis results and uploads interactive plots to WandB.
+
+    Args:
+        name: Name for this executor step
+        analysis_step: The isoflop_analysis_step to read results from
+        wandb_entity: WandB entity for uploads
+        wandb_project: WandB project for uploads
+        wandb_run_name: Name for WandB run (defaults to step name)
+
+    Returns:
+        ExecutorStep configured to upload plots to WandB
+
+    Example:
+        >>> analysis = isoflop_analysis_step(name="analysis", training_runs=runs)
+        >>> upload = upload_isoflop_plots_to_wandb_step(
+        ...     name="upload-plots",
+        ...     analysis_step=analysis,
+        ... )
+    """
+    analysis_path = output_path_of(analysis_step) if isinstance(analysis_step, ExecutorStep) else analysis_step
+
+    config = UploadPlotsToWandbConfig(
+        plots_path=analysis_path,
+        wandb_entity=wandb_entity,
+        wandb_project=wandb_project,
+        wandb_run_name=wandb_run_name or name,
+    )
+
+    return ExecutorStep(
+        name=name,
+        fn=_run_upload_plots_to_wandb_step,
+        config=config,
+        description="Upload isoflop plots to WandB",
     )
 
 
