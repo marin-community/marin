@@ -22,6 +22,7 @@ from datetime import timedelta
 
 import jmp
 from levanter.checkpoint import CheckpointerConfig
+from levanter.compat.hf_checkpoints import HFCompatConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.main.train_lm import TrainLmConfig
 from levanter.optim import AdamConfig
@@ -210,13 +211,14 @@ class DataEfficiencyConfig:
         return f"{schedule_short_name[self.lr_schedule]}-lr{lr_str}-wd{self.weight_decay:.2f}"
 
     def build_trainer_config(self) -> TrainerConfig:
+        mp_policy = jmp.get_policy("f32") if "gdn" in self.model_name else jmp.get_policy("p=f32,c=bfloat16")
         return TrainerConfig(
             seed=self.train_seed,
             tracker=WandbConfig(
                 project=self.wandb_project_name,
                 tags=["data-efficiency", self.data_name, *self.wandb_additional_tags],
             ),
-            mp=jmp.get_policy("p=f32,c=bfloat16"),
+            mp=mp_policy,
             train_batch_size=self.train_batch_size,
             num_train_steps=self.total_train_steps,
             steps_per_eval=self.steps_per_eval,
@@ -248,6 +250,7 @@ class DataEfficiencyConfig:
         return ResourceConfig.with_tpu(self.tpu_type, slice_count=self.slice_count)
 
     def build_train_lm_config(self) -> TrainLmConfig:
+        hf_save_steps = None if not isinstance(self.model_config, HFCompatConfig) else 10_000
         return TrainLmConfig(
             data=self.build_data_config(),
             trainer=self.build_trainer_config(),
@@ -260,6 +263,7 @@ class DataEfficiencyConfig:
             eval_harness_steps=self.eval_harness_steps,
             eval_harness=self.build_eval_harness_config(),
             data_seed=self.data_seed,
+            hf_save_steps=hf_save_steps,
         )
 
     def build_train_lm_on_pod_config(self) -> TrainLmOnPodConfig:

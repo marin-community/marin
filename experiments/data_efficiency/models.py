@@ -23,7 +23,15 @@ from levanter.models.rotary import Llama3RotaryEmbeddingsConfig
 
 from levanter.models.mixtral import MixtralConfig
 
-from experiments.llama import llama_1_4b, llama_1_9b, llama_150m, llama_300m, llama_600m
+from experiments.data_efficiency.gated_deltanet import GatedDeltaNetTransformerConfig
+from experiments.llama import (
+    llama3_tokenizer_vocab_size,
+    llama_1_4b,
+    llama_1_9b,
+    llama_150m,
+    llama_300m,
+    llama_600m,
+)
 
 
 llama_1_5b_config = LlamaConfig(
@@ -168,6 +176,37 @@ moe_debug = MixtralConfig(
     rzl_coef=None,  # Disables router z-loss logging
 )
 
+DEFAULT_GDN_VOCAB_SIZE = llama3_tokenizer_vocab_size
+
+
+def _gdn_size(
+    *,
+    hidden_dim: int,
+    intermediate_dim: int,
+    num_layers: int,
+    num_heads: int,
+    max_seq_len: int = SEQ_LEN,
+) -> GatedDeltaNetTransformerConfig:
+    return GatedDeltaNetTransformerConfig(
+        max_seq_len=max_seq_len,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        num_k_heads=num_heads,
+        num_v_heads=num_heads,
+        head_dim=hidden_dim // num_heads,
+        conv_kernel_size=4,
+        chunk_size=64,
+        cross_entropy_block_size=4096,
+        tie_word_embeddings=False,
+    )
+
+
+gdn_150m_4096_config = _gdn_size(hidden_dim=512, intermediate_dim=1792, num_layers=6, num_heads=8)
+gdn_300m_4096_config = _gdn_size(hidden_dim=768, intermediate_dim=2688, num_layers=12, num_heads=12)
+gdn_600m_4096_config = _gdn_size(hidden_dim=1024, intermediate_dim=3584, num_layers=24, num_heads=16)
+
 model_dict = {
     "150m4k": llama_150m_4096_config,
     "300m4k": llama_300m_4096_config,
@@ -184,4 +223,7 @@ model_dict = {
     "3_2b4k": llama_3_2b_4096_config,
     "3_2b4k_alln": llama_3_2b_4096_config_all_norm,
     "3_2b4k_qkn": llama_3_2b_4096_config_qk_norm,
+    "gdn150m4k": gdn_150m_4096_config,
+    "gdn300m4k": gdn_300m_4096_config,
+    "gdn600m4k": gdn_600m_4096_config,
 }
