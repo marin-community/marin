@@ -956,40 +956,9 @@ def take(array: NamedArray, axis: AxisSelector, index: int | NamedArray) -> Name
         else:
             new_axes = array.axes[:axis_index] + index.axes + array.axes[axis_index + 1 :]
             # Local import to avoid a circular import between core <-> partitioning.
-            from haliax.partitioning import pspec_for_axis
+            from haliax.partitioning import get_pspec_for_manual_mesh
 
-            # Some call sites (notably eval_shape) run under an AbstractMesh or a mesh with Auto/Manual axis types.
-            # In those cases, specifying `out_sharding` can error (JAX cannot resolve a concrete device assignment).
-            # Only provide `out_sharding` when we have a concrete mesh with Explicit axis types for every referenced axis.
-            try:
-                # Newer JAX exposes a concrete mesh getter.
-                mesh = jax.sharding.get_mesh()
-            except AttributeError:  # pragma: no cover
-                # Older JAX only exposes the abstract mesh.
-                mesh = jax.sharding.get_abstract_mesh()
-            out_sharding = None
-            if mesh is not None and not mesh.empty:
-                pspec = pspec_for_axis(new_axes)
-                axis_type_by_name = dict(zip(mesh.axis_names, mesh.axis_types, strict=False))
-
-                def _is_explicit_axis(name: str) -> bool:
-                    axis_type = axis_type_by_name.get(name)
-                    return axis_type == jax.sharding.AxisType.Explicit
-
-                def _iter_mesh_axes(spec_entry):
-                    if spec_entry is None or spec_entry is jax.sharding.PartitionSpec.UNCONSTRAINED:
-                        return
-                    if isinstance(spec_entry, str):
-                        yield spec_entry
-                    else:
-                        for item in spec_entry:
-                            if item is None or item is jax.sharding.PartitionSpec.UNCONSTRAINED:
-                                continue
-                            yield item
-
-                referenced = {name for entry in pspec for name in _iter_mesh_axes(entry)}
-                if referenced and all(_is_explicit_axis(name) for name in referenced):
-                    out_sharding = pspec
+            out_sharding = get_pspec_for_manual_mesh(new_axes)
             indexer = [py_slice(None)] * array.array.ndim
             indexer[axis_index] = index.array
             new_array = array.array.at[tuple(indexer)].get(out_sharding=out_sharding)
