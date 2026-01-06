@@ -57,6 +57,10 @@ class ShardedDataSource(Generic[T_co]):
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[T_co]:
         raise NotImplementedError
 
+    def shard_row_count(self, shard_name: str) -> int | None:
+        """Return the number of rows in a shard, or None if unknown."""
+        return None
+
     def __iter__(self):
         """
         Iterate over all data in the dataset, in order.
@@ -391,6 +395,129 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
                 case _:
                     raise ValueError(f"Unknown format {format}")
 
+class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
+    """
+    Dataset for image-text pairs from various file formats (JSON, JSONL, Parquet).
+
+    This data source reads image-text pairs where:
+    - image_key: points to the image data (can be path, URL, bytes, or HF dict format)
+    - text_key: points to the text description/caption
+
+    Supports HuggingFace-style image formats:
+    - {"bytes": <raw_bytes>}
+    - {"path": "path/to/image.jpg"}
+    - Direct path string or URL
+    """
+
+    def __init__(self, urls, image_key="image", text_key="text"):
+        super().__init__(urls)
+        self.image_key = image_key
+        self.text_key = text_key
+
+    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
+        url = self._shard_name_to_url_mapping[shard_name]
+        i = 0
+        with fsspec.open(url, "r", compression="infer") as f:
+            format = _sniff_format_for_dataset(url)
+            match format:
+                case ".jsonl":
+                    for line in f:
+                        if i >= row:
+                            data = json.loads(line)
+                            yield {
+                                "image": data[self.image_key],
+                                "text": data[self.text_key],
+                            }
+                        i += 1
+                case ".json":
+                    data = json.load(f)
+                    for doc in data[row:]:
+                        yield {
+                            "image": doc[self.image_key],
+                            "text": doc[self.text_key],
+                        }
+                case _:
+                    raise ValueError(f"Unknown format {format}")
+
+
+class ConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
+    """
+    Dataset for conversation-format image-text data (VLM training format).
+
+    This data source reads conversation data with interleaved images and text,
+    used for vision-language model training like LLaVA.
+
+    Expected data format:
+    {
+        "messages": [
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "..."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+        ],
+        "images": ["path/to/image.jpg"]  # or PIL Images, URLs, or bytes
+    }
+    """
+
+    def __init__(self, urls, messages_key="messages", images_key="images"):
+        super().__init__(urls)
+        self.messages_key = messages_key
+        self.images_key = images_key
+
+    def shard_row_count(self, shard_name: str) -> int | None:
+        """Return the number of rows in a shard."""
+        url = self._shard_name_to_url_mapping[shard_name]
+        format = _sniff_format_for_dataset(url)
+        if format == ".parquet":
+            with fsspec.open(url, "rb") as f:
+                parquet_file = pq.ParquetFile(f)
+                return parquet_file.metadata.num_rows
+        elif format == ".jsonl":
+            # Count lines in jsonl file
+            with fsspec.open(url, "r", compression="infer") as f:
+                return sum(1 for _ in f)
+        elif format == ".json":
+            with fsspec.open(url, "r", compression="infer") as f:
+                data = json.load(f)
+                return len(data)
+        return None
+
+    def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
+        url = self._shard_name_to_url_mapping[shard_name]
+        i = 0
+        format = _sniff_format_for_dataset(url)
+        if format == ".parquet":
+            # Handle parquet files
+            import pyarrow.parquet as pq
+
+            with fsspec.open(url, "rb") as f:
+                table = pq.read_table(f)
+                data = table.to_pydict()
+                num_rows = table.num_rows
+                for idx in range(row, num_rows):
+                    yield {
+                        "messages": data[self.messages_key][idx],
+                        "images": data.get(self.images_key, [[]])[idx],
+                    }
+        else:
+            with fsspec.open(url, "r", compression="infer") as f:
+                match format:
+                    case ".jsonl":
+                        for line in f:
+                            if i >= row:
+                                data = json.loads(line)
+                                yield {
+                                    "messages": data[self.messages_key],
+                                    "images": data.get(self.images_key, []),
+                                }
+                            i += 1
+                    case ".json":
+                        data = json.load(f)
+                        for doc in data[row:]:
+                            yield {
+                                "messages": doc[self.messages_key],
+                                "images": doc.get(self.images_key, []),
+                            }
+                    case _:
+                        raise ValueError(f"Unknown format {format}")
 
 def _sniff_format_for_dataset(url):
     good_formats = [".jsonl", ".txt", ".json", ".parquet"]

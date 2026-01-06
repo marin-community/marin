@@ -1,9 +1,12 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Type
+from typing import Callable, Dict, Optional, Tuple, Type
 
+import jax
+import jax.image
 import equinox as eqx
 import jax.numpy as jnp
 
@@ -15,14 +18,32 @@ from haliax.nn.scan import Stacked
 from haliax.state_dict import ModuleWithStateDictSerialization
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, ModelWithHfSerializationMixin
-from levanter.layers.attention import AttentionMask, dot_product_attention
+from levanter.layers.attention import AttentionBackend, AttentionMask, dot_product_attention
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
+logger = logging.getLogger(__name__)
 
 silence_transformer_nag()
 from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers import Siglip2VisionConfig as HfSiglip2VisionConfig  # noqa: E402
+
+
+@dataclass
+class Siglip2VisionModelOutput:
+    """
+    Output class for Siglip2 Vision Model, similar to HuggingFace's output format.
+
+    Args:
+        last_hidden_state: Final hidden states after post-layer normalization.
+            Shape: (batch, num_patches, embed)
+        hidden_states: Tuple of hidden states from each layer (including embeddings).
+            Each element has shape: (batch, num_patches, embed)
+            Only populated when output_hidden_states=True.
+    """
+
+    last_hidden_state: NamedArray
+    hidden_states: Optional[Tuple[NamedArray, ...]] = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +67,10 @@ class Siglip2VisionConfig:
         attention_dropout: The dropout ratio for the attention probabilities.
         initializer_range: The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
         gradient_checkpointing: Whether to use gradient checkpointing to save memory.
+        use_flash_attention: Whether to use flash attention.
+        attn_backend: Attention backend to use (if None, uses default).
+        flash_attention_block_size: Block size for flash attention.
+        inference: Whether to run in inference mode (disables dropout).
     """
 
     hidden_size: int = 768
@@ -60,6 +85,12 @@ class Siglip2VisionConfig:
     attention_dropout: float = 0.0
     initializer_range: float = 0.02
     gradient_checkpointing: bool = True
+
+    # Attention-related config
+    use_flash_attention: bool = False
+    attn_backend: Optional[AttentionBackend] = None
+    flash_attention_block_size: Optional[int] = None
+    inference: bool = True  # Whether to run in inference mode (disables dropout)
 
     # Reference checkpoint for loading pretrained models
     reference_checkpoint: Optional[str] = None
@@ -104,9 +135,10 @@ class Siglip2VisionConfig:
             elif hidden_act == "quick_gelu":
                 activation_fn = ActivationFunctionEnum.quick_gelu
             else:
-                # Default to gelu_new for unknown activations
+                logger.warning(f"Unknown activation function '{hidden_act}', defaulting to gelu_new")
                 activation_fn = ActivationFunctionEnum.gelu_new
         else:
+            logger.warning(f"Unexpected activation function type {type(hidden_act)}, defaulting to gelu_new")
             activation_fn = ActivationFunctionEnum.gelu_new
 
         # Calculate num_patches if not provided
@@ -277,10 +309,9 @@ class Siglip2MLP(eqx.Module):
         Returns:
             Output tensor with Embed axis
         """
-        k1, k2 = maybe_rng_split(key, 2)
-        x = self.fc1(x, key=k1)
+        x = self.fc1(x)
         x = self.act(x)
-        x = self.fc2(x, key=k2)
+        x = self.fc2(x)
         return x
 
 
@@ -302,6 +333,7 @@ class Siglip2Attention(eqx.Module):
     k_proj: hnn.Linear  # Key projection from Embed to (Heads, HeadSize)
     v_proj: hnn.Linear  # Value projection from Embed to (Heads, HeadSize)
     out_proj: hnn.Linear  # Output projection from (Heads, HeadSize) to Embed
+    inference: bool  # Whether to run in inference mode (disables dropout)
 
     @staticmethod
     def init(config: Siglip2VisionConfig, *, key) -> "Siglip2Attention":
@@ -328,7 +360,7 @@ class Siglip2Attention(eqx.Module):
         v_proj = hnn.Linear.init(In=Embed, Out=(Heads, HeadSize), key=k_v, use_bias=True, out_first=True)
         out_proj = hnn.Linear.init(In=(Heads, HeadSize), Out=Embed, key=k_out, use_bias=True, out_first=True)
 
-        return Siglip2Attention(config, q_proj, k_proj, v_proj, out_proj)
+        return Siglip2Attention(config, q_proj, k_proj, v_proj, out_proj, config.inference)
 
     @named_call
     def __call__(
@@ -349,81 +381,51 @@ class Siglip2Attention(eqx.Module):
         Returns:
             Output tensor with shape (..., position, embed)
         """
-        k_q, k_k, k_v, k_out, k_drop = maybe_rng_split(key, 5)
+        k_drop = maybe_rng_split(key, 1)[0] if key is not None else None
 
-        # Find the sequence axis (the one that's not Embed and not a common batch axis)
-        # This handles cases where the axis might be named "num_patches" or "position"
+        # Find the sequence axis (num_patches or position)
+        seq_axis_name = None
         embed_axis = self.config.Embed
-        common_batch_axes = {"batch", "Batch"}
-        sequence_axis = None
-
-        # First, check if "position" axis already exists
-        for axis in x.axes:
-            if axis.name == "position":
-                sequence_axis = axis
+        for ax in x.axes:
+            if ax.name in ("num_patches", "position"):
+                seq_axis_name = ax.name
                 break
-
-        # If not, look for sequence-like axes (num_patches, seq_len, etc.)
-        if sequence_axis is None:
-            sequence_like_names = {"num_patches", "seq_len", "seq", "length"}
-            for axis in x.axes:
-                if axis != embed_axis and axis.name not in common_batch_axes:
-                    if axis.name in sequence_like_names:
-                        sequence_axis = axis
-                        break
-
-        # If still not found, find the first non-Embed, non-batch axis
-        if sequence_axis is None:
-            for axis in x.axes:
-                if axis != embed_axis and axis.name not in common_batch_axes:
-                    sequence_axis = axis
+        if seq_axis_name is None:
+            for ax in x.axes:
+                if ax != embed_axis and ax.name not in ("batch", "Batch"):
+                    seq_axis_name = ax.name
                     break
-
-        if sequence_axis is None:
+        if seq_axis_name is None:
             raise ValueError(f"Could not find sequence axis in input {x.axes}")
 
-        # Rename sequence axis to "position" for consistent processing
-        # We'll rename it back at the end
-        original_seq_name = sequence_axis.name
-        if original_seq_name != "position":
-            x = x.rename({original_seq_name: "position"})
-
         # Project to Q, K, V
-        # Shape: (..., position, embed) -> (..., position, heads, head_size)
-        q = self.q_proj(x, key=k_q).rearrange((..., "heads", "position", "head_size"))
-        k = self.k_proj(x, key=k_k).rearrange((..., "heads", "position", "head_size"))
-        v = self.v_proj(x, key=k_v).rearrange((..., "heads", "position", "head_size"))
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
 
-        # Rename k and v's position axis to avoid conflicts
-        k = k.rename({"position": "key_position"})
-        v = v.rename({"position": "key_position"})
+        # Rename k and v's sequence axis to key_position
+        k = k.rename({seq_axis_name: "key_position"})
+        v = v.rename({seq_axis_name: "key_position"})
 
         # Compute attention
-        # Siglip2 uses standard scaled dot-product attention
         attn_output = dot_product_attention(
-            "position",
+            seq_axis_name,
             "key_position",
             "head_size",
             q,
             k,
             v,
             mask=mask,
-            inference=False,  # Siglip2VisionConfig doesn't have inference mode
-            use_flash=self.config.gradient_checkpointing,  # Use flash attention if gradient checkpointing enabled
+            inference=self.inference,
+            use_flash=self.config.use_flash_attention,
+            attn_backend=self.config.attn_backend,
+            flash_block_size=self.config.flash_attention_block_size,
             dropout=self.config.attention_dropout,
             prng=k_drop,
+            attention_dtype=x.dtype,
         )
 
-        # Project back to embedding dimension
-        # Shape: (..., position, heads, head_size) -> (..., position, embed)
-        attn_output = attn_output.astype(x.dtype)
-        output = self.out_proj(attn_output, key=k_out)
-
-        # Rename position axis back to original name if needed
-        if original_seq_name != "position":
-            output = output.rename({"position": original_seq_name})
-
-        return output
+        return self.out_proj(attn_output.astype(x.dtype))
 
 
 # =====================
@@ -461,7 +463,7 @@ class Siglip2EncoderLayer(eqx.Module):
         """
         k_attn, k_mlp = maybe_rng_split(key, 2)
 
-        # Initialize layer norms (no bias in Siglip2)
+        # Initialize layer norms
         layer_norm1 = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_eps, use_bias=True)
         layer_norm2 = hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_eps, use_bias=True)
 
@@ -571,19 +573,14 @@ class Siglip2VisionEmbeddings(eqx.Module):
                 where patch_input_dim = num_channels * patch_size * patch_size
             spatial_shapes: Optional array of shape (batch, 2) containing [height, width] in patches
                 for each image. If provided, position embeddings will be interpolated to match.
-            key: Optional PRNGKey
+            key: Optional PRNGKey (unused, kept for API compatibility)
 
         Returns:
             Embeddings with position information added
         """
-        import jax.numpy as jnp
-        import jax.image
-
-        k_patch, k_pos = maybe_rng_split(key, 2)
-
         # Apply patch embeddings to patchified pixels
         # Shape: (..., num_patches, patch_input_dim) -> (..., num_patches, hidden_size)
-        patch_embeds = self.patch_embedding(pixel_values, key=k_patch)
+        patch_embeds = self.patch_embedding(pixel_values)
 
         # Get position embeddings
         num_patches_axis = pixel_values.resolve_axis("num_patches")
@@ -644,12 +641,9 @@ class Siglip2VisionEmbeddings(eqx.Module):
                 repeated_padding = jnp.repeat(first_embedding, padding, axis=0)  # Shape: (padding, embed_dim)
                 pos_embeds_flat = jnp.concatenate([pos_embeds_flat, repeated_padding], axis=0)
             elif actual_num_patches_interp > expected_num_patches:
-                # Truncate to match expected size (shouldn't happen normally)
-                # pos_embeds_flat = pos_embeds_flat[:expected_num_patches]
                 raise ValueError(
-                    f"Actual number of patches {actual_num_patches_interp} does not match expected number of patches {expected_num_patches}"
+                    f"Actual number of patches {actual_num_patches_interp} exceeds expected {expected_num_patches}"
                 )
-            # assert actual_num_patches_interp == expected_num_patches, f"Actual number of patches {actual_num_patches_interp} does not match expected number of patches {expected_num_patches}"
 
             # Create NamedArray with correct axis
             pos_embeds = hax.named(pos_embeds_flat, (num_patches_axis, self.config.Embed))
@@ -724,9 +718,10 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
         pixel_values: NamedArray,
         mask: Optional[AttentionMask] = None,
         spatial_shapes=None,
+        output_hidden_states: bool = False,
         *,
         key=None,
-    ) -> NamedArray:
+    ) -> Siglip2VisionModelOutput:
         """
         Forward pass through vision transformer.
 
@@ -734,10 +729,17 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
             pixel_values: Patchified pixel values with shape (..., num_patches, patch_input_dim)
             mask: Optional attention mask
             spatial_shapes: Optional array of shape (batch, 2) containing [height, width] in patches
+            output_hidden_states: Whether to return hidden states from all layers.
+                If True, returns all layer hidden states.
+                If False, only returns the last hidden state (more efficient).
             key: PRNGKey for dropout
 
         Returns:
-            Encoded representations with shape (..., num_patches, embed)
+            Siglip2VisionModelOutput containing:
+                - last_hidden_state: Final encoded representations after post_layernorm
+                - hidden_states: Tuple of hidden states. When output_hidden_states=True, contains all layers.
+                    When output_hidden_states=False, contains only the last layer output (before post_layernorm)
+                    to support vision_feature_layer=-1 without collecting all intermediate states.
         """
         k_embed, k_layers = maybe_rng_split(key, 2)
 
@@ -746,12 +748,34 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
 
         # Pass through encoder layers
         keys = maybe_rng_split(k_layers, self.config.num_hidden_layers) if k_layers is not None else None
-        hidden_states = self.layers.fold(hidden_states, mask, key=keys)
+
+        if output_hidden_states:
+            # Use scan_via to collect hidden states from each layer
+            all_hidden_states = [hidden_states]  # Start with embeddings
+
+            def apply_layer(block, carry, mask_arg, key_arg):
+                """Apply a single layer and return (new_carry, output_to_collect)"""
+                new_carry = block(carry, mask_arg, key=key_arg)
+                return new_carry, new_carry
+
+            # Use scan_via to apply each layer and collect outputs
+            hidden_states, stacked_layer_outputs = self.layers.scan_via(apply_layer)(hidden_states, mask, keys)
+
+            # Unbind the stacked outputs to get a list of hidden states
+            layer_outputs_list = hax.unbind(stacked_layer_outputs, self.config.Layers)
+            all_hidden_states.extend(layer_outputs_list)
+            result_hidden_states: Optional[Tuple[NamedArray, ...]] = tuple(all_hidden_states)
+        else:
+            # Use fold for efficient processing when we don't need intermediate states
+            hidden_states = self.layers.fold(hidden_states, mask, key=keys)
+            # Still provide the last layer output (before post_layernorm) for vision_feature_layer=-1
+            # This allows callers to use hidden_states[-1] without requiring output_hidden_states=True
+            result_hidden_states = (hidden_states,)
 
         # Apply post-layer normalization
-        hidden_states = self.post_layernorm(hidden_states)
+        last_hidden_state = self.post_layernorm(hidden_states)
 
-        return hidden_states
+        return Siglip2VisionModelOutput(last_hidden_state=last_hidden_state, hidden_states=result_hidden_states)
 
 
 # =====================
@@ -775,6 +799,7 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
     out_proj: hnn.Linear  # Output projection
     layernorm: hnn.LayerNorm
     mlp: Siglip2MLP
+    inference: bool  # Whether to run in inference mode (disables dropout)
 
     @staticmethod
     def init(config: Siglip2VisionConfig, *, key) -> "Siglip2MultiheadAttentionPoolingHead":
@@ -844,6 +869,7 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             out_proj=out_proj,
             layernorm=layernorm,
             mlp=mlp,
+            inference=config.inference,
         )
 
     @named_call
@@ -865,30 +891,19 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
         Returns:
             Pooled representation with shape (..., embed)
         """
-        k_q, k_k, k_v, k_out, k_mlp = maybe_rng_split(key, 5)
-
-        # Expand probe for batch dimensions
-        # probe: (probe_seq=1, embed) -> broadcast with hidden_states batch dims
-        probe = self.probe
+        k_drop = maybe_rng_split(key, 1)[0] if key is not None else None
 
         # Project probe to Q
-        q = self.q_proj(probe, key=k_q)  # (probe_seq, heads, head_size)
+        q = self.q_proj(self.probe)  # (probe_seq, heads, head_size)
 
         # Project hidden states to K, V
-        k = self.k_proj(hidden_states, key=k_k)  # (..., num_patches, heads, head_size)
-        v = self.v_proj(hidden_states, key=k_v)  # (..., num_patches, heads, head_size)
+        k = self.k_proj(hidden_states)  # (..., num_patches, heads, head_size)
+        v = self.v_proj(hidden_states)  # (..., num_patches, heads, head_size)
 
         # Broadcast q to match batch dimensions of k and v
-        # q needs to have the same batch dims as k/v for attention
-        # Extract batch axes from k (all axes except num_patches, heads, head_size)
         batch_axes = [ax for ax in k.axes if ax.name not in ["num_patches", "heads", "head_size"]]
         for ax in batch_axes:
             q = hax.broadcast_to(q, (ax,) + q.axes)
-
-        # Rearrange for attention: put heads first
-        q = q.rearrange((..., "heads", "probe_seq", "head_size"))
-        k = k.rearrange((..., "heads", "num_patches", "head_size"))
-        v = v.rearrange((..., "heads", "num_patches", "head_size"))
 
         # Rename for attention
         k = k.rename({"num_patches": "key_position"})
@@ -903,17 +918,18 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             k,
             v,
             mask=mask,
-            inference=False,
+            inference=self.inference,
+            use_flash=self.config.use_flash_attention,
+            flash_block_size=self.config.flash_attention_block_size,
             dropout=self.config.attention_dropout,
-            prng=key,
+            prng=k_drop,
         )
 
         # Project back to embed dimension
-        attn_output = attn_output.astype(hidden_states.dtype)
-        attn_output = self.out_proj(attn_output, key=k_out)  # (..., probe_seq, embed)
+        attn_output = self.out_proj(attn_output.astype(hidden_states.dtype))  # (..., probe_seq, embed)
 
         # Residual connection with probe (broadcast probe to batch dims)
-        hidden_states = probe + attn_output
+        hidden_states = self.probe + attn_output
 
         # Squeeze probe_seq dimension to get (..., embed)
         ProbeSeq = hidden_states.resolve_axis("probe_seq")
@@ -922,7 +938,7 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
         # Layer norm + MLP with residual
         residual = hidden_states
         hidden_states = self.layernorm(hidden_states)
-        hidden_states = residual + self.mlp(hidden_states, key=k_mlp)
+        hidden_states = residual + self.mlp(hidden_states)
 
         return hidden_states
 
@@ -1060,6 +1076,7 @@ class Siglip2MultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             out_proj=out_proj,
             layernorm=layernorm,
             mlp=mlp,
+            inference=self.inference,
         )
 
 
@@ -1114,9 +1131,10 @@ class Siglip2VisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializat
         pixel_values: NamedArray,
         mask: Optional[AttentionMask] = None,
         spatial_shapes=None,
+        output_hidden_states: bool = False,
         *,
         key=None,
-    ) -> NamedArray:
+    ) -> Siglip2VisionModelOutput:
         """
         Forward pass through vision model.
 
@@ -1124,12 +1142,15 @@ class Siglip2VisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializat
             pixel_values: Patchified pixel values with shape (..., num_patches, patch_input_dim)
             mask: Optional attention mask
             spatial_shapes: Optional array of shape (batch, 2) containing [height, width] in patches
+            output_hidden_states: Whether to return hidden states from all layers
             key: PRNGKey for dropout
 
         Returns:
-            Encoded representations with shape (..., num_patches, embed)
+            Siglip2VisionModelOutput containing last_hidden_state and optionally hidden_states
         """
-        return self.vision_model(pixel_values, mask=mask, spatial_shapes=spatial_shapes, key=key)
+        return self.vision_model(
+            pixel_values, mask=mask, spatial_shapes=spatial_shapes, output_hidden_states=output_hidden_states, key=key
+        )
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         """Map Levanter field names to HuggingFace state dict keys."""

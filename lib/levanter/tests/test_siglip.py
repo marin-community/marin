@@ -22,6 +22,10 @@ jax.config.update("jax_default_matmul_precision", "float32")
 from levanter.models.siglip import SiglipVisionConfig  # noqa: E402
 from levanter.utils.activation import ActivationFunctionEnum  # noqa: E402
 from test_utils import use_test_mesh  # noqa: E402
+from jax.sharding import Mesh  # noqa: E402
+from haliax.partitioning import ResourceAxis  # noqa: E402
+import numpy as np  # noqa: E402
+from test_data_utils import get_single_image  # noqa: E402
 
 # Define skip_if_no_torch locally to avoid conftest dependencies
 try:
@@ -311,8 +315,6 @@ def test_siglip_vision_frozen_dataclass():
     config = SiglipVisionConfig()
 
     # Attempt to modify should raise an error
-    import pytest
-
     with pytest.raises(Exception):  # FrozenInstanceError in Python 3.10+
         config.hidden_size = 1024
 
@@ -344,18 +346,16 @@ def test_siglip_vision_head_size_calculation():
 
 def test_siglip_mlp_initialization():
     """Test that SiglipMLP can be initialized correctly."""
-    from haliax import Axis
-    from jax import random
     from levanter.models.siglip import SiglipMLP
 
-    Embed = Axis("embed", 64)
-    Mlp = Axis("mlp", 256)
+    Embed = hax.Axis("embed", 64)
+    Mlp = hax.Axis("mlp", 256)
 
     mlp = SiglipMLP.init(
         Embed=Embed,
         Mlp=Mlp,
         activation_fn=ActivationFunctionEnum.gelu_new,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Check that layers are initialized
@@ -372,28 +372,24 @@ def test_siglip_mlp_initialization():
 
 def test_siglip_mlp_forward():
     """Test SiglipMLP forward pass."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipMLP
 
-    Embed = Axis("embed", 64)
-    Mlp = Axis("mlp", 256)
-    Pos = Axis("position", 16)
+    Embed = hax.Axis("embed", 64)
+    Mlp = hax.Axis("mlp", 256)
+    Pos = hax.Axis("position", 16)
 
     mlp = SiglipMLP.init(
         Embed=Embed,
         Mlp=Mlp,
         activation_fn=ActivationFunctionEnum.gelu_new,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Create input
-    x = hax.random.normal(random.PRNGKey(0), (Pos, Embed))
+    x = hax.random.normal(jax.random.PRNGKey(0), (Pos, Embed))
 
     # Forward pass
-    output = mlp(x, key=random.PRNGKey(1))
+    output = mlp(x, key=jax.random.PRNGKey(1))
 
     # Check output shape
     assert output.axes == (Pos, Embed)
@@ -402,15 +398,11 @@ def test_siglip_mlp_forward():
 
 def test_siglip_mlp_different_activations():
     """Test SiglipMLP with different activation functions."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipMLP
 
-    Embed = Axis("embed", 32)
-    Mlp = Axis("mlp", 128)
-    Pos = Axis("position", 8)
+    Embed = hax.Axis("embed", 32)
+    Mlp = hax.Axis("mlp", 128)
+    Pos = hax.Axis("position", 8)
 
     activations = [
         ActivationFunctionEnum.gelu,
@@ -424,11 +416,11 @@ def test_siglip_mlp_different_activations():
             Embed=Embed,
             Mlp=Mlp,
             activation_fn=activation,
-            key=random.PRNGKey(42),
+            key=jax.random.PRNGKey(42),
         )
 
-        x = hax.random.normal(random.PRNGKey(0), (Pos, Embed))
-        output = mlp(x, key=random.PRNGKey(1))
+        x = hax.random.normal(jax.random.PRNGKey(0), (Pos, Embed))
+        output = mlp(x, key=jax.random.PRNGKey(1))
 
         assert output.axes == (Pos, Embed)
         assert not jnp.any(jnp.isnan(output.array))
@@ -441,7 +433,6 @@ def test_siglip_mlp_different_activations():
 
 def test_siglip_attention_initialization():
     """Test that SiglipAttention can be initialized correctly."""
-    from jax import random
     from levanter.models.siglip import SiglipAttention
 
     config = SiglipVisionConfig(
@@ -451,7 +442,7 @@ def test_siglip_attention_initialization():
 
     attention = SiglipAttention.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Check that components are initialized
@@ -474,10 +465,6 @@ def test_siglip_attention_initialization():
 
 def test_siglip_attention_forward():
     """Test SiglipAttention forward pass."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipAttention
 
     config = SiglipVisionConfig(
@@ -488,18 +475,18 @@ def test_siglip_attention_forward():
 
     attention = SiglipAttention.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Create input: (batch, position, embed)
-    Batch = Axis("batch", 2)
-    Position = Axis("position", 16)
+    Batch = hax.Axis("batch", 2)
+    Position = hax.Axis("position", 16)
 
-    x = hax.random.normal(random.PRNGKey(0), (Batch, Position, config.Embed))
+    x = hax.random.normal(jax.random.PRNGKey(0), (Batch, Position, config.Embed))
 
     # Forward pass with test mesh
     with use_test_mesh(tensor_parallelism=1):
-        output = attention(x, key=random.PRNGKey(1))
+        output = attention(x, key=jax.random.PRNGKey(1))
 
     # Check output shape: should be same as input
     assert output.axes == (Batch, Position, config.Embed)
@@ -508,10 +495,6 @@ def test_siglip_attention_forward():
 
 def test_siglip_attention_no_batch():
     """Test SiglipAttention without batch dimension."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipAttention
 
     config = SiglipVisionConfig(
@@ -522,17 +505,17 @@ def test_siglip_attention_no_batch():
 
     attention = SiglipAttention.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Create input without batch dimension
-    Position = Axis("position", 16)
+    Position = hax.Axis("position", 16)
 
-    x = hax.random.normal(random.PRNGKey(0), (Position, config.Embed))
+    x = hax.random.normal(jax.random.PRNGKey(0), (Position, config.Embed))
 
     # Forward pass with test mesh
     with use_test_mesh(tensor_parallelism=1):
-        output = attention(x, key=random.PRNGKey(1))
+        output = attention(x, key=jax.random.PRNGKey(1))
 
     # Check output shape
     assert output.axes == (Position, config.Embed)
@@ -541,10 +524,6 @@ def test_siglip_attention_no_batch():
 
 def test_siglip_attention_num_patches_axis():
     """Test SiglipAttention with num_patches axis name (instead of position)."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipAttention
 
     config = SiglipVisionConfig(
@@ -555,17 +534,17 @@ def test_siglip_attention_num_patches_axis():
 
     attention = SiglipAttention.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Create input with num_patches axis
-    NumPatches = Axis("num_patches", 196)
+    NumPatches = hax.Axis("num_patches", 196)
 
-    x = hax.random.normal(random.PRNGKey(0), (NumPatches, config.Embed))
+    x = hax.random.normal(jax.random.PRNGKey(0), (NumPatches, config.Embed))
 
     # Forward pass with test mesh
     with use_test_mesh(tensor_parallelism=1):
-        output = attention(x, key=random.PRNGKey(1))
+        output = attention(x, key=jax.random.PRNGKey(1))
 
     # Check output shape - should have num_patches axis
     assert output.axes == (NumPatches, config.Embed)
@@ -574,10 +553,6 @@ def test_siglip_attention_num_patches_axis():
 
 def test_siglip_attention_different_seq_lengths():
     """Test SiglipAttention with different sequence lengths."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipAttention
 
     config = SiglipVisionConfig(
@@ -588,15 +563,15 @@ def test_siglip_attention_different_seq_lengths():
 
     attention = SiglipAttention.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Test with different sequence lengths
     with use_test_mesh(tensor_parallelism=1):
         for seq_len in [49, 196, 256, 576]:  # Different image patch counts
-            NumPatches = Axis("num_patches", seq_len)
-            x = hax.random.normal(random.PRNGKey(0), (NumPatches, config.Embed))
-            output = attention(x, key=random.PRNGKey(1))
+            NumPatches = hax.Axis("num_patches", seq_len)
+            x = hax.random.normal(jax.random.PRNGKey(0), (NumPatches, config.Embed))
+            output = attention(x, key=jax.random.PRNGKey(1))
 
             assert output.axes == (NumPatches, config.Embed)
             assert not jnp.any(jnp.isnan(output.array))
@@ -609,7 +584,6 @@ def test_siglip_attention_different_seq_lengths():
 
 def test_siglip_encoder_layer_initialization():
     """Test that SiglipEncoderLayer can be initialized correctly."""
-    from jax import random
     from levanter.models.siglip import SiglipEncoderLayer
 
     config = SiglipVisionConfig(
@@ -620,7 +594,7 @@ def test_siglip_encoder_layer_initialization():
 
     layer = SiglipEncoderLayer.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Check that components are initialized
@@ -633,10 +607,6 @@ def test_siglip_encoder_layer_initialization():
 
 def test_siglip_encoder_layer_forward():
     """Test SiglipEncoderLayer forward pass."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipEncoderLayer
 
     config = SiglipVisionConfig(
@@ -648,18 +618,18 @@ def test_siglip_encoder_layer_forward():
 
     layer = SiglipEncoderLayer.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Create input: (batch, num_patches, embed)
-    Batch = Axis("batch", 2)
-    NumPatches = Axis("num_patches", 196)
+    Batch = hax.Axis("batch", 2)
+    NumPatches = hax.Axis("num_patches", 196)
 
-    x = hax.random.normal(random.PRNGKey(0), (Batch, NumPatches, config.Embed))
+    x = hax.random.normal(jax.random.PRNGKey(0), (Batch, NumPatches, config.Embed))
 
     # Forward pass with test mesh
     with use_test_mesh(tensor_parallelism=1):
-        output = layer(x, key=random.PRNGKey(1))
+        output = layer(x, key=jax.random.PRNGKey(1))
 
     # Check output shape: should be same as input
     assert output.axes == (Batch, NumPatches, config.Embed)
@@ -668,10 +638,6 @@ def test_siglip_encoder_layer_forward():
 
 def test_siglip_encoder_layer_residual_connections():
     """Test that residual connections are working correctly."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipEncoderLayer
 
     config = SiglipVisionConfig(
@@ -683,15 +649,15 @@ def test_siglip_encoder_layer_residual_connections():
 
     layer = SiglipEncoderLayer.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
-    NumPatches = Axis("num_patches", 196)
-    x = hax.random.normal(random.PRNGKey(0), (NumPatches, config.Embed))
+    NumPatches = hax.Axis("num_patches", 196)
+    x = hax.random.normal(jax.random.PRNGKey(0), (NumPatches, config.Embed))
 
     # Forward pass with test mesh
     with use_test_mesh(tensor_parallelism=1):
-        output = layer(x, key=random.PRNGKey(1))
+        output = layer(x, key=jax.random.PRNGKey(1))
 
     # The output should be different from input (due to transformations)
     # but should have contributions from the input (due to residual connections)
@@ -701,10 +667,6 @@ def test_siglip_encoder_layer_residual_connections():
 
 def test_siglip_encoder_layer_different_configs():
     """Test SiglipEncoderLayer with different configurations."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipEncoderLayer
 
     configs = [
@@ -719,12 +681,12 @@ def test_siglip_encoder_layer_different_configs():
 
             layer = SiglipEncoderLayer.init(
                 config=config,
-                key=random.PRNGKey(42),
+                key=jax.random.PRNGKey(42),
             )
 
-            NumPatches = Axis("num_patches", 196)
-            x = hax.random.normal(random.PRNGKey(0), (NumPatches, config.Embed))
-            output = layer(x, key=random.PRNGKey(1))
+            NumPatches = hax.Axis("num_patches", 196)
+            x = hax.random.normal(jax.random.PRNGKey(0), (NumPatches, config.Embed))
+            output = layer(x, key=jax.random.PRNGKey(1))
 
             assert output.axes == (NumPatches, config.Embed)
             assert not jnp.any(jnp.isnan(output.array))
@@ -737,7 +699,6 @@ def test_siglip_encoder_layer_different_configs():
 
 def test_siglip_vision_embeddings_initialization():
     """Test that SiglipVisionEmbeddings can be initialized correctly."""
-    from jax import random
     from levanter.models.siglip import SiglipVisionEmbeddings
 
     config = SiglipVisionConfig(
@@ -749,7 +710,7 @@ def test_siglip_vision_embeddings_initialization():
 
     embeddings = SiglipVisionEmbeddings.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Check that components are initialized
@@ -760,10 +721,6 @@ def test_siglip_vision_embeddings_initialization():
 
 def test_siglip_vision_embeddings_forward():
     """Test SiglipVisionEmbeddings forward pass with full images."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipVisionEmbeddings
 
     config = SiglipVisionConfig(
@@ -775,20 +732,20 @@ def test_siglip_vision_embeddings_forward():
 
     embeddings = SiglipVisionEmbeddings.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Create input: full images (not patchified)
     # Shape: (batch, channels, height, width)
-    Batch = Axis("batch", 2)
+    Batch = hax.Axis("batch", 2)
     Channels = config.Channels
-    Height = Axis("height", 224)
-    Width = Axis("width", 224)
+    Height = hax.Axis("height", 224)
+    Width = hax.Axis("width", 224)
 
-    pixel_values = hax.random.normal(random.PRNGKey(0), (Batch, Channels, Height, Width))
+    pixel_values = hax.random.normal(jax.random.PRNGKey(0), (Batch, Channels, Height, Width))
 
     # Forward pass
-    output = embeddings(pixel_values, key=random.PRNGKey(1))
+    output = embeddings(pixel_values, key=jax.random.PRNGKey(1))
 
     # Check output shape: should have (batch, num_patches, embed)
     expected_num_patches = (224 // 16) ** 2  # 196
@@ -802,10 +759,6 @@ def test_siglip_vision_embeddings_forward():
 
 def test_siglip_vision_embeddings_no_batch():
     """Test SiglipVisionEmbeddings without batch dimension."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipVisionEmbeddings
 
     config = SiglipVisionConfig(
@@ -817,19 +770,19 @@ def test_siglip_vision_embeddings_no_batch():
 
     embeddings = SiglipVisionEmbeddings.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Create input without batch dimension
     # Shape: (channels, height, width)
     Channels = config.Channels
-    Height = Axis("height", 224)
-    Width = Axis("width", 224)
+    Height = hax.Axis("height", 224)
+    Width = hax.Axis("width", 224)
 
-    pixel_values = hax.random.normal(random.PRNGKey(0), (Channels, Height, Width))
+    pixel_values = hax.random.normal(jax.random.PRNGKey(0), (Channels, Height, Width))
 
     # Forward pass
-    output = embeddings(pixel_values, key=random.PRNGKey(1))
+    output = embeddings(pixel_values, key=jax.random.PRNGKey(1))
 
     # Check output shape
     expected_num_patches = (224 // 16) ** 2
@@ -841,10 +794,6 @@ def test_siglip_vision_embeddings_no_batch():
 
 def test_siglip_vision_embeddings_different_image_sizes():
     """Test SiglipVisionEmbeddings with different image sizes."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipVisionEmbeddings
 
     # Test with different image sizes
@@ -864,18 +813,18 @@ def test_siglip_vision_embeddings_different_image_sizes():
 
         embeddings = SiglipVisionEmbeddings.init(
             config=config,
-            key=random.PRNGKey(42),
+            key=jax.random.PRNGKey(42),
         )
 
         # Create input
         Channels = config.Channels
-        Height = Axis("height", image_size)
-        Width = Axis("width", image_size)
+        Height = hax.Axis("height", image_size)
+        Width = hax.Axis("width", image_size)
 
-        pixel_values = hax.random.normal(random.PRNGKey(0), (Channels, Height, Width))
+        pixel_values = hax.random.normal(jax.random.PRNGKey(0), (Channels, Height, Width))
 
         # Forward pass
-        output = embeddings(pixel_values, key=random.PRNGKey(1))
+        output = embeddings(pixel_values, key=jax.random.PRNGKey(1))
 
         # Check number of patches
         assert output.axes[0].name == "num_patches"
@@ -890,7 +839,6 @@ def test_siglip_vision_embeddings_different_image_sizes():
 
 def test_siglip_vision_transformer_initialization():
     """Test that SiglipVisionTransformer can be initialized correctly."""
-    from jax import random
     from levanter.models.siglip import SiglipVisionTransformer
 
     config = SiglipVisionConfig(
@@ -902,7 +850,7 @@ def test_siglip_vision_transformer_initialization():
 
     transformer = SiglipVisionTransformer.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Check that components are initialized
@@ -914,10 +862,6 @@ def test_siglip_vision_transformer_initialization():
 
 def test_siglip_vision_transformer_forward():
     """Test SiglipVisionTransformer forward pass."""
-    from haliax import Axis
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
     from levanter.models.siglip import SiglipVisionTransformer
 
     config = SiglipVisionConfig(
@@ -931,29 +875,29 @@ def test_siglip_vision_transformer_forward():
 
     transformer = SiglipVisionTransformer.init(
         config=config,
-        key=random.PRNGKey(42),
+        key=jax.random.PRNGKey(42),
     )
 
     # Create input: full images
-    Batch = Axis("batch", 2)
+    Batch = hax.Axis("batch", 2)
     Channels = config.Channels
-    Height = Axis("height", 224)
-    Width = Axis("width", 224)
+    Height = hax.Axis("height", 224)
+    Width = hax.Axis("width", 224)
 
-    pixel_values = hax.random.normal(random.PRNGKey(0), (Batch, Channels, Height, Width))
+    pixel_values = hax.random.normal(jax.random.PRNGKey(0), (Batch, Channels, Height, Width))
 
     # Forward pass with test mesh
     with use_test_mesh(tensor_parallelism=1):
-        output = transformer(pixel_values, key=random.PRNGKey(1))
+        output = transformer(pixel_values, key=jax.random.PRNGKey(1))
 
     # Check output shape
     expected_num_patches = (224 // 16) ** 2
-    assert len(output.axes) == 3
-    assert output.axes[0] == Batch
-    assert output.axes[1].name == "num_patches"
-    assert output.axes[1].size == expected_num_patches
-    assert output.axes[2] == config.Embed
-    assert not jnp.any(jnp.isnan(output.array))
+    assert len(output.last_hidden_state.axes) == 3
+    assert output.last_hidden_state.axes[0] == Batch
+    assert output.last_hidden_state.axes[1].name == "num_patches"
+    assert output.last_hidden_state.axes[1].size == expected_num_patches
+    assert output.last_hidden_state.axes[2] == config.Embed
+    assert not jnp.any(jnp.isnan(output.last_hidden_state.array))
 
 
 # =====================
@@ -966,15 +910,10 @@ def test_siglip_vision_embeddings_vs_hf():
     """Compare SiglipVisionEmbeddings with HuggingFace by loading weights."""
     import torch
     from transformers import SiglipVisionModel as HfSiglipVisionModel
+    from transformers import SiglipVisionConfig as HfSiglipVisionConfig
     import tempfile
-    import numpy as np
-    from levanter.models.siglip import SiglipVisionConfig
     from haliax.state_dict import from_torch_compatible_state_dict
     import equinox as eqx
-    from jax.random import PRNGKey
-
-    # Create a small HF config for testing
-    from transformers import SiglipVisionConfig as HfSiglipVisionConfig
 
     hf_config = HfSiglipVisionConfig(
         hidden_size=256,
@@ -997,62 +936,93 @@ def test_siglip_vision_embeddings_vs_hf():
     batch_size = 2
     pixel_values_torch = torch.randn(batch_size, 3, 224, 224)
 
-    # Run HF model
+    # Run HF model with hidden states
     with torch.no_grad():
-        hf_output = hf_model(pixel_values_torch)
-        hf_output_np = hf_output.last_hidden_state.detach().cpu().numpy()
+        hf_output = hf_model(pixel_values_torch, output_hidden_states=True)
+        hf_last_hidden_np = hf_output.last_hidden_state.detach().cpu().numpy()
+        hf_hidden_states_np = [h.detach().cpu().numpy() for h in hf_output.hidden_states]
 
     # Load weights into Levanter model
     lev_config = SiglipVisionConfig.from_hf_config(hf_config)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # Use single-device mesh to avoid sharding issues with small batch sizes
+    single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
+
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(mesh=single_device_mesh):
         hf_model.save_pretrained(f"{tmpdir}/hf_model")
 
         from levanter.models.siglip import SiglipVisionModel
 
         Vocab = hax.Axis("vocab", 1)
-        model_template = eqx.filter_eval_shape(SiglipVisionModel.init, Vocab, lev_config, key=PRNGKey(0))
+        model_template = eqx.filter_eval_shape(SiglipVisionModel.init, Vocab, lev_config, key=jax.random.PRNGKey(0))
 
         converter = lev_config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/hf_model")
         state_dict = converter.load_state_dict(f"{tmpdir}/hf_model")
         lev_model = from_torch_compatible_state_dict(model_template, state_dict)
 
-    # Convert input to Levanter format
-    Batch = hax.Axis("batch", batch_size)
-    Channels = hax.Axis("channels", 3)
-    Height = hax.Axis("height", 224)
-    Width = hax.Axis("width", 224)
+        # Convert input to Levanter format
+        Batch = hax.Axis("batch", batch_size)
+        Channels = hax.Axis("channels", 3)
+        Height = hax.Axis("height", 224)
+        Width = hax.Axis("width", 224)
 
-    pixel_values_jax = hax.named(
-        jnp.array(pixel_values_torch.numpy(), dtype=jnp.float32), (Batch, Channels, Height, Width)
-    )
+        pixel_values_jax = hax.named(
+            jnp.array(pixel_values_torch.numpy(), dtype=jnp.float32), (Batch, Channels, Height, Width)
+        )
 
-    # Run Levanter model
-    with use_test_mesh(tensor_parallelism=1):
-        lev_output = lev_model(pixel_values_jax, key=PRNGKey(1))
+        # Run Levanter model with hidden states
+        lev_output = lev_model(pixel_values_jax, output_hidden_states=True, key=jax.random.PRNGKey(1))
 
-    lev_output_np = np.array(lev_output.array)
+    lev_last_hidden_np = np.array(lev_output.last_hidden_state.array)
+    lev_hidden_states_np = [np.array(h.array) for h in lev_output.hidden_states]
 
-    # Compare outputs
-    print("\n=== Output Comparison ===")
-    print(f"HF output shape: {hf_output_np.shape}")
-    print(f"Levanter output shape: {lev_output_np.shape}")
-    print(f"HF output range: [{hf_output_np.min():.3f}, {hf_output_np.max():.3f}]")
-    print(f"Levanter output range: [{lev_output_np.min():.3f}, {lev_output_np.max():.3f}]")
+    # Compare last hidden state
+    print("\n=== Last Hidden State Comparison ===")
+    print(f"HF output shape: {hf_last_hidden_np.shape}")
+    print(f"Levanter output shape: {lev_last_hidden_np.shape}")
+    print(f"HF output range: [{hf_last_hidden_np.min():.3f}, {hf_last_hidden_np.max():.3f}]")
+    print(f"Levanter output range: [{lev_last_hidden_np.min():.3f}, {lev_last_hidden_np.max():.3f}]")
 
-    max_diff = np.max(np.abs(hf_output_np - lev_output_np))
-    mean_diff = np.mean(np.abs(hf_output_np - lev_output_np))
+    max_diff = np.max(np.abs(hf_last_hidden_np - lev_last_hidden_np))
+    mean_diff = np.mean(np.abs(hf_last_hidden_np - lev_last_hidden_np))
     print(f"Max diff: {max_diff:.6f}")
     print(f"Mean diff: {mean_diff:.6f}")
-    print(f"HF first 5: {hf_output_np.flatten()[:5]}")
-    print(f"Lev first 5: {lev_output_np.flatten()[:5]}")
+    print(f"HF first 5: {hf_last_hidden_np.flatten()[:5]}")
+    print(f"Lev first 5: {lev_last_hidden_np.flatten()[:5]}")
 
-    # Assert outputs are close
+    # Assert last hidden state matches
     assert np.allclose(
-        hf_output_np, lev_output_np, rtol=1e-3, atol=1e-3
-    ), f"Output mismatch: max diff = {max_diff}, mean diff = {mean_diff}"
+        hf_last_hidden_np, lev_last_hidden_np, rtol=1e-3, atol=1e-3
+    ), f"Last hidden state mismatch: max diff = {max_diff}, mean diff = {mean_diff}"
 
-    print("\n✓ Vision model outputs match between HF and Levanter!")
+    print("\n✓ Last hidden state matches between HF and Levanter!")
+
+    # Compare all hidden states layer by layer
+    print("\n=== Hidden States Comparison (All Layers) ===")
+    print(f"Number of HF hidden states: {len(hf_hidden_states_np)}")
+    print(f"Number of Levanter hidden states: {len(lev_hidden_states_np)}")
+
+    assert len(hf_hidden_states_np) == len(
+        lev_hidden_states_np
+    ), f"Mismatch in number of hidden states: HF={len(hf_hidden_states_np)}, Lev={len(lev_hidden_states_np)}"
+
+    for i, (hf_h, lev_h) in enumerate(zip(hf_hidden_states_np, lev_hidden_states_np)):
+        layer_name = "Embeddings" if i == 0 else f"Layer {i-1}"
+
+        max_diff = np.max(np.abs(hf_h - lev_h))
+        mean_diff = np.mean(np.abs(hf_h - lev_h))
+
+        print(f"\n{layer_name}:")
+        print(f"  Shape: HF={hf_h.shape}, Lev={lev_h.shape}")
+        print(f"  Max diff: {max_diff:.6f}")
+        print(f"  Mean diff: {mean_diff:.6f}")
+
+        # Assert each layer matches
+        assert mean_diff < 1e-3, f"{layer_name} mismatch: max diff = {max_diff}, mean diff = {mean_diff}"
+
+        print(f"  ✓ {layer_name} matches!")
+
+    print("\n✓ All hidden states match between HF and Levanter!")
 
 
 @skip_if_no_torch
@@ -1064,27 +1034,16 @@ def test_siglip_vision_real_image():
     2. Convert Levanter model to HF and verify output consistency (Levanter -> HF)
     """
     import torch
-    from PIL import Image
-    import os
-    from jax import random
-    import jax.numpy as jnp
-    import haliax as hax
-    from haliax import Axis
 
     try:
         from transformers import AutoProcessor, AutoModel  # noqa: F401
     except ImportError:
         pytest.skip("transformers not available")
 
-    # Check if image file exists
-    image_path = "/home/ruili/marin_private/7-1-scaled.jpg"
-    if not os.path.exists(image_path):
-        pytest.skip(f"Test image {image_path} not found")
-
     print("\n=== Testing SigLIP Vision with Real Image ===")
 
-    # Load image
-    image = Image.open(image_path)
+    # Load image from HuggingFace dataset
+    image = get_single_image()
     print(f"Image size: {image.size}, mode: {image.mode}")
 
     # Load HF model and processor from cloud
@@ -1128,12 +1087,14 @@ def test_siglip_vision_real_image():
     print(f"Vision model type: {type(hf_vision).__name__}")
 
     with torch.no_grad():
-        vision_outputs = hf_vision(pixel_values_torch)
+        vision_outputs = hf_vision(pixel_values_torch, output_hidden_states=True)
         torch_output = vision_outputs.last_hidden_state.detach().cpu().numpy()
+        torch_hidden_states = [h.detach().cpu().numpy() for h in vision_outputs.hidden_states]
 
     print(f"HF encoder output shape: {torch_output.shape}")
     print(f"HF encoder output range: [{torch_output.min():.3f}, {torch_output.max():.3f}]")
     print(f"HF encoder output mean: {torch_output.mean():.6f}, std: {torch_output.std():.6f}")
+    print(f"Number of HF hidden states: {len(torch_hidden_states)}")
 
     # Convert to JAX/Haliax format
     from levanter.models.siglip import SiglipVisionConfig, SiglipVisionModel
@@ -1151,48 +1112,51 @@ def test_siglip_vision_real_image():
     import tempfile
     import equinox as eqx
     from haliax.state_dict import from_torch_compatible_state_dict
-    import numpy as np
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # Use single-device mesh to avoid sharding issues with small batch sizes
+    single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
+
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(mesh=single_device_mesh):
         # Save HF model to temporary directory
         torch_model.save_pretrained(f"{tmpdir}/hf_model")
 
         # Create Levanter model template
-        Vocab = Axis("vocab", 1)  # Dummy vocab for vision model
-        model_template = eqx.filter_eval_shape(SiglipVisionModel.init, Vocab, lev_config, key=random.PRNGKey(0))
+        Vocab = hax.Axis("vocab", 1)  # Dummy vocab for vision model
+        model_template = eqx.filter_eval_shape(SiglipVisionModel.init, Vocab, lev_config, key=jax.random.PRNGKey(0))
 
         # Load weights from HF checkpoint
         converter = lev_config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/hf_model")
         state_dict = converter.load_state_dict(f"{tmpdir}/hf_model")
         lev_model = from_torch_compatible_state_dict(model_template, state_dict)
 
-    print("✓ Successfully loaded HF weights into Levanter model")
+        print("✓ Successfully loaded HF weights into Levanter model")
 
-    # Convert PyTorch pixel values to JAX/Haliax format
-    # Shape: (batch, channels, height, width)
-    pixel_values_np = pixel_values_torch.cpu().numpy()
-    batch_size, num_channels, height, width = pixel_values_np.shape
+        # Convert PyTorch pixel values to JAX/Haliax format
+        # Shape: (batch, channels, height, width)
+        pixel_values_np = pixel_values_torch.cpu().numpy()
+        batch_size, num_channels, height, width = pixel_values_np.shape
 
-    Batch = Axis("batch", batch_size)
-    Channels = Axis("channels", num_channels)
-    Height = Axis("height", height)
-    Width = Axis("width", width)
+        Batch = hax.Axis("batch", batch_size)
+        Channels = hax.Axis("channels", num_channels)
+        Height = hax.Axis("height", height)
+        Width = hax.Axis("width", width)
 
-    pixel_values_jax = hax.named(jnp.array(pixel_values_np, dtype=jnp.float32), (Batch, Channels, Height, Width))
+        pixel_values_jax = hax.named(jnp.array(pixel_values_np, dtype=jnp.float32), (Batch, Channels, Height, Width))
 
-    print(f"\nJAX pixel values shape: {pixel_values_jax.axes}")
-    print(f"JAX pixel values range: [{pixel_values_jax.array.min():.3f}, {pixel_values_jax.array.max():.3f}]")
+        print(f"\nJAX pixel values shape: {pixel_values_jax.axes}")
+        print(f"JAX pixel values range: [{pixel_values_jax.array.min():.3f}, {pixel_values_jax.array.max():.3f}]")
 
-    # Run Levanter model with loaded HF weights
-    print("\nRunning Levanter model inference...")
-    with use_test_mesh(tensor_parallelism=1):
-        lev_output = lev_model(pixel_values_jax, key=random.PRNGKey(1))
+        # Run Levanter model with loaded HF weights
+        print("\nRunning Levanter model inference...")
+        lev_output = lev_model(pixel_values_jax, output_hidden_states=True, key=jax.random.PRNGKey(1))
 
-    lev_output_np = np.array(lev_output.array)
+    lev_output_np = np.array(lev_output.last_hidden_state.array)
+    lev_hidden_states = [np.array(h.array) for h in lev_output.hidden_states]
 
-    print(f"\nLevanter output shape: {lev_output.axes}")
+    print(f"\nLevanter output shape: {lev_output.last_hidden_state.axes}")
     print(f"Levanter output range: [{lev_output_np.min():.3f}, {lev_output_np.max():.3f}]")
     print(f"Levanter output mean: {lev_output_np.mean():.6f}, std: {lev_output_np.std():.6f}")
+    print(f"Number of Levanter hidden states: {len(lev_hidden_states)}")
 
     # Compare outputs between HF and Levanter
     print("\n=== Output Comparison (HF vs Levanter) ===")
@@ -1241,6 +1205,40 @@ def test_siglip_vision_real_image():
         assert np.allclose(
             torch_output, lev_output_np, rtol=tolerance_rtol, atol=tolerance_atol
         ), f"Output mismatch exceeds tolerance: max_diff={max_diff:.6f}, mean_diff={mean_diff:.6f}"
+
+    # Compare all hidden states layer by layer
+    print("\n=== Hidden States Comparison (All Layers) ===")
+    print(f"Number of HF hidden states: {len(torch_hidden_states)}")
+    print(f"Number of Levanter hidden states: {len(lev_hidden_states)}")
+
+    assert len(torch_hidden_states) == len(
+        lev_hidden_states
+    ), f"Mismatch in number of hidden states: HF={len(torch_hidden_states)}, Lev={len(lev_hidden_states)}"
+
+    hidden_states_all_match = True
+    for i, (hf_h, lev_h) in enumerate(zip(torch_hidden_states, lev_hidden_states)):
+        layer_name = "Embeddings" if i == 0 else f"Layer {i-1}"
+
+        max_diff_h = np.max(np.abs(hf_h - lev_h))
+        mean_diff_h = np.mean(np.abs(hf_h - lev_h))
+
+        print(f"\n{layer_name}:")
+        print(f"  Shape: HF={hf_h.shape}, Lev={lev_h.shape}")
+        print(f"  Max diff: {max_diff_h:.6f}")
+        print(f"  Mean diff: {mean_diff_h:.6f}")
+
+        # Check if layer matches
+        layer_matches = np.allclose(hf_h, lev_h, rtol=tolerance_rtol, atol=tolerance_atol)
+        if layer_matches:
+            print(f"  ✓ {layer_name} matches!")
+        else:
+            print(f"  ⚠️  Warning: {layer_name} outputs differ!")
+            hidden_states_all_match = False
+
+    if hidden_states_all_match:
+        print("\n✓ All hidden states match between HF and Levanter!")
+    else:
+        print("\n⚠️  Warning: Some hidden states differ between HF and Levanter!")
 
     # ================================================================
     # Part 2: Test Levanter -> HF conversion and output consistency
@@ -1335,3 +1333,241 @@ def test_siglip_vision_real_image():
     print("✓ HF -> Levanter conversion works correctly")
     print("✓ Levanter -> HF conversion works correctly")
     print("✓ Output consistency verified for all conversions")
+
+
+@skip_if_no_torch
+def test_siglip_vision_real_image_no_flash():
+    """Test SigLIP vision model with real image, explicitly using VANILLA attention backend.
+
+    This test is identical to test_siglip_vision_real_image but forces VANILLA attention
+    (no flash attention) to compare numerical precision.
+    """
+    import torch
+    from dataclasses import replace
+
+    from levanter.layers.attention import AttentionBackend
+
+    try:
+        from transformers import AutoProcessor, AutoModel  # noqa: F401
+    except ImportError:
+        pytest.skip("transformers not available")
+
+    print("\n=== Testing SigLIP Vision with Real Image (NO FLASH ATTENTION) ===")
+
+    # Load image from HuggingFace dataset
+    image = get_single_image()
+    print(f"Image size: {image.size}, mode: {image.mode}")
+
+    # Load HF model and processor from cloud
+    model_name = "google/siglip-base-patch16-224"
+    print(f"Loading HF model and processor from cloud: {model_name}")
+
+    try:
+        from transformers import SiglipImageProcessor
+
+        processor = SiglipImageProcessor.from_pretrained(model_name)
+
+        from transformers import SiglipVisionModel
+
+        torch_model = SiglipVisionModel.from_pretrained(model_name, torch_dtype=torch.float32)
+        torch_model.eval()
+        torch_model = torch_model.float()
+        print(f"Loaded model type: {type(torch_model).__name__}")
+        print(f"Model dtype: {next(torch_model.parameters()).dtype}")
+    except Exception as e:
+        import traceback
+
+        print(f"\nException loading model: {e}")
+        print(traceback.format_exc())
+        pytest.skip(f"Failed to load HF model/processor from cloud: {e}")
+
+    # Process image with HF processor
+    inputs = processor(images=image, return_tensors="pt")
+    pixel_values_torch = inputs["pixel_values"].float()
+    print(f"Pixel values shape: {pixel_values_torch.shape}")
+
+    # Run HF model
+    hf_vision = torch_model
+    hf_config = torch_model.config
+
+    with torch.no_grad():
+        vision_outputs = hf_vision(pixel_values_torch, output_hidden_states=True)
+        torch_output = vision_outputs.last_hidden_state.detach().cpu().numpy()
+        torch_hidden_states = [h.detach().cpu().numpy() for h in vision_outputs.hidden_states]
+
+    print(f"HF encoder output shape: {torch_output.shape}")
+    print(f"HF encoder output range: [{torch_output.min():.3f}, {torch_output.max():.3f}]")
+
+    # Convert to JAX/Haliax format
+    from levanter.models.siglip import SiglipVisionConfig, SiglipVisionModel
+
+    # Create Levanter config from HF config with VANILLA attention backend
+    lev_config_base = SiglipVisionConfig.from_hf_config(hf_config)
+    # Force VANILLA attention backend (no flash attention)
+    lev_config = replace(
+        lev_config_base,
+        use_flash_attention=False,
+        attn_backend=AttentionBackend.VANILLA,
+    )
+    print(
+        f"\nLevanter config: hidden_size={lev_config.hidden_size}, "
+        f"num_layers={lev_config.num_hidden_layers}, "
+        f"use_flash_attention={lev_config.use_flash_attention}, "
+        f"attn_backend={lev_config.attn_backend}"
+    )
+
+    # Load HF weights into Levanter model
+    print("\n=== Part 1: HF -> Levanter Conversion (VANILLA attention) ===")
+    import tempfile
+    import equinox as eqx
+    from haliax.state_dict import from_torch_compatible_state_dict
+
+    # Use single-device mesh to avoid sharding issues with small batch sizes
+    single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
+
+    with tempfile.TemporaryDirectory() as tmpdir, use_test_mesh(mesh=single_device_mesh):
+        torch_model.save_pretrained(f"{tmpdir}/hf_model")
+
+        Vocab = hax.Axis("vocab", 1)
+        model_template = eqx.filter_eval_shape(SiglipVisionModel.init, Vocab, lev_config, key=jax.random.PRNGKey(0))
+
+        converter = lev_config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/hf_model")
+        state_dict = converter.load_state_dict(f"{tmpdir}/hf_model")
+        lev_model = from_torch_compatible_state_dict(model_template, state_dict)
+
+        print("✓ Successfully loaded HF weights into Levanter model (VANILLA attention)")
+
+        # Convert PyTorch pixel values to JAX/Haliax format
+        pixel_values_np = pixel_values_torch.cpu().numpy()
+        batch_size, num_channels, height, width = pixel_values_np.shape
+
+        Batch = hax.Axis("batch", batch_size)
+        Channels = hax.Axis("channels", num_channels)
+        Height = hax.Axis("height", height)
+        Width = hax.Axis("width", width)
+
+        pixel_values_jax = hax.named(jnp.array(pixel_values_np, dtype=jnp.float32), (Batch, Channels, Height, Width))
+
+        # Run Levanter model with loaded HF weights
+        print("\nRunning Levanter model inference (VANILLA attention)...")
+        lev_output = lev_model(pixel_values_jax, output_hidden_states=True, key=jax.random.PRNGKey(1))
+
+    lev_output_np = np.array(lev_output.last_hidden_state.array)
+    lev_hidden_states = [np.array(h.array) for h in lev_output.hidden_states]
+
+    print(f"\nLevanter output shape: {lev_output.last_hidden_state.axes}")
+    print(f"Levanter output range: [{lev_output_np.min():.3f}, {lev_output_np.max():.3f}]")
+    print(f"Levanter output mean: {lev_output_np.mean():.6f}, std: {lev_output_np.std():.6f}")
+
+    # Compare outputs between HF and Levanter
+    print("\n=== Output Comparison (HF vs Levanter with VANILLA attention) ===")
+    print(f"HF shape: {torch_output.shape}")
+    print(f"Levanter shape: {lev_output_np.shape}")
+
+    assert (
+        torch_output.shape == lev_output_np.shape
+    ), f"Shape mismatch: HF={torch_output.shape}, Lev={lev_output_np.shape}"
+
+    # Compute differences
+    max_diff = np.max(np.abs(torch_output - lev_output_np))
+    mean_diff = np.mean(np.abs(torch_output - lev_output_np))
+    relative_diff = mean_diff / (np.abs(torch_output).mean() + 1e-8)
+
+    print(f"\nMax absolute diff: {max_diff:.6f}")
+    print(f"Mean absolute diff: {mean_diff:.6f}")
+    print(f"Relative diff: {relative_diff:.6f}")
+    print(f"\nHF first 10 values: {torch_output.flatten()[:10]}")
+    print(f"Lev first 10 values: {lev_output_np.flatten()[:10]}")
+
+    # Check for NaN/Inf
+    assert not np.any(np.isnan(lev_output_np)), "Levanter output contains NaN"
+    assert not np.any(np.isinf(lev_output_np)), "Levanter output contains Inf"
+
+    # Compare all hidden states layer by layer
+    print("\n=== Hidden States Comparison (All Layers) ===")
+    for i, (hf_h, lev_h) in enumerate(zip(torch_hidden_states, lev_hidden_states)):
+        layer_name = "Embeddings" if i == 0 else f"Layer {i-1}"
+        max_diff_h = np.max(np.abs(hf_h - lev_h))
+        mean_diff_h = np.mean(np.abs(hf_h - lev_h))
+        print(f"{layer_name}: max_diff={max_diff_h:.6f}, mean_diff={mean_diff_h:.6f}")
+
+    # Use same tolerance as regular test
+    tolerance_rtol = 5e-3
+    tolerance_atol = 2e-2
+
+    if np.allclose(torch_output, lev_output_np, rtol=tolerance_rtol, atol=tolerance_atol):
+        print("\n✓ ✓ ✓ Test PASSED with VANILLA attention! ✓ ✓ ✓")
+        print(f"  ✓ Max diff: {max_diff:.6f}, Mean diff: {mean_diff:.6f}")
+    else:
+        print("\n⚠ Warning: Outputs differ more than expected")
+        assert np.allclose(
+            torch_output, lev_output_np, rtol=tolerance_rtol, atol=tolerance_atol
+        ), f"Output mismatch: max_diff={max_diff:.6f}, mean_diff={mean_diff:.6f}"
+
+    # ================================================================
+    # Part 2: Test Levanter -> HF conversion
+    # ================================================================
+    print("\n\n=== Part 2: Levanter -> HF Conversion Test ===")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        save_path = f"{tmpdir}/converted_model"
+
+        print("Saving Levanter model as HF checkpoint...")
+        converter = lev_config.hf_checkpoint_converter(ref_checkpoint=model_name)
+        converter.save_pretrained(lev_model, save_path, save_tokenizer=False)
+
+        print("Loading saved checkpoint as HF model...")
+        from transformers import SiglipVisionModel as HfSiglipVisionModel
+
+        converted_hf_model = HfSiglipVisionModel.from_pretrained(save_path)
+        converted_hf_model.eval()
+        converted_hf_model = converted_hf_model.float()
+
+        print("✓ Successfully converted Levanter model to HF format")
+
+        with torch.no_grad():
+            converted_outputs = converted_hf_model(pixel_values_torch)
+            converted_output_np = converted_outputs.last_hidden_state.detach().cpu().numpy()
+
+        print(f"Converted HF output shape: {converted_output_np.shape}")
+        print(f"Converted HF output range: [{converted_output_np.min():.3f}, {converted_output_np.max():.3f}]")
+
+        # Compare Levanter output with converted HF output
+        print("\n=== Output Comparison (Levanter vs Converted HF) ===")
+        max_diff_lev_hf = np.max(np.abs(lev_output_np - converted_output_np))
+        mean_diff_lev_hf = np.mean(np.abs(lev_output_np - converted_output_np))
+
+        print(f"Max absolute diff: {max_diff_lev_hf:.6f}")
+        print(f"Mean absolute diff: {mean_diff_lev_hf:.6f}")
+        print(f"\nLevanter first 10 values: {lev_output_np.flatten()[:10]}")
+        print(f"Converted HF first 10 values: {converted_output_np.flatten()[:10]}")
+
+        assert not np.any(np.isnan(converted_output_np)), "Converted HF output contains NaN"
+        assert not np.any(np.isinf(converted_output_np)), "Converted HF output contains Inf"
+
+        if np.allclose(lev_output_np, converted_output_np, rtol=tolerance_rtol, atol=tolerance_atol):
+            print("\n✓ ✓ ✓ Part 2: Levanter -> HF PASSED! ✓ ✓ ✓")
+            print(f"  ✓ Max diff: {max_diff_lev_hf:.6f}, Mean diff: {mean_diff_lev_hf:.6f}")
+        else:
+            assert np.allclose(
+                lev_output_np, converted_output_np, rtol=tolerance_rtol, atol=tolerance_atol
+            ), f"Levanter -> HF conversion mismatch: max_diff={max_diff_lev_hf:.6f}"
+
+        # Compare converted HF with original HF
+        print("\n=== Bonus: Original HF vs Converted HF ===")
+        max_diff_hf_hf = np.max(np.abs(torch_output - converted_output_np))
+        mean_diff_hf_hf = np.mean(np.abs(torch_output - converted_output_np))
+        print(f"Max absolute diff: {max_diff_hf_hf:.6f}")
+        print(f"Mean absolute diff: {mean_diff_hf_hf:.6f}")
+
+        if np.allclose(torch_output, converted_output_np, rtol=tolerance_rtol, atol=tolerance_atol):
+            print("✓ Original HF and converted HF outputs match!")
+
+    print("\n\n=== All Tests PASSED (VANILLA attention)! ===")
+    print("✓ HF -> Levanter conversion works correctly with VANILLA attention")
+    print("✓ Levanter -> HF conversion works correctly")
+    print("✓ Output consistency verified for all conversions")
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
