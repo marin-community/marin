@@ -60,6 +60,7 @@ from marin.processing.tokenize.data_configs import add_validation_sets_to_mixtur
 from marin.processing.tokenize.tokenize import TokenizeConfig
 from marin.scaling_laws.isoflop_analysis import (
     IsoFlopSweepConfig,
+    ScalingFit,
     build_model_config,
     build_optimizer_config,
     isoflop_analysis_step,
@@ -153,11 +154,11 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
     with fs.open(result_path, "r") as f:
         analysis_result = json.load(f)
 
-    scaling_fits: dict[str, tuple[float, float]] = {}
+    scaling_fits: dict[str, ScalingFit] = {}
     for key, value in analysis_result["scaling_fits"].items():
         if len(value) != 2:
             raise ValueError(f"Expected 2 scaling fit values for '{key}', got {len(value)}")
-        scaling_fits[key] = (float(value[0]), float(value[1]))
+        scaling_fits[key] = ScalingFit(float(value[0]), float(value[1]))
 
     vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
 
