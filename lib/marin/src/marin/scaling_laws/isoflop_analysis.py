@@ -55,6 +55,7 @@ import os
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import asdict, dataclass, replace
+from typing import NamedTuple
 
 import fsspec
 import jax.numpy as jnp
@@ -103,6 +104,38 @@ BETA2_BATCH_DIVISOR = 128
 HBM_PER_CHIP_GIB = 95
 CORES_PER_CHIP = 2
 V5P_CORE_OPTIONS = [8, 16, 32, 128, 256, 512]
+
+
+# ---------------- Typed Tuples ----------------
+
+
+class ScalingFit(NamedTuple):
+    """Scaling law fit parameters for N* ~ A * C^alpha."""
+
+    alpha: float
+    """Exponent in scaling law."""
+
+    A: float
+    """Coefficient in scaling law."""
+
+
+class QuadraticFitCoeffs(NamedTuple):
+    """Quadratic fit coefficients for loss = a * log10(tokens)^2 + b * log10(tokens) + c."""
+
+    a: float
+    """Quadratic coefficient."""
+
+    b: float
+    """Linear coefficient."""
+
+    c: float
+    """Constant term."""
+
+    token_min: float
+    """Minimum token count used for fitting."""
+
+    token_max: float
+    """Maximum token count used for fitting."""
 
 
 # ---------------- IsoFLOP Sweep Config ----------------
@@ -218,6 +251,20 @@ class MinimaRecord:
     optimal_params: float
     scaling_alpha: float | None = None
     scaling_A: float | None = None
+
+
+@dataclass
+class FitScalingLawsResult:
+    """Result from fit_scaling_laws containing minima, scaling fits, and fit curves."""
+
+    minima_records: list[MinimaRecord]
+    """List of optimal configurations found at each (label, flops) point."""
+
+    scaling_fits: dict[str, ScalingFit]
+    """Per-label scaling fits: {label: ScalingFit} for N* ~ A * C^alpha."""
+
+    fit_curves: dict[tuple[str, float], QuadraticFitCoeffs]
+    """Quadratic fit coefficients {(label, flops): QuadraticFitCoeffs} for plotting."""
 
 
 # ---------------- Candidate Config Generation ----------------
@@ -708,11 +755,7 @@ def robust_quad_logx(x: jnp.ndarray, y: jnp.ndarray, delta: float = 1.0) -> tupl
 
 def fit_scaling_laws(
     df: pd.DataFrame,
-) -> tuple[
-    list[MinimaRecord],
-    dict[str, tuple[float, float]],
-    dict[tuple[str, float], tuple[float, float, float, float, float]],
-]:
+) -> FitScalingLawsResult:
     """
     Fit scaling laws and extract optimal configurations.
 
@@ -720,20 +763,17 @@ def fit_scaling_laws(
         df: DataFrame with columns: tokens, loss, flops, params, name, label
 
     Returns:
-        - minima_records: List of dicts with optimal config info per (label, flops)
-        - scaling_fits: Dict of {label: (alpha, A)} for N* ~ A * C^alpha
-        - fit_curves: Dict of {(label, flops): (a, b, c, token_min, token_max)} quadratic coefficients
-          for plotting
+        FitScalingLawsResult containing minima_records, scaling_fits, and fit_curves.
     """
     if df is None or df.empty:
-        return [], {}, {}
+        return FitScalingLawsResult(minima_records=[], scaling_fits={}, fit_curves={})
 
     datasets = list(dict.fromkeys(df["label"].tolist()))
 
     buckets = sorted(df.flops.unique())
 
     minima_records: list[MinimaRecord] = []
-    fit_curves: dict[tuple[str, float], tuple[float, float, float, float, float]] = {}
+    fit_curves: dict[tuple[str, float], QuadraticFitCoeffs] = {}
 
     # Fit quadratic for each (label, budget) and find minima
     for lab in datasets:
@@ -750,7 +790,7 @@ def fit_scaling_laws(
                 jnp.array(sub.loss.values, dtype=jnp.float64),
             )
             # Store coefficients along with token range used for fitting
-            fit_curves[(lab, C)] = (a, b, c, float(tokens_array.min()), float(tokens_array.max()))
+            fit_curves[(lab, C)] = QuadraticFitCoeffs(a, b, c, float(tokens_array.min()), float(tokens_array.max()))
 
             if a == 0:
                 continue
@@ -776,7 +816,7 @@ def fit_scaling_laws(
             )
 
     # Fit scaling law N* ~ A * C^alpha per dataset
-    scaling_fits: dict[str, tuple[float, float]] = {}
+    scaling_fits: dict[str, ScalingFit] = {}
     by_lab: dict[str, list[MinimaRecord]] = {}
     for rec in minima_records:
         by_lab.setdefault(rec.label, []).append(rec)
@@ -793,14 +833,18 @@ def fit_scaling_laws(
         alpha, logA = jnp.polyfit(jnp.log10(Cs), jnp.log10(Ns), 1)
         A = float(10**logA)
         alpha = float(alpha)
-        scaling_fits[lab] = (alpha, A)
+        scaling_fits[lab] = ScalingFit(alpha, A)
 
         # Augment minima records with scaling fit params
         for rec in recs:
             rec.scaling_alpha = alpha
             rec.scaling_A = A
 
-    return minima_records, scaling_fits, fit_curves
+    return FitScalingLawsResult(
+        minima_records=minima_records,
+        scaling_fits=scaling_fits,
+        fit_curves=fit_curves,
+    )
 
 
 def transform_metrics_for_isoflop(
@@ -898,7 +942,7 @@ def transform_metrics_for_isoflop(
 
 
 def predict_optimal_config(
-    scaling_fits: dict[str, tuple[float, float]],
+    scaling_fits: dict[str, ScalingFit],
     target_flops: float,
     label: str,
     sweep_config: IsoFlopSweepConfig | None = None,
@@ -912,7 +956,7 @@ def predict_optimal_config(
     3. Selects the candidate whose token count is closest to the predicted optimal
 
     Args:
-        scaling_fits: Dict of {label: (alpha, A)} from scaling ladder result.
+        scaling_fits: Dict of {label: ScalingFit} from scaling ladder result.
         target_flops: Target compute budget in FLOPs.
         label: Dataset/experiment label to use for scaling fit.
         sweep_config: Optional IsoFlopSweepConfig. If None, uses defaults.
@@ -951,7 +995,7 @@ def predict_optimal_config(
 
 
 def predict_optimal_configs_for_budgets(
-    scaling_fits: dict[str, tuple[float, float]],
+    scaling_fits: dict[str, ScalingFit],
     target_budgets: list[float],
     label: str,
     sweep_config: IsoFlopSweepConfig | None = None,
@@ -960,7 +1004,7 @@ def predict_optimal_configs_for_budgets(
     """Predict optimal configs for multiple target compute budgets.
 
     Args:
-        scaling_fits: Dict of {label: (alpha, A)} from scaling ladder result.
+        scaling_fits: Dict of {label: ScalingFit} from scaling ladder result.
         target_budgets: List of target compute budgets in FLOPs.
         label: Dataset/experiment label to use for scaling fit.
         sweep_config: Optional IsoFlopSweepConfig. If None, uses defaults.
@@ -995,8 +1039,8 @@ class IsoFlopAnalysisResult:
     configs: list[CandidateConfig]
     """List of optimal CandidateConfig for each (label, flops_budget) pair."""
 
-    scaling_fits: dict[str, tuple[float, float]]
-    """Per-label scaling fits: {label: (alpha, A)} for N* ~ A * C^alpha."""
+    scaling_fits: dict[str, ScalingFit]
+    """Per-label scaling fits: {label: ScalingFit} for N* ~ A * C^alpha."""
 
     isoflop_df: pd.DataFrame
     """Transformed dataframe used for analysis."""
@@ -1004,8 +1048,8 @@ class IsoFlopAnalysisResult:
     minima_records: list[MinimaRecord]
     """Raw minima records with detailed info for each optimum."""
 
-    fit_curves: dict[tuple[str, float], tuple[float, float, float, float, float]]
-    """Quadratic fit coefficients {(label, flops): (a, b, c, token_min, token_max)} for plotting."""
+    fit_curves: dict[tuple[str, float], QuadraticFitCoeffs]
+    """Quadratic fit coefficients {(label, flops): QuadraticFitCoeffs} for plotting."""
 
     def to_json_dict(self) -> dict:
         """Convert result to JSON-serializable dict (excludes DataFrame and fit_curves)."""
@@ -1016,11 +1060,11 @@ class IsoFlopAnalysisResult:
         }
 
 
-def _parse_fit_curve_coeffs(coeffs: Sequence[float]) -> tuple[float, float, float, float, float]:
+def _parse_fit_curve_coeffs(coeffs: Sequence[float]) -> QuadraticFitCoeffs:
     if len(coeffs) != 5:
         raise ValueError(f"Expected 5 fit curve coefficients, got {len(coeffs)}")
     a, b, c, token_min, token_max = coeffs
-    return (float(a), float(b), float(c), float(token_min), float(token_max))
+    return QuadraticFitCoeffs(float(a), float(b), float(c), float(token_min), float(token_max))
 
 
 # ---------------- ExecutorStep Config ----------------
@@ -1084,20 +1128,20 @@ def _run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
     logger.info(f"Labels found: {isoflop_df['label'].unique().tolist()}")
     logger.info(f"FLOP budgets: {sorted(isoflop_df['flops'].unique())}")
 
-    minima_records, scaling_fits, fit_curves = fit_scaling_laws(isoflop_df)
+    fit_result = fit_scaling_laws(isoflop_df)
 
-    logger.info(f"Found {len(minima_records)} optimal configurations")
-    for label, (alpha, A) in scaling_fits.items():
+    logger.info(f"Found {len(fit_result.minima_records)} optimal configurations")
+    for label, (alpha, A) in fit_result.scaling_fits.items():
         logger.info(f"  {label}: N* = {A:.2e} * C^{alpha:.3f}")
 
-    configs = _minima_to_candidates(minima_records)
+    configs = _minima_to_candidates(fit_result.minima_records)
 
     result = IsoFlopAnalysisResult(
         configs=configs,
-        scaling_fits=scaling_fits,
+        scaling_fits=fit_result.scaling_fits,
         isoflop_df=isoflop_df,
-        minima_records=minima_records,
-        fit_curves=fit_curves,
+        minima_records=fit_result.minima_records,
+        fit_curves=fit_result.fit_curves,
     )
 
     fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
@@ -1115,7 +1159,7 @@ def _run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
 
     fit_curves_path = os.path.join(config.output_path, "fit_curves.json")
     # Convert tuple keys to strings for JSON serialization
-    fit_curves_json = {f"{label}|{flops}": list(coeffs) for (label, flops), coeffs in fit_curves.items()}
+    fit_curves_json = {f"{label}|{flops}": list(coeffs) for (label, flops), coeffs in result.fit_curves.items()}
     with fs.open(fit_curves_path, "w") as f:
         json.dump(fit_curves_json, f, indent=2)
     logger.info(f"Saved fit curves to {fit_curves_path}")
@@ -1144,14 +1188,14 @@ def _run_isoflop_plots_step(config: IsoFlopPlotsConfig) -> None:
     fit_curves_path = os.path.join(config.analysis_output_path, "fit_curves.json")
     with fs.open(fit_curves_path, "r") as f:
         fit_curves_json = json.load(f)
-    fit_curves: dict[tuple[str, float], tuple[float, float, float, float, float]] = {}
+    fit_curves: dict[tuple[str, float], QuadraticFitCoeffs] = {}
     for key_str, coeffs in fit_curves_json.items():
         label, flops = key_str.rsplit("|", 1)
         fit_curves[(label, float(flops))] = _parse_fit_curve_coeffs(coeffs)
 
     # Reconstruct minima records
     minima_records = [MinimaRecord(**r) for r in result_dict["minima_records"]]
-    scaling_fits = {k: tuple(v) for k, v in result_dict["scaling_fits"].items()}
+    scaling_fits = {k: ScalingFit(*v) for k, v in result_dict["scaling_fits"].items()}
 
     # Create plots
     fig_isoflop = create_isoflop_plot(isoflop_df, minima_records, fit_curves)
@@ -1184,14 +1228,14 @@ def _run_upload_plots_to_wandb_step(config: UploadPlotsToWandbConfig) -> None:
     fit_curves_path = os.path.join(config.plots_path, "fit_curves.json")
     with fs.open(fit_curves_path, "r") as f:
         fit_curves_json = json.load(f)
-    fit_curves: dict[tuple[str, float], tuple[float, float, float, float, float]] = {}
+    fit_curves: dict[tuple[str, float], QuadraticFitCoeffs] = {}
     for key_str, coeffs in fit_curves_json.items():
         label, flops = key_str.rsplit("|", 1)
         fit_curves[(label, float(flops))] = _parse_fit_curve_coeffs(coeffs)
 
     # Reconstruct minima records
     minima_records = [MinimaRecord(**r) for r in result_dict["minima_records"]]
-    scaling_fits = {k: tuple(v) for k, v in result_dict["scaling_fits"].items()}
+    scaling_fits = {k: ScalingFit(*v) for k, v in result_dict["scaling_fits"].items()}
 
     # Create plots
     fig_isoflop = create_isoflop_plot(isoflop_df, minima_records, fit_curves)
@@ -1391,13 +1435,13 @@ def run_isoflop_analysis(
 
     logger.info(f"Transformed {len(isoflop_df)} runs for scaling ladder analysis")
 
-    minima_records, scaling_fits, fit_curves = fit_scaling_laws(isoflop_df)
-    configs = _minima_to_candidates(minima_records)
+    fit_result = fit_scaling_laws(isoflop_df)
+    configs = _minima_to_candidates(fit_result.minima_records)
 
     return IsoFlopAnalysisResult(
         configs=configs,
-        scaling_fits=scaling_fits,
+        scaling_fits=fit_result.scaling_fits,
         isoflop_df=isoflop_df,
-        minima_records=minima_records,
-        fit_curves=fit_curves,
+        minima_records=fit_result.minima_records,
+        fit_curves=fit_result.fit_curves,
     )

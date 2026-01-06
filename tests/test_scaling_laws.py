@@ -442,16 +442,16 @@ def test_end_to_end_analysis_pipeline():
     assert len(isoflop_df) == 6
 
     # Fit scaling laws
-    minima_records, _scaling_fits, _ = fit_scaling_laws(isoflop_df)
+    fit_result = fit_scaling_laws(isoflop_df)
 
     # Should find two minima (one per budget: 1e18 and 1e19)
-    assert len(minima_records) == 2
-    flops_budgets = {rec.flops for rec in minima_records}
+    assert len(fit_result.minima_records) == 2
+    flops_budgets = {rec.flops for rec in fit_result.minima_records}
     assert flops_budgets == {1e18, 1e19}
 
     # Verify fitted minima are near expected optimal points
     # Curve fitting interpolates to find analytical minimum of fitted quadratic
-    minima_by_flops = {rec.flops: rec for rec in minima_records}
+    minima_by_flops = {rec.flops: rec for rec in fit_result.minima_records}
 
     # At 1e18: raw data optimal at 2.5B (loss=1.12), fitted minimum ~2.6B
     assert abs(minima_by_flops[1e18].optimal_tokens - 2.6e9) < 0.2e9
