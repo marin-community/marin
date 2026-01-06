@@ -13,10 +13,6 @@ In general, you should reach for the default steps before writing your own.
 
 ::: marin.export.upload_dir_to_hf
 
-## Data Generation
-
-::: experiments.datashop.defaults.default_synthetic_data_generation
-
 ## Tokenization
 
 ::: experiments.defaults.default_tokenize
