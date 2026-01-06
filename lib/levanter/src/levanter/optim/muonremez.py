@@ -10,7 +10,6 @@ import chex
 import jax
 import jax.numpy as jnp
 import optax
-from jax.sharding import PartitionSpec
 from optax import tree_utils as otu
 
 import haliax
@@ -192,38 +191,37 @@ def coupled_newton_schulz_quintic(A, steps=5, variant="muon_aggressive", eps=1e-
     """
     Coupled Iteration for Square Root.
     Target: Z -> A^(-1/2), Y -> A^(1/2)
-    
+
     Args:
         A: Input matrix (2D array, should be square and positive semidefinite)
         steps: Number of Newton-Schulz iterations
         variant: Variant of the algorithm ('higham' or 'muon_aggressive')
         eps: Small constant for numerical stability
-    
+
     Returns:
         Y: A^(1/2) (matrix square root)
         Z: A^(-1/2) (inverse matrix square root)
     """
     chex.assert_rank(A, 2)
     # A should be square for this algorithm (guaranteed by construction in compute_u_sigma_half_vt)
-    
+
     alpha, beta, gamma = get_quintic_coeffs(variant)
-    
+
     # Normalization (Crucial)
     norm_A = jnp.linalg.norm(A) + eps
     A_scaled = A / norm_A
-    
+
     Y = A_scaled
     Z = jnp.eye(A.shape[0], dtype=A.dtype)
     I = jnp.eye(A.shape[0], dtype=A.dtype)
 
-    
     for k in range(steps):
         P = Z @ Y
         P2 = P @ P
         S = alpha * I + beta * P + gamma * P2
         Y = Y @ S
         Z = S @ Z
-    
+
     sqrt_norm = jnp.sqrt(norm_A)
     return Y * sqrt_norm, Z * (1.0 / sqrt_norm)
 
@@ -247,12 +245,12 @@ def compute_u_sigma_half_vt(M, steps=7, eps=1e-8, variant="higham"):
         Matrix square root U·Σ^(1/2)·V^T
     """
     chex.assert_rank(M, 2)
-    
+
     # Pre-normalize M
     # Check raw norm first (JIT-safe) to handle zero matrix case
     norm_M = jnp.linalg.norm(M) + eps
     M_scaled = M / norm_M
-        
+
     if M_scaled.shape[0] >= M_scaled.shape[1]:
         # Wide matrix: compute M^T M first
         A = M_scaled.T @ M_scaled
@@ -265,7 +263,6 @@ def compute_u_sigma_half_vt(M, steps=7, eps=1e-8, variant="higham"):
         _, Z1 = coupled_newton_schulz_quintic(A, steps, variant, eps)
         Y2, _ = coupled_newton_schulz_quintic(Z1, steps, variant, eps)
         Result_scaled = Y2 @ M_scaled
-    
+
     result = Result_scaled * jnp.sqrt(norm_M)
     return result
-

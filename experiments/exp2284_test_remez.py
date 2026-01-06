@@ -15,7 +15,6 @@
 """Learning rate sweeps comparing MuP and non-MuP variants of small Llama models."""
 
 import logging
-import os
 
 from experiments.defaults import default_train
 from experiments.pretraining_datasets.dclm import dclm_mixture_config_llama3
