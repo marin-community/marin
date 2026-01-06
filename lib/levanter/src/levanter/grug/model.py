@@ -57,19 +57,24 @@ def init_parameters(cfg: GrugModelConfig, *, key: jax.Array) -> GrugModelParamet
     embed_key, out_key, final_norm_key, *rest = keys
     layer_keys = [rest[i * 7 : (i + 1) * 7] for i in range(cfg.num_layers)]
 
+    # Sharding vocab-sized weights over `data` can trigger TPU collectives (e.g. reduce-scatter fusions)
+    # in the output projection / loss that are extremely sensitive to XLA's tiny on-chip "sflag" space.
+    # We prefer to keep vocab weights replicated on TPU unless/until we implement a more robust strategy.
+    vocab_pspec = P(None, None) if jax.default_backend() == "tpu" else P("data", None)
+
     token_embed = reshard(
         _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std),
-        P("data", None),
+        vocab_pspec,
     )
     if cfg.tie_embeddings:
         output_proj = token_embed.T
     else:
         output_proj = reshard(
             _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std),
-            P("data", None),
+            vocab_pspec,
         )
     if cfg.tie_embeddings:
-        output_proj = reshard(output_proj, P("data", None))
+        output_proj = reshard(output_proj, vocab_pspec)
     final_norm = reshard(
         jnp.ones((cfg.hidden_dim,), dtype=jnp.float32),
         P(
