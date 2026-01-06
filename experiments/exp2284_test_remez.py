@@ -46,47 +46,45 @@ def _lr_sweep() -> list[ExecutorStep[TrainLmOnPodConfig]]:
     """Construct a set of training steps for the provided hyperparameter sweep."""
 
     steps = []
-    optimizers = ["muonremez"]
     num_train_step = 11520
     weight_decay = 0.1  # Fixed weight decay, no sweeping
     lrs = [0.001, 0.002, 0.004, 0.008, 0.012]
-    for _optimizer in optimizers:
-        for lr in lrs:
-            optimizer_config = MuonRemezConfig(
-                learning_rate=lr,
-                warmup=0,
-                min_lr_ratio=0.0,
-                lr_schedule="cosine",
-                adam_lr=0.4 * lr,
-                momentum=0.95,
-                nesterov=True,
-                backend_steps=7,
-                weight_decay=weight_decay,
-                beta1=0.9,
-                beta2=0.95,
-                epsilon=1e-8,
-                muon_epsilon=1e-8,
-                max_grad_norm=1.0,
-                use_kimi_scaling=False,
-            )
-            train_config = SimpleTrainConfig(
-                resources=ResourceConfig.with_tpu("v5litepod-64"),
-                train_batch_size=128,
-                num_train_steps=num_train_step,
-                learning_rate=lr,
-                watch=WatchConfig(watch_targets=["grads", "params"], interval=10),
-                optimizer_config=optimizer_config,
-            )
-            step = default_train(
-                name=f"test-ramez-300m-lr{_format_lr(lr)}-wd{weight_decay}-warmup0-alr0.4",
-                tokenized=dclm_mixture_config_llama3,
-                model_config=llama_300m,
-                train_config=train_config,
-                tags=("ramez", "300m", "lr_sweep", "cosine"),
-                eval_harness_tasks=(),
-            )
+    for lr in lrs:
+        optimizer_config = MuonRemezConfig(
+            learning_rate=lr,
+            warmup=0,
+            min_lr_ratio=0.0,
+            lr_schedule="cosine",
+            adam_lr=0.4 * lr,
+            momentum=0.95,
+            nesterov=True,
+            backend_steps=7,
+            weight_decay=weight_decay,
+            beta1=0.9,
+            beta2=0.95,
+            epsilon=1e-8,
+            muon_epsilon=1e-8,
+            max_grad_norm=1.0,
+            use_kimi_scaling=False,
+        )
+        train_config = SimpleTrainConfig(
+            resources=ResourceConfig.with_tpu("v5litepod-64"),
+            train_batch_size=128,
+            num_train_steps=num_train_step,
+            learning_rate=lr,
+            watch=WatchConfig(watch_targets=["grads", "params"], interval=10),
+            optimizer_config=optimizer_config,
+        )
+        step = default_train(
+            name=f"test-remez-300m-lr{_format_lr(lr)}-wd{weight_decay}-warmup0-alr0.4",
+            tokenized=dclm_mixture_config_llama3,
+            model_config=llama_300m,
+            train_config=train_config,
+            tags=("remez", "300m", "lr_sweep", "cosine"),
+            eval_harness_tasks=(),
+        )
 
-            steps.append(step)
+        steps.append(step)
 
     return steps
 

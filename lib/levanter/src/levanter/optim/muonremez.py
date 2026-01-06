@@ -252,13 +252,13 @@ def compute_u_sigma_half_vt(M, steps=7, eps=1e-8, variant="higham"):
     M_scaled = M / norm_M
 
     if M_scaled.shape[0] >= M_scaled.shape[1]:
-        # Wide matrix: compute M^T M first
+        # Tall matrix: compute M^T M first
         A = M_scaled.T @ M_scaled
         _, Z1 = coupled_newton_schulz_quintic(A, steps, variant, eps)
         Y2, _ = coupled_newton_schulz_quintic(Z1, steps, variant, eps)
         Result_scaled = M_scaled @ Y2
     else:
-        # Tall matrix: compute M M^T first
+        # Wide matrix: compute M M^T first
         A = M_scaled @ M_scaled.T
         _, Z1 = coupled_newton_schulz_quintic(A, steps, variant, eps)
         Y2, _ = coupled_newton_schulz_quintic(Z1, steps, variant, eps)
