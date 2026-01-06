@@ -24,35 +24,63 @@ The scaling ladder:
 
 The analysis steps depend on completed isoflop training runs from isoflop_sweep.py.
 Once complete, results are saved to the output path and uploaded to WandB.
+
+This experiment creates ExecutorSteps directly rather than using library factory
+functions, following the pattern of isolating executor step creation to experiments.
 """
 
 from experiments.defaults import default_validation_sets
 from experiments.isoflop_sweep import MARIN_SCALING_SUITES, nemotron_mix
-from marin.execution.executor import executor_main
-from marin.scaling_laws import scaling_ladder_suite
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of
+from marin.scaling_laws import (
+    IsoFlopAnalysisConfig,
+    ScalingLadderRungConfig,
+    run_isoflop_analysis_step,
+    run_scaling_ladder_rung,
+)
+from marin.scaling_laws.recipe import MARIN_2025_RECIPE
 
-# Get training steps and datasets for each suite
+# Get training steps from the isoflop sweep
 nemotron_training, _ = MARIN_SCALING_SUITES["nemotron"]
 
-# --- Scaling Ladder Suites ---
-# These analyze completed isoflop training runs and optionally train compute-optimal models
-
-# Target budgets for compute-optimal training runs (beyond the isoflop sweep)
-# Set to empty list to only run analysis without training
+# --- Configuration ---
 TARGET_BUDGETS: list[float] = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
+EXPERIMENT_NAME = "exp2166-scaling-ladder-nemotron-validation"
+LABEL = "nemo-wider-depth-adapt"
 
-
-nemotron_suite = scaling_ladder_suite(
-    name="exp2166-scaling-ladder-nemotron-validation",
-    training_runs=nemotron_training,
-    target_budgets=TARGET_BUDGETS,
-    label="nemo-wider-depth-adapt",
-    tokenized=nemotron_mix,
-    wandb_project="marin-analysis",
-    validation_sets=default_validation_sets(tokenizer="stanford-crfm/marin-tokenizer"),
+# --- Step 1: IsoFLOP Analysis ---
+# Creates scaling law fits from the training runs
+analysis_step = ExecutorStep(
+    name=f"{EXPERIMENT_NAME}-analysis",
+    fn=run_isoflop_analysis_step,
+    config=IsoFlopAnalysisConfig(
+        training_runs=[output_path_of(r) for r in nemotron_training],
+        output_path=f"analysis/{EXPERIMENT_NAME}",
+        recipe=MARIN_2025_RECIPE,
+    ),
 )
 
-all_steps = [*nemotron_suite.all_steps]
+# --- Step 2: Optimal Training Runs ---
+# Train compute-optimal models at each target budget
+optimal_runs: list[ExecutorStep] = []
+for budget in TARGET_BUDGETS:
+    step = ExecutorStep(
+        name=f"{EXPERIMENT_NAME}-optimal-{budget:.0e}",
+        fn=run_scaling_ladder_rung,
+        config=ScalingLadderRungConfig(
+            analysis_output_path=output_path_of(analysis_step),
+            target_budget=budget,
+            label=LABEL,
+            tokenized=nemotron_mix,
+            output_path=f"checkpoints/{EXPERIMENT_NAME}-optimal-{budget:.0e}",
+            recipe=MARIN_2025_RECIPE,
+            validation_sets=default_validation_sets(tokenizer="stanford-crfm/marin-tokenizer"),
+        ),
+    )
+    optimal_runs.append(step)
+
+# All steps for this experiment
+all_steps = [analysis_step, *optimal_runs]
 
 if __name__ == "__main__":
     executor_main(steps=all_steps)

@@ -37,11 +37,17 @@ from marin.scaling_laws.isoflop_analysis import (
     predict_optimal_config,
     predict_optimal_configs_for_budgets,
     run_isoflop_analysis,
+    run_isoflop_analysis_step,
     upload_isoflop_plots_to_wandb_step,
+)
+from marin.scaling_laws.recipe import (
+    MARIN_2025_RECIPE,
+    ScalingRecipe,
 )
 from marin.scaling_laws.scaling_ladder import (
     ScalingLadderRungConfig,
     ScalingLadderSuite,
+    run_scaling_ladder_rung,
     scaling_ladder_rung_step,
     scaling_ladder_suite,
 )
@@ -54,6 +60,7 @@ from marin.scaling_laws.scaling_plots import (
 
 __all__ = [
     "DEFAULT_BUDGETS",
+    "MARIN_2025_RECIPE",
     "CandidateConfig",
     "FitScalingLawsResult",
     "IsoFlopAnalysisConfig",
@@ -66,6 +73,7 @@ __all__ = [
     "ScalingFit",
     "ScalingLadderRungConfig",
     "ScalingLadderSuite",
+    "ScalingRecipe",
     "UploadPlotsToWandbConfig",
     "build_model_config",
     "build_optimizer_config",
@@ -81,6 +89,8 @@ __all__ = [
     "predict_optimal_config",
     "predict_optimal_configs_for_budgets",
     "run_isoflop_analysis",
+    "run_isoflop_analysis_step",
+    "run_scaling_ladder_rung",
     "save_plots",
     "scaling_ladder_rung_step",
     "scaling_ladder_suite",

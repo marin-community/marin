@@ -74,6 +74,7 @@ from marin.scaling_laws.eval_metrics_reader import (
     extract_run_name_from_path,
     read_metrics_dataframe,
 )
+from marin.scaling_laws.recipe import MARIN_2025_RECIPE, ScalingRecipe
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
@@ -87,18 +88,6 @@ MARIN_TOKENIZER_VOCAB_SIZE = 128256
 
 # ---------------- IsoFLOP Sweep Constants ----------------
 DEFAULT_BUDGETS: tuple[float, ...] = (1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20)
-MLP_RATIO = 4
-
-# Learning rate scaling: lr = LR_CONSTANT * sqrt(batch_size) / hidden_dim
-LR_CONSTANT = 0.33
-
-# Head size for attention: num_heads = hidden_dim / HIDDEN_HEAD_RATIO
-HIDDEN_HEAD_RATIO = 128
-
-# Beta2 scaling for Adam: beta2 = BETA2_BASE ** (batch_size / BETA2_BATCH_DIVISOR)
-# Reference: https://arxiv.org/pdf/2507.07101
-BETA2_BASE = 0.98
-BETA2_BATCH_DIVISOR = 128
 
 # TPU v5p hardware constants for memory estimation
 HBM_PER_CHIP_GIB = 95
@@ -147,6 +136,9 @@ class IsoFlopSweepConfig:
     hyperparameters for isoflop experiments.
     """
 
+    recipe: ScalingRecipe = MARIN_2025_RECIPE
+    """Scaling recipe with hyperparameters (learning rate, beta2, optimizer settings)."""
+
     tokenizer: str = "stanford-crfm/marin-tokenizer"
     """Tokenizer to use (needed for vocab size)."""
 
@@ -164,12 +156,6 @@ class IsoFlopSweepConfig:
 
     base_hidden_layer_ratio: int = 64
     """Base ratio for hidden_dim to num_layers calculation."""
-
-    hidden_head_ratio: int = HIDDEN_HEAD_RATIO
-    """Ratio for hidden_dim to num_heads calculation."""
-
-    lr_constant: float = LR_CONSTANT
-    """Constant for learning rate calculation: lr = (lr_constant * sqrt(batch)) / hidden_dim."""
 
     min_hidden_pow: int = 9
     """Minimum hidden dimension as power of 2 (2^9 = 512)."""
@@ -405,11 +391,12 @@ def candidate_configs(
     else:
         step_size = 128
 
+    recipe = cfg.recipe
     for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, step_size):
         hs_pow = math.log2(hidden_size)
-        intermediate_dim = hidden_size * MLP_RATIO
+        intermediate_dim = hidden_size * recipe.mlp_ratio
         num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))
-        n_heads = max(1, hidden_size // cfg.hidden_head_ratio)
+        n_heads = max(1, hidden_size // recipe.hidden_head_ratio)
         n_kv_heads = n_heads
 
         batch_exact = budget / compute_total_flops(
@@ -425,11 +412,11 @@ def candidate_configs(
         )
 
         batch_size = round_to_power_of_two(batch_exact)
-        lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
+        lr = recipe.compute_learning_rate(batch_size, hidden_size)
         while lr > 0.01:
             batch_size //= 2
-            lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
-        b2 = BETA2_BASE ** (batch_size / BETA2_BATCH_DIVISOR)
+            lr = recipe.compute_learning_rate(batch_size, hidden_size)
+        b2 = recipe.compute_beta2(batch_size)
 
         if batch_size < 8:
             continue
@@ -545,32 +532,46 @@ def build_model_config(candidate: CandidateConfig, seq_len: int = SEQ_LEN) -> Qw
     )
 
 
-def build_optimizer_config(candidate: CandidateConfig) -> CautiousConfig:
-    """Build optimizer config from a CandidateConfig.
+def build_optimizer_config(
+    candidate: CandidateConfig,
+    recipe: ScalingRecipe = MARIN_2025_RECIPE,
+) -> CautiousConfig:
+    """Build optimizer config from a CandidateConfig and ScalingRecipe.
 
     This is the shared builder used by both generate_isoflop_train_args() and
     scaling_ladder's run_scaling_ladder_rung() to ensure consistent optimizer configs.
+
+    Args:
+        candidate: CandidateConfig with learning_rate and beta2.
+        recipe: ScalingRecipe with optimizer hyperparameters.
     """
     return CautiousConfig(
         learning_rate=candidate.learning_rate,
-        weight_decay=0.1,
-        min_lr_ratio=0.0,
-        warmup=0.1,
-        beta1=0.95,
+        weight_decay=recipe.weight_decay,
+        min_lr_ratio=recipe.min_lr_ratio,
+        warmup=recipe.warmup,
+        beta1=recipe.beta1,
         beta2=candidate.beta2,
-        epsilon=1e-15,
-        max_grad_norm=1,
+        epsilon=recipe.epsilon,
+        max_grad_norm=recipe.max_grad_norm,
         adamc_weight_decay=True,
-        lr_schedule="linear",
-        decay=0.2,
+        lr_schedule=recipe.lr_schedule,
+        decay=recipe.decay,
     )
 
 
-def _minima_to_candidates(minima_records: list[MinimaRecord]) -> list[CandidateConfig]:
+def _minima_to_candidates(
+    minima_records: list[MinimaRecord],
+    recipe: ScalingRecipe = MARIN_2025_RECIPE,
+) -> list[CandidateConfig]:
     """Convert minima records to CandidateConfig objects.
 
-    This is used by both _run_isoflop_analysis_step() and run_isoflop_analysis()
+    This is used by both run_isoflop_analysis_step() and run_isoflop_analysis()
     to convert the fitted minima into usable candidate configs.
+
+    Args:
+        minima_records: List of optimal configurations from scaling law fits.
+        recipe: ScalingRecipe with architecture and hyperparameter settings.
     """
     configs = []
     for rec in minima_records:
@@ -579,14 +580,14 @@ def _minima_to_candidates(minima_records: list[MinimaRecord]) -> list[CandidateC
         configs.append(
             CandidateConfig(
                 hidden_size=rec.hidden_dim,
-                intermediate_dim=rec.hidden_dim * MLP_RATIO,
+                intermediate_dim=rec.hidden_dim * recipe.mlp_ratio,
                 num_layers=rec.num_layers,
-                num_heads=max(1, rec.hidden_dim // HIDDEN_HEAD_RATIO),
-                num_kv_heads=max(1, rec.hidden_dim // HIDDEN_HEAD_RATIO),
+                num_heads=max(1, rec.hidden_dim // recipe.hidden_head_ratio),
+                num_kv_heads=max(1, rec.hidden_dim // recipe.hidden_head_ratio),
                 batch_size=rec.batch_size,
                 train_steps=int(rec.optimal_tokens / (rec.batch_size * SEQ_LEN)),
-                learning_rate=(LR_CONSTANT * math.sqrt(rec.batch_size)) / rec.hidden_dim,
-                beta2=BETA2_BASE ** (rec.batch_size / BETA2_BATCH_DIVISOR),
+                learning_rate=recipe.compute_learning_rate(rec.batch_size, rec.hidden_dim),
+                beta2=recipe.compute_beta2(rec.batch_size),
                 tokens=rec.optimal_tokens,
                 flops_budget=rec.flops,
             )
@@ -626,19 +627,20 @@ def generate_isoflop_train_args(
         ...     # Use args.model_config, args.optimizer_config, etc. with default_train()
         ...     pass
     """
+    recipe = sweep_config.recipe
     if base_optimizer_config is None:
         base_optimizer_config = CautiousConfig(
             learning_rate=1.0,  # Placeholder, will be overridden
-            weight_decay=0.1,
-            min_lr_ratio=0.0,
-            warmup=0.1,
-            beta1=0.95,
+            weight_decay=recipe.weight_decay,
+            min_lr_ratio=recipe.min_lr_ratio,
+            warmup=recipe.warmup,
+            beta1=recipe.beta1,
             beta2=0.98,  # Placeholder, will be overridden
-            epsilon=1e-15,
-            max_grad_norm=1,
+            epsilon=recipe.epsilon,
+            max_grad_norm=recipe.max_grad_norm,
             adamc_weight_decay=True,
-            lr_schedule="linear",
-            decay=0.2,
+            lr_schedule=recipe.lr_schedule,
+            decay=recipe.decay,
         )
 
     results: list[IsoFlopTrainArgs] = []
@@ -1074,6 +1076,9 @@ def _parse_fit_curve_coeffs(coeffs: Sequence[float]) -> QuadraticFitCoeffs:
 class IsoFlopAnalysisConfig(EvalMetricsAnalysisConfig):
     """Configuration for scaling ladder analysis ExecutorStep."""
 
+    recipe: ScalingRecipe = MARIN_2025_RECIPE
+    """Scaling recipe for computing optimal hyperparameters."""
+
     metric_key: str = DEFAULT_METRIC_KEY
     """Metric to use for loss (default: eval/paloma/c4_en/bpb)."""
 
@@ -1109,7 +1114,7 @@ class UploadPlotsToWandbConfig:
     """Name for the WandB run."""
 
 
-def _run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
+def run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
     """Execute scaling ladder analysis (called by ExecutorStep)."""
     raw_df = read_metrics_dataframe(config)
 
@@ -1134,7 +1139,7 @@ def _run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
     for label, (alpha, A) in fit_result.scaling_fits.items():
         logger.info(f"  {label}: N* = {A:.2e} * C^{alpha:.3f}")
 
-    configs = _minima_to_candidates(fit_result.minima_records)
+    configs = _minima_to_candidates(fit_result.minima_records, config.recipe)
 
     result = IsoFlopAnalysisResult(
         configs=configs,
@@ -1258,6 +1263,7 @@ def isoflop_analysis_step(
     training_runs: Sequence[ExecutorStep | InputName],
     metric_key: str = DEFAULT_METRIC_KEY,
     label_map: dict[str, str] | None = None,
+    recipe: ScalingRecipe = MARIN_2025_RECIPE,
 ) -> ExecutorStep:
     """Create an ExecutorStep for scaling ladder analysis.
 
@@ -1270,6 +1276,7 @@ def isoflop_analysis_step(
         training_runs: Training run ExecutorSteps or InputNames to analyze
         metric_key: Which metric to use for loss (default: eval/paloma/c4_en/bpb)
         label_map: Optional mapping from experiment_name -> display label
+        recipe: ScalingRecipe with hyperparameters
 
     Returns:
         ExecutorStep configured to run the analysis
@@ -1290,13 +1297,14 @@ def isoflop_analysis_step(
     config = IsoFlopAnalysisConfig(
         training_runs=run_paths,
         output_path=this_output_path(),
+        recipe=recipe,
         metric_key=metric_key,
         label_map=tuple(label_map.items()) if label_map else None,
     )
 
     return ExecutorStep(
         name=name,
-        fn=_run_isoflop_analysis_step,
+        fn=run_isoflop_analysis_step,
         config=config,
         description=f"Scaling ladder analysis for {len(training_runs)} training runs",
     )
@@ -1389,6 +1397,7 @@ def run_isoflop_analysis(
     training_runs: Sequence[ExecutorStep] | Sequence[str],
     metric_key: str = DEFAULT_METRIC_KEY,
     label_map: dict[str, str] | None = None,
+    recipe: ScalingRecipe = MARIN_2025_RECIPE,
 ) -> IsoFlopAnalysisResult:
     """Analyze isoflop training runs and return optimal training configurations.
 
@@ -1399,6 +1408,7 @@ def run_isoflop_analysis(
         training_runs: List of ExecutorSteps or path strings to training runs
         metric_key: Which metric to use for loss (default: eval/paloma/c4_en/bpb)
         label_map: Optional mapping from experiment_name -> display label
+        recipe: ScalingRecipe with hyperparameter settings
 
     Returns:
         IsoFlopAnalysisResult with configs, scaling_fits, and analysis data
@@ -1436,7 +1446,7 @@ def run_isoflop_analysis(
     logger.info(f"Transformed {len(isoflop_df)} runs for scaling ladder analysis")
 
     fit_result = fit_scaling_laws(isoflop_df)
-    configs = _minima_to_candidates(fit_result.minima_records)
+    configs = _minima_to_candidates(fit_result.minima_records, recipe)
 
     return IsoFlopAnalysisResult(
         configs=configs,

@@ -67,8 +67,8 @@ from marin.scaling_laws.isoflop_analysis import (
     pick_v5p_type,
     predict_optimal_config,
 )
+from marin.scaling_laws.recipe import MARIN_2025_RECIPE, ScalingRecipe
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
-from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +133,9 @@ class ScalingLadderRungConfig:
     output_path: str
     """Where to write training outputs."""
 
+    recipe: ScalingRecipe = MARIN_2025_RECIPE
+    """Scaling recipe with hyperparameters."""
+
     tokenizer: str = "stanford-crfm/marin-tokenizer"
     """Tokenizer to use."""
 
@@ -194,7 +197,7 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
         vocab_size,
     )
 
-    optimizer_cfg = build_optimizer_config(candidate)
+    optimizer_cfg = build_optimizer_config(candidate, config.recipe)
 
     pretraining_data = _prepare_data_config(config.tokenized, config.validation_sets)
 
@@ -247,6 +250,7 @@ def scaling_ladder_rung_step(
     target_budget: float,
     label: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    recipe: ScalingRecipe = MARIN_2025_RECIPE,
     tokenizer: str = "stanford-crfm/marin-tokenizer",
     seq_len: int = 4096,
     override_output_path: str | None = None,
@@ -264,6 +268,7 @@ def scaling_ladder_rung_step(
         label: Dataset label to use for scaling fit (e.g., 'nemo', 'comma')
         tokenized: Tokenized dataset to train on. Can be an ExecutorStep, InputName,
             or LMMixtureDatasetConfig.
+        recipe: ScalingRecipe with hyperparameters
         tokenizer: Tokenizer to use
         seq_len: Sequence length for training
         override_output_path: Optional override for the output path
@@ -287,6 +292,7 @@ def scaling_ladder_rung_step(
         label=label,
         tokenized=resolved_tokenized,
         output_path=output_path,
+        recipe=recipe,
         tokenizer=tokenizer,
         seq_len=seq_len,
         validation_sets=validation_sets,
@@ -334,14 +340,11 @@ def scaling_ladder_suite(
     target_budgets: Sequence[float],
     label: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    recipe: ScalingRecipe = MARIN_2025_RECIPE,
     tokenizer: str = "stanford-crfm/marin-tokenizer",
     seq_len: int = 4096,
     metric_key: str = "eval/paloma/c4_en/bpb",
     label_map: dict[str, str] | None = None,
-    save_plots: bool = True,
-    upload_to_wandb: bool = True,
-    wandb_entity: str = WANDB_ENTITY,
-    wandb_project: str = f"{WANDB_PROJECT}-analysis",
     validation_sets: dict[str, TokenizerStep] | None = None,
 ) -> ScalingLadderSuite:
     """Create a complete scaling ladder: IsoFLOP analysis + optimal training runs.
@@ -360,14 +363,11 @@ def scaling_ladder_suite(
         label: Dataset label to use for scaling fit (e.g., 'nemo', 'comma')
         tokenized: Tokenized dataset for optimal training runs. Can be an ExecutorStep,
             InputName, or LMMixtureDatasetConfig.
+        recipe: ScalingRecipe with hyperparameters
         tokenizer: Tokenizer to use
         seq_len: Sequence length for training
         metric_key: Which metric to use for loss
         label_map: Optional mapping from experiment_name -> display label
-        save_plots: Whether to save HTML plots
-        upload_to_wandb: Whether to upload plots to WandB
-        wandb_entity: WandB entity for uploads
-        wandb_project: WandB project for uploads
         validation_sets: Optional validation sets for eval loss tracking
 
     Returns:
@@ -388,11 +388,7 @@ def scaling_ladder_suite(
         training_runs=training_runs,
         metric_key=metric_key,
         label_map=label_map,
-        save_plots=save_plots,
-        upload_to_wandb=upload_to_wandb,
-        wandb_entity=wandb_entity,
-        wandb_project=wandb_project,
-        wandb_run_name=f"{name}-analysis",
+        recipe=recipe,
     )
 
     optimal_runs = []
@@ -403,6 +399,7 @@ def scaling_ladder_suite(
             target_budget=budget,
             label=label,
             tokenized=tokenized,
+            recipe=recipe,
             tokenizer=tokenizer,
             seq_len=seq_len,
             validation_sets=validation_sets,
