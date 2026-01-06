@@ -136,12 +136,21 @@ def tree_serialize_leaves_tensorstore(
 
 
 def _sharding_from_leaf(leaf, axis_mapping, mesh) -> Optional[jax.sharding.Sharding]:
+    def _concretize_sharding(sharding: jax.sharding.Sharding) -> jax.sharding.Sharding:
+        # `eqx.filter_eval_shape` can produce `NamedSharding(mesh=AbstractMesh(...))`, but JAX array
+        # deserialization requires a concrete device assignment (i.e., a concrete Mesh).
+        if isinstance(sharding, jax.sharding.NamedSharding) and isinstance(sharding.mesh, jax.sharding.AbstractMesh):
+            concrete_mesh = mesh or jax.sharding.get_mesh()
+            if not concrete_mesh.empty:
+                return jax.sharding.NamedSharding(concrete_mesh, sharding.spec)
+        return sharding
+
     if is_named_array(leaf):
         if not is_jax_array_like(leaf.array):
             return None
         return hax.partitioning.sharding_for_axis(leaf.axes, axis_mapping, mesh)
     elif hasattr(leaf, "sharding") and getattr(leaf, "sharding") is not None:
-        return leaf.sharding
+        return _concretize_sharding(leaf.sharding)
     elif is_jax_array_like(leaf):
         return _fully_replicated_sharding(mesh)
     elif isinstance(leaf, (bool, float, complex, int, np.ndarray)):
