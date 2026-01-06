@@ -101,7 +101,8 @@ upload_qwen32b_annotated_open_thoughts_4_math = replace(
 
 
 if __name__ == "__main__":
+    # It's recommended to just run the first 2 steps (download model and annotate) separately
+    # and then run the last step (upload to HF) afterwards
     executor_main([qwen3_32b])
     executor_main([qwen_32B_annotated_open_thoughts_4_math])
-    # TODO: Uncomment once HF permissions are sorted out
     # executor_main([upload_qwen32b_annotated_open_thoughts_4_math])
