@@ -133,21 +133,14 @@ def test_compute_total_flops_linear_in_batch_and_steps():
 
 
 def test_parse_isoflop_run_name():
-    """Test parsing isoflop run names extracts correct values."""
+    """Test parsing isoflop run names extracts experiment names."""
     # Standard name
     result = parse_isoflop_run_name("isoflop-1e+19-d2048-L16-B1024-nemo-wider-depth-adapt")
-    assert result is not None
-    assert result["flops"] == 1e19
-    assert result["d"] == 2048
-    assert result["L"] == 16
-    assert result["B"] == 1024
-    assert result["experiment_name"] == "nemo-wider-depth-adapt"
+    assert result == "nemo-wider-depth-adapt"
 
     # With hash suffix
     result = parse_isoflop_run_name("isoflop-1e+18-d512-L8-B128-dclm-a1b2c3")
-    assert result is not None
-    assert result["flops"] == 1e18
-    assert result["experiment_name"] == "dclm"
+    assert result == "dclm"
 
     # Invalid formats return None
     assert parse_isoflop_run_name("not-a-valid-name") is None
