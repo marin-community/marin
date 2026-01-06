@@ -15,16 +15,22 @@
 """Generate ISOFlop sweep steps for varying model sizes on a target dataset.
 
 This script constructs `ExecutorStep` objects that train models of different
-sizes while keeping the total training FLOPs roughly constant.  It is intended
+sizes while keeping the total training FLOPs roughly constant. It is intended
 as a lightweight scaffold for ISOFlop scaling law experiments.
+
+ExecutorSteps are created directly in this experiment file, following the pattern
+of isolating executor step creation to experiments. The library provides:
+- `generate_isoflop_train_args()`: Computes model/optimizer configs for each sweep point
+- `IsoFlopSweepConfig`: Configuration for the sweep parameters
+- `ScalingRecipe`: Named hyperparameter bundle
+
+This file uses those to create the actual ExecutorSteps.
 """
 
 import dataclasses
-from dataclasses import dataclass, replace
+from dataclasses import replace
 
 from levanter.data.text import LMMixtureDatasetConfig
-from levanter.optim.cautious import CautiousConfig
-from levanter.optim.config import OptimizerConfig
 
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import EvalTaskConfig
@@ -37,94 +43,73 @@ from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.processing.tokenize import get_vocab_size_for_tokenizer, lm_mixture_data_config
-from marin.scaling_laws.isoflop_analysis import (
+from marin.scaling_laws import (
     CandidateConfig,
     IsoFlopSweepConfig,
     generate_isoflop_train_args,
 )
+from marin.scaling_laws.recipe import MARIN_2025_RECIPE, ScalingRecipe
 
 
-@dataclass(frozen=True)
-class IsoFlopExperimentConfig:
-    """Configuration for isoflop experiments with dataset and eval settings.
-
-    Composes an IsoFlopSweepConfig for core sweep parameters and adds
-    experiment-specific settings like tokenized dataset and eval tasks.
-    """
-
-    tokenized_dataset: InputName | str
-    """Tokenized dataset to train on."""
-
-    sweep_config: IsoFlopSweepConfig = dataclasses.field(default_factory=IsoFlopSweepConfig)
-    """Core sweep parameters (budgets, seq_len, etc.)."""
-
-    eval_tasks: tuple[EvalTaskConfig, ...] | None = None
-    """Evaluation tasks to run after training (disabled by default)."""
-
-    base_optimizer_config: OptimizerConfig = dataclasses.field(
-        default_factory=lambda: CautiousConfig(
-            learning_rate=1.0,  # Placeholder
-            weight_decay=0.1,
-            min_lr_ratio=0.0,
-            warmup=0.1,
-            beta1=0.95,
-            beta2=0.98,
-            epsilon=1e-15,
-            max_grad_norm=1,
-            adamc_weight_decay=True,
-            lr_schedule="linear",
-            decay=0.2,
-        ),
-    )
-
-    base_train_config: SimpleTrainConfig = dataclasses.field(
-        default_factory=lambda: SimpleTrainConfig(
-            resources=ResourceConfig.with_tpu("v5p-8"),
-            train_batch_size=1,
-            num_train_steps=50_000,
-            learning_rate=1.0,  # Placeholder
-            weight_decay=0.1,
-            min_lr_ratio=0.0,
-            lr_schedule="linear",
-            decay=0.2,
-        )
-    )
-
-
-def generate_isoflop_steps(
-    config: IsoFlopExperimentConfig,
+def create_isoflop_sweep_steps(
+    tokenized: InputName | str | LMMixtureDatasetConfig,
     experiment_name: str,
+    recipe: ScalingRecipe,
+    sweep_config: IsoFlopSweepConfig | None = None,
+    eval_tasks: tuple[EvalTaskConfig, ...] | None = None,
 ) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
-    """Generate executor steps for an ISOFlop sweep.
+    """Create ExecutorSteps for an ISOFlop sweep.
 
-    Uses generate_isoflop_train_args() from the scaling_laws library to get
-    model configs, optimizer configs, and other arguments, then constructs
-    ExecutorSteps using default_train().
+    This function creates ExecutorSteps directly in experiment code, using
+    `generate_isoflop_train_args()` from the library to compute configs.
+
+    Args:
+        tokenized: Tokenized dataset to train on.
+        experiment_name: Name suffix for the experiment (e.g., 'nemo', 'dclm').
+        recipe: ScalingRecipe with hyperparameters - must be explicitly specified.
+        sweep_config: Optional custom sweep config. Uses defaults with the recipe if None.
+        eval_tasks: Optional evaluation tasks to run after training.
 
     Returns:
         A tuple of:
         - steps: Training and evaluation ExecutorSteps for the sweep.
-        - candidates: CandidateConfig for each training run (contains budget, hidden_size,
-          num_layers, batch_size, train_steps, learning_rate, etc.)
+        - candidates: CandidateConfig for each training run with full config details.
     """
-    vocab_size = get_vocab_size_for_tokenizer(config.sweep_config.tokenizer)
+    # Build sweep config with the specified recipe
+    if sweep_config is None:
+        sweep_config = IsoFlopSweepConfig(recipe=recipe)
+    else:
+        sweep_config = dataclasses.replace(sweep_config, recipe=recipe)
 
-    # Get training arguments from the library
+    vocab_size = get_vocab_size_for_tokenizer(sweep_config.tokenizer)
+
+    # Library provides the training arguments (model configs, optimizer configs, etc.)
     train_args_list = generate_isoflop_train_args(
-        sweep_config=config.sweep_config,
+        sweep_config=sweep_config,
         experiment_name=experiment_name,
         vocab_size=vocab_size,
-        base_optimizer_config=config.base_optimizer_config,
     )
 
-    train_steps_list: list[ExecutorStep] = []
+    # Base config for training runs
+    base_train_config = SimpleTrainConfig(
+        resources=ResourceConfig.with_tpu("v5p-8"),
+        train_batch_size=1,
+        num_train_steps=50_000,
+        learning_rate=1.0,  # Placeholder, will be overridden
+        weight_decay=recipe.weight_decay,
+        min_lr_ratio=recipe.min_lr_ratio,
+        lr_schedule=recipe.lr_schedule,
+        decay=recipe.decay,
+    )
+
+    train_steps: list[ExecutorStep] = []
     eval_steps: list[ExecutorStep] = []
     candidates: list[CandidateConfig] = []
 
+    # Create ExecutorSteps for each candidate configuration
     for args in train_args_list:
-        # Build SimpleTrainConfig from the library-provided arguments
         train_cfg = replace(
-            config.base_train_config,
+            base_train_config,
             train_batch_size=args.candidate.batch_size,
             learning_rate=args.candidate.learning_rate,
             num_train_steps=args.candidate.train_steps,
@@ -132,10 +117,10 @@ def generate_isoflop_steps(
             optimizer_config=args.optimizer_config,
         )
 
-        # Create training step using default_train
+        # Create training step
         train_step = default_train(
             name=args.run_name,
-            tokenized=config.tokenized_dataset,
+            tokenized=tokenized,
             model_config=args.model_config,
             train_config=train_cfg,
             eval_harness_tasks=[],
@@ -144,50 +129,23 @@ def generate_isoflop_steps(
 
         # Pin to static output path for checkpoint reuse
         train_step = train_step.with_output_path(args.output_path)
-        train_steps_list.append(train_step)
+        train_steps.append(train_step)
         candidates.append(args.candidate)
 
-        # Evaluation on the latest checkpoint for each ISOFlop run
-        if config.eval_tasks:
+        # Create evaluation step if eval tasks specified
+        if eval_tasks:
             eval_step = default_eval(
                 train_step,
                 resource_config=train_cfg.resources,
-                evals=config.eval_tasks,
+                evals=eval_tasks,
             )
             eval_steps.append(eval_step)
 
-    all_steps: list[ExecutorStep] = [*train_steps_list, *eval_steps]
+    all_steps: list[ExecutorStep] = [*train_steps, *eval_steps]
     return all_steps, candidates
 
 
-def generate_isoflop_sweep(
-    tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
-    experiment_name: str,
-    sweep_config: IsoFlopSweepConfig | None = None,
-    eval_tasks: tuple[EvalTaskConfig, ...] | None = None,
-) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
-    """Generate an ISOFlop sweep for a tokenized dataset.
-
-    Args:
-        tokenized: Tokenized dataset to train on.
-        experiment_name: Name suffix for the experiment (e.g., 'nemo', 'dclm').
-        sweep_config: Optional custom sweep config. Uses defaults if None.
-        eval_tasks: Optional evaluation tasks to run after training.
-
-    Returns:
-        A tuple of:
-        - steps: Training and evaluation ExecutorSteps for the sweep.
-        - candidates: CandidateConfig for each training run with full config details.
-    """
-    config = IsoFlopExperimentConfig(
-        tokenized_dataset=tokenized,
-        sweep_config=sweep_config or IsoFlopSweepConfig(),
-        eval_tasks=eval_tasks,
-    )
-    steps, candidates = generate_isoflop_steps(config, experiment_name)
-
-    return steps, candidates
-
+# --- Tokenized Datasets ---
 
 dclm_tokenized = dataclasses.replace(
     default_tokenize(
@@ -196,7 +154,6 @@ dclm_tokenized = dataclasses.replace(
         tokenizer=llama3_tokenizer,
     ).with_output_path("tokenized/dclm_baseline-0206f1/"),
 )
-
 
 dclm_mix = lm_mixture_data_config(
     components={"dclm": dclm_tokenized},
@@ -218,14 +175,37 @@ dolma3_mix = lm_mixture_data_config(
     num_validation_sequences={"dolma3_mix-150B-1025": 1024},
 )
 
+
+# --- Scaling Suites ---
+# Each suite explicitly specifies the recipe for visibility.
+# ExecutorSteps are created by create_isoflop_sweep_steps() in this file.
+
 MARIN_SCALING_SUITES = {
-    "nemotron": generate_isoflop_sweep(nemotron_mix, experiment_name="nemo-wider-depth-adapt"),
-    "common_pile": generate_isoflop_sweep(comma_main_mixture(permutation_type="linear"), experiment_name="comma-mix"),
-    "common_pile_feistel": generate_isoflop_sweep(
-        comma_main_mixture(permutation_type="feistel"), experiment_name="comma-mix-feistel"
+    "nemotron": create_isoflop_sweep_steps(
+        tokenized=nemotron_mix,
+        experiment_name="nemo-wider-depth-adapt",
+        recipe=MARIN_2025_RECIPE,
     ),
-    "dclm-default": generate_isoflop_sweep(dclm_mix, experiment_name="dclm-default"),
-    "dolma3_mix_150b": generate_isoflop_sweep(dolma3_mix, experiment_name="dolma3-mix-150b-1025"),
+    "common_pile": create_isoflop_sweep_steps(
+        tokenized=comma_main_mixture(permutation_type="linear"),
+        experiment_name="comma-mix",
+        recipe=MARIN_2025_RECIPE,
+    ),
+    "common_pile_feistel": create_isoflop_sweep_steps(
+        tokenized=comma_main_mixture(permutation_type="feistel"),
+        experiment_name="comma-mix-feistel",
+        recipe=MARIN_2025_RECIPE,
+    ),
+    "dclm-default": create_isoflop_sweep_steps(
+        tokenized=dclm_mix,
+        experiment_name="dclm-default",
+        recipe=MARIN_2025_RECIPE,
+    ),
+    "dolma3_mix_150b": create_isoflop_sweep_steps(
+        tokenized=dolma3_mix,
+        experiment_name="dolma3-mix-150b-1025",
+        recipe=MARIN_2025_RECIPE,
+    ),
 }
 
 if __name__ == "__main__":
