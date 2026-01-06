@@ -176,6 +176,7 @@ class TestMultipleFileProcessing:
                 assert "id" in result
                 assert "attributes" in result
 
+
 def test_run_inference_raises_for_empty_glob(tmp_path):
     config = InferenceConfig(
         input_path=str(tmp_path),
