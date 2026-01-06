@@ -137,7 +137,7 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
     gdn_block_size: int = 4
     gdn_conv_kernel_size: int = 4
     gdn_chunk_size: int = 128
-    gdn_segment_size: int = 8
+    gdn_segment_size: int = 16
 
     gradient_checkpointing: bool | ScanCheckpointPolicy | str = True
     initializer_range: float = 0.02
