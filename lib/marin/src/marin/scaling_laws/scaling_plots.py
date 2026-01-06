@@ -30,12 +30,7 @@ import plotly.io as pio
 
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
-try:
-    import wandb
-
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
+import wandb
 
 
 logger = logging.getLogger(__name__)
@@ -312,10 +307,6 @@ def upload_plots_to_wandb(
         project: WandB project
         run_name: Name for the WandB run
     """
-    if not WANDB_AVAILABLE:
-        logger.warning("wandb not available, cannot upload plots")
-        return
-
     wandb.login()
     run = wandb.init(
         entity=entity,
