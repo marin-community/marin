@@ -358,11 +358,11 @@ class LlavaOnevisionModel(eqx.Module):
         # Initialize vision tower based on encoder type
         if config.vision_encoder_type == "siglip2":
             vision_tower = Siglip2VisionModel.init(
-                Vocab=Vocab, config=config.vision_config, key=k_vision  # Dummy vocab for vision model
+                Vocab=Vocab, config=config.vision_config, key=k_vision
             )
         elif config.vision_encoder_type == "siglip":
             vision_tower = SiglipVisionModel.init(
-                Vocab=Vocab, config=config.vision_config, key=k_vision  # Dummy vocab for vision model
+                Vocab=Vocab, config=config.vision_config, key=k_vision
             )
         else:
             raise ValueError(f"Unsupported vision_encoder_type: {config.vision_encoder_type}")
@@ -455,7 +455,8 @@ class LlavaOnevisionModel(eqx.Module):
 
         # Run vision tower on all patches (including padding patches)
         image_outputs = self.vision_tower(pixel_values_flat, output_hidden_states=True, key=k_vision)
-        assert image_outputs.hidden_states is not None  # output_hidden_states=True ensures this
+        if image_outputs.hidden_states is None:
+            raise ValueError("Vision tower must return hidden states when output_hidden_states=True")
 
         # Select features from specified layer(s)
         if isinstance(vision_feature_layer, int):

@@ -88,7 +88,15 @@ from test_image_utils import (  # noqa: E402
     compare_logits_by_region,
     create_lev_jax_tensors,
 )
-from test_data_utils import get_single_image, get_multi_images  # noqa: E402
+from test_image_utils import get_single_image, get_multi_images  # noqa: E402
+import jax.tree_util as jtu  # noqa: E402
+
+
+def _to_float32(x):
+    """Convert JAX arrays to float32 for numerical consistency in tests."""
+    if isinstance(x, jnp.ndarray) and jnp.issubdtype(x.dtype, jnp.floating):
+        return x.astype(jnp.float32)
+    return x
 
 
 def _tiny_vision_config():
@@ -1256,8 +1264,6 @@ def test_llava_onevision_full_model_vs_hf():
     patch_size = hf_config.vision_config.patch_size
     image_height = hf_config.vision_config.image_size
     image_width = hf_config.vision_config.image_size
-    grid_size = image_height // patch_size
-    _ = grid_size * grid_size  # num_patches - used for validation
 
     # Create pixel values as regular image data (4D)
     num_channels = hf_config.vision_config.num_channels
@@ -1700,7 +1706,7 @@ def test_llava_onevision_visual_embeddings_match():
     import equinox as eqx
     from levanter.compat.hf_checkpoints import from_torch_compatible_state_dict
 
-    from levanter.data.processing_llava_onevision import create_custom_processor
+    from levanter.data.image import create_custom_processor
 
     print("\n=== Test: Visual Embeddings Match (Pre-LM) ===")
 
@@ -1715,21 +1721,10 @@ def test_llava_onevision_visual_embeddings_match():
     torch_model.model.image_newline = None  # Disable image_newline for consistency
     torch_model.eval()
     # Update image_grid_pinpoints in config
-    custom_image_grid_pinpoints = [
-        [384, 384],
-        [384, 768],
-        [384, 1152],
-        [768, 384],
-        [768, 768],
-        [768, 1152],
-        [1152, 384],
-        [1152, 768],
-        [1152, 1152],
-    ]
-    torch_model.model.config.image_grid_pinpoints = custom_image_grid_pinpoints
+    torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
     # Create two processors: HF uses unpadded, Levanter uses padded
-    processor_hf = create_custom_processor(model_name, do_pad=False, image_grid_pinpoints=custom_image_grid_pinpoints)
-    processor_lev = create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=custom_image_grid_pinpoints)
+    processor_hf = create_custom_processor(model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS)
+    processor_lev = create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS)
 
     text = "Describe this image briefly."
     messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": text}]}]
@@ -1776,14 +1771,7 @@ def test_llava_onevision_visual_embeddings_match():
     lev_model = from_torch_compatible_state_dict(model_template, state_dict)
 
     # Convert model weights to float32 for consistency
-    import jax.tree_util as jtu
-
-    def to_float32(x):
-        if isinstance(x, jnp.ndarray) and jnp.issubdtype(x.dtype, jnp.floating):
-            return x.astype(jnp.float32)
-        return x
-
-    lev_model = jtu.tree_map(to_float32, lev_model)
+    lev_model = jtu.tree_map(_to_float32, lev_model)
 
     batch_size = inputs_lev["input_ids"].shape[0]
     Batch = Axis("batch", batch_size)
@@ -2036,14 +2024,7 @@ def test_llava_onevision_real_image_text():
     lev_model = from_torch_compatible_state_dict(model_template, state_dict)
 
     # Convert model weights to float32 for consistency
-    import jax.tree_util as jtu
-
-    def to_float32(x):
-        if isinstance(x, jnp.ndarray) and jnp.issubdtype(x.dtype, jnp.floating):
-            return x.astype(jnp.float32)
-        return x
-
-    lev_model = jtu.tree_map(to_float32, lev_model)
+    lev_model = jtu.tree_map(_to_float32, lev_model)
 
     model_convert_time = time.time() - start_time
     print(f"  Total conversion time: {model_convert_time:.4f} seconds")
@@ -2319,14 +2300,7 @@ def test_llava_onevision_real_multi_image_text():
     lev_model = from_torch_compatible_state_dict(model_template, state_dict)
 
     # Convert model weights to float32 for consistency
-    import jax.tree_util as jtu
-
-    def to_float32(x):
-        if isinstance(x, jnp.ndarray) and jnp.issubdtype(x.dtype, jnp.floating):
-            return x.astype(jnp.float32)
-        return x
-
-    lev_model = jtu.tree_map(to_float32, lev_model)
+    lev_model = jtu.tree_map(_to_float32, lev_model)
 
     model_convert_time = time.time() - start_time
     print(f"  Total conversion time: {model_convert_time:.4f} seconds")
@@ -2803,7 +2777,7 @@ def test_llava_onevision_real_image_text_0_5b_batch():
     from transformers import (
         LlavaOnevisionForConditionalGeneration as HfLlavaOnevision,
     )
-    from levanter.data.processing_llava_onevision import create_custom_processor
+    from levanter.data.image import create_custom_processor
 
     print("\n=== Test: Real Image with Batch Padding (batch=8) ===")
 
@@ -2832,24 +2806,13 @@ def test_llava_onevision_real_image_text_0_5b_batch():
         torch_model.model.image_newline = None  # Disable image_newline for consistency
         torch_model.eval()
         # Update image_grid_pinpoints in config to 3x3 grid (matches anyres_max_9)
-        custom_image_grid_pinpoints = [
-            [384, 384],
-            [384, 768],
-            [384, 1152],
-            [768, 384],
-            [768, 768],
-            [768, 1152],
-            [1152, 384],
-            [1152, 768],
-            [1152, 1152],
-        ]
-        torch_model.model.config.image_grid_pinpoints = custom_image_grid_pinpoints
+        torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
         # Create two processors: HF uses unpadded, Levanter uses padded
         processor_hf = create_custom_processor(
-            model_name, do_pad=False, image_grid_pinpoints=custom_image_grid_pinpoints
+            model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
         )
         processor_lev = create_custom_processor(
-            model_name, do_pad=True, image_grid_pinpoints=custom_image_grid_pinpoints
+            model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
         )
     except Exception as e:
         print(f"Could not load model: {e}")
@@ -3162,7 +3125,7 @@ def test_llava_onevision_generation():
     )
     import equinox as eqx
     from levanter.compat.hf_checkpoints import from_torch_compatible_state_dict
-    from levanter.data.processing_llava_onevision import create_custom_processor
+    from levanter.data.image import create_custom_processor
     from levanter.data.image import ImageTextExample
     from haliax import NamedArray
 
@@ -3185,25 +3148,14 @@ def test_llava_onevision_generation():
         torch_model.eval()
 
         # Use 3x3 grid (matches other tests)
-        custom_image_grid_pinpoints = [
-            [384, 384],
-            [384, 768],
-            [384, 1152],
-            [768, 384],
-            [768, 768],
-            [768, 1152],
-            [1152, 384],
-            [1152, 768],
-            [1152, 1152],
-        ]
-        torch_model.model.config.image_grid_pinpoints = custom_image_grid_pinpoints
+        torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
 
         # Create processors (HF unpadded, Levanter padded)
         processor_hf = create_custom_processor(
-            model_name, do_pad=False, image_grid_pinpoints=custom_image_grid_pinpoints
+            model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
         )
         processor_lev = create_custom_processor(
-            model_name, do_pad=True, image_grid_pinpoints=custom_image_grid_pinpoints
+            model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
         )
     except Exception as e:
         print(f"Could not load model: {e}")
@@ -3263,14 +3215,7 @@ def test_llava_onevision_generation():
     lev_model = from_torch_compatible_state_dict(model_template, state_dict)
 
     # Convert model weights to float32 for consistency
-    import jax.tree_util as jtu
-
-    def to_float32(x):
-        if isinstance(x, jnp.ndarray) and jnp.issubdtype(x.dtype, jnp.floating):
-            return x.astype(jnp.float32)
-        return x
-
-    lev_model = jtu.tree_map(to_float32, lev_model)
+    lev_model = jtu.tree_map(_to_float32, lev_model)
 
     # Prepare Levanter inputs using ImageTextExample
     print("\n--- Levanter Generation ---")
@@ -3540,7 +3485,7 @@ def test_llava_onevision_generation_with_kv_cache():
     import equinox as eqx
     from levanter.compat.hf_checkpoints import from_torch_compatible_state_dict
     from levanter.inference.page_table import PageTable, PageBatchInfo
-    from levanter.data.processing_llava_onevision import create_custom_processor
+    from levanter.data.image import create_custom_processor
 
     print("\n=== Test: Generation with KV Cache ===")
 
@@ -3550,19 +3495,6 @@ def test_llava_onevision_generation_with_kv_cache():
 
     # Use a small pretrained model for testing
     model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
-
-    # Custom 3x3 grid pinpoints (matches other tests)
-    custom_image_grid_pinpoints = [
-        [384, 384],
-        [384, 768],
-        [384, 1152],
-        [768, 384],
-        [768, 768],
-        [768, 1152],
-        [1152, 384],
-        [1152, 768],
-        [1152, 1152],
-    ]
 
     print(f"Loading HuggingFace model and processor: {model_name}")
     try:
@@ -3574,14 +3506,14 @@ def test_llava_onevision_generation_with_kv_cache():
 
         # Disable image_newline for consistency with other tests
         torch_model.model.image_newline = None
-        torch_model.model.config.image_grid_pinpoints = custom_image_grid_pinpoints
+        torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
 
         # Create processors (HF unpadded, Levanter padded)
         processor_hf = create_custom_processor(
-            model_name, do_pad=False, image_grid_pinpoints=custom_image_grid_pinpoints
+            model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
         )
         processor_lev = create_custom_processor(
-            model_name, do_pad=True, image_grid_pinpoints=custom_image_grid_pinpoints
+            model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
         )
     except Exception as e:
         print(f"Could not load model: {e}")
@@ -3639,14 +3571,7 @@ def test_llava_onevision_generation_with_kv_cache():
     lev_model = from_torch_compatible_state_dict(model_template, state_dict)
 
     # Convert weights to float32 (model may have float16 weights)
-    import jax.tree_util as jtu
-
-    def to_float32(x):
-        if isinstance(x, jnp.ndarray) and jnp.issubdtype(x.dtype, jnp.floating):
-            return x.astype(jnp.float32)
-        return x
-
-    lev_model = jtu.tree_map(to_float32, lev_model)
+    lev_model = jtu.tree_map(_to_float32, lev_model)
 
     # Prepare Levanter inputs
     print("\n--- Levanter Generation with KV Cache ---")
@@ -3964,7 +3889,7 @@ def test_llava_onevision_generation_with_inference_engine():
         LlavaOnevisionForConditionalGeneration as HfLlavaOnevision,
     )
     from levanter.trainer import TrainerConfig
-    from levanter.data.processing_llava_onevision import create_custom_processor
+    from levanter.data.image import create_custom_processor
 
     print("\n=== Test: Generation with InferenceEngine using VLMRequest ===")
 
@@ -3975,19 +3900,6 @@ def test_llava_onevision_generation_with_inference_engine():
     # Use a small pretrained model for testing (0.5B instead of 7B to fit in TPU VMEM)
     model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
 
-    # Custom 3x3 grid pinpoints (matches other tests)
-    custom_image_grid_pinpoints = [
-        [384, 384],
-        [384, 768],
-        [384, 1152],
-        [768, 384],
-        [768, 768],
-        [768, 1152],
-        [1152, 384],
-        [1152, 768],
-        [1152, 1152],
-    ]
-
     print(f"Loading HuggingFace config and processor: {model_name}")
     try:
         # Only load config and processor, NOT the model to save memory for Levanter loading
@@ -3997,10 +3909,10 @@ def test_llava_onevision_generation_with_inference_engine():
 
         # Create processors (HF unpadded, Levanter padded)
         processor_hf = create_custom_processor(
-            model_name, do_pad=False, image_grid_pinpoints=custom_image_grid_pinpoints
+            model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
         )
         processor_lev = create_custom_processor(
-            model_name, do_pad=True, image_grid_pinpoints=custom_image_grid_pinpoints
+            model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
         )
 
         # Comment out torch model loading to save memory - we only need config
@@ -4012,7 +3924,7 @@ def test_llava_onevision_generation_with_inference_engine():
 
         # Disable image_newline for consistency with other tests
         torch_model.model.image_newline = None
-        torch_model.model.config.image_grid_pinpoints = custom_image_grid_pinpoints
+        torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
     except Exception as e:
         print(f"Could not load config/processor: {e}")
         pytest.skip(f"Could not download model config: {model_name}")
@@ -4278,8 +4190,7 @@ def test_llava_onevision_generation_with_inference_engine_multi():
     import torch
     from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision
     from levanter.trainer import TrainerConfig
-    from test_data_utils import get_multi_images
-    from test_image_utils import prepare_test_data_single, create_lev_jax_tensors
+    from test_image_utils import get_multi_images, prepare_test_data_single, create_lev_jax_tensors
 
     print("\n=== Test: Generation with InferenceEngine (Multi-Image) ===")
 
@@ -4574,14 +4485,7 @@ def test_get_image_features_vs_hf_real_single_image():
     state_dict = converter.load_state_dict(model_name)
     lev_model = from_torch_compatible_state_dict(model_template, state_dict)
 
-    import jax.tree_util as jtu
-
-    def to_float32(x):
-        if isinstance(x, jnp.ndarray) and jnp.issubdtype(x.dtype, jnp.floating):
-            return x.astype(jnp.float32)
-        return x
-
-    lev_model = jtu.tree_map(to_float32, lev_model)
+    lev_model = jtu.tree_map(_to_float32, lev_model)
 
     # Create 5D input for Levanter (no padding needed - use exact patches)
     pv_np = pixel_values_torch.numpy().astype(np.float32)
@@ -4708,14 +4612,7 @@ def test_get_image_features_vs_hf_real_multi_image():
     state_dict = converter.load_state_dict(model_name)
     lev_model = from_torch_compatible_state_dict(model_template, state_dict)
 
-    import jax.tree_util as jtu
-
-    def to_float32(x):
-        if isinstance(x, jnp.ndarray) and jnp.issubdtype(x.dtype, jnp.floating):
-            return x.astype(jnp.float32)
-        return x
-
-    lev_model = jtu.tree_map(to_float32, lev_model)
+    lev_model = jtu.tree_map(_to_float32, lev_model)
 
     # Create 5D input for Levanter (no padding - use exact patches)
     pv_np = pixel_values_torch.numpy().astype(np.float32)

@@ -28,34 +28,31 @@ Usage:
     python launch_vlm_training.py --initialize_from_hf --num_train_steps 10000 --train_batch_size 32
 
     # High-performance training with all optimizations enabled
-    python launch_vlm_training.py --initialize_from_hf --use_flash_attention --mp bfloat16 \\
+    python launch_vlm_training.py --initialize_from_hf --mp bfloat16 \\
         --freeze_vision_encoder --per_device_parallelism 8
 
 Performance Optimization Flags:
     --mp bfloat16           : Use mixed precision (bfloat16) for faster training
-    --use_flash_attention   : Enable flash attention for memory efficiency
+    --no_flash_attention    : Disable flash attention (enabled by default)
     --freeze_vision_encoder : Freeze vision encoder (only train projector + LLM)
     --per_device_parallelism: Number of examples per device (for gradient accumulation)
     --fsdp_axis             : FSDP sharding axis (default: embed)
 """
 
 import argparse
+import asyncio
 import dataclasses
 import logging
-import os
-import sys
 
 import jmp  # For mixed precision policy
-
-# Add levanter to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import levanter.main.train_vlm as train_vlm
 from levanter.data.image import ConversationDatasetSourceConfig, ImageMixtureDatasetConfig
 from levanter.distributed import DistributedConfig, RayConfig
 from levanter.models.llava_onevision import LlavaOnevisionConfig
 from levanter.models.siglip import SiglipVisionConfig
-from levanter.models.qwen import QwenConfig
+from levanter.models.qwen import Qwen3Config, QwenConfig
+from levanter.models.rotary import DefaultRotaryEmbeddingsConfig
 from levanter.layers.attention import AttentionBackend
 from levanter.optim import AdamConfig
 from levanter.tracker import NoopConfig
@@ -74,7 +71,7 @@ def parse_args():
     parser.add_argument(
         "--train_data",
         type=str,
-        default="/home/ruili/marin_private/output",
+        default="./output",
         help="Path to training data. Can be: a single parquet file, a directory containing parquet files, "
         "or a glob pattern (e.g., '/path/to/*.parquet')",
     )
@@ -96,11 +93,6 @@ def parse_args():
         help="Disable caching and use streaming mode (processes images on-the-fly, saves disk space)",
     )
     parser.add_argument(
-        "--no_overwrite_cache",
-        action="store_true",
-        help="Do not overwrite existing cache. Default is to overwrite cache.",
-    )
-    parser.add_argument(
         "--max_length",
         type=int,
         default=8192,
@@ -116,14 +108,12 @@ def parse_args():
     )
     parser.add_argument(
         "--initialize_from_hf",
-        default=False,  # Default to False since we use custom weight loading for SigLIP + Qwen3
-        action="store_true",
+        action="store_true",  # Default is False; we use custom weight loading for SigLIP + Qwen3
         help="Initialize model weights from HuggingFace checkpoint (for unified llava-onevision models)",
     )
     parser.add_argument(
         "--use_hf_model_config",
-        action="store_true",
-        default=False,  # Default to False to use custom SigLIP + Qwen3 config
+        action="store_true",  # Default is False; use custom SigLIP + Qwen3 config
         help="Use model config from HuggingFace checkpoint (set to True to load full llava-onevision model)",
     )
     parser.add_argument(
@@ -143,8 +133,8 @@ def parse_args():
         "--epoch",
         type=int,
         default=1,
-        help="Number of epochs to train. If 0 (default), train indefinitely until num_train_steps is reached. "
-        "If > 0, dataset will be wrapped to cycle through the data for the specified number of epochs.",
+        help="Number of epochs to train (default: 1). If 0, train indefinitely until num_train_steps is reached. "
+        "If > 0, dataset will cycle through the data for the specified number of epochs.",
     )
     parser.add_argument(
         "--train_batch_size",
@@ -180,10 +170,9 @@ def parse_args():
         help="Mixed precision mode: bfloat16 (recommended for TPU), float16 (GPU), or float32 (full precision)",
     )
     parser.add_argument(
-        "--use_flash_attention",
+        "--no_flash_attention",
         action="store_true",
-        default=True,
-        help="Enable flash attention for memory-efficient attention computation",
+        help="Disable flash attention (enabled by default for memory-efficient attention computation)",
     )
     parser.add_argument(
         "--flash_attention_block_size",
@@ -202,7 +191,7 @@ def parse_args():
         "--freeze_vision_encoder",
         action="store_true",
         help="Freeze vision encoder weights (only train projector and LLM). "
-        "Reduces compute by ~30%% and often improves fine-tuning results.",
+        "Reduces compute by ~30% and often improves fine-tuning results.",
     )
     parser.add_argument(
         "--freeze_llm",
@@ -217,15 +206,9 @@ def parse_args():
         help="Axis to use for FSDP sharding. Options: embed, mlp, or comma-separated list",
     )
     parser.add_argument(
-        "--gradient_checkpointing",
-        action="store_true",
-        default=True,
-        help="Enable gradient checkpointing to reduce memory usage (default: True)",
-    )
-    parser.add_argument(
         "--no_gradient_checkpointing",
         action="store_true",
-        help="Disable gradient checkpointing (faster but uses more memory)",
+        help="Disable gradient checkpointing (enabled by default to reduce memory usage)",
     )
 
     # Checkpoint arguments
@@ -310,14 +293,13 @@ def get_model_config(args) -> LlavaOnevisionConfig:
     # Determine gradient checkpointing setting
     use_gradient_checkpointing = not args.no_gradient_checkpointing
 
-    # Determine attention backend
-    if args.use_flash_attention:
-        attn_backend = AttentionBackend.DEFAULT  # Will use flash attention
-        use_flash = True
+    # Determine attention backend (flash attention enabled by default)
+    use_flash = not args.no_flash_attention
+    if use_flash:
+        attn_backend = AttentionBackend.DEFAULT
         flash_block_size = args.flash_attention_block_size
     else:
         attn_backend = AttentionBackend.VANILLA
-        use_flash = False
         flash_block_size = None
 
     if args.use_small_model:
@@ -365,9 +347,6 @@ def get_model_config(args) -> LlavaOnevisionConfig:
         )
 
         # Qwen3-1.7B config (from HuggingFace Qwen/Qwen3-1.7B)
-        from levanter.models.qwen import Qwen3Config
-        from levanter.models.rotary import DefaultRotaryEmbeddingsConfig
-
         text_config = Qwen3Config(
             hidden_dim=2048,
             intermediate_dim=6144,
@@ -419,7 +398,7 @@ def main():
     logger.info("-" * 60)
     logger.info("Performance Optimizations:")
     logger.info(f"  Mixed precision: {args.mp or 'disabled (float32)'}")
-    logger.info(f"  Flash attention: {args.use_flash_attention}")
+    logger.info(f"  Flash attention: {not args.no_flash_attention}")
     logger.info(f"  Freeze vision encoder: {args.freeze_vision_encoder}")
     logger.info(f"  Per-device parallelism: {args.per_device_parallelism}")
     logger.info(f"  FSDP axis: {args.fsdp_axis}")
@@ -458,8 +437,6 @@ def main():
     num_train_steps = args.num_train_steps
     if args.epoch > 0:
         # Build training datasets to get the actual dataset size
-        import asyncio
-
         logger.info("Building training datasets to calculate epoch-based steps...")
         train_datasets = data_config.training_sets()
 
@@ -590,10 +567,6 @@ def main():
         logger.info(f"Training for {args.epoch} epoch(s) ({num_train_steps:,} steps)")
     else:
         logger.info(f"Training for {num_train_steps:,} steps (no epoch limit)")
-
-    # Note: pixel_values dtype casting is now handled in ImageTextDataset with pixel_dtype
-    # parameter, which is set to trainer.mp.compute_dtype in train_vlm.py.
-    # This avoids redundant dtype checks and allocations on every training step.
 
     # Run training
     train_vlm.main(config)
