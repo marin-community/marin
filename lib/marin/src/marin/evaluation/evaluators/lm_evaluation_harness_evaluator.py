@@ -455,12 +455,16 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 self._patch_tokenizer_loading(max_model_len_value)
                 self._patch_lm_eval_vllm_wrapper(max_model_len_value)
             
+            # Get configurable values from engine_kwargs with defaults
+            max_num_seqs = engine_kwargs.pop("max_num_seqs", 1)
+            enforce_eager = engine_kwargs.pop("enforce_eager", False)
+
             pretrained_args_parts = [
                 f"pretrained={model_name_or_path}",
                 "device=tpu",
-                "enforce_eager=True",
+                f"enforce_eager={enforce_eager}",
                 "dtype=bfloat16",
-                "max_num_seqs=1",
+                f"max_num_seqs={max_num_seqs}",
                 "pipeline_parallel_size=1",
             ]
             # Add distributed_executor_backend=ray for TPU tensor parallelism

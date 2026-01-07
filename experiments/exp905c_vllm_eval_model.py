@@ -45,8 +45,8 @@ Note for people trying to do evals:
 
 """
 EVAL_TASKS = [
-    EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
-    # EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime25_0shot"),
+    # EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
+    EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime25_0shot"),
     # EvalTaskConfig("math_500", num_fewshot=0, task_alias="math_500"),
     # EvalTaskConfig("gpqa_diamond_zeroshot", num_fewshot=0, task_alias="gpqa_diamond_zeroshot"),
 ]
@@ -167,13 +167,13 @@ MODELS = [
     #     "tensor_parallel_size": 4,
     # },
     # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262e-chkpt2340-aime24",
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262e-chkpt2340-aime25-bsz30",
     #     "path": "gs://marin-us-east5/checkpoints/exp2262e_ot4_math30k_qwen3_32b_bsz128_lr4e_5-51aefe/hf/step-2340-padded-vocab/",
     #     "apply_chat_template": True,
     #     "tensor_parallel_size": 4,
     # },
     {
-        "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262f-chkpt2340-aime24",
+        "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262f-chkpt2340-aime25-bsz30",
         "path": "gs://marin-us-east5/checkpoints/exp2262f_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-cfac80/hf/step-2340-padded-vocab/",
         "apply_chat_template": True,
         "tensor_parallel_size": 4,
@@ -331,9 +331,11 @@ if __name__ == "__main__":
             # Use evaluate_lm_evaluation_harness which handles dataset loading from lm-evaluation-harness
             engine_kwargs = {
                 "tensor_parallel_size": model_config.get("tensor_parallel_size", 4),
+                "max_num_seqs": 30,  # Batch size for parallel generation
+                "enforce_eager": False,  # Allow graph optimization for better throughput
             }
             # Ensure that max_model_len > max_gen_toks + prompt len.
-            # Note that max_gen_toks is controlled by lm-eval 
+            # Note that max_gen_toks is controlled by lm-eval
             engine_kwargs["max_model_len"] = int(32768+2048)
             engine_kwargs["max_gen_toks"] = int(32768) # No point. It will be overwritten by lm-eval task's yaml config
             
