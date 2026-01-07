@@ -45,6 +45,7 @@ from dataclasses import dataclass
 
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
+from levanter.optim.cautious import CautiousConfig
 
 
 @dataclass(frozen=True)
@@ -185,6 +186,33 @@ class ScalingRecipe:
             num_kv_heads=n_heads,
             max_seq_len=seq_len,
             rope=Llama3RotaryEmbeddingsConfig(),
+        )
+
+    def build_optimizer_config(self, learning_rate: float, beta2: float) -> CautiousConfig:
+        """Build optimizer config using this recipe's hyperparameters.
+
+        This centralizes all optimizer configuration in the recipe, ensuring
+        consistent hyperparameters across isoflop sweeps and optimal training runs.
+
+        Args:
+            learning_rate: Learning rate (typically from CandidateConfig).
+            beta2: Adam beta2 (typically from CandidateConfig).
+
+        Returns:
+            A CautiousConfig with optimizer settings from this recipe.
+        """
+        return CautiousConfig(
+            learning_rate=learning_rate,
+            weight_decay=self.weight_decay,
+            min_lr_ratio=self.min_lr_ratio,
+            warmup=self.warmup,
+            beta1=self.beta1,
+            beta2=beta2,
+            epsilon=self.epsilon,
+            max_grad_norm=self.max_grad_norm,
+            adamc_weight_decay=True,
+            lr_schedule=self.lr_schedule,
+            decay=self.decay,
         )
 
 

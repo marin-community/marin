@@ -577,37 +577,6 @@ def candidate_configs(
         )
 
 
-# ---------------- Shared Builders ----------------
-
-
-def build_optimizer_config(
-    candidate: CandidateConfig,
-    recipe: ScalingRecipe = MARIN_2025_RECIPE,
-) -> CautiousConfig:
-    """Build optimizer config from a CandidateConfig and ScalingRecipe.
-
-    This is the shared builder used by both generate_isoflop_train_args() and
-    scaling_ladder's run_scaling_ladder_rung() to ensure consistent optimizer configs.
-
-    Args:
-        candidate: CandidateConfig with learning_rate and beta2.
-        recipe: ScalingRecipe with optimizer hyperparameters.
-    """
-    return CautiousConfig(
-        learning_rate=candidate.learning_rate,
-        weight_decay=recipe.weight_decay,
-        min_lr_ratio=recipe.min_lr_ratio,
-        warmup=recipe.warmup,
-        beta1=recipe.beta1,
-        beta2=candidate.beta2,
-        epsilon=recipe.epsilon,
-        max_grad_norm=recipe.max_grad_norm,
-        adamc_weight_decay=True,
-        lr_schedule=recipe.lr_schedule,
-        decay=recipe.decay,
-    )
-
-
 def _minima_to_candidates(
     minima_records: list[MinimaRecord],
     recipe: ScalingRecipe = MARIN_2025_RECIPE,
