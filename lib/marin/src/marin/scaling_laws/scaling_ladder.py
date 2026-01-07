@@ -61,8 +61,8 @@ from marin.processing.tokenize.tokenize import TokenizeConfig
 from marin.scaling_laws.isoflop_analysis import (
     IsoFlopSweepConfig,
     ScalingFit,
-    build_model_config,
     build_optimizer_config,
+    candidate_to_model_config,
     isoflop_analysis_step,
     pick_v5p_type,
     predict_optimal_config,
@@ -185,17 +185,9 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
         f"  learning_rate={candidate.learning_rate:.6f}, tokens={candidate.tokens:.2e}"
     )
 
-    model_cfg = build_model_config(candidate, config.seq_len)
+    model_cfg = candidate_to_model_config(candidate, config.seq_len)
 
-    param_count = model_cfg.total_trainable_params(vocab_size)
-    tpu_type = pick_v5p_type(
-        param_count,
-        candidate.hidden_size,
-        candidate.num_layers,
-        candidate.batch_size,
-        config.seq_len,
-        vocab_size,
-    )
+    tpu_type = pick_v5p_type(model_cfg, vocab_size, candidate.batch_size, config.seq_len)
 
     optimizer_cfg = build_optimizer_config(candidate, config.recipe)
 
