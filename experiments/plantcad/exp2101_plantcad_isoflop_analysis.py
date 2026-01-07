@@ -25,8 +25,8 @@ from rich.table import Table
 from scipy.interpolate import griddata
 import wandb
 
-RUN_PREFIX = "plantcad_isoflop_v1.6"
-RESULT_PATH = "experiments/plantcad/results/v8"
+RUN_PREFIX = "plantcad_isoflop_v1.8"
+RESULT_PATH = "experiments/plantcad/results/v10"
 EXPORT_DPI = 300
 DEFAULT_ARCH = "qwen"
 
