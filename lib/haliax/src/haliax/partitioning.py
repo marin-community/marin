@@ -722,6 +722,53 @@ def pspec_for_axis(axis: AxisSelection, mapping: ResourceMapping | None = None) 
     return PartitionSpec(*(physical_axis_name(a, mapping) for a in axis))
 
 
+def get_pspec_for_manual_mesh(
+    axis: AxisSelection,
+    mapping: ResourceMapping | None = None,
+    *,
+    mesh: MeshLike | None = None,
+) -> PartitionSpec | None:
+    """Return a `PartitionSpec` for `axis` iff the active mesh uses explicit axis types.
+
+    Some JAX APIs (e.g. gather via `.at[...].get(out_sharding=...)`) require an output sharding to be
+    unambiguous. However, passing a `PartitionSpec` while under an `AbstractMesh` or a mesh with
+    `AxisType.Auto`/`AxisType.Manual` can raise errors because JAX cannot resolve a concrete device assignment.
+
+    This helper returns:
+      - `pspec_for_axis(axis, mapping)` when all referenced mesh axes are `AxisType.Explicit`, else
+      - `None` (caller should omit `out_sharding`).
+    """
+
+    resolved_mesh = _resolve_mesh(mesh)
+    if resolved_mesh is None or resolved_mesh.empty:
+        return None
+
+    pspec = pspec_for_axis(axis, mapping)
+
+    axis_type_by_name = dict(zip(resolved_mesh.axis_names, resolved_mesh.axis_types, strict=False))
+
+    def _iter_mesh_axes(spec_entry):
+        if spec_entry is None or spec_entry is PartitionSpec.UNCONSTRAINED:
+            return
+        if isinstance(spec_entry, str):
+            yield spec_entry
+        else:
+            for item in spec_entry:
+                if item is None or item is PartitionSpec.UNCONSTRAINED:
+                    continue
+                yield item
+
+    referenced = {name for entry in pspec for name in _iter_mesh_axes(entry)}
+    if not referenced:
+        return pspec
+
+    for name in referenced:
+        if axis_type_by_name.get(name) != AxisType.Explicit:
+            return None
+
+    return pspec
+
+
 def round_axis_for_partitioning(axis: Axis, mapping: ResourceMapping | None = None) -> Axis:
     """Round an axis so that it's divisible by the size of the partition it's on"""
     size = physical_axis_size(axis, mapping)
