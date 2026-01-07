@@ -62,9 +62,7 @@ import jax.numpy as jnp
 import pandas as pd
 from jaxopt import ScipyMinimize
 
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
 
@@ -193,16 +191,26 @@ class CandidateConfig:
 class IsoFlopTrainArgs:
     """Arguments needed to set up an isoflop training run.
 
-    This dataclass contains all the information needed to call default_train()
-    for an isoflop sweep run. The caller is responsible for constructing the
-    experiment-specific SimpleTrainConfig from these arguments.
+    This dataclass contains the parameters needed for training. The caller is
+    responsible for constructing the model config from candidate parameters,
+    allowing flexibility in model type (Qwen3Config, LlamaConfig, etc.).
+
+    Example:
+        >>> args = generate_isoflop_train_args(config, "my-exp", vocab_size)[0]
+        >>> # Caller constructs the model config
+        >>> model_config = Qwen3Config(
+        ...     hidden_dim=args.candidate.hidden_size,
+        ...     intermediate_dim=args.candidate.intermediate_dim,
+        ...     num_layers=args.candidate.num_layers,
+        ...     num_heads=args.candidate.num_heads,
+        ...     num_kv_heads=args.candidate.num_kv_heads,
+        ...     max_seq_len=4096,
+        ...     rope=Llama3RotaryEmbeddingsConfig(),
+        ... )
     """
 
     candidate: CandidateConfig
     """The candidate configuration with model/training hyperparameters."""
-
-    model_config: Qwen3Config
-    """Levanter model configuration ready to use."""
 
     optimizer_config: OptimizerConfig
     """Levanter optimizer configuration with learning_rate and beta2 set."""
@@ -367,6 +375,56 @@ def solve_for_train_steps(
     return target_flops / (3 * flops_per_token * batch_size * seq_len)
 
 
+def compute_transformer_params(
+    hidden_dim: int,
+    intermediate_dim: int,
+    num_layers: int,
+    num_heads: int,
+    num_kv_heads: int,
+    vocab_size: int,
+    tie_embeddings: bool = False,
+) -> int:
+    """Compute parameter count for a standard transformer (Llama/Qwen architecture).
+
+    This matches the formula used in Levanter's LlamaConfig.total_trainable_params(),
+    allowing parameter estimation without constructing a model config.
+
+    Args:
+        hidden_dim: Model hidden dimension.
+        intermediate_dim: MLP intermediate dimension.
+        num_layers: Number of transformer layers.
+        num_heads: Number of attention heads.
+        num_kv_heads: Number of key-value heads (for GQA).
+        vocab_size: Vocabulary size.
+        tie_embeddings: Whether embeddings are tied (default False).
+
+    Returns:
+        Total parameter count.
+    """
+    token_embedding = vocab_size * hidden_dim
+    head_size = hidden_dim // num_heads
+
+    # Attention: Q, K, V projections + output projection
+    q_proj = hidden_dim * head_size * num_heads
+    kv_proj = 2 * hidden_dim * head_size * num_kv_heads
+    o_proj = head_size * num_heads * hidden_dim
+    attn = q_proj + kv_proj + o_proj
+
+    # MLP: gate, up, down projections (SwiGLU uses 3 matrices)
+    mlp = 3 * hidden_dim * intermediate_dim
+
+    # Per-layer: attention + mlp + 2 RMSNorm
+    transformer_layer = attn + mlp + 2 * hidden_dim
+
+    # Full transformer: layers + final RMSNorm
+    transformer = num_layers * transformer_layer + hidden_dim
+
+    # LM head (separate unless tied)
+    lm_head = 0 if tie_embeddings else token_embedding
+
+    return transformer + token_embedding + lm_head
+
+
 def estimate_memory_bytes(
     param_count: int,
     hidden_dim: int,
@@ -401,29 +459,34 @@ def estimate_memory_bytes(
 
 
 def pick_v5p_type(
-    model_config: "Qwen3Config",
+    candidate: CandidateConfig,
     vocab_size: int,
-    batch_size: int,
     seq_len: int,
 ) -> str:
     """
     Select the smallest TPU v5p slice that fits the model in float32.
 
     Args:
-        model_config: Levanter model config with total_trainable_params method.
+        candidate: CandidateConfig with model architecture parameters.
         vocab_size: Vocabulary size.
-        batch_size: Training batch size.
         seq_len: Sequence length.
 
     Returns:
         TPU slice name, e.g., "v5p-8" or "v5p-32"
     """
-    param_count = model_config.total_trainable_params(vocab_size)
+    param_count = compute_transformer_params(
+        hidden_dim=candidate.hidden_size,
+        intermediate_dim=candidate.intermediate_dim,
+        num_layers=candidate.num_layers,
+        num_heads=candidate.num_heads,
+        num_kv_heads=candidate.num_kv_heads,
+        vocab_size=vocab_size,
+    )
     need_bytes = estimate_memory_bytes(
         param_count,
-        model_config.hidden_dim,
-        model_config.num_layers,
-        batch_size,
+        candidate.hidden_size,
+        candidate.num_layers,
+        candidate.batch_size,
         seq_len,
         vocab_size,
     )
@@ -514,30 +577,7 @@ def candidate_configs(
         )
 
 
-# ---------------- Shared Model/Optimizer Builders ----------------
-# Note: For parameter counts, use model_config.total_trainable_params(vocab_size)
-# which is defined on Levanter model configs (LlamaConfig, Qwen3Config, etc.)
-
-
-def candidate_to_model_config(candidate: CandidateConfig, seq_len: int = SEQ_LEN) -> Qwen3Config:
-    """Convert a CandidateConfig to a Qwen3Config for training.
-
-    This is used after candidate search to convert the selected candidate
-    into a model config for actual training. The architecture parameters
-    come directly from the candidate (which were determined by the recipe
-    during search).
-
-    Note: For creating model configs during search, use recipe.build_model_config(hidden_size).
-    """
-    return Qwen3Config(
-        max_seq_len=seq_len,
-        hidden_dim=candidate.hidden_size,
-        intermediate_dim=candidate.intermediate_dim,
-        num_heads=candidate.num_heads,
-        num_kv_heads=candidate.num_kv_heads,
-        num_layers=candidate.num_layers,
-        rope=Llama3RotaryEmbeddingsConfig(),
-    )
+# ---------------- Shared Builders ----------------
 
 
 def build_optimizer_config(
@@ -629,11 +669,18 @@ def generate_isoflop_train_args(
 
     Example:
         >>> from marin.scaling_laws import IsoFlopSweepConfig, generate_isoflop_train_args
+        >>> from levanter.models.qwen import Qwen3Config
         >>> config = IsoFlopSweepConfig(budgets=(1e18, 1e19))
         >>> train_args = generate_isoflop_train_args(config, "my-experiment", vocab_size=128256)
         >>> for args in train_args:
-        ...     # Use args.model_config, args.optimizer_config, etc. with default_train()
-        ...     pass
+        ...     # Caller constructs the model config from candidate parameters
+        ...     model_config = Qwen3Config(
+        ...         hidden_dim=args.candidate.hidden_size,
+        ...         intermediate_dim=args.candidate.intermediate_dim,
+        ...         num_layers=args.candidate.num_layers,
+        ...         # ... etc
+        ...     )
+        ...     # Then use model_config with default_train()
     """
     recipe = sweep_config.recipe
     if base_optimizer_config is None:
@@ -655,11 +702,8 @@ def generate_isoflop_train_args(
 
     for budget in sweep_config.budgets:
         for candidate in candidate_configs(sweep_config, budget, vocab_size):
-            # Build model config using shared builder
-            model_cfg = candidate_to_model_config(candidate, sweep_config.seq_len)
-
-            # Pick TPU type based on model config
-            tpu_type = pick_v5p_type(model_cfg, vocab_size, candidate.batch_size, sweep_config.seq_len)
+            # Pick TPU type based on candidate parameters
+            tpu_type = pick_v5p_type(candidate, vocab_size, sweep_config.seq_len)
 
             # Build optimizer config with candidate-specific LR and beta2
             optimizer_cfg = replace(
@@ -689,7 +733,6 @@ def generate_isoflop_train_args(
             results.append(
                 IsoFlopTrainArgs(
                     candidate=candidate,
-                    model_config=model_cfg,
                     optimizer_config=optimizer_cfg,
                     tpu_type=tpu_type,
                     run_name=run_name,
