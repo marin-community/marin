@@ -7,12 +7,10 @@ from typing import Optional, Tuple, Type, TypeAlias, Union
 
 import jax
 import numpy as np
-from jax import ShapeDtypeStruct
-from jaxtyping import PyTree
-
 from haliax import Axis
 from haliax.util import is_named_array
-
+from jax import ShapeDtypeStruct
+from jaxtyping import PyTree
 
 DType = Union[np.dtype, Type[int], Type[float], Type[bool]]
 
@@ -38,18 +36,6 @@ def to_raw_shape(shape: Union[ShapeSpec, NamedShapeSpec]) -> Optional[Tuple[int,
         if raw is None:
             return None
         return tuple(ax.size for ax in raw)
-
-
-def shape_spec_of(tree: PyTree) -> PyTree[Union[ShapeSpec, NamedShapeSpec]]:
-    """Get the shape specification of a tree."""
-
-    def _leaf_spec(leaf):
-        if is_named_array(leaf):
-            return NamedShapeSpec(leaf.axes, leaf.dtype)
-        else:
-            return ShapeDtypeStruct(leaf.shape, leaf.dtype)
-
-    return jax.tree_util.tree_map(_leaf_spec, tree, is_leaf=is_named_array)
 
 
 def conforms(shape: PyTree[Union[ShapeSpec, NamedShapeSpec]], tree: PyTree) -> bool:

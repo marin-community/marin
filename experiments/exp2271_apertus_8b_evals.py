@@ -12,18 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pytest
-from marin.processing.classification.inference import InferenceConfig, run_inference
+"""
+Evaluate Apertus-8B on MMLU 0-shot and 5-shot.
+"""
 
+from fray.cluster import ResourceConfig
 
-def test_run_inference_raises_for_empty_glob(tmp_path):
-    config = InferenceConfig(
-        input_path=str(tmp_path),
-        output_path=str(tmp_path / "out"),
-        model_name="dummy",
-        model_type="fasttext",
-        attribute_name="test",
+from experiments.evals.evals import default_eval
+from experiments.evals.task_configs import MMLU_0_SHOT, MMLU_5_SHOT
+from experiments.models import apertus_8b
+from marin.execution.executor import executor_main
+
+if __name__ == "__main__":
+    mmlu_eval = default_eval(
+        step=apertus_8b,
+        resource_config=ResourceConfig.with_tpu("v5p-8"),
+        evals=(MMLU_0_SHOT, MMLU_5_SHOT),
+        discover_latest_checkpoint=False,
     )
-
-    with pytest.raises(FileNotFoundError):
-        run_inference(config)
+    executor_main(steps=[mmlu_eval])

@@ -19,10 +19,10 @@ import numpy as np
 import pyarrow as pa
 import tensorstore as ts
 from dataclasses_json import dataclass_json
+from fray.job import JobContext
 from fsspec import AbstractFileSystem
 from jaxtyping import PyTree
 from tqdm_loggable.tqdm_logging import tqdm_logging
-from fray.job import JobContext
 from zephyr import Backend, Dataset
 from zephyr.writers import write_levanter_cache
 
@@ -551,17 +551,6 @@ def _distributed_build_cache(
             raise RuntimeError("Cache build failed on leader process.")
         else:
             raise RuntimeError("Unexpected status received during distributed cache build.")
-
-
-def _wait_for_leader_cache():
-    status = np.array(0, dtype=np.int32)
-    while True:
-        status = broadcast_one_to_all(status, is_source=False)
-        if status == 1:
-            break
-        if status == -1:
-            raise RuntimeError("Cache build failed on leader process.")
-        time.sleep(1)
 
 
 def _safe_remove(path: str):
