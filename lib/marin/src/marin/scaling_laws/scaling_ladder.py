@@ -65,7 +65,6 @@ from marin.scaling_laws.isoflop_analysis import (
     CandidateConfig,
     IsoFlopSweepConfig,
     ScalingFit,
-    build_optimizer_config,
     isoflop_analysis_step,
     pick_v5p_type,
     predict_optimal_config,
@@ -218,7 +217,7 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
 
     tpu_type = pick_v5p_type(candidate, vocab_size, config.seq_len)
 
-    optimizer_cfg = build_optimizer_config(candidate, config.recipe)
+    optimizer_cfg = config.recipe.build_optimizer_config(candidate.learning_rate, candidate.beta2)
 
     pretraining_data = _prepare_data_config(config.tokenized, config.validation_sets)
 
