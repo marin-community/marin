@@ -12,7 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-STEP_BY_STEP_TEMPLATE = """
-You will be given a problem. Please reason step by step, and put your final answer within \boxed{}:
-{example}
 """
+Evaluate OLMo-3-1025-7B on MMLU 0-shot and 5-shot.
+"""
+
+from fray.cluster import ResourceConfig
+
+from experiments.evals.evals import default_eval
+from experiments.evals.task_configs import MMLU_0_SHOT, MMLU_5_SHOT
+from experiments.models import olmo_3_1025_7b
+from marin.execution.executor import executor_main
+
+if __name__ == "__main__":
+    mmlu_eval = default_eval(
+        step=olmo_3_1025_7b,
+        resource_config=ResourceConfig.with_tpu("v5p-8"),
+        evals=(MMLU_0_SHOT, MMLU_5_SHOT),
+        discover_latest_checkpoint=False,
+    )
+    executor_main(steps=[mmlu_eval])

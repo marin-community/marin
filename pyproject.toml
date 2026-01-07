@@ -171,7 +171,7 @@ packages = ["experiments"]
 packages = ["experiments"]
 
 [tool.pytest.ini_options]
-timeout = 300
+timeout = 60
 filterwarnings = ["ignore::DeprecationWarning"]
 log_format = "%(asctime)s %(levelname)s %(message)s"
 log_date_format = "%Y-%m-%d %H:%M:%S"
@@ -182,4 +182,4 @@ markers = [
 testpaths = ["tests", "experiments"]
 
 # Make sure we timeout before CI kills us, and don't run TPU or slow tests by default
-addopts = "--session-timeout=500 -m 'not tpu_ci and not slow'"
+addopts = "--session-timeout=480 -m 'not tpu_ci and not slow'"

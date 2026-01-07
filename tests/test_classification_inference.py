@@ -117,6 +117,7 @@ class TestStreamingReading:
 class TestMultipleFileProcessing:
     """Test processing of multiple files"""
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("num_files", [1, 3])
     @pytest.mark.parametrize(
         "ext,create_fn,read_fn",
@@ -148,8 +149,8 @@ class TestMultipleFileProcessing:
         config = InferenceConfig(
             input_path=input_dir,
             output_path=output_dir,
-            model_name="dummy",
-            model_type="dummy",
+            model_name="compression",
+            model_type="compression",
             attribute_name="quality",
             filetype=ext,
             batch_size=2,
@@ -174,3 +175,16 @@ class TestMultipleFileProcessing:
             for result in results:
                 assert "id" in result
                 assert "attributes" in result
+
+
+def test_run_inference_raises_for_empty_glob(tmp_path):
+    config = InferenceConfig(
+        input_path=str(tmp_path),
+        output_path=str(tmp_path / "out"),
+        model_name="compression",
+        model_type="compression",
+        attribute_name="test",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        run_inference(config)

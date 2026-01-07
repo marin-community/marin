@@ -1571,6 +1571,7 @@ class AttentionConfig:
         attn_backend: Which attention backend to use
         flash_attention_block_size: Block size for flash attention
         rope: Configuration for rotary position embeddings
+        sliding_window: Optional sliding window size for attention masks.
         scaling_factor: Optional scaling factor for attention scores. If None, defaults to 1/sqrt(head_size)
         qk_norm: Optional configuration for QK normalization. If None, no normalization is applied.
     """
@@ -1586,6 +1587,7 @@ class AttentionConfig:
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
     rope: Optional[RotaryEmbeddingsConfig] = None
+    sliding_window: Optional[int] = None
     scaling_factor: Optional[float] = None
     logits_soft_cap: Optional[float] = None
     qk_norm: Optional[LayerNormConfigBase] = None
@@ -1719,6 +1721,9 @@ class Attention(eqx.Module):
         # Distinguish key sequence axis for attention
         k = k.rename({"position": "key_position"})
         v = v.rename({"position": "key_position"})
+
+        if self.config.sliding_window is not None and isinstance(mask, AttentionMask):
+            mask = mask.with_sliding_window(self.config.sliding_window)
 
         # Apply attention
         attn_output = dot_product_attention(
@@ -2400,6 +2405,9 @@ class AttentionWithSink(Attention):
 
         k = k.rename({"position": "key_position"})
         v = v.rename({"position": "key_position"})
+
+        if self.config.sliding_window is not None and isinstance(mask, AttentionMask):
+            mask = mask.with_sliding_window(self.config.sliding_window)
 
         attn_output = dot_product_attention(
             "position",

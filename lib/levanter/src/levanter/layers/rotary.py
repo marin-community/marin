@@ -198,9 +198,10 @@ class YarnRotaryEmbeddings(RotaryEmbeddings):
                 self.config.theta ** (hax.arange(HeadHalfSize, step=2, dtype=jnp.float32) / head_dim)
             )
 
-            # YaRN β-ramp
+            # YaRN β-ramp: find correction dimension based on number of rotations
+            # Uses full head_dim (not half_dim) to match HuggingFace implementation
             def _find_dim(n_rot: float):
-                return (half_dim * math.log(self.config.original_max_position_embeddings / (n_rot * 2 * math.pi))) / (
+                return (head_dim * math.log(self.config.original_max_position_embeddings / (n_rot * 2 * math.pi))) / (
                     2 * math.log(self.config.theta)
                 )
 
@@ -211,16 +212,18 @@ class YarnRotaryEmbeddings(RotaryEmbeddings):
             inv_extrap = inv_freq
             inv_interp = inv_freq / self.config.factor
             inv_freq = inv_interp * ramp + inv_extrap * (1 - ramp)
-            position_ids_scaled = position_ids / self.config.factor
 
-        freqs = position_ids_scaled * inv_freq.broadcast_axis(position_ids.axes)
+        # Note: position_ids are NOT scaled in YARN - scaling is baked into inv_freq
+        freqs = position_ids * inv_freq.broadcast_axis(position_ids.axes)
         emb = hax.concatenate(self.HeadDim, (freqs, freqs))
 
-        # temperature scaling
-        if self.config.factor < 1.0:
+        # attention_factor scaling (called "temperature" here for historical reasons)
+        # Formula from YARN paper (arXiv:2309.00071): 0.1 * mscale * log(factor) + 1.0
+        # HF's get_mscale() uses this formula directly without sqrt
+        if self.config.factor <= 1.0:
             temperature = 1.0
         else:
-            temperature = math.sqrt(0.1 * self.config.mscale * math.log(self.config.factor) + 1.0)
+            temperature = 0.1 * self.config.mscale * math.log(self.config.factor) + 1.0
 
         cos = hax.cos(emb).astype(q.dtype) * temperature
         sin = hax.sin(emb).astype(q.dtype) * temperature
@@ -258,7 +261,7 @@ class YarnRotaryEmbeddingsConfig(RotaryEmbeddingsConfig):
 
     def to_hf_config(self) -> tuple[float, dict]:
         return self.theta, {
-            "type": "yarn",
+            "rope_type": "yarn",
             "factor": self.factor,
             "beta_fast": self.beta_fast,
             "beta_slow": self.beta_slow,

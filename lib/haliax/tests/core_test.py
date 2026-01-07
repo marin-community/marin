@@ -8,9 +8,18 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from jax.random import PRNGKey
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 import haliax as hax
 from haliax import Axis, NamedArray, updated_slice
+
+
+def _make_explicit_data_mesh() -> Mesh:
+    devices = jax.devices()
+    if not devices:
+        raise RuntimeError("No JAX devices available")
+    mesh_devices = np.array(devices).reshape((len(devices),))
+    return Mesh(mesh_devices, axis_names=("data",), axis_types=(AxisType.Explicit,))
 
 
 def test_unary_np_functions():
@@ -170,6 +179,28 @@ def test_take():
 
     named2 = hax.take(named1, Depth, indices2)
     assert named2.axes == (Height, Width, Index, Index2)
+
+
+def test_take_sharded_index_under_mesh_uses_explicit_out_sharding():
+    mesh = _make_explicit_data_mesh()
+    index_size = 2 * int(mesh.shape["data"])
+
+    Height, Width, Depth = hax.make_axes(Height=2, Width=3, Depth=4)
+    named1 = hax.random.uniform(PRNGKey(0), (Height, Width, Depth))
+
+    Index = Axis("Index", index_size)
+    indices_arr = jax.device_put(
+        jnp.ones((Index.size,), dtype=jnp.int32),
+        NamedSharding(mesh, P("data")),
+    )
+    indices = NamedArray(indices_arr, (Index,))
+
+    with jax.set_mesh(mesh):
+        with hax.axis_mapping({"Index": "data"}):
+            out = hax.take(named1, Height, indices)
+
+    assert out.axes == (Index, Width, Depth)
+    assert getattr(out.array.sharding, "spec", None) == P("data", None, None)
 
 
 def test_take_overlapping_names():

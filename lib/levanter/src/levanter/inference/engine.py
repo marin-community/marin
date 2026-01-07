@@ -476,13 +476,6 @@ def _prefill_kernel(
     return gen_state, outputs
 
 
-def _stop_tokens_from_work(work: PrefillWork, idx: int) -> ht.i32[NamedArray, "stop_seq position"] | None:  # type: ignore[name-defined]
-    stop_tokens = work.seq_params.stop_tokens
-    if stop_tokens is None:
-        return None
-    return stop_tokens["seq", idx]
-
-
 def _seq_params_from_work(work: PrefillWork, idx: int) -> SeqDecodingParams:
     def select(x):
         if isinstance(x, NamedArray):

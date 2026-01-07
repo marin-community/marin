@@ -32,10 +32,6 @@ __all__ = [
     "ScionConfig",
     # soap
     "SoapConfig",
-    # sophia
-    "ScaleBySophiaState",
-    "SophiaHConfig",
-    "scale_by_sophia_h",
     # skipstep
     "SkipStepConfig",
     # model averaging
@@ -55,11 +51,6 @@ from .muonh import MuonHConfig
 from .rmsprop import RMSPropMomentumConfig, ScaleByRMSPropMomState
 from .scion import ScaleByScionState, ScionConfig
 from .soap import SoapConfig
-from .sophia import (  # SophiaGConfig,; SophiaGObjective,; scale_by_sophia_g,
-    ScaleBySophiaState,
-    SophiaHConfig,
-    scale_by_sophia_h,
-)
 from .skipstep import SkipStepConfig
 from .model_averaging import (
     EmaDecaySqrtConfig,
