@@ -38,11 +38,9 @@ from test_image_utils import get_real_data  # noqa: E402
 import numpy as np  # noqa: E402
 
 # Import shared helper functions from test_image_utils
-from test_image_utils import create_grid_mask, pad_pixel_values, DEFAULT_GRID_PINPOINTS  # noqa: E402
+from test_image_utils import DEFAULT_GRID_PINPOINTS  # noqa: E402
 import haliax as hax  # noqa: E402
-from test_utils import use_test_mesh  # noqa: E402
 from jax.sharding import Mesh  # noqa: E402
-from haliax.partitioning import ResourceAxis  # noqa: E402
 
 # =============================================================================
 # Tests for ShardedDataSource classes
@@ -691,7 +689,6 @@ async def test_hf_image_ray_pipeline():
 
 def test_image_data_loader(processor, dataset):
     """Test ImageDataLoader with cached data."""
-    from jax.sharding import Mesh
     from levanter.data.loader import ImageDataLoader, ImageTextExample
 
     batch_processor = BatchImageProcessor(
@@ -1298,7 +1295,6 @@ def test_llava_with_image_dataloader(processor, dataset):
                 assert avg_pred_match > 0.90, f"Average prediction match too low: {avg_pred_match}"
 
             print("  All samples pass consistency check with HuggingFace!")
-
 
 
 def test_cache_vs_streaming_data_consistency():

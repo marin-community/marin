@@ -423,6 +423,7 @@ class Siglip2Attention(eqx.Module):
             # Create attention mask to ignore padded positions using numpy for static mask
             # This allows Splash Attention to use NumpyMask which requires static arrays
             import numpy as np
+
             q_indices = np.arange(padded_seq_len)
             k_indices = np.arange(padded_seq_len)
             # Create 2D mask: valid positions are where both q and k indices < orig_seq_len

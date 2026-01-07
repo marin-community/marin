@@ -323,7 +323,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         # Parameters for computing grid_mask for JIT-compatible VLM training
         grid_pinpoints: Optional[List[List[int]]] = None,
         patch_size: int = 384,
-        vision_feature_height: Optional[int] = None
+        vision_feature_height: Optional[int] = None,
     ):
         """
         Initialize the BatchImageProcessor.

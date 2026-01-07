@@ -139,7 +139,7 @@ class LlavaOnevisionConfig:
             vision_config = SiglipVisionConfig.from_hf_config(hf_config.vision_config)
 
         # Ensure no_bias attribute exists (Qwen2 default is True, meaning use_bias=False)
-        if not hasattr(hf_config.text_config, 'no_bias'):
+        if not hasattr(hf_config.text_config, "no_bias"):
             hf_config.text_config.no_bias = True
 
         text_config = QwenConfig.from_hf_config(hf_config.text_config)
@@ -361,13 +361,9 @@ class LlavaOnevisionModel(eqx.Module):
 
         # Initialize vision tower based on encoder type
         if config.vision_encoder_type == "siglip2":
-            vision_tower = Siglip2VisionModel.init(
-                Vocab=Vocab, config=config.vision_config, key=k_vision
-            )
+            vision_tower = Siglip2VisionModel.init(Vocab=Vocab, config=config.vision_config, key=k_vision)
         elif config.vision_encoder_type == "siglip":
-            vision_tower = SiglipVisionModel.init(
-                Vocab=Vocab, config=config.vision_config, key=k_vision
-            )
+            vision_tower = SiglipVisionModel.init(Vocab=Vocab, config=config.vision_config, key=k_vision)
         else:
             raise ValueError(f"Unsupported vision_encoder_type: {config.vision_encoder_type}")
 
@@ -1028,7 +1024,7 @@ class _LlavaInferenceWrapper(eqx.Module):
         # Use empty axis_mapping to avoid auto_sharding issues with
         # vision encoder's intermediate tensors (e.g., 31 patches not divisible by 4)
         with hax.axis_mapping({}):
-            merged_embeds, position_ids = self.model._merge_embeddings(
+            merged_embeds, position_ids, _ = self.model._merge_embeddings(
                 input_ids=self._input_ids,
                 inputs_embeds=None,
                 pixel_values=self._pixel_values,
