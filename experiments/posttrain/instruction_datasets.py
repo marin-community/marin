@@ -494,6 +494,21 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated",
         max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
     ),
+    # Same as "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated", except 16384 max generation length instead of 7500:
+    "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens": InstructionDatasetConfig(
+        hf_dataset_id="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens",
+        revision="8dc6397",
+        adapter=multi_turn_adapter(
+            conversation_column="conversations",
+            role_key="from",
+            user_value="human",
+            assistant_value="gpt",
+            content_key="value",
+        ),
+        metadata_columns=["ms_id"],
+        name="marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens",
+        max_parallelism=32,  # Fix the max number of concurrent data processing tasks to avoid HF rate limits
+    ),
     "marin-community/open-thoughts-4-30k-math-qwen3-235b-a22b-annotated": InstructionDatasetConfig(
         hf_dataset_id="marin-community/open-thoughts-4-30k-math-qwen3-235b-a22b-annotated",
         revision="8c6cd1f",

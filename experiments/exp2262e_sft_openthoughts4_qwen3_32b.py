@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-Fine-tunes Qwen/Qwen2.5-7B-Instruct on TODO(replace with 16K regen dataset name).
+Fine-tunes Qwen/Qwen2.5-7B-Instruct on marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens.
 Uses 16384 sequence length (previous runs might have only used 4096 due to a bug).
 10 epochs.
 """
@@ -47,7 +47,7 @@ def _slugify(value: str) -> str:
 def build_dataset_specs() -> tuple[dict[str, str], dict[str, int]]:
     datasets: dict[str, str] = {}
     weights: dict[str, int] = {}
-    # datasets["openthoughts3"] = "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated"  # TODO - Replace with 16K tokens version
+    datasets["openthoughts3"] = "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens"
     weights["openthoughts3"] = 29963
     return datasets, weights
 
