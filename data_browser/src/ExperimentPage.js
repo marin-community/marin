@@ -489,23 +489,36 @@ function renderExperimentStatus({step, auxiliaryData}) {
   if (data.error) {
     return <span className="error" title={data.error}>{errorIcon}</span>;
   }
-  const events = data.items;
+  const events = data.items || [];
+  if (events.length === 0) {
+    return <span className="error" title="No status events found">{errorIcon}</span>;
+  }
 
-  const lastEvent = events[events.length - 1];
+  const lastEvent = events[events.length - 1] || {};
+  const status = lastEvent.status || "UNKNOWN";
 
-  // If last event is RUNNING, use the current time as the end time
-  // Otherwise, use the time of the last event
-  const startTime = new Date(events[0].date);
-  const endTime = ["WAITING", "RUNNING"].includes(lastEvent.status) ? new Date() : new Date(lastEvent.date);
+  const isActive = ["WAITING", "RUNNING"].includes(status);
 
-  const duration = (endTime.getTime() - startTime.getTime()) / 1000;
+  const firstDate = events[0] && typeof events[0].date === "string" && events[0].date.length > 0 ? events[0].date : null;
+  const lastDate = typeof lastEvent.date === "string" && lastEvent.date.length > 0 ? lastEvent.date : null;
+  const temporalParts = [];
+  if (lastDate) {
+    temporalParts.push(`last updated ${renderDate(lastDate)}`);
+  }
+  if (firstDate) {
+    const startMs = new Date(firstDate).getTime();
+    const endMs = isActive ? Date.now() : (lastDate ? new Date(lastDate).getTime() : NaN);
+    if (!Number.isNaN(startMs) && !Number.isNaN(endMs) && endMs >= startMs) {
+      temporalParts.push(`lifetime is ${renderDuration((endMs - startMs) / 1000)}`);
+    }
+  }
 
-  const statusIcon = statusIcons[lastEvent.status] || lastEvent.status;
+  const statusIcon = statusIcons[status] || status;
 
-  const lastStatus = <span className={"status-" + lastEvent.status}>{statusIcon}</span>;
-  const temporalInfo = `last updated ${renderDate(lastEvent.date)}, lifetime is ${renderDuration(duration)}`;
+  const lastStatus = <span className={"status-" + status}>{statusIcon}</span>;
+  const temporalInfo = temporalParts.length ? ` (${temporalParts.join(", ")})` : "";
   return <span className="status-container">
-    <a href={viewStatusUrl(step)} target="_blank" rel="noreferrer" title={`View raw JSON status of this step ${temporalInfo}`}>
+    <a href={viewStatusUrl(step)} target="_blank" rel="noreferrer" title={`View raw JSON status of this step${temporalInfo}`}>
       {lastStatus}
     </a>
   </span>;

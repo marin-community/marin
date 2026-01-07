@@ -25,6 +25,9 @@ from experiments.models import ModelConfig, download_model_step
 from marin.execution.executor import executor_main, output_path_of, versioned
 from marin.evaluation.log_probs import default_lm_log_probs
 
+# This is painfully slow to run in dry run mode
+# nodryrun
+
 
 def create_eval_steps() -> list:
     tasks = (

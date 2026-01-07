@@ -108,7 +108,7 @@ def test_yarn_rotary_embedding():
     # Test HF config conversion
     theta, config = yarn_config.to_hf_config()
     assert theta == 10000.0
-    assert config["type"] == "yarn"
+    assert config["rope_type"] == "yarn"
     assert config["factor"] == 2.0
     assert config["beta_fast"] == 32.0
     assert config["beta_slow"] == 1.0
@@ -123,3 +123,77 @@ def test_yarn_rotary_embedding():
     assert yarn_config_from_hf.beta_slow == yarn_config.beta_slow
     assert yarn_config_from_hf.original_max_position_embeddings == yarn_config.original_max_position_embeddings
     assert yarn_config_from_hf.mscale == yarn_config.mscale
+
+
+@skip_if_no_torch
+@pytest.mark.parametrize("factor", [1.0, 2.0, 4.0, 8.0])
+def test_yarn_rotary_embedding_vs_hf(factor):
+    """Test that YARN rotary embeddings match HuggingFace implementation."""
+    import torch
+    from transformers import LlamaConfig
+    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding as HFLlamaRotaryEmbedding
+    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb
+
+    from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
+
+    head_dim = 64
+    seq_len = 32
+    original_max_position_embeddings = 16  # Scaled down for testing
+    theta = 500000.0
+
+    HeadSize = hax.Axis("HeadSize", head_dim)
+    Pos = hax.Axis("Pos", seq_len)
+    Heads = hax.Axis("Heads", 4)
+    Batch = hax.Axis("batch", 2)
+
+    # Create YARN config
+    yarn_config = YarnRotaryEmbeddingsConfig(
+        theta=theta,
+        factor=factor,
+        beta_fast=32.0,
+        beta_slow=1.0,
+        original_max_position_embeddings=original_max_position_embeddings,
+        mscale=1.0,
+    )
+
+    # Build Levanter YARN
+    rope = yarn_config.build(HeadSize)
+
+    # Create test inputs
+    q = hax.random.normal(random.PRNGKey(0), (Batch, Pos, Heads, HeadSize))
+    position_ids = hax.arange(Pos)
+
+    # Apply Levanter YARN
+    q_rotated = rope(q, position_ids)
+
+    # Create HF config with YARN rope_scaling
+    rope_theta, rope_scaling = yarn_config.to_hf_config()
+    hf_config = LlamaConfig(
+        hidden_size=head_dim * Heads.size,
+        num_attention_heads=Heads.size,
+        head_dim=head_dim,
+        max_position_embeddings=seq_len * int(factor),
+        rope_theta=rope_theta,
+        rope_scaling=rope_scaling,
+    )
+
+    # Build HF rotary embeddings
+    hf_rope = HFLlamaRotaryEmbedding(config=hf_config)
+
+    # Apply HF rotary embeddings
+    # HF expects shape (batch, heads, seq, head_dim), so transpose
+    q_torch = torch.from_numpy(np.array(q.array)).transpose(1, 2)
+    position_ids_torch = torch.arange(seq_len).reshape(1, -1)
+
+    hf_cos, hf_sin = hf_rope(q_torch, position_ids_torch)
+    hf_q_rotated, _ = apply_rotary_pos_emb(q_torch, q_torch, hf_cos, hf_sin)
+    hf_q_rotated = hf_q_rotated.transpose(1, 2)  # Back to (batch, seq, heads, head_dim)
+
+    # Compare
+    np.testing.assert_allclose(
+        np.array(q_rotated.array),
+        hf_q_rotated.numpy(),
+        rtol=1e-5,
+        atol=1e-5,
+        err_msg=f"YARN rotary embeddings don't match HF for factor={factor}",
+    )
