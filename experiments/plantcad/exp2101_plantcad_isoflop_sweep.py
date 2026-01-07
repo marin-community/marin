@@ -24,7 +24,6 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 
 from levanter.data.text import TextLmDatasetFormat
-from levanter.data.sharded_datasource import WrappedHFDataSource
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
@@ -36,9 +35,8 @@ from experiments.evals.task_configs import EvalTaskConfig
 from experiments.llama import compute_num_parameters
 from experiments.simple_train_config import SimpleTrainConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path, versioned
-from marin.processing.tokenize import TokenizeConfig, tokenize
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, tokenize
 from fray.cluster import ResourceConfig
-from zephyr import Dataset, Backend
 
 logger = logging.getLogger("ray")
 
@@ -135,26 +133,16 @@ def format_num(n: int | float) -> str:
 
 @dataclass(frozen=True)
 class IsoFlopDataConfig:
-    output_path: str
-    dataset_name: str = versioned("plantcad/Angiosperm_65_genomes_8192bp")
-    dataset_revision: str | None = versioned("4a444fff5520b992aa978d92a5af509a81977098")
-    # Original sequence length for the dataset
-    input_seq_len: int = 8192
-    # Target sequence length for the dataset after cropping
-    output_seq_len: int = 4096
-    # Token count in training split (prior to cropping)
-    total_token_count: int = 21_615_869_952
-    # Per-shard sample limit; e.g. for 60 shards in plantcad2 dataset,
-    # multiple this value by 60 to get final sample limit
-    sample_limit: int | None = None
-    train_split: str = "train"
-    validation_split: str = "validation"
+    dataset_name: str = versioned("plantcad/opengenome2-metagenomes-plantcad2-c4096")
+    dataset_revision: str | None = versioned("913963b5ffe4354a23f9200d39984c0565ef45f9")
+    seq_len: int = 4096
+    total_token_count: int = 10_807_934_976
 
 
 @dataclass(frozen=True)
-class IsoFlopTokenizeConfig(TokenizeConfig):
+class IsoFlopTokenizeConfig(HfTokenizeConfig):
     tokenizer: str = versioned("kuleshov-group/PlantCAD2-Small-l24-d0768")
-    format: TextLmDatasetFormat = dataclasses.field(default_factory=lambda: TextLmDatasetFormat(text_key="seq"))
+    format: TextLmDatasetFormat = dataclasses.field(default_factory=lambda: TextLmDatasetFormat(text_key="text"))
     vocab_size: int = 7
     # DNA complement map for reverse-complement augmentation.
     # Maps token IDs to their complements: A↔T (3↔6), C↔G (4↔5), special tokens unchanged.
@@ -169,16 +157,11 @@ class IsoFlopSweepConfig:
     vocab_size: int
     seq_len: int
     total_token_count: int
-    output_seq_len: int
-    input_seq_len: int
-    experiment_name: str = "plantcad_isoflop_v1.6"
+    experiment_name: str = "plantcad_isoflop_v1.8"
     complement_map: tuple[int, ...] | None = None
-
-    # Previous settings as of https://github.com/marin-community/marin/issues/2101#issuecomment-3677025495
     budgets: list[float] = dataclasses.field(
         default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
     )
-    # epochs: list[int] = dataclasses.field(default_factory=lambda: [1, 2, 4, 8, 16, 32])
     epochs: list[int] = dataclasses.field(default_factory=lambda: [1])
     steps_per_run: int = 8_192
     min_hidden_pow: int = 8
@@ -189,21 +172,6 @@ class IsoFlopSweepConfig:
     hidden_head_ratio: int = 128
     lr_max: float | None = 0.02
     flop_tolerance: float = 0.01
-
-    # budgets: list[float] = dataclasses.field(
-    #     default_factory=lambda: list(np.logspace(np.log10(2e15), np.log10(1e16), 5))
-    # )
-    # epochs: list[int] = dataclasses.field(default_factory=lambda: [1])
-    # steps_per_run: int = 8_192
-    # min_hidden_pow: int = 5
-    # max_hidden_pow: int = 7
-    # hidden_step_size: int = 16
-    # mlp_ratio: int = 4
-    # base_hidden_layer_ratio: int = 4
-    # hidden_head_ratio: int = 8
-    # lr_max: float | None = .2
-    # flop_tolerance: float = 0.05
-
     architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen"])
     per_device_eval_parallelism: int = 512
     max_eval_batches: int = 64
@@ -338,8 +306,7 @@ class IsoFlopRunConfig:
 def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[IsoFlopRunConfig]:
     """Generate ISOFlop run configurations within the FLOP budget."""
 
-    # Effective token count after cropping
-    dataset_tokens = int(cfg.total_token_count * (cfg.output_seq_len / cfg.input_seq_len))
+    dataset_tokens = cfg.total_token_count
 
     # Loop over architecture as the primary dimension of the search space
     for architecture in cfg.architectures:
@@ -601,106 +568,41 @@ def generate_isoflop_sweep(
     return steps
 
 
-# def _verify_jax_cpu_only():
-#     """Verify that JAX is configured for CPU-only mode.
+def tokenize_plantcad() -> tuple[ExecutorStep, IsoFlopDataConfig]:
+    """Tokenize the PlantCAD dataset directly from HuggingFace.
 
-#     See:
-#     - https://github.com/marin-community/marin/blob/821f9d79d7344960ce023f027ac77952389c8b84/lib/marin/src/marin/processing/tokenize/tokenize.py#L276-L290
-#     - https://openathena.slack.com/archives/C09AUMZ3QUA/p1764006926655589?thread_ts=1763988866.060449&cid=C09AUMZ3QUA
-#     """
-#     # Verify JAX is configured for CPU-only mode
-#     jax_platforms = os.environ.get("JAX_PLATFORMS", "not set")
-#     jax_devices = jax.devices()
-
-#     # Assert that JAX_PLATFORMS is set to cpu and that all devices are CPU devices
-#     assert jax_platforms == "cpu", f"JAX_PLATFORMS should be 'cpu' but is '{jax_platforms}'"
-#     assert all(d.platform == "cpu" for d in jax_devices), f"Expected all CPU devices, got: {jax_devices}"
-
-
-def _prepare_dataset(config: IsoFlopDataConfig):
-    # TODO: Where is the correct place to check this?
-    # _verify_jax_cpu_only()
-
-    def crop(example):
-        seq = example["seq"]
-        return {"seq": seq[: config.output_seq_len]}
-
-    # Keep parallelism modest for HF reads (else 429s everywhere)
-    # TODO: delete when sure memory setting isn't needed
-    # backend = create_backend(backend_type="ray", max_parallelism=8, max_retries=3, memory="8GB")
-
-    for split_key, split_name in [("train", config.train_split), ("validation", config.validation_split)]:
-        output_pattern = f"{config.output_path}/{split_key}/data-{{shard:05d}}.jsonl.gz"
-        data_source = WrappedHFDataSource(config.dataset_name, split=split_name, revision=config.dataset_revision)
-
-        ds = (
-            Dataset.from_list(data_source.shard_names)
-            .flat_map(lambda shard, ds=data_source: ds.open_shard(shard))
-            .map(crop)
-        )
-
-        if config.sample_limit is not None:
-            ds = ds.take_per_shard(config.sample_limit)
-
-        ds = ds.write_jsonl(output_pattern)
-
-        # Keep parallelism modest for HF reads (else 429s everywhere)
-        results = list(Backend.execute(ds, max_parallelism=8))
-        logger.info(
-            f"Wrote {len(results)} prepared data files to {config.output_path}/{split_key} (first 5: {results[:5]})"
-        )
-
-
-def prepare_plantcad_dataset() -> ExecutorStep:
-    return ExecutorStep(
-        name="prepared/plantcad2",
-        fn=_prepare_dataset,
-        config=IsoFlopDataConfig(output_path=this_output_path()),
-    )
-
-
-def tokenize_plantcad_dataset(
-    prepared: ExecutorStep,
-) -> ExecutorStep:
-    # TODO: how should I be configuring this for faster tokenization?  It's crazy slow..
-    return ExecutorStep(
+    Returns:
+        A tuple of (tokenized ExecutorStep, IsoFlopDataConfig with dataset metadata).
+    """
+    data_config = IsoFlopDataConfig()
+    step = ExecutorStep(
         name="tokenized/plantcad2",
         fn=tokenize,
         config=IsoFlopTokenizeConfig(
-            train_paths=[prepared.cd("train")],
-            validation_paths=[prepared.cd("validation")],
+            id=data_config.dataset_name,
+            revision=data_config.dataset_revision,
             cache_path=this_output_path(),
         ),
     )
+    return step, data_config
 
 
 def main():
-    # Crop to match target sequence length
-    plantcad_prepared = prepare_plantcad_dataset()
-
-    # Tokenize
-    plantcad_tokenized = tokenize_plantcad_dataset(
-        prepared=plantcad_prepared,
-    )
+    plantcad_tokenized, data_config = tokenize_plantcad()
 
     # Generate sweep steps
     plantcad_sweep = generate_isoflop_sweep(
         tokenized=plantcad_tokenized,
-        # TODO: Find a better way to chain config dependencies like this
-        #       (e.g. this fails if any value is `versioned`)
         vocab_size=plantcad_tokenized.config.vocab_size,
-        seq_len=plantcad_prepared.config.output_seq_len,
-        total_token_count=plantcad_prepared.config.total_token_count,
-        output_seq_len=plantcad_prepared.config.output_seq_len,
-        input_seq_len=plantcad_prepared.config.input_seq_len,
+        seq_len=data_config.seq_len,
+        total_token_count=data_config.total_token_count,
         complement_map=plantcad_tokenized.config.complement_map,
     )
 
-    # Execute in batches of 32 sweep steps to avoid head node OOM errors.
+    # Execute in batches of 16 sweep steps to avoid head node OOM errors.
     # See: https://discord.com/channels/1354881461060243556/1442689455554171071/1447914001957785620
     # TODO: Figure out how to run on compute nodes instead w/o reverting back to this PR:
     #       https://discord.com/channels/1354881461060243556/1442689455554171071/1447920947402375291
-    base_steps = [plantcad_prepared, plantcad_tokenized]
     batch_size = 16
     batches = [plantcad_sweep[i : i + batch_size] for i in range(0, len(plantcad_sweep), batch_size)]
     batch_index: int | None = int(os.environ["SWEEP_BATCH_INDEX"]) if "SWEEP_BATCH_INDEX" in os.environ else None
@@ -712,7 +614,7 @@ def main():
         if os.environ.get("DRY_RUN"):
             logger.info("DRY RUN; skipping execution")
             continue
-        executor_main(steps=[*base_steps, *batch])
+        executor_main(steps=[plantcad_tokenized, *batch])
 
 
 if __name__ == "__main__":
