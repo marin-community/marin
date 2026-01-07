@@ -14,6 +14,7 @@
 
 from marin.scaling_laws.isoflop_analysis import (
     DEFAULT_BUDGETS,
+    DEFAULT_EVAL_METRIC_KEY,
     CandidateConfig,
     FitScalingLawsResult,
     IsoFlopAnalysisConfig,
@@ -32,7 +33,6 @@ from marin.scaling_laws.isoflop_analysis import (
     generate_isoflop_train_args,
     isoflop_analysis_step,
     isoflop_plots_step,
-    pick_v5p_type,
     predict_optimal_config,
     predict_optimal_configs_for_budgets,
     run_isoflop_analysis,
@@ -40,6 +40,10 @@ from marin.scaling_laws.isoflop_analysis import (
     solve_for_batch_size,
     solve_for_train_steps,
     upload_isoflop_plots_to_wandb_step,
+)
+from marin.scaling_laws.tpu_utils import (
+    estimate_memory_bytes,
+    pick_v5p_type,
 )
 from marin.scaling_laws.recipe import (
     MARIN_2025_RECIPE,
@@ -63,6 +67,7 @@ from marin.scaling_laws.scaling_plots import (
 
 __all__ = [
     "DEFAULT_BUDGETS",
+    "DEFAULT_EVAL_METRIC_KEY",
     "MARIN_2025_RECIPE",
     "CandidateConfig",
     "FitScalingLawsResult",
@@ -85,6 +90,7 @@ __all__ = [
     "create_isoflop_plot",
     "create_scaling_plot",
     "default_model_builder",
+    "estimate_memory_bytes",
     "fit_scaling_laws",
     "generate_isoflop_train_args",
     "isoflop_analysis_step",

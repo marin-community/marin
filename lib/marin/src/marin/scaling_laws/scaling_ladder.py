@@ -421,7 +421,7 @@ def scaling_ladder_suite(
     optimal_runs = []
     for budget in target_budgets:
         run_step = scaling_ladder_rung_step(
-            name=f"{name}-optimal-{budget:.0e}",
+            name=f"{name}-optimal-{budget:.2e}",
             analysis_step=analysis,
             target_budget=budget,
             label=label,
