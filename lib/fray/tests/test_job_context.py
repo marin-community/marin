@@ -14,16 +14,44 @@
 
 """Tests for execution contexts."""
 
+import threading
+import time
+
 import pytest
 from fray.job import RayContext, SimpleActor, SyncContext, ThreadContext, create_job_ctx
+from fray.job.rpc.context import FrayContext
+from fray.job.rpc.controller import FrayControllerServer
+from fray.job.rpc.worker import FrayWorker
 
 
-@pytest.fixture(params=["sync", "threadpool", "ray"])
-def job_context(request, ray_cluster):
+@pytest.fixture(scope="module")
+def rpc_controller():
+    """Start a controller server for RPC tests."""
+    server = FrayControllerServer(port=0)
+    port = server.start()
+
+    # Start a worker for the controller
+    worker = FrayWorker(f"http://localhost:{port}", port=0)
+    thread = threading.Thread(target=worker.run, daemon=True)
+    thread.start()
+    time.sleep(0.2)  # Give worker time to register
+
+    yield port
+
+    # Cleanup
+    worker.stop()
+    server.stop()
+    thread.join(timeout=2.0)
+
+
+@pytest.fixture(params=["sync", "threadpool", "ray", "rpc"])
+def job_context(request, ray_cluster, rpc_controller):
     if request.param == "sync":
         return SyncContext()
     elif request.param == "threadpool":
         return ThreadContext(max_workers=2)
+    elif request.param == "rpc":
+        return FrayContext(f"http://localhost:{rpc_controller}")
 
     return RayContext()
 
@@ -52,6 +80,9 @@ def test_fray_job_ctx_invalid():
 
 
 def test_actor_named_get_if_exists(job_context):
+    if isinstance(job_context, FrayContext):
+        pytest.skip("Actors not yet supported in FrayContext")
+
     actor1 = job_context.create_actor(SimpleActor, 100, name="test_actor", get_if_exists=True)
     future1 = actor1.increment.remote(10)
     job_context.get(future1)
@@ -62,6 +93,9 @@ def test_actor_named_get_if_exists(job_context):
 
 
 def test_actor_thread_safety(job_context):
+    if isinstance(job_context, FrayContext):
+        pytest.skip("Actors not yet supported in FrayContext")
+
     actor = job_context.create_actor(SimpleActor, 0)
 
     futures = [actor.increment.remote(1) for _ in range(100)]
@@ -72,6 +106,9 @@ def test_actor_thread_safety(job_context):
 
 
 def test_actor_integration_with_put_get_wait(job_context):
+    if isinstance(job_context, FrayContext):
+        pytest.skip("Actors not yet supported in FrayContext")
+
     actor = job_context.create_actor(SimpleActor, 0)
 
     futures = [actor.increment.remote(1) for _ in range(10)]
@@ -89,6 +126,9 @@ def test_actor_integration_with_put_get_wait(job_context):
 
 def test_actor_unnamed_isolation(job_context):
     """Test that unnamed actors are isolated instances."""
+    if isinstance(job_context, FrayContext):
+        pytest.skip("Actors not yet supported in FrayContext")
+
     actor1 = job_context.create_actor(SimpleActor, 10)
     actor2 = job_context.create_actor(SimpleActor, 20)
 
@@ -101,6 +141,9 @@ def test_actor_unnamed_isolation(job_context):
 
 def test_actor_named_without_get_if_exists(job_context):
     """Test that named actors without get_if_exists create new instances."""
+    if isinstance(job_context, FrayContext):
+        pytest.skip("Actors not yet supported in FrayContext")
+
     actor1 = job_context.create_actor(SimpleActor, 10, name="actor", get_if_exists=False)
     job_context.get(actor1.increment.remote(5))
 

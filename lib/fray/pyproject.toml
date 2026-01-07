@@ -19,6 +19,7 @@ dependencies = [
     "httpx>=0.28.1",
     "fastapi>=0.100.0",
     "uvicorn[standard]>=0.23.0",
+    "connect-python>=0.7.0",
 ]
 
 [project.scripts]
@@ -32,8 +33,9 @@ fray_test = [
     "numpy",
     "pip", # ray requires pip to be installed
     "pytest-timeout",
+    "pytest-asyncio",
     "pytest>=8.3.2",
-    "ray[default]"
+    "ray[default]",
 ]
 fray_tpu_test = ["jax[tpu]", { include-group = "fray_test" }]
 

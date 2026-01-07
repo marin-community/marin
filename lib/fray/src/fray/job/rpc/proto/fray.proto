@@ -1,0 +1,94 @@
+// Copyright 2025 The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package fray;
+
+option py_generic_services = true;
+
+enum TaskStatus {
+  TASK_STATUS_UNSPECIFIED = 0;
+  TASK_STATUS_PENDING = 1;
+  TASK_STATUS_RUNNING = 2;
+  TASK_STATUS_COMPLETED = 3;
+  TASK_STATUS_FAILED = 4;
+}
+
+message TaskSpec {
+  string task_id = 1;
+  bytes serialized_fn = 2;
+  map<string, int32> resources = 3;
+  int32 max_retries = 4;
+}
+
+message TaskHandle {
+  string task_id = 1;
+  TaskStatus status = 2;
+  string worker_id = 3;
+  string error = 4;
+}
+
+message TaskResult {
+  string task_id = 1;
+  bytes serialized_result = 2;
+  string error = 3;
+}
+
+message WorkerInfo {
+  string worker_id = 1;
+  string address = 2;
+  int32 num_cpus = 3;
+  int64 memory_bytes = 4;
+}
+
+message GetTaskRequest {
+  string worker_id = 1;
+}
+
+message Empty {}
+
+// Controller service - clients submit tasks, workers fetch and report
+service FrayController {
+  // Client RPCs
+  rpc SubmitTask(TaskSpec) returns (TaskHandle);
+  rpc GetTaskStatus(TaskHandle) returns (TaskHandle);
+  rpc GetTaskResult(TaskHandle) returns (TaskResult);
+
+  // Worker RPCs
+  rpc RegisterWorker(WorkerInfo) returns (Empty);
+  rpc GetNextTask(GetTaskRequest) returns (TaskSpec);
+  rpc ReportTaskComplete(TaskResult) returns (Empty);
+  rpc ReportTaskFailed(TaskResult) returns (Empty);
+  rpc UnregisterWorker(WorkerInfo) returns (Empty);
+}
+
+message WorkerTask {
+  string task_id = 1;
+  TaskStatus status = 2;
+  int64 started_at_ms = 3;
+}
+
+message WorkerStatus {
+  string worker_id = 1;
+  bool healthy = 2;
+  repeated WorkerTask current_tasks = 3;
+  int64 uptime_ms = 4;
+}
+
+// Worker service - for monitoring and health checks
+service FrayWorker {
+  rpc HealthCheck(Empty) returns (WorkerStatus);
+  rpc ListTasks(Empty) returns (WorkerStatus);
+}

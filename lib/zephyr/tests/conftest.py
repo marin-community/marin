@@ -14,10 +14,15 @@
 
 """Pytest fixtures for zephyr tests."""
 
+import threading
+import time
+
 import pytest
 import ray
 
 from fray.job import create_job_ctx
+from fray.job.rpc.controller import FrayControllerServer
+from fray.job.rpc.worker import FrayWorker
 
 from zephyr import load_file
 
@@ -31,6 +36,41 @@ def ray_cluster():
     # Don't shutdown - let pytest handle cleanup
 
 
+@pytest.fixture(scope="module")
+def rpc_infrastructure():
+    """Start RPC controller and workers for Zephyr tests.
+
+    Creates a controller server and 2 workers to match threadpool
+    parallelism (max_workers=2).
+    """
+    # Start controller on random port
+    server = FrayControllerServer(port=0)
+    port = server.start()
+
+    # Start 2 workers for parallel execution
+    workers = []
+    threads = []
+
+    for i in range(2):
+        worker = FrayWorker(f"http://localhost:{port}", port=0)
+        workers.append(worker)
+        thread = threading.Thread(target=worker.run, daemon=True, name=f"zephyr-rpc-worker-{i}")
+        thread.start()
+        threads.append(thread)
+
+    # Give workers time to register
+    time.sleep(0.3)
+
+    yield port
+
+    # Cleanup
+    for worker in workers:
+        worker.stop()
+    server.stop()
+    for thread in threads:
+        thread.join(timeout=2.0)
+
+
 @pytest.fixture
 def sample_data():
     """Sample data for testing."""
@@ -39,14 +79,29 @@ def sample_data():
 
 @pytest.fixture(
     params=[
-        pytest.param(create_job_ctx("sync"), id="sync"),
-        pytest.param(create_job_ctx("threadpool", max_workers=2), id="thread"),
-        pytest.param(create_job_ctx("ray"), id="ray"),
+        pytest.param("sync", id="sync"),
+        pytest.param("threadpool", id="thread"),
+        pytest.param("ray", id="ray"),
+        pytest.param("rpc", id="rpc"),
     ]
 )
-def backend(request):
-    """Parametrized fixture providing all job contexts for testing."""
-    return request.param
+def backend(request, ray_cluster, rpc_infrastructure):
+    """Parametrized fixture providing all job contexts for testing.
+
+    Tests run against all 4 backends: sync, threadpool, ray, and rpc.
+    """
+    backend_type = request.param
+
+    if backend_type == "sync":
+        return create_job_ctx("sync")
+    elif backend_type == "threadpool":
+        return create_job_ctx("threadpool", max_workers=2)
+    elif backend_type == "ray":
+        return create_job_ctx("ray")
+    elif backend_type == "rpc":
+        return create_job_ctx("fray", controller_address=f"http://localhost:{rpc_infrastructure}")
+    else:
+        raise ValueError(f"Unknown backend: {backend_type}")
 
 
 class CallCounter:

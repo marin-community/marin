@@ -1,0 +1,363 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Fray RPC worker implementation.
+
+This module implements the worker process that executes tasks assigned by the FrayController.
+Workers register with the controller, continuously poll for tasks, execute them using
+cloudpickle deserialization, and report results.
+
+Architecture
+------------
+Each FrayWorker consists of:
+
+1. **FrayWorkerServicer**: Exposes a Connect RPC service for health checks and task
+   monitoring. Controllers and monitoring tools can query worker status.
+
+2. **FrayWorker**: Main worker class that maintains a connection to the controller,
+   implements the task execution loop, and manages worker lifecycle.
+
+Usage
+-----
+Starting a worker::
+
+    from fray.job.rpc.worker import FrayWorker
+
+    worker = FrayWorker(
+        controller_address="http://localhost:50051",
+        worker_id="worker-1",  # Optional, UUID generated if not provided
+        port=0  # Port for worker's own RPC server, 0 = auto-assign
+    )
+    worker.run()  # Blocks until stopped
+
+Worker Lifecycle
+----------------
+1. Worker registers with controller via register_worker()
+2. Starts background RPC server for health checks
+3. Enters main loop:
+   - Polls controller for next task via get_next_task()
+   - Deserializes task function and arguments using cloudpickle
+   - Executes function
+   - Reports success via report_task_complete() or failure via report_task_failed()
+4. On shutdown:
+   - Unregisters from controller
+   - Stops RPC server
+   - Exits gracefully
+
+Task Execution
+--------------
+Tasks are serialized as cloudpickle payloads containing:
+- fn: The function to execute
+- args: Positional arguments to pass to the function
+
+The worker deserializes the payload, calls fn(*args), and serializes the result
+back using cloudpickle. Any exceptions during execution are caught, formatted with
+traceback, and reported as task failures.
+
+Error Handling
+--------------
+- RPC errors (connection failures, timeouts) are logged but don't crash the worker
+- Task execution errors are caught and reported as failed tasks
+- Graceful shutdown on SIGINT/SIGTERM via stop() method
+
+Health Monitoring
+-----------------
+Workers expose their own Connect RPC service providing:
+- health_check(): Returns worker status including uptime and current tasks
+- list_tasks(): Returns detailed information about running tasks
+
+This allows controllers and monitoring tools to track worker health and task execution.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import threading
+import time
+import traceback
+import uuid
+
+import cloudpickle
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
+from connectrpc.request import RequestContext
+from uvicorn import Config, Server
+
+from fray.job.rpc.proto import fray_pb2
+from fray.job.rpc.proto.fray_connect import (
+    FrayControllerClientSync,
+    FrayWorker,
+    FrayWorkerASGIApplication,
+)
+from fray.job.rpc.proto.fray_pb2 import TaskStatus
+
+logger = logging.getLogger(__name__)
+
+
+class FrayWorkerServicer(FrayWorker):
+    """
+    Implements the FrayWorker Connect RPC service for health checks and task monitoring.
+
+    This servicer runs on each worker to provide status information about the worker's
+    health, uptime, and currently running tasks.
+    """
+
+    def __init__(self, worker_id: str):
+        self.worker_id = worker_id
+        self.start_time = time.time_ns() // 1_000_000
+        self.current_tasks: list[tuple[str, TaskStatus, int]] = []
+        self._lock = threading.Lock()
+
+    async def health_check(self, request: fray_pb2.Empty, ctx: RequestContext) -> fray_pb2.WorkerStatus:
+        return self._get_status()
+
+    async def list_tasks(self, request: fray_pb2.Empty, ctx: RequestContext) -> fray_pb2.WorkerStatus:
+        return self._get_status()
+
+    def _get_status(self) -> fray_pb2.WorkerStatus:
+        """Generate current worker status."""
+        current_time_ms = time.time_ns() // 1_000_000
+        uptime_ms = current_time_ms - self.start_time
+
+        with self._lock:
+            worker_tasks = [
+                fray_pb2.WorkerTask(
+                    task_id=task_id,
+                    status=status,
+                    started_at_ms=started_at_ms,
+                )
+                for task_id, status, started_at_ms in self.current_tasks
+            ]
+
+        return fray_pb2.WorkerStatus(
+            worker_id=self.worker_id,
+            healthy=True,
+            current_tasks=worker_tasks,
+            uptime_ms=uptime_ms,
+        )
+
+    def add_task(self, task_id: str, status: TaskStatus) -> None:
+        """Add a task to the current tasks list."""
+        started_at_ms = time.time_ns() // 1_000_000
+        with self._lock:
+            self.current_tasks.append((task_id, status, started_at_ms))
+
+    def update_task_status(self, task_id: str, status: TaskStatus) -> None:
+        """Update the status of a task."""
+        with self._lock:
+            for i, (tid, _, started_at_ms) in enumerate(self.current_tasks):
+                if tid == task_id:
+                    self.current_tasks[i] = (task_id, status, started_at_ms)
+                    break
+
+    def remove_task(self, task_id: str) -> None:
+        """Remove a task from the current tasks list."""
+        with self._lock:
+            self.current_tasks = [
+                (tid, status, started_at_ms) for tid, status, started_at_ms in self.current_tasks if tid != task_id
+            ]
+
+
+class FrayWorker:
+    """
+    Worker that connects to a FrayController, fetches tasks, executes them, and reports results.
+
+    The worker maintains a connection to the controller for fetching tasks and reporting results,
+    while also exposing its own Connect RPC service for health checks and monitoring.
+    """
+
+    def __init__(self, controller_address: str, worker_id: str | None = None, port: int = 0):
+        """
+        Initialize a FrayWorker.
+
+        Args:
+            controller_address: Address of the controller to connect to (e.g., "localhost:50051")
+            worker_id: Optional worker ID. If not provided, a UUID will be generated.
+            port: Port to run the worker's own Connect RPC server on. If 0, an available port will be chosen.
+        """
+        self.worker_id = worker_id or str(uuid.uuid4())
+        self._port = port
+        self._running = False
+        self._current_task: str | None = None
+
+        # Ensure controller address has http:// prefix
+        if not controller_address.startswith("http://") and not controller_address.startswith("https://"):
+            controller_address = f"http://{controller_address}"
+        self.controller_address = controller_address
+
+        # Create Connect RPC client to controller
+        self._controller_client = FrayControllerClientSync(controller_address)
+
+        # Create our own Connect RPC service for health checks
+        self._servicer = FrayWorkerServicer(self.worker_id)
+        app = FrayWorkerASGIApplication(self._servicer)
+
+        # Create uvicorn server for ASGI app
+        # Let uvicorn handle port=0 directly to avoid race condition
+        self._server_config = Config(app=app, host="0.0.0.0", port=port, log_level="error")
+        self._server = Server(config=self._server_config)
+        self._server_thread: threading.Thread | None = None
+        self._port = port
+
+    @property
+    def address(self) -> str:
+        """Return the address of this worker's RPC server."""
+        # Get actual port from server after it starts
+        if hasattr(self._server, "servers") and self._server.servers:
+            # Extract port from running server
+            actual_port = self._server.servers[0].sockets[0].getsockname()[1]
+            return f"localhost:{actual_port}"
+        return f"localhost:{self._port}"
+
+    def register(self) -> None:
+        """Register this worker with the controller."""
+        worker_info = fray_pb2.WorkerInfo(
+            worker_id=self.worker_id,
+            address=self.address,
+            num_cpus=os.cpu_count() or 1,
+            memory_bytes=0,  # Not tracking memory for now
+        )
+        self._controller_client.register_worker(worker_info)
+        logger.info(f"Worker {self.worker_id} registered with controller at {self.controller_address}")
+
+    def run(self) -> None:
+        """
+        Main worker loop.
+
+        Registers with the controller, starts the health check server, and continuously
+        fetches and executes tasks until stopped.
+        """
+        self._running = True
+
+        # Register with controller
+        self.register()
+
+        # Start our own Connect RPC server in a background thread
+        def run_server():
+            self._server.run()
+
+        self._server_thread = threading.Thread(target=run_server, daemon=True)
+        self._server_thread.start()
+        logger.info(f"Worker {self.worker_id} Connect RPC server started on {self.address}")
+
+        try:
+            # Main task execution loop
+            while self._running:
+                try:
+                    # Request next task from controller
+                    request = fray_pb2.GetTaskRequest(worker_id=self.worker_id)
+                    task_spec = self._controller_client.get_next_task(request, timeout_ms=1000)
+
+                    # If no task available, continue
+                    if not task_spec.task_id:
+                        continue
+
+                    logger.info(f"Worker {self.worker_id} received task {task_spec.task_id}")
+
+                    # Track task in servicer
+                    self._current_task = task_spec.task_id
+                    self._servicer.add_task(task_spec.task_id, fray_pb2.TASK_STATUS_RUNNING)
+
+                    try:
+                        # Execute the task
+                        result = self._execute_task(task_spec)
+
+                        # Report success
+                        self._controller_client.report_task_complete(result)
+                        logger.info(f"Worker {self.worker_id} completed task {task_spec.task_id}")
+
+                    except Exception as e:
+                        # Report failure
+                        error_msg = f"{type(e).__name__}: {e!s}\n{traceback.format_exc()}"
+                        failure_result = fray_pb2.TaskResult(
+                            task_id=task_spec.task_id,
+                            error=error_msg,
+                        )
+                        self._controller_client.report_task_failed(failure_result)
+                        logger.error(f"Worker {self.worker_id} failed task {task_spec.task_id}: {error_msg}")
+
+                    finally:
+                        # Remove task from tracking
+                        self._servicer.remove_task(task_spec.task_id)
+                        self._current_task = None
+
+                except ConnectError as e:
+                    # Handle timeout gracefully for shutdown
+                    if e.code == Code.DEADLINE_EXCEEDED:
+                        continue
+                    # Log other RPC errors but continue
+                    if self._running:
+                        logger.error(f"RPC error in worker loop: {e}")
+                        time.sleep(0.1)
+
+                except Exception as e:
+                    if self._running:
+                        logger.error(f"Unexpected error in worker loop: {e}", exc_info=True)
+                        time.sleep(0.1)
+
+        finally:
+            # Cleanup
+            self._cleanup()
+
+    def _execute_task(self, task: fray_pb2.TaskSpec) -> fray_pb2.TaskResult:
+        """
+        Execute a task by deserializing and calling the function.
+
+        Args:
+            task: TaskSpec containing the serialized function and arguments
+
+        Returns:
+            TaskResult containing the serialized result or error
+        """
+        # Deserialize the function and arguments
+        task_data = cloudpickle.loads(task.serialized_fn)
+        fn = task_data["fn"]
+        args = task_data["args"]
+
+        # Execute the function
+        result = fn(*args)
+
+        # Serialize and return the result
+        serialized_result = cloudpickle.dumps(result)
+        return fray_pb2.TaskResult(
+            task_id=task.task_id,
+            serialized_result=serialized_result,
+        )
+
+    def stop(self) -> None:
+        """Stop the worker gracefully."""
+        logger.info(f"Stopping worker {self.worker_id}")
+        self._running = False
+
+    def _cleanup(self) -> None:
+        """Clean up resources when stopping."""
+        try:
+            # Unregister from controller
+            worker_info = fray_pb2.WorkerInfo(
+                worker_id=self.worker_id,
+                address=self.address,
+                num_cpus=os.cpu_count() or 1,
+                memory_bytes=0,
+            )
+            self._controller_client.unregister_worker(worker_info)
+            logger.info(f"Worker {self.worker_id} unregistered from controller")
+        except Exception as e:
+            logger.error(f"Error unregistering worker: {e}")
+
+        # Stop our Connect RPC server
+        self._server.should_exit = True
+        if self._server_thread:
+            self._server_thread.join(timeout=5.0)
+        logger.info(f"Worker {self.worker_id} Connect RPC server stopped")
