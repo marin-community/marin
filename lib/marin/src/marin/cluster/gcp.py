@@ -54,14 +54,6 @@ def get_default_zone() -> str | None:
         return None
 
 
-def get_gcloud_config() -> dict[str, str | None]:
-    """Get common gcloud configuration values."""
-    return {
-        "project": get_project_id(),
-        "zone": get_default_zone(),
-    }
-
-
 # Compute instance utilities
 
 
@@ -82,17 +74,6 @@ def list_instances(project: str, zone: str, filter_expr: str | None = None) -> l
 
     result = run_gcloud_command(cmd)
     return json.loads(result.stdout)
-
-
-def find_head_node_ip(cluster_name: str, project: str, zone: str) -> str:
-    """Find the internal IP of the Ray cluster head node."""
-    filter_expr = f"labels.ray-node-type=head AND labels.ray-node-name=ray-{cluster_name}-head"
-    instances = list_instances(project, zone, filter_expr)
-
-    if not instances:
-        raise RuntimeError(f"No head node found for cluster {cluster_name} in zone {zone}")
-
-    return instances[0]["networkInterfaces"][0]["networkIP"]
 
 
 def list_tpu_nodes(project: str, zone: str, filter_expr: str = "") -> list[dict[str, Any]]:
@@ -185,50 +166,6 @@ def ssh_to_tpu(tpu_name: str, zone: str, project: str, extra_args: list[str] | N
         cmd.extend(["--", *extra_args])
 
     subprocess.run(cmd, check=True)
-
-
-def get_tpu_health_status(project: str, zone: str) -> dict[str, Any]:
-    """Get health status of all TPU nodes in a zone."""
-    nodes = list_tpu_nodes(project, zone)
-
-    health_status = {
-        "healthy": [],
-        "unhealthy": [],
-        "preempted": [],
-        "creating": [],
-        "total_nodes": len(nodes),
-        "total_chips": 0,
-    }
-
-    for node in nodes:
-        name = node.get("name", "").split("/")[-1]  # Get simple name
-        state = node.get("state", "UNKNOWN")
-        accelerator_type = node.get("acceleratorType", "")
-
-        # Calculate chips for this node
-        try:
-            chips = int(accelerator_type.split("-")[-1])
-            health_status["total_chips"] += chips
-        except (ValueError, IndexError):
-            pass
-
-        node_info = {
-            "name": name,
-            "state": state,
-            "accelerator_type": accelerator_type,
-            "zone": zone,
-        }
-
-        if state == "READY":
-            health_status["healthy"].append(node_info)
-        elif state in ["PREEMPTED", "TERMINATED"]:
-            health_status["preempted"].append(node_info)
-        elif state in ["CREATING", "STARTING"]:
-            health_status["creating"].append(node_info)
-        else:
-            health_status["unhealthy"].append(node_info)
-
-    return health_status
 
 
 def terminate_tpus_in_cluster(project: str, zone: str, cluster_name: str) -> list[str]:

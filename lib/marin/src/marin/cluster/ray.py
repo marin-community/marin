@@ -22,7 +22,6 @@ import socket
 import subprocess
 import tempfile
 import time
-from collections import Counter
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -792,70 +791,6 @@ def list_workers(limit: int = 10000) -> list[dict[str, Any]]:
         ["ray", "list", "workers", "--format=json", f"--limit={limit}"],
     )
     return json.loads(result.stdout)
-
-
-def list_tasks(limit: int = 1000) -> list[dict[str, Any]]:
-    """Get list of Ray tasks."""
-    result = run_ray_command(
-        ["ray", "list", "tasks", "--format=json", f"--limit={limit}"],
-    )
-    return json.loads(result.stdout)
-
-
-def list_actors(limit: int = 1000) -> list[dict[str, Any]]:
-    """Get list of Ray actors."""
-    result = run_ray_command(["ray", "list", "actors", "--format=json", f"--limit={limit}"])
-    return json.loads(result.stdout)
-
-
-def get_cluster_utilization() -> dict[str, Any]:
-    """Get cluster resource utilization summary."""
-    try:
-        nodes = list_nodes()
-        workers = list_workers()
-
-        total_nodes = len(nodes)
-        total_workers = len(workers)
-
-        # Calculate resource totals
-        total_cpus = sum(node.get("Resources", {}).get("CPU", 0) for node in nodes)
-        total_gpus = sum(node.get("Resources", {}).get("GPU", 0) for node in nodes)
-        total_memory = sum(node.get("Resources", {}).get("memory", 0) for node in nodes)
-
-        # Count TPU resources
-        tpu_resources = {}
-        for node in nodes:
-            resources = node.get("Resources", {})
-            for resource, amount in resources.items():
-                if resource.startswith("TPU"):
-                    tpu_resources[resource] = tpu_resources.get(resource, 0) + amount
-
-        # Count nodes by status
-        node_status = Counter()
-        for node in nodes:
-            status = node.get("Alive", False)
-            node_status["alive" if status else "dead"] += 1
-
-        return {
-            "total_nodes": total_nodes,
-            "total_workers": total_workers,
-            "node_status": dict(node_status),
-            "resources": {
-                "CPU": total_cpus,
-                "GPU": total_gpus,
-                "memory": total_memory,
-                "TPU": tpu_resources,
-            },
-            "worker_ips": list(set(worker.get("ip") for worker in workers if worker.get("ip"))),
-        }
-    except Exception as e:
-        raise RuntimeError(f"Failed to get cluster utilization: {e}") from e
-
-
-def print_cluster_status() -> None:
-    """Get Ray cluster resources using ray CLI."""
-    # seriously, you can't use anything other than the GCS address here?
-    run_ray_command(["ray", "status", f"--address={os.environ['RAY_GCS_ADDRESS']}"], capture_output=False)
 
 
 def add_manual_worker(

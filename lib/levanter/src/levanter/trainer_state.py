@@ -8,19 +8,17 @@ from typing import TYPE_CHECKING, Callable, Generic, Optional, TypeVar
 import equinox as eqx
 import jax
 import jmp
+from haliax.quantization import QuantizationConfig, apply_updates, partition_for_grad_overwrite, quantize_linear_layers
+from haliax.types import IntScalar, Scalar
 from jax import numpy as jnp
 from jax._src.random import PRNGKey
 from jaxtyping import PRNGKeyArray, PyTree
 from optax import GradientTransformation, OptState
 
-from haliax.quantization import QuantizationConfig, apply_updates, partition_for_grad_overwrite, quantize_linear_layers
-from haliax.types import IntScalar, Scalar
-
 from levanter.optim.model_averaging import ModelAveraging, ModelAveragingConfig
 from levanter.utils.jax_utils import is_inexact_arrayish
 from levanter.utils.tree_utils import inference_mode
 from levanter.utils.types import FilterTree
-
 
 M = TypeVar("M", bound=PyTree)
 S = TypeVar("S")
@@ -186,10 +184,6 @@ def init_optimizer_for_trainables(optimizer, trainable_model):
     return opt_state
 
 
-def _params_only(t):
-    return eqx.filter(t, is_inexact_arrayish)
-
-
 def _partition_trainable_params(model, filter):
     """
     Partitions the model into trainable and non-trainable parameters. This is used internally
@@ -255,7 +249,7 @@ def take_train_step(
     Takes a single training step for the model using the provided optimizer and gradients. This function takes into account:
     - The optimizer to update the model parameters based on the gradients.
     - The model parameters that are trainable based on the provided filter.
-    - The optional objective function for Sophia, etc.
+    - The optional objective function for certain optimizers.
     - quantized state updates (Gradient Overwrite) if applicable.
 
     Returns:

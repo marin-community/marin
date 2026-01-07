@@ -15,7 +15,6 @@ import requests  # type: ignore
 
 from levanter.infra.docker import make_docker_run_command
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -46,24 +45,6 @@ def setup_vm_docker(tpu_name, zone, node_count):
     )
 
 
-def list_tpus(zone):
-    return json.loads(
-        subprocess.check_output(
-            [
-                "gcloud",
-                "alpha",
-                "compute",
-                "tpus",
-                "queued-resources",
-                "list",
-                f"--zone={zone}",
-                "--format=json(name.basename(), state)",
-                "--quiet",
-            ]
-        )
-    )
-
-
 def describe_tpu_queued_resource(tpu_name, zone):
     try:
         return json.loads(
@@ -74,29 +55,6 @@ def describe_tpu_queued_resource(tpu_name, zone):
                     "compute",
                     "tpus",
                     "queued-resources",
-                    "describe",
-                    tpu_name,
-                    f"--zone={zone}",
-                    "--format=json(name.basename(), state)",
-                    "--quiet",
-                ],
-                stderr=subprocess.DEVNULL,
-            )
-        )
-    except subprocess.CalledProcessError:
-        return None
-
-
-def describe_tpu_vm(tpu_name, zone):
-    try:
-        return json.loads(
-            subprocess.check_output(
-                [
-                    "gcloud",
-                    "alpha",
-                    "compute",
-                    "tpus",
-                    "tpu-vm",
                     "describe",
                     tpu_name,
                     f"--zone={zone}",
@@ -318,27 +276,6 @@ def _tpu_ssh_multislice(tpu_name, zone, node_count, *args, ignore_failure=False)
 
 GCE_TPU_ACCELERATOR_ENDPOINT = "http://metadata.google.internal/computeMetadata/v1/instance/attributes/"
 GCE_TPU_HEADERS = {"Metadata-Flavor": "Google"}
-
-
-def get_current_tpu_metadata(key: str) -> Optional[str]:
-    # cribbed from Ray.
-    """Poll and get TPU metadata. This only works on a **TPU VM**."""
-    try:
-        accelerator_type_request = requests.get(
-            os.path.join(GCE_TPU_ACCELERATOR_ENDPOINT, key),
-            headers=GCE_TPU_HEADERS,
-        )
-        if accelerator_type_request.status_code == 200 and accelerator_type_request.text:
-            return accelerator_type_request.text
-        else:
-            logging.debug(
-                "Unable to poll TPU GCE Metadata. Got "
-                f"status code: {accelerator_type_request.status_code} and "
-                f"content: {accelerator_type_request.text}"
-            )
-    except requests.RequestException as e:
-        logging.debug("Unable to poll the TPU GCE Metadata: %s", e)
-    return None
 
 
 def get_current_tpu_is_preempted() -> bool:

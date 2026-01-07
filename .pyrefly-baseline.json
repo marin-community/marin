@@ -733,18 +733,6 @@
       "severity": "error"
     },
     {
-      "line": 32,
-      "column": 5,
-      "stop_line": 32,
-      "stop_column": 10,
-      "path": "lib/levanter/src/levanter/optim/sophia.py",
-      "code": -2,
-      "name": "bad-override",
-      "description": "Class member `ScaleBySophiaState.count` overrides parent class `NamedTupleFallback` in an inconsistent manner\n  `ScaleBySophiaState.count` is read-only, but `NamedTupleFallback.count` is read-write",
-      "concise_description": "Class member `ScaleBySophiaState.count` overrides parent class `NamedTupleFallback` in an inconsistent manner",
-      "severity": "error"
-    },
-    {
       "line": 432,
       "column": 16,
       "stop_line": 432,

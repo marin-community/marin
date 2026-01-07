@@ -14,37 +14,36 @@ import urllib.parse
 import warnings
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Generic, Optional, Tuple, Type, TypeVar, Union, cast, Callable
+from typing import Callable, Generic, Optional, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
 import fsspec
+import haliax
 import huggingface_hub
 import humanfriendly
 import jax
 import jax.numpy as jnp
-from jax._src.mesh import get_concrete_mesh
 import mergedeep
 import numpy as np
 import transformers.utils.hub
 from fsspec import AbstractFileSystem
-from fsspec.asyn import get_loop, sync as fsspec_sync
+from fsspec.asyn import get_loop
+from fsspec.asyn import sync as fsspec_sync
+from haliax import Axis
 from haliax._src.state_dict import flatten_modules_for_export, to_state_dict
 from haliax.jax_utils import is_jax_array_like
-from haliax.state_dict import StateDict
+from haliax.partitioning import ResourceMapping
+from haliax.state_dict import StateDict, from_torch_compatible_state_dict, save_state_dict
 from huggingface_hub import HfApi, hf_hub_download, repo_exists, snapshot_download
 from huggingface_hub.file_download import repo_folder_name
-from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError, RepositoryNotFoundError
+from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
+from jax._src.mesh import get_concrete_mesh
 from jax._src.partition_spec import PartitionSpec
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from tqdm_loggable.auto import tqdm
-
-import haliax
-from haliax import Axis
-from haliax.partitioning import ResourceMapping
-from haliax.state_dict import from_torch_compatible_state_dict, save_state_dict
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import read_safetensors_fsspec
@@ -52,31 +51,27 @@ from levanter.models.asr_model import ASRMixin
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.utils.cloud_utils import temp_dir_before_upload
 from levanter.utils.hf_utils import HfTokenizer
-from levanter.utils.jax_utils import best_effort_sharding, use_cpu_device, sync_global_devices
+from levanter.utils.jax_utils import best_effort_sharding, sync_global_devices, use_cpu_device
 from levanter.utils.json_utils import ConfigJSONEncoder
 from levanter.utils.logging import silence_transformer_nag
 from levanter.utils.py_utils import dataclass_with_default_init
 
-
 silence_transformer_nag()
-from transformers import (  # noqa: E402
+from transformers import (  # noqa: E402  # noqa: E402
     AutoConfig,
     AutoModel,
     AutoModelForCausalLM,
     AutoProcessor,
     AutoTokenizer,
     FeatureExtractionMixin,
-)
-from transformers import PretrainedConfig as HfConfig  # noqa: E402
-from transformers import (  # noqa: E402
     PreTrainedTokenizer,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
     ProcessorMixin,
 )
+from transformers import PretrainedConfig as HfConfig  # noqa: E402
 from transformers.dynamic_module_utils import get_class_from_dynamic_module  # noqa: E402
 from transformers.models.auto.auto_factory import _get_model_class  # noqa: E402
-
 
 DEFAULT_MAX_SHARD_SIZE = int(5e9)
 
@@ -1269,16 +1264,6 @@ def _shard_best_effort(array_or_slice, dtype) -> jax.Array:
         return arr
 
     return jax.make_array_from_callback(tuple(shape), sharding, get_slice)
-
-
-def _is_hf_hub_model(ref: RepoRef):
-    api = HfApi()
-
-    try:
-        api.model_info(repo_id=ref.model_name_or_path)
-        return True
-    except RepositoryNotFoundError:
-        return False
 
 
 @contextlib.contextmanager

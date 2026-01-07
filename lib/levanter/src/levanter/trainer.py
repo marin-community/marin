@@ -650,7 +650,7 @@ class Trainer:
             self.loss_fn, model, *batch, **batch_kwargs, key=key
         )
 
-        # Sophia needs to be able to access the loss function in the optimizer
+        # Some optimizers need to be able to access the loss function
         def obj_fun(trainable_model):
             model = eqx.combine(trainable_model, state.model)
             with hax.axis_mapping(self.compute_axis_mapping):

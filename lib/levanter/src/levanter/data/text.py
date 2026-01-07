@@ -1367,25 +1367,6 @@ class MultiturnChatDataset(MappedAsyncDataset[tuple[ProcessedChatDict, Processed
         super().__init__(self.packed, _create_lm_example)
 
 
-def cached_token_count(cache_path: str, field: str = "input_ids") -> int:
-    """Return the total number of tokens stored in a finished :class:`TreeCache`.
-
-    This simply loads the cache and reads the ``data_size`` for ``field``.  It
-    assumes the cache contains the given field of token ids and that the cache
-    is already finished.
-
-    Args:
-        cache_path: Path to the on-disk cache directory.
-        field: Name of the field containing token ids. Defaults to ``"input_ids"``.
-
-    Returns:
-        The total number of tokens in the cache.
-    """
-
-    cache = TreeCache.load(cache_path, {field: np.zeros((0,), dtype=np.int32)})
-    return cache.store.tree[field].data_size
-
-
 def count_corpus_sizes(
     config: LMMixtureDatasetConfig | SingleDatasetLMConfig,
     prefix: str = "data/stats/",
