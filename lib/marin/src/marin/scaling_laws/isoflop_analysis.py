@@ -87,6 +87,8 @@ SEQ_LEN = 4096
 MARIN_TOKENIZER_VOCAB_SIZE = 128256
 
 # ---------------- IsoFLOP Sweep Constants ----------------
+# Budgets in training FLOPs (includes 3x multiplier for forward + backward pass).
+# This matches how FLOPs are tracked in WandB via Levanter's log_performance_stats.
 DEFAULT_BUDGETS: tuple[float, ...] = (1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20)
 
 # TPU v5p hardware constants for memory estimation
@@ -298,7 +300,12 @@ def compute_total_flops(
     seq_len: int,
     vocab_size: int,
 ) -> float:
-    """Compute total training FLOPs using Levanter utilities."""
+    """Compute total training FLOPs using Levanter utilities.
+
+    This returns training FLOPs which includes forward pass (1x) + backward pass (2x) = 3x.
+    This matches the FLOP accounting in Levanter's log_performance_stats callback
+    (see train_lm.py) and standard ML conventions (e.g., Chinchilla paper).
+    """
     flops_per_token = lm_flops_per_token(
         hidden,
         intermediate,
@@ -309,7 +316,8 @@ def compute_total_flops(
         vocab_size,
         glu=True,
     )
-    return flops_per_token * batch * steps * seq_len
+    # Multiply by 3 for training: forward (1x) + backward (2x)
+    return 3 * flops_per_token * batch * steps * seq_len
 
 
 def estimate_memory_bytes(
