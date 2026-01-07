@@ -589,7 +589,7 @@ class LlavaOnevisionModel(eqx.Module):
         k_vision, k_lm = maybe_rng_split(key, 2)
 
         # Merge text embeddings with image features and compute position IDs
-        inputs_embeds, position_ids = self._merge_embeddings(
+        inputs_embeds, position_ids, validity_mask = self._merge_embeddings(
             input_ids=input_ids,
             inputs_embeds=inputs_embeds,
             pixel_values=pixel_values,
@@ -599,10 +599,16 @@ class LlavaOnevisionModel(eqx.Module):
         )
 
         # Forward through language model with merged embeddings
-        causal_mask = AttentionMask.causal()
+        # Create attention mask: causal + segment-based padding mask
+        # validity_mask is (batch, seq) with True for valid, False for invalid
+        # Use segment_ids instead of explicit_mask for splash attention compatibility
+        # Valid tokens get segment_id=1, padding tokens get segment_id=0
+        # Splash attention prevents attention between different segments
+        segment_ids = validity_mask.astype(jnp.int32)
+        attn_mask = AttentionMask.causal().with_segment_ids(segment_ids)
 
         activations = self.language_model.transformer(
-            inputs_embeds, attn_mask=causal_mask, pos_ids=position_ids, key=k_lm
+            inputs_embeds, attn_mask=attn_mask, pos_ids=position_ids, key=k_lm
         )
 
         # Return activations and lm_head for blockwise loss computation
@@ -656,7 +662,7 @@ class LlavaOnevisionModel(eqx.Module):
         unpad_indices: Optional[NamedArray] = None,
         *,
         key=None,
-    ) -> Tuple[NamedArray, NamedArray]:
+    ) -> Tuple[NamedArray, NamedArray, NamedArray]:
         """
         Merge text embeddings with projected image features and compute position IDs.
 
@@ -680,6 +686,7 @@ class LlavaOnevisionModel(eqx.Module):
             Tuple of:
             - merged_embeds: (batch, seq_len, embed) with image features at placeholders
             - position_ids: (batch, seq_len) compact position IDs skipping padding
+            - validity_mask: (batch, seq_len) boolean mask for valid tokens (for attention masking)
         """
         if inputs_embeds is None:
             if input_ids is None:
@@ -698,7 +705,9 @@ class LlavaOnevisionModel(eqx.Module):
             position_ids_array = self._compute_position_ids(text_mask.array)
             Pos = Axis("position", seq_ax.size)
             position_ids = hax.named(position_ids_array, (batch_ax, Pos))
-            return inputs_embeds, position_ids
+            # Return text_mask as validity mask (already a NamedArray)
+            validity_mask = text_mask.astype(jnp.bool_)
+            return inputs_embeds, position_ids, validity_mask
 
         # Get image features: (batch, TOTAL_PATCHES, features_per_patch, embed)
         image_features, grid_mask = self.get_image_features(
@@ -767,7 +776,10 @@ class LlavaOnevisionModel(eqx.Module):
         Pos = Axis("position", seq_ax.size)
         position_ids = hax.named(position_ids_array, (batch_ax, Pos))
 
-        return merged_embeds, position_ids
+        # Return validity mask for attention masking
+        validity_mask = hax.named(combined_mask.astype(jnp.bool_), (batch_ax, seq_ax))
+
+        return merged_embeds, position_ids, validity_mask
 
     def initial_cache(self, spec, *, dtype):
         """Creates an initial paged KV cache for the language model."""
@@ -811,7 +823,7 @@ class LlavaOnevisionModel(eqx.Module):
         if embeds is None:
             if input_ids is None:
                 raise ValueError("When embeds is None, input_ids is required.")
-            embeds, pos_ids = self._merge_embeddings(
+            embeds, pos_ids, _validity_mask = self._merge_embeddings(
                 input_ids=input_ids,
                 inputs_embeds=None,
                 pixel_values=pixel_values,
@@ -819,6 +831,8 @@ class LlavaOnevisionModel(eqx.Module):
                 unpad_indices=unpad_indices,
                 key=k_vision,
             )
+            # Note: For paged attention, validity masking is handled through batch_info
+            # which manages the KV cache pages and slot positions
 
         transformer = self.language_model.transformer
         num_layers = self.config.text_config.num_layers

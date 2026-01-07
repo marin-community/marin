@@ -400,9 +400,47 @@ class SiglipAttention(eqx.Module):
         k = self.k_proj(x)
         v = self.v_proj(x)
 
-        # Rename k and v's sequence axis to key_position to avoid conflicts in attention
-        k = k.rename({seq_axis_name: "key_position"})
-        v = v.rename({seq_axis_name: "key_position"})
+        # Compute padding for Splash Attention (requires sequence length to be multiple of 128)
+        seq_axis = q.resolve_axis(seq_axis_name)
+        orig_seq_len = seq_axis.size
+        SPLASH_BLOCK_SIZE = 128
+        pad_len = (SPLASH_BLOCK_SIZE - (orig_seq_len % SPLASH_BLOCK_SIZE)) % SPLASH_BLOCK_SIZE
+
+        if pad_len > 0:
+            # Pad q, k, v with zeros along sequence dimension
+            q = hax.pad(q, {seq_axis_name: (0, pad_len)})
+            k = hax.pad(k, {seq_axis_name: (0, pad_len)})
+            v = hax.pad(v, {seq_axis_name: (0, pad_len)})
+
+            # Create padded axes
+            padded_seq_len = orig_seq_len + pad_len
+            PaddedSeqAxis = Axis(seq_axis_name, padded_seq_len)
+            PaddedKeyAxis = Axis("key_position", padded_seq_len)
+
+            # Create attention mask to ignore padded positions using numpy for static mask
+            # This allows Splash Attention to use NumpyMask which requires static arrays
+            import numpy as np
+            q_indices = np.arange(padded_seq_len)
+            k_indices = np.arange(padded_seq_len)
+            # Create 2D mask: valid positions are where both q and k indices < orig_seq_len
+            pad_mask_np = (q_indices[:, None] < orig_seq_len) & (k_indices[None, :] < orig_seq_len)
+            # Wrap as NamedArray for AttentionMask
+            pad_mask = hax.named(pad_mask_np, (PaddedSeqAxis, PaddedKeyAxis))
+
+            # Combine with existing mask if present
+            if mask is not None:
+                combined_mask = AttentionMask.explicit(pad_mask) & mask
+            else:
+                combined_mask = AttentionMask.explicit(pad_mask)
+
+            # Rename k and v's sequence axis to key_position
+            k = k.rename({seq_axis_name: "key_position"})
+            v = v.rename({seq_axis_name: "key_position"})
+        else:
+            # No padding needed
+            combined_mask = mask
+            k = k.rename({seq_axis_name: "key_position"})
+            v = v.rename({seq_axis_name: "key_position"})
 
         attn_output = dot_product_attention(
             seq_axis_name,
@@ -411,7 +449,7 @@ class SiglipAttention(eqx.Module):
             q,
             k,
             v,
-            mask=mask,
+            mask=combined_mask,
             inference=self.config.inference,
             use_flash=self.config.use_flash_attention,
             attn_backend=self.config.attn_backend,
@@ -420,6 +458,10 @@ class SiglipAttention(eqx.Module):
             prng=k_drop,
             attention_dtype=x.dtype,
         )
+
+        # Remove padding from output if we added it
+        if pad_len > 0:
+            attn_output = attn_output[seq_axis_name, :orig_seq_len]
 
         # Project back to embedding dimension
         return self.out_proj(attn_output.astype(x.dtype))

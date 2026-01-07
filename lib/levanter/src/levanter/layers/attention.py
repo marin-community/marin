@@ -13,6 +13,7 @@ from typing import Optional, Union, cast, overload
 
 import equinox as eqx
 import jax
+import numpy as np
 import jax.random as jrandom
 from equinox import Partial
 from jax import numpy as jnp
@@ -1426,7 +1427,27 @@ def _tpu_splash_attention(
             )
             base_mask = splash_attention_mask.LogicalAnd(base_mask, local_mask)
         if mask.explicit_mask is not None:
-            raise NotImplementedError("Explicit masks are not yet supported for splash attention")
+            # Convert NamedArray explicit_mask to numpy boolean array for NumpyMask
+            # explicit_mask should have shape compatible with (Sq, Sk)
+            # Note: This will fail during JIT tracing if the mask is dynamic
+            try:
+                explicit_np = np.asarray(mask.explicit_mask.array, dtype=np.bool_)
+            except jax.errors.TracerArrayConversionError:
+                raise NotImplementedError(
+                    "Explicit masks with dynamic values are not supported for splash attention. "
+                    "The mask must be a static numpy array at compile time."
+                )
+
+            # Ensure correct shape (Sq, Sk) - may need to squeeze or reshape
+            if explicit_np.shape != (Sq, Sk):
+                raise ValueError(
+                    f"explicit_mask shape {explicit_np.shape} does not match "
+                    f"expected shape ({Sq}, {Sk})"
+                )
+
+            # Create NumpyMask and combine with base_mask using LogicalAnd
+            explicit_splash_mask = splash_attention_mask.NumpyMask(explicit_np)
+            base_mask = splash_attention_mask.LogicalAnd(base_mask, explicit_splash_mask)
     elif isinstance(mask, NamedArray):
         raise NotImplementedError("NamedArray masks are not yet supported for splash attention")
     else:

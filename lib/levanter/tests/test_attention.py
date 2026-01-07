@@ -381,6 +381,126 @@ def test_tpu_splash_attention():
         assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
 
 
+def test_tpu_splash_attention_explicit_mask_static():
+    """Test that splash attention works with static explicit masks (e.g., padding masks).
+
+    Static masks are numpy arrays known at compile time. This tests consistency
+    between splash attention and vanilla attention when using explicit padding masks.
+    """
+    if jax.default_backend() != "tpu":
+        pytest.skip("TPU only")
+
+    BLOCK_SIZE = 512
+
+    Head = hax.Axis("Head", 8)
+    Key = hax.Axis("Key", 128)  # splash only supports 128
+    QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
+    KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
+
+    # Create a static padding mask: first 3/4 of keys are valid, last 1/4 are padding
+    seq_len = BLOCK_SIZE * 2
+    valid_len = seq_len * 3 // 4
+    padding_mask_np = np.zeros((seq_len, seq_len), dtype=np.bool_)
+    # For each query position, it can attend to valid key positions (respecting causality)
+    for q in range(seq_len):
+        for k in range(min(q + 1, valid_len)):  # causal + padding
+            padding_mask_np[q, k] = True
+
+    padding_mask = hax.named(padding_mask_np, (QPos, KPos))
+    mask = AttentionMask.causal() & AttentionMask.explicit(padding_mask)
+
+    with use_test_mesh():
+        q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Head, Key)) * 0.02
+        k = hax.random.normal(jrandom.PRNGKey(1), (KPos, Head, Key)) * 0.02
+        v = hax.random.normal(jrandom.PRNGKey(2), (KPos, Head, Key)) * 0.02
+
+        flash_out = _tpu_splash_attention(
+            QPos,
+            KPos,
+            Key,
+            q,
+            k,
+            v,
+            inference=True,
+            mask=mask,
+            block_size=BLOCK_SIZE,
+            scaling_factor=1 / math.sqrt(Key.size),
+        )
+        hax_out = hax.nn.attention.dot_product_attention(KPos, Key, q, k, v, mask=mask.materialize(QPos, KPos))
+        assert hax_out.axes == flash_out.axes
+        assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
+
+
+def test_tpu_splash_attention_segment_ids_for_padding():
+    """Test that segment_ids can be used for dynamic padding masks with splash attention.
+
+    Unlike explicit_mask which requires static numpy arrays, segment_ids can be dynamic
+    JAX arrays. This is the recommended approach for VLM training where padding masks
+    depend on batch data.
+
+    Strategy: valid tokens get segment_id=1, padding tokens get segment_id=0.
+    Tokens with different segment_ids cannot attend to each other.
+    """
+    if jax.default_backend() != "tpu":
+        pytest.skip("TPU only")
+
+    BLOCK_SIZE = 512
+
+    Head = hax.Axis("Head", 8)
+    Key = hax.Axis("Key", 128)
+    QPos = hax.Axis("QPos", BLOCK_SIZE * 2)
+    KPos = hax.Axis("KPos", BLOCK_SIZE * 2)
+
+    seq_len = BLOCK_SIZE * 2
+    valid_len = seq_len * 3 // 4  # First 3/4 are valid
+
+    with use_test_mesh():
+        q = hax.random.normal(jrandom.PRNGKey(0), (QPos, Head, Key)) * 0.02
+        k = hax.random.normal(jrandom.PRNGKey(1), (KPos, Head, Key)) * 0.02
+        v = hax.random.normal(jrandom.PRNGKey(2), (KPos, Head, Key)) * 0.02
+
+        # Create segment_ids: 1 for valid, 0 for padding
+        # This can be dynamic (depend on input data) unlike explicit_mask
+        segment_ids_arr = jnp.concatenate([
+            jnp.ones(valid_len, dtype=jnp.int32),
+            jnp.zeros(seq_len - valid_len, dtype=jnp.int32)
+        ])
+        segment_ids = hax.named(segment_ids_arr, (QPos,))
+
+        # Use segment_ids with causal mask
+        mask = AttentionMask.causal().with_segment_ids(segment_ids)
+
+        flash_out = _tpu_splash_attention(
+            QPos,
+            KPos,
+            Key,
+            q,
+            k,
+            v,
+            inference=True,
+            mask=mask,
+            block_size=BLOCK_SIZE,
+            scaling_factor=1 / math.sqrt(Key.size),
+        )
+
+        # For reference: create equivalent explicit mask for vanilla attention
+        # Valid tokens (segment=1) can attend to other valid tokens (respecting causality)
+        # Padding tokens (segment=0) can only attend to padding tokens
+        ref_mask_np = np.zeros((seq_len, seq_len), dtype=np.bool_)
+        for qi in range(seq_len):
+            for ki in range(qi + 1):  # causal
+                # Same segment can attend to each other
+                q_seg = 1 if qi < valid_len else 0
+                k_seg = 1 if ki < valid_len else 0
+                if q_seg == k_seg:
+                    ref_mask_np[qi, ki] = True
+        ref_mask = hax.named(ref_mask_np, (QPos, KPos))
+
+        hax_out = hax.nn.attention.dot_product_attention(KPos, Key, q, k, v, mask=ref_mask)
+        assert hax_out.axes == flash_out.axes
+        assert_trees_all_close(hax_out.array, flash_out.array, atol=1e-3, rtol=1e-3)
+
+
 def test_tpu_splash_attention_sliding_window():
     if jax.default_backend() != "tpu":
         pytest.skip("TPU only")
