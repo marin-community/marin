@@ -140,7 +140,9 @@ url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
 resiliparse = { index = "marin-resiliparse" }
-torch = { index = "pytorch-cu128" }
+# Use CUDA 12.8 PyTorch only when --extra=gpu on Linux
+# Other platforms and extras use PyPI default
+torch = { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" }
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
