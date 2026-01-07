@@ -31,6 +31,8 @@ import dataclasses
 from dataclasses import replace
 
 from levanter.data.text import LMMixtureDatasetConfig
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.models.qwen import Qwen3Config
 
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import EvalTaskConfig
@@ -49,6 +51,24 @@ from marin.scaling_laws import (
     generate_isoflop_train_args,
 )
 from marin.scaling_laws.recipe import MARIN_2025_RECIPE, ScalingRecipe
+
+
+def build_qwen3_from_candidate(candidate: CandidateConfig, seq_len: int = 4096) -> Qwen3Config:
+    """Build a Qwen3Config from a CandidateConfig.
+
+    This is the experiment-level helper for constructing model configs.
+    Different experiments can use different model types (LlamaConfig, etc.)
+    by implementing their own builder function.
+    """
+    return Qwen3Config(
+        hidden_dim=candidate.hidden_size,
+        intermediate_dim=candidate.intermediate_dim,
+        num_layers=candidate.num_layers,
+        num_heads=candidate.num_heads,
+        num_kv_heads=candidate.num_kv_heads,
+        max_seq_len=seq_len,
+        rope=Llama3RotaryEmbeddingsConfig(),
+    )
 
 
 def create_isoflop_sweep_steps(
@@ -108,6 +128,9 @@ def create_isoflop_sweep_steps(
 
     # Create ExecutorSteps for each candidate configuration
     for args in train_args_list:
+        # Build model config from candidate (experiment controls model type)
+        model_config = build_qwen3_from_candidate(args.candidate, sweep_config.seq_len)
+
         train_cfg = replace(
             base_train_config,
             train_batch_size=args.candidate.batch_size,
@@ -121,7 +144,7 @@ def create_isoflop_sweep_steps(
         train_step = default_train(
             name=args.run_name,
             tokenized=tokenized,
-            model_config=args.model_config,
+            model_config=model_config,
             train_config=train_cfg,
             eval_harness_tasks=[],
             tags=args.tags,
