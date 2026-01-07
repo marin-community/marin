@@ -103,12 +103,14 @@ launching tasks -- see [test_integration_test.py](https://github.com/marin-commu
 ```bash
 # [Terminal 2] Submit a Ray Job (specified via a Python script)
 #   =>> Will output a Job ID like `raysubmit_pAJM8vKfHPhiyHBa`
-uv run lib/marin/src/marin/run/ray_run.py  --cluster infra/marin-us-central1.yaml --no_wait -e WANDB_API_KEY ${WANDB_API_KEY} -- python experiments/tutorials/hello_world.py
+uv run lib/marin/src/marin/run/ray_run.py --cluster infra/marin-us-central1.yaml --no_wait -e WANDB_API_KEY ${WANDB_API_KEY} -- python experiments/tutorials/hello_world.py
 
 # Get Job Status
 uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml list-jobs
 
 # Get Job Logs for a specific job
+# Ensure that the dashboard for the correct cluster is running (run this in another terminal)
+# > uv run scripts/ray/cluster.py --config infra/marin-us-central1.yaml dashboard
 ray job logs --address "http://127.0.0.1:8265" <JOB_ID>
 
 # Kill / Stop Job (if necessary / error / bug)
