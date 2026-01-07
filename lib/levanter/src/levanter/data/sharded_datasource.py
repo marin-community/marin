@@ -395,6 +395,7 @@ class AudioTextUrlDataSource(UrlBackedShardedDataSource[Tuple[np.ndarray, int, s
                 case _:
                     raise ValueError(f"Unknown format {format}")
 
+
 class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
     """
     Dataset for image-text pairs from various file formats (JSON, JSONL, Parquet).
@@ -518,6 +519,7 @@ class ConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
                             }
                     case _:
                         raise ValueError(f"Unknown format {format}")
+
 
 def _sniff_format_for_dataset(url):
     good_formats = [".jsonl", ".txt", ".json", ".parquet"]

@@ -190,7 +190,6 @@ class QwenDecoderLayer(eqx.Module):
 
         return output, kv_cache
 
-        
     @named_call
     def __call__(
         self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None

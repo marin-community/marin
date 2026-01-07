@@ -30,7 +30,6 @@ from test_image_utils import (
     DEFAULT_GRID_PINPOINTS,
 )
 from test_image_utils import get_real_data, get_single_image
-from test_utils import use_test_mesh
 
 # Define skip_if_no_torch locally to avoid conftest dependencies
 try:
@@ -117,7 +116,6 @@ def test_vlm_numerical_correctness():
     """
     import torch
     from transformers import AutoModelForVision2Seq
-    from haliax import Axis
     from levanter.models.llava_onevision import LlavaOnevisionModel
 
     # Use real HuggingFace model for comparison
@@ -180,7 +178,9 @@ def test_vlm_numerical_correctness():
         # Forward function for Levanter
         @eqx.filter_jit
         def compute_forward(model, input_ids, pixel_values, grid_mask, unpad_indices):
-            return model(input_ids, pixel_values=pixel_values, grid_mask=grid_mask, unpad_indices=unpad_indices, key=None)
+            return model(
+                input_ids, pixel_values=pixel_values, grid_mask=grid_mask, unpad_indices=unpad_indices, key=None
+            )
 
         # ========== Test each sample ==========
         all_max_diffs = []

@@ -461,10 +461,9 @@ def test_tpu_splash_attention_segment_ids_for_padding():
 
         # Create segment_ids: 1 for valid, 0 for padding
         # This can be dynamic (depend on input data) unlike explicit_mask
-        segment_ids_arr = jnp.concatenate([
-            jnp.ones(valid_len, dtype=jnp.int32),
-            jnp.zeros(seq_len - valid_len, dtype=jnp.int32)
-        ])
+        segment_ids_arr = jnp.concatenate(
+            [jnp.ones(valid_len, dtype=jnp.int32), jnp.zeros(seq_len - valid_len, dtype=jnp.int32)]
+        )
         segment_ids = hax.named(segment_ids_arr, (QPos,))
 
         # Use segment_ids with causal mask

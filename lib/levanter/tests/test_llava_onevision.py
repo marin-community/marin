@@ -63,8 +63,8 @@ from levanter.layers.attention import AttentionBackend  # noqa: E402
 from levanter.utils.activation import ActivationFunctionEnum  # noqa: E402
 from levanter.inference.engine import InferenceEngineConfig  # noqa: E402
 from levanter.inference.jit_scheduler import SeqDecodingParams  # noqa: E402
-from levanter.trainer import TrainerConfig
-from levanter.utils.mesh import MeshConfig, DEFAULT_DP_AXES
+from levanter.trainer import TrainerConfig  # noqa: E402
+from levanter.utils.mesh import MeshConfig, DEFAULT_DP_AXES  # noqa: E402
 from tokenizers import Tokenizer  # noqa: E402
 from tokenizers.models import WordLevel  # noqa: E402
 from transformers import PreTrainedTokenizerFast  # noqa: E402
@@ -1270,7 +1270,6 @@ def test_llava_onevision_full_model_vs_hf():
     # Create test inputs
     batch_size = 1
     seq_len = 25  # Must be >= 5 + num_image_tokens to fit all image tokens
-    patch_size = hf_config.vision_config.patch_size
     image_height = hf_config.vision_config.image_size
     image_width = hf_config.vision_config.image_size
 
@@ -1605,7 +1604,6 @@ def test_llava_onevision_full_model_vs_hf():
     print(f"Total time: {total_time:.4f}s")
 
 
-
 @skip_if_no_torch
 def test_llava_onevision_visual_embeddings_match():
     """Compare HF vs Levanter merged embeddings (text + visual) before LM."""
@@ -1829,8 +1827,6 @@ def test_llava_onevision_real_image_text():
     from transformers import (
         LlavaOnevisionForConditionalGeneration as HfLlavaOnevision,
     )
-    import equinox as eqx
-    from levanter.compat.hf_checkpoints import from_torch_compatible_state_dict
 
     print("\n=== Test: Real Image and Text Input (with Feature Alignment) ===")
 
@@ -1917,13 +1913,11 @@ def test_llava_onevision_real_image_text():
     hf_config = torch_model.config
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
-
     config_time = time.time() - start_time
     print(f"  Config conversion time: {config_time:.4f} seconds")
 
     # Load directly from HuggingFace instead of saving to temp directory
     # This avoids processor.save_pretrained() issues with audio_tokenizer
-    
 
     # Use model parallelism to shard vocab dimension and avoid OOM:
     # - logits tensor is seq_len * vocab_size ≈ 7000 * 152000 = 4GB per sample in fp32
@@ -1945,7 +1939,7 @@ def test_llava_onevision_real_image_text():
         },
         param_mapping={
             "heads": "data",  # Map heads to data (size 1) to avoid sharding since 14 is not divisible by 8
-        }
+        },
     )
     trainer_config = TrainerConfig(mesh=mesh_config)
 
@@ -2001,7 +1995,9 @@ def test_llava_onevision_real_image_text():
         # First call includes JIT compilation
         print("  First forward pass (includes JIT compilation)...")
         start_time = time.time()
-        lev_logits_first = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
+        lev_logits_first = compute_lev(
+            lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices
+        )
         lev_logits_first.array.block_until_ready()
         first_forward_time = time.time() - start_time
         print(f"  First forward pass time: {first_forward_time:.4f} seconds")
@@ -2031,7 +2027,9 @@ def test_llava_onevision_real_image_text():
         print(f"  Min: {min_forward_time:.4f} seconds, Max: {max_forward_time:.4f} seconds")
 
         print(f"Lev logits shape: {lev_logits.shape}")
-        print(f"Lev logits stats: min={lev_logits.min():.4f}, max={lev_logits.max():.4f}, mean={lev_logits.mean():.4f}")
+        print(
+            f"Lev logits stats: min={lev_logits.min():.4f}, max={lev_logits.max():.4f}, mean={lev_logits.mean():.4f}"
+        )
         print(f"Lev first 5 logits: {np.array(lev_logits).flatten()[:5]}")
 
         # ===== Compare logits by region using unified compare_logits_by_region =====
@@ -2111,8 +2109,6 @@ def test_llava_onevision_real_multi_image_text():
     from transformers import (
         LlavaOnevisionForConditionalGeneration as HfLlavaOnevision,
     )
-    import equinox as eqx
-    from levanter.compat.hf_checkpoints import from_torch_compatible_state_dict
 
     print("\n=== Test: Multi-Image Real Input (Levanter only) ===")
 
@@ -2225,7 +2221,7 @@ def test_llava_onevision_real_multi_image_text():
 
     # Load directly from HuggingFace
     from levanter.trainer import TrainerConfig
-    from levanter.utils.mesh import MeshConfig, DEFAULT_DP_AXES
+    from levanter.utils.mesh import MeshConfig
 
     # Use proper multi-device mesh with vision_batch sharding
     # Use batch_size=1 to avoid OOM (logits tensor is ~4GB per sample with vocab=152k)
@@ -2242,7 +2238,7 @@ def test_llava_onevision_real_multi_image_text():
         },
         param_mapping={
             "heads": "data",  # Map heads to data (size 1) to avoid sharding since 14 is not divisible by 8
-        }
+        },
     )
     trainer_config = TrainerConfig(mesh=mesh_config)
 
@@ -2298,7 +2294,9 @@ def test_llava_onevision_real_multi_image_text():
         # First call includes JIT compilation
         print("  First forward pass (includes JIT compilation)...")
         start_time = time.time()
-        lev_logits_first = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
+        lev_logits_first = compute_lev(
+            lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices
+        )
         lev_logits_first.array.block_until_ready()
         first_forward_time = time.time() - start_time
         print(f"  First forward pass time: {first_forward_time:.4f} seconds")
@@ -2500,7 +2498,7 @@ def test_llava_onevision_real_image_text_7b():
         },
         param_mapping={
             "heads": "data",  # Map heads to data (size 1) to avoid sharding since 14 is not divisible by 8
-        }
+        },
     )
     trainer_config = TrainerConfig(mesh=mesh_config)
 
@@ -2773,12 +2771,8 @@ def test_llava_onevision_real_image_text_0_5b_batch():
         # Update image_grid_pinpoints in config to 3x3 grid (matches anyres_max_9)
         torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
         # Create two processors: HF uses unpadded, Levanter uses padded
-        processor_hf = create_custom_processor(
-            model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
-        )
-        processor_lev = create_custom_processor(
-            model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
-        )
+        processor_hf = create_custom_processor(model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS)
+        processor_lev = create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS)
     except Exception as e:
         print(f"Could not load model: {e}")
         pytest.skip(f"Could not download model: {model_name}")
@@ -2796,7 +2790,9 @@ def test_llava_onevision_real_image_text_0_5b_batch():
     # HF inputs (unpadded)
     inputs_hf = processor_hf(images=image, text=prompt, return_tensors="pt", padding_mode=False)
     # Levanter inputs (padded)
-    inputs_lev = processor_lev(images=image, text=prompt, return_tensors="pt",padding="max_length",max_length=8192,padding_mode=True)
+    inputs_lev = processor_lev(
+        images=image, text=prompt, return_tensors="pt", padding="max_length", max_length=8192, padding_mode=True
+    )
     processor_time = time.time() - start_time
     print(f"  Time: {processor_time:.4f} seconds")
 
@@ -2832,7 +2828,6 @@ def test_llava_onevision_real_image_text_0_5b_batch():
     start_time = time.time()
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
-
     config_time = time.time() - start_time
     print(f"  Config conversion time: {config_time:.4f} seconds")
 
@@ -2840,7 +2835,7 @@ def test_llava_onevision_real_image_text_0_5b_batch():
     start_time = time.time()
 
     from levanter.trainer import TrainerConfig
-    from levanter.utils.mesh import MeshConfig, DEFAULT_DP_AXES
+    from levanter.utils.mesh import MeshConfig
 
     # Use proper sharding with batch=8 (divisible by data axis size=8)
     # Add vision_batch to compute_mapping so it gets sharded across TPU devices
@@ -3029,10 +3024,15 @@ def test_llava_onevision_real_image_text_0_5b_batch():
         print(f"Levanter forward:        {forward_time:.4f} seconds (batch={target_batch_size})")
         print(f"Comparison:              {compare_time:.4f} seconds")
 
-        assert all_ok, f"Batch test failed: pre_mean={result.pre_image_mean_diff:.6e}, img_mean={result.image_mean_diff:.6e}, post_mean={result.post_image_mean_diff:.6e}"
+        assert (
+            all_ok
+        ), f"Batch test failed: pre_mean={result.pre_image_mean_diff:.6e}, img_mean={result.image_mean_diff:.6e}, post_mean={result.post_image_mean_diff:.6e}"
         print("\n✓ Batch test completed successfully!")
 
-@pytest.mark.skip(reason="Skipping test_llava_onevision_generation, beacuse padded flash attention is not supported yet")
+
+@pytest.mark.skip(
+    reason="Skipping test_llava_onevision_generation, beacuse padded flash attention is not supported yet"
+)
 @skip_if_no_torch
 def test_llava_onevision_generation():
     """Test generation consistency between HuggingFace and Levanter/JAX implementations.
@@ -3073,12 +3073,8 @@ def test_llava_onevision_generation():
         torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
 
         # Create processors (HF unpadded, Levanter padded)
-        processor_hf = create_custom_processor(
-            model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
-        )
-        processor_lev = create_custom_processor(
-            model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
-        )
+        processor_hf = create_custom_processor(model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS)
+        processor_lev = create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS)
     except Exception as e:
         print(f"Could not load model: {e}")
         pytest.skip(f"Could not download model: {model_name}")
@@ -3092,7 +3088,9 @@ def test_llava_onevision_generation():
     # HF inputs (unpadded)
     inputs_hf = processor_hf(images=image, text=prompt, return_tensors="pt", padding_mode=False)
     # Levanter inputs (padded)
-    inputs_lev = processor_lev(images=image, text=prompt, return_tensors="pt",padding="max_length",max_length=8192,padding_mode=True)
+    inputs_lev = processor_lev(
+        images=image, text=prompt, return_tensors="pt", padding="max_length", max_length=8192, padding_mode=True
+    )
 
     print(f"Processor output keys (HF): {inputs_hf.keys()}")
     print(f"HF input_ids shape: {inputs_hf['input_ids'].shape}")
@@ -3435,12 +3433,8 @@ def test_llava_onevision_generation_with_kv_cache():
         torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
 
         # Create processors (HF unpadded, Levanter padded)
-        processor_hf = create_custom_processor(
-            model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
-        )
-        processor_lev = create_custom_processor(
-            model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
-        )
+        processor_hf = create_custom_processor(model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS)
+        processor_lev = create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS)
     except Exception as e:
         print(f"Could not load model: {e}")
         pytest.skip(f"Could not download model: {model_name}")
@@ -3838,12 +3832,8 @@ def test_llava_onevision_generation_with_inference_engine():
         hf_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
 
         # Create processors (HF unpadded, Levanter padded)
-        processor_hf = create_custom_processor(
-            model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
-        )
-        processor_lev = create_custom_processor(
-            model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS
-        )
+        processor_hf = create_custom_processor(model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS)
+        processor_lev = create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS)
 
         # Comment out torch model loading to save memory - we only need config
         torch_model = HfLlavaOnevision.from_pretrained(
@@ -4421,7 +4411,7 @@ def test_get_image_features_vs_hf_real_single_image():
         },
         param_mapping={
             "heads": "data",  # Map heads to data (size 1) to avoid sharding since 14 is not divisible by 8
-        }
+        },
     )
     trainer_config = TrainerConfig(mesh=mesh_config)
 
@@ -4487,8 +4477,6 @@ def test_get_image_features_vs_hf_real_multi_image():
     import torch
     from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision
     from transformers import LlavaOnevisionProcessor
-    from levanter.compat.hf_checkpoints import from_torch_compatible_state_dict
-    import equinox as eqx
 
     print("\n=== Testing get_image_features vs HF with Real Multiple Images (raw features) ===")
 
@@ -4551,7 +4539,7 @@ def test_get_image_features_vs_hf_real_multi_image():
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
     from levanter.trainer import TrainerConfig
-    from levanter.utils.mesh import MeshConfig, DEFAULT_DP_AXES
+    from levanter.utils.mesh import MeshConfig
 
     # Use proper multi-device mesh with vision_batch sharding to avoid OOM
     # Pad batch to 8 for proper TPU sharding (divisible by data axis size=8)
@@ -4592,7 +4580,9 @@ def test_get_image_features_vs_hf_real_multi_image():
         Height = Axis("height", patch_height)
         Width = Axis("width", patch_width)
 
-        pixel_values_lev = hax.named(jnp.array(pv_padded, dtype=jnp.float32), (Batch, NumPatches, Channels, Height, Width))
+        pixel_values_lev = hax.named(
+            jnp.array(pv_padded, dtype=jnp.float32), (Batch, NumPatches, Channels, Height, Width)
+        )
         grid_mask = hax.named(jnp.array(grid_mask_np), (Batch, NumPatches))
 
         print("Running Levanter get_image_features...")

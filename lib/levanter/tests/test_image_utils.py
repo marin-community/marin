@@ -596,9 +596,13 @@ def compare_logits_by_region(
     input_ids = input_ids[:seq_len]
     if attention_mask is not None:
         attention_mask = attention_mask[:seq_len]
-    valid_mask = attention_mask.astype(bool)
-    valid_count = valid_mask.sum()
-    lev_logits_valid = lev_logits[valid_mask]
+        valid_mask = attention_mask.astype(bool)
+        valid_count = valid_mask.sum()
+        lev_logits_valid = lev_logits[valid_mask]
+    else:
+        valid_mask = np.ones(seq_len, dtype=bool)
+        valid_count = seq_len
+        lev_logits_valid = lev_logits
     # Simple mode: just compute overall diff for valid positions
     if not detailed:
         if attention_mask is not None:

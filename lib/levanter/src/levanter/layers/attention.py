@@ -1441,8 +1441,7 @@ def _tpu_splash_attention(
             # Ensure correct shape (Sq, Sk) - may need to squeeze or reshape
             if explicit_np.shape != (Sq, Sk):
                 raise ValueError(
-                    f"explicit_mask shape {explicit_np.shape} does not match "
-                    f"expected shape ({Sq}, {Sk})"
+                    f"explicit_mask shape {explicit_np.shape} does not match " f"expected shape ({Sq}, {Sk})"
                 )
 
             # Create NumpyMask and combine with base_mask using LogicalAnd
