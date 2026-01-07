@@ -831,21 +831,6 @@ def _get_preconditioner_types(shape: Tuple[int, ...], max_precond_dim: int, one_
 
     return new_result
 
-    flag = True
-    for i in range(len(p_shape)):
-        s = p_shape[i]
-        if (s < max_precond_dim) and (flag or (not one_diag)):
-            flag = False
-            if mesh is not None:
-                if s % fsdp_size == 0:
-                    q_sharding = PartitionSpec(fsdp_axis_name, None)
-                else:
-                    q_sharding = PartitionSpec(None, None)
-            else:
-                q_sharding = PartitionSpec(None, None)
-            sharding_out[i] = q_sharding
-    return sharding_out
-
 
 def init_conditioner(p_shape, max_precond_dim: int, dtype: Optional[Union[str, jnp.dtype]], one_diag: bool):
     if len(p_shape) == 1:

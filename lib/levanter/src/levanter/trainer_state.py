@@ -249,7 +249,7 @@ def take_train_step(
     Takes a single training step for the model using the provided optimizer and gradients. This function takes into account:
     - The optimizer to update the model parameters based on the gradients.
     - The model parameters that are trainable based on the provided filter.
-    - The optional objective function for Sophia, etc.
+    - The optional objective function for certain optimizers.
     - quantized state updates (Gradient Overwrite) if applicable.
 
     Returns:
