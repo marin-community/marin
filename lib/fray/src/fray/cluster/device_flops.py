@@ -58,7 +58,7 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "int8": 3.958e15 / 2,
     },
     # source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf
-    "a100": {
+    "a100-40g": {
         "fp64": 19.5e12,
         "fp32": 19.5e12,
         "tf32": 156e12,
