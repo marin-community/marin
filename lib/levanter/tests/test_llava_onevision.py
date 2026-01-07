@@ -63,6 +63,8 @@ from levanter.layers.attention import AttentionBackend  # noqa: E402
 from levanter.utils.activation import ActivationFunctionEnum  # noqa: E402
 from levanter.inference.engine import InferenceEngineConfig  # noqa: E402
 from levanter.inference.jit_scheduler import SeqDecodingParams  # noqa: E402
+from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig, DEFAULT_DP_AXES
 from tokenizers import Tokenizer  # noqa: E402
 from tokenizers.models import WordLevel  # noqa: E402
 from transformers import PreTrainedTokenizerFast  # noqa: E402
@@ -1666,8 +1668,6 @@ def test_llava_onevision_visual_embeddings_match():
     print(f"HF merged embeds shape: {hf_merged_embeds.shape}")
     hf_config = torch_model.config
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
-    text_config_updated = dataclasses.replace(config.text_config, attn_backend="dot", flash_attention_block_size=None)
-    config = dataclasses.replace(config, text_config=text_config_updated)
 
     # Load directly from HuggingFace instead of saving to temp directory
     # This avoids tokenizer loading issues
@@ -1917,164 +1917,184 @@ def test_llava_onevision_real_image_text():
     hf_config = torch_model.config
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
-    # Disable flash attention for this test because the sequence length might not be
-    # a multiple of the block size (1024), which causes errors
-    # Only update text_config since vision models don't have these config fields
-    text_config_updated = dataclasses.replace(config.text_config, attn_backend="dot", flash_attention_block_size=None)
-    config = dataclasses.replace(config, text_config=text_config_updated)
 
     config_time = time.time() - start_time
     print(f"  Config conversion time: {config_time:.4f} seconds")
 
     # Load directly from HuggingFace instead of saving to temp directory
     # This avoids processor.save_pretrained() issues with audio_tokenizer
-    Vocab = Axis("vocab", hf_config.text_config.vocab_size)
-    model_template = eqx.filter_eval_shape(LlavaOnevisionModel.init, Vocab, config, key=random.PRNGKey(0))
+    
 
-    # Use single-device mesh to avoid sharding issues
-    single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
+    # Use model parallelism to shard vocab dimension and avoid OOM:
+    # - logits tensor is seq_len * vocab_size ≈ 7000 * 152000 = 4GB per sample in fp32
+    # - With model=8, vocab is sharded across 8 devices, reducing to ~0.5GB per device
+    # - Set data=1 so batch_size=1 works (no data parallel sharding requirement)
+    # - Note: heads=14 cannot be evenly divided by model=8, so we map heads to data (which is 1, i.e., no sharding)
+    # - Also, vision_batch is mapped to model, so we need to prevent heads from also mapping to model
+    #   to avoid duplicate model axis mapping (vision_batch and heads both on model axis)
+    mesh_config = MeshConfig(
+        axes={"model": 8, "data": 1, "replica": 1},
+        compute_mapping={
+            "vision_batch": ("model",),  # Shard vision patches across model axis
+            "vocab": "model",  # Shard vocab dimension to reduce logits memory
+            "batch": ("replica_dcn", "replica"),  # Map batch without data to avoid conflict with mlp/heads on data
+        },
+        shared_mapping={
+            "heads": "data",  # Map heads to data (size 1) to avoid sharding and conflict with vision_batch
+            "mlp": "data",  # Map mlp to data (size 1) to avoid conflict with vision_batch on model axis
+        },
+        param_mapping={
+            "heads": "data",  # Map heads to data (size 1) to avoid sharding since 14 is not divisible by 8
+        }
+    )
+    trainer_config = TrainerConfig(mesh=mesh_config)
 
-    with use_test_mesh(mesh=single_device_mesh):
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
         converter = config.hf_checkpoint_converter(ref_checkpoint=model_name)
-        state_dict = converter.load_state_dict(model_name)
-        lev_model = from_torch_compatible_state_dict(model_template, state_dict)
+        parameter_axis_mapping = trainer_config.parameter_axis_mapping
 
-    # Convert model weights to float32 for consistency
-    lev_model = jtu.tree_map(_to_float32, lev_model)
-
-    model_convert_time = time.time() - start_time
-    print(f"  Total conversion time: {model_convert_time:.4f} seconds")
-
-    # Use Levanter data from test_pair (already has grid_mask, padded pixel_values, unpad_indices)
-    print("\n--- [Timing] Preparing Levanter Inputs ---")
-    start_time = time.time()
-
-    # Create JAX tensors using helper function
-    jax_tensors = create_lev_jax_tensors(test_pair.lev)
-    input_ids_lev_tensor = jax_tensors.input_ids
-    pixel_values_lev_tensor = jax_tensors.pixel_values
-    grid_mask = jax_tensors.grid_mask
-    unpad_indices = jax_tensors.unpad_indices
-
-    print(f"Levanter input_ids shape: {input_ids_lev_tensor.array.shape}")
-    print(f"Levanter pixel_values shape: {pixel_values_lev_tensor.array.shape}")
-    print(f"grid_mask shape: {grid_mask.array.shape}, valid patches: {test_pair.lev.grid_mask.sum()}")
-    print(f"unpad_indices shape: {unpad_indices.array.shape}")
-    print(f"unpad_indices first 10: {unpad_indices.array[0, :10]}")
-    print(f"unpad_indices last 10: {unpad_indices.array[0, -10:]}")
-
-    input_prep_time = time.time() - start_time
-    print(f"  Time: {input_prep_time:.4f} seconds")
-
-    print("\n--- [Timing] Levanter Forward Pass ---")
-
-    @hax.named_jit
-    def compute_lev(model, input_ids, pixel_values, grid_mask, unpad_indices):
-        return model(
-            input_ids,
-            pixel_values=pixel_values,
-            grid_mask=grid_mask,
-            unpad_indices=unpad_indices,
-            key=None,
+        lev_model = converter.load_pretrained(
+            LlavaOnevisionModel,
+            ref=model_name,
+            config=config,
+            axis_mapping=parameter_axis_mapping,
+            dtype=jnp.float32,
+            resize_vocab_to_match_tokenizer=False,
         )
 
-    # First call includes JIT compilation
-    print("  First forward pass (includes JIT compilation)...")
-    start_time = time.time()
-    lev_logits_first = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
-    lev_logits_first.array.block_until_ready()
-    first_forward_time = time.time() - start_time
-    print(f"  First forward pass time: {first_forward_time:.4f} seconds")
+        model_convert_time = time.time() - start_time
+        print(f"  Total conversion time: {model_convert_time:.4f} seconds")
 
-    # Warmup runs
-    print("  Running warmup passes...")
-    for i in range(3):
-        _ = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
-        _.array.block_until_ready()
-
-    # Measure execution time (excluding compilation)
-    print("  Measuring forward pass time (averaging over 5 runs)...")
-    times = []
-    for i in range(5):
+        # Use Levanter data from test_pair (already has grid_mask, padded pixel_values, unpad_indices)
+        print("\n--- [Timing] Preparing Levanter Inputs ---")
         start_time = time.time()
-        _ = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
-        _.array.block_until_ready()
-        elapsed = time.time() - start_time
-        times.append(elapsed)
-        print(f"    Run {i+1}: {elapsed:.4f} seconds")
 
-    avg_forward_time = sum(times) / len(times)
-    min_forward_time = min(times)
-    max_forward_time = max(times)
-    lev_logits = lev_logits_first.array
-    print(f"  Average forward pass time: {avg_forward_time:.4f} seconds")
-    print(f"  Min: {min_forward_time:.4f} seconds, Max: {max_forward_time:.4f} seconds")
+        # Create JAX tensors with batch_size=1 (data parallel axis is 1)
+        jax_tensors = create_lev_jax_tensors(test_pair.lev, batch_size=1)
+        input_ids_lev_tensor = jax_tensors.input_ids
+        pixel_values_lev_tensor = jax_tensors.pixel_values
+        grid_mask = jax_tensors.grid_mask
+        unpad_indices = jax_tensors.unpad_indices
 
-    print(f"Lev logits shape: {lev_logits.shape}")
-    print(f"Lev logits stats: min={lev_logits.min():.4f}, max={lev_logits.max():.4f}, mean={lev_logits.mean():.4f}")
-    print(f"Lev first 5 logits: {np.array(lev_logits).flatten()[:5]}")
+        print(f"Levanter input_ids shape: {input_ids_lev_tensor.array.shape}")
+        print(f"Levanter pixel_values shape: {pixel_values_lev_tensor.array.shape}")
+        print(f"grid_mask shape: {grid_mask.array.shape}, valid patches: {test_pair.lev.grid_mask.sum()}")
+        print(f"unpad_indices shape: {unpad_indices.array.shape}")
+        print(f"unpad_indices first 10: {unpad_indices.array[0, :10]}")
+        print(f"unpad_indices last 10: {unpad_indices.array[0, -10:]}")
 
-    # ===== Compare logits by region using unified compare_logits_by_region =====
-    # Note: HF logits may have different length than Levanter (HF is unpadded, Levanter is padded)
-    # compare_logits_by_region handles this by taking min(hf_len, lev_len)
-    print("\n--- [Timing] Comparison by Region ---")
-    start_time = time.time()
+        input_prep_time = time.time() - start_time
+        print(f"  Time: {input_prep_time:.4f} seconds")
 
-    lev_logits_np = np.array(lev_logits)
-    if lev_logits_np.ndim == 3:
-        lev_logits_np = lev_logits_np[0]  # Remove batch dimension
+        print("\n--- [Timing] Levanter Forward Pass ---")
 
-    # HF logits
-    hf_logits_flat = hf_logits[0]  # (seq_len, vocab_size)
+        @hax.named_jit
+        def compute_lev(model, input_ids, pixel_values, grid_mask, unpad_indices):
+            return model(
+                input_ids,
+                pixel_values=pixel_values,
+                grid_mask=grid_mask,
+                unpad_indices=unpad_indices,
+                key=None,
+            )
 
-    print(f"HF logits shape: {hf_logits_flat.shape}")
-    print(f"Lev logits shape: {lev_logits_np.shape}")
-    # Use compare_logits_by_region for unified comparison
-    # detailed=False for faster comparison (only overall diff, no per-region breakdown)
-    # Pass attention_mask to exclude padding from Levanter
-    image_token_id = torch_model.config.image_token_index
-    comparison_result = compare_logits_by_region(
-        hf_logits=hf_logits_flat,
-        lev_logits=lev_logits_np,
-        input_ids=test_pair.hf.input_ids,
-        image_token_id=image_token_id,
-        tolerance=1e-2,
-        verbose=True,
-        detailed=False,
-        attention_mask=test_pair.lev.attention_mask,
-    )
+        # First call includes JIT compilation
+        print("  First forward pass (includes JIT compilation)...")
+        start_time = time.time()
+        lev_logits_first = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
+        lev_logits_first.array.block_until_ready()
+        first_forward_time = time.time() - start_time
+        print(f"  First forward pass time: {first_forward_time:.4f} seconds")
 
-    compare_time = time.time() - start_time
-    print(f"\n  Comparison time: {compare_time:.4f} seconds")
+        # Warmup runs
+        print("  Running warmup passes...")
+        for i in range(3):
+            _ = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
+            _.array.block_until_ready()
 
-    # Print timing summary
-    print("\n=== Timing Summary ===")
-    print(f"Image loading:           {image_load_time:.4f} seconds")
-    print(f"HF model loading:        {hf_load_time:.4f} seconds")
-    print(f"Processor (input prep):  {processor_time:.4f} seconds")
-    print(f"HF forward pass:         {hf_forward_time:.4f} seconds")
-    print(f"Config conversion:       {config_time:.4f} seconds")
-    print(f"Model conversion:        {model_convert_time:.4f} seconds")
-    print(f"Levanter input prep:     {input_prep_time:.4f} seconds")
-    print(f"Levanter forward (first): {first_forward_time:.4f} seconds (includes JIT)")
-    print(f"Levanter forward (avg):   {avg_forward_time:.4f} seconds")
-    print(f"Comparison:              {compare_time:.4f} seconds")
-    total_time = (
-        image_load_time
-        + hf_load_time
-        + processor_time
-        + hf_forward_time
-        + model_convert_time
-        + input_prep_time
-        + first_forward_time
-        + compare_time
-    )
-    print(f"Total time:              {total_time:.4f} seconds")
+        # Measure execution time (excluding compilation)
+        print("  Measuring forward pass time (averaging over 5 runs)...")
+        times = []
+        for i in range(5):
+            start_time = time.time()
+            _ = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
+            _.array.block_until_ready()
+            elapsed = time.time() - start_time
+            times.append(elapsed)
+            print(f"    Run {i+1}: {elapsed:.4f} seconds")
 
-    assert (
-        comparison_result.passed
-    ), f"Real image/text test failed: pre={comparison_result.details['pre_matches']}, image={comparison_result.details['image_matches']}, post={comparison_result.details['post_matches']}"
-    print("✓ Real image and text input produces matching results!")
+        avg_forward_time = sum(times) / len(times)
+        min_forward_time = min(times)
+        max_forward_time = max(times)
+        lev_logits = lev_logits_first.array
+        print(f"  Average forward pass time: {avg_forward_time:.4f} seconds")
+        print(f"  Min: {min_forward_time:.4f} seconds, Max: {max_forward_time:.4f} seconds")
+
+        print(f"Lev logits shape: {lev_logits.shape}")
+        print(f"Lev logits stats: min={lev_logits.min():.4f}, max={lev_logits.max():.4f}, mean={lev_logits.mean():.4f}")
+        print(f"Lev first 5 logits: {np.array(lev_logits).flatten()[:5]}")
+
+        # ===== Compare logits by region using unified compare_logits_by_region =====
+        # Note: HF logits may have different length than Levanter (HF is unpadded, Levanter is padded)
+        # compare_logits_by_region handles this by taking min(hf_len, lev_len)
+        print("\n--- [Timing] Comparison by Region ---")
+        start_time = time.time()
+
+        lev_logits_np = np.array(lev_logits)
+        if lev_logits_np.ndim == 3:
+            lev_logits_np = lev_logits_np[0]  # Remove batch dimension
+
+        # HF logits
+        hf_logits_flat = hf_logits[0]  # (seq_len, vocab_size)
+
+        print(f"HF logits shape: {hf_logits_flat.shape}")
+        print(f"Lev logits shape: {lev_logits_np.shape}")
+        # Use compare_logits_by_region for unified comparison
+        # detailed=False for faster comparison (only overall diff, no per-region breakdown)
+        # Pass attention_mask to exclude padding from Levanter
+        image_token_id = torch_model.config.image_token_index
+        comparison_result = compare_logits_by_region(
+            hf_logits=hf_logits_flat,
+            lev_logits=lev_logits_np,
+            input_ids=test_pair.hf.input_ids,
+            image_token_id=image_token_id,
+            tolerance=1e-2,
+            verbose=True,
+            detailed=False,
+            attention_mask=test_pair.lev.attention_mask,
+        )
+
+        compare_time = time.time() - start_time
+        print(f"\n  Comparison time: {compare_time:.4f} seconds")
+
+        # Print timing summary
+        print("\n=== Timing Summary ===")
+        print(f"Image loading:           {image_load_time:.4f} seconds")
+        print(f"HF model loading:        {hf_load_time:.4f} seconds")
+        print(f"Processor (input prep):  {processor_time:.4f} seconds")
+        print(f"HF forward pass:         {hf_forward_time:.4f} seconds")
+        print(f"Config conversion:       {config_time:.4f} seconds")
+        print(f"Model conversion:        {model_convert_time:.4f} seconds")
+        print(f"Levanter input prep:     {input_prep_time:.4f} seconds")
+        print(f"Levanter forward (first): {first_forward_time:.4f} seconds (includes JIT)")
+        print(f"Levanter forward (avg):   {avg_forward_time:.4f} seconds")
+        print(f"Comparison:              {compare_time:.4f} seconds")
+        total_time = (
+            image_load_time
+            + hf_load_time
+            + processor_time
+            + hf_forward_time
+            + model_convert_time
+            + input_prep_time
+            + first_forward_time
+            + compare_time
+        )
+        print(f"Total time:              {total_time:.4f} seconds")
+
+        assert (
+            comparison_result.passed
+        ), f"Real image/text test failed: pre={comparison_result.details['pre_matches']}, image={comparison_result.details['image_matches']}, post={comparison_result.details['post_matches']}"
+        print("✓ Real image and text input produces matching results!")
 
 
 @skip_if_no_torch
@@ -2203,124 +2223,142 @@ def test_llava_onevision_real_multi_image_text():
     hf_config = torch_model.config
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
-    # Disable flash attention for this test
-    text_config_updated = dataclasses.replace(config.text_config, attn_backend="dot", flash_attention_block_size=None)
-    config = dataclasses.replace(config, text_config=text_config_updated)
-
     # Load directly from HuggingFace
-    Vocab = Axis("vocab", hf_config.text_config.vocab_size)
-    model_template = eqx.filter_eval_shape(LlavaOnevisionModel.init, Vocab, config, key=random.PRNGKey(0))
+    from levanter.trainer import TrainerConfig
+    from levanter.utils.mesh import MeshConfig, DEFAULT_DP_AXES
 
-    # Use single-device mesh to avoid sharding issues
-    single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
+    # Use proper multi-device mesh with vision_batch sharding
+    # Use batch_size=1 to avoid OOM (logits tensor is ~4GB per sample with vocab=152k)
+    mesh_config = MeshConfig(
+        axes={"model": 8, "data": 1, "replica": 1},
+        compute_mapping={
+            "vision_batch": ("model",),  # Shard vision patches across model axis
+            "vocab": "model",  # Shard vocab dimension to reduce logits memory
+            "batch": ("replica_dcn", "replica"),  # Map batch without data to avoid conflict with mlp/heads on data
+        },
+        shared_mapping={
+            "heads": "data",  # Map heads to data (size 1) to avoid sharding and conflict with vision_batch
+            "mlp": "data",  # Map mlp to data (size 1) to avoid conflict with vision_batch on model axis
+        },
+        param_mapping={
+            "heads": "data",  # Map heads to data (size 1) to avoid sharding since 14 is not divisible by 8
+        }
+    )
+    trainer_config = TrainerConfig(mesh=mesh_config)
 
-    with use_test_mesh(mesh=single_device_mesh):
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
         converter = config.hf_checkpoint_converter(ref_checkpoint=model_name)
-        state_dict = converter.load_state_dict(model_name)
-        lev_model = from_torch_compatible_state_dict(model_template, state_dict)
+        parameter_axis_mapping = trainer_config.parameter_axis_mapping
 
-    # Convert model weights to float32 for consistency
-    lev_model = jtu.tree_map(_to_float32, lev_model)
-
-    model_convert_time = time.time() - start_time
-    print(f"  Total conversion time: {model_convert_time:.4f} seconds")
-
-    # Use Levanter data from test_pair
-    print("\n--- [Timing] Preparing Levanter Inputs ---")
-    start_time = time.time()
-
-    # Create JAX tensors using helper function (handles None unpad_indices)
-    jax_tensors = create_lev_jax_tensors(test_pair.lev)
-    input_ids_lev_tensor = jax_tensors.input_ids
-    pixel_values_lev_tensor = jax_tensors.pixel_values
-    grid_mask = jax_tensors.grid_mask
-    unpad_indices = jax_tensors.unpad_indices
-
-    print(f"Levanter input_ids shape: {input_ids_lev_tensor.array.shape}")
-    print(f"Levanter pixel_values shape: {pixel_values_lev_tensor.array.shape}")
-    print(f"grid_mask shape: {grid_mask.array.shape}, valid patches: {test_pair.lev.grid_mask.sum()}")
-    assert unpad_indices is None, "Multi-image should have None unpad_indices in JAX tensors"
-    print("unpad_indices: None (multi-image mode, no anyres)")
-
-    input_prep_time = time.time() - start_time
-    print(f"  Time: {input_prep_time:.4f} seconds")
-
-    print("\n--- [Timing] Levanter Forward Pass ---")
-
-    @hax.named_jit
-    def compute_lev(model, input_ids, pixel_values, grid_mask, unpad_indices):
-        return model(
-            input_ids,
-            pixel_values=pixel_values,
-            grid_mask=grid_mask,
-            unpad_indices=unpad_indices,
-            key=None,
+        lev_model = converter.load_pretrained(
+            LlavaOnevisionModel,
+            ref=model_name,
+            config=config,
+            axis_mapping=parameter_axis_mapping,
+            dtype=jnp.float32,
+            resize_vocab_to_match_tokenizer=False,
         )
 
-    # First call includes JIT compilation
-    print("  First forward pass (includes JIT compilation)...")
-    start_time = time.time()
-    lev_logits_first = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
-    lev_logits_first.array.block_until_ready()
-    first_forward_time = time.time() - start_time
-    print(f"  First forward pass time: {first_forward_time:.4f} seconds")
+        model_convert_time = time.time() - start_time
+        print(f"  Total conversion time: {model_convert_time:.4f} seconds")
 
-    lev_logits = lev_logits_first.array
+        # Use Levanter data from test_pair
+        print("\n--- [Timing] Preparing Levanter Inputs ---")
+        start_time = time.time()
 
-    print(f"Lev logits shape: {lev_logits.shape}")
-    print(
-        f"Lev logits stats: min={float(lev_logits.min()):.4f}, max={float(lev_logits.max()):.4f}, mean={float(lev_logits.mean()):.4f}"
-    )
+        # Create JAX tensors using helper function with batch_size=1 to avoid OOM
+        # The logits tensor is very large: seq_len * vocab_size ≈ 7000 * 152000 = 4GB per sample in fp32
+        jax_tensors = create_lev_jax_tensors(test_pair.lev, batch_size=1)
+        input_ids_lev_tensor = jax_tensors.input_ids
+        pixel_values_lev_tensor = jax_tensors.pixel_values
+        grid_mask = jax_tensors.grid_mask
+        unpad_indices = jax_tensors.unpad_indices
 
-    # Verify logits are not NaN/Inf
-    assert not jnp.isnan(lev_logits).any(), "Logits contain NaN"
-    assert not jnp.isinf(lev_logits).any(), "Logits contain Inf"
+        print(f"Levanter input_ids shape: {input_ids_lev_tensor.array.shape}")
+        print(f"Levanter pixel_values shape: {pixel_values_lev_tensor.array.shape}")
+        print(f"grid_mask shape: {grid_mask.array.shape}, valid patches: {test_pair.lev.grid_mask.sum()}")
+        assert unpad_indices is None, "Multi-image should have None unpad_indices in JAX tensors"
+        print("unpad_indices: None (multi-image mode, no anyres)")
 
-    # ===== Compare logits by region using unified compare_logits_by_region =====
-    print("\n--- [Timing] Comparison by Region ---")
-    start_time = time.time()
+        input_prep_time = time.time() - start_time
+        print(f"  Time: {input_prep_time:.4f} seconds")
 
-    lev_logits_np = np.array(lev_logits)
-    if lev_logits_np.ndim == 3:
-        lev_logits_np = lev_logits_np[0]  # Remove batch dimension
+        print("\n--- [Timing] Levanter Forward Pass ---")
 
-    # HF logits
-    hf_logits_flat = hf_logits[0]  # (seq_len, vocab_size)
+        @hax.named_jit
+        def compute_lev(model, input_ids, pixel_values, grid_mask, unpad_indices):
+            return model(
+                input_ids,
+                pixel_values=pixel_values,
+                grid_mask=grid_mask,
+                unpad_indices=unpad_indices,
+                key=None,
+            )
 
-    print(f"HF logits shape: {hf_logits_flat.shape}")
-    print(f"Lev logits shape: {lev_logits_np.shape}")
+        # First call includes JIT compilation
+        print("  First forward pass (includes JIT compilation)...")
+        start_time = time.time()
+        lev_logits_first = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
+        lev_logits_first.array.block_until_ready()
+        first_forward_time = time.time() - start_time
+        print(f"  First forward pass time: {first_forward_time:.4f} seconds")
 
-    # Use compare_logits_by_region for unified comparison
-    image_token_id = torch_model.config.image_token_index
-    comparison_result = compare_logits_by_region(
-        hf_logits=hf_logits_flat,
-        lev_logits=lev_logits_np,
-        input_ids=test_pair.hf.input_ids,
-        image_token_id=image_token_id,
-        tolerance=1e-2,
-        verbose=True,
-        detailed=False,
-        attention_mask=test_pair.lev.attention_mask,
-    )
+        lev_logits = lev_logits_first.array
 
-    compare_time = time.time() - start_time
-    print(f"\n  Comparison time: {compare_time:.4f} seconds")
+        print(f"Lev logits shape: {lev_logits.shape}")
+        print(
+            f"Lev logits stats: min={float(lev_logits.min()):.4f}, max={float(lev_logits.max()):.4f}, mean={float(lev_logits.mean()):.4f}"
+        )
 
-    # Print timing summary
-    print("\n=== Timing Summary ===")
-    print(f"Image loading:           {image_load_time:.4f} seconds")
-    print(f"HF model loading:        {hf_load_time:.4f} seconds")
-    print(f"Processor (input prep):  {processor_time:.4f} seconds")
-    print(f"HF forward pass:         {hf_forward_time:.4f} seconds")
-    print(f"Model conversion:        {model_convert_time:.4f} seconds")
-    print(f"Levanter input prep:     {input_prep_time:.4f} seconds")
-    print(f"Levanter forward (first): {first_forward_time:.4f} seconds (includes JIT)")
-    print(f"Comparison:              {compare_time:.4f} seconds")
+        # Verify logits are not NaN/Inf
+        assert not jnp.isnan(lev_logits).any(), "Logits contain NaN"
+        assert not jnp.isinf(lev_logits).any(), "Logits contain Inf"
 
-    assert (
-        comparison_result.passed
-    ), f"Multi-image test failed: pre={comparison_result.details['pre_matches']}, image={comparison_result.details['image_matches']}, post={comparison_result.details['post_matches']}"
-    print("✓ Multi-image forward pass produces matching results!")
+        # ===== Compare logits by region using unified compare_logits_by_region =====
+        print("\n--- [Timing] Comparison by Region ---")
+        start_time = time.time()
+
+        lev_logits_np = np.array(lev_logits)
+        if lev_logits_np.ndim == 3:
+            lev_logits_np = lev_logits_np[0]  # Remove batch dimension
+
+        # HF logits
+        hf_logits_flat = hf_logits[0]  # (seq_len, vocab_size)
+
+        print(f"HF logits shape: {hf_logits_flat.shape}")
+        print(f"Lev logits shape: {lev_logits_np.shape}")
+
+        # Use compare_logits_by_region for unified comparison
+        image_token_id = torch_model.config.image_token_index
+        comparison_result = compare_logits_by_region(
+            hf_logits=hf_logits_flat,
+            lev_logits=lev_logits_np,
+            input_ids=test_pair.hf.input_ids,
+            image_token_id=image_token_id,
+            tolerance=1e-2,
+            verbose=True,
+            detailed=False,
+            attention_mask=test_pair.lev.attention_mask,
+        )
+
+        compare_time = time.time() - start_time
+        print(f"\n  Comparison time: {compare_time:.4f} seconds")
+
+        # Print timing summary
+        print("\n=== Timing Summary ===")
+        print(f"Image loading:           {image_load_time:.4f} seconds")
+        print(f"HF model loading:        {hf_load_time:.4f} seconds")
+        print(f"Processor (input prep):  {processor_time:.4f} seconds")
+        print(f"HF forward pass:         {hf_forward_time:.4f} seconds")
+        print(f"Model conversion:        {model_convert_time:.4f} seconds")
+        print(f"Levanter input prep:     {input_prep_time:.4f} seconds")
+        print(f"Levanter forward (first): {first_forward_time:.4f} seconds (includes JIT)")
+        print(f"Comparison:              {compare_time:.4f} seconds")
+
+        assert (
+            comparison_result.passed
+        ), f"Multi-image test failed: pre={comparison_result.details['pre_matches']}, image={comparison_result.details['image_matches']}, post={comparison_result.details['post_matches']}"
+        print("✓ Multi-image forward pass produces matching results!")
 
 
 @skip_if_no_torch
@@ -2449,17 +2487,24 @@ def test_llava_onevision_real_image_text_7b():
     print("\n--- [Timing] Saving and Loading Model ---")
     start_time = time.time()
 
-    from levanter.trainer import TrainerConfig
-
-    # Use model_axis_size=2 with FSDP for 7B model
-    # This gives: DATA=4 devices, MODEL=2 devices
-    # - FSDP shards parameters across DATA axis (4-way): 28GB/4 = 7GB per device
-    # - TP shards activations across MODEL axis (2-way)
-    trainer_config = TrainerConfig(
-        model_axis_size=2,  # DATA=4, MODEL=2
-        tensor_parallel_axes=["mlp"],  # Enable TP for MLP
+    mesh_config = MeshConfig(
+        axes={"model": 8, "data": 1, "replica": 1},
+        compute_mapping={
+            "vision_batch": ("model",),  # Shard vision patches across model axis
+            "vocab": "model",  # Shard vocab dimension to reduce logits memory
+            "batch": ("replica_dcn", "replica"),  # Map batch without data to avoid conflict with mlp/heads on data
+        },
+        shared_mapping={
+            "heads": "data",  # Map heads to data (size 1) to avoid sharding and conflict with vision_batch
+            "mlp": "data",  # Map mlp to data (size 1) to avoid conflict with vision_batch on model axis
+        },
+        param_mapping={
+            "heads": "data",  # Map heads to data (size 1) to avoid sharding since 14 is not divisible by 8
+        }
     )
-    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.parameter_axis_mapping):
+    trainer_config = TrainerConfig(mesh=mesh_config)
+
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
         # Use bfloat16 for inference to halve memory (14GB instead of 28GB)
         # This is acceptable for inference where numerical precision is less critical
         compute_dtype = jnp.bfloat16
@@ -2770,13 +2815,11 @@ def test_llava_onevision_real_image_text_0_5b_batch():
     print(f"  Time: {hf_forward_time:.4f} seconds")
     print(f"HF logits shape: {hf_logits.shape}")
 
-    # Get image token info for later comparison (from HF inputs)
+    # Get image token info for later use
     image_token_id = torch_model.config.image_token_index
     input_ids_for_mask = inputs_hf["input_ids"].numpy()[0]
     image_mask = input_ids_for_mask == image_token_id
-    image_start = np.where(image_mask)[0][0] if image_mask.any() else -1
     num_image_tokens = image_mask.sum()
-    post_image_start = image_start + num_image_tokens
 
     # Delete HF model to free memory
     del torch_model
@@ -2789,25 +2832,6 @@ def test_llava_onevision_real_image_text_0_5b_batch():
     start_time = time.time()
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
-    # Use SPLASH attention (flash attention) for memory efficiency
-    # With batch=8 and num_patches=37, total vision images = 296 = 8×37 (divisible by 8)
-    vision_config_updated = dataclasses.replace(
-        config.vision_config,
-        use_flash_attention=True,
-        attn_backend=None,  # Don't use SPLASH - 729 patches not divisible by 128
-        gradient_checkpointing=False,
-    )
-    text_config_updated = dataclasses.replace(
-        config.text_config,
-        attn_backend=AttentionBackend.SPLASH,
-        gradient_checkpointing=False,
-    )
-    config = dataclasses.replace(
-        config,
-        vision_config=vision_config_updated,
-        text_config=text_config_updated,
-        gradient_checkpointing=False,
-    )
 
     config_time = time.time() - start_time
     print(f"  Config conversion time: {config_time:.4f} seconds")
@@ -2816,9 +2840,16 @@ def test_llava_onevision_real_image_text_0_5b_batch():
     start_time = time.time()
 
     from levanter.trainer import TrainerConfig
+    from levanter.utils.mesh import MeshConfig, DEFAULT_DP_AXES
 
     # Use proper sharding with batch=8 (divisible by data axis size=8)
-    trainer_config = TrainerConfig()
+    # Add vision_batch to compute_mapping so it gets sharded across TPU devices
+    mesh_config = MeshConfig(
+        compute_mapping={
+            "vision_batch": DEFAULT_DP_AXES,  # Shard vision_batch like batch
+        }
+    )
+    trainer_config = TrainerConfig(mesh=mesh_config)
 
     # Use compute_axis_mapping for proper sharding across TPU devices
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
@@ -2967,53 +2998,24 @@ def test_llava_onevision_real_image_text_0_5b_batch():
         print(f"HF logits shape: {hf_logits_flat.shape}")
         print(f"Lev logits shape: {lev_logits_np.shape}")
 
-        # Compare by region
-        print("\n=== Position Info ===")
-        print(f"Image token start: {image_start}, count: {num_image_tokens}")
-        print(f"Post-image start: {post_image_start}")
-
-        # 1. Pre-image text logits
-        print("\n=== Pre-Image Text Logits Comparison ===")
-        hf_pre = hf_logits_flat[:image_start]
-        lev_pre = lev_logits_np[:image_start]
-        pre_diff = np.mean(np.abs(hf_pre - lev_pre))
-        pre_max_diff = np.max(np.abs(hf_pre - lev_pre))
-        print(f"Pre-image ({image_start} tokens): mean={pre_diff:.6e}, max={pre_max_diff:.6e}")
-
-        # 2. Image logits
-        print("\n=== Image Logits Comparison ===")
-        hf_img = hf_logits_flat[image_start:post_image_start]
-        lev_img = lev_logits_np[image_start:post_image_start]
-        img_diff = np.mean(np.abs(hf_img - lev_img))
-        img_max_diff = np.max(np.abs(hf_img - lev_img))
-        print(f"Image ({num_image_tokens} tokens): mean={img_diff:.6e}, max={img_max_diff:.6e}")
-
-        # 3. Post-image text logits
-        print("\n=== Post-Image Text Logits Comparison ===")
-        hf_post = hf_logits_flat[post_image_start:]
-        lev_post = lev_logits_np[post_image_start:]
-        if len(hf_post) > 0:
-            post_diff = np.mean(np.abs(hf_post - lev_post))
-            post_max_diff = np.max(np.abs(hf_post - lev_post))
-            print(f"Post-image ({len(hf_post)} tokens): mean={post_diff:.6e}, max={post_max_diff:.6e}")
-        else:
-            post_diff = 0.0
-            post_max_diff = 0.0
-            print("No post-image tokens")
+        # Compare by region using compare_logits_by_region
+        tolerance = 1e-2
+        attention_mask_np = inputs_lev["attention_mask"].numpy()[0]
+        result = compare_logits_by_region(
+            hf_logits=hf_logits_flat,
+            lev_logits=lev_logits_np,
+            input_ids=input_ids_for_mask,
+            image_token_id=image_token_id,
+            tolerance=tolerance,
+            verbose=True,
+            detailed=True,
+            attention_mask=attention_mask_np,
+        )
 
         compare_time = time.time() - start_time
         print(f"\n  Comparison time: {compare_time:.4f} seconds")
 
-        # Check tolerance
-        tolerance = 1e-2
-        pre_ok = pre_diff < tolerance
-        img_ok = img_diff < tolerance
-        post_ok = post_diff < tolerance
-        all_ok = pre_ok and img_ok and post_ok
-
-        print(f"\n{'✓ PASS' if pre_ok else '✗ FAIL'}: Pre-image logits (tol={tolerance})")
-        print(f"{'✓ PASS' if img_ok else '✗ FAIL'}: Image logits (tol={tolerance})")
-        print(f"{'✓ PASS' if post_ok else '✗ FAIL'}: Post-image logits (tol={tolerance})")
+        all_ok = result.passed
 
         # Print timing summary
         print("\n=== Timing Summary ===")
@@ -3027,7 +3029,7 @@ def test_llava_onevision_real_image_text_0_5b_batch():
         print(f"Levanter forward:        {forward_time:.4f} seconds (batch={target_batch_size})")
         print(f"Comparison:              {compare_time:.4f} seconds")
 
-        assert all_ok, f"Batch test failed: pre={pre_ok}, img={img_ok}, post={post_ok}"
+        assert all_ok, f"Batch test failed: pre_mean={result.pre_image_mean_diff:.6e}, img_mean={result.image_mean_diff:.6e}, post_mean={result.post_image_mean_diff:.6e}"
         print("\n✓ Batch test completed successfully!")
 
 @pytest.mark.skip(reason="Skipping test_llava_onevision_generation, beacuse padded flash attention is not supported yet")
@@ -4216,10 +4218,6 @@ def test_llava_onevision_generation_with_inference_engine_multi():
     print("\n--- Converting to Levanter ---")
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
-    # Disable flash attention for this test
-    text_config_updated = dataclasses.replace(config.text_config, attn_backend="dot", flash_attention_block_size=None)
-    config = dataclasses.replace(config, text_config=text_config_updated)
-
     # Enter mesh context for InferenceEngine and model loading
     trainer_config = TrainerConfig()
 
@@ -4410,9 +4408,24 @@ def test_get_image_features_vs_hf_real_single_image():
     model_template = eqx.filter_eval_shape(LlavaOnevisionModel.init, Vocab, config, key=random.PRNGKey(0))
 
     # Use single-device mesh to avoid sharding issues
-    single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
+    mesh_config = MeshConfig(
+        axes={"model": 8, "data": 1, "replica": 1},
+        compute_mapping={
+            "vision_batch": ("model",),  # Shard vision patches across model axis
+            "vocab": "model",  # Shard vocab dimension to reduce logits memory
+            "batch": ("replica_dcn", "replica"),  # Map batch without data to avoid conflict with mlp/heads on data
+        },
+        shared_mapping={
+            "heads": "data",  # Map heads to data (size 1) to avoid sharding and conflict with vision_batch
+            "mlp": "data",  # Map mlp to data (size 1) to avoid conflict with vision_batch on model axis
+        },
+        param_mapping={
+            "heads": "data",  # Map heads to data (size 1) to avoid sharding since 14 is not divisible by 8
+        }
+    )
+    trainer_config = TrainerConfig(mesh=mesh_config)
 
-    with use_test_mesh(mesh=single_device_mesh):
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
         converter = config.hf_checkpoint_converter(ref_checkpoint=model_name)
         state_dict = converter.load_state_dict(model_name)
         lev_model = from_torch_compatible_state_dict(model_template, state_dict)
@@ -4537,64 +4550,83 @@ def test_get_image_features_vs_hf_real_multi_image():
     print("Converting to Levanter...")
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
-    Vocab = Axis("vocab", hf_config.text_config.vocab_size)
-    model_template = eqx.filter_eval_shape(LlavaOnevisionModel.init, Vocab, config, key=random.PRNGKey(0))
+    from levanter.trainer import TrainerConfig
+    from levanter.utils.mesh import MeshConfig, DEFAULT_DP_AXES
 
-    # Use single-device mesh to avoid sharding issues
-    single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
+    # Use proper multi-device mesh with vision_batch sharding to avoid OOM
+    # Pad batch to 8 for proper TPU sharding (divisible by data axis size=8)
+    mesh_config = MeshConfig(
+        compute_mapping={
+            "vision_batch": DEFAULT_DP_AXES,  # Shard vision_batch like batch
+        }
+    )
+    trainer_config = TrainerConfig(mesh=mesh_config)
 
-    with use_test_mesh(mesh=single_device_mesh):
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
         converter = config.hf_checkpoint_converter(ref_checkpoint=model_name)
-        state_dict = converter.load_state_dict(model_name)
-        lev_model = from_torch_compatible_state_dict(model_template, state_dict)
+        parameter_axis_mapping = trainer_config.parameter_axis_mapping
 
-    lev_model = jtu.tree_map(_to_float32, lev_model)
+        lev_model = converter.load_pretrained(
+            LlavaOnevisionModel,
+            ref=model_name,
+            config=config,
+            axis_mapping=parameter_axis_mapping,
+            dtype=jnp.float32,
+            resize_vocab_to_match_tokenizer=False,
+        )
 
-    # Create 5D input for Levanter (no padding - use exact patches)
-    pv_np = pixel_values_torch.numpy().astype(np.float32)
-    grid_mask_np = np.ones((batch_size, num_patches), dtype=bool)
+        # Pad batch to 8 for proper TPU sharding
+        original_batch_size = batch_size
+        target_batch_size = 8
+        print(f"  Padding batch from {original_batch_size} to {target_batch_size} for TPU sharding")
 
-    Batch = Axis("batch", batch_size)
-    NumPatches = Axis("num_patches", num_patches)
-    Channels = Axis("channels", channels)
-    Height = Axis("height", patch_height)
-    Width = Axis("width", patch_width)
+        # Create 5D input for Levanter with batch padding
+        pv_np = pixel_values_torch.numpy().astype(np.float32)
+        # Tile to reach target batch size
+        pv_padded = np.tile(pv_np, (target_batch_size // original_batch_size + 1, 1, 1, 1, 1))[:target_batch_size]
+        grid_mask_np = np.ones((target_batch_size, num_patches), dtype=bool)
 
-    pixel_values_lev = hax.named(jnp.array(pv_np, dtype=jnp.float32), (Batch, NumPatches, Channels, Height, Width))
-    grid_mask = hax.named(jnp.array(grid_mask_np), (Batch, NumPatches))
+        Batch = Axis("batch", target_batch_size)
+        NumPatches = Axis("num_patches", num_patches)
+        Channels = Axis("channels", channels)
+        Height = Axis("height", patch_height)
+        Width = Axis("width", patch_width)
 
-    print("Running Levanter get_image_features...")
+        pixel_values_lev = hax.named(jnp.array(pv_padded, dtype=jnp.float32), (Batch, NumPatches, Channels, Height, Width))
+        grid_mask = hax.named(jnp.array(grid_mask_np), (Batch, NumPatches))
 
-    @hax.named_jit
-    def compute_lev_multi(model, pixel_values, grid_mask):
-        return model.get_image_features(pixel_values=pixel_values, grid_mask=grid_mask, key=None)
+        print("Running Levanter get_image_features...")
 
-    lev_result = compute_lev_multi(lev_model, pixel_values_lev, grid_mask)
-    lev_image_features = lev_result[0] if isinstance(lev_result, tuple) else lev_result
+        @hax.named_jit
+        def compute_lev_multi(model, pixel_values, grid_mask):
+            return model.get_image_features(pixel_values=pixel_values, grid_mask=grid_mask, key=None)
 
-    # Compare results
-    print("Comparing results...")
-    hf_array = hf_raw_features.detach().numpy()
-    lev_array = np.array(lev_image_features.array)
+        lev_result = compute_lev_multi(lev_model, pixel_values_lev, grid_mask)
+        lev_image_features = lev_result[0] if isinstance(lev_result, tuple) else lev_result
 
-    # HF: (batch * num_patches, features_per_patch, embed)
-    # Lev: (batch, num_patches, features_per_patch, embed)
-    hf_array_reshaped = hf_array.reshape(batch_size, num_patches, -1, hf_array.shape[-1])
+        # Compare results (only first original_batch_size samples)
+        print("Comparing results...")
+        hf_array = hf_raw_features.detach().numpy()
+        lev_array = np.array(lev_image_features.array)[:original_batch_size]  # Only compare original samples
 
-    print(f"  HF reshaped: {hf_array_reshaped.shape}")
-    print(f"  Lev shape: {lev_array.shape}")
+        # HF: (batch * num_patches, features_per_patch, embed)
+        # Lev: (batch, num_patches, features_per_patch, embed)
+        hf_array_reshaped = hf_array.reshape(original_batch_size, num_patches, -1, hf_array.shape[-1])
 
-    assert (
-        hf_array_reshaped.shape == lev_array.shape
-    ), f"Shape mismatch: HF={hf_array_reshaped.shape}, Lev={lev_array.shape}"
+        print(f"  HF reshaped: {hf_array_reshaped.shape}")
+        print(f"  Lev shape: {lev_array.shape}")
 
-    max_diff = np.max(np.abs(hf_array_reshaped - lev_array))
-    mean_diff = np.mean(np.abs(hf_array_reshaped - lev_array))
-    print(f"  Max diff: {max_diff:.6e}, Mean diff: {mean_diff:.6e}")
+        assert (
+            hf_array_reshaped.shape == lev_array.shape
+        ), f"Shape mismatch: HF={hf_array_reshaped.shape}, Lev={lev_array.shape}"
 
-    assert mean_diff < 1e-3, f"Values don't match: mean diff = {mean_diff}, max diff = {max_diff}"
+        max_diff = np.max(np.abs(hf_array_reshaped - lev_array))
+        mean_diff = np.mean(np.abs(hf_array_reshaped - lev_array))
+        print(f"  Max diff: {max_diff:.6e}, Mean diff: {mean_diff:.6e}")
 
-    print("✓ Raw image features match for real multiple images!")
+        assert mean_diff < 1e-3, f"Values don't match: mean diff = {mean_diff}, max diff = {max_diff}"
+
+        print("✓ Raw image features match for real multiple images!")
 
 
 def test_get_placeholder_mask_vs_hf():

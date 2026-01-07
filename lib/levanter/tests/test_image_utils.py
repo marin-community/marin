@@ -596,22 +596,22 @@ def compare_logits_by_region(
     input_ids = input_ids[:seq_len]
     if attention_mask is not None:
         attention_mask = attention_mask[:seq_len]
-
+    valid_mask = attention_mask.astype(bool)
+    valid_count = valid_mask.sum()
+    lev_logits_valid = lev_logits[valid_mask]
     # Simple mode: just compute overall diff for valid positions
     if not detailed:
-        diff = np.abs(hf_logits - lev_logits)
         if attention_mask is not None:
             # Only compare valid (non-padding) positions
-            valid_mask = attention_mask.astype(bool)
-            valid_count = valid_mask.sum()
-            diff_valid = diff[valid_mask]
-            overall_mean_diff = float(np.mean(diff_valid))
-            overall_max_diff = float(np.max(diff_valid))
+            diff = np.abs(hf_logits - lev_logits_valid)
+            overall_mean_diff = float(np.mean(diff))
+            overall_max_diff = float(np.max(diff))
             if verbose:
                 print(
                     f"Overall ({valid_count} valid tokens): mean={overall_mean_diff:.6e}, max={overall_max_diff:.6e}"
                 )
         else:
+            diff = np.abs(hf_logits - lev_logits)
             overall_mean_diff = float(np.mean(diff))
             overall_max_diff = float(np.max(diff))
             if verbose:

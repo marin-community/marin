@@ -90,7 +90,7 @@ class SiglipVisionConfig:
     gradient_checkpointing: bool = True
 
     # Attention-related config
-    use_flash_attention: bool = False
+    use_flash_attention: bool = True
     attn_backend: Optional[AttentionBackend] = None
     flash_attention_block_size: Optional[int] = None
     inference: bool = True  # Whether to run in inference mode (disables dropout)

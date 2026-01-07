@@ -177,7 +177,7 @@ def parse_args():
     parser.add_argument(
         "--flash_attention_block_size",
         type=int,
-        default=512,
+        default=64,
         help="Block size for flash attention (default: 512, use smaller values if OOM)",
     )
     parser.add_argument(
