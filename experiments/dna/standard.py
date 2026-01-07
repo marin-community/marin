@@ -17,10 +17,10 @@ Example training experiment with repeat downweighting.
 Adapted from https://github.com/marin-community/marin/blob/0d38a98b63a8566451d3cb9a2fb488ec0d1647ce/experiments/plantcad/exp1729_plantcad_train.py
 """
 
-import jax
+import dataclasses
 import logging
 from fray.cluster import ResourceConfig
-from levanter.data.text import DNALmDatasetFormat
+from levanter.data.text import TextLmDatasetFormat
 from experiments.qwen3 import qwen3_0_6b_hd128
 from marin.execution.executor import executor_main
 from experiments.defaults import default_tokenize, default_train
@@ -28,21 +28,19 @@ from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger("ray")
 
-if (backend := jax.default_backend()) not in {"gpu", "cpu"}:
-    raise NotImplementedError(f"Only GPU and CPU backends supported, not {backend=}")
+RESOURCES = ResourceConfig.with_tpu("v5p-8")
 
 # -----------------------------------------------------------------------------
 # Experiment configuration
 # -----------------------------------------------------------------------------
-run_number = 5
-num_gpus = len(jax.devices("gpu")) if backend == "gpu" else 1
+run_number = 7
 tokenizer_path = "songlab/tokenizer-dna-clm"
 dataset_path = "gonzalobenegas/genomes-v3-genome_set-animals-intervals-v1_512_256"
-learning_rate = 5e-4
-per_device_eval_parallelism = 64
-train_batch_size = per_device_eval_parallelism * num_gpus
+dataset_seq_len = 512  # constant for all sequences in dataset
+learning_rate = 1e-3
+train_batch_size = 2048
 lr_schedule = "inv"
-num_train_steps = 100_000
+num_train_steps = 20_000
 steps_per_export = 1000
 steps_per_cycle = steps_per_export
 steps_per_eval = steps_per_export
@@ -52,22 +50,16 @@ decay = 0.1
 # -----------------------------------------------------------------------------
 # Model configuration
 # -----------------------------------------------------------------------------
-model_config = qwen3_0_6b_hd128
+model_config = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=dataset_seq_len)
 
 # -----------------------------------------------------------------------------
 # Dataset configuration
 # -----------------------------------------------------------------------------
 data_tokenized = default_tokenize(
-    name="animal-promoters",
-    # versioned(dataset_path) was causing issues:
-    # ValueError: No valid jsonl or parquet files found in
-    # ['songlab/gpn-animal-promoter-dataset']. Please provide a path to a
-    # directory containing jsonl or parquet files.
+    name="animal-promoters-standard",
     dataset=dataset_path,
     tokenizer=tokenizer_path,
-    format=DNALmDatasetFormat(
-        soft_mask_weight=0.01,  # Lowercase (repetitive) positions get 1% weight
-    ),
+    format=TextLmDatasetFormat(text_key="seq"),
     # my thoughts (should check):
     # max parallelism is number of shards in HF dataset
     # window_size_bytes should be smaller than shard size to achieve max parallelism
@@ -78,9 +70,8 @@ data_tokenized = default_tokenize(
 # Training configuration
 # -----------------------------------------------------------------------------
 train_config = SimpleTrainConfig(
-    resources=ResourceConfig.with_gpu("A100", count=num_gpus),
+    resources=RESOURCES,
     train_batch_size=train_batch_size,
-    per_device_eval_parallelism=per_device_eval_parallelism,
     learning_rate=learning_rate,
     lr_schedule=lr_schedule,
     warmup=warmup,
@@ -93,7 +84,7 @@ train_config = SimpleTrainConfig(
 )
 
 training_step = default_train(
-    name=f"animal-promoters-r{run_number:02d}",
+    name=f"animal-promoters-standard-r{run_number:02d}",
     tokenized=data_tokenized,
     model_config=model_config,
     train_config=train_config,
@@ -111,7 +102,6 @@ if __name__ == "__main__":
     logger.info(f"Model:              {model_config}")
     logger.info(f"Learning rate:      {learning_rate}")
     logger.info(f"Global batch size:  {train_batch_size}")
-    logger.info(f"Micro batch size:   {per_device_eval_parallelism}")
     logger.info(f"Training steps:     {num_train_steps:,}")
     logger.info(f"Steps per export:   {steps_per_export:,}")
     logger.info(f"Steps per eval:     {steps_per_eval:,}")
