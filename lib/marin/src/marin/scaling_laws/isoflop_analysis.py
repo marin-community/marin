@@ -61,9 +61,9 @@ import fsspec
 import jax.numpy as jnp
 import pandas as pd
 from jaxopt import ScipyMinimize
-from levanter.utils.flop_utils import lm_flops_per_token
 
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
@@ -134,12 +134,19 @@ class QuadraticFitCoeffs(NamedTuple):
 class IsoFlopSweepConfig:
     """Configuration for generating ISOFlop sweep candidate configs.
 
-    This config controls the model architecture search space and training
-    hyperparameters for isoflop experiments.
+    This config controls the FLOP budgets and training parameters.
+    Architecture decisions (num_layers formula, hidden_pow bounds, etc.)
+    are controlled by the ScalingRecipe.
     """
 
     recipe: ScalingRecipe = MARIN_2025_RECIPE
-    """Scaling recipe with hyperparameters (learning rate, beta2, optimizer settings)."""
+    """Scaling recipe with all opinionated hyperparameters:
+    - Architecture formula (num_layers from hidden_size)
+    - Architecture ratios (mlp_ratio, hidden_head_ratio)
+    - Search bounds (min/max hidden_pow, step_size)
+    - Constraints (max_learning_rate, min_batch_size)
+    - Optimizer settings (weight_decay, warmup, etc.)
+    """
 
     tokenizer: str = "stanford-crfm/marin-tokenizer"
     """Tokenizer to use (needed for vocab size)."""
@@ -155,15 +162,6 @@ class IsoFlopSweepConfig:
 
     flop_tolerance: float = 0.01
     """Tolerance for matching FLOP budget (relative error)."""
-
-    base_hidden_layer_ratio: int = 64
-    """Base ratio for hidden_dim to num_layers calculation."""
-
-    min_hidden_pow: int = 9
-    """Minimum hidden dimension as power of 2 (2^9 = 512)."""
-
-    max_hidden_pow: int = 12
-    """Maximum hidden dimension as power of 2 (2^12 = 4096)."""
 
 
 # ---------------- Candidate Config ----------------
@@ -289,35 +287,84 @@ def round_flops_to_bucket(flops: float) -> float:
     return float(rounded_mantissa) * (10**exponent)
 
 
-def compute_total_flops(
-    batch: int,
-    num_layers: int,
-    hidden: int,
-    intermediate: int,
-    num_kv_heads: int,
-    num_heads: int,
-    steps: int,
-    seq_len: int,
+def compute_training_flops(
+    model_config: "LlamaConfig",
     vocab_size: int,
+    batch_size: int,
+    train_steps: int,
+    seq_len: int,
 ) -> float:
-    """Compute total training FLOPs using Levanter utilities.
+    """Compute total training FLOPs using the model config's own method.
 
     This returns training FLOPs which includes forward pass (1x) + backward pass (2x) = 3x.
     This matches the FLOP accounting in Levanter's log_performance_stats callback
     (see train_lm.py) and standard ML conventions (e.g., Chinchilla paper).
+
+    Args:
+        model_config: Levanter model config with flops_per_token method (LlamaConfig or subclass).
+        vocab_size: Vocabulary size.
+        batch_size: Training batch size.
+        train_steps: Number of training steps.
+        seq_len: Sequence length.
+
+    Returns:
+        Total training FLOPs (including 3x multiplier for forward + backward pass).
     """
-    flops_per_token = lm_flops_per_token(
-        hidden,
-        intermediate,
-        num_layers,
-        num_kv_heads,
-        num_heads,
-        seq_len,
-        vocab_size,
-        glu=True,
-    )
+    flops_per_token = model_config.flops_per_token(vocab_size, seq_len)
     # Multiply by 3 for training: forward (1x) + backward (2x)
-    return 3 * flops_per_token * batch * steps * seq_len
+    return 3 * flops_per_token * batch_size * train_steps * seq_len
+
+
+def solve_for_batch_size(
+    model_config: "LlamaConfig",
+    vocab_size: int,
+    target_flops: float,
+    train_steps: int,
+    seq_len: int,
+) -> float:
+    """Solve for batch size needed to hit a target FLOP budget.
+
+    Given: total_flops = 3 * flops_per_token * batch * steps * seq_len
+    Solve: batch = total_flops / (3 * flops_per_token * steps * seq_len)
+
+    Args:
+        model_config: Levanter model config with flops_per_token method.
+        vocab_size: Vocabulary size.
+        target_flops: Target total training FLOPs.
+        train_steps: Number of training steps.
+        seq_len: Sequence length.
+
+    Returns:
+        Exact batch size (float) - caller decides how to round.
+    """
+    flops_per_token = model_config.flops_per_token(vocab_size, seq_len)
+    return target_flops / (3 * flops_per_token * train_steps * seq_len)
+
+
+def solve_for_train_steps(
+    model_config: "LlamaConfig",
+    vocab_size: int,
+    target_flops: float,
+    batch_size: int,
+    seq_len: int,
+) -> float:
+    """Solve for training steps needed to hit a target FLOP budget.
+
+    Given: total_flops = 3 * flops_per_token * batch * steps * seq_len
+    Solve: steps = total_flops / (3 * flops_per_token * batch * seq_len)
+
+    Args:
+        model_config: Levanter model config with flops_per_token method.
+        vocab_size: Vocabulary size.
+        target_flops: Target total training FLOPs.
+        batch_size: Training batch size.
+        seq_len: Sequence length.
+
+    Returns:
+        Exact training steps (float) - caller decides how to round.
+    """
+    flops_per_token = model_config.flops_per_token(vocab_size, seq_len)
+    return target_flops / (3 * flops_per_token * batch_size * seq_len)
 
 
 def estimate_memory_bytes(
@@ -354,20 +401,32 @@ def estimate_memory_bytes(
 
 
 def pick_v5p_type(
-    param_count: int,
-    hidden: int,
-    layers: int,
-    batch: int,
+    model_config: "Qwen3Config",
+    vocab_size: int,
+    batch_size: int,
     seq_len: int,
-    vocab: int,
 ) -> str:
     """
     Select the smallest TPU v5p slice that fits the model in float32.
 
+    Args:
+        model_config: Levanter model config with total_trainable_params method.
+        vocab_size: Vocabulary size.
+        batch_size: Training batch size.
+        seq_len: Sequence length.
+
     Returns:
-    - TPU slice name, e.g., "v5p-8" or "v5p-32"
+        TPU slice name, e.g., "v5p-8" or "v5p-32"
     """
-    need_bytes = estimate_memory_bytes(param_count, hidden, layers, batch, seq_len, vocab)
+    param_count = model_config.total_trainable_params(vocab_size)
+    need_bytes = estimate_memory_bytes(
+        param_count,
+        model_config.hidden_dim,
+        model_config.num_layers,
+        batch_size,
+        seq_len,
+        vocab_size,
+    )
     chip_bytes = HBM_PER_CHIP_GIB * 1024**3
     chips = math.ceil(need_bytes / chip_bytes)
     cores_req = chips * CORES_PER_CHIP
@@ -386,148 +445,89 @@ def candidate_configs(
 ) -> Iterator[CandidateConfig]:
     """Yield candidate model configurations within the FLOP budget.
 
+    This function uses the recipe for all opinionated choices:
+    - Architecture formula (num_layers from hidden_size)
+    - Architecture ratios (mlp_ratio, hidden_head_ratio)
+    - Search bounds (min/max hidden_pow, step_size)
+    - Constraints (max_learning_rate, min_batch_size)
+
+    The mechanics layer (solve_for_batch_size, solve_for_train_steps, compute_training_flops)
+    handles the pure FLOP math.
+
     Args:
-        cfg: IsoFlopSweepConfig with search parameters
+        cfg: IsoFlopSweepConfig with recipe and other search parameters
         budget: Target FLOP budget
         vocab_size: Vocabulary size for the tokenizer
 
     Yields:
         CandidateConfig objects for each valid configuration
     """
-    if budget > 9e18:
-        step_size = 256
-    else:
-        step_size = 128
-
     recipe = cfg.recipe
-    for hidden_size in range(2**cfg.min_hidden_pow, (2**cfg.max_hidden_pow) + 1, step_size):
-        hs_pow = math.log2(hidden_size)
-        intermediate_dim = hidden_size * recipe.mlp_ratio
-        num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))
-        n_heads = max(1, hidden_size // recipe.hidden_head_ratio)
-        n_kv_heads = n_heads
 
-        batch_exact = budget / compute_total_flops(
-            1,
-            num_layers,
-            hidden_size,
-            intermediate_dim,
-            n_kv_heads,
-            n_heads,
-            cfg.steps_per_run,
-            cfg.seq_len,
-            vocab_size,
-        )
+    # RECIPE: Get search parameters
+    step_size = recipe.get_step_size(budget)
+    min_hidden = 2**recipe.min_hidden_pow
+    max_hidden = 2**recipe.max_hidden_pow
 
+    for hidden_size in range(min_hidden, max_hidden + 1, step_size):
+        # RECIPE: Build model config (makes all architecture decisions)
+        model_config = recipe.build_model_config(hidden_size, cfg.seq_len)
+
+        # MECHANICS: Solve for batch size to hit budget with target steps
+        batch_exact = solve_for_batch_size(model_config, vocab_size, budget, cfg.steps_per_run, cfg.seq_len)
         batch_size = round_to_power_of_two(batch_exact)
+
+        # RECIPE: Apply LR constraint
         lr = recipe.compute_learning_rate(batch_size, hidden_size)
-        while lr > 0.01:
+        while lr > recipe.max_learning_rate:
             batch_size //= 2
             lr = recipe.compute_learning_rate(batch_size, hidden_size)
-        b2 = recipe.compute_beta2(batch_size)
 
-        if batch_size < 8:
+        # RECIPE: Apply min batch constraint
+        if batch_size < recipe.min_batch_size:
             continue
 
-        steps_exact = budget / compute_total_flops(
-            batch_size,
-            num_layers,
-            hidden_size,
-            intermediate_dim,
-            n_kv_heads,
-            n_heads,
-            1,
-            cfg.seq_len,
-            vocab_size,
-        )
-        train_steps = round(steps_exact)
+        # MECHANICS: Solve for steps to hit budget with chosen batch
+        train_steps = round(solve_for_train_steps(model_config, vocab_size, budget, batch_size, cfg.seq_len))
 
-        achieved_flops = compute_total_flops(
-            batch_size,
-            num_layers,
-            hidden_size,
-            intermediate_dim,
-            n_kv_heads,
-            n_heads,
-            train_steps,
-            cfg.seq_len,
-            vocab_size,
-        )
-
+        # MECHANICS: Verify we hit the budget within tolerance
+        achieved_flops = compute_training_flops(model_config, vocab_size, batch_size, train_steps, cfg.seq_len)
         if abs(achieved_flops - budget) / budget > cfg.flop_tolerance:
             continue
 
+        # RECIPE: Compute optimizer hyperparameters
+        beta2 = recipe.compute_beta2(batch_size)
         tokens = batch_size * train_steps * cfg.seq_len
 
         yield CandidateConfig(
             hidden_size=hidden_size,
-            intermediate_dim=intermediate_dim,
-            num_layers=num_layers,
-            num_heads=n_heads,
-            num_kv_heads=n_kv_heads,
+            intermediate_dim=model_config.intermediate_dim,
+            num_layers=model_config.num_layers,
+            num_heads=model_config.num_heads,
+            num_kv_heads=model_config.num_kv_heads,
             batch_size=batch_size,
             train_steps=train_steps,
             learning_rate=lr,
-            beta2=b2,
+            beta2=beta2,
             tokens=tokens,
             flops_budget=budget,
         )
 
 
-def compute_transformer_params(
-    hidden_dim: int,
-    intermediate_dim: int,
-    num_layers: int,
-    vocab_size: int,
-    num_kv_heads: int | None = None,
-    num_heads: int | None = None,
-) -> int:
-    """Compute parameter count for a transformer model.
-
-    This is a standard approximation for LLaMA-style models with:
-    - Embedding: vocab_size * hidden_dim
-    - Per layer: 4 * hidden_dim^2 (attention) + 3 * hidden_dim * intermediate_dim (MLP with GLU)
-    - Output: vocab_size * hidden_dim (shared with embedding in some models)
-    """
-    # Embedding parameters
-    embed_params = vocab_size * hidden_dim
-
-    # Attention parameters per layer: Q, K, V, O projections
-    # For GQA: Q = hidden * hidden, K = hidden * kv_dim, V = hidden * kv_dim, O = hidden * hidden
-    if num_kv_heads is not None and num_heads is not None:
-        head_dim = hidden_dim // num_heads
-        kv_dim = num_kv_heads * head_dim
-        attn_params_per_layer = (
-            hidden_dim * hidden_dim  # Q
-            + hidden_dim * kv_dim  # K
-            + hidden_dim * kv_dim  # V
-            + hidden_dim * hidden_dim  # O
-        )
-    else:
-        # Standard MHA: 4 * hidden^2
-        attn_params_per_layer = 4 * hidden_dim * hidden_dim
-
-    # MLP parameters per layer (GLU: gate, up, down)
-    mlp_params_per_layer = 3 * hidden_dim * intermediate_dim
-
-    # Layer norm parameters (2 per layer + 1 final)
-    ln_params = (2 * num_layers + 1) * hidden_dim
-
-    # Total
-    layer_params = (attn_params_per_layer + mlp_params_per_layer) * num_layers
-    total = embed_params + layer_params + ln_params
-
-    return total
-
-
 # ---------------- Shared Model/Optimizer Builders ----------------
+# Note: For parameter counts, use model_config.total_trainable_params(vocab_size)
+# which is defined on Levanter model configs (LlamaConfig, Qwen3Config, etc.)
 
 
-def build_model_config(candidate: CandidateConfig, seq_len: int = SEQ_LEN) -> Qwen3Config:
-    """Build a Qwen3Config from a CandidateConfig.
+def candidate_to_model_config(candidate: CandidateConfig, seq_len: int = SEQ_LEN) -> Qwen3Config:
+    """Convert a CandidateConfig to a Qwen3Config for training.
 
-    This is the shared builder used by both generate_isoflop_train_args() and
-    scaling_ladder's run_scaling_ladder_rung() to ensure consistent model configs.
+    This is used after candidate search to convert the selected candidate
+    into a model config for actual training. The architecture parameters
+    come directly from the candidate (which were determined by the recipe
+    during search).
+
+    Note: For creating model configs during search, use recipe.build_model_config(hidden_size).
     """
     return Qwen3Config(
         max_seq_len=seq_len,
@@ -656,20 +656,10 @@ def generate_isoflop_train_args(
     for budget in sweep_config.budgets:
         for candidate in candidate_configs(sweep_config, budget, vocab_size):
             # Build model config using shared builder
-            model_cfg = build_model_config(candidate, sweep_config.seq_len)
+            model_cfg = candidate_to_model_config(candidate, sweep_config.seq_len)
 
-            # Compute parameter count for TPU selection
-            param_count = model_cfg.total_trainable_params(vocab_size)
-
-            # Pick TPU type
-            tpu_type = pick_v5p_type(
-                param_count=param_count,
-                hidden=candidate.hidden_size,
-                layers=candidate.num_layers,
-                batch=candidate.batch_size,
-                seq_len=sweep_config.seq_len,
-                vocab=vocab_size,
-            )
+            # Pick TPU type based on model config
+            tpu_type = pick_v5p_type(model_cfg, vocab_size, candidate.batch_size, sweep_config.seq_len)
 
             # Build optimizer config with candidate-specific LR and beta2
             optimizer_cfg = replace(

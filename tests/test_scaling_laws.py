@@ -22,18 +22,24 @@ import jax.numpy as jnp
 import pandas as pd
 import pytest
 
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.models.qwen import Qwen3Config
+
 from marin.scaling_laws.isoflop_analysis import (
     MARIN_TOKENIZER_VOCAB_SIZE,
     IsoFlopSweepConfig,
     IsoFlopTrainArgs,
     candidate_configs,
-    compute_total_flops,
+    candidate_to_model_config,
+    compute_training_flops,
     fit_scaling_laws,
     generate_isoflop_train_args,
     parse_isoflop_run_name,
     robust_quad_logx,
     round_flops_to_bucket,
     round_to_power_of_two,
+    solve_for_batch_size,
+    solve_for_train_steps,
     transform_metrics_for_isoflop,
 )
 
@@ -90,43 +96,106 @@ def test_round_flops_to_bucket(value, expected):
 # --- FLOP computation tests ---
 
 
-def test_compute_total_flops_linear_in_batch_and_steps():
+def test_compute_training_flops_linear_in_batch_and_steps():
     """Test that FLOPs scale linearly with batch size and steps."""
-    base_flops = compute_total_flops(
-        batch=32,
-        num_layers=12,
-        hidden=512,
-        intermediate=2048,
-        num_kv_heads=8,
+    # Build a model config for testing
+    model_config = Qwen3Config(
+        max_seq_len=4096,
+        hidden_dim=512,
+        intermediate_dim=2048,
         num_heads=8,
-        steps=1000,
-        seq_len=4096,
-        vocab_size=128256,
-    )
-    double_batch_flops = compute_total_flops(
-        batch=64,
-        num_layers=12,
-        hidden=512,
-        intermediate=2048,
         num_kv_heads=8,
-        num_heads=8,
-        steps=1000,
-        seq_len=4096,
-        vocab_size=128256,
-    )
-    double_steps_flops = compute_total_flops(
-        batch=32,
         num_layers=12,
-        hidden=512,
-        intermediate=2048,
-        num_kv_heads=8,
-        num_heads=8,
-        steps=2000,
-        seq_len=4096,
-        vocab_size=128256,
+        rope=Llama3RotaryEmbeddingsConfig(),
     )
+    vocab_size = 128256
+    seq_len = 4096
+
+    base_flops = compute_training_flops(model_config, vocab_size, 32, 1000, seq_len)
+    double_batch_flops = compute_training_flops(model_config, vocab_size, 64, 1000, seq_len)
+    double_steps_flops = compute_training_flops(model_config, vocab_size, 32, 2000, seq_len)
+
     assert abs(double_batch_flops - 2 * base_flops) / base_flops < 0.01
     assert abs(double_steps_flops - 2 * base_flops) / base_flops < 0.01
+
+
+def test_solve_for_batch_size_inverts_flop_calculation():
+    """Test that solve_for_batch_size correctly inverts compute_training_flops."""
+    model_config = Qwen3Config(
+        max_seq_len=4096,
+        hidden_dim=768,
+        intermediate_dim=3072,
+        num_heads=12,
+        num_kv_heads=12,
+        num_layers=12,
+        rope=Llama3RotaryEmbeddingsConfig(),
+    )
+    vocab_size = 128256
+    seq_len = 4096
+    train_steps = 10000
+    original_batch_size = 64
+
+    # Compute FLOPs for known batch size
+    target_flops = compute_training_flops(model_config, vocab_size, original_batch_size, train_steps, seq_len)
+
+    # Solve for batch size given those FLOPs
+    recovered_batch = solve_for_batch_size(model_config, vocab_size, target_flops, train_steps, seq_len)
+
+    # Should recover original batch size (exact float)
+    assert abs(recovered_batch - original_batch_size) < 0.01
+
+
+def test_solve_for_train_steps_inverts_flop_calculation():
+    """Test that solve_for_train_steps correctly inverts compute_training_flops."""
+    model_config = Qwen3Config(
+        max_seq_len=4096,
+        hidden_dim=1024,
+        intermediate_dim=4096,
+        num_heads=8,
+        num_kv_heads=8,
+        num_layers=16,
+        rope=Llama3RotaryEmbeddingsConfig(),
+    )
+    vocab_size = 128256
+    seq_len = 4096
+    batch_size = 32
+    original_steps = 50000
+
+    # Compute FLOPs for known steps
+    target_flops = compute_training_flops(model_config, vocab_size, batch_size, original_steps, seq_len)
+
+    # Solve for steps given those FLOPs
+    recovered_steps = solve_for_train_steps(model_config, vocab_size, target_flops, batch_size, seq_len)
+
+    # Should recover original steps (exact float)
+    assert abs(recovered_steps - original_steps) < 0.01
+
+
+def test_solvers_consistent_with_each_other():
+    """Test that solving for batch and then steps gives consistent results."""
+    model_config = Qwen3Config(
+        max_seq_len=4096,
+        hidden_dim=512,
+        intermediate_dim=2048,
+        num_heads=8,
+        num_kv_heads=8,
+        num_layers=8,
+        rope=Llama3RotaryEmbeddingsConfig(),
+    )
+    vocab_size = 128256
+    seq_len = 4096
+    target_flops = 1e19
+
+    # Pick arbitrary steps, solve for batch
+    steps = 20000
+    batch = solve_for_batch_size(model_config, vocab_size, target_flops, steps, seq_len)
+
+    # Now with that batch, solve for steps - should get back original
+    recovered_steps = solve_for_train_steps(model_config, vocab_size, target_flops, round(batch), seq_len)
+
+    # Allow small error from rounding batch to int
+    relative_error = abs(recovered_steps - steps) / steps
+    assert relative_error < 0.01
 
 
 # --- Run name parsing tests ---
@@ -150,16 +219,14 @@ def test_candidate_configs_within_tolerance():
     cfg = IsoFlopSweepConfig(flop_tolerance=0.01)
     budget = 1e19
     for candidate in candidate_configs(cfg, budget, MARIN_TOKENIZER_VOCAB_SIZE):
-        achieved = compute_total_flops(
+        # Build model config from candidate to verify FLOPs
+        model_config = candidate_to_model_config(candidate, cfg.seq_len)
+        achieved = compute_training_flops(
+            model_config,
+            MARIN_TOKENIZER_VOCAB_SIZE,
             candidate.batch_size,
-            candidate.num_layers,
-            candidate.hidden_size,
-            candidate.intermediate_dim,
-            candidate.num_kv_heads,
-            candidate.num_heads,
             candidate.train_steps,
             cfg.seq_len,
-            MARIN_TOKENIZER_VOCAB_SIZE,
         )
         relative_error = abs(achieved - budget) / budget
         assert relative_error <= cfg.flop_tolerance
@@ -185,7 +252,7 @@ def test_robust_quad_logx_fits_quadratic():
 # --- Snapshot test for config generation ---
 
 # Snapshot of expected output for generate_isoflop_train_args with budget=3e18 training FLOPs.
-# Note: compute_total_flops includes the 3x multiplier for training (forward + backward pass),
+# Note: compute_training_flops includes the 3x multiplier for training (forward + backward pass),
 # matching how FLOPs are tracked in WandB via Levanter's log_performance_stats.
 EXPECTED_ISOFLOP_CONFIGS_3E18 = [
     {
