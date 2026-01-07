@@ -25,12 +25,12 @@ import pytest
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
 
+from marin.scaling_laws import default_model_builder
 from marin.scaling_laws.isoflop_analysis import (
     MARIN_TOKENIZER_VOCAB_SIZE,
     IsoFlopSweepConfig,
     IsoFlopTrainArgs,
     candidate_configs,
-    candidate_to_model_config,
     compute_training_flops,
     fit_scaling_laws,
     generate_isoflop_train_args,
@@ -220,7 +220,7 @@ def test_candidate_configs_within_tolerance():
     budget = 1e19
     for candidate in candidate_configs(cfg, budget, MARIN_TOKENIZER_VOCAB_SIZE):
         # Build model config from candidate to verify FLOPs
-        model_config = candidate_to_model_config(candidate, cfg.seq_len)
+        model_config = default_model_builder(candidate, cfg.seq_len)
         achieved = compute_training_flops(
             model_config,
             MARIN_TOKENIZER_VOCAB_SIZE,

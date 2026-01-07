@@ -39,9 +39,10 @@ Usage:
 import json
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 import fsspec
 import jmp
@@ -49,7 +50,10 @@ from fray.cluster import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMMixtureDatasetConfig
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.main.train_lm import TrainLmConfig
+from levanter.models.lm_model import LmConfig
+from levanter.models.qwen import Qwen3Config
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
@@ -59,10 +63,10 @@ from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.processing.tokenize.data_configs import add_validation_sets_to_mixture, lm_data_config
 from marin.processing.tokenize.tokenize import TokenizeConfig
 from marin.scaling_laws.isoflop_analysis import (
+    CandidateConfig,
     IsoFlopSweepConfig,
     ScalingFit,
     build_optimizer_config,
-    candidate_to_model_config,
     isoflop_analysis_step,
     pick_v5p_type,
     predict_optimal_config,
@@ -74,6 +78,27 @@ logger = logging.getLogger(__name__)
 
 # Type alias for tokenizer steps
 TokenizerStep = ExecutorStep[TokenizeConfig]
+
+# Type alias for model builder callbacks
+# Takes (candidate, seq_len) and returns a model config
+ModelBuilder = Callable[[CandidateConfig, int], LmConfig]
+
+
+def default_model_builder(candidate: CandidateConfig, seq_len: int) -> Qwen3Config:
+    """Default model builder that creates Qwen3Config.
+
+    This is provided as a convenience for the common case. Users can pass
+    their own model_builder function to use different model types.
+    """
+    return Qwen3Config(
+        hidden_dim=candidate.hidden_size,
+        intermediate_dim=candidate.intermediate_dim,
+        num_layers=candidate.num_layers,
+        num_heads=candidate.num_heads,
+        num_kv_heads=candidate.num_kv_heads,
+        max_seq_len=seq_len,
+        rope=Llama3RotaryEmbeddingsConfig(),
+    )
 
 
 def _prepare_data_config(
@@ -133,6 +158,9 @@ class ScalingLadderRungConfig:
     output_path: str
     """Where to write training outputs."""
 
+    model_builder: ModelBuilder | None = None
+    """Function to build model config from CandidateConfig. If None, uses default_model_builder (Qwen3)."""
+
     recipe: ScalingRecipe = MARIN_2025_RECIPE
     """Scaling recipe with hyperparameters."""
 
@@ -185,9 +213,11 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
         f"  learning_rate={candidate.learning_rate:.6f}, tokens={candidate.tokens:.2e}"
     )
 
-    model_cfg = candidate_to_model_config(candidate, config.seq_len)
+    # Use provided model builder or default to Qwen3
+    model_builder = config.model_builder or default_model_builder
+    model_cfg = model_builder(candidate, config.seq_len)
 
-    tpu_type = pick_v5p_type(model_cfg, vocab_size, candidate.batch_size, config.seq_len)
+    tpu_type = pick_v5p_type(candidate, vocab_size, config.seq_len)
 
     optimizer_cfg = build_optimizer_config(candidate, config.recipe)
 
@@ -242,6 +272,7 @@ def scaling_ladder_rung_step(
     target_budget: float,
     label: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    model_builder: ModelBuilder | None = None,
     recipe: ScalingRecipe = MARIN_2025_RECIPE,
     tokenizer: str = "stanford-crfm/marin-tokenizer",
     seq_len: int = 4096,
@@ -260,6 +291,8 @@ def scaling_ladder_rung_step(
         label: Dataset label to use for scaling fit (e.g., 'nemo', 'comma')
         tokenized: Tokenized dataset to train on. Can be an ExecutorStep, InputName,
             or LMMixtureDatasetConfig.
+        model_builder: Function to build model config from CandidateConfig.
+            If None, uses default_model_builder (Qwen3Config).
         recipe: ScalingRecipe with hyperparameters
         tokenizer: Tokenizer to use
         seq_len: Sequence length for training
@@ -284,6 +317,7 @@ def scaling_ladder_rung_step(
         label=label,
         tokenized=resolved_tokenized,
         output_path=output_path,
+        model_builder=model_builder,
         recipe=recipe,
         tokenizer=tokenizer,
         seq_len=seq_len,
@@ -332,6 +366,7 @@ def scaling_ladder_suite(
     target_budgets: Sequence[float],
     label: str,
     tokenized: InputName | ExecutorStep | LMMixtureDatasetConfig,
+    model_builder: ModelBuilder | None = None,
     recipe: ScalingRecipe = MARIN_2025_RECIPE,
     tokenizer: str = "stanford-crfm/marin-tokenizer",
     seq_len: int = 4096,
@@ -355,6 +390,8 @@ def scaling_ladder_suite(
         label: Dataset label to use for scaling fit (e.g., 'nemo', 'comma')
         tokenized: Tokenized dataset for optimal training runs. Can be an ExecutorStep,
             InputName, or LMMixtureDatasetConfig.
+        model_builder: Function to build model config from CandidateConfig.
+            If None, uses default_model_builder (Qwen3Config).
         recipe: ScalingRecipe with hyperparameters
         tokenizer: Tokenizer to use
         seq_len: Sequence length for training
@@ -391,6 +428,7 @@ def scaling_ladder_suite(
             target_budget=budget,
             label=label,
             tokenized=tokenized,
+            model_builder=model_builder,
             recipe=recipe,
             tokenizer=tokenizer,
             seq_len=seq_len,
