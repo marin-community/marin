@@ -73,12 +73,19 @@ from marin.scaling_laws.eval_metrics_reader import (
     read_metrics_dataframe,
 )
 from marin.scaling_laws.recipe import MARIN_2025_RECIPE, ScalingRecipe
+from marin.scaling_laws.tpu_utils import (
+    pick_v5p_type,
+)
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 logger = logging.getLogger(__name__)
 
 # ---------------- Constants ----------------
-DEFAULT_METRIC_KEY = "eval/paloma/c4_en/bpb"
+
+# Paloma is a standard LLM evaluation benchmark. C4-en BPB (bits-per-byte) is a
+# common loss metric that measures model perplexity on the C4 English dataset.
+# See: https://arxiv.org/abs/2312.10523
+DEFAULT_EVAL_METRIC_KEY = "eval/paloma/c4_en/bpb"
 SEQ_LEN = 4096
 
 # Marin tokenizer vocab size (stanford-crfm/marin-tokenizer)
@@ -89,10 +96,16 @@ MARIN_TOKENIZER_VOCAB_SIZE = 128256
 # This matches how FLOPs are tracked in WandB via Levanter's log_performance_stats.
 DEFAULT_BUDGETS: tuple[float, ...] = (1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20)
 
-# TPU v5p hardware constants for memory estimation
-HBM_PER_CHIP_GIB = 95
-CORES_PER_CHIP = 2
-V5P_CORE_OPTIONS = [8, 16, 32, 128, 256, 512]
+# Derived from Kaiyue's hyperparameter sweep: optimal_LR * hidden_size * sqrt(batch_size)
+LR_CONSTANT = 0.33
+
+# ---------------- WandB Metric Keys ----------------
+# These keys correspond to the metrics logged by Levanter's training callbacks.
+THROUGHPUT_TOKENS_KEY = "throughput/total_tokens"
+THROUGHPUT_GFLOPS_KEY = "throughput/total_gflops"
+PARAMETER_COUNT_KEY = "parameter_count"
+MODEL_CONFIG_KEY = "model"
+TRAINER_CONFIG_KEY = "trainer"
 
 
 # ---------------- Typed Tuples ----------------
@@ -156,7 +169,13 @@ class IsoFlopSweepConfig:
     """Sequence length for training."""
 
     steps_per_run: int = 2**16
-    """Target number of training steps per run."""
+    """Number of training steps used for FLOP budget calculation and hyperparameter tuning.
+
+    This is the reference step count that other hyperparameters (LR, beta2) are tuned for.
+    The actual training steps may differ based on batch size to hit the target FLOP budget.
+    Default of 2^16 (65,536) steps is used because the LR_CONSTANT and other tuned values
+    were optimized for this step count.
+    """
 
     flop_tolerance: float = 0.01
     """Tolerance for matching FLOP budget (relative error)."""
@@ -276,6 +295,11 @@ def round_flops_to_bucket(flops: float) -> float:
 
     This ensures runs with slightly different achieved FLOPs are grouped
     together for analysis when they were targeting the same budget.
+    Using 1 significant figure creates buckets at 1e19, 2e19, 3e19, etc.,
+    which matches the typical spacing of isoflop budget targets.
+
+    Note: This means 1.5e19 and 2.4e19 both map to 2e19. For finer granularity,
+    consider using 2 significant figures (round to nearest 0.1 mantissa).
 
     Examples:
         1.05e19 → 1e19
@@ -423,82 +447,6 @@ def compute_transformer_params(
     lm_head = 0 if tie_embeddings else token_embedding
 
     return transformer + token_embedding + lm_head
-
-
-def estimate_memory_bytes(
-    param_count: int,
-    hidden_dim: int,
-    num_layers: int,
-    batch: int,
-    seq_len: int,
-    vocab: int,
-    optim_mult: int = 3,
-    dtype_size: int = 4,
-    fudge_factor: float = 2,
-) -> int:
-    """
-    Estimate float32 memory usage (in bytes) for one training step.
-
-    Parameters:
-    - param_count: number of model parameters
-    - hidden_dim: model hidden size
-    - num_layers: number of Transformer layers
-    - batch, seq_len: training batch size and sequence length
-    - vocab: vocabulary size
-    - optim_mult: optimizer memory multiplier (e.g., 3x for Adam + states)
-    - dtype_size: bytes per float (4 for float32)
-    - fudge_factor: safety margin for extra memory
-
-    Returns:
-    - total estimated memory in bytes
-    """
-    param_bytes = param_count * optim_mult * dtype_size
-    act_bytes = (batch * seq_len) * ((hidden_dim * num_layers) + vocab * fudge_factor)
-    total_bytes = param_bytes + act_bytes
-    return int(total_bytes * fudge_factor)
-
-
-def pick_v5p_type(
-    candidate: CandidateConfig,
-    vocab_size: int,
-    seq_len: int,
-) -> str:
-    """
-    Select the smallest TPU v5p slice that fits the model in float32.
-
-    Args:
-        candidate: CandidateConfig with model architecture parameters.
-        vocab_size: Vocabulary size.
-        seq_len: Sequence length.
-
-    Returns:
-        TPU slice name, e.g., "v5p-8" or "v5p-32"
-    """
-    param_count = compute_transformer_params(
-        hidden_dim=candidate.hidden_size,
-        intermediate_dim=candidate.intermediate_dim,
-        num_layers=candidate.num_layers,
-        num_heads=candidate.num_heads,
-        num_kv_heads=candidate.num_kv_heads,
-        vocab_size=vocab_size,
-    )
-    need_bytes = estimate_memory_bytes(
-        param_count,
-        candidate.hidden_size,
-        candidate.num_layers,
-        candidate.batch_size,
-        seq_len,
-        vocab_size,
-    )
-    chip_bytes = HBM_PER_CHIP_GIB * 1024**3
-    chips = math.ceil(need_bytes / chip_bytes)
-    cores_req = chips * CORES_PER_CHIP
-
-    valid = [c for c in V5P_CORE_OPTIONS if c >= cores_req]
-    if not valid:
-        raise ValueError(f"Model too large for available v5p slices (need {cores_req} cores).")
-
-    return f"v5p-{min(valid)}"
 
 
 def candidate_configs(
@@ -716,6 +664,21 @@ def generate_isoflop_train_args(
 # ---------------- Helpers ----------------
 
 
+def _resolve_run_paths(runs: Sequence[ExecutorStep | InputName | str]) -> list[InputName | str]:
+    """Convert mixed ExecutorStep/InputName/path inputs to executor-ready paths.
+
+    This helper reduces duplication across functions that accept either
+    ExecutorSteps or string paths.
+
+    Args:
+        runs: Sequence of ExecutorStep, InputName, or path strings.
+
+    Returns:
+        List of InputName or string paths.
+    """
+    return [output_path_of(run) if isinstance(run, ExecutorStep) else run for run in runs]
+
+
 def parse_isoflop_run_name(run_name: str) -> str | None:
     """Parse experiment name from isoflop run name.
 
@@ -740,7 +703,20 @@ def parse_isoflop_run_name(run_name: str) -> str | None:
 def robust_quad_logx(x: jnp.ndarray, y: jnp.ndarray, delta: float = 1.0) -> tuple[float, float, float]:
     """Fit a robust quadratic in log10(x) space using Huber loss.
 
-    Returns (a, b, c) coefficients for: loss = a * log10(x)^2 + b * log10(x) + c
+    Log10 space is used because FLOP budgets and token counts span many orders of
+    magnitude (e.g., 1e18 to 1e21+). Fitting in linear space would be numerically
+    unstable and dominated by the largest values. Log space provides better
+    conditioning and more interpretable coefficients.
+
+    The Huber loss provides robustness to outliers compared to standard least squares.
+
+    Args:
+        x: Input array (e.g., token counts). Must be positive.
+        y: Output array (e.g., loss values).
+        delta: Huber loss threshold. Residuals larger than delta use linear loss.
+
+    Returns:
+        Tuple (a, b, c) of coefficients for: loss = a * log10(x)^2 + b * log10(x) + c
     """
     L = jnp.log10(x)
 
@@ -891,19 +867,19 @@ def transform_metrics_for_isoflop(
         # Extract config and summary dicts
         config = row.get("config", {}) or {}
         summary = row.get("summary", {}) or {}
-        model_config = config.get("model", {}) or {}
-        trainer_config = config.get("trainer", {}) or {}
+        model_config = config.get(MODEL_CONFIG_KEY, {}) or {}
+        trainer_config = config.get(TRAINER_CONFIG_KEY, {}) or {}
 
         # Get tokens directly from summary
-        tokens = summary.get("throughput/total_tokens")
+        tokens = summary.get(THROUGHPUT_TOKENS_KEY)
         if tokens is None or pd.isna(tokens):
-            logger.warning(f"Missing throughput/total_tokens in summary for run {run_name}")
+            logger.warning(f"Missing {THROUGHPUT_TOKENS_KEY} in summary for run {run_name}")
             continue
 
         # Get total FLOPs from summary (convert GFLOPs to FLOPs)
-        total_gflops = summary.get("throughput/total_gflops")
+        total_gflops = summary.get(THROUGHPUT_GFLOPS_KEY)
         if total_gflops is None or pd.isna(total_gflops):
-            logger.warning(f"Missing throughput/total_gflops in summary for run {run_name}")
+            logger.warning(f"Missing {THROUGHPUT_GFLOPS_KEY} in summary for run {run_name}")
             continue
         flops = round_flops_to_bucket(total_gflops * 1e9)
 
@@ -917,7 +893,7 @@ def transform_metrics_for_isoflop(
             continue
 
         # Get parameter count from summary
-        params = summary.get("parameter_count")
+        params = summary.get(PARAMETER_COUNT_KEY)
         if params is None or pd.isna(params):
             params = None
 
@@ -961,6 +937,17 @@ def predict_optimal_config(
     vocab_size: int = MARIN_TOKENIZER_VOCAB_SIZE,
 ) -> CandidateConfig | None:
     """Predict optimal training config for a target compute budget using fitted scaling laws.
+
+    This implements IsoFLOP Approach 2 from the Chinchilla paper:
+    1. D_opt (optimal tokens) is found empirically at each compute budget by fitting
+       parabolas to actual loss values and finding the minimum.
+    2. D_opt ~ A * C^alpha is fitted from those empirical minima.
+    3. Given D_opt and C, N_opt (optimal params) is derived as C/(6D), so no
+       separate alpha fit for params is needed.
+
+    This approach works regardless of whether the scaling exponents for params
+    and tokens are equal (alpha == beta), unlike Approach 3 which fits a
+    parametric loss surface.
 
     This function:
     1. Uses the scaling fit (N* ~ A * C^alpha) to predict optimal tokens for target_flops
@@ -1089,8 +1076,8 @@ class IsoFlopAnalysisConfig(EvalMetricsAnalysisConfig):
     recipe: ScalingRecipe = MARIN_2025_RECIPE
     """Scaling recipe for computing optimal hyperparameters."""
 
-    metric_key: str = DEFAULT_METRIC_KEY
-    """Metric to use for loss (default: eval/paloma/c4_en/bpb)."""
+    metric_key: str = DEFAULT_EVAL_METRIC_KEY
+    """Metric to use for loss (default: eval/paloma/c4_en/bpb - Paloma benchmark on C4 English)."""
 
     label_map: tuple[tuple[str, str], ...] | None = None
     """Optional mapping from experiment_name -> display label as tuple of pairs."""
@@ -1271,7 +1258,7 @@ def _run_upload_plots_to_wandb_step(config: UploadPlotsToWandbConfig) -> None:
 def isoflop_analysis_step(
     name: str,
     training_runs: Sequence[ExecutorStep | InputName],
-    metric_key: str = DEFAULT_METRIC_KEY,
+    metric_key: str = DEFAULT_EVAL_METRIC_KEY,
     label_map: dict[str, str] | None = None,
     recipe: ScalingRecipe = MARIN_2025_RECIPE,
 ) -> ExecutorStep:
@@ -1302,7 +1289,7 @@ def isoflop_analysis_step(
         ...     analysis_step=analysis,
         ... )
     """
-    run_paths = [output_path_of(run) if isinstance(run, ExecutorStep) else run for run in training_runs]
+    run_paths = _resolve_run_paths(training_runs)
 
     config = IsoFlopAnalysisConfig(
         training_runs=run_paths,
@@ -1405,7 +1392,7 @@ def upload_isoflop_plots_to_wandb_step(
 
 def run_isoflop_analysis(
     training_runs: Sequence[ExecutorStep] | Sequence[str],
-    metric_key: str = DEFAULT_METRIC_KEY,
+    metric_key: str = DEFAULT_EVAL_METRIC_KEY,
     label_map: dict[str, str] | None = None,
     recipe: ScalingRecipe = MARIN_2025_RECIPE,
 ) -> IsoFlopAnalysisResult:
@@ -1423,7 +1410,7 @@ def run_isoflop_analysis(
     Returns:
         IsoFlopAnalysisResult with configs, scaling_fits, and analysis data
     """
-    run_paths = [output_path_of(run) if isinstance(run, ExecutorStep) else run for run in training_runs]
+    run_paths = _resolve_run_paths(training_runs)
 
     config = EvalMetricsAnalysisConfig(
         training_runs=run_paths,
