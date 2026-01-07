@@ -11,6 +11,7 @@ import numpy as np
 import optax
 import pytest
 from chex import assert_trees_all_close
+from jax.sharding import NamedSharding, PartitionSpec as P
 
 import haliax as hax
 
@@ -46,6 +47,23 @@ def test_tensorstore_checkpoint_simple():
             jax.tree_util.tree_leaves(arrays_only(initial_model)),
         )
         assert all(np.isclose(rkey, initial_key))
+
+
+def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
+    with use_test_mesh():
+        key0 = jax.random.PRNGKey(0)
+        arr = jax.random.normal(key0, (8,), dtype=jnp.float32)
+
+        # Simulate an eval_shape-produced sharding: NamedSharding(mesh=AbstractMesh(...)).
+        abs_mesh = jax.sharding.get_abstract_mesh()
+        abstract_sharding = NamedSharding(abs_mesh, P("data"))
+        assert isinstance(abstract_sharding.mesh, jax.sharding.AbstractMesh)
+        state_shape = jax.ShapeDtypeStruct(arr.shape, arr.dtype, sharding=abstract_sharding)
+
+        with TemporaryDirectory() as tmpdir:
+            tree_serialize_leaves_tensorstore(tmpdir, {"x": arr})
+            restored = tree_deserialize_leaves_tensorstore(tmpdir, {"x": state_shape})
+            assert jnp.allclose(restored["x"], arr)
 
 
 def test_checkpoint_steps():
