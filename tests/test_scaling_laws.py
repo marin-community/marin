@@ -184,9 +184,10 @@ def test_robust_quad_logx_fits_quadratic():
 
 # --- Snapshot test for config generation ---
 
-# Snapshot of expected output for generate_isoflop_train_args with budget=1e18.
-# This captures the configuration generation logic to ensure reproducibility.
-EXPECTED_ISOFLOP_CONFIGS_1E18 = [
+# Snapshot of expected output for generate_isoflop_train_args with budget=3e18 training FLOPs.
+# Note: compute_total_flops includes the 3x multiplier for training (forward + backward pass),
+# matching how FLOPs are tracked in WandB via Levanter's log_performance_stats.
+EXPECTED_ISOFLOP_CONFIGS_3E18 = [
     {
         "hidden_size": 512,
         "intermediate_dim": 2048,
@@ -198,7 +199,7 @@ EXPECTED_ISOFLOP_CONFIGS_1E18 = [
         "learning_rate": 0.003646,
         "beta2": 0.994962,
         "tpu_type": "v5p-8",
-        "run_name": "isoflop-1e+18-d512-L6-B32-test-snapshot",
+        "run_name": "isoflop-3e+18-d512-L6-B32-test-snapshot",
     },
     {
         "hidden_size": 640,
@@ -211,7 +212,7 @@ EXPECTED_ISOFLOP_CONFIGS_1E18 = [
         "learning_rate": 0.002063,
         "beta2": 0.997478,
         "tpu_type": "v5p-8",
-        "run_name": "isoflop-1e+18-d640-L7-B16-test-snapshot",
+        "run_name": "isoflop-3e+18-d640-L7-B16-test-snapshot",
     },
     {
         "hidden_size": 768,
@@ -224,7 +225,7 @@ EXPECTED_ISOFLOP_CONFIGS_1E18 = [
         "learning_rate": 0.001719,
         "beta2": 0.997478,
         "tpu_type": "v5p-8",
-        "run_name": "isoflop-1e+18-d768-L8-B16-test-snapshot",
+        "run_name": "isoflop-3e+18-d768-L8-B16-test-snapshot",
     },
     {
         "hidden_size": 896,
@@ -237,7 +238,7 @@ EXPECTED_ISOFLOP_CONFIGS_1E18 = [
         "learning_rate": 0.001042,
         "beta2": 0.998738,
         "tpu_type": "v5p-8",
-        "run_name": "isoflop-1e+18-d896-L10-B8-test-snapshot",
+        "run_name": "isoflop-3e+18-d896-L10-B8-test-snapshot",
     },
     {
         "hidden_size": 1024,
@@ -250,7 +251,7 @@ EXPECTED_ISOFLOP_CONFIGS_1E18 = [
         "learning_rate": 0.000912,
         "beta2": 0.998738,
         "tpu_type": "v5p-8",
-        "run_name": "isoflop-1e+18-d1024-L11-B8-test-snapshot",
+        "run_name": "isoflop-3e+18-d1024-L11-B8-test-snapshot",
     },
 ]
 
@@ -259,9 +260,10 @@ def test_generate_isoflop_train_args_snapshot():
     """Snapshot test: verify generate_isoflop_train_args produces expected configs.
 
     This test ensures the scaling_laws module produces identical configurations
-    for reproducible isoflop sweeps.
+    for reproducible isoflop sweeps. Uses 3e18 training FLOPs budget (which accounts
+    for the 3x multiplier for forward + backward pass).
     """
-    config = IsoFlopSweepConfig(budgets=(1e18,))
+    config = IsoFlopSweepConfig(budgets=(3e18,))
     result = generate_isoflop_train_args(
         sweep_config=config,
         experiment_name="test-snapshot",
@@ -269,10 +271,10 @@ def test_generate_isoflop_train_args_snapshot():
     )
 
     assert len(result) == len(
-        EXPECTED_ISOFLOP_CONFIGS_1E18
-    ), f"Expected {len(EXPECTED_ISOFLOP_CONFIGS_1E18)} configs, got {len(result)}"
+        EXPECTED_ISOFLOP_CONFIGS_3E18
+    ), f"Expected {len(EXPECTED_ISOFLOP_CONFIGS_3E18)} configs, got {len(result)}"
 
-    for i, (args, expected) in enumerate(zip(result, EXPECTED_ISOFLOP_CONFIGS_1E18, strict=True)):
+    for i, (args, expected) in enumerate(zip(result, EXPECTED_ISOFLOP_CONFIGS_3E18, strict=True)):
         assert isinstance(args, IsoFlopTrainArgs)
         c = args.candidate
         actual = {
