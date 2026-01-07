@@ -71,13 +71,52 @@ def _is_running_in_ray_context() -> bool:
         return False
 
 
+def _detect_local_accelerators() -> dict[str, float] | None:
+    """Detect local accelerators (GPUs/TPUs) and return Ray resource dict.
+
+    Returns None if no accelerators are found, otherwise returns a dict
+    suitable for passing to ray.init(resources=...).
+    """
+    resources: dict[str, float] = {}
+
+    # Try to detect GPUs via JAX
+    try:
+        import jax
+
+        devices = jax.devices()
+        gpu_count = sum(1 for d in devices if d.platform == "gpu")
+        if gpu_count > 0:
+            resources["GPU"] = float(gpu_count)
+            # Also add accelerator type info if available
+            try:
+                from fray.cluster.ray.resources import jax_device_kind_to_ray_accel_type
+
+                gpu_device = next(d for d in devices if d.platform == "gpu")
+                accel_type = jax_device_kind_to_ray_accel_type(gpu_device.device_kind)
+                if accel_type:
+                    resources[f"accelerator_type:{accel_type}"] = float(gpu_count)
+                    logger.info(f"Detected {gpu_count} GPU(s) of type {accel_type}")
+            except Exception:
+                logger.info(f"Detected {gpu_count} GPU(s)")
+
+        tpu_count = sum(1 for d in devices if d.platform == "tpu")
+        if tpu_count > 0:
+            resources["TPU"] = float(tpu_count)
+            logger.info(f"Detected {tpu_count} TPU(s)")
+    except Exception as e:
+        logger.debug(f"Could not detect accelerators via JAX: {e}")
+
+    return resources if resources else None
+
+
 def current_cluster() -> Cluster:
     """Return a cluster context.
 
     If a cluster is already set in context, return it.
     If a FRAY_CLUSTER_SPEC is set, create a cluster from it.
     If running inside of Ray, use a Ray cluster.
-    If no cluster is specified, use a LocalCluster.
+    If accelerators are detected locally, initialize Ray with them.
+    Otherwise, use a LocalCluster for CPU-only work.
     """
     cluster = _cluster_context.get()
     if cluster is not None:
@@ -95,6 +134,21 @@ def current_cluster() -> Cluster:
 
         if ray.is_initialized() or _is_running_in_ray_context():
             logger.info("Auto-detected Ray cluster")
+            from fray.cluster.ray.cluster import RayCluster
+
+            cluster = RayCluster()
+            set_current_cluster(cluster)
+            return cluster
+
+        # Check for local accelerators and initialize Ray with them
+        local_resources = _detect_local_accelerators()
+        if local_resources is not None:
+            logger.info(f"Detected local accelerators, initializing Ray with resources: {local_resources}")
+            ray.init(
+                namespace="marin",
+                ignore_reinit_error=True,
+                resources=local_resources,
+            )
             from fray.cluster.ray.cluster import RayCluster
 
             cluster = RayCluster()

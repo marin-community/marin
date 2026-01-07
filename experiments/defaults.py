@@ -428,6 +428,7 @@ def default_train(
         fn=run_levanter_train_lm,
         config=config,
         override_output_path=override_output_path,
+        resources=train_config.resources,
     )
 
 
