@@ -23,15 +23,6 @@ def get_id_from_row(row: dict, id_path: tuple[str, ...]) -> str | None:
     return obj
 
 
-def has_id_column(row: dict, id_path: tuple[str, ...]) -> bool:
-    """Check whether the tuple path exists in the row."""
-    try:
-        get_id_from_row(row, id_path)
-        return True
-    except ValueError:
-        return False
-
-
 def get_finished_ids(output_filename: str, id_path: tuple[str, ...]) -> set:
     """Get the set of IDs that have already been processed in the output file
 
@@ -43,6 +34,7 @@ def get_finished_ids(output_filename: str, id_path: tuple[str, ...]) -> set:
         Set of IDs that have already been processed
     """
     import json
+
     import fsspec
 
     finished_ids = set()
