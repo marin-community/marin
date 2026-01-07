@@ -18,7 +18,6 @@ from levanter.optim.config import HessianOptConfig, OptimizerConfig
 from levanter.optim.util import hvp, tree_gaussian_like
 from levanter.utils.jax_utils import parameter_count, tree_filter_like
 
-
 M = TypeVar("M")
 Ex = TypeVar("Ex")
 
@@ -241,57 +240,8 @@ def scale_by_sophia_h(
     *,
     key: PRNGKeyArray,
 ):
-
     return _sophia_gradient_transform(
         sophia_hess_fn=stochastic_hessian_diagonal,
-        update_interval=update_interval,
-        b1=b1,
-        b2=b2,
-        eps=eps,
-        gamma=gamma,
-        clip_threshold=clip_threshold,
-        initial_key=key,
-    )
-
-
-def sophia_g(
-    lr: float = 1e-3,
-    *,
-    b1: float = 0.99,
-    b2: float = 0.99,
-    eps: float = 1e-8,
-    gamma: float = GAMMA_SOPHIA_G,
-    weight_decay: float = 0.0,
-    clip_threshold: Optional[float] = 1.0,
-    update_interval: int = 10,
-    key: PRNGKeyArray,
-) -> optax.GradientTransformation:
-    """Sophia-G: https://arxiv.org/pdf/2305.14342.pdf Algorithm 2&3"""
-    components = []
-
-    components.append(scale_by_sophia_g(b1, b2, eps, gamma, clip_threshold, update_interval, key=key))
-
-    if weight_decay > 0:
-        components.append(optax.add_decayed_weights(weight_decay))
-
-    components.append(optax.scale(-lr))
-
-    return optax.chain(*components)
-
-
-def scale_by_sophia_g(
-    b1: float = 0.99,
-    b2: float = 0.99,
-    eps: float = 1e-8,
-    gamma: float = GAMMA_SOPHIA_G,
-    clip_threshold: Optional[float] = 1.0,
-    update_interval=10,
-    *,
-    key: PRNGKeyArray,
-):
-
-    return _sophia_gradient_transform(
-        sophia_hess_fn=stochastic_diag_gauss_newton,
         update_interval=update_interval,
         b1=b1,
         b2=b2,
