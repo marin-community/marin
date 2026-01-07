@@ -306,6 +306,10 @@ def upload_plots_to_wandb(
         entity: WandB entity
         project: WandB project
         run_name: Name for the WandB run
+
+    TODO: Consider extracting a generic wandb-upload utility that takes artifacts
+    and handles upload logic. This would decouple the plotting logic from WandB
+    and allow reuse across other analysis tools.
     """
     wandb.login()
     run = wandb.init(
