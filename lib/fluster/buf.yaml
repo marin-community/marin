@@ -1,0 +1,10 @@
+version: v2
+modules:
+  - path: src/fluster/proto
+  - path: src/fluster/actor/proto
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE
