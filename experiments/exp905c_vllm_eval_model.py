@@ -45,8 +45,8 @@ Note for people trying to do evals:
 
 """
 EVAL_TASKS = [
-    # EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
-    EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime25_0shot"),
+    EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
+    # EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime25_0shot"),
     # EvalTaskConfig("math_500", num_fewshot=0, task_alias="math_500"),
     # EvalTaskConfig("gpqa_diamond_zeroshot", num_fewshot=0, task_alias="gpqa_diamond_zeroshot"),
 ]
@@ -160,9 +160,21 @@ MODELS = [
     #     "apply_chat_template": True,
     #     "tensor_parallel_size": 4,
     # },
+    # {
+    #     "name": "marin-8b-longcontext-finetuned-ot3-chkpt11718-aime25",
+    #     "path": "gs://marin-us-central2/checkpoints/exp2199a2_redo2_sft_longcontext_marin_8b_ot3_bsz512_lr8e_5-fe3bab/hf/step-11718/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262e-chkpt2340-aime24",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262e_ot4_math30k_qwen3_32b_bsz128_lr4e_5-51aefe/hf/step-2340-padded-vocab/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
     {
-        "name": "marin-8b-longcontext-finetuned-ot3-chkpt11718-aime25",
-        "path": "gs://marin-us-central2/checkpoints/exp2199a2_redo2_sft_longcontext_marin_8b_ot3_bsz512_lr8e_5-fe3bab/hf/step-11718/",
+        "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262f-chkpt2340-aime24",
+        "path": "gs://marin-us-east5/checkpoints/exp2262f_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-cfac80/hf/step-2340-padded-vocab/",
         "apply_chat_template": True,
         "tensor_parallel_size": 4,
     },
