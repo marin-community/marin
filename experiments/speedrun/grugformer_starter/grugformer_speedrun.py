@@ -13,10 +13,13 @@
 # limitations under the License.
 
 """
-Grugformer starter speedrun (ejkernel blocksparse attention).
+Grugformer starter speedrun.
 
 This uses the grug core implementation (`levanter.grug`) and wires it into the existing
 Marin speedrun harness via the `levanter.models.grug_wrapper.GrugWrapper` adapter.
+
+On TPU, grug uses JAX's Splash Attention; on other backends it falls back to a reference
+attention implementation.
 
 How to run:
   python marin/run/ray_run.py -- \
@@ -119,7 +122,7 @@ speedrun_config = SpeedrunConfig(
         affiliation="__YOUR_AFFILIATION__",
         url="__YOUR_URL__",
     ),
-    description="Grugformer starter (ejkernel blocksparse attention).",
+    description="Grugformer starter (TPU Splash Attention; reference fallback elsewhere).",
     model_config=GrugformerConfig(
         max_seq_len=2048,
         hidden_dim=1024,

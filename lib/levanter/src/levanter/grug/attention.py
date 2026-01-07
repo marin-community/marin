@@ -5,9 +5,12 @@ import math
 from dataclasses import dataclass
 
 import jax
-from ejkernel.types import MaskInfo
 from jax import numpy as jnp
+from jax.experimental.shard_map import shard_map
+from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.tree_util import register_dataclass
+
+from haliax.partitioning import _get_mesh
 
 from .config import RotaryConfig
 
@@ -166,56 +169,173 @@ def reference_attention(
     return ctx.astype(v.dtype)
 
 
-def _blocksparse_attention(
+def _pspec_from_sharding(x: jax.Array) -> P:
+    sharding = getattr(x, "sharding", None)
+    if isinstance(sharding, NamedSharding) and isinstance(sharding.spec, P):
+        return sharding.spec
+    # In tracing contexts we may not have a concrete sharding available.
+    # Default to the common "data-parallel batch" convention used by grug.
+    if x.ndim == 4:
+        return P(("replica", "data"), None, None, None)
+    if x.ndim == 3:
+        return P(("replica", "data"), None, None)
+    if x.ndim == 2:
+        return P(("replica", "data"), None)
+    return P(*(None,) * x.ndim)
+
+
+def _spec_shard_factor(entry: object, mesh) -> int:
+    if entry is None or mesh is None:
+        return 1
+    if isinstance(entry, str):
+        return mesh.shape[entry]
+    if isinstance(entry, tuple):
+        factor = 1
+        for name in entry:
+            factor *= mesh.shape[name]
+        return factor
+    raise TypeError(f"Unsupported PartitionSpec entry: {entry!r}")
+
+
+def _tpu_splash_attention(
     q: jax.Array,
     k: jax.Array,
     v: jax.Array,
     mask: AttentionMask | jax.Array | None,
 ) -> jax.Array:
-    from ejkernel.modules.operations.blocksparse_attention import blocksparse_attention as ej_blocksparse_attention
+    from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
+    from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
 
-    q_segment_ids = None
-    kv_segment_ids = None
-    sliding_window = None
-    causal = False
+    # Splash attention expects BHSD.
+    q_ = jnp.transpose(q, (0, 2, 1, 3))
+    k_ = jnp.transpose(k, (0, 2, 1, 3))
+    v_ = jnp.transpose(v, (0, 2, 1, 3))
 
-    if isinstance(mask, AttentionMask):
+    B, Hq, Sq, D = q_.shape
+    _, _, Sk, _ = k_.shape
+
+    if Sk % 128 != 0:
+        raise NotImplementedError("Splash attention requires key/value sequence length to be a multiple of 128.")
+
+    q_ = q_ * (1.0 / math.sqrt(D))
+
+    mesh = _get_mesh()
+    if mesh is None or getattr(mesh, "empty", False):
+        raise RuntimeError("TPU splash attention requires a JAX mesh context.")
+
+    q_pspec = _pspec_from_sharding(q_)
+    k_pspec = _pspec_from_sharding(k_)
+    v_pspec = _pspec_from_sharding(v_)
+
+    # KV sequence must not be sharded for splash attention.
+    if k_pspec[2] is not None:
+        raise NotImplementedError(
+            "Splash attention does not support sharding the KV sequence dimension. "
+            f"Got KV sequence spec: {k_pspec[2]}"
+        )
+
+    head_shards = _spec_shard_factor(q_pspec[1], mesh)
+    q_seq_shards = _spec_shard_factor(q_pspec[2], mesh)
+
+    # Choose blocks per-shard so we avoid partial blocks.
+    def _compatible_block(shard_len: int, max_block: int) -> int:
+        if shard_len <= 0:
+            return max_block
+        cap = min(max_block, shard_len)
+        for step in (128, 1):
+            candidate = cap - (cap % step)
+            while candidate >= step:
+                if shard_len % candidate == 0:
+                    return candidate
+                candidate -= step
+        return 1
+
+    block_size = 512
+    shard_Sq = max(1, Sq // max(1, q_seq_shards))
+    block_q = _compatible_block(shard_Sq, block_size)
+    block_kv = _compatible_block(Sk, block_size)
+
+    block_sizes = splash_attention_kernel.BlockSizes(
+        block_q=block_q,
+        block_kv_compute=block_kv,
+        block_kv=block_kv,
+        block_q_dkv=block_q,
+        block_kv_dkv=block_kv,
+        block_kv_dkv_compute=block_q,
+        block_q_dq=block_q,
+        block_kv_dq=block_kv,
+    )
+
+    if mask is None:
+        base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
+        segment_ids = None
+        segment_ids_axes = None
+        segment_batch_axis = None
+    elif isinstance(mask, AttentionMask):
         if mask.causal_offset != 0:
-            raise NotImplementedError("Grug AttentionMask.causal_offset is not supported by ejkernel blocksparse.")
+            raise NotImplementedError("Causal offsets are not supported for splash attention.")
+
+        if mask.is_causal:
+            base_mask = splash_attention_mask.CausalMask((Sq, Sk), offset=0, shard_count=q_seq_shards)
+        else:
+            base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
+
+        if mask.sliding_window is not None:
+            local_mask = splash_attention_mask.LocalMask(
+                shape=(Sq, Sk),
+                window_size=(mask.sliding_window - 1, None),
+                offset=0,
+                shard_count=q_seq_shards,
+            )
+            base_mask = splash_attention_mask.LogicalAnd(base_mask, local_mask)
 
         if mask.segment_ids is not None:
             q_segment_ids, kv_segment_ids = mask.segment_ids
+            segment_ids = SplashSegmentIds(q_segment_ids, kv_segment_ids)
+            segment_ids_axes = SplashSegmentIds(
+                _pspec_from_sharding(q_segment_ids),
+                _pspec_from_sharding(kv_segment_ids),
+            )
+            segment_batch_axis = SplashSegmentIds(
+                0 if q_segment_ids.ndim == 2 else None,
+                0 if kv_segment_ids.ndim == 2 else None,
+            )
+        else:
+            segment_ids = None
+            segment_ids_axes = None
+            segment_batch_axis = None
+    else:
+        raise NotImplementedError("Dense masks are not supported for splash attention.")
 
-        sliding_window = mask.sliding_window
-        causal = mask.is_causal
+    kernel_mask = splash_attention_mask.MultiHeadMask(masks=[base_mask for _ in range(Hq)])
 
-    if isinstance(mask, jax.Array):
-        # Grug sometimes passes an explicit (q,k) boolean mask. ejkernel blocksparse_attention
-        # does not accept an arbitrary dense mask; it only supports structured masks
-        # (causal/window/segments) and block-sparse patterns.
-        raise NotImplementedError("Dense boolean masks are not supported by ejkernel blocksparse attention.")
-
-    mask_info = (
-        MaskInfo.from_segments(
-            q_segment_ids,
-            kv_segment_ids,
-            batch_axis_name=("replica", "data"),
-        )
-        if q_segment_ids is not None
-        else None
+    splash_kernel = splash_attention_kernel.make_splash_mha(
+        mask=kernel_mask,
+        head_shards=head_shards,
+        q_seq_shards=q_seq_shards,
+        block_sizes=block_sizes,
     )
 
-    out = ej_blocksparse_attention(
-        q.transpose(0, 2, 1, 3),
-        k.transpose(0, 2, 1, 3),
-        v.transpose(0, 2, 1, 3),
-        None,
-        None,
-        mask_info=mask_info,
-        sliding_window=sliding_window,
-        causal=causal,
+    kernel_sharding = NamedSharding(mesh, P(q_pspec[1], q_pspec[2]))
+    kernel_specs = splash_kernel.manual_sharding_spec(kernel_sharding)
+
+    @functools.partial(
+        shard_map,
+        mesh=mesh,
+        in_specs=(q_pspec, k_pspec, v_pspec, segment_ids_axes, kernel_specs),
+        out_specs=q_pspec,
+        check_rep=False,
     )
-    return out.transpose(0, 2, 1, 3)
+    def wrap(q_bhsd, k_bhsd, v_bhsd, seg_ids, kernel):
+        def call_kernel(q_b, k_b, v_b, si):
+            if si is None:
+                return kernel(q_b, k_b, v_b)
+            return kernel(q_b, k_b, v_b, segment_ids=si)
+
+        return jax.vmap(call_kernel, in_axes=(0, 0, 0, segment_batch_axis))(q_bhsd, k_bhsd, v_bhsd, seg_ids)
+
+    out = wrap(q_, k_, v_, segment_ids, splash_kernel)
+    return jnp.transpose(out, (0, 2, 1, 3)).astype(v.dtype)
 
 
 def attention(
@@ -224,7 +344,9 @@ def attention(
     v: jax.Array,
     mask: AttentionMask | jax.Array | None,
 ) -> jax.Array:
-    return _blocksparse_attention(q, k, v, mask)
+    if jax.default_backend() == "tpu":
+        return _tpu_splash_attention(q, k, v, mask)
+    return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
 
 
 __all__ = [
