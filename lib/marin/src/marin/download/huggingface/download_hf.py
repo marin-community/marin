@@ -79,10 +79,14 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
 
 def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path: str):
     """Ray task to stream a file from HfFileSystem to another fsspec path."""
+    # Debug: Print to stderr to ensure we see this even if logging is misconfigured
+    import sys
+    print(f"[DEBUG] stream_file_to_fsspec called: {file_path} -> {fsspec_file_path}", file=sys.stderr, flush=True)
+
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
     target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
-    # Use larger chunk size for large files, such as 32B models
-    chunk_size = 256 * 1024 * 1024 * 1024
+    # Use 256 MB chunk size for large files
+    chunk_size = 256 * 1024 * 1024
     max_retries = 10
 
     # Retry when there is an error, such as hf rate limit
@@ -93,9 +97,11 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
                 with target_fs.open(fsspec_file_path, "wb") as dest_file:
                     while chunk := src_file.read(chunk_size):
                         dest_file.write(chunk)
+            print(f"[DEBUG] Successfully downloaded: {fsspec_file_path}", file=sys.stderr, flush=True)
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path}")
             return {"file_path": file_path, "status": "success"}
         except Exception as e:
+            print(f"[DEBUG] Download failed attempt {attempt + 1}: {file_path}: {e}", file=sys.stderr, flush=True)
             wait_time = (2**attempt) + random.uniform(0, 5)
             logger.warning(f"Attempt {attempt + 1} failed for {file_path}: {e}, retrying in {wait_time:.1f}s")
             time.sleep(wait_time)
