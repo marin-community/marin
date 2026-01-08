@@ -123,6 +123,8 @@ class LocalCluster(Cluster):
             env_vars = dict(request.environment.env_vars) if request.environment.env_vars else {}
 
             def run_with_env():
+                import os
+
                 # Apply environment variables for this execution
                 old_env = {k: os.environ.get(k) for k in env_vars}
                 try:

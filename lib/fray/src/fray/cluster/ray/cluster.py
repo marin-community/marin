@@ -232,6 +232,7 @@ class RayCluster(Cluster):
 
             # Apply environment variables
             import os
+
             old_env = {k: os.environ.get(k) for k in env_vars}
             try:
                 os.environ.update(env_vars)
