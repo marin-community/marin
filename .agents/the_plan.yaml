@@ -25,9 +25,7 @@ meta:
     ahmed: ahmeda14960
     chris: BabyChouSr
     david: dlwh
-    herumb: krypticmouse
     kevin: AlienKevin
-    niki: nikil-ravi
     percy: percyliang
     will: Helw150
     rohith: RohithKuditipudi
@@ -71,7 +69,7 @@ milestone_2026_01_scaling_up:
     - data_curation_100_experiments
     - train_8x7b
     - moe_mfu_match_maxtext_8x7b
-    - attention_sinks_gated_deltanet
+    - attention_sinks
     - effective_gdn_implementation
     - posttraining_evals_and_models
     - sft_synthetic_datasets
@@ -203,7 +201,7 @@ dedup_pipeline_robust:
   type: task
   status: planned
   target_date: "2025-12-31"
-  labels: [timeline, data_pipeline, newbie_friendly, agent_friendly]
+  labels: [timeline, data_pipeline]
 
 
 fluster_design_doc:
@@ -303,10 +301,10 @@ moe_mfu_match_maxtext_8x7b:
   labels: [timeline, moe, infra]
 
 
-attention_sinks_gated_deltanet:
+attention_sinks:
   title: "Attention sinks"
-  type: epic
-  status: planned
+  type: task
+  status: closed
   owners: [Calvin-Xu]
   target_date: "2026-01-15"
   issue: 1593
@@ -319,7 +317,7 @@ effective_gdn_implementation:
   status: planned
   owners: [Calvin-Xu]
   target_date: "2026-01-15"
-  issue: null
+  issue: 2109
   labels: [timeline, architecture, agent_friendly]
   description: |
     Make a high-performance, correct Gated DeltaNet implementation suitable for training runs and speedruns.
@@ -330,12 +328,12 @@ effective_gdn_implementation:
 
 
 gdn_perf_bottleneck:
-  title: "GDN performance bottleneck"
+  title: "GDN pallas tpu kernel"
   type: task
   status: planned
   owners: [Calvin-Xu]
   issue: 1884
-  labels: [architecture, performance]
+  labels: [architecture, performance, agent_friendly]
 
 
 posttraining_evals_and_models:
@@ -383,7 +381,9 @@ support_nvidia_gpu_clusters:
   target_date: "2026-01-31"
   issue: null
   labels: [timeline, infra]
-
+  description: |
+    Support running Marin training and inference jobs on NVIDIA GPU clusters, especially backed by SLURM.
+    Single node works already, but we need to support multi-node training jobs and rl.
 
 fluster_scheduler_mvp:
   title: "Fluster: central scheduler; users request resources on any cluster"
@@ -391,7 +391,7 @@ fluster_scheduler_mvp:
   status: planned
   owners: [rjpower]
   target_date: "2026-01-31"
-  labels: [timeline, infra]
+  labels: [timeline, infra, fluster]
 
 
 data_ingestion_pipeline_scale:
@@ -1172,8 +1172,6 @@ scalable_dedupe:
   status: planned
   labels: [data_pipeline, infra]
   issue: 2091
-  dependencies:
-    - fray
 
 # evals
 frontier_evals:
@@ -1694,14 +1692,6 @@ rl_env_prime_intellect_logprobs:
   labels: [rl, environments]
 
 
-fray:
-  title: "Fray"
-  type: epic
-  status: planned
-  labels: [infra]
-  description: |
-    Placeholder for the Fray abstraction layer (or its successor). Keep as a dependency anchor for now.
-
 
 hq_data:
   title: "HQ / midtraining data mixture (Phase 2)"
@@ -1892,20 +1882,89 @@ rephrasing_pipeline:
   type: epic
   status: planned
   labels: [data, web, synthetic_data]
+  description: |
+    Build a rephrasing pipeline to augment web data.
+    This could involve using LLMs to paraphrase existing web content to create new, diverse training examples.
+
+  dependencies:
+    - inference_workers
+
+
+inference_workers:
+  title: "Fray Inference workers for data processing"
+  type: task
+  status: planned
+  labels: [data, infra]
+  description: |
+    Set up Fray inference workers to handle data processing tasks such as rephrasing web data.
+  dependencies:
+    - vllm_in_docker
+
+
+vllm_in_docker:
+    title: "vLLM tpu in Docker for inference workers"
+    type: task
+    status: in_progress
+    owners: [dlwh]
+    labels: [data, infra, agent_friendly]
+
+    description: |
+      Set up vLLM inside Docker containers to be used by inference workers for data processing tasks.
+      These should be set up as "sidecars" that can be spun up next to the ray docker container.
 
 
 ferry_framework:
-  title: "Ferry framework"
+  title: "Ferry framework (repeatable vertical training cadence)"
   type: epic
   status: planned
-  labels: [process, infra]
+  labels: [process, infra, infra2026, agent_friendly]
+  description: |
+    In [#ferries], we propose training models on a regular cadence of increasing scale and quality.
+    The ferry framework is the process + tooling that makes those launches repeatable, observable, and easy
+    to run across daily/weekly/monthly cadences.
+
+    Contrary to current (~2026-01-01) practice, each scale's ferry experiment should be a "living" experiment
+    where we update it with our best / most promising / highest-value-of-information experiment
+
+    The ferry framework should handle:
+      - creating an issue for the ferry launch, following a naming scheme (e.g. `Ferry: daily 1e17 model - 2024-09-01`)
+        and any reasonable tags
+      - creating a branch for this particular ferry with the particular configuration to run in a predictable place.
+      - launch the run on the appropriate cluster
+      - update the issue with a wandb link, key metrics, and pass/fail signals
+      - maybe also update discord.
+
+    All of this should be automated via a CLI tool.
+
+    The ferry launch process should be encoded as a recipe (in `docs/recipes/ferries/`)
+  definition_of_done: |
+    - There is a single documented “how to run a ferry” entrypoint (manual + scheduled).
+    - Each ferry run creates/updates a GitHub issue as the canonical record (links, metrics, outcomes, next steps).
+    - Each ferry run has a reproducible config location (branch + config path) and a predictable naming scheme.
+    - It’s easy to run the same ferry locally (tiny) and on cluster (small/real) without changing the workflow.
+  dependencies:
+    - experiment_updates_bot
+
 
 
 automated_daily_ferry_launch:
-  title: "Automated daily ferry launch"
+  title: "Automated daily ferry launch (daily regression run)"
   type: task
   status: planned
-  labels: [process, infra, agent_friendly]
+  labels: [process, infra, infra2026, testing, agent_friendly, newbie_friendly]
+  description: |
+    Daily scheduled ferry run (this is our “daily regression”).
+
+    This should be the lowest-friction way to catch cluster + pipeline regressions early, and it should always
+    produce a canonical GitHub issue record via `ferry_framework`.
+  definition_of_done: |
+    - A single daily job (cron-style) launches a small end-to-end run (e.g. 10–100M params).
+    - The run creates/updates a GitHub issue with links, key metrics, and pass/fail signals.
+    - Failures trigger an alert and make it obvious what component regressed.
+  dependencies:
+    - ferry_framework
+    - model_pipeline_v0
+    - test_cluster
 
 
 automated_weekly_ferry_launch:
@@ -1920,3 +1979,788 @@ automated_monthly_ferry_launch:
   type: task
   status: planned
   labels: [process, infra, agent_friendly]
+
+
+# -----------------------------------------------------------------------------
+# Marin Infrastructure 2026 (imported from `Marin Infrastructure 2026)
+# -----------------------------------------------------------------------------
+
+# this section is a bit dated. working on updating
+
+infra2026_program:
+  title: "Marin Infrastructure 2026 program"
+  type: epic
+  status: planned
+  owners: [rjpower, dlwh]
+  target_date: "2026-12-31"
+  labels: [infra, infra2026]
+  description: |
+    Master tracking node for the 2026 infrastructure roadmap.
+
+    This section is imported from `.agents/Marin Infrastructure 2026.md` and is intended to cover:
+    - cluster and job management beyond Ray
+    - robustness to preemption and global resource availability
+    - data movement and validation
+    - end-to-end model pipelines (pretrain → SFT → RL → eval)
+    - observability, alerting, and cost tracking
+    - developer experience for human + agent automation
+  dependencies:
+    - llm_guided_research
+    - model_pipeline_v1
+    - global_dashboard
+    - monitoring
+    - cost_tracking
+    - auto_doc
+
+
+llm_guided_research:
+  title: "LLM-guided research automation (10% paper→implementation success)"
+  type: epic
+  status: planned
+  owners: [rjpower, dlwh]
+  target_date: "2026-12-31"
+  labels: [infra, infra2026, automation, agent_friendly]
+  description: |
+    End-of-2026 goal: a frontier model can take a paper and, with >10% likelihood, implement and validate
+    the idea using the Marin codebase with minimal/no supervision.
+
+    This implies:
+    - strong scaffolding docs and discoverability
+    - vertical end-to-end examples at multiple scales
+    - programmatic visibility into execution (no SSH required)
+    - robust alerting + automatic termination / recovery
+    - ability to scale from tiny to large models without rewriting user code
+  dependencies:
+    - model_pipeline
+    - staged_validation
+    - robust_alerting
+    - auto_doc
+    - cli_tools
+    - cli_logging
+
+devops_automation:
+  title: "DevOps automation: rebuild/refresh clusters on cadence"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  labels: [infra, infra2026, devops]
+  description: |
+    Make cluster provisioning, updates, and refreshes routine and reproducible rather than ad-hoc.
+
+    Goals:
+    - reduce “it broke again” incidents
+    - keep package caches warm and environments consistent
+    - keep cluster launch/playbooks fresh and documented
+  dependencies:
+
+
+fray:
+  title: "Fray (Ray abstraction / migration layer)"
+  type: epic
+  status: planned
+  labels: [infra, infra2026]
+  description: |
+    Backend abstraction that retains a Ray-like interface while we migrate the underlying execution and
+    cluster management system away from Ray.
+
+
+resource_manager:
+  title: "Resource manager (scheduler-facing API + accounting)"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, scheduling]
+  description: |
+    Provide a backend-neutral resource management layer to:
+    - accept user/job resource requests
+    - schedule / allocate resources fairly
+    - track quotas/credits and usage over time
+
+    This should integrate with the Fluster direction where relevant.
+  dependencies:
+    - fluster_scheduler_mvp
+
+
+cluster_manager:
+  title: "Cluster manager: manage multi-tenant cluster resources"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  labels: [infra, infra2026, cluster]
+  description: |
+    Replace Ray’s cluster management with a system that supports multi-tenancy and robust scheduling.
+
+    Wishlist:
+    - gang scheduling and slice-aware placement
+    - fair sharing / credit system
+    - job isolation (no shared Python env surprise)
+    - good monitoring + dashboard + programmatic API
+    - robust preemptible support (auto-restart and recovery)
+
+    Overlaps with Fluster: this should either be Fluster itself, or share components with it.
+  dependencies:
+    - cluster_manager_v0
+    - cluster_manager_v1
+
+
+cluster_manager_v0:
+  title: "Cluster manager v0: stop using Ray for cluster lifecycle"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  labels: [infra, infra2026, cluster]
+  description: |
+    First milestone: replace Ray cluster lifecycle with an alternative (e.g. Monarch + Slurm/K8s),
+    update scripts and docs, and ensure jobs can launch reliably.
+
+    Include basic log collection so failures are visible without SSH.
+  dependencies:
+    - devops_automation
+    - dataset_processing
+    - fluster_design_doc
+    - fluster_scheduler_mvp
+
+
+cluster_manager_v1:
+  title: "Cluster manager v1: multi-region scheduling + visibility + fair sharing"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  labels: [infra, infra2026, cluster]
+  description: |
+    Expand v0 with multi-region scheduling, per-user/per-job dashboards, and a credit/quota system.
+  dependencies:
+    - cluster_manager_v0
+
+
+global_cluster_v0:
+  title: "Global cluster v0: schedule to first available cluster"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, cluster]
+  description: |
+    Allow a job to run on any available cluster (first-fit), without moving it once placed.
+
+    If the chosen cluster loses capacity, the job waits until resources return (no repositioning yet).
+  dependencies:
+    - region_caching_fs
+    - resource_manager
+
+
+global_cluster_v1:
+  title: "Global cluster v1: reposition stalled jobs across clusters"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, cluster]
+  description: |
+    Add cost/benefit awareness to global scheduling:
+    - detect stalled jobs
+    - terminate and reposition to better resources
+    - prefer cheaper capacity when appropriate
+  dependencies:
+    - global_cluster_v0
+
+
+global_dashboard:
+  title: "Global dashboard: see what we're running, where"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    A single view to answer:
+    - what jobs/workers are running on which clusters
+    - what is queued and why it’s waiting
+    - (for pipelines) what step is blocked on which dependency
+    - where datasets live (region/cache state)
+  dependencies:
+    - global_cluster_v0
+    - cluster_manager
+    - region_caching_fs
+
+
+multi_slice_training:
+  title: "Multi-slice training: scale jobs up/down with available slices"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, training]
+  description: |
+    Flex multislice already kind of exists, but we need to test it more and improve robustness.
+  dependencies:
+    - resource_manager
+    - aot_compilation
+    - batch_size_calc
+
+
+region_caching_fs:
+  title: "Region caching filesystem: move data to where we train"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, data]
+  description: |
+    Provide filesystem-level or fsspec-level support so checkpoints and datasets are staged into the region
+    where compute runs, with clear cost tradeoffs and documentation.
+
+    This should:
+    - hide cross-region latency/egress surprises
+    - support automatic caching and/or replication policies
+    - integrate cleanly into existing fsspec usage
+
+
+dataset_processing:
+  title: "Dataset processing: scalable preprocessing beyond Ray"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, data_pipeline]
+  description: |
+    Make large dataset preprocessing and transformation robust and scalable even as we migrate off Ray.
+
+    Likely work:
+    - evaluate Beam/Dataflow tradeoffs (cost, capability, shuffles)
+    - preserve good current properties (incremental processing, preemptible usage)
+    - ensure cleanup and retries are reliable
+  dependencies:
+    - fray
+
+
+data_validation:
+  title: "Data validation: quality checks and pipeline correctness"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, data_pipeline]
+  description: |
+    Validate dataset quality and detect pipeline correctness issues before training.
+
+    Examples:
+    - schema and invariants for structured data
+    - corrupted/empty/encoding checks
+    - distribution drift and sampling sanity checks
+    - dedupe verification and token count statistics
+    - generate human/agent-readable reports and fail fast when needed
+  dependencies:
+    - dataset_processing
+
+model_loading_without_hf:
+  title: "Model loading without HuggingFace dependency"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, modeling, reliability, levanter]
+  description: |
+    Make it possible to build/train/eval without touching HuggingFace services.
+
+    Goals:
+    - remove “HF is down” as a training failure mode
+    - clarify separation between internal formats and HF compatibility
+    - avoid implicit network requests during checkpoint/tokenizer loading
+
+
+dependency_manager:
+  title: "Dependency manager: experiment dependency graphs + status queries"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, developer_experience, executor]
+  description: |
+    Improve experiment dependency management (building on Executor) so we can:
+    - visualize the dependency graph
+    - see status and failure reasons programmatically
+    - support agent tooling to query and repair experiment state
+  dependencies:
+    - visualize_executor_graph
+    - cli_tools
+
+
+visualize_executor_graph:
+  title: "Visualize Executor dependency graph"
+  type: task
+  status: planned
+  labels: [infra, infra2026, developer_experience]
+  description: |
+    Provide a visualization of the Executor dependency graph for a given experiment,
+    showing step status, failures, and dependencies.
+
+
+experiments_outside_marin:
+  title: "Experiments outside Marin: develop with Marin without forking"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, developer_experience]
+  description: |
+    Support a workflow where users build experiments using Marin as a dependency, without landing every
+    experiment inside the Marin repo.
+  dependencies:
+    - cluster_manager
+    - dependency_manager
+
+
+aot_compilation:
+  title: "AOT compilation as a pipeline step"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, performance]
+  description: |
+    Make compilation a first-class pipeline step so expensive accelerators aren’t stranded waiting for XLA.
+
+    Goals:
+    - fail fast on OOM/HBM problems via AOT compile using an “abstract mesh”
+    - cache compile artifacts and reuse them in the subsequent training job
+    - integrate into Executor / standard training recipes
+
+
+batch_size_calc:
+  title: "Batch size calculator (fit prediction + micro-batch auto-choice)"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, performance]
+  description: |
+    Automate batch-size decisions, especially on TPUs where padding can cause large memory blowups.
+
+    Intended workflow:
+    - user picks effective batch size
+    - system picks micro-batch size that fits (based on compilation/estimation)
+    - cache results between runs
+
+  dependencies:
+    - aot_compilation
+
+
+test_cluster:
+  title: "Test cluster: run accelerator regression tests regularly"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, testing]
+  description: |
+    Run representative training/inference/RL workloads on real accelerators routinely (not just unit tests),
+    and wire results into CI/alerts.
+  dependencies:
+    - cluster_manager_v0
+
+
+test_sharding:
+  title: "Test sharding: run only relevant accelerator tests per PR"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, testing]
+  description: |
+    Avoid running every expensive test for every PR by:
+    - sharding test suites by component (or file change)
+    - optionally using an LLM to suggest relevant tests
+  dependencies:
+
+
+levanter_inference:
+  title: "Levanter inference (service + evaluation hooks)"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, inference]
+  description: |
+    Dependency anchor for inference serving and evaluation integration used by continuous eval and pipelines.
+
+
+continuous_eval:
+  title: "Continuous eval: periodic eval during training + alerts"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, evals]
+  description: |
+    Periodically evaluate models during training (both qualitative samples and benchmark evals) and alert on:
+    - regressions
+    - garbage output / stuck behavior
+    - unexpected performance drops
+  dependencies:
+    - levanter_inference
+
+
+staged_validation:
+  title: "Staged validation: tiny→small→large vertical examples"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, testing, agent_friendly]
+  description: |
+    Provide staged, vertical examples that progress from small to large models when the previous stage
+    succeeds past a given target. This supports both human and agent-driven iteration.
+  dependencies:
+    - model_pipeline_v0
+
+
+robust_alerting:
+  title: "Robust alerting beyond W&B defaults"
+  type: task
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    Improve alerting reliability and richness (crash detection, soft alerts, and instrumentation checks),
+    avoiding "alerts silently stopped" failure modes.
+  dependencies:
+    - monitoring
+    - alerting
+
+
+cli_tools:
+  title: "CLI tools for pipeline/job introspection"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, developer_experience, agent_friendly]
+  description: |
+    Provide a stable CLI surface to query:
+    - running jobs and where they’re scheduled
+    - pipeline step status and failures
+    - dataset locations and cache state
+    so both humans and agents can operate the system without SSH.
+    Outputs should be structured (JSON-friendly) for tooling/agent use, with a human-readable view too.
+  dependencies:
+    - cluster_manager_v0
+
+
+cli_logging:
+  title: "Structured CLI/logging for machine-readable failures"
+  type: task
+  status: planned
+  labels: [infra, infra2026, developer_experience, agent_friendly]
+  description: |
+    Standardize logging/events so failures are easy for tools (including agents) to detect and diagnose.
+  dependencies:
+    - monitoring
+
+
+sft:
+  title: "SFT pipeline"
+  type: epic
+  status: planned
+  labels: [posttraining, sft, infra2026]
+  description: |
+    End-to-end supervised fine-tuning pipeline (data, training, evaluation, and reproducible recipes).
+  dependencies:
+    - sft_existing_datasets_models
+    - sft_synthetic_datasets
+
+
+auto_sft_augmentation:
+  title: "Auto SFT augmentation (bootstrap from frontier traces)"
+  type: epic
+  status: planned
+  labels: [posttraining, sft, synthetic_data, infra2026]
+  description: |
+    Automatically build stronger SFT data by acquiring traces from strong models and using them as
+    bootstrapping baselines (especially for RL problem sets).
+  dependencies:
+    - sft
+
+
+rl:
+  title: "RL pipeline"
+  type: epic
+  status: planned
+  labels: [rl, infra2026]
+  description: |
+    End-to-end RL pipeline support (envs, grading, curricula, monitoring, and scalable execution).
+  dependencies:
+    - scalable_rl_framework
+    - rl_recipe
+    - full_rl_environments
+    - frontier_evals_wired
+
+
+rl_environments:
+  title: "RL environments: make it easy to add/test new envs"
+  type: epic
+  status: planned
+  labels: [rl, environments, infra2026]
+  description: |
+    Support a wide range of standard RL environments and make it easy to add and test new ones locally
+    and at scale.
+  dependencies:
+    - full_rl_environments
+
+
+rl_rubrics:
+  title: "RL rubrics: composable reward/grading components"
+  type: epic
+  status: planned
+  labels: [rl, infra2026]
+  description: |
+    Introduce shared, composable grading “rubrics” so reward computation can be reused across environments
+    (e.g. thinking tokens, non-verifiable rewards, shared anti-cheating checks).
+  dependencies:
+    - scalable_rl_framework
+
+
+cluster_alerts:
+  title: "Cluster alerts: surface failures and soft alerts programmatically"
+  type: task
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    Provide a consistent “alerts” surface (API + CLI + optional notifications) for job/pipeline failures and
+    important warnings, so users/agents don’t need to poll dashboards.
+  dependencies:
+    - alerting
+
+
+rl_progress_alerts:
+  title: "RL progress alerts: detect when RL has gone off the rails"
+  type: epic
+  status: planned
+  labels: [rl, infra2026, observability]
+  description: |
+    Conservative automatic alerts when RL training is stuck or regressing:
+    - curriculum not progressing
+    - reward spikes/drops
+    - throughput collapses
+    - determinism violations
+  dependencies:
+    - cluster_alerts
+    - rl_observability
+
+
+rl_curriculum:
+  title: "RL curriculum: robustly train any model through RL"
+  type: epic
+  status: planned
+  labels: [rl, infra2026]
+  description: |
+    Curriculum learning support so users specify “what to train on” and the framework handles “when/how long”.
+
+    Includes:
+    - progressive unlocking of environments
+    - staged strategies (e.g. brief SFT/teacher forcing before RL)
+    - monitoring and recovery hooks
+  dependencies:
+    - rl_progress_alerts
+    - rl_multi_env_and_curriculum
+
+
+rl_soft_sft:
+  title: "RL + soft SFT: mix token loss on successful rollouts"
+  type: task
+  status: planned
+  labels: [rl, posttraining, infra2026]
+  description: |
+    Mix RL loss with a token-level next-token loss on successful samples to speed up learning for tasks with
+    binary success criteria, while preserving diversity.
+  dependencies:
+    - rl
+    - rl_curriculum
+
+
+model_pipeline:
+  title: "Model pipeline: pretrain→SFT→RL with automated notification"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, pipeline]
+  description: |
+    End-to-end pipeline where the user defines model + data, and the system runs pretraining + posttraining,
+    providing programmatic status, resumability, and failure visibility.
+  dependencies:
+    - rl
+    - sft
+    - cluster_manager
+    - region_caching_fs
+
+
+model_pipeline_v0:
+  title: "Model pipeline v0: stitch existing pieces with monitoring"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, pipeline]
+  description: |
+    First vertical pipeline built from existing components (ExecutorSteps), plus basic robustness/monitoring
+    (timeouts, progress visibility).
+
+    Reference: Marino-chat (#1775).
+  dependencies:
+    - sft
+    - rl
+    - continuous_eval
+
+
+model_pipeline_v1:
+  title: "Model pipeline v1: daily runs + global resources"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, pipeline]
+  description: |
+    Schedule the pipeline regularly (cron-style), find resources across the fleet, and transition between
+    stages robustly in the presence of preemption and capacity variability.
+  dependencies:
+    - model_pipeline_v0
+    - global_cluster_v1
+    - region_caching_fs
+    - alerting
+    - multi_slice_training
+
+
+monitoring:
+  title: "Monitoring: centralized metrics + logs + APIs + dashboard"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    Centralized monitoring across training, RL, and infra:
+    - metrics (loss, throughput, HBM, compilation time)
+    - system metrics (CPU/mem/network/accelerator)
+    - job lifecycle events
+    - log aggregation and search
+    - APIs for programmatic access and automation
+    - historical storage for performance analysis
+  dependencies:
+    - cluster_manager
+
+
+alerting:
+  title: "Alerting: notify on errors and soft alerts"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, observability]
+  description: |
+    Alerts for important events (task failures, stuck pipelines, suspicious metrics), with API access so tools
+    can query and act on alert state.
+  dependencies:
+    - cluster_manager_v0
+
+
+cost_tracking:
+  title: "Cost tracking: per-job/user/experiment costs across regions"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, cost]
+  description: |
+    Track and optimize infrastructure cost:
+    - real-time per-job/user cost estimates
+    - breakdown by resource type (TPU/GPU/storage/egress)
+    - historical analysis and budgets/alerts
+    - inputs to global scheduler placement decisions
+  dependencies:
+    - monitoring
+    - global_cluster_v0
+
+
+vllm_inference:
+  title: "vLLM inference: TPU support + compatibility tests"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, inference]
+  description: |
+    Make vLLM inference seamless for Marin models and add tests (including multi-host where needed).
+  dependencies:
+    - rl_vllm_rollout_worker
+
+
+auto_doc:
+  title: "Auto-doc: generated documentation + hierarchical index"
+  type: epic
+  status: planned
+  labels: [infra, infra2026, docs, agent_friendly]
+  description: |
+    Generate and maintain always-current documentation for humans and agents:
+    - API docs from docstrings
+    - hierarchical module index by functionality
+    - end-to-end examples and troubleshooting guides
+    - publish in CI
+  dependencies:
+    - test_sharding
+
+
+experiment_updates_bot:
+  title: "Experiment updates bot: GitHub → Discord (and optional Discord → GitHub summaries)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, developer_experience, process, automation, newbie_friendly, agent_friendly]
+  description: |
+    We want GitHub issues to be the single source of truth for experiment results and discussion, but in
+    practice people often post updates only in Discord.
+
+    Build a bot/workflow that makes this easy by:
+    - automatically mirroring key GitHub issue updates into a Discord channel/thread
+    - (optional) summarizing Discord discussion back into GitHub as a comment or a draft PR comment
+
+    The design goal is to remove the “do I have to update two places?” friction while keeping the canonical
+    record in GitHub.
+  definition_of_done: |
+    - GitHub → Discord mirroring is enabled for a configured set of repos/issues/labels and is low-noise.
+    - The bot posts context-rich updates (issue title + link + who + what changed) and threads updates per issue.
+    - There is a documented workflow for enabling/disabling mirroring per issue (e.g. label or checkbox).
+    - (Optional) A summarizer can propose GitHub comments from Discord, with a human-in-the-loop approval step.
+  dependencies:
+    - cli_logging
+    - alerting
+    - auto_doc
+
+
+experiment_updates_github_to_discord:
+  title: "Bot: mirror GitHub issue updates to Discord"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, developer_experience, process, automation, newbie_friendly, agent_friendly]
+  description: |
+    Implement the minimal, high-value integration: when an issue changes in GitHub, post a message to Discord.
+
+    Suggested events:
+    - issue opened/closed/reopened
+    - labels changed (especially experiment/result labels)
+    - new comments (with a short excerpt)
+    - status-style edits (e.g. checklists, title edits)
+
+    Suggested routing:
+    - one Discord channel for “experiment-updates”
+    - each issue maps to a dedicated Discord thread (created on first event)
+  definition_of_done: |
+    - Uses a GitHub App/webhook (or Actions) to detect events and post to Discord.
+    - Includes basic dedupe so edits/bot loops don’t spam.
+    - Includes a simple allowlist mechanism (label-based or explicit list) to keep noise under control.
+    - Includes docs for setup and local testing.
+  dependencies:
+    - experiment_updates_bot
+
+
+experiment_updates_discord_to_github_summaries:
+  title: "Bot: propose Discord → GitHub summaries (human-approved)"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, developer_experience, process, automation, agent_friendly]
+  description: |
+    Optional “round-trip” improvement: periodically summarize Discord discussion back into the canonical
+    GitHub issue.
+
+    Key requirement: avoid surprising writes. Prefer:
+    - bot posts a proposed summary as a *draft* (e.g. in Discord) and a human clicks approve
+    - or bot opens a PR / creates a GitHub comment in “pending” state
+  definition_of_done: |
+    - There is a safe human-in-the-loop workflow to publish summaries into GitHub issues.
+    - Summaries include: decisions, current state, next steps, links to relevant logs/PRs.
+    - It’s easy to disable per issue/thread if it’s not useful.
+  dependencies:
+    - experiment_updates_bot
+
+
+experiment_structure_overhaul:
+  title: "Gruggify experiment structure (taxonomy + templates + migration plan)"
+  type: epic
+  status: planned
+  owners: [rjpower]
+  issue: null
+  labels: [process, infra, infra2026, developer_experience, agent_friendly, newbie_friendly]
+  description: |
+    Establish a new, simpler, more legible structure for how we organize “experiments” vs “dependencies”
+    vs “recipes/templates/ferries” vs “artifacts” in Marin.
+
+    Motivation:
+    - Experiments should test a hypothesis and be easy to write/read/modify (often as notebooks).
+    - Dependencies should be reusable producers of artifacts (datasets, model checkpoints, sweeps) that can be
+      resolved from an artifact without necessarily re-running the original code.
+    - Prefer fewer magic defaults/abstractions; favor copy-pasteable templates that make “how it works” obvious.
+    - Improve interactive control (run pieces locally / in notebooks) vs only async background jobs.
+
+    This is the meta-issue to define the directory layout/taxonomy and the migration strategy.
+  definition_of_done: |
+    - We identify ~10 archetypes of experiments we want to run (optimizer swap, datamix change, etc.).
+    - For each archetype, we draft a notebook-style skeleton that uses the intended APIs.
+    - We write a concrete directory taxonomy for Marin: experiments / ferries / templates / recipes / artifacts /
+      libraries / dependency pipelines (with examples).
+    - We list the minimum required API changes (with owners) to make those notebooks feasible.
+    - We define a migration plan (what moves, what stays, compatibility approach) with incremental milestones.
+  dependencies:
+    - ferry_framework
+    - dependency_manager
+    - cli_tools
+    - auto_doc
