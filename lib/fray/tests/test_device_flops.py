@@ -41,7 +41,7 @@ def test_device_flops(device_type, dtype, flops):
         ("TPU v6 lite", "v6e"),
         ("NVIDIA H100 80GB HBM3", "h100"),
         ("NVIDIA H100-PCIE", "h100-pcie"),
-        ("NVIDIA A100-SXM4-80GB", "a100"),
+        ("NVIDIA A100-SXM4-80GB", "a100-80g"),
         ("NVIDIA A10G", "a10g"),
         ("NVIDIA T4", "t4"),
     ],

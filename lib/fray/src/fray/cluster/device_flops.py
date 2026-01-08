@@ -255,8 +255,10 @@ def jax_device_kind_to_fray_device_type(kind: str) -> str:
         return "h100-pcie"
     if "h200" in kind:
         return "h200"
-    if "a100" in kind:
-        return "a100"
+    if "a100" in kind and "80g" in kind:
+        return "a100-80g"
+    if "a100" in kind and "40g" in kind:
+        return "a100-40g"
     if "a10g" in kind:
         return "a10g"
     if "a10" in kind:
