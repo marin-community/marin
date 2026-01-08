@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import functools
 import gc
 import logging
 import os
@@ -25,7 +24,7 @@ from levanter.compat.hf_checkpoints import HFCompatConfig, save_hf_checkpoint_ca
 from levanter.data.text import LMMixtureDatasetConfig, SingleDatasetLMConfig, UrlSingleDatasetLMConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, compute_next_token_loss
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.jax_utils import parameter_count
@@ -102,7 +101,8 @@ def main(config: TrainLmConfig):
     levanter.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    loss_function = functools.partial(compute_next_token_loss, logsumexp_weight=config.z_loss_weight)
+    def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
+        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
