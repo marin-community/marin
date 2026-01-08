@@ -564,13 +564,22 @@ def fit_scaling_laws(
             idx = (sub.tokens - D_star).abs().argmin()
             nearest_row = sub.iloc[idx]
 
+            # Require params to be present - the 6ND approximation is inaccurate for small models
+            params = nearest_row.get("params")
+            if params is None or pd.isna(params):
+                logger.warning(
+                    f"Missing params for {lab} at {C:.1e} FLOPs - skipping. "
+                    "Ensure runs log parameter_count or have full model config."
+                )
+                continue
+
             minima_records.append(
                 MinimaRecord(
                     label=lab,
                     flops=float(C),
                     optimal_tokens=D_star,
                     loss_at_optimal=loss_opt,
-                    optimal_params=float(nearest_row.get("params") or C / (6 * D_star)),
+                    optimal_params=float(params),
                     batch_size=int(nearest_row["batch_size"]),
                 )
             )
@@ -664,7 +673,7 @@ def transform_metrics_for_isoflop(
             logger.warning(f"Missing metric {metric_key} for run {run_name}")
             continue
 
-        # Get parameter count from summary
+        # Get parameter count from summary (required for accurate scaling analysis)
         params = summary.get(PARAMETER_COUNT_KEY)
         if params is None or pd.isna(params):
             params = None
