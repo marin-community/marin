@@ -234,6 +234,39 @@ def loss_fn(
     labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
     loss_weight = loss_weight.astype(loss_dtype)
 
+    # Prefer tokamax's Mosaic TPU implementation when possible: it uses a custom kernel and custom VJP,
+    # avoiding the large (tokens x vocab_block) intermediates that can cause TPU HBM OOMs.
+    #
+    # Limitations:
+    # - tokamax returns a scalar (sum/mean); we only use it when `reduction` is not "none".
+    # - tokamax does not currently support arbitrary per-token weights; we only support the common
+    #   "all ones except last position" case via slicing off the final position.
+    if (
+        jax.default_backend() == "tpu"
+        and reduction in {"mean", "sum"}
+        and (logsumexp_weight is None or logsumexp_weight == 0.0)
+    ):
+        try:
+            import tokamax
+        except ImportError:
+            tokamax = None  # type: ignore[assignment]
+
+        if tokamax is not None:
+            # Next-token: predict token[t+1] from hidden[t]. Drop the final position.
+            x = hidden[:, :-1, :].reshape((-1, hidden.shape[-1]))
+            y = token_ids[:, 1:].reshape((-1,)).astype(jnp.int32)
+
+            # NOTE: this ignores `loss_weight` except for the last-position convention.
+            # If your input uses additional masking (padding/ignore_id/etc), use `reduction="none"`
+            # (or a nonzero `logsumexp_weight`) to force the weighted blockwise fallback.
+            return tokamax.linear_softmax_cross_entropy_loss(
+                x,
+                y,
+                params.output_proj,
+                reduction=reduction,  # type: ignore[arg-type]
+                implementation="mosaic_tpu",
+            )
+
     block_size = cfg.cross_entropy_block_size
     # On TPU, the (tokens_per_shard x vocab_block) matmul can be enormous for large batches/seq lens.
     # Choose a conservative upper bound to avoid compile-time HBM blowups.
