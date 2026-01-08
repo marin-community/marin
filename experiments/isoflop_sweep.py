@@ -15,22 +15,12 @@
 """Generate ISOFlop sweep steps for varying model sizes on a target dataset.
 
 This script constructs `ExecutorStep` objects that train models of different
-sizes while keeping the total training FLOPs roughly constant. It is intended
-as a lightweight scaffold for ISOFlop scaling law experiments.
-
-ExecutorSteps are created directly in this experiment file, following the pattern
-of isolating executor step creation to experiments. The library provides:
-- `generate_isoflop_train_args()`: Computes model/optimizer configs for each sweep point
-- `ScalingRecipe`: Named hyperparameter bundle with architecture and optimizer settings
-
-This file uses those to create the actual ExecutorSteps.
+sizes while keeping the total training FLOPs roughly constant.
 """
 
 from dataclasses import replace
 
 from levanter.data.text import LMMixtureDatasetConfig
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
-from levanter.models.qwen import Qwen3Config
 
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import EvalTaskConfig
@@ -46,34 +36,13 @@ from marin.processing.tokenize import get_vocab_size_for_tokenizer, lm_mixture_d
 from marin.scaling_laws import (
     DEFAULT_BUDGETS,
     CandidateConfig,
+    ScalingRecipe,
     generate_isoflop_train_args,
+    pick_v5p_type,
 )
-from marin.scaling_laws import ScalingRecipe
-
-# --- Scaling Recipe ---
-# This recipe encapsulates all model-specific hyperparameters for Marin scaling experiments.
-# Other experiments can define their own recipes by instantiating ScalingRecipe with different values.
 
 MARIN_2025_RECIPE = ScalingRecipe(name="marin-2025")
-"""Default Marin scaling recipe based on 2025 best practices."""
-
-
-def build_qwen3_from_candidate(candidate: CandidateConfig, seq_len: int = 4096) -> Qwen3Config:
-    """Build a Qwen3Config from a CandidateConfig.
-
-    This is the experiment-level helper for constructing model configs.
-    Different experiments can use different model types (LlamaConfig, etc.)
-    by implementing their own builder function.
-    """
-    return Qwen3Config(
-        hidden_dim=candidate.hidden_size,
-        intermediate_dim=candidate.intermediate_dim,
-        num_layers=candidate.num_layers,
-        num_heads=candidate.num_heads,
-        num_kv_heads=candidate.num_kv_heads,
-        max_seq_len=seq_len,
-        rope=Llama3RotaryEmbeddingsConfig(),
-    )
+"""Default Marin scaling recipe."""
 
 
 def create_isoflop_sweep_steps(
@@ -131,16 +100,20 @@ def create_isoflop_sweep_steps(
 
     # Create ExecutorSteps for each candidate configuration
     for args in train_args_list:
-        # Build model config from candidate (experiment controls model type)
-        model_config = build_qwen3_from_candidate(args.candidate, seq_len)
+        candidate = args.candidate
+
+        # Build model and optimizer configs using the recipe
+        model_config = recipe.build_model_config(candidate.target_params, vocab_size, seq_len)
+        optimizer_config = recipe.build_optimizer_config(candidate, vocab_size)
+        tpu_type = pick_v5p_type(candidate, vocab_size, seq_len, recipe)
 
         train_cfg = replace(
             base_train_config,
-            train_batch_size=args.candidate.batch_size,
-            learning_rate=args.candidate.learning_rate,
-            num_train_steps=args.candidate.train_steps,
-            resources=ResourceConfig.with_tpu(args.tpu_type),
-            optimizer_config=args.optimizer_config,
+            train_batch_size=candidate.batch_size,
+            learning_rate=optimizer_config.learning_rate,
+            num_train_steps=candidate.train_steps,
+            resources=ResourceConfig.with_tpu(tpu_type),
+            optimizer_config=optimizer_config,
         )
 
         # Create training step
@@ -156,7 +129,7 @@ def create_isoflop_sweep_steps(
         # Pin to static output path for checkpoint reuse
         train_step = train_step.with_output_path(args.output_path)
         train_steps.append(train_step)
-        candidates.append(args.candidate)
+        candidates.append(candidate)
 
         # Create evaluation step if eval tasks specified
         if eval_tasks:
@@ -197,10 +170,6 @@ dolma3_mix = lm_mixture_data_config(
     num_validation_sequences={"dolma3_mix-150B-1025": 1024},
 )
 
-
-# --- Scaling Suites ---
-# Each suite explicitly specifies the recipe for visibility.
-# ExecutorSteps are created by create_isoflop_sweep_steps() in this file.
 
 MARIN_SCALING_SUITES = {
     "nemotron": create_isoflop_sweep_steps(

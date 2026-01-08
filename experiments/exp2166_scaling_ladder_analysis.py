@@ -21,12 +21,6 @@ The scaling ladder:
 1. Fits scaling laws from IsoFLOP sweep data to find compute-optimal configurations
 2. Generates visualization plots (isoflop curves and scaling fit plots)
 3. Optionally trains compute-optimal models at larger target budgets
-
-The analysis steps depend on completed isoflop training runs from isoflop_sweep.py.
-Once complete, results are saved to the output path and uploaded to WandB.
-
-This experiment creates ExecutorSteps directly rather than using library factory
-functions, following the pattern of isolating executor step creation to experiments.
 """
 
 from experiments.defaults import default_validation_sets

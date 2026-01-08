@@ -14,36 +14,19 @@
 
 """Scaling recipes: model-specific hyperparameter bundles for scaling law experiments.
 
-A ScalingRecipe encapsulates ALL model-specific decisions for scaling experiments:
-- Architecture formula (how to compute num_layers from hidden_size)
+A ScalingRecipe encapsulates model-specific decisions for scaling experiments:
+- Architecture formula (how to compute architecture from target param count)
 - Architecture ratios (MLP width, head size)
 - Model config building (returns LlamaConfig or subclass)
 - Learning rate and optimizer hyperparameters
 - Search bounds and constraints for isoflop sweeps
 - Candidate generation for isoflop sweeps
-
-The scaling_laws module provides model-agnostic utilities (FLOP math, scaling law
-fitting), while the recipe provides the model-specific "driver" that uses them.
-
-Experiments should define their own recipe instances:
-
-    from marin.scaling_laws import ScalingRecipe
-
-    MY_RECIPE = ScalingRecipe(name="my-experiment")
-
-    # Generate candidates for a FLOP budget
-    for candidate in MY_RECIPE.candidate_configs(budget=1e18, vocab_size=128256):
-        print(candidate)
-
-    # Build model and optimizer configs
-    model_config = MY_RECIPE.build_model_config(hidden_size=1024)
-    optimizer_config = MY_RECIPE.build_optimizer_config(lr=0.001, beta2=0.95)
 """
 
 import math
 import os
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
@@ -67,13 +50,10 @@ DEFAULT_TOKENIZER = "stanford-crfm/marin-tokenizer"
 
 
 def _round_to_power_of_two(x: float) -> int:
-    """Round to the nearest power of 2."""
-    if x <= 0:
+    """Round x UP to the nearest power of 2."""
+    if x <= 1:
         return 1
-    log2_x = math.log2(x)
-    lower = 2 ** int(log2_x)
-    upper = 2 ** (int(log2_x) + 1)
-    return lower if (x - lower) < (upper - x) else upper
+    return 2 ** math.ceil(math.log2(x))
 
 
 @dataclass(frozen=True)
@@ -189,20 +169,76 @@ class ScalingRecipe:
             return self.large_budget_step_size
         return self.small_budget_step_size
 
+    # --- Parameter count estimation ---
+
+    def compute_params_for_hidden_size(self, hidden_size: int, vocab_size: int) -> int:
+        """Compute approximate parameter count for a given hidden size.
+
+        This uses the standard transformer parameter formula for Llama/Qwen architectures.
+        """
+        num_layers = self.compute_num_layers(hidden_size)
+        intermediate_dim = hidden_size * self.mlp_ratio
+        n_heads = max(1, hidden_size // self.hidden_head_ratio)
+        head_size = hidden_size // n_heads
+
+        # Embeddings
+        embed_params = vocab_size * hidden_size * 2  # input + output embeddings
+
+        # Per-layer params: attention + mlp + layer norms
+        q_proj = hidden_size * head_size * n_heads
+        kv_proj = 2 * hidden_size * head_size * n_heads  # K and V
+        o_proj = head_size * n_heads * hidden_size
+        attn_params = q_proj + kv_proj + o_proj
+
+        mlp_params = 3 * hidden_size * intermediate_dim  # gate, up, down
+        norm_params = 2 * hidden_size  # 2 layer norms per layer
+
+        layer_params = attn_params + mlp_params + norm_params
+        total_layer_params = num_layers * layer_params
+
+        # Final layer norm
+        final_norm = hidden_size
+
+        return embed_params + total_layer_params + final_norm
+
+    def hidden_size_for_params(self, target_params: int, vocab_size: int) -> int:
+        """Find the hidden size that gives approximately target_params.
+
+        Uses binary search over valid hidden sizes.
+        """
+        min_hidden = 2**self.min_hidden_pow
+        max_hidden = 2**self.max_hidden_pow
+
+        best_hidden = min_hidden
+        best_diff = abs(self.compute_params_for_hidden_size(min_hidden, vocab_size) - target_params)
+
+        # Search in steps of 64 for efficiency
+        for hidden_size in range(min_hidden, max_hidden + 1, 64):
+            params = self.compute_params_for_hidden_size(hidden_size, vocab_size)
+            diff = abs(params - target_params)
+            if diff < best_diff:
+                best_diff = diff
+                best_hidden = hidden_size
+
+        return best_hidden
+
     # --- Model config building ---
 
-    def build_model_config(self, hidden_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
-        """Build a model config from hidden_size using this recipe's architecture formula.
+    def build_model_config(self, target_params: int, vocab_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
+        """Build a model config for a target parameter count.
+
+        The recipe determines the architecture (hidden_size, num_layers, etc.)
+        that achieves approximately target_params parameters.
 
         Args:
-            hidden_size: Model hidden dimension.
+            target_params: Target parameter count.
+            vocab_size: Vocabulary size.
             seq_len: Maximum sequence length.
 
         Returns:
             A LlamaConfig (or subclass) with architecture determined by this recipe.
         """
-        # TODO: Currently returns Qwen3Config which inherits from LlamaConfig.
-        # This could be parameterized to return different model types.
+        hidden_size = self.hidden_size_for_params(target_params, vocab_size)
         num_layers = self.compute_num_layers(hidden_size)
         intermediate_dim = hidden_size * self.mlp_ratio
         n_heads = max(1, hidden_size // self.hidden_head_ratio)
@@ -217,16 +253,41 @@ class ScalingRecipe:
             rope=Llama3RotaryEmbeddingsConfig(),
         )
 
-    def build_optimizer_config(self, learning_rate: float, beta2: float) -> OptimizerConfig:
-        """Build optimizer config using this recipe's hyperparameters.
+    def _build_model_config_from_hidden_size(self, hidden_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
+        """Internal: build model config from hidden_size directly.
+
+        Used during candidate generation when we're iterating over hidden sizes.
+        """
+        num_layers = self.compute_num_layers(hidden_size)
+        intermediate_dim = hidden_size * self.mlp_ratio
+        n_heads = max(1, hidden_size // self.hidden_head_ratio)
+
+        return Qwen3Config(
+            hidden_dim=hidden_size,
+            intermediate_dim=intermediate_dim,
+            num_layers=num_layers,
+            num_heads=n_heads,
+            num_kv_heads=n_heads,
+            max_seq_len=seq_len,
+            rope=Llama3RotaryEmbeddingsConfig(),
+        )
+
+    def build_optimizer_config(self, candidate: "CandidateConfig", vocab_size: int) -> OptimizerConfig:
+        """Build optimizer config for a candidate.
+
+        Computes learning rate and beta2 from the candidate's batch_size and target_params.
 
         Args:
-            learning_rate: Learning rate.
-            beta2: Adam beta2.
+            candidate: Model-agnostic candidate config.
+            vocab_size: Vocabulary size (needed to determine hidden_size).
 
         Returns:
             An OptimizerConfig with settings from this recipe.
         """
+        hidden_size = self.hidden_size_for_params(candidate.target_params, vocab_size)
+        learning_rate = self.compute_learning_rate(candidate.batch_size, hidden_size)
+        beta2 = self.compute_beta2(candidate.batch_size)
+
         return CautiousConfig(
             learning_rate=learning_rate,
             weight_decay=self.weight_decay,
@@ -251,12 +312,14 @@ class ScalingRecipe:
         steps_per_run: int = DEFAULT_STEPS_PER_RUN,
         flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
     ) -> "Iterator[CandidateConfig]":
-        """Yield candidate model configurations within the FLOP budget.
+        """Yield model-agnostic candidate configurations within the FLOP budget.
 
-        This method encapsulates the model-specific search logic:
-        - Iterates over hidden_sizes using the recipe's search bounds
-        - Builds model configs using the recipe's architecture formula
-        - Applies the recipe's LR and batch size constraints
+        This method encapsulates the model-specific search logic internally but
+        returns model-agnostic CandidateConfig objects containing only:
+        batch_size, train_steps, tokens, target_params, flops_budget.
+
+        The caller uses recipe.build_model_config() and recipe.build_optimizer_config()
+        to convert these to model-specific configs.
 
         Args:
             budget: Target FLOP budget.
@@ -266,7 +329,7 @@ class ScalingRecipe:
             flop_tolerance: Tolerance for matching FLOP budget (relative error).
 
         Yields:
-            CandidateConfig objects for each valid configuration.
+            Model-agnostic CandidateConfig objects for each valid configuration.
         """
         # Import here to avoid circular dependency
         from marin.scaling_laws.isoflop_analysis import CandidateConfig, solve_for_batch_size, solve_for_train_steps
@@ -276,49 +339,36 @@ class ScalingRecipe:
         max_hidden = 2**self.max_hidden_pow
 
         for hidden_size in range(min_hidden, max_hidden + 1, step_size):
-            # Build model config using recipe's architecture formula
-            model_config = self.build_model_config(hidden_size, seq_len)
+            model_config = self._build_model_config_from_hidden_size(hidden_size, seq_len)
 
-            # Use model-agnostic FLOP utilities to solve for batch/steps
-            # TODO: LlamaConfig.flops_per_token() provides the FLOP calculation
             batch_exact = solve_for_batch_size(model_config, vocab_size, budget, steps_per_run, seq_len)
             batch_size = _round_to_power_of_two(batch_exact)
 
-            # Apply LR constraint (recipe-specific)
+            # Apply LR constraint
             lr = self.compute_learning_rate(batch_size, hidden_size)
             while lr > self.max_learning_rate:
                 batch_size //= 2
                 lr = self.compute_learning_rate(batch_size, hidden_size)
 
-            # Apply min batch constraint (recipe-specific)
             if batch_size < self.min_batch_size:
                 continue
 
-            # Solve for steps to hit budget with chosen batch
             train_steps = round(solve_for_train_steps(model_config, vocab_size, budget, batch_size, seq_len))
 
             # Verify we hit the budget within tolerance
             # Training FLOPs = 3 * flops_per_token * batch * steps * seq_len
-            # The 3x multiplier accounts for forward (1x) + backward (2x) pass
             achieved_flops = 3 * model_config.flops_per_token(vocab_size, seq_len) * batch_size * train_steps * seq_len
             if abs(achieved_flops - budget) / budget > flop_tolerance:
                 continue
 
-            # Compute optimizer hyperparameters (recipe-specific)
-            beta2 = self.compute_beta2(batch_size)
             tokens = batch_size * train_steps * seq_len
+            target_params = self.compute_params_for_hidden_size(hidden_size, vocab_size)
 
             yield CandidateConfig(
-                hidden_size=hidden_size,
-                intermediate_dim=model_config.intermediate_dim,
-                num_layers=model_config.num_layers,
-                num_heads=model_config.num_heads,
-                num_kv_heads=model_config.num_kv_heads,
                 batch_size=batch_size,
                 train_steps=train_steps,
-                learning_rate=lr,
-                beta2=beta2,
                 tokens=tokens,
+                target_params=target_params,
                 flops_budget=budget,
             )
 
@@ -330,12 +380,12 @@ class ScalingRecipe:
         seq_len: int = DEFAULT_SEQ_LEN,
         steps_per_run: int = DEFAULT_STEPS_PER_RUN,
         flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
-        base_optimizer_config: OptimizerConfig | None = None,
     ) -> "list[IsoFlopTrainArgs]":
-        """Generate training arguments for each candidate in an isoflop sweep.
+        """Generate model-agnostic training arguments for each candidate in an isoflop sweep.
 
-        This method generates all the arguments needed to set up training runs for
-        each candidate configuration in the sweep.
+        Returns IsoFlopTrainArgs containing the model-agnostic CandidateConfig plus
+        naming information. The caller uses recipe.build_model_config() and
+        recipe.build_optimizer_config() to get model-specific configs.
 
         Args:
             budgets: Sequence of FLOP budgets to generate configs for.
@@ -344,57 +394,27 @@ class ScalingRecipe:
             seq_len: Sequence length for training.
             steps_per_run: Reference step count for FLOP budget calculation.
             flop_tolerance: Tolerance for matching FLOP budget.
-            base_optimizer_config: Base optimizer config to modify. If None, uses recipe defaults.
 
         Returns:
             List of IsoFlopTrainArgs, one per candidate config across all budgets.
         """
-        # Import here to avoid circular dependency
         from marin.scaling_laws.isoflop_analysis import IsoFlopTrainArgs
-        from marin.scaling_laws.tpu_utils import pick_v5p_type
-
-        if base_optimizer_config is None:
-            base_optimizer_config = CautiousConfig(
-                learning_rate=1.0,  # Placeholder, will be overridden
-                weight_decay=self.weight_decay,
-                min_lr_ratio=self.min_lr_ratio,
-                warmup=self.warmup,
-                beta1=self.beta1,
-                beta2=0.98,  # Placeholder, will be overridden
-                epsilon=self.epsilon,
-                max_grad_norm=self.max_grad_norm,
-                adamc_weight_decay=True,
-                lr_schedule=self.lr_schedule,
-                decay=self.decay,
-            )
 
         results: list[IsoFlopTrainArgs] = []
 
         for budget in budgets:
             for candidate in self.candidate_configs(budget, vocab_size, seq_len, steps_per_run, flop_tolerance):
-                # Pick TPU type based on candidate parameters
-                tpu_type = pick_v5p_type(candidate, vocab_size, seq_len)
-
-                # Build optimizer config with candidate-specific LR and beta2
-                optimizer_cfg = replace(
-                    base_optimizer_config,
-                    learning_rate=candidate.learning_rate,
-                    beta2=candidate.beta2,
-                )
-
-                # Generate run name and tags
                 run_name = (
-                    f"isoflop-{budget:.0e}-d{candidate.hidden_size}-"
-                    f"L{candidate.num_layers}-B{candidate.batch_size}-{experiment_name}"
+                    f"isoflop-{budget:.0e}-N{candidate.target_params:.0e}-"
+                    f"B{candidate.batch_size}-{experiment_name}"
                 )
 
                 tags = (
                     f"FLOPs={budget:.1e}",
-                    f"d={candidate.hidden_size}",
-                    f"L={candidate.num_layers}",
+                    f"N={candidate.target_params:.1e}",
                     f"B={candidate.batch_size}",
                     f"steps={candidate.train_steps}",
-                    f"tpu={tpu_type}",
+                    f"tokens={candidate.tokens:.1e}",
                 )
 
                 # Static output path for checkpoint reuse
@@ -403,8 +423,6 @@ class ScalingRecipe:
                 results.append(
                     IsoFlopTrainArgs(
                         candidate=candidate,
-                        optimizer_config=optimizer_cfg,
-                        tpu_type=tpu_type,
                         run_name=run_name,
                         tags=tags,
                         output_path=output_path,
@@ -468,7 +486,7 @@ class ScalingRecipe:
             best = max(candidates, key=lambda c: c.tokens)
 
         logger.info(
-            f"Selected config: d={best.hidden_size}, L={best.num_layers}, "
+            f"Selected config: N={best.target_params:.2e}, "
             f"B={best.batch_size}, tokens={best.tokens:.2e} (optimal: {optimal_tokens:.2e})"
         )
 
