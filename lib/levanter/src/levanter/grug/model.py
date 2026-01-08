@@ -234,6 +234,17 @@ def loss_fn(
     labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
     loss_weight = loss_weight.astype(loss_dtype)
 
+    def _ensure_absl_flags_parsed() -> None:
+        # tokamax uses absl.flags for configuration, and will error if flags haven't been parsed.
+        # In library contexts (e.g. pytest, ray workers) absl flags parsing may not have happened.
+        try:
+            from absl import flags as absl_flags  # type: ignore[import-not-found]
+        except Exception:  # noqa: BLE001
+            return
+
+        if not absl_flags.FLAGS.is_parsed():
+            absl_flags.FLAGS(["levanter_grug"])
+
     # Prefer tokamax's Mosaic TPU implementation when possible: it uses a custom kernel and custom VJP,
     # avoiding the large (tokens x vocab_block) intermediates that can cause TPU HBM OOMs.
     #
@@ -241,17 +252,14 @@ def loss_fn(
     # - tokamax returns a scalar (sum/mean); we only use it when `reduction` is not "none".
     # - tokamax does not currently support arbitrary per-token weights; we only support the common
     #   "all ones except last position" case via slicing off the final position.
-    if (
-        jax.default_backend() == "tpu"
-        and reduction in {"mean", "sum"}
-        and (logsumexp_weight is None or logsumexp_weight == 0.0)
-    ):
+    if reduction in {"mean", "sum"} and (logsumexp_weight is None or logsumexp_weight == 0.0):
         try:
             import tokamax
         except ImportError:
             tokamax = None  # type: ignore[assignment]
 
         if tokamax is not None:
+            _ensure_absl_flags_parsed()
             # Next-token: predict token[t+1] from hidden[t]. Drop the final position.
             x = hidden[:, :-1, :].reshape((-1, hidden.shape[-1]))
             y = token_ids[:, 1:].reshape((-1,)).astype(jnp.int32)
@@ -264,7 +272,7 @@ def loss_fn(
                 y,
                 params.output_proj,
                 reduction=reduction,  # type: ignore[arg-type]
-                implementation="mosaic_tpu",
+                implementation=None,
             )
 
     block_size = cfg.cross_entropy_block_size
