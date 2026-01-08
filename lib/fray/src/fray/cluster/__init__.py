@@ -71,16 +71,21 @@ def _is_running_in_ray_context() -> bool:
         return False
 
 
-def _detect_local_accelerators() -> dict[str, float] | None:
-    """Detect local accelerators (GPUs/TPUs) and return Ray resource dict.
+def _detect_local_accelerators() -> tuple[bool, dict[str, float]]:
+    """Detect local accelerators (GPUs/TPUs).
 
-    Returns None if no accelerators are found, otherwise returns a dict
-    suitable for passing to ray.init(resources=...).
+    Returns a tuple of (has_accelerators, custom_resources).
+    - has_accelerators: True if GPUs or TPUs are detected
+    - custom_resources: Additional Ray custom resources (e.g., accelerator_type)
+
+    Note: We don't include "GPU" in custom_resources because Ray auto-detects GPUs.
+    The num_gpus parameter in ray.remote() uses Ray's built-in GPU tracking.
     """
     import shutil
     import subprocess
 
-    resources: dict[str, float] = {}
+    has_accelerators = False
+    custom_resources: dict[str, float] = {}
 
     # detect GPUs using nvidia-smi
     if shutil.which("nvidia-smi"):
@@ -95,8 +100,8 @@ def _detect_local_accelerators() -> dict[str, float] | None:
                 gpu_names = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
                 gpu_count = len(gpu_names)
                 if gpu_count > 0:
-                    resources["GPU"] = float(gpu_count)
-                    # Try to map GPU name to Ray accelerator type
+                    has_accelerators = True
+                    # Try to map GPU name to Ray accelerator type (as custom resource)
                     gpu_name = gpu_names[0].upper()
                     accel_type = None
                     if "A100" in gpu_name:
@@ -113,7 +118,7 @@ def _detect_local_accelerators() -> dict[str, float] | None:
                         accel_type = "T4"
 
                     if accel_type:
-                        resources[f"accelerator_type:{accel_type}"] = float(gpu_count)
+                        custom_resources[f"accelerator_type:{accel_type}"] = float(gpu_count)
                         logger.info(f"Detected {gpu_count} GPU(s) of type {accel_type}")
                     else:
                         logger.info(f"Detected {gpu_count} GPU(s): {gpu_names[0]}")
@@ -121,7 +126,7 @@ def _detect_local_accelerators() -> dict[str, float] | None:
             logger.debug(f"nvidia-smi detection failed: {e}")
 
     # detect TPUs via environment variable
-    if not resources:
+    if not has_accelerators:
         tpu_name = os.environ.get("TPU_NAME") or os.environ.get("CLOUD_TPU_TASK_ID")
         if tpu_name:
             # On TPU VMs, detect chip count via JAX (safe since no GPU conflict)
@@ -131,12 +136,13 @@ def _detect_local_accelerators() -> dict[str, float] | None:
                 devices = jax.devices()
                 tpu_count = sum(1 for d in devices if d.platform == "tpu")
                 if tpu_count > 0:
-                    resources["TPU"] = float(tpu_count)
+                    has_accelerators = True
+                    custom_resources["TPU"] = float(tpu_count)
                     logger.info(f"Detected {tpu_count} TPU(s)")
             except Exception as e:
                 logger.debug(f"Could not detect TPUs via JAX: {e}")
 
-    return resources if resources else None
+    return has_accelerators, custom_resources
 
 
 def current_cluster() -> Cluster:
@@ -171,13 +177,14 @@ def current_cluster() -> Cluster:
             return cluster
 
         # Check for local accelerators and initialize Ray with them
-        local_resources = _detect_local_accelerators()
-        if local_resources is not None:
-            logger.info(f"Detected local accelerators, initializing Ray with resources: {local_resources}")
+        has_accelerators, custom_resources = _detect_local_accelerators()
+        if has_accelerators:
+            logger.info(f"Detected local accelerators, initializing Ray (custom resources: {custom_resources})")
+            # Let Ray auto-detect GPUs; only pass additional custom resources
             ray.init(
                 namespace="marin",
                 ignore_reinit_error=True,
-                resources=local_resources,
+                resources=custom_resources if custom_resources else None,
             )
             from fray.cluster.ray.cluster import RayCluster
 

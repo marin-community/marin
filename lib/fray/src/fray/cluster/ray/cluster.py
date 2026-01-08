@@ -280,10 +280,17 @@ class RayCluster(Cluster):
         )
 
         env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
-        logger.info(
-            f"Building environment with {environment.pip_packages}, extras {environment.extras} for job: {request.name}"
-        )
-        if environment.pip_packages or environment.extras:
+
+        # Check if we're running on a local Ray cluster (single node)
+        # If so, skip pip installation since we're already in the correct environment
+        is_local = self._address == "auto" or self._address.startswith("local")
+        if is_local:
+            logger.info("Local Ray cluster detected, skipping pip environment setup")
+            runtime_env = {"env_vars": env_vars}
+        elif environment.pip_packages or environment.extras:
+            logger.info(
+                f"Building environment with {environment.pip_packages}, extras {environment.extras} for job: {request.name}"
+            )
             runtime_env = build_runtime_env_for_packages(
                 extra=list(environment.extras),
                 pip_packages=list(environment.pip_packages),
