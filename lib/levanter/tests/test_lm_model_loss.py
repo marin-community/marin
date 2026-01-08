@@ -93,11 +93,8 @@ def test_compute_next_token_loss_reduction_returns_scalar():
     example = _toy_example(Batch, Pos, Vocab, key=jax.random.PRNGKey(1))
 
     loss = model.compute_next_token_loss(example)
-    if isinstance(loss, hax.NamedArray):
-        assert loss.axes == ()
-        assert jnp.shape(loss.array) == ()
-    else:
-        assert jnp.shape(loss) == ()
+    assert loss.axes == ()
+    assert jnp.shape(loss.array) == ()
 
 
 def test_compute_next_token_loss_unreduced_has_expected_axes():
