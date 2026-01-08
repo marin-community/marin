@@ -53,7 +53,11 @@ class ScalingRecipe(Protocol):
     """Name identifying this recipe (e.g., 'marin-2025')."""
 
     def build_model_config(self, target_params: int, vocab_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
-        """Build a model config for a target parameter count."""
+        """Build a model config for a target parameter count.
+
+        TODO: LlamaConfig is currently our most generic config type, but this
+        couples recipes to Llama-family architectures. Generalize when needed.
+        """
         ...
 
     def estimate_memory_bytes(self, model_config: LlamaConfig, batch_size: int, vocab_size: int) -> int:
