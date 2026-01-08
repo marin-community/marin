@@ -168,15 +168,33 @@ def current_cluster() -> Cluster:
     try:
         import ray
 
-        # Only use RayCluster if Ray is already initialized (e.g., multi-node cluster)
-        # or we're running inside a Ray context
-        if ray.is_initialized() or _is_running_in_ray_context():
-            logger.info("Auto-detected Ray cluster")
+        # Only use RayCluster if:
+        # 1. We're running inside a Ray context (worker/actor)
+        # 2. Ray is initialized with an explicit address (not 'auto' or 'local')
+        if _is_running_in_ray_context():
+            logger.info("Running in Ray context, using RayCluster")
             from fray.cluster.ray.cluster import RayCluster
 
             cluster = RayCluster()
             set_current_cluster(cluster)
             return cluster
+
+        if ray.is_initialized():
+            # Check if this is a local auto-initialized Ray (single-node)
+            # vs an explicit multi-node cluster
+            address = ray.get_runtime_context().gcs_address
+            # Local Ray uses addresses like "127.0.0.1:..." or just initializes without explicit address
+            # For single-node local execution, prefer LocalCluster to avoid overhead
+            if address and not (address.startswith("127.0.0.1") or address.startswith("localhost")):
+                logger.info(f"Detected multi-node Ray cluster at {address}, using RayCluster")
+                from fray.cluster.ray.cluster import RayCluster
+
+                cluster = RayCluster()
+                set_current_cluster(cluster)
+                return cluster
+            else:
+                logger.info(f"Detected local Ray cluster at {address}, shutting down for LocalCluster")
+                ray.shutdown()
     except ImportError:
         pass
 
