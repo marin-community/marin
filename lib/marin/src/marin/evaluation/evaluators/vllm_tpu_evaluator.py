@@ -95,6 +95,12 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
             volumes: list[tuple[str, str]] = [("/tmp", "/tmp")]
             host_gcsfuse_mount = os.environ.get(VllmTpuEvaluator.HOST_GCSFUSE_MOUNT_ENV)
+            if not host_gcsfuse_mount and os.path.isdir("/tmp/gcsfuse_mount"):
+                # Cluster configs mount GCS once on the host at `/tmp/gcsfuse_mount` and expose it
+                # inside the Ray container via a symlink at `/opt/gcsfuse_mount`. Since the Docker
+                # daemon sees the host filesystem, we must bind-mount the host path (under `/tmp`),
+                # not the in-container symlink path (under `/opt`).
+                host_gcsfuse_mount = "/tmp/gcsfuse_mount"
             if host_gcsfuse_mount:
                 volumes.append((host_gcsfuse_mount, "/opt/gcsfuse_mount"))
             elif model_name_or_path.startswith("/opt/gcsfuse_mount/"):
@@ -103,6 +109,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
                     f"{VllmTpuEvaluator.HOST_GCSFUSE_MOUNT_ENV} is not set. When using docker sidecars, "
                     "any host mounts must be visible to the Docker daemon (host filesystem). "
                     "Either set the env var to a host path that contains the model (and is gcsfuse-mounted on the host),"
+                    "or ensure the host has GCS mounted at /tmp/gcsfuse_mount, "
                     "or use an HF repo id and let vLLM download inside the sidecar."
                 )
 
