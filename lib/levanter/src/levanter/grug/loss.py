@@ -71,11 +71,12 @@ def linear_softmax_cross_entropy_loss_and_logz(
     # correct logits: dot(hidden, lm_head[:, label])
     # We take rows from lm_head.T (shape [vocab, hidden]) so the gather output is [N, hidden].
     # Under explicit meshes, gather output sharding is otherwise ambiguous, so we supply out_sharding.
+    # Some JAX versions want an output *PartitionSpec* here (not a full Sharding).
     out_sharding = None
     labels_sharding = getattr(flat_labels, "sharding", None)
     if isinstance(labels_sharding, NamedSharding) and isinstance(labels_sharding.spec, P):
         first_dim = labels_sharding.spec[0] if labels_sharding.spec else None
-        out_sharding = NamedSharding(labels_sharding.mesh, P(first_dim, None))
+        out_sharding = P(first_dim, None)
 
     w_y = lm_head.T.at[flat_labels].get(out_sharding=out_sharding).astype(dtype)
     hidden_sharding = getattr(flat_hidden, "sharding", None)
