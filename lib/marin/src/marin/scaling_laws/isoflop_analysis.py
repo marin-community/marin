@@ -14,28 +14,7 @@
 
 """IsoFLOP analysis for finding compute-optimal training configurations.
 
-This module provides functions and configs for IsoFLOP scaling law analysis.
-Experiments create ExecutorSteps directly using the provided functions.
-
-Example usage in experiments:
-
-    from marin.execution.executor import ExecutorStep, output_path_of
-    from marin.scaling_laws import (
-        IsoFlopAnalysisConfig,
-        run_isoflop_analysis_step,
-    )
-
-    # Create analysis step
-    analysis_step = ExecutorStep(
-        name="my-scaling-analysis",
-        fn=run_isoflop_analysis_step,
-        config=IsoFlopAnalysisConfig(
-            training_runs=[output_path_of(r) for r in training_runs],
-            output_path="analysis/my-analysis",
-        ),
-    )
-
-The analysis step will:
+This module provides functions and configs for IsoFLOP scaling law analysis:
 1. Read eval metrics from completed training runs
 2. Fit scaling laws to find compute-optimal token counts
 3. Save results to JSON/parquet files
@@ -58,7 +37,6 @@ import pandas as pd
 from jaxopt import ScipyMinimize
 
 from levanter.models.llama import LlamaConfig
-from levanter.optim.config import OptimizerConfig
 
 from marin.scaling_laws.eval_metrics_reader import (
     EvalMetricsAnalysisConfig,
@@ -101,7 +79,7 @@ TRAINER_CONFIG_KEY = "trainer"
 
 
 class ScalingFit(NamedTuple):
-    """Scaling law fit parameters for N* ~ A * C^alpha."""
+    """Scaling law fit parameters for D* ~ A * C^alpha (optimal tokens ~ compute^alpha)."""
 
     alpha: float
     """Exponent in scaling law."""
@@ -140,56 +118,41 @@ DEFAULT_FLOP_TOLERANCE = 0.01  # Relative error tolerance for FLOP budget
 
 @dataclass
 class CandidateConfig:
-    """A candidate model/training configuration from the isoflop sweep.
+    """Model-agnostic compute allocation from scaling law analysis.
 
-    This dataclass contains all the information needed to create a training run.
-    Callers are responsible for converting this to their specific config format
-    (e.g., SimpleTrainConfig, Qwen3Config).
+    Contains only the fundamental parameters that scaling laws reason about:
+    - How much compute (flops_budget)
+    - How to allocate it between model size (target_params) and data (tokens)
+    - Training batch configuration (batch_size, train_steps)
+
+    All model-specific details (architecture, optimizer hyperparameters) are
+    computed by the ScalingRecipe from these values.
     """
 
-    hidden_size: int
-    intermediate_dim: int
-    num_layers: int
-    num_heads: int
-    num_kv_heads: int
     batch_size: int
     train_steps: int
-    learning_rate: float
-    beta2: float
-    tokens: float  # total tokens = batch_size * train_steps * seq_len
-    flops_budget: float = 0.0  # the FLOP budget this config was generated for
+    tokens: float  # = batch_size * train_steps * seq_len
+    target_params: int  # Optimal parameter count for this flops_budget
+    flops_budget: float  # Compute budget this config was generated for
 
 
 @dataclass
 class IsoFlopTrainArgs:
     """Arguments needed to set up an isoflop training run.
 
-    This dataclass contains the parameters needed for training. The caller is
-    responsible for constructing the model config from candidate parameters,
-    allowing flexibility in model type (Qwen3Config, LlamaConfig, etc.).
+    This dataclass contains the model-agnostic parameters needed for training.
+    The ScalingRecipe is responsible for converting these to model-specific
+    configs (model architecture, optimizer hyperparameters).
 
     Example:
-        >>> args = generate_isoflop_train_args(config, "my-exp", vocab_size)[0]
-        >>> # Caller constructs the model config
-        >>> model_config = Qwen3Config(
-        ...     hidden_dim=args.candidate.hidden_size,
-        ...     intermediate_dim=args.candidate.intermediate_dim,
-        ...     num_layers=args.candidate.num_layers,
-        ...     num_heads=args.candidate.num_heads,
-        ...     num_kv_heads=args.candidate.num_kv_heads,
-        ...     max_seq_len=4096,
-        ...     rope=Llama3RotaryEmbeddingsConfig(),
-        ... )
+        >>> args = generate_isoflop_train_args(budgets, "my-exp", vocab_size, recipe)[0]
+        >>> # Recipe converts candidate to model-specific configs
+        >>> model_config = recipe.build_model_config(args.candidate.target_params, vocab_size)
+        >>> optimizer_config = recipe.build_optimizer_config(args.candidate)
     """
 
     candidate: CandidateConfig
-    """The candidate configuration with model/training hyperparameters."""
-
-    optimizer_config: OptimizerConfig
-    """Levanter optimizer configuration with learning_rate and beta2 set."""
-
-    tpu_type: str
-    """TPU slice type (e.g., 'v5p-8', 'v5p-32')."""
+    """Model-agnostic compute allocation (batch_size, train_steps, tokens, target_params)."""
 
     run_name: str
     """Name for the training run."""
@@ -206,16 +169,14 @@ class IsoFlopTrainArgs:
 
 @dataclass
 class MinimaRecord:
-    """Record of optimal configuration found at a specific (label, flops) point."""
+    """Model-agnostic record of optimal configuration found at a specific (label, flops) point."""
 
     label: str
     flops: float
     optimal_tokens: float
     loss_at_optimal: float
-    hidden_dim: int
-    num_layers: int
-    batch_size: int
     optimal_params: float
+    batch_size: int
     scaling_alpha: float | None = None
     scaling_A: float | None = None
 
@@ -433,33 +394,25 @@ def candidate_configs(
 
 def _minima_to_candidates(
     minima_records: list[MinimaRecord],
-    recipe: ScalingRecipe,
 ) -> list[CandidateConfig]:
-    """Convert minima records to CandidateConfig objects.
+    """Convert minima records to model-agnostic CandidateConfig objects.
 
     This is used by both run_isoflop_analysis_step() and run_isoflop_analysis()
     to convert the fitted minima into usable candidate configs.
 
     Args:
         minima_records: List of optimal configurations from scaling law fits.
-        recipe: ScalingRecipe with architecture and hyperparameter settings.
     """
     configs = []
     for rec in minima_records:
-        if rec.hidden_dim == 0:
+        if rec.optimal_params == 0:
             continue
         configs.append(
             CandidateConfig(
-                hidden_size=rec.hidden_dim,
-                intermediate_dim=rec.hidden_dim * recipe.mlp_ratio,
-                num_layers=rec.num_layers,
-                num_heads=max(1, rec.hidden_dim // recipe.hidden_head_ratio),
-                num_kv_heads=max(1, rec.hidden_dim // recipe.hidden_head_ratio),
                 batch_size=rec.batch_size,
                 train_steps=int(rec.optimal_tokens / (rec.batch_size * SEQ_LEN)),
-                learning_rate=recipe.compute_learning_rate(rec.batch_size, rec.hidden_dim),
-                beta2=recipe.compute_beta2(rec.batch_size),
                 tokens=rec.optimal_tokens,
+                target_params=int(rec.optimal_params),
                 flops_budget=rec.flops,
             )
         )
@@ -477,13 +430,13 @@ def generate_isoflop_train_args(
     seq_len: int = DEFAULT_SEQ_LEN,
     steps_per_run: int = DEFAULT_STEPS_PER_RUN,
     flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
-    base_optimizer_config: OptimizerConfig | None = None,
 ) -> list[IsoFlopTrainArgs]:
-    """Generate training arguments for each candidate in an isoflop sweep.
+    """Generate model-agnostic training arguments for each candidate in an isoflop sweep.
 
     This is a convenience function that delegates to recipe.generate_isoflop_train_args().
-    The recipe encapsulates all model-specific decisions, while this function provides
-    backward compatibility.
+    Returns IsoFlopTrainArgs containing model-agnostic CandidateConfig objects.
+    Use recipe.build_model_config() and recipe.build_optimizer_config() to get
+    model-specific configs.
 
     Args:
         budgets: Sequence of FLOP budgets to generate configs for.
@@ -493,27 +446,26 @@ def generate_isoflop_train_args(
         seq_len: Sequence length for training.
         steps_per_run: Reference step count for FLOP budget calculation.
         flop_tolerance: Tolerance for matching FLOP budget.
-        base_optimizer_config: Base optimizer config to modify. If None, uses recipe defaults.
 
     Returns:
         List of IsoFlopTrainArgs, one per candidate config across all budgets.
 
     Example:
-        >>> from marin.scaling_laws import generate_isoflop_train_args, DEFAULT_BUDGETS
+        >>> from marin.scaling_laws import generate_isoflop_train_args, DEFAULT_BUDGETS, ScalingRecipe
+        >>> recipe = ScalingRecipe(name="my-recipe")
         >>> train_args = generate_isoflop_train_args(
         ...     budgets=DEFAULT_BUDGETS,
         ...     experiment_name="my-experiment",
         ...     vocab_size=128256,
+        ...     recipe=recipe,
         ... )
         >>> for args in train_args:
-        ...     # Caller constructs the model config from candidate parameters
-        ...     model_config = Qwen3Config(
-        ...         hidden_dim=args.candidate.hidden_size,
-        ...         # ... etc
-        ...     )
+        ...     # Recipe converts model-agnostic candidate to model-specific configs
+        ...     model_config = recipe.build_model_config(args.candidate.target_params, vocab_size)
+        ...     optimizer_config = recipe.build_optimizer_config(args.candidate, vocab_size)
     """
     return recipe.generate_isoflop_train_args(
-        budgets, experiment_name, vocab_size, seq_len, steps_per_run, flop_tolerance, base_optimizer_config
+        budgets, experiment_name, vocab_size, seq_len, steps_per_run, flop_tolerance
     )
 
 
@@ -523,22 +475,32 @@ def generate_isoflop_train_args(
 def parse_isoflop_run_name(run_name: str) -> str | None:
     """Parse experiment name from isoflop run name.
 
-    Expected format: isoflop-{budget}-d{hidden}-L{layers}-B{batch}-{experiment_name}
+    Supports two formats:
+    - New: isoflop-{budget}-N{params}-B{batch}-{experiment_name}
+      E.g., 'isoflop-1e+18-N1e+08-B128-nemo-wider-depth-adapt'
+    - Legacy: isoflop-{budget}-d{hidden}-L{layers}-B{batch}-{experiment_name}
+      E.g., 'isoflop-1e+19-d2048-L16-B1024-nemo-wider-depth-adapt'
+
     Optionally with a trailing -<hash> which is ignored.
-    E.g., 'isoflop-1e+19-d2048-L16-B1024-nemo-wider-depth-adapt'
-    or 'isoflop-1e+19-d2048-L16-B1024-nemo-wider-depth-adapt-a1b2c3'
 
     Returns experiment_name or None if parsing fails.
     """
     # Strip optional -<hash> suffix
     run_name = re.sub(r"-[0-9a-fA-F]{6}$", "", run_name)
 
-    pattern = r"isoflop-(?:[0-9.e+]+)-d(?:\d+)-L(?:\d+)-B(?:\d+)-(.+)"
-    match = re.match(pattern, run_name)
-    if not match:
-        return None
+    # New format: isoflop-{budget}-N{params}-B{batch}-{experiment_name}
+    new_pattern = r"isoflop-(?:[0-9.e+]+)-N(?:[0-9.e+]+)-B(?:\d+)-(.+)"
+    match = re.match(new_pattern, run_name)
+    if match:
+        return match.group(1)
 
-    return match.group(1)
+    # Legacy format: isoflop-{budget}-d{hidden}-L{layers}-B{batch}-{experiment_name}
+    legacy_pattern = r"isoflop-(?:[0-9.e+]+)-d(?:\d+)-L(?:\d+)-B(?:\d+)-(.+)"
+    match = re.match(legacy_pattern, run_name)
+    if match:
+        return match.group(1)
+
+    return None
 
 
 def robust_quad_logx(x: jnp.ndarray, y: jnp.ndarray, delta: float = 1.0) -> tuple[float, float, float]:
@@ -624,27 +586,25 @@ def fit_scaling_laws(
             if a == 0:
                 continue
 
-            L_opt = -b / (2 * a)
-            N_star = float(10**L_opt)
-            loss_opt = float(a * L_opt**2 + b * L_opt + c)
+            log_D_opt = -b / (2 * a)
+            D_star = float(10**log_D_opt)
+            loss_opt = float(a * log_D_opt**2 + b * log_D_opt + c)
 
-            idx = (sub.tokens - N_star).abs().argmin()
+            idx = (sub.tokens - D_star).abs().argmin()
             nearest_row = sub.iloc[idx]
 
             minima_records.append(
                 MinimaRecord(
                     label=lab,
                     flops=float(C),
-                    optimal_tokens=N_star,
+                    optimal_tokens=D_star,
                     loss_at_optimal=loss_opt,
-                    hidden_dim=int(nearest_row["hidden_dim"]),
-                    num_layers=int(nearest_row["num_layers"]),
+                    optimal_params=float(nearest_row.get("params") or C / (6 * D_star)),
                     batch_size=int(nearest_row["batch_size"]),
-                    optimal_params=float(nearest_row.get("params") or C / (6 * N_star)),
                 )
             )
 
-    # Fit scaling law N* ~ A * C^alpha per dataset
+    # Fit scaling law D* ~ A * C^alpha per dataset (optimal tokens ~ compute^alpha)
     scaling_fits: dict[str, ScalingFit] = {}
     by_lab: dict[str, list[MinimaRecord]] = {}
     for rec in minima_records:
@@ -657,9 +617,9 @@ def fit_scaling_laws(
 
         recs = sorted(recs, key=lambda r: r.flops)
         Cs = jnp.array([r.flops for r in recs])
-        Ns = jnp.array([r.optimal_tokens for r in recs])
+        Ds = jnp.array([r.optimal_tokens for r in recs])
 
-        alpha, logA = jnp.polyfit(jnp.log10(Cs), jnp.log10(Ns), 1)
+        alpha, logA = jnp.polyfit(jnp.log10(Cs), jnp.log10(Ds), 1)
         A = float(10**logA)
         alpha = float(alpha)
         scaling_fits[lab] = ScalingFit(alpha, A)
@@ -930,7 +890,7 @@ def run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
     for label, (alpha, A) in fit_result.scaling_fits.items():
         logger.info(f"  {label}: N* = {A:.2e} * C^{alpha:.3f}")
 
-    configs = _minima_to_candidates(fit_result.minima_records, config.recipe)
+    configs = _minima_to_candidates(fit_result.minima_records)
 
     result = IsoFlopAnalysisResult(
         configs=configs,
@@ -1016,7 +976,7 @@ def run_isoflop_analysis(
     logger.info(f"Transformed {len(isoflop_df)} runs for scaling ladder analysis")
 
     fit_result = fit_scaling_laws(isoflop_df)
-    configs = _minima_to_candidates(fit_result.minima_records, recipe)
+    configs = _minima_to_candidates(fit_result.minima_records)
 
     return IsoFlopAnalysisResult(
         configs=configs,

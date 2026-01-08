@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from marin.scaling_laws.isoflop_analysis import CandidateConfig
+    from marin.scaling_laws.recipe import ScalingRecipe
 
 # ---------------- TPU v5p Hardware Constants ----------------
 # These constants are specific to TPU v5p pods.
@@ -84,16 +85,15 @@ def pick_v5p_type(
     candidate: "CandidateConfig",
     vocab_size: int,
     seq_len: int,
+    recipe: "ScalingRecipe | None" = None,
 ) -> str:
     """Select the smallest TPU v5p slice that fits the model in float32.
 
-    Uses conservative memory estimation to select a TPU slice size that
-    can accommodate the model parameters, optimizer states, and activations.
-
     Args:
-        candidate: CandidateConfig with model architecture parameters.
+        candidate: CandidateConfig with target_params and batch_size.
         vocab_size: Vocabulary size.
         seq_len: Sequence length.
+        recipe: ScalingRecipe to determine architecture. If None, uses default.
 
     Returns:
         TPU slice name, e.g., "v5p-8" or "v5p-32".
@@ -101,21 +101,17 @@ def pick_v5p_type(
     Raises:
         ValueError: If the model is too large for available v5p slices.
     """
-    # Import here to avoid circular dependency
-    from marin.scaling_laws.isoflop_analysis import compute_transformer_params
+    if recipe is None:
+        from marin.scaling_laws.recipe import ScalingRecipe
+        recipe = ScalingRecipe(name="default")
 
-    param_count = compute_transformer_params(
-        hidden_dim=candidate.hidden_size,
-        intermediate_dim=candidate.intermediate_dim,
-        num_layers=candidate.num_layers,
-        num_heads=candidate.num_heads,
-        num_kv_heads=candidate.num_kv_heads,
-        vocab_size=vocab_size,
-    )
+    hidden_size = recipe.hidden_size_for_params(candidate.target_params, vocab_size)
+    num_layers = recipe.compute_num_layers(hidden_size)
+
     need_bytes = estimate_memory_bytes(
-        param_count,
-        candidate.hidden_size,
-        candidate.num_layers,
+        candidate.target_params,
+        hidden_size,
+        num_layers,
         candidate.batch_size,
         seq_len,
         vocab_size,
