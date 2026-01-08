@@ -28,7 +28,6 @@ from marin.scaling_laws.isoflop_analysis import (
     ScalingFit,
     candidate_configs,
     compute_training_flops,
-    compute_transformer_params,
     fit_scaling_laws,
     generate_isoflop_train_args,
     predict_optimal_config,
@@ -39,7 +38,6 @@ from marin.scaling_laws.isoflop_analysis import (
     solve_for_train_steps,
 )
 from marin.scaling_laws.tpu_utils import (
-    estimate_memory_bytes,
     pick_v5p_type,
 )
 from marin.scaling_laws.recipe import (
@@ -77,10 +75,8 @@ __all__ = [
     # Functions
     "candidate_configs",
     "compute_training_flops",
-    "compute_transformer_params",
     "create_isoflop_plot",
     "create_scaling_plot",
-    "estimate_memory_bytes",
     "fit_scaling_laws",
     "generate_isoflop_train_args",
     "pick_v5p_type",
