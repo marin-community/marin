@@ -36,7 +36,6 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
-from marin.processing.tokenize.data_configs import add_validation_sets_to_mixture, lm_data_config
 from marin.scaling_laws.isoflop_analysis import (
     ScalingFit,
     predict_optimal_config,
@@ -46,39 +45,6 @@ from marin.scaling_laws.recipe import ScalingRecipe
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 logger = logging.getLogger(__name__)
-
-
-def _prepare_data_config(
-    tokenized: str | LMMixtureDatasetConfig,
-    validation_sets: dict | None = None,
-) -> LMMixtureDatasetConfig:
-    """Prepare a tokenized dataset for training.
-
-    This is a local helper that prepares data configs without depending on
-    experiment-specific validation sets. Callers should pass validation sets
-    explicitly if needed.
-
-    Args:
-        tokenized: The tokenized dataset - can be a path string or an
-            already-configured LMMixtureDatasetConfig.
-        validation_sets: Optional dict of validation sets to add. If None,
-            no validation sets are added.
-
-    Returns:
-        LMMixtureDatasetConfig ready for training.
-    """
-    if isinstance(tokenized, LMMixtureDatasetConfig):
-        pretraining_data = tokenized
-        if validation_sets:
-            pretraining_data = add_validation_sets_to_mixture(pretraining_data, validation_sets)
-    else:
-        # String path
-        pretraining_data = lm_data_config(
-            training_set=tokenized,
-            validation_sets=validation_sets,
-            permutation_type="feistel",
-        )
-    return pretraining_data
 
 
 @dataclass(frozen=True)
@@ -101,8 +67,8 @@ class ScalingLadderRungConfig:
     label: str
     """Dataset label to use for scaling fit (e.g., 'nemo', 'comma', 'dclm')."""
 
-    tokenized: str | LMMixtureDatasetConfig
-    """Tokenized dataset for training. Can be a path string or LMMixtureDatasetConfig."""
+    tokenized: LMMixtureDatasetConfig
+    """Tokenized dataset for training (with validation sets already added)."""
 
     output_path: str
     """Where to write training outputs."""
@@ -115,9 +81,6 @@ class ScalingLadderRungConfig:
 
     seq_len: int = 4096
     """Sequence length for training."""
-
-    validation_sets: dict | None = None
-    """Optional validation sets to add for eval loss tracking."""
 
 
 def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
@@ -166,10 +129,8 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
     optimizer_cfg = config.recipe.build_optimizer_config(candidate, vocab_size)
     tpu_type = pick_v5p_type(candidate, vocab_size, config.seq_len, config.recipe)
 
-    pretraining_data = _prepare_data_config(config.tokenized, config.validation_sets)
-
     train_config = TrainLmConfig(
-        data=pretraining_data,
+        data=config.tokenized,
         trainer=TrainerConfig(
             tracker=WandbConfig(
                 project="marin",
