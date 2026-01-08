@@ -50,7 +50,6 @@ from marin.scaling_laws import (
 )
 from marin.scaling_laws import ScalingRecipe
 
-
 # --- Scaling Recipe ---
 # This recipe encapsulates all model-specific hyperparameters for Marin scaling experiments.
 # Other experiments can define their own recipes by instantiating ScalingRecipe with different values.
