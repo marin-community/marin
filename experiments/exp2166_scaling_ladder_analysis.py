@@ -26,6 +26,7 @@ The scaling ladder:
 from experiments.defaults import default_validation_sets
 from experiments.isoflop_sweep import MARIN_2025_RECIPE, MARIN_SCALING_SUITES, nemotron_mix
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of
+from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.scaling_laws import (
     IsoFlopAnalysisConfig,
     ScalingLadderRungConfig,
@@ -40,6 +41,10 @@ nemotron_training, _ = MARIN_SCALING_SUITES["nemotron"]
 TARGET_BUDGETS: list[float] = [1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20]
 EXPERIMENT_NAME = "exp2166-scaling-ladder-nemotron-validation"
 LABEL = "nemo-wider-depth-adapt"
+TOKENIZER = "stanford-crfm/marin-tokenizer"
+
+# Add validation sets to the training mixture
+nemotron_mix_with_validation = add_validation_sets_to_mixture(nemotron_mix, default_validation_sets(tokenizer=TOKENIZER))
 
 # --- Step 1: IsoFLOP Analysis ---
 # Creates scaling law fits from the training runs
@@ -64,10 +69,9 @@ for budget in TARGET_BUDGETS:
             analysis_output_path=output_path_of(analysis_step),
             target_budget=budget,
             label=LABEL,
-            tokenized=nemotron_mix,
+            tokenized=nemotron_mix_with_validation,
             output_path=f"checkpoints/{EXPERIMENT_NAME}-optimal-{budget:.0e}",
             recipe=MARIN_2025_RECIPE,
-            validation_sets=default_validation_sets(tokenizer="stanford-crfm/marin-tokenizer"),
         ),
     )
     optimal_runs.append(step)
