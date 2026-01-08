@@ -30,7 +30,6 @@ from collections.abc import Sequence
 import fsspec
 import pandas as pd
 
-from marin.execution.executor import InputName
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
 
 try:
@@ -109,8 +108,8 @@ class EvalMetricsAnalysisConfig:
     The training_runs field creates blocking dependencies on the training jobs.
     """
 
-    training_runs: Sequence[str | InputName]
-    """List of training run output paths (strings or InputNames resolved by the executor)."""
+    training_runs: Sequence[str]
+    """List of training run output paths (executor resolves InputName to str at runtime)."""
 
     output_path: str
     """Where to write analysis outputs."""
@@ -123,20 +122,6 @@ class EvalMetricsAnalysisConfig:
 
     wandb_entity_project: str = f"{WANDB_ENTITY}/{WANDB_PROJECT}"
     """WandB entity/project to query for backfill (format: 'entity/project')."""
-
-
-def _resolve_training_run_path(run_path: str | InputName) -> str:
-    """Return a concrete path string for a training run."""
-    if isinstance(run_path, InputName):
-        if run_path.step is not None:
-            raise ValueError(
-                "Training runs must be concrete paths when calling read_metrics_dataframe directly. "
-                "Use the Executor to resolve InputName values."
-            )
-        if run_path.name is None:
-            raise ValueError("Training run InputName must include a name.")
-        return run_path.name
-    return run_path
 
 
 def read_metrics_dataframe(config: EvalMetricsAnalysisConfig) -> pd.DataFrame:
@@ -155,7 +140,6 @@ def read_metrics_dataframe(config: EvalMetricsAnalysisConfig) -> pd.DataFrame:
     all_records = []
 
     for i, run_path in enumerate(config.training_runs):
-        run_path = _resolve_training_run_path(run_path)
         metrics_file = os.path.join(run_path, config.metrics_filename)
 
         fs, _, _ = fsspec.get_fs_token_paths(metrics_file)

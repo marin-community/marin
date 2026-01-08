@@ -24,7 +24,7 @@ from functools import lru_cache
 
 from experiments.evals.evals import evaluate_levanter_lm_evaluation_harness
 from experiments.evals.task_configs import EvalTaskConfig
-from experiments.isoflop_sweep import create_isoflop_sweep_steps
+from experiments.isoflop_sweep import MARIN_2025_RECIPE, create_isoflop_sweep_steps
 from experiments.llama import llama3_tokenizer
 from experiments.models import ModelConfig as HFModelConfig, download_model_step
 from experiments.paloma import paloma_tokenized
@@ -34,7 +34,6 @@ from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from marin.evaluation.log_probs import default_lm_log_probs
 from marin.execution.executor import executor_main, output_path_of
 from marin.processing.tokenize.data_configs import mixture_for_evaluation
-from marin.scaling_laws.recipe import MARIN_2025_RECIPE
 
 # Import shared components from exp1600_uncheatable_evals
 from experiments.evals.exp1600_uncheatable_evals import (
