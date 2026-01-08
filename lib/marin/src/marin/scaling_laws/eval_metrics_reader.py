@@ -29,15 +29,9 @@ from collections.abc import Sequence
 
 import fsspec
 import pandas as pd
+import wandb
 
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
-
-try:
-    import wandb
-
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +63,6 @@ def _backfill_metrics_from_wandb(
     Returns:
         True if backfill succeeded, False otherwise
     """
-    if not WANDB_AVAILABLE:
-        logger.warning(f"wandb not available, cannot backfill metrics for {checkpoint_path}")
-        return False
-
     try:
         run_id = extract_run_name_from_path(checkpoint_path)
         logger.info(f"Attempting to backfill metrics for run_id: {run_id}")
