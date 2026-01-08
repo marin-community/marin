@@ -684,14 +684,10 @@ wheels = [
 [[package]]
 name = "connect-python"
 version = "0.7.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/connectrpc/connect-python.git?rev=5342eacecef85e52717604ee5ac7e03a1e16c7ac#5342eacecef85e52717604ee5ac7e03a1e16c7ac" }
 dependencies = [
     { name = "httpx" },
     { name = "protobuf" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/2a/19/25da2836f26bade3904e6c49733dc5128bb4049503f1c9732e72e4bb5410/connect_python-0.7.0.tar.gz", hash = "sha256:f87a3b69c23a6ceb2c04aa4defdd1972a714a89511c2164699553b71b7b0afc7", size = 40663, upload-time = "2025-12-26T09:36:07.231Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/96/1ae2bd802623d9ee8a8da4fe6babd1b9afc223b4ec93825121953fdbb12e/connect_python-0.7.0-py3-none-any.whl", hash = "sha256:7c0e953e337508f9a5603d08ab9381c9796db40bd5dc9a29f68a9ae425e90364", size = 55532, upload-time = "2025-12-26T09:36:06.047Z" },
 ]
 
 [[package]]
@@ -1224,7 +1220,7 @@ fray-tpu-test = [
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "cloudpickle", specifier = ">=3.1.2" },
-    { name = "connect-python", specifier = ">=0.7.0" },
+    { name = "connect-python", git = "https://github.com/connectrpc/connect-python.git?rev=5342eacecef85e52717604ee5ac7e03a1e16c7ac" },
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "flask" },
     { name = "fsspec", specifier = ">=2024.0.0" },
