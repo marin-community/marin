@@ -55,8 +55,9 @@ class ScalingRecipe(Protocol):
     def build_model_config(self, target_params: int, vocab_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
         """Build a model config for a target parameter count.
 
-        TODO: LlamaConfig is currently our most generic config type, but this
-        couples recipes to Llama-family architectures. Generalize when needed.
+        TODO: LlamaConfig is currently our most generic config type, and we
+        subclass it to other models (e.g. Qwen, OLMo, etc). We should make
+        a true generic config class eventually.
         """
         ...
 
