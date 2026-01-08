@@ -33,7 +33,7 @@ RESOURCES = ResourceConfig.with_tpu("v5p-8")
 # -----------------------------------------------------------------------------
 # Experiment configuration
 # -----------------------------------------------------------------------------
-run_number = 7
+run_number = 8
 tokenizer_path = "songlab/tokenizer-dna-clm"
 dataset_path = "gonzalobenegas/genomes-v3-genome_set-animals-intervals-v1_512_256"
 dataset_seq_len = 512  # constant for all sequences in dataset
@@ -41,10 +41,10 @@ learning_rate = 1e-3
 train_batch_size = 2048
 lr_schedule = "inv"
 num_train_steps = 20_000
-steps_per_export = 1000
+steps_per_export = 2000
 steps_per_cycle = steps_per_export
 steps_per_eval = steps_per_export
-warmup = 0.01
+warmup = 0.5  # fraction of cycle
 decay = 0.1
 
 # -----------------------------------------------------------------------------
