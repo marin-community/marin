@@ -77,34 +77,64 @@ def _detect_local_accelerators() -> dict[str, float] | None:
     Returns None if no accelerators are found, otherwise returns a dict
     suitable for passing to ray.init(resources=...).
     """
+    import shutil
+    import subprocess
+
     resources: dict[str, float] = {}
 
-    # Try to detect GPUs via JAX
-    try:
-        import jax
+    # detect GPUs using nvidia-smi
+    if shutil.which("nvidia-smi"):
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                gpu_names = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+                gpu_count = len(gpu_names)
+                if gpu_count > 0:
+                    resources["GPU"] = float(gpu_count)
+                    # Try to map GPU name to Ray accelerator type
+                    gpu_name = gpu_names[0].upper()
+                    accel_type = None
+                    if "A100" in gpu_name:
+                        accel_type = "A100-80G" if "80G" in gpu_name else "A100-40G"
+                    elif "H100" in gpu_name:
+                        accel_type = "H100"
+                    elif "V100" in gpu_name:
+                        accel_type = "V100"
+                    elif "A10" in gpu_name:
+                        accel_type = "A10G"
+                    elif "L4" in gpu_name:
+                        accel_type = "L4"
+                    elif "T4" in gpu_name:
+                        accel_type = "T4"
 
-        devices = jax.devices()
-        gpu_count = sum(1 for d in devices if d.platform == "gpu")
-        if gpu_count > 0:
-            resources["GPU"] = float(gpu_count)
-            # Also add accelerator type info if available
+                    if accel_type:
+                        resources[f"accelerator_type:{accel_type}"] = float(gpu_count)
+                        logger.info(f"Detected {gpu_count} GPU(s) of type {accel_type}")
+                    else:
+                        logger.info(f"Detected {gpu_count} GPU(s): {gpu_names[0]}")
+        except Exception as e:
+            logger.debug(f"nvidia-smi detection failed: {e}")
+
+    # detect TPUs via environment variable
+    if not resources:
+        tpu_name = os.environ.get("TPU_NAME") or os.environ.get("CLOUD_TPU_TASK_ID")
+        if tpu_name:
+            # On TPU VMs, detect chip count via JAX (safe since no GPU conflict)
             try:
-                from fray.cluster.ray.resources import jax_device_kind_to_ray_accel_type
+                import jax
 
-                gpu_device = next(d for d in devices if d.platform == "gpu")
-                accel_type = jax_device_kind_to_ray_accel_type(gpu_device.device_kind)
-                if accel_type:
-                    resources[f"accelerator_type:{accel_type}"] = float(gpu_count)
-                    logger.info(f"Detected {gpu_count} GPU(s) of type {accel_type}")
-            except Exception:
-                logger.info(f"Detected {gpu_count} GPU(s)")
-
-        tpu_count = sum(1 for d in devices if d.platform == "tpu")
-        if tpu_count > 0:
-            resources["TPU"] = float(tpu_count)
-            logger.info(f"Detected {tpu_count} TPU(s)")
-    except Exception as e:
-        logger.debug(f"Could not detect accelerators via JAX: {e}")
+                devices = jax.devices()
+                tpu_count = sum(1 for d in devices if d.platform == "tpu")
+                if tpu_count > 0:
+                    resources["TPU"] = float(tpu_count)
+                    logger.info(f"Detected {tpu_count} TPU(s)")
+            except Exception as e:
+                logger.debug(f"Could not detect TPUs via JAX: {e}")
 
     return resources if resources else None
 
