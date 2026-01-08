@@ -76,14 +76,6 @@ def init_parameters(cfg: GrugModelConfig, *, key: jax.Array) -> GrugModelParamet
         )
     if cfg.tie_embeddings:
         output_proj = reshard(output_proj, vocab_pspec)
-    final_norm = reshard(
-        jnp.ones((cfg.hidden_dim,), dtype=jnp.float32),
-        P(
-            "data",
-        ),
-    )
-
-    output_proj = reshard(output_proj, P("data", None))
     final_norm = reshard(jnp.ones((cfg.hidden_dim,), dtype=jnp.float32), P(None))
 
     blocks: list[GrugBlockParams] = []
