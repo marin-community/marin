@@ -259,6 +259,11 @@ def loss_fn(
             tokamax = None  # type: ignore[assignment]
 
         if tokamax is not None:
+            # TODO(grug): Prefer a vendored/fixed kernel that supports:
+            #   - per-token `loss_weight` (padding/ignore_id/etc),
+            #   - `reduction="none"` (to keep per-token losses),
+            #   - optional z-loss / logsumexp regularization,
+            # while still using a custom VJP to avoid TPU HBM blowups from large intermediates.
             _ensure_absl_flags_parsed()
             # Next-token: predict token[t+1] from hidden[t]. Drop the final position.
             x = hidden[:, :-1, :].reshape((-1, hidden.shape[-1]))
