@@ -144,8 +144,11 @@ class IsoFlopTrainArgs:
     The ScalingRecipe is responsible for converting these to model-specific
     configs (model architecture, optimizer hyperparameters).
 
+    Naming (run_name, output_path) is intentionally not included here - that's
+    the responsibility of experiment code which may have its own conventions.
+
     Example:
-        >>> args = generate_isoflop_train_args(budgets, "my-exp", vocab_size, recipe)[0]
+        >>> args = generate_isoflop_train_args(budgets, vocab_size, recipe)[0]
         >>> # Recipe converts candidate to model-specific configs
         >>> model_config = recipe.build_model_config(args.candidate.target_params, vocab_size)
         >>> optimizer_config = recipe.build_optimizer_config(args.candidate)
@@ -154,14 +157,8 @@ class IsoFlopTrainArgs:
     candidate: CandidateConfig
     """Model-agnostic compute allocation (batch_size, train_steps, tokens, target_params)."""
 
-    run_name: str
-    """Name for the training run."""
-
     tags: tuple[str, ...]
     """Tags for tracking/filtering runs."""
-
-    output_path: str
-    """Static output path for checkpoints."""
 
 
 # ---------------- Typed Records ----------------
@@ -374,7 +371,6 @@ def _minima_to_candidates(
 
 def generate_isoflop_train_args(
     budgets: Sequence[float],
-    experiment_name: str,
     vocab_size: int,
     recipe: ScalingRecipe,
     seq_len: int = DEFAULT_SEQ_LEN,
@@ -385,11 +381,10 @@ def generate_isoflop_train_args(
 
     Returns IsoFlopTrainArgs containing model-agnostic CandidateConfig objects.
     Use recipe.build_model_config() and recipe.build_optimizer_config() to get
-    model-specific configs.
+    model-specific configs. Naming (run_name, output_path) is left to the caller.
 
     Args:
         budgets: Sequence of FLOP budgets to generate configs for.
-        experiment_name: Name suffix for run names (e.g., 'nemo', 'dclm').
         vocab_size: Vocabulary size for the tokenizer.
         recipe: ScalingRecipe with architecture/hyperparameter settings.
         seq_len: Sequence length for training.
@@ -405,7 +400,6 @@ def generate_isoflop_train_args(
         >>> # recipe = Marin2025Recipe()
         >>> train_args = generate_isoflop_train_args(
         ...     budgets=DEFAULT_BUDGETS,
-        ...     experiment_name="my-experiment",
         ...     vocab_size=128256,
         ...     recipe=recipe,
         ... )
@@ -418,7 +412,6 @@ def generate_isoflop_train_args(
 
     for budget in budgets:
         for candidate in recipe.candidate_configs(budget, vocab_size, seq_len, steps_per_run, flop_tolerance):
-            run_name = f"isoflop-{budget:.0e}-N{candidate.target_params:.0e}-B{candidate.batch_size}-{experiment_name}"
             tags = (
                 f"FLOPs={budget:.1e}",
                 f"N={candidate.target_params:.1e}",
@@ -426,14 +419,11 @@ def generate_isoflop_train_args(
                 f"steps={candidate.train_steps}",
                 f"tokens={candidate.tokens:.1e}",
             )
-            output_path = os.path.join("checkpoints", "isoflop", run_name)
 
             results.append(
                 IsoFlopTrainArgs(
                     candidate=candidate,
-                    run_name=run_name,
                     tags=tags,
-                    output_path=output_path,
                 )
             )
 
