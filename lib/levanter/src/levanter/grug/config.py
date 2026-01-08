@@ -16,7 +16,7 @@ class RotaryConfig:
 class GrugModelConfig:
     """Hyperparameters for the Grug Llama-style transformer."""
 
-    vocab_size: int = 32000
+    vocab_size: int
     hidden_dim: int = 2048
     intermediate_dim: int = 5632
     num_layers: int = 24
@@ -25,11 +25,13 @@ class GrugModelConfig:
     head_dim: int | None = None
     max_seq_len: int = 4096
     dropout_rate: float = 0.0
-    attention_dropout_rate: float = 0.0
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     rope: RotaryConfig = field(default_factory=RotaryConfig)
     tie_embeddings: bool = False
+
+    # TODO: strip this out
+    cross_entropy_block_size: int | None = 32768
 
     @property
     def inferred_head_dim(self) -> int:

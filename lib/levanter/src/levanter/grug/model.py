@@ -82,6 +82,9 @@ def init_parameters(cfg: GrugModelConfig, *, key: jax.Array) -> GrugModelParamet
         ),
     )
 
+    output_proj = reshard(output_proj, P("data", None))
+    final_norm = reshard(jnp.ones((cfg.hidden_dim,), dtype=jnp.float32), P(None))
+
     blocks: list[GrugBlockParams] = []
     for i in range(cfg.num_layers):
         k_q, k_k, k_v, k_o, k_gate, k_up, k_down = layer_keys[i]
@@ -124,17 +127,17 @@ def _unshard(x: jax.Array) -> jax.Array:
     return reshard(x, P((None,) * x.ndim))
 
 
-_Pbatch = P(("replica", "data"), None)
+_Pbatch = P(("replica_dcn", "replica", "data"), None)
 
 
-def _rms_norm(x: jax.Array, weight: jax.Array, eps: float) -> jax.Array:
+def rms_norm(x: jax.Array, weight: jax.Array, eps: float) -> jax.Array:
     weight = _unshard(weight)
     variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
     normed = x * jax.lax.rsqrt(variance + eps)
     return normed * weight
 
 
-def _mlp(block: GrugBlockParams, x: jax.Array) -> jax.Array:
+def mlp(block: GrugBlockParams, x: jax.Array) -> jax.Array:
     gate = jnp.einsum("bsh,hm->bsm", x, block.mlp_gate)
     up = jnp.einsum("bsh,hm->bsm", x, block.mlp_up)
     activated = jax.nn.silu(gate) * up
@@ -159,7 +162,7 @@ def _transformer_hidden(
     hidden = params.token_embed.at[token_ids].get(out_sharding=_Pbatch)
 
     for block in params.blocks:
-        attn_in = _rms_norm(hidden, block.rms_attn, cfg.layer_norm_eps)
+        attn_in = rms_norm(hidden, block.rms_attn, cfg.layer_norm_eps)
         q = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_q), "... (n d) -> ... n d", d=head_dim)
         k = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(jnp.einsum("bsh,hd->bsd", attn_in, block.attn.w_v), "... (m d) -> ... m d", d=head_dim)
@@ -169,11 +172,11 @@ def _transformer_hidden(
         attn_out = jnp.einsum("bsh,hd->bsd", attn_out, block.attn.w_o, out_sharding=_Pbatch)
 
         hidden = hidden + attn_out
-        mlp_in = _rms_norm(hidden, block.rms_mlp, cfg.layer_norm_eps)
-        mlp_out = _mlp(block, mlp_in)
+        mlp_in = rms_norm(hidden, block.rms_mlp, cfg.layer_norm_eps)
+        mlp_out = mlp(block, mlp_in)
         hidden = hidden + mlp_out
 
-    hidden = _rms_norm(hidden, params.final_norm, cfg.layer_norm_eps)
+    hidden = rms_norm(hidden, params.final_norm, cfg.layer_norm_eps)
     return hidden
 
 

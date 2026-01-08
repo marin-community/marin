@@ -6,9 +6,10 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 import pytest
-from jax.sharding import AxisType, Mesh, PartitionSpec as P
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import AttentionMask, attention, reference_attention
+from levanter.grug.attention import _positions_from_segment_ids_2d as grug_positions_from_segments
 from levanter.grug.config import GrugModelConfig
 from levanter.grug.model import forward, init_parameters
 
@@ -17,11 +18,11 @@ def _make_grug_mesh() -> Mesh:
     devices = jax.devices()
     if not devices:
         raise RuntimeError("No JAX devices available")
-    mesh_devices = np.array(devices).reshape(1, 1, len(devices))
+    mesh_devices = np.array(devices).reshape(1, 1, 1, len(devices))
     return Mesh(
         mesh_devices,
-        axis_names=("replica", "data", "model"),
-        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+        axis_names=("replica_dcn", "replica", "data", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
     )
 
 
@@ -68,6 +69,20 @@ def test_parameter_sharding_specs_are_named():
         assert getattr(params.token_embed.sharding, "spec", None) == expected_vocab
         assert getattr(params.output_proj.sharding, "spec", None) == expected_vocab
         assert getattr(params.blocks[0].attn.w_q.sharding, "spec", None) == P("data", "model")
+
+
+def test_full_like_preserves_sharding_under_mesh():
+    mesh = _make_grug_mesh()
+    with jax.set_mesh(mesh):
+        sharding = NamedSharding(mesh, P(("replica_dcn", "replica", "data"), None))
+        segment_ids = jax.device_put(jnp.array([[0, 0, 1, 1], [5, 5, 5, -1]], dtype=jnp.int32), sharding)
+
+        batch_slice = segment_ids[:, 0]
+        init_last = jnp.full_like(batch_slice, jnp.int32(-2))
+        init_pos = jnp.full_like(batch_slice, jnp.int32(-1))
+
+        assert getattr(batch_slice.sharding, "spec", None) == getattr(init_last.sharding, "spec", None)
+        assert getattr(batch_slice.sharding, "spec", None) == getattr(init_pos.sharding, "spec", None)
 
 
 def test_attentionmask_materialize_causal():
@@ -127,6 +142,26 @@ def test_attentionmask_materialize_segment_ids_per_batch():
     assert allowed is not None
     assert allowed.shape == (2, 3, 4)
     assert jnp.array_equal(allowed, expected)
+
+
+def test_positions_from_segment_ids_resets_per_segment():
+    segment_ids = jnp.array(
+        [
+            [0, 0, 1, 1, -1, -1],
+            [5, 5, 5, 6, 6, 6],
+        ],
+        dtype=jnp.int32,
+    )
+    pos = grug_positions_from_segments(segment_ids, pad_value=-1)
+    expected = jnp.array(
+        [
+            [0, 1, 0, 1, -1, -1],
+            [0, 1, 2, 0, 1, 2],
+        ],
+        dtype=jnp.int32,
+    )
+    assert pos.shape == segment_ids.shape
+    assert jnp.array_equal(pos, expected)
 
 
 @pytest.mark.parametrize("mode", ["causal", "causal_window", "causal_window_segments"])

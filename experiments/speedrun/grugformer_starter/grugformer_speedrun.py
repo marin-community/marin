@@ -29,6 +29,7 @@ How to run:
 # nodryrun
 
 import logging
+import os
 from dataclasses import dataclass
 
 from fray.cluster import ResourceConfig
@@ -46,6 +47,49 @@ from experiments.llama import llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
 
 logger = logging.getLogger("ray")
+
+
+def _get_num_train_steps(param_count: int, batch_size: int, max_seq_len: int, tpp: int = 20) -> int:
+    total_tokens = param_count * tpp
+    return max(1, total_tokens // (batch_size * max_seq_len))
+
+
+def _size_presets() -> dict[str, "GrugformerConfig"]:
+    base = dict(max_seq_len=2048, tie_embeddings=False, head_dim=None)
+    return {
+        "130m": GrugformerConfig(
+            hidden_dim=512, intermediate_dim=1792, num_layers=6, num_heads=8, num_kv_heads=8, **base
+        ),
+        "300m": GrugformerConfig(
+            hidden_dim=768, intermediate_dim=2688, num_layers=12, num_heads=12, num_kv_heads=12, **base
+        ),
+        "520m": GrugformerConfig(
+            hidden_dim=1024, intermediate_dim=3584, num_layers=24, num_heads=16, num_kv_heads=16, **base
+        ),
+        "1_2b": GrugformerConfig(
+            hidden_dim=2048, intermediate_dim=7168, num_layers=16, num_heads=16, num_kv_heads=16, **base
+        ),
+    }
+
+
+def _resource_presets(use_tpu: bool = False):
+    if use_tpu:
+        return {
+            "130m": ResourceConfig.with_tpu("v5p-8"),
+            "300m": ResourceConfig.with_tpu("v5p-8"),
+            "520m": ResourceConfig.with_tpu("v5p-8"),
+            "1_2b": ResourceConfig.with_tpu("v5p-8"),
+        }
+    return {
+        "130m": ResourceConfig.with_gpu("A100-80G", count=1),
+        "300m": ResourceConfig.with_gpu("A100-80G", count=1),
+        "520m": ResourceConfig.with_gpu("A100-80G", count=2),
+        "1_2b": ResourceConfig.with_gpu("A100-80G", count=4),
+    }
+
+
+def _batch_sizes() -> dict[str, int]:
+    return {"130m": 128, "300m": 128, "520m": 128, "1_2b": 256}
 
 
 @LmConfig.register_subclass("grugformer")
@@ -116,42 +160,58 @@ class GrugformerConfig(LmConfig[GrugWrapper]):
         return int(transformer + token_embedding + head)
 
 
-speedrun_config = SpeedrunConfig(
-    author=Author(
-        name="__YOUR_NAME__",
-        affiliation="__YOUR_AFFILIATION__",
-        url="__YOUR_URL__",
-    ),
-    description="Grugformer starter (TPU Splash Attention; reference fallback elsewhere).",
-    model_config=GrugformerConfig(
-        max_seq_len=2048,
-        hidden_dim=1024,
-        intermediate_dim=2752,
-        num_layers=12,
-        num_heads=16,
-        num_kv_heads=16,
-        head_dim=None,
-        tie_embeddings=False,
-    ),
-    train_config=SimpleTrainConfig(
-        ResourceConfig.with_gpu("A100", count=1),
-        train_batch_size=32,
-        num_train_steps=100,
+def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]:
+    sizes = _size_presets()
+    if size not in sizes:
+        raise ValueError(f"Unknown size: {size}")
+    model_cfg = sizes[size]
+
+    batch = _batch_sizes()[size]
+    max_seq_len = model_cfg.max_seq_len
+    params = int(model_cfg.total_trainable_params(llama3_tokenizer_vocab_size))
+    steps = _get_num_train_steps(params, batch, max_seq_len, tpp=20)
+    resources = _resource_presets(use_tpu=use_tpu)[size]
+
+    train = SimpleTrainConfig(
+        resources,
+        train_seq_len=max_seq_len,
+        train_batch_size=batch,
+        num_train_steps=steps,
         learning_rate=3e-3,
         weight_decay=0.1,
         steps_per_eval=500,
-    ),
-)
+        steps_per_hf_export=-1,
+        explicit_mesh_axes=True,
+    )
 
-speedrun_config.print_run_info()
+    run_name = f"grugformer_starter_{size}"
+    desc = f"Grugformer starter (ejkernel blocksparse attention) ({size})."
+    cfg = SpeedrunConfig(
+        author=Author(
+            name="__YOUR_NAME__",
+            affiliation="__YOUR_AFFILIATION__",
+            url="__YOUR_URL__",
+        ),
+        description=desc,
+        model_config=model_cfg,
+        train_config=train,
+    )
+    return run_name, cfg
 
 
 def main() -> None:
-    # Ensure model vocab matches the default Llama-3 tokenizer used by speedrun harness.
-    if speedrun_config.vocab_size != llama3_tokenizer_vocab_size:
-        raise AssertionError("Speedrun vocab_size mismatch; expected llama3_tokenizer_vocab_size")
+    sizes = ["130m", "300m", "520m", "1_2b"]
+    use_tpu = bool(int(os.environ.get("SR_USE_TPU", "0")))
 
-    executor_main(steps=default_speedrun("grugformer_starter", speedrun_config))
+    steps = []
+    for s in sizes:
+        name, cfg = build_run(s, use_tpu=use_tpu)
+        if cfg.vocab_size != llama3_tokenizer_vocab_size:
+            raise AssertionError("Speedrun vocab_size mismatch; expected llama3_tokenizer_vocab_size")
+        cfg.print_run_info()
+        steps.extend(default_speedrun(name, cfg))
+
+    executor_main(steps=steps, description="Grugformer starter (ejkernel blocksparse attention).")
 
 
 if __name__ == "__main__":

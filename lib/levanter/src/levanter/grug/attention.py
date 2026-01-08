@@ -15,6 +15,38 @@ from haliax.partitioning import _get_mesh
 from .config import RotaryConfig
 
 
+def _positions_from_segment_ids_2d(segment_ids: jax.Array, *, pad_value: int) -> jax.Array:
+    """Compute per-token positions that reset at segment boundaries.
+
+    `segment_ids` uses -1 for padding. This helper is sharding-friendly: it keeps the batch
+    dimension intact and scans over the sequence dimension, avoiding `vmap(scan)` patterns
+    that can trigger sharding errors on TPU.
+    """
+    if segment_ids.ndim != 2:
+        raise ValueError(f"segment_ids must be 2D (batch, seq), got shape={segment_ids.shape}")
+
+    # Make sure the scan carry has the same sharding as the per-batch ids.
+    # Using plain `jnp.full((batch,), ...)` can default to replicated sharding and then
+    # JAX will error in `where/select` when mixing sharded and replicated values.
+    init_last = jnp.full_like(segment_ids[:, 0], jnp.int32(-2))
+    init_pos = jnp.full_like(segment_ids[:, 0], jnp.int32(-1))
+    pad = jnp.int32(pad_value)
+
+    # Scan over sequence; lax.scan is time-major, so swap to (seq, batch).
+    segment_tm = jnp.swapaxes(segment_ids.astype(jnp.int32), 0, 1)
+
+    def step(carry, seg_t):
+        last_seg, pos = carry
+        is_new = seg_t != last_seg
+        pos = jnp.where(is_new, jnp.zeros_like(pos), pos + jnp.int32(1))
+        last_seg = jnp.where(is_new, seg_t, last_seg)
+        pos_out = jnp.where(seg_t < 0, jnp.full_like(pos, pad), pos)
+        return (last_seg, pos), pos_out
+
+    (_, _), pos_tm = jax.lax.scan(step, (init_last, init_pos), segment_tm)
+    return jnp.swapaxes(pos_tm, 0, 1)
+
+
 @functools.partial(
     register_dataclass, data_fields=["segment_ids"], meta_fields=["is_causal", "causal_offset", "sliding_window"]
 )

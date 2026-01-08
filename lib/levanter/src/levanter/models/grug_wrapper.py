@@ -3,7 +3,7 @@
 
 # Adapter to wire the grug model into the LmHeadModel API.
 
-from typing import Any, Protocol
+from typing import Any, Protocol, Type
 
 import equinox as eqx
 import jax
@@ -15,13 +15,14 @@ from levanter.grug.attention import AttentionMask
 from levanter.grug.model import activations as grug_activations
 from levanter.grug.model import init_parameters
 from levanter.layers.attention import AttentionMask as LevanterAttentionMask
-from levanter.models.lm_model import LmHeadModel
+from levanter.models.lm_model import LmHeadModel, LmConfig, LmT
 
 
 class GrugConfigLike(Protocol):
     vocab_size: int
     max_seq_len: int
     hidden_dim: int
+    cross_entropy_block_size: int | None = None
 
 
 class GrugForwardFn(Protocol):
@@ -44,11 +45,7 @@ class GrugLmHeadFn(Protocol):
 
 
 def _default_lm_head_fn(params: PyTree) -> jax.Array:
-    output_proj = getattr(params, "output_proj", None)
-    if output_proj is None:
-        raise AttributeError("GrugWrapper params must have an output_proj field, or provide lm_head_fn.")
-    return output_proj
-
+    return params.output_proj  # type: ignore[attr-defined]
 
 class GrugWrapper(LmHeadModel[Any]):
     """Minimal LmHeadModel wrapper around the standalone Grug transformer."""
@@ -65,10 +62,7 @@ class GrugWrapper(LmHeadModel[Any]):
 
     @property
     def Pos(self) -> Axis:
-        max_seq_len = getattr(self.grug_config, "max_seq_len", None)
-        if max_seq_len is None:
-            raise AttributeError("grug_config must define max_seq_len.")
-        return Axis("position", max_seq_len)
+        return Axis("position", self.grug_config.max_seq_len)
 
     @property
     def KeyPos(self) -> Axis:
@@ -76,17 +70,11 @@ class GrugWrapper(LmHeadModel[Any]):
 
     @property
     def Vocab(self) -> Axis:
-        vocab_size = getattr(self.grug_config, "vocab_size", None)
-        if vocab_size is None:
-            raise AttributeError("grug_config must define vocab_size.")
-        return Axis("vocab", vocab_size)
+        return Axis("vocab", self.grug_config.vocab_size)
 
     @property
     def Embed(self) -> Axis:
-        hidden_dim = getattr(self.grug_config, "hidden_dim", None)
-        if hidden_dim is None:
-            raise AttributeError("grug_config must define hidden_dim.")
-        return Axis("embed", hidden_dim)
+        return Axis("embed", self.grug_config.hidden_dim)
 
     @classmethod
     def init(
