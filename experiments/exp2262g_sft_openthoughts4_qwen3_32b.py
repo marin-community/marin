@@ -76,7 +76,7 @@ TRAIN_BATCH_SIZE = 128
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 mixture_sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v5litepod-128"),
+    resources=ResourceConfig.with_tpu("v5p-64"),
     tokenizer=qwen2_5_7b_instruct_tokenizer,
     model_name_or_path="Qwen/Qwen2.5-7B-Instruct",
     train_batch_size=TRAIN_BATCH_SIZE,
