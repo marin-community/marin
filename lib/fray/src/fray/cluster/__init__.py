@@ -168,33 +168,32 @@ def current_cluster() -> Cluster:
     try:
         import ray
 
-        # Only use RayCluster if:
-        # 1. We're running inside a Ray context (worker/actor)
-        # 2. Ray is initialized with an explicit address (not 'auto' or 'local')
-        if _is_running_in_ray_context():
-            logger.info("Running in Ray context, using RayCluster")
+        # Use RayCluster if Ray is already initialized or we're in a Ray context
+        # Note: Some operations (like Zephyr data processing) require Ray,
+        # so we use RayCluster when Ray is initialized, even for local execution
+        if ray.is_initialized() or _is_running_in_ray_context():
+            logger.info("Auto-detected Ray cluster")
             from fray.cluster.ray.cluster import RayCluster
 
             cluster = RayCluster()
             set_current_cluster(cluster)
             return cluster
 
-        if ray.is_initialized():
-            # Check if this is a local auto-initialized Ray (single-node)
-            # vs an explicit multi-node cluster
-            address = ray.get_runtime_context().gcs_address
-            # Local Ray uses addresses like "127.0.0.1:..." or just initializes without explicit address
-            # For single-node local execution, prefer LocalCluster to avoid overhead
-            if address and not (address.startswith("127.0.0.1") or address.startswith("localhost")):
-                logger.info(f"Detected multi-node Ray cluster at {address}, using RayCluster")
-                from fray.cluster.ray.cluster import RayCluster
+        # Check for local accelerators and initialize Ray with them
+        has_accelerators, custom_resources = _detect_local_accelerators()
+        if has_accelerators:
+            logger.info(f"Detected local accelerators, initializing Ray (custom resources: {custom_resources})")
+            # Let Ray auto-detect GPUs; only pass additional custom resources
+            ray.init(
+                namespace="marin",
+                ignore_reinit_error=True,
+                resources=custom_resources if custom_resources else None,
+            )
+            from fray.cluster.ray.cluster import RayCluster
 
-                cluster = RayCluster()
-                set_current_cluster(cluster)
-                return cluster
-            else:
-                logger.info(f"Detected local Ray cluster at {address}, shutting down for LocalCluster")
-                ray.shutdown()
+            cluster = RayCluster()
+            set_current_cluster(cluster)
+            return cluster
     except ImportError:
         pass
 
