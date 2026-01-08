@@ -20,16 +20,19 @@ provide model-specific decisions for:
 - Model config building (returns LlamaConfig or subclass)
 - Optimizer config building
 - Candidate generation for isoflop sweeps
+
+Orchestration logic (generating train args, predicting optimal configs) lives in
+the library functions in isoflop_analysis.py, not in recipes.
 """
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Protocol
 
 from levanter.models.llama import LlamaConfig
 from levanter.optim.config import OptimizerConfig
 
 if TYPE_CHECKING:
-    from marin.scaling_laws.isoflop_analysis import CandidateConfig, IsoFlopTrainArgs
+    from marin.scaling_laws.isoflop_analysis import CandidateConfig
 
 # Default constants
 DEFAULT_SEQ_LEN = 4096
@@ -40,23 +43,21 @@ DEFAULT_FLOP_TOLERANCE = 0.01  # Relative error tolerance for FLOP budget
 class ScalingRecipe(Protocol):
     """Protocol defining the interface for scaling law recipes.
 
-    Concrete implementations (e.g., Marin2025Recipe) should implement all methods
-    with their specific hyperparameters and formulas.
+    Concrete implementations (e.g., Marin2025Recipe) should implement these
+    model-specific methods. Orchestration logic (generating training args,
+    predicting optimal configs) is handled by library functions that use
+    these core methods.
     """
 
     name: str
     """Name identifying this recipe (e.g., 'marin-2025')."""
 
-    def compute_num_layers(self, hidden_size: int) -> int:
-        """Compute number of layers from hidden size using the recipe's depth-width formula."""
-        ...
-
-    def hidden_size_for_params(self, target_params: int, vocab_size: int) -> int:
-        """Find the hidden size that gives approximately target_params."""
-        ...
-
     def build_model_config(self, target_params: int, vocab_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
         """Build a model config for a target parameter count."""
+        ...
+
+    def estimate_memory_bytes(self, model_config: LlamaConfig, batch_size: int, vocab_size: int) -> int:
+        """Estimate memory usage in bytes for training with this model config."""
         ...
 
     def build_optimizer_config(self, candidate: "CandidateConfig", vocab_size: int) -> OptimizerConfig:
@@ -72,29 +73,4 @@ class ScalingRecipe(Protocol):
         flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
     ) -> "Iterator[CandidateConfig]":
         """Yield candidate configurations within the FLOP budget."""
-        ...
-
-    def generate_isoflop_train_args(
-        self,
-        budgets: Sequence[float],
-        experiment_name: str,
-        vocab_size: int,
-        seq_len: int = DEFAULT_SEQ_LEN,
-        steps_per_run: int = DEFAULT_STEPS_PER_RUN,
-        flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
-    ) -> "list[IsoFlopTrainArgs]":
-        """Generate training arguments for each candidate in an isoflop sweep."""
-        ...
-
-    def predict_optimal_config(
-        self,
-        scaling_fits: "dict[str, tuple[float, float]]",
-        target_flops: float,
-        label: str,
-        vocab_size: int,
-        seq_len: int = DEFAULT_SEQ_LEN,
-        steps_per_run: int = DEFAULT_STEPS_PER_RUN,
-        flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
-    ) -> "CandidateConfig | None":
-        """Predict optimal training config for a target compute budget using fitted scaling laws."""
         ...

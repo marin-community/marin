@@ -19,8 +19,7 @@ sizes while keeping the total training FLOPs roughly constant.
 """
 
 import math
-import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 
 from levanter.data.text import LMMixtureDatasetConfig
@@ -47,7 +46,6 @@ from marin.scaling_laws import (
     DEFAULT_SEQ_LEN,
     DEFAULT_STEPS_PER_RUN,
     CandidateConfig,
-    IsoFlopTrainArgs,
     ScalingRecipe,
     generate_isoflop_train_args,
     pick_v5p_type,
@@ -203,6 +201,24 @@ class Marin2025Recipe:
             rope=Llama3RotaryEmbeddingsConfig(),
         )
 
+    def estimate_memory_bytes(
+        self,
+        model_config: LlamaConfig,
+        batch_size: int,
+        vocab_size: int,
+        optim_mult: int = 3,
+        dtype_size: int = 4,
+        fudge_factor: float = 2.0,
+    ) -> int:
+        """Estimate float32 memory usage in bytes for training."""
+        param_count = self._compute_params_for_hidden_size(model_config.hidden_dim, vocab_size)
+        param_bytes = param_count * optim_mult * dtype_size
+        act_bytes = (batch_size * model_config.max_seq_len) * (
+            (model_config.hidden_dim * model_config.num_layers) + vocab_size * fudge_factor
+        )
+        total_bytes = param_bytes + act_bytes
+        return int(total_bytes * fudge_factor)
+
     def build_optimizer_config(self, candidate: CandidateConfig, vocab_size: int) -> OptimizerConfig:
         """Build optimizer config for a candidate."""
         hidden_size = self.hidden_size_for_params(candidate.target_params, vocab_size)
@@ -266,86 +282,6 @@ class Marin2025Recipe:
                 target_params=target_params,
                 flops_budget=budget,
             )
-
-    def generate_isoflop_train_args(
-        self,
-        budgets: Sequence[float],
-        experiment_name: str,
-        vocab_size: int,
-        seq_len: int = DEFAULT_SEQ_LEN,
-        steps_per_run: int = DEFAULT_STEPS_PER_RUN,
-        flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
-    ) -> list[IsoFlopTrainArgs]:
-        """Generate training arguments for each candidate in an isoflop sweep."""
-        results: list[IsoFlopTrainArgs] = []
-
-        for budget in budgets:
-            for candidate in self.candidate_configs(budget, vocab_size, seq_len, steps_per_run, flop_tolerance):
-                run_name = (
-                    f"isoflop-{budget:.0e}-N{candidate.target_params:.0e}-" f"B{candidate.batch_size}-{experiment_name}"
-                )
-
-                tags = (
-                    f"FLOPs={budget:.1e}",
-                    f"N={candidate.target_params:.1e}",
-                    f"B={candidate.batch_size}",
-                    f"steps={candidate.train_steps}",
-                    f"tokens={candidate.tokens:.1e}",
-                )
-
-                output_path = os.path.join("checkpoints", "isoflop", run_name)
-
-                results.append(
-                    IsoFlopTrainArgs(
-                        candidate=candidate,
-                        run_name=run_name,
-                        tags=tags,
-                        output_path=output_path,
-                    )
-                )
-
-        return results
-
-    def predict_optimal_config(
-        self,
-        scaling_fits: dict[str, tuple[float, float]],
-        target_flops: float,
-        label: str,
-        vocab_size: int,
-        seq_len: int = DEFAULT_SEQ_LEN,
-        steps_per_run: int = DEFAULT_STEPS_PER_RUN,
-        flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
-    ) -> CandidateConfig | None:
-        """Predict optimal training config for a target compute budget using fitted scaling laws."""
-        import logging
-
-        logger = logging.getLogger(__name__)
-
-        if label not in scaling_fits:
-            logger.warning(f"Label '{label}' not found in scaling fits")
-            return None
-
-        alpha, A = scaling_fits[label]
-        optimal_tokens = A * (target_flops**alpha)
-
-        logger.info(f"Predicted optimal tokens for {target_flops:.2e} FLOPs: {optimal_tokens:.2e}")
-
-        candidates = list(self.candidate_configs(target_flops, vocab_size, seq_len, steps_per_run, flop_tolerance))
-
-        if not candidates:
-            logger.warning(f"No valid candidates found for budget {target_flops:.2e}")
-            return None
-
-        best = min(candidates, key=lambda c: c.tokens - optimal_tokens if c.tokens >= optimal_tokens else float("inf"))
-        if best.tokens < optimal_tokens:
-            best = max(candidates, key=lambda c: c.tokens)
-
-        logger.info(
-            f"Selected config: N={best.target_params:.2e}, "
-            f"B={best.batch_size}, tokens={best.tokens:.2e} (optimal: {optimal_tokens:.2e})"
-        )
-
-        return best
 
 
 MARIN_2025_RECIPE = Marin2025Recipe()

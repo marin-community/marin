@@ -314,56 +314,6 @@ def solve_for_train_steps(
     return target_flops / (3 * flops_per_token * batch_size * seq_len)
 
 
-def compute_transformer_params(
-    hidden_dim: int,
-    intermediate_dim: int,
-    num_layers: int,
-    num_heads: int,
-    num_kv_heads: int,
-    vocab_size: int,
-    tie_embeddings: bool = False,
-) -> int:
-    """Compute parameter count for a standard transformer (Llama/Qwen architecture).
-
-    This matches the formula used in Levanter's LlamaConfig.total_trainable_params(),
-    allowing parameter estimation without constructing a model config.
-
-    Args:
-        hidden_dim: Model hidden dimension.
-        intermediate_dim: MLP intermediate dimension.
-        num_layers: Number of transformer layers.
-        num_heads: Number of attention heads.
-        num_kv_heads: Number of key-value heads (for GQA).
-        vocab_size: Vocabulary size.
-        tie_embeddings: Whether embeddings are tied (default False).
-
-    Returns:
-        Total parameter count.
-    """
-    token_embedding = vocab_size * hidden_dim
-    head_size = hidden_dim // num_heads
-
-    # Attention: Q, K, V projections + output projection
-    q_proj = hidden_dim * head_size * num_heads
-    kv_proj = 2 * hidden_dim * head_size * num_kv_heads
-    o_proj = head_size * num_heads * hidden_dim
-    attn = q_proj + kv_proj + o_proj
-
-    # MLP: gate, up, down projections (SwiGLU uses 3 matrices)
-    mlp = 3 * hidden_dim * intermediate_dim
-
-    # Per-layer: attention + mlp + 2 RMSNorm
-    transformer_layer = attn + mlp + 2 * hidden_dim
-
-    # Full transformer: layers + final RMSNorm
-    transformer = num_layers * transformer_layer + hidden_dim
-
-    # LM head (separate unless tied)
-    lm_head = 0 if tie_embeddings else token_embedding
-
-    return transformer + token_embedding + lm_head
-
-
 def candidate_configs(
     budget: float,
     vocab_size: int,
@@ -433,7 +383,6 @@ def generate_isoflop_train_args(
 ) -> list[IsoFlopTrainArgs]:
     """Generate model-agnostic training arguments for each candidate in an isoflop sweep.
 
-    This is a convenience function that delegates to recipe.generate_isoflop_train_args().
     Returns IsoFlopTrainArgs containing model-agnostic CandidateConfig objects.
     Use recipe.build_model_config() and recipe.build_optimizer_config() to get
     model-specific configs.
@@ -465,9 +414,30 @@ def generate_isoflop_train_args(
         ...     model_config = recipe.build_model_config(args.candidate.target_params, vocab_size)
         ...     optimizer_config = recipe.build_optimizer_config(args.candidate, vocab_size)
     """
-    return recipe.generate_isoflop_train_args(
-        budgets, experiment_name, vocab_size, seq_len, steps_per_run, flop_tolerance
-    )
+    results: list[IsoFlopTrainArgs] = []
+
+    for budget in budgets:
+        for candidate in recipe.candidate_configs(budget, vocab_size, seq_len, steps_per_run, flop_tolerance):
+            run_name = f"isoflop-{budget:.0e}-N{candidate.target_params:.0e}-B{candidate.batch_size}-{experiment_name}"
+            tags = (
+                f"FLOPs={budget:.1e}",
+                f"N={candidate.target_params:.1e}",
+                f"B={candidate.batch_size}",
+                f"steps={candidate.train_steps}",
+                f"tokens={candidate.tokens:.1e}",
+            )
+            output_path = os.path.join("checkpoints", "isoflop", run_name)
+
+            results.append(
+                IsoFlopTrainArgs(
+                    candidate=candidate,
+                    run_name=run_name,
+                    tags=tags,
+                    output_path=output_path,
+                )
+            )
+
+    return results
 
 
 # ---------------- Helpers ----------------
@@ -743,10 +713,6 @@ def predict_optimal_config(
 ) -> CandidateConfig | None:
     """Predict optimal training config for a target compute budget using fitted scaling laws.
 
-    This is a convenience function that delegates to recipe.predict_optimal_config().
-    The recipe encapsulates all model-specific decisions, while this function provides
-    backward compatibility.
-
     This implements IsoFLOP Approach 2 from the Chinchilla paper:
     1. D_opt (optimal tokens) is found empirically at each compute budget by fitting
        parabolas to actual loss values and finding the minimum.
@@ -768,11 +734,32 @@ def predict_optimal_config(
         CandidateConfig for the predicted optimal, or None if label not in fits
         or no valid candidates found.
     """
-    # Convert ScalingFit NamedTuples to plain tuples for recipe method
-    fits_as_tuples = {k: (v.alpha, v.A) for k, v in scaling_fits.items()}
-    return recipe.predict_optimal_config(
-        fits_as_tuples, target_flops, label, vocab_size, seq_len, steps_per_run, flop_tolerance
+    if label not in scaling_fits:
+        logger.warning(f"Label '{label}' not found in scaling fits")
+        return None
+
+    alpha, A = scaling_fits[label]
+    optimal_tokens = A * (target_flops**alpha)
+
+    logger.info(f"Predicted optimal tokens for {target_flops:.2e} FLOPs: {optimal_tokens:.2e}")
+
+    candidates = list(recipe.candidate_configs(target_flops, vocab_size, seq_len, steps_per_run, flop_tolerance))
+
+    if not candidates:
+        logger.warning(f"No valid candidates found for budget {target_flops:.2e}")
+        return None
+
+    # Find candidate with tokens >= optimal_tokens, closest to optimal
+    best = min(candidates, key=lambda c: c.tokens - optimal_tokens if c.tokens >= optimal_tokens else float("inf"))
+    if best.tokens < optimal_tokens:
+        best = max(candidates, key=lambda c: c.tokens)
+
+    logger.info(
+        f"Selected config: N={best.target_params:.2e}, "
+        f"B={best.batch_size}, tokens={best.tokens:.2e} (optimal: {optimal_tokens:.2e})"
     )
+
+    return best
 
 
 def predict_optimal_configs_for_budgets(

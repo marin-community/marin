@@ -38,49 +38,6 @@ V5P_CORE_OPTIONS = [8, 16, 32, 128, 256, 512]
 """Available TPU v5p core configurations (slice sizes)."""
 
 
-def estimate_memory_bytes(
-    param_count: int,
-    hidden_dim: int,
-    num_layers: int,
-    batch: int,
-    seq_len: int,
-    vocab: int,
-    optim_mult: int = 3,
-    dtype_size: int = 4,
-    fudge_factor: float = 2,
-) -> int:
-    """Estimate float32 memory usage (in bytes) for one training step.
-
-    This is a conservative estimate for LLaMA-style architectures with
-    Adam optimizer. The fudge_factor provides a safety margin for
-    additional memory overhead not captured in the simple model.
-
-    Args:
-        param_count: Number of model parameters.
-        hidden_dim: Model hidden size.
-        num_layers: Number of Transformer layers.
-        batch: Training batch size.
-        seq_len: Sequence length.
-        vocab: Vocabulary size.
-        optim_mult: Optimizer memory multiplier (default 3 for Adam with
-            momentum and variance states).
-        dtype_size: Bytes per float (default 4 for float32).
-        fudge_factor: Safety margin multiplier (default 2x).
-
-    Returns:
-        Estimated total memory in bytes.
-
-    Note:
-        This assumes a LLaMA-style architecture with Adam optimizer in float32.
-        Actual memory usage may vary based on specific model architecture,
-        optimizer choice, and JAX/XLA memory optimizations.
-    """
-    param_bytes = param_count * optim_mult * dtype_size
-    act_bytes = (batch * seq_len) * ((hidden_dim * num_layers) + vocab * fudge_factor)
-    total_bytes = param_bytes + act_bytes
-    return int(total_bytes * fudge_factor)
-
-
 def pick_v5p_type(
     candidate: "CandidateConfig",
     vocab_size: int,
@@ -101,17 +58,8 @@ def pick_v5p_type(
     Raises:
         ValueError: If the model is too large for available v5p slices.
     """
-    hidden_size = recipe.hidden_size_for_params(candidate.target_params, vocab_size)
-    num_layers = recipe.compute_num_layers(hidden_size)
-
-    need_bytes = estimate_memory_bytes(
-        candidate.target_params,
-        hidden_size,
-        num_layers,
-        candidate.batch_size,
-        seq_len,
-        vocab_size,
-    )
+    model_config = recipe.build_model_config(candidate.target_params, vocab_size, seq_len)
+    need_bytes = recipe.estimate_memory_bytes(model_config, candidate.batch_size, vocab_size)
     chip_bytes = HBM_PER_CHIP_GIB * 1024**3
     chips = math.ceil(need_bytes / chip_bytes)
     cores_req = chips * CORES_PER_CHIP
