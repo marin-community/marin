@@ -405,8 +405,7 @@ class ScalingRecipe:
         for budget in budgets:
             for candidate in self.candidate_configs(budget, vocab_size, seq_len, steps_per_run, flop_tolerance):
                 run_name = (
-                    f"isoflop-{budget:.0e}-N{candidate.target_params:.0e}-"
-                    f"B{candidate.batch_size}-{experiment_name}"
+                    f"isoflop-{budget:.0e}-N{candidate.target_params:.0e}-" f"B{candidate.batch_size}-{experiment_name}"
                 )
 
                 tags = (
