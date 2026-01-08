@@ -3,7 +3,7 @@
 
 # Adapter to wire the grug model into the LmHeadModel API.
 
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import equinox as eqx
 import jax
@@ -152,7 +152,7 @@ class GrugWrapper(LmHeadModel[Any]):
         example: LmExample,
         *,
         key=None,
-        reduction: hax.ReductionFunction | None = hax.mean,
+        reduction: hax.ReductionFunction | None = cast(hax.ReductionFunction | None, hax.mean),
         reduction_axis: hax.AxisSelection | None = None,
         logsumexp_weight: float | None = None,
         loss_dtype: jnp.dtype | None = jnp.float32,

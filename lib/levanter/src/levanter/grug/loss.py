@@ -57,15 +57,14 @@ def linear_softmax_cross_entropy_loss_and_logz(
     nblocks = (vocab_size + block_size - 1) // block_size
     vocab_padded = nblocks * block_size
     if vocab_padded != vocab_size:
-        # TODO: avoid materializing a padded `lm_head` by switching to a tokamax/pallas kernel (TPU)
-        # or by clamping the final block slice + masking. For now, the overhead is bounded by
-        # `hidden_dim * (block_size - 1)` elements.
-        pad = jnp.zeros((hidden_dim, vocab_padded - vocab_size), dtype=lm_head.dtype)
-        # If lm_head is sharded, concatenate requires the pad to have the same sharding.
-        lm_head_sharding = getattr(lm_head, "sharding", None)
-        if isinstance(lm_head_sharding, NamedSharding) and isinstance(lm_head_sharding.spec, P):
-            pad = reshard(pad, lm_head_sharding.spec)
-        lm_head = jnp.concatenate([lm_head, pad], axis=1)
+        # We pad the vocab dimension so we can `dynamic_slice_in_dim(..., slice_size=block_size)`
+        # for every block. Use `lax.pad` (rather than concatenating a freshly-created zeros array)
+        # so sharding stays consistent under explicit meshes.
+        lm_head = jax.lax.pad(
+            lm_head,
+            jnp.array(0, dtype=lm_head.dtype),
+            padding_config=((0, 0, 0), (0, vocab_padded - vocab_size, 0)),
+        )
     flat_hidden = hidden.reshape((-1, hidden_dim)).astype(dtype)
     flat_labels = labels.reshape((-1,)).astype(jnp.int32)
 
