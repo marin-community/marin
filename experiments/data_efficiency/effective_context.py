@@ -35,8 +35,15 @@ val_name_dict = {
     "dclm": None,
     "dc_t10x": ["dc_t10x_val", "dc_t10x_val_shuffled"],
     "dc_t10x_shuffled": ["dc_t10x_val", "dc_t10x_val_shuffled"],
+    "dc_40x": ["dc_40x_val", "dc_40x_val_shuffled"],
+    "dc_40x_shuffled": ["dc_40x_val", "dc_40x_val_shuffled"],
     "dc_100x": ["dc_100x_val", "dc_100x_val_shuffled", "dc_1k_val_normal"],
     "dc_100x_shuffled": ["dc_100x_val", "dc_100x_val_shuffled", "dc_1k_val_normal"],
+    "dc_100x_v2": ["dc_100x_v2_val", "dc_100x_v2_val_shuffled", "dc_1k_val_1_5"],
+    "dc_100x_v2_shuffled": ["dc_100x_v2_val", "dc_100x_v2_val_shuffled", "dc_1k_val_1_5"],
+    "dc_100x_v2_mixed": ["dc_100x_v2_val", "dc_100x_v2_val_shuffled", "dc_1k_val_1_5"],
+    "dc_100x_v2_submixed": ["dc_100x_v2_val", "dc_100x_v2_val_shuffled", "dc_1k_val_1_5"],
+    "dc_100x_v2_doubled": ["dc_100x_v2_val", "dc_100x_v2_val_shuffled", "dc_1k_val_1_5"],
     "dc_shuffled": ["dc_t10x_val", "dc_t10x_val_shuffled"],
     "dc_1m": ["dc_1k_val_normal", "dc_t10x_val", "dc_t10x_val_shuffled"],
     "dc_1m_mix": ["dc_1k_val_normal", "dc_t10x_val", "dc_t10x_val_shuffled"],
@@ -66,7 +73,7 @@ train_steps = [
         )
 
     ###### Pick one of convex mode or standard mode ######
-    ## Convex mode
+    # Convex mode
     #    for base_train_steps, epochs, lr, weight_decay, model_name in get_bounding_box(base_train_steps_center, epochs_center, lr_center, weight_decay_center, model_name_center)
     # ]
     # for base_train_steps_center, epochs_center, lr_center, weight_decay_center, model_name_center, batch_size, train_seq_len in [
@@ -82,10 +89,14 @@ train_steps = [
         # (750, 16, 3e-3, 1.6, "300m4k", 256, 1024),
         # (750, 16, 3e-3, 1.6, "300m4k", 128, 2048),
         (750, 16, 3e-3, 1.6, "300m4k", 64, 4096),
+        # (1500, 8, 3e-3, 1.6, "300m4k", 64, 4096),
+        # (1500, 8, 3e-3, 1.6, "300m4k", 64, 4096),
         # (750, 16, 3e-3, 1.6, "gdn300m4k", 1024, 256),
         # (750, 8, 3e-3, 1.6, "gdn300m4k", 64, 4096),
     ]
-    for train_data_name in ["dc_100x", "dc_100x_shuffled"]
+    # for train_data_name in ["dc_100x", "dc_100x_shuffled"]
+    # for train_data_name in ["dc_40x", "dc_40x_shuffled", "dc_100x_v2", "dc_100x_v2_shuffled"]
+    for train_data_name in ["dc_100x_v2_doubled"]
     # for train_data_name in ["dc_t10x", "dc_t10x_shuffled"]
     # for train_data_name in ["dc_1_3m", "dc_1_3m_mix"]
     # for train_data_name in ["dclm_shuffled"]

@@ -234,6 +234,34 @@ dclm_train_164k_t10x_shuffled_tokenized = tokenize_data_efficiency_dataset(
     "e8b08b4",
 )
 
+# 40x dense TSP data
+
+dclm_train_164k_t40x_tsp_tokenized = tokenize_data_efficiency_dataset(
+    "dclm_train_164k_t40x_tsp",
+    "konwoo/dclm-40x-tsp-train",
+    "3df9749",
+)
+
+dclm_train_164k_t40x_tsp_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "dclm_train_164k_t40x_tsp_shuffled",
+    "konwoo/dclm-40x-tsp-train-shuffled",
+    "eff3412",
+)
+
+dclm_val_1k_t40x_tsp_tokenized = tokenize_data_efficiency_dataset(
+    "dclm_val_1k_t40x_tsp",
+    "konwoo/dclm-40x-tsp-val",
+    "71666ae",
+    is_validation=True,
+)
+
+dclm_val_1k_t40x_tsp_shuffled_tokenized = tokenize_data_efficiency_dataset(
+    "dclm_val_1k_t40x_tsp_shuffled",
+    "konwoo/dclm-40x-tsp-val-shuffled",
+    "b1ab43d",
+    is_validation=True,
+)
+
 ## 100x dense TSP data
 
 dclm_train_164k_t100x_tsp_tokenized = tokenize_data_efficiency_dataset(
@@ -262,6 +290,58 @@ dclm_val_1k_t100x_tsp_shuffled_tokenized = tokenize_data_efficiency_dataset(
     is_validation=True,
 )
 
+dclm_train_164k_t100x_tsp_tokenized_v2 = tokenize_data_efficiency_dataset(
+    "dclm_train_164k_t100x_tsp_v2",
+    "konwoo/dclm-100x-tsp-v2",
+    "06a49d1",
+)
+
+dclm_train_164k_t100x_tsp_shuffled_tokenized_v2 = tokenize_data_efficiency_dataset(
+    "dclm_train_164k_t100x_tsp_shuffled_v2",
+    "konwoo/dclm-100x-tsp-v2-shuffled",
+    "ceb72a7",
+)
+
+dclm_val_1k_t100x_tsp_tokenized_v2 = tokenize_data_efficiency_dataset(
+    "dclm_val_1k_t100x_tsp_v2",
+    "konwoo/dclm-100x-tsp-v2-val",
+    "0006aff",
+    is_validation=True,
+)
+
+dclm_val_1k_t100x_tsp_shuffled_tokenized_v2 = tokenize_data_efficiency_dataset(
+    "dclm_val_1k_t100x_tsp_shuffled_v2",
+    "konwoo/dclm-100x-tsp-v2-val-shuffled",
+    "c40959c",
+    is_validation=True,
+)
+
+dclm_train_164k_t100x_tsp_mixed_tokenized_v2 = tokenize_data_efficiency_dataset(
+    "dclm_train_164k_t100x_tsp_mixed_v2",
+    "kothasuhas/dclm-100x-tsp-v2-mixed",
+    "b5e8d49",
+)
+
+dclm_train_164k_t100x_tsp_submixed_tokenized_v2 = tokenize_data_efficiency_dataset(
+    "dclm_train_164k_t100x_tsp_submixed_v2",
+    "kothasuhas/dclm-100x-tsp-v2-submixed",
+    "24a85ff",
+)
+
+dclm_train_164k_t100x_tsp_doubled_tokenized_v2 = tokenize_data_efficiency_dataset(
+    "dclm_train_164k_t100x_tsp_doubled_v2",
+    "kothasuhas/dclm-100x-tsp-v2-double",
+    "62cb243",
+)
+
+# generic val set to use
+
+dclm_val_1k_1_5_tokenized = tokenize_data_efficiency_dataset(
+    "dclm_val_1k_1_5",
+    "konwoo/dclm-01-05-26-val-1000",
+    "147eb15",
+    is_validation=True,
+)
 ## 1.64M doc TSP 
 
 dclm_train_1m640k_tsp_tokenized = tokenize_data_efficiency_dataset(
@@ -395,11 +475,25 @@ data_dict = {
     "dc_t10x_val": dclm_val_1k_t10x_tsp_d20_tokenized,
     "dc_t10x_val_shuffled": dclm_val_1k_t10x_tsp_d20_shuffled_tokenized,
     "dc_shuffled": dclm_train_164k_t10x_shuffled_tokenized,
+    # 40x dense TSP data
+    "dc_40x": dclm_train_164k_t40x_tsp_tokenized,
+    "dc_40x_shuffled": dclm_train_164k_t40x_tsp_shuffled_tokenized,
+    "dc_40x_val": dclm_val_1k_t40x_tsp_tokenized,
+    "dc_40x_val_shuffled": dclm_val_1k_t40x_tsp_shuffled_tokenized,
     # 100x dense TSP data
     "dc_100x": dclm_train_164k_t100x_tsp_tokenized,
     "dc_100x_shuffled": dclm_train_164k_t100x_tsp_shuffled_tokenized,
     "dc_100x_val": dclm_val_1k_t100x_tsp_tokenized,
     "dc_100x_val_shuffled": dclm_val_1k_t100x_tsp_shuffled_tokenized,
+    "dc_100x_v2": dclm_train_164k_t100x_tsp_tokenized_v2,
+    "dc_100x_v2_shuffled": dclm_train_164k_t100x_tsp_shuffled_tokenized_v2,
+    "dc_100x_v2_mixed": dclm_train_164k_t100x_tsp_mixed_tokenized_v2,
+    "dc_100x_v2_submixed": dclm_train_164k_t100x_tsp_submixed_tokenized_v2,
+    "dc_100x_v2_doubled": dclm_train_164k_t100x_tsp_doubled_tokenized_v2,
+    "dc_100x_v2_val": dclm_val_1k_t100x_tsp_tokenized_v2,
+    "dc_100x_v2_val_shuffled": dclm_val_1k_t100x_tsp_shuffled_tokenized_v2,
+    # generic val set to use
+    "dc_1k_val_1_5": dclm_val_1k_1_5_tokenized,
     # 1.64M doc TSP data
     "dc_1m": dclm_train_1m640k_tsp_tokenized,
     "dc_1m_mix": dclm_train_1m640k_tsp_shuffled_tokenized,
