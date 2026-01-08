@@ -151,7 +151,11 @@ def download_hf(cfg: DownloadConfig) -> None:
         Dataset.from_list(download_tasks)
         .map(lambda task: stream_file_to_fsspec(*task))
         .write_jsonl(
-            f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
+            f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl",
+            # Note: skip_existing=False because the Executor already handles resumption
+            # via .executor_status files. Using skip_existing here causes bugs where
+            # .metrics files exist but actual data files don't (e.g., after partial runs).
+            skip_existing=False,
         )
     )
     Backend.execute(pipeline)
