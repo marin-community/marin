@@ -21,13 +21,11 @@ as a lightweight scaffold for ISOFlop scaling law experiments.
 ExecutorSteps are created directly in this experiment file, following the pattern
 of isolating executor step creation to experiments. The library provides:
 - `generate_isoflop_train_args()`: Computes model/optimizer configs for each sweep point
-- `IsoFlopSweepConfig`: Configuration for the sweep parameters
-- `ScalingRecipe`: Named hyperparameter bundle
+- `ScalingRecipe`: Named hyperparameter bundle with architecture and optimizer settings
 
 This file uses those to create the actual ExecutorSteps.
 """
 
-import dataclasses
 from dataclasses import replace
 
 from levanter.data.text import LMMixtureDatasetConfig
@@ -46,11 +44,19 @@ from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.processing.tokenize import get_vocab_size_for_tokenizer, lm_mixture_data_config
 from marin.scaling_laws import (
+    DEFAULT_BUDGETS,
     CandidateConfig,
-    IsoFlopSweepConfig,
     generate_isoflop_train_args,
 )
-from marin.scaling_laws.recipe import MARIN_2025_RECIPE, ScalingRecipe
+from marin.scaling_laws import ScalingRecipe
+
+
+# --- Scaling Recipe ---
+# This recipe encapsulates all model-specific hyperparameters for Marin scaling experiments.
+# Other experiments can define their own recipes by instantiating ScalingRecipe with different values.
+
+MARIN_2025_RECIPE = ScalingRecipe(name="marin-2025")
+"""Default Marin scaling recipe based on 2025 best practices."""
 
 
 def build_qwen3_from_candidate(candidate: CandidateConfig, seq_len: int = 4096) -> Qwen3Config:
@@ -75,8 +81,10 @@ def create_isoflop_sweep_steps(
     tokenized: InputName | str | LMMixtureDatasetConfig,
     experiment_name: str,
     recipe: ScalingRecipe,
-    sweep_config: IsoFlopSweepConfig | None = None,
+    budgets: tuple[float, ...] = DEFAULT_BUDGETS,
+    tokenizer: str = "stanford-crfm/marin-tokenizer",
     eval_tasks: tuple[EvalTaskConfig, ...] | None = None,
+    seq_len: int = 4096,
 ) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
     """Create ExecutorSteps for an ISOFlop sweep.
 
@@ -87,7 +95,8 @@ def create_isoflop_sweep_steps(
         tokenized: Tokenized dataset to train on.
         experiment_name: Name suffix for the experiment (e.g., 'nemo', 'dclm').
         recipe: ScalingRecipe with hyperparameters - must be explicitly specified.
-        sweep_config: Optional custom sweep config. Uses defaults with the recipe if None.
+        budgets: FLOP budgets to sweep over.
+        tokenizer: Tokenizer to use for vocab size.
         eval_tasks: Optional evaluation tasks to run after training.
 
     Returns:
@@ -95,19 +104,14 @@ def create_isoflop_sweep_steps(
         - steps: Training and evaluation ExecutorSteps for the sweep.
         - candidates: CandidateConfig for each training run with full config details.
     """
-    # Build sweep config with the specified recipe
-    if sweep_config is None:
-        sweep_config = IsoFlopSweepConfig(recipe=recipe)
-    else:
-        sweep_config = dataclasses.replace(sweep_config, recipe=recipe)
-
-    vocab_size = get_vocab_size_for_tokenizer(sweep_config.tokenizer)
+    vocab_size = get_vocab_size_for_tokenizer(tokenizer)
 
     # Library provides the training arguments (model configs, optimizer configs, etc.)
     train_args_list = generate_isoflop_train_args(
-        sweep_config=sweep_config,
+        budgets=budgets,
         experiment_name=experiment_name,
         vocab_size=vocab_size,
+        recipe=recipe,
     )
 
     # Base config for training runs
@@ -129,7 +133,7 @@ def create_isoflop_sweep_steps(
     # Create ExecutorSteps for each candidate configuration
     for args in train_args_list:
         # Build model config from candidate (experiment controls model type)
-        model_config = build_qwen3_from_candidate(args.candidate, sweep_config.seq_len)
+        model_config = build_qwen3_from_candidate(args.candidate, seq_len)
 
         train_cfg = replace(
             base_train_config,
@@ -170,13 +174,11 @@ def create_isoflop_sweep_steps(
 
 # --- Tokenized Datasets ---
 
-dclm_tokenized = dataclasses.replace(
-    default_tokenize(
-        name="dclm_baseline",
-        dataset=downloads["dclm_baseline"],
-        tokenizer=llama3_tokenizer,
-    ).with_output_path("tokenized/dclm_baseline-0206f1/"),
-)
+dclm_tokenized = default_tokenize(
+    name="dclm_baseline",
+    dataset=downloads["dclm_baseline"],
+    tokenizer=llama3_tokenizer,
+).with_output_path("tokenized/dclm_baseline-0206f1/")
 
 dclm_mix = lm_mixture_data_config(
     components={"dclm": dclm_tokenized},
@@ -184,13 +186,11 @@ dclm_mix = lm_mixture_data_config(
     num_validation_sequences={"dclm": 1024},
 )
 
-dolma3_mix_tokenized = dataclasses.replace(
-    default_tokenize(
-        name="dolma3_mix-150B-1025",
-        dataset=downloads["dolma3_mix_150b_1025"],
-        tokenizer=llama3_tokenizer,
-    ).with_output_path("tokenized/dolma3_mix-150B-1025-15d04ee/"),
-)
+dolma3_mix_tokenized = default_tokenize(
+    name="dolma3_mix-150B-1025",
+    dataset=downloads["dolma3_mix_150b_1025"],
+    tokenizer=llama3_tokenizer,
+).with_output_path("tokenized/dolma3_mix-150B-1025-15d04ee/")
 
 dolma3_mix = lm_mixture_data_config(
     components={"dolma3_mix-150B-1025": dolma3_mix_tokenized},
