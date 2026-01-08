@@ -14,30 +14,25 @@
 
 """IsoFLOP analysis for finding compute-optimal training configurations.
 
-Primary usage - create ExecutorSteps for your pipeline:
+This module provides functions and configs for IsoFLOP scaling law analysis.
+Experiments create ExecutorSteps directly using the provided functions.
 
+Example usage in experiments:
+
+    from marin.execution.executor import ExecutorStep, output_path_of
     from marin.scaling_laws import (
-        isoflop_analysis_step,
-        isoflop_plots_step,
-        upload_isoflop_plots_to_wandb_step,
+        IsoFlopAnalysisConfig,
+        run_isoflop_analysis_step,
     )
 
-    # Step 1: Compute metrics and fit scaling laws
-    analysis = isoflop_analysis_step(
+    # Create analysis step
+    analysis_step = ExecutorStep(
         name="my-scaling-analysis",
-        training_runs=my_training_steps,  # list of ExecutorStep
-    )
-
-    # Step 2: Generate HTML plots (optional)
-    plots = isoflop_plots_step(
-        name="my-scaling-plots",
-        analysis_step=analysis,
-    )
-
-    # Step 3: Upload to WandB (optional)
-    upload = upload_isoflop_plots_to_wandb_step(
-        name="upload-scaling-plots",
-        analysis_step=analysis,
+        fn=run_isoflop_analysis_step,
+        config=IsoFlopAnalysisConfig(
+            training_runs=[output_path_of(r) for r in training_runs],
+            output_path="analysis/my-analysis",
+        ),
     )
 
 The analysis step will:
@@ -45,7 +40,7 @@ The analysis step will:
 2. Fit scaling laws to find compute-optimal token counts
 3. Save results to JSON/parquet files
 
-For programmatic use, see `run_isoflop_analysis()` which returns a `IsoFlopAnalysisResult`.
+For programmatic use (without ExecutorStep), see `run_isoflop_analysis()`.
 """
 
 import json
@@ -54,7 +49,7 @@ import math
 import os
 import re
 from collections.abc import Iterator, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field
 from typing import NamedTuple
 
 import fsspec
@@ -63,20 +58,14 @@ import pandas as pd
 from jaxopt import ScipyMinimize
 
 from levanter.models.llama import LlamaConfig
-from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
 
-from marin.execution.executor import ExecutorStep, InputName, output_path_of, this_output_path
 from marin.scaling_laws.eval_metrics_reader import (
     EvalMetricsAnalysisConfig,
     extract_run_name_from_path,
     read_metrics_dataframe,
 )
-from marin.scaling_laws.recipe import MARIN_2025_RECIPE, ScalingRecipe
-from marin.scaling_laws.tpu_utils import (
-    pick_v5p_type,
-)
-from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
+from marin.scaling_laws.recipe import ScalingRecipe
 
 logger = logging.getLogger(__name__)
 
@@ -140,45 +129,10 @@ class QuadraticFitCoeffs(NamedTuple):
     """Maximum token count used for fitting."""
 
 
-# ---------------- IsoFLOP Sweep Config ----------------
-@dataclass(frozen=True)
-class IsoFlopSweepConfig:
-    """Configuration for generating ISOFlop sweep candidate configs.
-
-    This config controls the FLOP budgets and training parameters.
-    Architecture decisions (num_layers formula, hidden_pow bounds, etc.)
-    are controlled by the ScalingRecipe.
-    """
-
-    recipe: ScalingRecipe = MARIN_2025_RECIPE
-    """Scaling recipe with all opinionated hyperparameters:
-    - Architecture formula (num_layers from hidden_size)
-    - Architecture ratios (mlp_ratio, hidden_head_ratio)
-    - Search bounds (min/max hidden_pow, step_size)
-    - Constraints (max_learning_rate, min_batch_size)
-    - Optimizer settings (weight_decay, warmup, etc.)
-    """
-
-    tokenizer: str = "stanford-crfm/marin-tokenizer"
-    """Tokenizer to use (needed for vocab size)."""
-
-    budgets: tuple[float, ...] = DEFAULT_BUDGETS
-    """Tuple of FLOP budgets to generate configs for."""
-
-    seq_len: int = SEQ_LEN
-    """Sequence length for training."""
-
-    steps_per_run: int = 2**16
-    """Number of training steps used for FLOP budget calculation and hyperparameter tuning.
-
-    This is the reference step count that other hyperparameters (LR, beta2) are tuned for.
-    The actual training steps may differ based on batch size to hit the target FLOP budget.
-    Default of 2^16 (65,536) steps is used because the LR_CONSTANT and other tuned values
-    were optimized for this step count.
-    """
-
-    flop_tolerance: float = 0.01
-    """Tolerance for matching FLOP budget (relative error)."""
+# ---------------- IsoFLOP Sweep Defaults ----------------
+DEFAULT_SEQ_LEN = SEQ_LEN
+DEFAULT_STEPS_PER_RUN = 2**16  # Reference step count for hyperparameter tuning
+DEFAULT_FLOP_TOLERANCE = 0.01  # Relative error tolerance for FLOP budget
 
 
 # ---------------- Candidate Config ----------------
@@ -450,84 +404,36 @@ def compute_transformer_params(
 
 
 def candidate_configs(
-    cfg: IsoFlopSweepConfig,
     budget: float,
     vocab_size: int,
+    recipe: ScalingRecipe,
+    seq_len: int = DEFAULT_SEQ_LEN,
+    steps_per_run: int = DEFAULT_STEPS_PER_RUN,
+    flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
 ) -> Iterator[CandidateConfig]:
     """Yield candidate model configurations within the FLOP budget.
 
-    This function uses the recipe for all opinionated choices:
-    - Architecture formula (num_layers from hidden_size)
-    - Architecture ratios (mlp_ratio, hidden_head_ratio)
-    - Search bounds (min/max hidden_pow, step_size)
-    - Constraints (max_learning_rate, min_batch_size)
-
-    The mechanics layer (solve_for_batch_size, solve_for_train_steps, compute_training_flops)
-    handles the pure FLOP math.
+    This is a convenience function that delegates to recipe.candidate_configs().
+    The recipe encapsulates all model-specific decisions (architecture formula,
+    search bounds, constraints), while this function provides backward compatibility.
 
     Args:
-        cfg: IsoFlopSweepConfig with recipe and other search parameters
-        budget: Target FLOP budget
-        vocab_size: Vocabulary size for the tokenizer
+        budget: Target FLOP budget.
+        vocab_size: Vocabulary size for the tokenizer.
+        recipe: ScalingRecipe with architecture/hyperparameter settings.
+        seq_len: Sequence length for training.
+        steps_per_run: Reference step count for FLOP budget calculation.
+        flop_tolerance: Tolerance for matching FLOP budget (relative error).
 
     Yields:
-        CandidateConfig objects for each valid configuration
+        CandidateConfig objects for each valid configuration.
     """
-    recipe = cfg.recipe
-
-    # RECIPE: Get search parameters
-    step_size = recipe.get_step_size(budget)
-    min_hidden = 2**recipe.min_hidden_pow
-    max_hidden = 2**recipe.max_hidden_pow
-
-    for hidden_size in range(min_hidden, max_hidden + 1, step_size):
-        # RECIPE: Build model config (makes all architecture decisions)
-        model_config = recipe.build_model_config(hidden_size, cfg.seq_len)
-
-        # MECHANICS: Solve for batch size to hit budget with target steps
-        batch_exact = solve_for_batch_size(model_config, vocab_size, budget, cfg.steps_per_run, cfg.seq_len)
-        batch_size = round_to_power_of_two(batch_exact)
-
-        # RECIPE: Apply LR constraint
-        lr = recipe.compute_learning_rate(batch_size, hidden_size)
-        while lr > recipe.max_learning_rate:
-            batch_size //= 2
-            lr = recipe.compute_learning_rate(batch_size, hidden_size)
-
-        # RECIPE: Apply min batch constraint
-        if batch_size < recipe.min_batch_size:
-            continue
-
-        # MECHANICS: Solve for steps to hit budget with chosen batch
-        train_steps = round(solve_for_train_steps(model_config, vocab_size, budget, batch_size, cfg.seq_len))
-
-        # MECHANICS: Verify we hit the budget within tolerance
-        achieved_flops = compute_training_flops(model_config, vocab_size, batch_size, train_steps, cfg.seq_len)
-        if abs(achieved_flops - budget) / budget > cfg.flop_tolerance:
-            continue
-
-        # RECIPE: Compute optimizer hyperparameters
-        beta2 = recipe.compute_beta2(batch_size)
-        tokens = batch_size * train_steps * cfg.seq_len
-
-        yield CandidateConfig(
-            hidden_size=hidden_size,
-            intermediate_dim=model_config.intermediate_dim,
-            num_layers=model_config.num_layers,
-            num_heads=model_config.num_heads,
-            num_kv_heads=model_config.num_kv_heads,
-            batch_size=batch_size,
-            train_steps=train_steps,
-            learning_rate=lr,
-            beta2=beta2,
-            tokens=tokens,
-            flops_budget=budget,
-        )
+    yield from recipe.candidate_configs(budget, vocab_size, seq_len, steps_per_run, flop_tolerance)
 
 
 def _minima_to_candidates(
     minima_records: list[MinimaRecord],
-    recipe: ScalingRecipe = MARIN_2025_RECIPE,
+    recipe: ScalingRecipe,
 ) -> list[CandidateConfig]:
     """Convert minima records to CandidateConfig objects.
 
@@ -564,119 +470,54 @@ def _minima_to_candidates(
 
 
 def generate_isoflop_train_args(
-    sweep_config: IsoFlopSweepConfig,
+    budgets: Sequence[float],
     experiment_name: str,
     vocab_size: int,
+    recipe: ScalingRecipe,
+    seq_len: int = DEFAULT_SEQ_LEN,
+    steps_per_run: int = DEFAULT_STEPS_PER_RUN,
+    flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
     base_optimizer_config: OptimizerConfig | None = None,
 ) -> list[IsoFlopTrainArgs]:
     """Generate training arguments for each candidate in an isoflop sweep.
 
-    This function generates all the arguments needed to call default_train() for
-    each candidate configuration in the sweep. The caller is responsible for
-    constructing the experiment-specific SimpleTrainConfig.
+    This is a convenience function that delegates to recipe.generate_isoflop_train_args().
+    The recipe encapsulates all model-specific decisions, while this function provides
+    backward compatibility.
 
     Args:
-        sweep_config: Configuration for the sweep (budgets, seq_len, etc.)
-        experiment_name: Name suffix for run names (e.g., 'nemo', 'dclm')
-        vocab_size: Vocabulary size for the tokenizer
-        base_optimizer_config: Base optimizer config to modify. If None, uses CautiousConfig defaults.
+        budgets: Sequence of FLOP budgets to generate configs for.
+        experiment_name: Name suffix for run names (e.g., 'nemo', 'dclm').
+        vocab_size: Vocabulary size for the tokenizer.
+        recipe: ScalingRecipe with architecture/hyperparameter settings.
+        seq_len: Sequence length for training.
+        steps_per_run: Reference step count for FLOP budget calculation.
+        flop_tolerance: Tolerance for matching FLOP budget.
+        base_optimizer_config: Base optimizer config to modify. If None, uses recipe defaults.
 
     Returns:
         List of IsoFlopTrainArgs, one per candidate config across all budgets.
 
     Example:
-        >>> from marin.scaling_laws import IsoFlopSweepConfig, generate_isoflop_train_args
-        >>> from levanter.models.qwen import Qwen3Config
-        >>> config = IsoFlopSweepConfig(budgets=(1e18, 1e19))
-        >>> train_args = generate_isoflop_train_args(config, "my-experiment", vocab_size=128256)
+        >>> from marin.scaling_laws import generate_isoflop_train_args, DEFAULT_BUDGETS
+        >>> train_args = generate_isoflop_train_args(
+        ...     budgets=DEFAULT_BUDGETS,
+        ...     experiment_name="my-experiment",
+        ...     vocab_size=128256,
+        ... )
         >>> for args in train_args:
         ...     # Caller constructs the model config from candidate parameters
         ...     model_config = Qwen3Config(
         ...         hidden_dim=args.candidate.hidden_size,
-        ...         intermediate_dim=args.candidate.intermediate_dim,
-        ...         num_layers=args.candidate.num_layers,
         ...         # ... etc
         ...     )
-        ...     # Then use model_config with default_train()
     """
-    recipe = sweep_config.recipe
-    if base_optimizer_config is None:
-        base_optimizer_config = CautiousConfig(
-            learning_rate=1.0,  # Placeholder, will be overridden
-            weight_decay=recipe.weight_decay,
-            min_lr_ratio=recipe.min_lr_ratio,
-            warmup=recipe.warmup,
-            beta1=recipe.beta1,
-            beta2=0.98,  # Placeholder, will be overridden
-            epsilon=recipe.epsilon,
-            max_grad_norm=recipe.max_grad_norm,
-            adamc_weight_decay=True,
-            lr_schedule=recipe.lr_schedule,
-            decay=recipe.decay,
-        )
-
-    results: list[IsoFlopTrainArgs] = []
-
-    for budget in sweep_config.budgets:
-        for candidate in candidate_configs(sweep_config, budget, vocab_size):
-            # Pick TPU type based on candidate parameters
-            tpu_type = pick_v5p_type(candidate, vocab_size, sweep_config.seq_len)
-
-            # Build optimizer config with candidate-specific LR and beta2
-            optimizer_cfg = replace(
-                base_optimizer_config,
-                learning_rate=candidate.learning_rate,
-                beta2=candidate.beta2,
-            )
-
-            # Generate run name and tags
-            run_name = (
-                f"isoflop-{budget:.0e}-d{candidate.hidden_size}-"
-                f"L{candidate.num_layers}-B{candidate.batch_size}-{experiment_name}"
-            )
-
-            tags = (
-                f"FLOPs={budget:.1e}",
-                f"d={candidate.hidden_size}",
-                f"L={candidate.num_layers}",
-                f"B={candidate.batch_size}",
-                f"steps={candidate.train_steps}",
-                f"tpu={tpu_type}",
-            )
-
-            # Static output path for checkpoint reuse
-            output_path = os.path.join("checkpoints", "isoflop", run_name)
-
-            results.append(
-                IsoFlopTrainArgs(
-                    candidate=candidate,
-                    optimizer_config=optimizer_cfg,
-                    tpu_type=tpu_type,
-                    run_name=run_name,
-                    tags=tags,
-                    output_path=output_path,
-                )
-            )
-
-    return results
+    return recipe.generate_isoflop_train_args(
+        budgets, experiment_name, vocab_size, seq_len, steps_per_run, flop_tolerance, base_optimizer_config
+    )
 
 
 # ---------------- Helpers ----------------
-
-
-def _resolve_run_paths(runs: Sequence[ExecutorStep | InputName | str]) -> list[InputName | str]:
-    """Convert mixed ExecutorStep/InputName/path inputs to executor-ready paths.
-
-    This helper reduces duplication across functions that accept either
-    ExecutorSteps or string paths.
-
-    Args:
-        runs: Sequence of ExecutorStep, InputName, or path strings.
-
-    Returns:
-        List of InputName or string paths.
-    """
-    return [output_path_of(run) if isinstance(run, ExecutorStep) else run for run in runs]
 
 
 def parse_isoflop_run_name(run_name: str) -> str | None:
@@ -933,10 +774,17 @@ def predict_optimal_config(
     scaling_fits: dict[str, ScalingFit],
     target_flops: float,
     label: str,
-    sweep_config: IsoFlopSweepConfig | None = None,
-    vocab_size: int = MARIN_TOKENIZER_VOCAB_SIZE,
+    vocab_size: int,
+    recipe: ScalingRecipe,
+    seq_len: int = DEFAULT_SEQ_LEN,
+    steps_per_run: int = DEFAULT_STEPS_PER_RUN,
+    flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
 ) -> CandidateConfig | None:
     """Predict optimal training config for a target compute budget using fitted scaling laws.
+
+    This is a convenience function that delegates to recipe.predict_optimal_config().
+    The recipe encapsulates all model-specific decisions, while this function provides
+    backward compatibility.
 
     This implements IsoFLOP Approach 2 from the Chinchilla paper:
     1. D_opt (optimal tokens) is found empirically at each compute budget by fitting
@@ -945,60 +793,36 @@ def predict_optimal_config(
     3. Given D_opt and C, N_opt (optimal params) is derived as C/(6D), so no
        separate alpha fit for params is needed.
 
-    This approach works regardless of whether the scaling exponents for params
-    and tokens are equal (alpha == beta), unlike Approach 3 which fits a
-    parametric loss surface.
-
-    This function:
-    1. Uses the scaling fit (N* ~ A * C^alpha) to predict optimal tokens for target_flops
-    2. Generates candidate configs for the target budget using candidate_configs()
-    3. Selects the candidate whose token count is closest to the predicted optimal
-
     Args:
         scaling_fits: Dict of {label: ScalingFit} from scaling ladder result.
         target_flops: Target compute budget in FLOPs.
         label: Dataset/experiment label to use for scaling fit.
-        sweep_config: Optional IsoFlopSweepConfig. If None, uses defaults.
-        vocab_size: Vocabulary size (default: MARIN_TOKENIZER_VOCAB_SIZE for marin tokenizer).
+        vocab_size: Vocabulary size.
+        recipe: ScalingRecipe with architecture/hyperparameter settings.
+        seq_len: Sequence length for training.
+        steps_per_run: Reference step count for FLOP budget calculation.
+        flop_tolerance: Tolerance for matching FLOP budget.
 
     Returns:
         CandidateConfig for the predicted optimal, or None if label not in fits
         or no valid candidates found.
     """
-    if label not in scaling_fits:
-        logger.warning(f"Label '{label}' not found in scaling fits")
-        return None
-
-    alpha, A = scaling_fits[label]
-    optimal_tokens = A * (target_flops**alpha)
-
-    logger.info(f"Predicted optimal tokens for {target_flops:.2e} FLOPs: {optimal_tokens:.2e}")
-
-    if sweep_config is None:
-        sweep_config = IsoFlopSweepConfig()
-
-    candidates = list(candidate_configs(sweep_config, target_flops, vocab_size))
-
-    if not candidates:
-        logger.warning(f"No valid candidates found for budget {target_flops:.2e}")
-        return None
-
-    best = min(candidates, key=lambda c: abs(c.tokens - optimal_tokens))
-
-    logger.info(
-        f"Selected config: d={best.hidden_size}, L={best.num_layers}, "
-        f"B={best.batch_size}, tokens={best.tokens:.2e} (optimal: {optimal_tokens:.2e})"
+    # Convert ScalingFit NamedTuples to plain tuples for recipe method
+    fits_as_tuples = {k: (v.alpha, v.A) for k, v in scaling_fits.items()}
+    return recipe.predict_optimal_config(
+        fits_as_tuples, target_flops, label, vocab_size, seq_len, steps_per_run, flop_tolerance
     )
-
-    return best
 
 
 def predict_optimal_configs_for_budgets(
     scaling_fits: dict[str, ScalingFit],
     target_budgets: list[float],
     label: str,
-    sweep_config: IsoFlopSweepConfig | None = None,
-    vocab_size: int = MARIN_TOKENIZER_VOCAB_SIZE,
+    vocab_size: int,
+    recipe: ScalingRecipe,
+    seq_len: int = DEFAULT_SEQ_LEN,
+    steps_per_run: int = DEFAULT_STEPS_PER_RUN,
+    flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
 ) -> list[CandidateConfig]:
     """Predict optimal configs for multiple target compute budgets.
 
@@ -1006,8 +830,11 @@ def predict_optimal_configs_for_budgets(
         scaling_fits: Dict of {label: ScalingFit} from scaling ladder result.
         target_budgets: List of target compute budgets in FLOPs.
         label: Dataset/experiment label to use for scaling fit.
-        sweep_config: Optional IsoFlopSweepConfig. If None, uses defaults.
         vocab_size: Vocabulary size.
+        recipe: ScalingRecipe with architecture/hyperparameter settings.
+        seq_len: Sequence length for training.
+        steps_per_run: Reference step count for FLOP budget calculation.
+        flop_tolerance: Tolerance for matching FLOP budget.
 
     Returns:
         List of CandidateConfig for each budget.
@@ -1017,7 +844,9 @@ def predict_optimal_configs_for_budgets(
     """
     configs = []
     for budget in target_budgets:
-        config = predict_optimal_config(scaling_fits, budget, label, sweep_config, vocab_size)
+        config = predict_optimal_config(
+            scaling_fits, budget, label, vocab_size, recipe, seq_len, steps_per_run, flop_tolerance
+        )
         if config is None:
             raise RuntimeError(
                 f"Failed to predict optimal config for budget {budget:.2e} FLOPs "
@@ -1059,13 +888,6 @@ class IsoFlopAnalysisResult:
         }
 
 
-def _parse_fit_curve_coeffs(coeffs: Sequence[float]) -> QuadraticFitCoeffs:
-    if len(coeffs) != 5:
-        raise ValueError(f"Expected 5 fit curve coefficients, got {len(coeffs)}")
-    a, b, c, token_min, token_max = coeffs
-    return QuadraticFitCoeffs(float(a), float(b), float(c), float(token_min), float(token_max))
-
-
 # ---------------- ExecutorStep Config ----------------
 
 
@@ -1073,42 +895,14 @@ def _parse_fit_curve_coeffs(coeffs: Sequence[float]) -> QuadraticFitCoeffs:
 class IsoFlopAnalysisConfig(EvalMetricsAnalysisConfig):
     """Configuration for scaling ladder analysis ExecutorStep."""
 
-    recipe: ScalingRecipe = MARIN_2025_RECIPE
+    recipe: ScalingRecipe = field(kw_only=True)
     """Scaling recipe for computing optimal hyperparameters."""
 
-    metric_key: str = DEFAULT_EVAL_METRIC_KEY
+    metric_key: str = field(default=DEFAULT_EVAL_METRIC_KEY, kw_only=True)
     """Metric to use for loss (default: eval/paloma/c4_en/bpb - Paloma benchmark on C4 English)."""
 
-    label_map: tuple[tuple[str, str], ...] | None = None
+    label_map: tuple[tuple[str, str], ...] | None = field(default=None, kw_only=True)
     """Optional mapping from experiment_name -> display label as tuple of pairs."""
-
-
-@dataclass(frozen=True)
-class IsoFlopPlotsConfig:
-    """Configuration for isoflop plots ExecutorStep."""
-
-    analysis_output_path: str
-    """Path to the isoflop analysis output (containing isoflop_analysis_result.json)."""
-
-    output_path: str
-    """Path to save the HTML plots."""
-
-
-@dataclass(frozen=True)
-class UploadPlotsToWandbConfig:
-    """Configuration for uploading plots to WandB."""
-
-    plots_path: str
-    """Path to the directory containing HTML plots."""
-
-    wandb_entity: str = WANDB_ENTITY
-    """WandB entity for uploads."""
-
-    wandb_project: str = f"{WANDB_PROJECT}-analysis"
-    """WandB project for uploads."""
-
-    wandb_run_name: str = "scaling-ladder-analysis"
-    """Name for the WandB run."""
 
 
 def run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
@@ -1167,242 +961,23 @@ def run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
     logger.info(f"Saved fit curves to {fit_curves_path}")
 
 
-def _run_isoflop_plots_step(config: IsoFlopPlotsConfig) -> None:
-    """Generate and save isoflop plots (called by ExecutorStep)."""
-    from marin.scaling_laws.scaling_plots import (
-        create_isoflop_plot,
-        create_scaling_plot,
-        save_plots,
-    )
-
-    fs, _, _ = fsspec.get_fs_token_paths(config.analysis_output_path)
-
-    # Load the analysis results
-    result_path = os.path.join(config.analysis_output_path, "isoflop_analysis_result.json")
-    with fs.open(result_path, "r") as f:
-        result_dict = json.load(f)
-
-    # Load the dataframe
-    df_path = os.path.join(config.analysis_output_path, "isoflop_df.parquet")
-    isoflop_df = pd.read_parquet(df_path)
-
-    # Load fit curves and reconstruct tuple keys
-    fit_curves_path = os.path.join(config.analysis_output_path, "fit_curves.json")
-    with fs.open(fit_curves_path, "r") as f:
-        fit_curves_json = json.load(f)
-    fit_curves: dict[tuple[str, float], QuadraticFitCoeffs] = {}
-    for key_str, coeffs in fit_curves_json.items():
-        label, flops = key_str.rsplit("|", 1)
-        fit_curves[(label, float(flops))] = _parse_fit_curve_coeffs(coeffs)
-
-    # Reconstruct minima records
-    minima_records = [MinimaRecord(**r) for r in result_dict["minima_records"]]
-    scaling_fits = {k: ScalingFit(*v) for k, v in result_dict["scaling_fits"].items()}
-
-    # Create plots
-    fig_isoflop = create_isoflop_plot(isoflop_df, minima_records, fit_curves)
-    fig_scaling = create_scaling_plot(minima_records, scaling_fits)
-
-    # Save plots
-    save_plots(fig_isoflop, fig_scaling, config.output_path)
-
-
-def _run_upload_plots_to_wandb_step(config: UploadPlotsToWandbConfig) -> None:
-    """Upload plots to WandB (called by ExecutorStep)."""
-    from marin.scaling_laws.scaling_plots import (
-        create_isoflop_plot,
-        create_scaling_plot,
-        upload_plots_to_wandb,
-    )
-
-    fs, _, _ = fsspec.get_fs_token_paths(config.plots_path)
-
-    # Load the analysis results to regenerate plots
-    result_path = os.path.join(config.plots_path, "isoflop_analysis_result.json")
-    with fs.open(result_path, "r") as f:
-        result_dict = json.load(f)
-
-    # Load the dataframe
-    df_path = os.path.join(config.plots_path, "isoflop_df.parquet")
-    isoflop_df = pd.read_parquet(df_path)
-
-    # Load fit curves and reconstruct tuple keys
-    fit_curves_path = os.path.join(config.plots_path, "fit_curves.json")
-    with fs.open(fit_curves_path, "r") as f:
-        fit_curves_json = json.load(f)
-    fit_curves: dict[tuple[str, float], QuadraticFitCoeffs] = {}
-    for key_str, coeffs in fit_curves_json.items():
-        label, flops = key_str.rsplit("|", 1)
-        fit_curves[(label, float(flops))] = _parse_fit_curve_coeffs(coeffs)
-
-    # Reconstruct minima records
-    minima_records = [MinimaRecord(**r) for r in result_dict["minima_records"]]
-    scaling_fits = {k: ScalingFit(*v) for k, v in result_dict["scaling_fits"].items()}
-
-    # Create plots
-    fig_isoflop = create_isoflop_plot(isoflop_df, minima_records, fit_curves)
-    fig_scaling = create_scaling_plot(minima_records, scaling_fits)
-
-    upload_plots_to_wandb(
-        fig_isoflop,
-        fig_scaling,
-        entity=config.wandb_entity,
-        project=config.wandb_project,
-        run_name=config.wandb_run_name,
-    )
-
-
-# ---------------- Primary Export: ExecutorStep Factory ----------------
-
-
-def isoflop_analysis_step(
-    name: str,
-    training_runs: Sequence[ExecutorStep | InputName],
-    metric_key: str = DEFAULT_EVAL_METRIC_KEY,
-    label_map: dict[str, str] | None = None,
-    recipe: ScalingRecipe = MARIN_2025_RECIPE,
-) -> ExecutorStep:
-    """Create an ExecutorStep for scaling ladder analysis.
-
-    This step computes scaling law fits and saves results to JSON/parquet files.
-    For plotting, use `isoflop_plots_step()`. For WandB upload, use
-    `upload_isoflop_plots_to_wandb_step()`.
-
-    Args:
-        name: Name for this executor step
-        training_runs: Training run ExecutorSteps or InputNames to analyze
-        metric_key: Which metric to use for loss (default: eval/paloma/c4_en/bpb)
-        label_map: Optional mapping from experiment_name -> display label
-        recipe: ScalingRecipe with hyperparameters
-
-    Returns:
-        ExecutorStep configured to run the analysis
-
-    Example:
-        >>> from marin.scaling_laws import isoflop_analysis_step, isoflop_plots_step
-        >>> analysis = isoflop_analysis_step(
-        ...     name="my-scaling-analysis",
-        ...     training_runs=my_training_steps,
-        ... )
-        >>> plots = isoflop_plots_step(
-        ...     name="my-scaling-plots",
-        ...     analysis_step=analysis,
-        ... )
-    """
-    run_paths = _resolve_run_paths(training_runs)
-
-    config = IsoFlopAnalysisConfig(
-        training_runs=run_paths,
-        output_path=this_output_path(),
-        recipe=recipe,
-        metric_key=metric_key,
-        label_map=tuple(label_map.items()) if label_map else None,
-    )
-
-    return ExecutorStep(
-        name=name,
-        fn=run_isoflop_analysis_step,
-        config=config,
-        description=f"Scaling ladder analysis for {len(training_runs)} training runs",
-    )
-
-
-def isoflop_plots_step(
-    name: str,
-    analysis_step: ExecutorStep | InputName,
-) -> ExecutorStep:
-    """Create an ExecutorStep to generate isoflop HTML plots.
-
-    This step reads the output from an isoflop_analysis_step and generates
-    HTML plots for the isoflop curves and scaling fits.
-
-    Args:
-        name: Name for this executor step
-        analysis_step: The isoflop_analysis_step to read results from
-
-    Returns:
-        ExecutorStep configured to generate plots
-
-    Example:
-        >>> analysis = isoflop_analysis_step(name="analysis", training_runs=runs)
-        >>> plots = isoflop_plots_step(name="plots", analysis_step=analysis)
-    """
-    analysis_path = output_path_of(analysis_step) if isinstance(analysis_step, ExecutorStep) else analysis_step
-
-    config = IsoFlopPlotsConfig(
-        analysis_output_path=analysis_path,
-        output_path=this_output_path(),
-    )
-
-    return ExecutorStep(
-        name=name,
-        fn=_run_isoflop_plots_step,
-        config=config,
-        description="Generate isoflop HTML plots",
-    )
-
-
-def upload_isoflop_plots_to_wandb_step(
-    name: str,
-    analysis_step: ExecutorStep | InputName,
-    wandb_entity: str = WANDB_ENTITY,
-    wandb_project: str = f"{WANDB_PROJECT}-analysis",
-    wandb_run_name: str | None = None,
-) -> ExecutorStep:
-    """Create an ExecutorStep to upload isoflop plots to WandB.
-
-    This step reads the analysis results and uploads interactive plots to WandB.
-
-    Args:
-        name: Name for this executor step
-        analysis_step: The isoflop_analysis_step to read results from
-        wandb_entity: WandB entity for uploads
-        wandb_project: WandB project for uploads
-        wandb_run_name: Name for WandB run (defaults to step name)
-
-    Returns:
-        ExecutorStep configured to upload plots to WandB
-
-    Example:
-        >>> analysis = isoflop_analysis_step(name="analysis", training_runs=runs)
-        >>> upload = upload_isoflop_plots_to_wandb_step(
-        ...     name="upload-plots",
-        ...     analysis_step=analysis,
-        ... )
-    """
-    analysis_path = output_path_of(analysis_step) if isinstance(analysis_step, ExecutorStep) else analysis_step
-
-    config = UploadPlotsToWandbConfig(
-        plots_path=analysis_path,
-        wandb_entity=wandb_entity,
-        wandb_project=wandb_project,
-        wandb_run_name=wandb_run_name or name,
-    )
-
-    return ExecutorStep(
-        name=name,
-        fn=_run_upload_plots_to_wandb_step,
-        config=config,
-        description="Upload isoflop plots to WandB",
-    )
-
-
 # ---------------- Programmatic Interface ----------------
 
 
 def run_isoflop_analysis(
-    training_runs: Sequence[ExecutorStep] | Sequence[str],
+    training_runs: Sequence[str],
+    recipe: ScalingRecipe,
     metric_key: str = DEFAULT_EVAL_METRIC_KEY,
     label_map: dict[str, str] | None = None,
-    recipe: ScalingRecipe = MARIN_2025_RECIPE,
 ) -> IsoFlopAnalysisResult:
     """Analyze isoflop training runs and return optimal training configurations.
 
-    This is the programmatic interface for scaling ladder analysis. For pipeline
-    usage, prefer `isoflop_analysis_step()` which returns an ExecutorStep.
+    This is the programmatic interface for scaling ladder analysis, useful for
+    notebooks or scripts. For ExecutorStep-based pipelines, use
+    `run_isoflop_analysis_step()` with `IsoFlopAnalysisConfig`.
 
     Args:
-        training_runs: List of ExecutorSteps or path strings to training runs
+        training_runs: List of path strings to training run output directories
         metric_key: Which metric to use for loss (default: eval/paloma/c4_en/bpb)
         label_map: Optional mapping from experiment_name -> display label
         recipe: ScalingRecipe with hyperparameter settings
@@ -1410,10 +985,8 @@ def run_isoflop_analysis(
     Returns:
         IsoFlopAnalysisResult with configs, scaling_fits, and analysis data
     """
-    run_paths = _resolve_run_paths(training_runs)
-
     config = EvalMetricsAnalysisConfig(
-        training_runs=run_paths,
+        training_runs=training_runs,
         output_path="analysis/scaling_ladder",
     )
     raw_df = read_metrics_dataframe(config)

@@ -30,7 +30,7 @@ functions, following the pattern of isolating executor step creation to experime
 """
 
 from experiments.defaults import default_validation_sets
-from experiments.isoflop_sweep import MARIN_SCALING_SUITES, nemotron_mix
+from experiments.isoflop_sweep import MARIN_2025_RECIPE, MARIN_SCALING_SUITES, nemotron_mix
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of
 from marin.scaling_laws import (
     IsoFlopAnalysisConfig,
@@ -38,7 +38,6 @@ from marin.scaling_laws import (
     run_isoflop_analysis_step,
     run_scaling_ladder_rung,
 )
-from marin.scaling_laws.recipe import MARIN_2025_RECIPE
 
 # Get training steps from the isoflop sweep
 nemotron_training, _ = MARIN_SCALING_SUITES["nemotron"]
