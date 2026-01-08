@@ -18,9 +18,17 @@ This script constructs `ExecutorStep` objects that train models of different
 sizes while keeping the total training FLOPs roughly constant.
 """
 
-from dataclasses import replace
+import math
+import os
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, replace
 
 from levanter.data.text import LMMixtureDatasetConfig
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.models.llama import LlamaConfig
+from levanter.models.qwen import Qwen3Config
+from levanter.optim.cautious import CautiousConfig
+from levanter.optim.config import OptimizerConfig
 
 from experiments.evals.evals import default_eval
 from experiments.evals.task_configs import EvalTaskConfig
@@ -35,13 +43,312 @@ from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.processing.tokenize import get_vocab_size_for_tokenizer, lm_mixture_data_config
 from marin.scaling_laws import (
     DEFAULT_BUDGETS,
+    DEFAULT_FLOP_TOLERANCE,
+    DEFAULT_SEQ_LEN,
+    DEFAULT_STEPS_PER_RUN,
     CandidateConfig,
+    IsoFlopTrainArgs,
     ScalingRecipe,
     generate_isoflop_train_args,
     pick_v5p_type,
+    solve_for_batch_size,
+    solve_for_train_steps,
 )
 
-MARIN_2025_RECIPE = ScalingRecipe(name="marin-2025")
+
+def _round_to_power_of_two(x: float) -> int:
+    """Round x UP to the nearest power of 2."""
+    if x <= 1:
+        return 1
+    return 2 ** math.ceil(math.log2(x))
+
+
+@dataclass(frozen=True)
+class Marin2025Recipe:
+    """Marin 2025 scaling recipe with all hyperparameters and formulas.
+
+    This recipe implements all the Marin-specific decisions for scaling experiments.
+    """
+
+    name: str = "marin-2025"
+
+    # --- Learning rate scaling ---
+    # lr = lr_constant * sqrt(batch_size) / hidden_dim
+    lr_constant: float = 0.33
+
+    # --- Beta2 scaling for Adam ---
+    # beta2 = beta2_base ** (batch_size / beta2_batch_divisor)
+    beta2_base: float = 0.98
+    beta2_batch_divisor: float = 128
+
+    # --- Optimizer hyperparameters ---
+    weight_decay: float = 0.1
+    min_lr_ratio: float = 0.0
+    warmup: float = 0.1
+    beta1: float = 0.95
+    epsilon: float = 1e-15
+    max_grad_norm: float = 1.0
+    lr_schedule: str = "linear"
+    decay: float = 0.2
+
+    # --- Architecture ratios ---
+    mlp_ratio: int = 4
+    hidden_head_ratio: int = 128
+
+    # --- Architecture formula for depth-to-width scaling ---
+    base_hidden_layer_ratio: int = 64
+    layer_scaling_factor: float = 4.0
+    layer_formula_offset: int = 9
+
+    # --- Constraints ---
+    max_learning_rate: float = 0.01
+    min_batch_size: int = 8
+
+    # --- Search bounds for isoflop sweeps ---
+    min_hidden_pow: int = 9
+    max_hidden_pow: int = 12
+    small_budget_step_size: int = 128
+    large_budget_step_size: int = 256
+    budget_step_threshold: float = 9e18
+
+    def _compute_learning_rate(self, batch_size: int, hidden_dim: int) -> float:
+        """Compute learning rate from batch size and hidden dim."""
+        return (self.lr_constant * math.sqrt(batch_size)) / hidden_dim
+
+    def _compute_beta2(self, batch_size: int) -> float:
+        """Compute beta2 from batch size."""
+        return self.beta2_base ** (batch_size / self.beta2_batch_divisor)
+
+    def compute_num_layers(self, hidden_size: int) -> int:
+        """Compute number of layers from hidden size using the depth-width formula."""
+        hs_pow = math.log2(hidden_size)
+        return round(
+            hidden_size
+            / (self.base_hidden_layer_ratio + (hs_pow * self.layer_scaling_factor) - self.layer_formula_offset)
+        )
+
+    def _get_step_size(self, budget: float) -> int:
+        """Get hidden_size search step size based on budget."""
+        if budget > self.budget_step_threshold:
+            return self.large_budget_step_size
+        return self.small_budget_step_size
+
+    def _compute_params_for_hidden_size(self, hidden_size: int, vocab_size: int) -> int:
+        """Compute approximate parameter count for a given hidden size."""
+        num_layers = self.compute_num_layers(hidden_size)
+        intermediate_dim = hidden_size * self.mlp_ratio
+        n_heads = max(1, hidden_size // self.hidden_head_ratio)
+        head_size = hidden_size // n_heads
+
+        embed_params = vocab_size * hidden_size * 2
+        q_proj = hidden_size * head_size * n_heads
+        kv_proj = 2 * hidden_size * head_size * n_heads
+        o_proj = head_size * n_heads * hidden_size
+        attn_params = q_proj + kv_proj + o_proj
+        mlp_params = 3 * hidden_size * intermediate_dim
+        norm_params = 2 * hidden_size
+        layer_params = attn_params + mlp_params + norm_params
+        total_layer_params = num_layers * layer_params
+        final_norm = hidden_size
+
+        return embed_params + total_layer_params + final_norm
+
+    def hidden_size_for_params(self, target_params: int, vocab_size: int) -> int:
+        """Find the hidden size that gives approximately target_params."""
+        min_hidden = 2**self.min_hidden_pow
+        max_hidden = 2**self.max_hidden_pow
+
+        best_hidden = min_hidden
+        best_diff = abs(self._compute_params_for_hidden_size(min_hidden, vocab_size) - target_params)
+
+        for hidden_size in range(min_hidden, max_hidden + 1, 64):
+            params = self._compute_params_for_hidden_size(hidden_size, vocab_size)
+            diff = abs(params - target_params)
+            if diff < best_diff:
+                best_diff = diff
+                best_hidden = hidden_size
+
+        return best_hidden
+
+    def build_model_config(self, target_params: int, vocab_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
+        """Build a Qwen3 model config for a target parameter count."""
+        hidden_size = self.hidden_size_for_params(target_params, vocab_size)
+        num_layers = self.compute_num_layers(hidden_size)
+        intermediate_dim = hidden_size * self.mlp_ratio
+        n_heads = max(1, hidden_size // self.hidden_head_ratio)
+
+        return Qwen3Config(
+            hidden_dim=hidden_size,
+            intermediate_dim=intermediate_dim,
+            num_layers=num_layers,
+            num_heads=n_heads,
+            num_kv_heads=n_heads,
+            max_seq_len=seq_len,
+            rope=Llama3RotaryEmbeddingsConfig(),
+        )
+
+    def _build_model_config_from_hidden_size(self, hidden_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
+        """Build model config from hidden_size directly."""
+        num_layers = self.compute_num_layers(hidden_size)
+        intermediate_dim = hidden_size * self.mlp_ratio
+        n_heads = max(1, hidden_size // self.hidden_head_ratio)
+
+        return Qwen3Config(
+            hidden_dim=hidden_size,
+            intermediate_dim=intermediate_dim,
+            num_layers=num_layers,
+            num_heads=n_heads,
+            num_kv_heads=n_heads,
+            max_seq_len=seq_len,
+            rope=Llama3RotaryEmbeddingsConfig(),
+        )
+
+    def build_optimizer_config(self, candidate: CandidateConfig, vocab_size: int) -> OptimizerConfig:
+        """Build optimizer config for a candidate."""
+        hidden_size = self.hidden_size_for_params(candidate.target_params, vocab_size)
+        learning_rate = self._compute_learning_rate(candidate.batch_size, hidden_size)
+        beta2 = self._compute_beta2(candidate.batch_size)
+
+        return CautiousConfig(
+            learning_rate=learning_rate,
+            weight_decay=self.weight_decay,
+            min_lr_ratio=self.min_lr_ratio,
+            warmup=self.warmup,
+            beta1=self.beta1,
+            beta2=beta2,
+            epsilon=self.epsilon,
+            max_grad_norm=self.max_grad_norm,
+            adamc_weight_decay=True,
+            lr_schedule=self.lr_schedule,
+            decay=self.decay,
+        )
+
+    def candidate_configs(
+        self,
+        budget: float,
+        vocab_size: int,
+        seq_len: int = DEFAULT_SEQ_LEN,
+        steps_per_run: int = DEFAULT_STEPS_PER_RUN,
+        flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
+    ) -> Iterator[CandidateConfig]:
+        """Yield candidate configurations within the FLOP budget."""
+        step_size = self._get_step_size(budget)
+        min_hidden = 2**self.min_hidden_pow
+        max_hidden = 2**self.max_hidden_pow
+
+        for hidden_size in range(min_hidden, max_hidden + 1, step_size):
+            model_config = self._build_model_config_from_hidden_size(hidden_size, seq_len)
+
+            batch_exact = solve_for_batch_size(model_config, vocab_size, budget, steps_per_run, seq_len)
+            batch_size = _round_to_power_of_two(batch_exact)
+
+            lr = self._compute_learning_rate(batch_size, hidden_size)
+            while lr > self.max_learning_rate:
+                batch_size //= 2
+                lr = self._compute_learning_rate(batch_size, hidden_size)
+
+            if batch_size < self.min_batch_size:
+                continue
+
+            train_steps = round(solve_for_train_steps(model_config, vocab_size, budget, batch_size, seq_len))
+
+            achieved_flops = 3 * model_config.flops_per_token(vocab_size, seq_len) * batch_size * train_steps * seq_len
+            if abs(achieved_flops - budget) / budget > flop_tolerance:
+                continue
+
+            tokens = batch_size * train_steps * seq_len
+            target_params = self._compute_params_for_hidden_size(hidden_size, vocab_size)
+
+            yield CandidateConfig(
+                batch_size=batch_size,
+                train_steps=train_steps,
+                tokens=tokens,
+                target_params=target_params,
+                flops_budget=budget,
+            )
+
+    def generate_isoflop_train_args(
+        self,
+        budgets: Sequence[float],
+        experiment_name: str,
+        vocab_size: int,
+        seq_len: int = DEFAULT_SEQ_LEN,
+        steps_per_run: int = DEFAULT_STEPS_PER_RUN,
+        flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
+    ) -> list[IsoFlopTrainArgs]:
+        """Generate training arguments for each candidate in an isoflop sweep."""
+        results: list[IsoFlopTrainArgs] = []
+
+        for budget in budgets:
+            for candidate in self.candidate_configs(budget, vocab_size, seq_len, steps_per_run, flop_tolerance):
+                run_name = (
+                    f"isoflop-{budget:.0e}-N{candidate.target_params:.0e}-" f"B{candidate.batch_size}-{experiment_name}"
+                )
+
+                tags = (
+                    f"FLOPs={budget:.1e}",
+                    f"N={candidate.target_params:.1e}",
+                    f"B={candidate.batch_size}",
+                    f"steps={candidate.train_steps}",
+                    f"tokens={candidate.tokens:.1e}",
+                )
+
+                output_path = os.path.join("checkpoints", "isoflop", run_name)
+
+                results.append(
+                    IsoFlopTrainArgs(
+                        candidate=candidate,
+                        run_name=run_name,
+                        tags=tags,
+                        output_path=output_path,
+                    )
+                )
+
+        return results
+
+    def predict_optimal_config(
+        self,
+        scaling_fits: dict[str, tuple[float, float]],
+        target_flops: float,
+        label: str,
+        vocab_size: int,
+        seq_len: int = DEFAULT_SEQ_LEN,
+        steps_per_run: int = DEFAULT_STEPS_PER_RUN,
+        flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
+    ) -> CandidateConfig | None:
+        """Predict optimal training config for a target compute budget using fitted scaling laws."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        if label not in scaling_fits:
+            logger.warning(f"Label '{label}' not found in scaling fits")
+            return None
+
+        alpha, A = scaling_fits[label]
+        optimal_tokens = A * (target_flops**alpha)
+
+        logger.info(f"Predicted optimal tokens for {target_flops:.2e} FLOPs: {optimal_tokens:.2e}")
+
+        candidates = list(self.candidate_configs(target_flops, vocab_size, seq_len, steps_per_run, flop_tolerance))
+
+        if not candidates:
+            logger.warning(f"No valid candidates found for budget {target_flops:.2e}")
+            return None
+
+        best = min(candidates, key=lambda c: c.tokens - optimal_tokens if c.tokens >= optimal_tokens else float("inf"))
+        if best.tokens < optimal_tokens:
+            best = max(candidates, key=lambda c: c.tokens)
+
+        logger.info(
+            f"Selected config: N={best.target_params:.2e}, "
+            f"B={best.batch_size}, tokens={best.tokens:.2e} (optimal: {optimal_tokens:.2e})"
+        )
+
+        return best
+
+
+MARIN_2025_RECIPE = Marin2025Recipe()
 """Default Marin scaling recipe."""
 
 
@@ -82,16 +389,12 @@ def create_isoflop_sweep_steps(
         recipe=recipe,
     )
 
-    # Base config for training runs
+    # Base config for training runs (values overridden per-candidate via optimizer_config)
     base_train_config = SimpleTrainConfig(
         resources=ResourceConfig.with_tpu("v5p-8"),
         train_batch_size=1,
         num_train_steps=50_000,
-        learning_rate=1.0,  # Placeholder, will be overridden
-        weight_decay=recipe.weight_decay,
-        min_lr_ratio=recipe.min_lr_ratio,
-        lr_schedule=recipe.lr_schedule,
-        decay=recipe.decay,
+        learning_rate=1.0,  # Overridden via optimizer_config
     )
 
     train_steps: list[ExecutorStep] = []

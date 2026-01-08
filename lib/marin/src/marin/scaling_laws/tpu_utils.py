@@ -85,7 +85,7 @@ def pick_v5p_type(
     candidate: "CandidateConfig",
     vocab_size: int,
     seq_len: int,
-    recipe: "ScalingRecipe | None" = None,
+    recipe: "ScalingRecipe",
 ) -> str:
     """Select the smallest TPU v5p slice that fits the model in float32.
 
@@ -93,7 +93,7 @@ def pick_v5p_type(
         candidate: CandidateConfig with target_params and batch_size.
         vocab_size: Vocabulary size.
         seq_len: Sequence length.
-        recipe: ScalingRecipe to determine architecture. If None, uses default.
+        recipe: ScalingRecipe to determine architecture.
 
     Returns:
         TPU slice name, e.g., "v5p-8" or "v5p-32".
@@ -101,11 +101,6 @@ def pick_v5p_type(
     Raises:
         ValueError: If the model is too large for available v5p slices.
     """
-    if recipe is None:
-        from marin.scaling_laws.recipe import ScalingRecipe
-
-        recipe = ScalingRecipe(name="default")
-
     hidden_size = recipe.hidden_size_for_params(candidate.target_params, vocab_size)
     num_layers = recipe.compute_num_layers(hidden_size)
 
