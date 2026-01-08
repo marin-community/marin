@@ -25,10 +25,10 @@ import pytest
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
 
-from marin.scaling_laws import default_model_builder
+from marin.scaling_laws import ScalingRecipe
 from marin.scaling_laws.isoflop_analysis import (
+    DEFAULT_SEQ_LEN,
     MARIN_TOKENIZER_VOCAB_SIZE,
-    IsoFlopSweepConfig,
     IsoFlopTrainArgs,
     candidate_configs,
     compute_training_flops,
@@ -216,20 +216,22 @@ def test_parse_isoflop_run_name():
 
 def test_candidate_configs_within_tolerance():
     """Test that generated configs achieve the target FLOP budget within tolerance."""
-    cfg = IsoFlopSweepConfig(flop_tolerance=0.01)
+    recipe = ScalingRecipe(name="test")
     budget = 1e19
-    for candidate in candidate_configs(cfg, budget, MARIN_TOKENIZER_VOCAB_SIZE):
-        # Build model config from candidate to verify FLOPs
-        model_config = default_model_builder(candidate, cfg.seq_len)
+    flop_tolerance = 0.01
+    seq_len = DEFAULT_SEQ_LEN
+    for candidate in candidate_configs(budget, MARIN_TOKENIZER_VOCAB_SIZE, recipe, flop_tolerance=flop_tolerance):
+        # Build model config from candidate using recipe
+        model_config = recipe.build_model_config(candidate.target_params, MARIN_TOKENIZER_VOCAB_SIZE, seq_len)
         achieved = compute_training_flops(
             model_config,
             MARIN_TOKENIZER_VOCAB_SIZE,
             candidate.batch_size,
             candidate.train_steps,
-            cfg.seq_len,
+            seq_len,
         )
         relative_error = abs(achieved - budget) / budget
-        assert relative_error <= cfg.flop_tolerance
+        assert relative_error <= flop_tolerance
 
 
 # --- Curve fitting tests ---
@@ -254,71 +256,34 @@ def test_robust_quad_logx_fits_quadratic():
 # Snapshot of expected output for generate_isoflop_train_args with budget=3e18 training FLOPs.
 # Note: compute_training_flops includes the 3x multiplier for training (forward + backward pass),
 # matching how FLOPs are tracked in WandB via Levanter's log_performance_stats.
+#
+# CandidateConfig is now model-agnostic, containing only:
+# - batch_size, train_steps, tokens, target_params, flops_budget
 EXPECTED_ISOFLOP_CONFIGS_3E18 = [
     {
-        "hidden_size": 512,
-        "intermediate_dim": 2048,
-        "num_layers": 6,
-        "num_heads": 4,
-        "num_kv_heads": 4,
         "batch_size": 32,
         "train_steps": 32844,
-        "learning_rate": 0.003646,
-        "beta2": 0.994962,
-        "tpu_type": "v5p-8",
-        "run_name": "isoflop-3e+18-d512-L6-B32-test-snapshot",
+        "flops_budget": 3e18,
     },
     {
-        "hidden_size": 640,
-        "intermediate_dim": 2560,
-        "num_layers": 7,
-        "num_heads": 5,
-        "num_kv_heads": 5,
         "batch_size": 16,
         "train_steps": 46274,
-        "learning_rate": 0.002063,
-        "beta2": 0.997478,
-        "tpu_type": "v5p-8",
-        "run_name": "isoflop-3e+18-d640-L7-B16-test-snapshot",
+        "flops_budget": 3e18,
     },
     {
-        "hidden_size": 768,
-        "intermediate_dim": 3072,
-        "num_layers": 8,
-        "num_heads": 6,
-        "num_kv_heads": 6,
         "batch_size": 16,
         "train_steps": 33965,
-        "learning_rate": 0.001719,
-        "beta2": 0.997478,
-        "tpu_type": "v5p-8",
-        "run_name": "isoflop-3e+18-d768-L8-B16-test-snapshot",
+        "flops_budget": 3e18,
     },
     {
-        "hidden_size": 896,
-        "intermediate_dim": 3584,
-        "num_layers": 10,
-        "num_heads": 7,
-        "num_kv_heads": 7,
         "batch_size": 8,
         "train_steps": 48105,
-        "learning_rate": 0.001042,
-        "beta2": 0.998738,
-        "tpu_type": "v5p-8",
-        "run_name": "isoflop-3e+18-d896-L10-B8-test-snapshot",
+        "flops_budget": 3e18,
     },
     {
-        "hidden_size": 1024,
-        "intermediate_dim": 4096,
-        "num_layers": 11,
-        "num_heads": 8,
-        "num_kv_heads": 8,
         "batch_size": 8,
         "train_steps": 37335,
-        "learning_rate": 0.000912,
-        "beta2": 0.998738,
-        "tpu_type": "v5p-8",
-        "run_name": "isoflop-3e+18-d1024-L11-B8-test-snapshot",
+        "flops_budget": 3e18,
     },
 ]
 
@@ -329,12 +294,17 @@ def test_generate_isoflop_train_args_snapshot():
     This test ensures the scaling_laws module produces identical configurations
     for reproducible isoflop sweeps. Uses 3e18 training FLOPs budget (which accounts
     for the 3x multiplier for forward + backward pass).
+
+    CandidateConfig is now model-agnostic, so we only check the core compute
+    allocation parameters (batch_size, train_steps, flops_budget).
     """
-    config = IsoFlopSweepConfig(budgets=(3e18,))
+    recipe = ScalingRecipe(name="test-snapshot")
+    budgets = (3e18,)
     result = generate_isoflop_train_args(
-        sweep_config=config,
+        budgets=budgets,
         experiment_name="test-snapshot",
         vocab_size=MARIN_TOKENIZER_VOCAB_SIZE,
+        recipe=recipe,
     )
 
     assert len(result) == len(
@@ -345,17 +315,9 @@ def test_generate_isoflop_train_args_snapshot():
         assert isinstance(args, IsoFlopTrainArgs)
         c = args.candidate
         actual = {
-            "hidden_size": c.hidden_size,
-            "intermediate_dim": c.intermediate_dim,
-            "num_layers": c.num_layers,
-            "num_heads": c.num_heads,
-            "num_kv_heads": c.num_kv_heads,
             "batch_size": c.batch_size,
             "train_steps": c.train_steps,
-            "learning_rate": round(c.learning_rate, 6),
-            "beta2": round(c.beta2, 6),
-            "tpu_type": args.tpu_type,
-            "run_name": args.run_name,
+            "flops_budget": c.flops_budget,
         }
 
         for key in expected:
