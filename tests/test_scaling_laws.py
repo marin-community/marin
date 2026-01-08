@@ -24,7 +24,6 @@ import pandas as pd
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
 
-from marin.scaling_laws import ScalingRecipe
 from marin.scaling_laws.isoflop_analysis import (
     DEFAULT_SEQ_LEN,
     MARIN_TOKENIZER_VOCAB_SIZE,
@@ -39,6 +38,9 @@ from marin.scaling_laws.isoflop_analysis import (
     solve_for_train_steps,
     transform_metrics_for_isoflop,
 )
+
+# Import the concrete recipe from experiments for testing
+from experiments.isoflop_sweep import Marin2025Recipe
 
 # --- FLOP computation tests ---
 
@@ -95,7 +97,7 @@ def test_parse_isoflop_run_name():
 
 def test_candidate_configs_within_tolerance():
     """Test that generated configs achieve the target FLOP budget within tolerance."""
-    recipe = ScalingRecipe(name="test")
+    recipe = Marin2025Recipe()
     budget = 1e19
     flop_tolerance = 0.01
     seq_len = DEFAULT_SEQ_LEN
@@ -147,7 +149,7 @@ def test_generate_isoflop_train_args_snapshot():
 
     This ensures reproducibility of the config generation algorithm.
     """
-    recipe = ScalingRecipe(name="test-snapshot")
+    recipe = Marin2025Recipe()
     result = generate_isoflop_train_args(
         budgets=(3e18,),
         experiment_name="test-snapshot",

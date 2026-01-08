@@ -451,8 +451,9 @@ def generate_isoflop_train_args(
         List of IsoFlopTrainArgs, one per candidate config across all budgets.
 
     Example:
-        >>> from marin.scaling_laws import generate_isoflop_train_args, DEFAULT_BUDGETS, ScalingRecipe
-        >>> recipe = ScalingRecipe(name="my-recipe")
+        >>> from marin.scaling_laws import generate_isoflop_train_args, DEFAULT_BUDGETS
+        >>> # Use a concrete recipe implementation (e.g., from experiments/isoflop_sweep.py)
+        >>> # recipe = Marin2025Recipe()
         >>> train_args = generate_isoflop_train_args(
         ...     budgets=DEFAULT_BUDGETS,
         ...     experiment_name="my-experiment",
