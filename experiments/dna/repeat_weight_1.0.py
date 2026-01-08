@@ -17,6 +17,7 @@ Example training experiment with repeat downweighting.
 Adapted from https://github.com/marin-community/marin/blob/0d38a98b63a8566451d3cb9a2fb488ec0d1647ce/experiments/plantcad/exp1729_plantcad_train.py
 """
 
+import dataclasses
 import logging
 from fray.cluster import ResourceConfig
 from levanter.data.text import DNALmDatasetFormat
@@ -32,34 +33,33 @@ RESOURCES = ResourceConfig.with_tpu("v5p-8")
 # -----------------------------------------------------------------------------
 # Experiment configuration
 # -----------------------------------------------------------------------------
-run_number = 6
+run_number = 1
 tokenizer_path = "songlab/tokenizer-dna-clm"
 dataset_path = "gonzalobenegas/genomes-v3-genome_set-animals-intervals-v1_512_256"
-learning_rate = 5e-4
-train_batch_size = 512
+dataset_seq_len = 512  # constant for all sequences in dataset
+learning_rate = 1e-3
+train_batch_size = 2048
 lr_schedule = "inv"
-num_train_steps = 100_000
-steps_per_export = 1000
+num_train_steps = 20_000
+steps_per_export = 2000
 steps_per_cycle = steps_per_export
 steps_per_eval = steps_per_export
-warmup = 0.01
+warmup = 0.5  # fraction of cycle
 decay = 0.1
 
 # -----------------------------------------------------------------------------
 # Model configuration
 # -----------------------------------------------------------------------------
-model_config = qwen3_0_6b_hd128
+model_config = dataclasses.replace(qwen3_0_6b_hd128, max_seq_len=dataset_seq_len)
 
 # -----------------------------------------------------------------------------
 # Dataset configuration
 # -----------------------------------------------------------------------------
 data_tokenized = default_tokenize(
-    name="animal-promoters",
+    name="animal-promoters-repeat-weight-1.0",
     dataset=dataset_path,
     tokenizer=tokenizer_path,
-    format=DNALmDatasetFormat(
-        soft_mask_weight=0.01,  # Lowercase (repetitive) positions get 1% weight
-    ),
+    format=DNALmDatasetFormat(soft_mask_weight=1.0),
     # my thoughts (should check):
     # max parallelism is number of shards in HF dataset
     # window_size_bytes should be smaller than shard size to achieve max parallelism
@@ -84,7 +84,7 @@ train_config = SimpleTrainConfig(
 )
 
 training_step = default_train(
-    name=f"animal-promoters-r{run_number:02d}",
+    name=f"animal-promoters-repeat-weight-1.0-r{run_number:02d}",
     tokenized=data_tokenized,
     model_config=model_config,
     train_config=train_config,
