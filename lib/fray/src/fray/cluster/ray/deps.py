@@ -120,7 +120,7 @@ def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
     return PackageSpec(package_specs=package_specs, py_modules=py_modules)
 
 
-def build_python_path(submodules_dir: str = "submodules") -> list[str]:
+def build_python_path(submodules_dir: str = "submodules", absolute: bool = False) -> list[str]:
     """Build the PYTHONPATH for the given submodules.
 
     Ray's installation process is... non-optimal. `py_modules` just injects
@@ -130,6 +130,10 @@ def build_python_path(submodules_dir: str = "submodules") -> list[str]:
     something like -e {module_path} but noooo, that would be too easy. For whatever
     reason, at install time, the py_modules are not yet in a usable state. So instead
     we have to just manually guess what our PYTHONPATH should be.
+
+    Args:
+        submodules_dir: Directory containing submodules
+        absolute: If True, return absolute paths (needed for local execution without working_dir)
     """
     # Workspace member src directories + experiments directory
     paths = [
@@ -141,20 +145,22 @@ def build_python_path(submodules_dir: str = "submodules") -> list[str]:
         "lib/zephyr/src",
     ]
 
-    if not os.path.exists(submodules_dir):
-        return paths
+    if os.path.exists(submodules_dir):
+        # Iterate through the directories inside submodules
+        for submodule in os.listdir(submodules_dir):
+            submodule_path = os.path.join(submodules_dir, submodule)
 
-    # Iterate through the directories inside submodules
-    for submodule in os.listdir(submodules_dir):
-        submodule_path = os.path.join(submodules_dir, submodule)
+            # Check if it's a directory
+            if os.path.isdir(submodule_path):
+                # Add both submodule and submodule/src paths, because why not
+                paths.append(submodule_path)
+                src_path = os.path.join(submodule_path, "src")
+                if os.path.isdir(src_path):
+                    paths.append(src_path)
 
-        # Check if it's a directory
-        if os.path.isdir(submodule_path):
-            # Add both submodule and submodule/src paths, because why not
-            paths.append(submodule_path)
-            src_path = os.path.join(submodule_path, "src")
-            if os.path.isdir(src_path):
-                paths.append(src_path)
+    if absolute:
+        cwd = os.getcwd()
+        paths = [os.path.join(cwd, p) if not os.path.isabs(p) else p for p in paths]
 
     return paths
 
@@ -163,13 +169,21 @@ def build_runtime_env_for_packages(
     extra: list[str] | None = None,
     pip_packages: list[str] | None = None,
     env_vars: dict | None = None,
+    absolute_paths: bool = False,
 ) -> RuntimeEnv:
-    """Inject the appropriate UV environment for the given packages."""
+    """Inject the appropriate UV environment for the given packages.
+
+    Args:
+        extra: Extra dependency groups from pyproject.toml
+        pip_packages: Additional pip packages to install
+        env_vars: Environment variables to include
+        absolute_paths: If True, PYTHONPATH entries are absolute (for local execution)
+    """
     env_vars = dict(env_vars or {})
     pip_packages = pip_packages or []
     extra = extra or []
 
-    python_path = build_python_path()
+    python_path = build_python_path(absolute=absolute_paths)
     if "PYTHONPATH" in env_vars:
         python_path.extend(env_vars["PYTHONPATH"].split(":"))
 
