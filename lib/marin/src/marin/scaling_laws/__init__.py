@@ -46,9 +46,7 @@ from marin.scaling_laws.recipe import (
     ScalingRecipe,
 )
 from marin.scaling_laws.scaling_ladder import (
-    ModelBuilder,
     ScalingLadderRungConfig,
-    default_model_builder,
     run_scaling_ladder_rung,
 )
 from marin.scaling_laws.scaling_plots import (
@@ -72,7 +70,6 @@ __all__ = [
     "IsoFlopAnalysisResult",
     "IsoFlopTrainArgs",
     "MinimaRecord",
-    "ModelBuilder",
     "QuadraticFitCoeffs",
     "ScalingFit",
     "ScalingLadderRungConfig",
@@ -83,7 +80,6 @@ __all__ = [
     "compute_transformer_params",
     "create_isoflop_plot",
     "create_scaling_plot",
-    "default_model_builder",
     "estimate_memory_bytes",
     "fit_scaling_laws",
     "generate_isoflop_train_args",

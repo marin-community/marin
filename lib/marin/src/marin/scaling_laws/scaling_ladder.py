@@ -15,35 +15,12 @@
 """Scaling ladder: compute-optimal training runs based on IsoFLOP analysis.
 
 This module provides functions and configs for training models with compute-optimal
-configurations derived from IsoFLOP analysis. Experiments create ExecutorSteps
-directly using the provided functions.
-
-Example usage in experiments:
-
-    from marin.execution.executor import ExecutorStep, output_path_of
-    from marin.scaling_laws import (
-        ScalingLadderRungConfig,
-        run_scaling_ladder_rung,
-    )
-
-    # Create optimal training step that depends on analysis output
-    optimal_step = ExecutorStep(
-        name="optimal-1e21",
-        fn=run_scaling_ladder_rung,
-        config=ScalingLadderRungConfig(
-            analysis_output_path=output_path_of(analysis_step),
-            target_budget=1e21,
-            label="nemo",
-            tokenized=my_tokenized_dataset,
-            output_path="checkpoints/optimal-1e21",
-        ),
-    )
+configurations derived from IsoFLOP analysis.
 """
 
 import json
 import logging
 import os
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -53,10 +30,7 @@ from fray.cluster import ResourceConfig
 from haliax.partitioning import ResourceAxis
 from levanter.checkpoint import CheckpointerConfig
 from levanter.data.text import LMMixtureDatasetConfig
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.main.train_lm import TrainLmConfig
-from levanter.models.lm_model import LmConfig
-from levanter.models.qwen import Qwen3Config
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
@@ -64,7 +38,6 @@ from levanter.utils.mesh import MeshConfig
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.processing.tokenize.data_configs import add_validation_sets_to_mixture, lm_data_config
 from marin.scaling_laws.isoflop_analysis import (
-    CandidateConfig,
     ScalingFit,
     predict_optimal_config,
 )
@@ -73,27 +46,6 @@ from marin.scaling_laws.recipe import ScalingRecipe
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 logger = logging.getLogger(__name__)
-
-# Type alias for model builder callbacks
-# Takes (candidate, seq_len) and returns a model config
-ModelBuilder = Callable[[CandidateConfig, int], LmConfig]
-
-
-def default_model_builder(candidate: CandidateConfig, seq_len: int) -> Qwen3Config:
-    """Default model builder that creates Qwen3Config.
-
-    This is provided as a convenience for the common case. Users can pass
-    their own model_builder function to use different model types.
-    """
-    return Qwen3Config(
-        hidden_dim=candidate.hidden_size,
-        intermediate_dim=candidate.intermediate_dim,
-        num_layers=candidate.num_layers,
-        num_heads=candidate.num_heads,
-        num_kv_heads=candidate.num_kv_heads,
-        max_seq_len=seq_len,
-        rope=Llama3RotaryEmbeddingsConfig(),
-    )
 
 
 def _prepare_data_config(
@@ -136,6 +88,8 @@ class ScalingLadderRungConfig:
     This config references an IsoFLOP analysis output and specifies
     the target compute budget. At runtime, the optimal config is loaded
     from the analysis output.
+
+    The ScalingRecipe handles all model-specific decisions (architecture, optimizer).
     """
 
     analysis_output_path: str
@@ -154,10 +108,7 @@ class ScalingLadderRungConfig:
     """Where to write training outputs."""
 
     recipe: ScalingRecipe
-    """Scaling recipe with hyperparameters."""
-
-    model_builder: ModelBuilder | None = None
-    """Function to build model config from CandidateConfig. If None, uses default_model_builder (Qwen3)."""
+    """Scaling recipe that handles model/optimizer config building."""
 
     tokenizer: str = "stanford-crfm/marin-tokenizer"
     """Tokenizer to use."""
@@ -170,7 +121,12 @@ class ScalingLadderRungConfig:
 
 
 def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
-    """Run one rung of the scaling ladder (one compute-optimal training run)."""
+    """Run one rung of the scaling ladder (one compute-optimal training run).
+
+    The recipe handles all model-specific decisions:
+    - Model config is built via `recipe.build_model_config(target_params, vocab_size)`
+    - Optimizer config is built via `recipe.build_optimizer_config(candidate, vocab_size)`
+    """
     result_path = os.path.join(config.analysis_output_path, "isoflop_analysis_result.json")
     fs, _, _ = fsspec.get_fs_token_paths(result_path)
 
@@ -201,18 +157,14 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
 
     logger.info(
         f"Training with optimal config for {config.target_budget:.2e} FLOPs:\n"
-        f"  hidden_size={candidate.hidden_size}, num_layers={candidate.num_layers}\n"
+        f"  target_params={candidate.target_params:.2e}\n"
         f"  batch_size={candidate.batch_size}, train_steps={candidate.train_steps}\n"
-        f"  learning_rate={candidate.learning_rate:.6f}, tokens={candidate.tokens:.2e}"
+        f"  tokens={candidate.tokens:.2e}"
     )
 
-    # Use provided model builder or default to Qwen3
-    model_builder = config.model_builder or default_model_builder
-    model_cfg = model_builder(candidate, config.seq_len)
-
-    tpu_type = pick_v5p_type(candidate, vocab_size, config.seq_len)
-
-    optimizer_cfg = config.recipe.build_optimizer_config(candidate.learning_rate, candidate.beta2)
+    model_cfg = config.recipe.build_model_config(candidate.target_params, vocab_size, config.seq_len)
+    optimizer_cfg = config.recipe.build_optimizer_config(candidate, vocab_size)
+    tpu_type = pick_v5p_type(candidate, vocab_size, config.seq_len, config.recipe)
 
     pretraining_data = _prepare_data_config(config.tokenized, config.validation_sets)
 
@@ -225,6 +177,7 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
                     "optimal-training",
                     f"FLOPs={config.target_budget:.1e}",
                     f"label={config.label}",
+                    f"N={candidate.target_params:.1e}",
                 ],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
