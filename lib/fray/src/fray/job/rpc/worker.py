@@ -88,6 +88,7 @@ import threading
 import time
 import traceback
 import uuid
+from typing import Any
 
 import cloudpickle
 from connectrpc.code import Code
@@ -98,7 +99,7 @@ from uvicorn import Config, Server
 from fray.job.rpc.proto import fray_pb2
 from fray.job.rpc.proto.fray_connect import (
     FrayControllerClientSync,
-    FrayWorker,
+    FrayWorker as FrayWorkerProtocol,
     FrayWorkerASGIApplication,
 )
 from fray.job.rpc.proto.fray_pb2 import TaskStatus
@@ -106,7 +107,7 @@ from fray.job.rpc.proto.fray_pb2 import TaskStatus
 logger = logging.getLogger(__name__)
 
 
-class FrayWorkerServicer(FrayWorker):
+class FrayWorkerServicer(FrayWorkerProtocol):
     """
     Implements the FrayWorker Connect RPC service for health checks and task monitoring.
 
@@ -118,6 +119,7 @@ class FrayWorkerServicer(FrayWorker):
         self.worker_id = worker_id
         self.start_time = time.time_ns() // 1_000_000
         self.current_tasks: list[tuple[str, TaskStatus, int]] = []
+        self._actor_instances: dict[str, Any] = {}
         self._lock = threading.Lock()
 
     async def health_check(self, request: fray_pb2.Empty, ctx: RequestContext) -> fray_pb2.WorkerStatus:
@@ -168,6 +170,154 @@ class FrayWorkerServicer(FrayWorker):
             self.current_tasks = [
                 (tid, status, started_at_ms) for tid, status, started_at_ms in self.current_tasks if tid != task_id
             ]
+
+    async def instantiate_actor(self, request: fray_pb2.ActorSpec, ctx: RequestContext) -> fray_pb2.ActorHandle:
+        """
+        Instantiate an actor from serialized specification.
+
+        Deserializes the actor class, arguments, and keyword arguments from the request,
+        creates an instance, and stores it in the actor_instances dictionary.
+
+        Args:
+            request: ActorSpec containing actor_id and serialized actor data
+            ctx: Request context from Connect RPC
+
+        Returns:
+            ActorHandle with actor_id, worker_id, name, and READY status
+
+        Raises:
+            ConnectError with Code.INTERNAL if instantiation fails
+        """
+        # Deserialize actor spec
+        actor_data = cloudpickle.loads(request.serialized_actor)
+        cls = actor_data["cls"]
+        args = actor_data["args"]
+        kwargs = actor_data["kwargs"]
+
+        # Create instance
+        try:
+            instance = cls(*args, **kwargs)
+
+            with self._lock:
+                self._actor_instances[request.actor_id] = instance
+
+            logger.info(f"Worker {self.worker_id} instantiated actor {request.actor_id}")
+
+            return fray_pb2.ActorHandle(
+                actor_id=request.actor_id,
+                worker_id=self.worker_id,
+                name=request.name,
+                status=fray_pb2.ACTOR_STATUS_READY,
+            )
+
+        except Exception as e:
+            error_msg = f"Failed to instantiate actor: {type(e).__name__}: {e!s}"
+            logger.error(f"{error_msg}\n{traceback.format_exc()}")
+            raise ConnectError(Code.INTERNAL, error_msg) from e
+
+    async def execute_actor_method(self, request: fray_pb2.ActorCall, ctx: RequestContext) -> fray_pb2.TaskResult:
+        """
+        Execute a method on an actor instance.
+
+        Deserializes the method call (method name, args, kwargs), retrieves the actor
+        instance, executes the method, and returns the serialized result.
+
+        Args:
+            request: ActorCall containing actor_id and serialized method call
+            ctx: Request context from Connect RPC
+
+        Returns:
+            TaskResult with serialized result or error information
+
+        Raises:
+            ConnectError with Code.NOT_FOUND if actor not found
+        """
+        with self._lock:
+            if request.actor_id not in self._actor_instances:
+                raise ConnectError(Code.NOT_FOUND, f"Actor {request.actor_id} not found on this worker")
+
+            instance = self._actor_instances[request.actor_id]
+
+        # Deserialize method call
+        call_data = cloudpickle.loads(request.serialized_call)
+        method_name = call_data["method"]
+        args = call_data["args"]
+        kwargs = call_data["kwargs"]
+
+        # Execute method
+        try:
+            method = getattr(instance, method_name)
+            result = method(*args, **kwargs)
+
+            serialized_result = cloudpickle.dumps(result)
+
+            logger.info(f"Worker {self.worker_id} executed {method_name} on actor {request.actor_id}")
+
+            return fray_pb2.TaskResult(
+                task_id="",  # Not used for direct calls
+                serialized_result=serialized_result,
+            )
+
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {e!s}\n{traceback.format_exc()}"
+            serialized_error = cloudpickle.dumps(e)
+
+            logger.error(
+                f"Worker {self.worker_id} failed executing {method_name} on actor {request.actor_id}: {error_msg}"
+            )
+
+            return fray_pb2.TaskResult(
+                task_id="",
+                error=error_msg,
+                serialized_error=serialized_error,
+            )
+
+    async def destroy_actor(self, request: fray_pb2.ActorDeleteRequest, ctx: RequestContext) -> fray_pb2.Empty:
+        """
+        Destroy an actor instance.
+
+        Removes the actor from the actor_instances dictionary. If the actor doesn't exist,
+        this is a no-op (idempotent).
+
+        Args:
+            request: ActorDeleteRequest containing actor_id to destroy
+            ctx: Request context from Connect RPC
+
+        Returns:
+            Empty response
+        """
+        with self._lock:
+            if request.actor_id in self._actor_instances:
+                del self._actor_instances[request.actor_id]
+                logger.info(f"Worker {self.worker_id} destroyed actor {request.actor_id}")
+
+        return fray_pb2.Empty()
+
+    async def list_actors(self, request: fray_pb2.Empty, ctx: RequestContext) -> fray_pb2.ActorList:
+        """
+        List all actor instances on this worker.
+
+        Returns information about all actors currently hosted on this worker.
+
+        Args:
+            request: Empty request
+            ctx: Request context from Connect RPC
+
+        Returns:
+            ActorList containing actor handles for all actors on this worker
+        """
+        with self._lock:
+            actor_handles = [
+                fray_pb2.ActorHandle(
+                    actor_id=actor_id,
+                    worker_id=self.worker_id,
+                    name="",  # Name is not stored in worker state
+                    status=fray_pb2.ACTOR_STATUS_READY,
+                )
+                for actor_id in self._actor_instances.keys()
+            ]
+
+        return fray_pb2.ActorList(actors=actor_handles)
 
 
 class FrayWorker:
@@ -241,16 +391,27 @@ class FrayWorker:
         """
         self._running = True
 
-        # Register with controller
-        self.register()
-
-        # Start our own Connect RPC server in a background thread
+        # Start our own Connect RPC server in a background thread BEFORE registering
+        # This ensures the server is ready to accept requests when the controller tries
+        # to instantiate actors immediately after registration
         def run_server():
             self._server.run()
 
         self._server_thread = threading.Thread(target=run_server, daemon=True)
         self._server_thread.start()
+
+        # Wait for server to be ready
+        max_wait = 5.0
+        start_time = time.time()
+        while not self._server.started:
+            if time.time() - start_time > max_wait:
+                raise RuntimeError(f"Worker RPC server failed to start within {max_wait}s")
+            time.sleep(0.01)
+
         logger.info(f"Worker {self.worker_id} Connect RPC server started on {self.address}")
+
+        # Now register with controller (server is ready to accept requests)
+        self.register()
 
         try:
             # Main task execution loop
@@ -279,11 +440,13 @@ class FrayWorker:
                         logger.info(f"Worker {self.worker_id} completed task {task_spec.task_id}")
 
                     except Exception as e:
-                        # Report failure
+                        # Report failure - serialize the actual exception for proper propagation
                         error_msg = f"{type(e).__name__}: {e!s}\n{traceback.format_exc()}"
+                        serialized_error = cloudpickle.dumps(e)
                         failure_result = fray_pb2.TaskResult(
                             task_id=task_spec.task_id,
                             error=error_msg,
+                            serialized_error=serialized_error,
                         )
                         self._controller_client.report_task_failed(failure_result)
                         logger.error(f"Worker {self.worker_id} failed task {task_spec.task_id}: {error_msg}")
@@ -315,26 +478,60 @@ class FrayWorker:
         """
         Execute a task by deserializing and calling the function.
 
+        Handles both regular tasks (with 'fn' and 'args') and actor method calls
+        (with 'actor_id' and 'serialized_call').
+
         Args:
             task: TaskSpec containing the serialized function and arguments
 
         Returns:
             TaskResult containing the serialized result or error
         """
-        # Deserialize the function and arguments
+        # Deserialize the task payload
         task_data = cloudpickle.loads(task.serialized_fn)
-        fn = task_data["fn"]
-        args = task_data["args"]
 
-        # Execute the function
-        result = fn(*args)
+        # Check if this is an actor method call (has 'actor_id' key) or regular task (has 'fn' key)
+        if "actor_id" in task_data:
+            # This is an actor method call - route to internal actor execution
+            actor_id = task_data["actor_id"]
+            serialized_call = task_data["serialized_call"]
 
-        # Serialize and return the result
-        serialized_result = cloudpickle.dumps(result)
-        return fray_pb2.TaskResult(
-            task_id=task.task_id,
-            serialized_result=serialized_result,
-        )
+            # Execute via servicer's actor method (reuse execute_actor_method logic)
+            with self._servicer._lock:
+                if actor_id not in self._servicer._actor_instances:
+                    raise RuntimeError(f"Actor {actor_id} not found on this worker")
+                instance = self._servicer._actor_instances[actor_id]
+
+            # Deserialize method call
+            call_data = cloudpickle.loads(serialized_call)
+            method_name = call_data["method"]
+            args = call_data["args"]
+            kwargs = call_data["kwargs"]
+
+            # Execute method
+            method = getattr(instance, method_name)
+            result = method(*args, **kwargs)
+
+            # Serialize and return the result
+            serialized_result = cloudpickle.dumps(result)
+            return fray_pb2.TaskResult(
+                task_id=task.task_id,
+                serialized_result=serialized_result,
+            )
+        else:
+            # Regular task execution
+            fn = task_data["fn"]
+            args = task_data["args"]
+
+            # Execute the function
+            result = fn(*args)
+
+            # Serialize and return the result
+            serialized_result = cloudpickle.dumps(result)
+            return fray_pb2.TaskResult(
+                task_id=task.task_id,
+                serialized_result=serialized_result,
+            )
 
     def stop(self) -> None:
         """Stop the worker gracefully."""

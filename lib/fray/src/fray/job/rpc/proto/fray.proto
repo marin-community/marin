@@ -26,6 +26,14 @@ enum TaskStatus {
   TASK_STATUS_FAILED = 4;
 }
 
+enum ActorStatus {
+  ACTOR_STATUS_UNSPECIFIED = 0;
+  ACTOR_STATUS_CREATING = 1;
+  ACTOR_STATUS_READY = 2;
+  ACTOR_STATUS_RESTARTING = 3;
+  ACTOR_STATUS_FAILED = 4;
+}
+
 message TaskSpec {
   string task_id = 1;
   bytes serialized_fn = 2;
@@ -44,6 +52,39 @@ message TaskResult {
   string task_id = 1;
   bytes serialized_result = 2;
   string error = 3;
+  bytes serialized_error = 4;
+}
+
+message ActorSpec {
+  string actor_id = 1;
+  bytes serialized_actor = 2;
+  string name = 3;
+  bool get_if_exists = 4;
+}
+
+message ActorHandle {
+  string actor_id = 1;
+  string worker_id = 2;
+  string name = 3;
+  ActorStatus status = 4;
+}
+
+message ActorCall {
+  string actor_id = 1;
+  bytes serialized_call = 2;
+}
+
+message ActorCallResult {
+  string actor_id = 1;
+  string task_id = 2;
+}
+
+message ActorDeleteRequest {
+  string actor_id = 1;
+}
+
+message ActorList {
+  repeated ActorHandle actors = 1;
 }
 
 message WorkerInfo {
@@ -72,6 +113,12 @@ service FrayController {
   rpc ReportTaskComplete(TaskResult) returns (Empty);
   rpc ReportTaskFailed(TaskResult) returns (Empty);
   rpc UnregisterWorker(WorkerInfo) returns (Empty);
+
+  // Actor RPCs
+  rpc CreateActor(ActorSpec) returns (ActorHandle);
+  rpc CallActor(ActorCall) returns (TaskHandle);
+  rpc GetActorStatus(ActorHandle) returns (ActorHandle);
+  rpc DeleteActor(ActorDeleteRequest) returns (Empty);
 }
 
 message WorkerTask {
@@ -91,4 +138,10 @@ message WorkerStatus {
 service FrayWorker {
   rpc HealthCheck(Empty) returns (WorkerStatus);
   rpc ListTasks(Empty) returns (WorkerStatus);
+
+  // Actor RPCs
+  rpc InstantiateActor(ActorSpec) returns (ActorHandle);
+  rpc ExecuteActorMethod(ActorCall) returns (TaskResult);
+  rpc DestroyActor(ActorDeleteRequest) returns (Empty);
+  rpc ListActors(Empty) returns (ActorList);
 }

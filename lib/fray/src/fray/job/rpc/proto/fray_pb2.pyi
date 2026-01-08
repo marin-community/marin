@@ -15,11 +15,24 @@ class TaskStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     TASK_STATUS_RUNNING: _ClassVar[TaskStatus]
     TASK_STATUS_COMPLETED: _ClassVar[TaskStatus]
     TASK_STATUS_FAILED: _ClassVar[TaskStatus]
+
+class ActorStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    ACTOR_STATUS_UNSPECIFIED: _ClassVar[ActorStatus]
+    ACTOR_STATUS_CREATING: _ClassVar[ActorStatus]
+    ACTOR_STATUS_READY: _ClassVar[ActorStatus]
+    ACTOR_STATUS_RESTARTING: _ClassVar[ActorStatus]
+    ACTOR_STATUS_FAILED: _ClassVar[ActorStatus]
 TASK_STATUS_UNSPECIFIED: TaskStatus
 TASK_STATUS_PENDING: TaskStatus
 TASK_STATUS_RUNNING: TaskStatus
 TASK_STATUS_COMPLETED: TaskStatus
 TASK_STATUS_FAILED: TaskStatus
+ACTOR_STATUS_UNSPECIFIED: ActorStatus
+ACTOR_STATUS_CREATING: ActorStatus
+ACTOR_STATUS_READY: ActorStatus
+ACTOR_STATUS_RESTARTING: ActorStatus
+ACTOR_STATUS_FAILED: ActorStatus
 
 class TaskSpec(_message.Message):
     __slots__ = ()
@@ -57,10 +70,64 @@ class TaskResult(_message.Message):
     TASK_ID_FIELD_NUMBER: _ClassVar[int]
     SERIALIZED_RESULT_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
+    SERIALIZED_ERROR_FIELD_NUMBER: _ClassVar[int]
     task_id: str
     serialized_result: bytes
     error: str
-    def __init__(self, task_id: _Optional[str] = ..., serialized_result: _Optional[bytes] = ..., error: _Optional[str] = ...) -> None: ...
+    serialized_error: bytes
+    def __init__(self, task_id: _Optional[str] = ..., serialized_result: _Optional[bytes] = ..., error: _Optional[str] = ..., serialized_error: _Optional[bytes] = ...) -> None: ...
+
+class ActorSpec(_message.Message):
+    __slots__ = ()
+    ACTOR_ID_FIELD_NUMBER: _ClassVar[int]
+    SERIALIZED_ACTOR_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    GET_IF_EXISTS_FIELD_NUMBER: _ClassVar[int]
+    actor_id: str
+    serialized_actor: bytes
+    name: str
+    get_if_exists: bool
+    def __init__(self, actor_id: _Optional[str] = ..., serialized_actor: _Optional[bytes] = ..., name: _Optional[str] = ..., get_if_exists: _Optional[bool] = ...) -> None: ...
+
+class ActorHandle(_message.Message):
+    __slots__ = ()
+    ACTOR_ID_FIELD_NUMBER: _ClassVar[int]
+    WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    actor_id: str
+    worker_id: str
+    name: str
+    status: ActorStatus
+    def __init__(self, actor_id: _Optional[str] = ..., worker_id: _Optional[str] = ..., name: _Optional[str] = ..., status: _Optional[_Union[ActorStatus, str]] = ...) -> None: ...
+
+class ActorCall(_message.Message):
+    __slots__ = ()
+    ACTOR_ID_FIELD_NUMBER: _ClassVar[int]
+    SERIALIZED_CALL_FIELD_NUMBER: _ClassVar[int]
+    actor_id: str
+    serialized_call: bytes
+    def __init__(self, actor_id: _Optional[str] = ..., serialized_call: _Optional[bytes] = ...) -> None: ...
+
+class ActorCallResult(_message.Message):
+    __slots__ = ()
+    ACTOR_ID_FIELD_NUMBER: _ClassVar[int]
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    actor_id: str
+    task_id: str
+    def __init__(self, actor_id: _Optional[str] = ..., task_id: _Optional[str] = ...) -> None: ...
+
+class ActorDeleteRequest(_message.Message):
+    __slots__ = ()
+    ACTOR_ID_FIELD_NUMBER: _ClassVar[int]
+    actor_id: str
+    def __init__(self, actor_id: _Optional[str] = ...) -> None: ...
+
+class ActorList(_message.Message):
+    __slots__ = ()
+    ACTORS_FIELD_NUMBER: _ClassVar[int]
+    actors: _containers.RepeatedCompositeFieldContainer[ActorHandle]
+    def __init__(self, actors: _Optional[_Iterable[_Union[ActorHandle, _Mapping]]] = ...) -> None: ...
 
 class WorkerInfo(_message.Message):
     __slots__ = ()

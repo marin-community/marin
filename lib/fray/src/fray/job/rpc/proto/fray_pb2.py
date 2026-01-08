@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\nfray.proto\x12\x04\x66ray\"\xe4\x01\n\x08TaskSpec\x12\x17\n\x07task_id\x18\x01 \x01(\tR\x06taskId\x12#\n\rserialized_fn\x18\x02 \x01(\x0cR\x0cserializedFn\x12;\n\tresources\x18\x03 \x03(\x0b\x32\x1d.fray.TaskSpec.ResourcesEntryR\tresources\x12\x1f\n\x0bmax_retries\x18\x04 \x01(\x05R\nmaxRetries\x1a<\n\x0eResourcesEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\x05R\x05value:\x02\x38\x01\"\x82\x01\n\nTaskHandle\x12\x17\n\x07task_id\x18\x01 \x01(\tR\x06taskId\x12(\n\x06status\x18\x02 \x01(\x0e\x32\x10.fray.TaskStatusR\x06status\x12\x1b\n\tworker_id\x18\x03 \x01(\tR\x08workerId\x12\x14\n\x05\x65rror\x18\x04 \x01(\tR\x05\x65rror\"h\n\nTaskResult\x12\x17\n\x07task_id\x18\x01 \x01(\tR\x06taskId\x12+\n\x11serialized_result\x18\x02 \x01(\x0cR\x10serializedResult\x12\x14\n\x05\x65rror\x18\x03 \x01(\tR\x05\x65rror\"\x81\x01\n\nWorkerInfo\x12\x1b\n\tworker_id\x18\x01 \x01(\tR\x08workerId\x12\x18\n\x07\x61\x64\x64ress\x18\x02 \x01(\tR\x07\x61\x64\x64ress\x12\x19\n\x08num_cpus\x18\x03 \x01(\x05R\x07numCpus\x12!\n\x0cmemory_bytes\x18\x04 \x01(\x03R\x0bmemoryBytes\"-\n\x0eGetTaskRequest\x12\x1b\n\tworker_id\x18\x01 \x01(\tR\x08workerId\"\x07\n\x05\x45mpty\"s\n\nWorkerTask\x12\x17\n\x07task_id\x18\x01 \x01(\tR\x06taskId\x12(\n\x06status\x18\x02 \x01(\x0e\x32\x10.fray.TaskStatusR\x06status\x12\"\n\rstarted_at_ms\x18\x03 \x01(\x03R\x0bstartedAtMs\"\x99\x01\n\x0cWorkerStatus\x12\x1b\n\tworker_id\x18\x01 \x01(\tR\x08workerId\x12\x18\n\x07healthy\x18\x02 \x01(\x08R\x07healthy\x12\x35\n\rcurrent_tasks\x18\x03 \x03(\x0b\x32\x10.fray.WorkerTaskR\x0c\x63urrentTasks\x12\x1b\n\tuptime_ms\x18\x04 \x01(\x03R\x08uptimeMs*\x8e\x01\n\nTaskStatus\x12\x1b\n\x17TASK_STATUS_UNSPECIFIED\x10\x00\x12\x17\n\x13TASK_STATUS_PENDING\x10\x01\x12\x17\n\x13TASK_STATUS_RUNNING\x10\x02\x12\x19\n\x15TASK_STATUS_COMPLETED\x10\x03\x12\x16\n\x12TASK_STATUS_FAILED\x10\x04\x32\xab\x03\n\x0e\x46rayController\x12.\n\nSubmitTask\x12\x0e.fray.TaskSpec\x1a\x10.fray.TaskHandle\x12\x33\n\rGetTaskStatus\x12\x10.fray.TaskHandle\x1a\x10.fray.TaskHandle\x12\x33\n\rGetTaskResult\x12\x10.fray.TaskHandle\x1a\x10.fray.TaskResult\x12/\n\x0eRegisterWorker\x12\x10.fray.WorkerInfo\x1a\x0b.fray.Empty\x12\x33\n\x0bGetNextTask\x12\x14.fray.GetTaskRequest\x1a\x0e.fray.TaskSpec\x12\x33\n\x12ReportTaskComplete\x12\x10.fray.TaskResult\x1a\x0b.fray.Empty\x12\x31\n\x10ReportTaskFailed\x12\x10.fray.TaskResult\x1a\x0b.fray.Empty\x12\x31\n\x10UnregisterWorker\x12\x10.fray.WorkerInfo\x1a\x0b.fray.Empty2j\n\nFrayWorker\x12.\n\x0bHealthCheck\x12\x0b.fray.Empty\x1a\x12.fray.WorkerStatus\x12,\n\tListTasks\x12\x0b.fray.Empty\x1a\x12.fray.WorkerStatusBH\n\x08\x63om.frayB\tFrayProtoP\x01\x90\x01\x01\xa2\x02\x03\x46XX\xaa\x02\x04\x46ray\xca\x02\x04\x46ray\xe2\x02\x10\x46ray\\GPBMetadata\xea\x02\x04\x46rayb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\nfray.proto\x12\x04\x66ray\"\xe4\x01\n\x08TaskSpec\x12\x17\n\x07task_id\x18\x01 \x01(\tR\x06taskId\x12#\n\rserialized_fn\x18\x02 \x01(\x0cR\x0cserializedFn\x12;\n\tresources\x18\x03 \x03(\x0b\x32\x1d.fray.TaskSpec.ResourcesEntryR\tresources\x12\x1f\n\x0bmax_retries\x18\x04 \x01(\x05R\nmaxRetries\x1a<\n\x0eResourcesEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\x05R\x05value:\x02\x38\x01\"\x82\x01\n\nTaskHandle\x12\x17\n\x07task_id\x18\x01 \x01(\tR\x06taskId\x12(\n\x06status\x18\x02 \x01(\x0e\x32\x10.fray.TaskStatusR\x06status\x12\x1b\n\tworker_id\x18\x03 \x01(\tR\x08workerId\x12\x14\n\x05\x65rror\x18\x04 \x01(\tR\x05\x65rror\"\x93\x01\n\nTaskResult\x12\x17\n\x07task_id\x18\x01 \x01(\tR\x06taskId\x12+\n\x11serialized_result\x18\x02 \x01(\x0cR\x10serializedResult\x12\x14\n\x05\x65rror\x18\x03 \x01(\tR\x05\x65rror\x12)\n\x10serialized_error\x18\x04 \x01(\x0cR\x0fserializedError\"\x89\x01\n\tActorSpec\x12\x19\n\x08\x61\x63tor_id\x18\x01 \x01(\tR\x07\x61\x63torId\x12)\n\x10serialized_actor\x18\x02 \x01(\x0cR\x0fserializedActor\x12\x12\n\x04name\x18\x03 \x01(\tR\x04name\x12\"\n\rget_if_exists\x18\x04 \x01(\x08R\x0bgetIfExists\"\x84\x01\n\x0b\x41\x63torHandle\x12\x19\n\x08\x61\x63tor_id\x18\x01 \x01(\tR\x07\x61\x63torId\x12\x1b\n\tworker_id\x18\x02 \x01(\tR\x08workerId\x12\x12\n\x04name\x18\x03 \x01(\tR\x04name\x12)\n\x06status\x18\x04 \x01(\x0e\x32\x11.fray.ActorStatusR\x06status\"O\n\tActorCall\x12\x19\n\x08\x61\x63tor_id\x18\x01 \x01(\tR\x07\x61\x63torId\x12\'\n\x0fserialized_call\x18\x02 \x01(\x0cR\x0eserializedCall\"E\n\x0f\x41\x63torCallResult\x12\x19\n\x08\x61\x63tor_id\x18\x01 \x01(\tR\x07\x61\x63torId\x12\x17\n\x07task_id\x18\x02 \x01(\tR\x06taskId\"/\n\x12\x41\x63torDeleteRequest\x12\x19\n\x08\x61\x63tor_id\x18\x01 \x01(\tR\x07\x61\x63torId\"6\n\tActorList\x12)\n\x06\x61\x63tors\x18\x01 \x03(\x0b\x32\x11.fray.ActorHandleR\x06\x61\x63tors\"\x81\x01\n\nWorkerInfo\x12\x1b\n\tworker_id\x18\x01 \x01(\tR\x08workerId\x12\x18\n\x07\x61\x64\x64ress\x18\x02 \x01(\tR\x07\x61\x64\x64ress\x12\x19\n\x08num_cpus\x18\x03 \x01(\x05R\x07numCpus\x12!\n\x0cmemory_bytes\x18\x04 \x01(\x03R\x0bmemoryBytes\"-\n\x0eGetTaskRequest\x12\x1b\n\tworker_id\x18\x01 \x01(\tR\x08workerId\"\x07\n\x05\x45mpty\"s\n\nWorkerTask\x12\x17\n\x07task_id\x18\x01 \x01(\tR\x06taskId\x12(\n\x06status\x18\x02 \x01(\x0e\x32\x10.fray.TaskStatusR\x06status\x12\"\n\rstarted_at_ms\x18\x03 \x01(\x03R\x0bstartedAtMs\"\x99\x01\n\x0cWorkerStatus\x12\x1b\n\tworker_id\x18\x01 \x01(\tR\x08workerId\x12\x18\n\x07healthy\x18\x02 \x01(\x08R\x07healthy\x12\x35\n\rcurrent_tasks\x18\x03 \x03(\x0b\x32\x10.fray.WorkerTaskR\x0c\x63urrentTasks\x12\x1b\n\tuptime_ms\x18\x04 \x01(\x03R\x08uptimeMs*\x8e\x01\n\nTaskStatus\x12\x1b\n\x17TASK_STATUS_UNSPECIFIED\x10\x00\x12\x17\n\x13TASK_STATUS_PENDING\x10\x01\x12\x17\n\x13TASK_STATUS_RUNNING\x10\x02\x12\x19\n\x15TASK_STATUS_COMPLETED\x10\x03\x12\x16\n\x12TASK_STATUS_FAILED\x10\x04*\x94\x01\n\x0b\x41\x63torStatus\x12\x1c\n\x18\x41\x43TOR_STATUS_UNSPECIFIED\x10\x00\x12\x19\n\x15\x41\x43TOR_STATUS_CREATING\x10\x01\x12\x16\n\x12\x41\x43TOR_STATUS_READY\x10\x02\x12\x1b\n\x17\x41\x43TOR_STATUS_RESTARTING\x10\x03\x12\x17\n\x13\x41\x43TOR_STATUS_FAILED\x10\x04\x32\xfc\x04\n\x0e\x46rayController\x12.\n\nSubmitTask\x12\x0e.fray.TaskSpec\x1a\x10.fray.TaskHandle\x12\x33\n\rGetTaskStatus\x12\x10.fray.TaskHandle\x1a\x10.fray.TaskHandle\x12\x33\n\rGetTaskResult\x12\x10.fray.TaskHandle\x1a\x10.fray.TaskResult\x12/\n\x0eRegisterWorker\x12\x10.fray.WorkerInfo\x1a\x0b.fray.Empty\x12\x33\n\x0bGetNextTask\x12\x14.fray.GetTaskRequest\x1a\x0e.fray.TaskSpec\x12\x33\n\x12ReportTaskComplete\x12\x10.fray.TaskResult\x1a\x0b.fray.Empty\x12\x31\n\x10ReportTaskFailed\x12\x10.fray.TaskResult\x1a\x0b.fray.Empty\x12\x31\n\x10UnregisterWorker\x12\x10.fray.WorkerInfo\x1a\x0b.fray.Empty\x12\x31\n\x0b\x43reateActor\x12\x0f.fray.ActorSpec\x1a\x11.fray.ActorHandle\x12.\n\tCallActor\x12\x0f.fray.ActorCall\x1a\x10.fray.TaskHandle\x12\x36\n\x0eGetActorStatus\x12\x11.fray.ActorHandle\x1a\x11.fray.ActorHandle\x12\x34\n\x0b\x44\x65leteActor\x12\x18.fray.ActorDeleteRequest\x1a\x0b.fray.Empty2\xbe\x02\n\nFrayWorker\x12.\n\x0bHealthCheck\x12\x0b.fray.Empty\x1a\x12.fray.WorkerStatus\x12,\n\tListTasks\x12\x0b.fray.Empty\x1a\x12.fray.WorkerStatus\x12\x36\n\x10InstantiateActor\x12\x0f.fray.ActorSpec\x1a\x11.fray.ActorHandle\x12\x37\n\x12\x45xecuteActorMethod\x12\x0f.fray.ActorCall\x1a\x10.fray.TaskResult\x12\x35\n\x0c\x44\x65stroyActor\x12\x18.fray.ActorDeleteRequest\x1a\x0b.fray.Empty\x12*\n\nListActors\x12\x0b.fray.Empty\x1a\x0f.fray.ActorListBH\n\x08\x63om.frayB\tFrayProtoP\x01\x90\x01\x01\xa2\x02\x03\x46XX\xaa\x02\x04\x46ray\xca\x02\x04\x46ray\xe2\x02\x10\x46ray\\GPBMetadata\xea\x02\x04\x46rayb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,29 +34,43 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._serialized_options = b'\n\010com.frayB\tFrayProtoP\001\220\001\001\242\002\003FXX\252\002\004Fray\312\002\004Fray\342\002\020Fray\\GPBMetadata\352\002\004Fray'
   _globals['_TASKSPEC_RESOURCESENTRY']._loaded_options = None
   _globals['_TASKSPEC_RESOURCESENTRY']._serialized_options = b'8\001'
-  _globals['_TASKSTATUS']._serialized_start=952
-  _globals['_TASKSTATUS']._serialized_end=1094
+  _globals['_TASKSTATUS']._serialized_start=1528
+  _globals['_TASKSTATUS']._serialized_end=1670
+  _globals['_ACTORSTATUS']._serialized_start=1673
+  _globals['_ACTORSTATUS']._serialized_end=1821
   _globals['_TASKSPEC']._serialized_start=21
   _globals['_TASKSPEC']._serialized_end=249
   _globals['_TASKSPEC_RESOURCESENTRY']._serialized_start=189
   _globals['_TASKSPEC_RESOURCESENTRY']._serialized_end=249
   _globals['_TASKHANDLE']._serialized_start=252
   _globals['_TASKHANDLE']._serialized_end=382
-  _globals['_TASKRESULT']._serialized_start=384
-  _globals['_TASKRESULT']._serialized_end=488
-  _globals['_WORKERINFO']._serialized_start=491
-  _globals['_WORKERINFO']._serialized_end=620
-  _globals['_GETTASKREQUEST']._serialized_start=622
-  _globals['_GETTASKREQUEST']._serialized_end=667
-  _globals['_EMPTY']._serialized_start=669
-  _globals['_EMPTY']._serialized_end=676
-  _globals['_WORKERTASK']._serialized_start=678
-  _globals['_WORKERTASK']._serialized_end=793
-  _globals['_WORKERSTATUS']._serialized_start=796
-  _globals['_WORKERSTATUS']._serialized_end=949
-  _globals['_FRAYCONTROLLER']._serialized_start=1097
-  _globals['_FRAYCONTROLLER']._serialized_end=1524
-  _globals['_FRAYWORKER']._serialized_start=1526
-  _globals['_FRAYWORKER']._serialized_end=1632
+  _globals['_TASKRESULT']._serialized_start=385
+  _globals['_TASKRESULT']._serialized_end=532
+  _globals['_ACTORSPEC']._serialized_start=535
+  _globals['_ACTORSPEC']._serialized_end=672
+  _globals['_ACTORHANDLE']._serialized_start=675
+  _globals['_ACTORHANDLE']._serialized_end=807
+  _globals['_ACTORCALL']._serialized_start=809
+  _globals['_ACTORCALL']._serialized_end=888
+  _globals['_ACTORCALLRESULT']._serialized_start=890
+  _globals['_ACTORCALLRESULT']._serialized_end=959
+  _globals['_ACTORDELETEREQUEST']._serialized_start=961
+  _globals['_ACTORDELETEREQUEST']._serialized_end=1008
+  _globals['_ACTORLIST']._serialized_start=1010
+  _globals['_ACTORLIST']._serialized_end=1064
+  _globals['_WORKERINFO']._serialized_start=1067
+  _globals['_WORKERINFO']._serialized_end=1196
+  _globals['_GETTASKREQUEST']._serialized_start=1198
+  _globals['_GETTASKREQUEST']._serialized_end=1243
+  _globals['_EMPTY']._serialized_start=1245
+  _globals['_EMPTY']._serialized_end=1252
+  _globals['_WORKERTASK']._serialized_start=1254
+  _globals['_WORKERTASK']._serialized_end=1369
+  _globals['_WORKERSTATUS']._serialized_start=1372
+  _globals['_WORKERSTATUS']._serialized_end=1525
+  _globals['_FRAYCONTROLLER']._serialized_start=1824
+  _globals['_FRAYCONTROLLER']._serialized_end=2460
+  _globals['_FRAYWORKER']._serialized_start=2463
+  _globals['_FRAYWORKER']._serialized_end=2781
 _builder.BuildServices(DESCRIPTOR, 'fray_pb2', _globals)
 # @@protoc_insertion_point(module_scope)

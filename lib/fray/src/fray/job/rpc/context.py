@@ -63,11 +63,13 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 import cloudpickle
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 
 from fray.job.rpc.proto import fray_pb2
 from fray.job.rpc.proto.fray_connect import FrayControllerClientSync
 
-__all__ = ["FrayContext", "_FrayFuture"]
+__all__ = ["FrayContext", "_FrayActorHandle", "_FrayActorMethod", "_FrayFuture"]
 
 
 class _FrayFuture:
@@ -93,6 +95,15 @@ class _FrayFuture:
                 if status_handle.status == fray_pb2.TASK_STATUS_COMPLETED:  # type: ignore
                     break
                 elif status_handle.status == fray_pb2.TASK_STATUS_FAILED:  # type: ignore
+                    # Fetch the full task result to get serialized exception
+                    task_result = self._client.get_task_result(handle)
+
+                    # If we have a serialized error, deserialize and re-raise the original exception
+                    if task_result.serialized_error:
+                        original_exception = cloudpickle.loads(task_result.serialized_error)
+                        raise original_exception
+
+                    # Fallback to RuntimeError if no serialized error (backward compatibility)
                     self._error = status_handle.error
                     raise RuntimeError(f"Task {self._task_id} failed: {self._error}")
 
@@ -120,6 +131,88 @@ class _FrayFuture:
 
         # Don't set _done here - only result() should set it after fetching
         return status_handle.status in (fray_pb2.TASK_STATUS_COMPLETED, fray_pb2.TASK_STATUS_FAILED)  # type: ignore
+
+
+class _FrayActorMethod:
+    """Actor method wrapper that provides remote() call interface."""
+
+    def __init__(
+        self,
+        actor_id: str,
+        method_name: str,
+        client: FrayControllerClientSync,
+        max_retries: int = 10,
+        base_delay: float = 0.01,
+        max_delay: float = 1.0,
+    ):
+        self._actor_id = actor_id
+        self._method_name = method_name
+        self._client = client
+        self._max_retries = max_retries
+        self._base_delay = base_delay
+        self._max_delay = max_delay
+
+    def remote(self, *args, **kwargs) -> _FrayFuture:
+        """Call actor method remotely with retry on UNAVAILABLE, returns future for async execution.
+
+        Implements exponential backoff retry for UNAVAILABLE errors (e.g., during actor restart).
+        Starting delay is 10ms, doubling each retry, capped at 1s, with default max 10 retries.
+        """
+        payload = {"method": self._method_name, "args": args, "kwargs": kwargs}
+        serialized_call = cloudpickle.dumps(payload)
+
+        call = fray_pb2.ActorCall(  # type: ignore
+            actor_id=self._actor_id,
+            serialized_call=serialized_call,
+        )
+
+        for attempt in range(self._max_retries):
+            try:
+                task_handle = self._client.call_actor(call)
+                return _FrayFuture(task_handle.task_id, self._client)
+            except ConnectError as e:
+                if e.code == Code.UNAVAILABLE and attempt < self._max_retries - 1:
+                    # Exponential backoff: start at base_delay, double each time, cap at max_delay
+                    delay = min(self._base_delay * (2**attempt), self._max_delay)
+                    time.sleep(delay)
+                else:
+                    # Re-raise if not UNAVAILABLE or max retries exceeded
+                    raise
+
+        # Should never reach here, but satisfy type checker
+        raise RuntimeError("Unexpected state in retry loop")
+
+
+class _FrayActorHandle:
+    """Actor handle for remote method calls.
+
+    Provides __getattr__ to dynamically return method wrappers for any method name.
+    """
+
+    def __init__(
+        self,
+        actor_id: str,
+        client: FrayControllerClientSync,
+        max_retries: int = 10,
+        base_delay: float = 0.01,
+        max_delay: float = 1.0,
+    ):
+        self._actor_id = actor_id
+        self._client = client
+        self._max_retries = max_retries
+        self._base_delay = base_delay
+        self._max_delay = max_delay
+
+    def __getattr__(self, method_name: str) -> _FrayActorMethod:
+        """Return method wrapper for any requested method."""
+        return _FrayActorMethod(
+            self._actor_id,
+            method_name,
+            self._client,
+            self._max_retries,
+            self._base_delay,
+            self._max_delay,
+        )
 
 
 class FrayContext:
@@ -184,6 +277,29 @@ class FrayContext:
         lifetime: Literal["non_detached", "detached"] = "non_detached",
         preemptible: bool = True,
         **kwargs,
-    ) -> Any:
-        """Create an actor (not yet supported)."""
-        raise NotImplementedError("Actors not yet supported in FrayContext")
+    ) -> _FrayActorHandle:
+        """Create actor and return handle for remote method calls.
+
+        Args:
+            actor_class: The actor class to instantiate
+            *args: Positional arguments for actor constructor
+            name: Optional name for the actor (enables get_if_exists)
+            get_if_exists: If True, return existing actor with same name
+            lifetime: Actor lifetime (only "non_detached" supported in Phase 1)
+            preemptible: Whether actor can be preempted (not used in Phase 1)
+            **kwargs: Keyword arguments for actor constructor
+
+        Returns:
+            Actor handle for calling methods via .method.remote()
+        """
+        payload = {"cls": actor_class, "args": args, "kwargs": kwargs}
+        serialized_actor = cloudpickle.dumps(payload)
+
+        spec = fray_pb2.ActorSpec(  # type: ignore
+            serialized_actor=serialized_actor,
+            name=name or "",
+            get_if_exists=get_if_exists,
+        )
+        handle = self._client.create_actor(spec)
+
+        return _FrayActorHandle(handle.actor_id, self._client)

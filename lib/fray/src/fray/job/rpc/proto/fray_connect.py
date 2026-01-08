@@ -53,6 +53,18 @@ class FrayController(Protocol):
     async def unregister_worker(self, request: fray__pb2.WorkerInfo, ctx: RequestContext) -> fray__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def create_actor(self, request: fray__pb2.ActorSpec, ctx: RequestContext) -> fray__pb2.ActorHandle:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def call_actor(self, request: fray__pb2.ActorCall, ctx: RequestContext) -> fray__pb2.TaskHandle:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def get_actor_status(self, request: fray__pb2.ActorHandle, ctx: RequestContext) -> fray__pb2.ActorHandle:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def delete_actor(self, request: fray__pb2.ActorDeleteRequest, ctx: RequestContext) -> fray__pb2.Empty:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
 
 class FrayControllerASGIApplication(ConnectASGIApplication[FrayController]):
     def __init__(
@@ -144,6 +156,46 @@ class FrayControllerASGIApplication(ConnectASGIApplication[FrayController]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.unregister_worker,
+                ),
+                "/fray.FrayController/CreateActor": Endpoint.unary(
+                    method=MethodInfo(
+                        name="CreateActor",
+                        service_name="fray.FrayController",
+                        input=fray__pb2.ActorSpec,
+                        output=fray__pb2.ActorHandle,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.create_actor,
+                ),
+                "/fray.FrayController/CallActor": Endpoint.unary(
+                    method=MethodInfo(
+                        name="CallActor",
+                        service_name="fray.FrayController",
+                        input=fray__pb2.ActorCall,
+                        output=fray__pb2.TaskHandle,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.call_actor,
+                ),
+                "/fray.FrayController/GetActorStatus": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetActorStatus",
+                        service_name="fray.FrayController",
+                        input=fray__pb2.ActorHandle,
+                        output=fray__pb2.ActorHandle,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_actor_status,
+                ),
+                "/fray.FrayController/DeleteActor": Endpoint.unary(
+                    method=MethodInfo(
+                        name="DeleteActor",
+                        service_name="fray.FrayController",
+                        input=fray__pb2.ActorDeleteRequest,
+                        output=fray__pb2.Empty,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.delete_actor,
                 ),
             },
             interceptors=interceptors,
@@ -317,12 +369,104 @@ class FrayControllerClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def create_actor(
+        self,
+        request: fray__pb2.ActorSpec,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.ActorHandle:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="CreateActor",
+                service_name="fray.FrayController",
+                input=fray__pb2.ActorSpec,
+                output=fray__pb2.ActorHandle,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def call_actor(
+        self,
+        request: fray__pb2.ActorCall,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.TaskHandle:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="CallActor",
+                service_name="fray.FrayController",
+                input=fray__pb2.ActorCall,
+                output=fray__pb2.TaskHandle,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def get_actor_status(
+        self,
+        request: fray__pb2.ActorHandle,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.ActorHandle:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetActorStatus",
+                service_name="fray.FrayController",
+                input=fray__pb2.ActorHandle,
+                output=fray__pb2.ActorHandle,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def delete_actor(
+        self,
+        request: fray__pb2.ActorDeleteRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.Empty:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="DeleteActor",
+                service_name="fray.FrayController",
+                input=fray__pb2.ActorDeleteRequest,
+                output=fray__pb2.Empty,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class FrayWorker(Protocol):
     async def health_check(self, request: fray__pb2.Empty, ctx: RequestContext) -> fray__pb2.WorkerStatus:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def list_tasks(self, request: fray__pb2.Empty, ctx: RequestContext) -> fray__pb2.WorkerStatus:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def instantiate_actor(self, request: fray__pb2.ActorSpec, ctx: RequestContext) -> fray__pb2.ActorHandle:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def execute_actor_method(self, request: fray__pb2.ActorCall, ctx: RequestContext) -> fray__pb2.TaskResult:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def destroy_actor(self, request: fray__pb2.ActorDeleteRequest, ctx: RequestContext) -> fray__pb2.Empty:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def list_actors(self, request: fray__pb2.Empty, ctx: RequestContext) -> fray__pb2.ActorList:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -356,6 +500,46 @@ class FrayWorkerASGIApplication(ConnectASGIApplication[FrayWorker]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_tasks,
+                ),
+                "/fray.FrayWorker/InstantiateActor": Endpoint.unary(
+                    method=MethodInfo(
+                        name="InstantiateActor",
+                        service_name="fray.FrayWorker",
+                        input=fray__pb2.ActorSpec,
+                        output=fray__pb2.ActorHandle,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.instantiate_actor,
+                ),
+                "/fray.FrayWorker/ExecuteActorMethod": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ExecuteActorMethod",
+                        service_name="fray.FrayWorker",
+                        input=fray__pb2.ActorCall,
+                        output=fray__pb2.TaskResult,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.execute_actor_method,
+                ),
+                "/fray.FrayWorker/DestroyActor": Endpoint.unary(
+                    method=MethodInfo(
+                        name="DestroyActor",
+                        service_name="fray.FrayWorker",
+                        input=fray__pb2.ActorDeleteRequest,
+                        output=fray__pb2.Empty,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.destroy_actor,
+                ),
+                "/fray.FrayWorker/ListActors": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListActors",
+                        service_name="fray.FrayWorker",
+                        input=fray__pb2.Empty,
+                        output=fray__pb2.ActorList,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_actors,
                 ),
             },
             interceptors=interceptors,
@@ -409,6 +593,86 @@ class FrayWorkerClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
+    async def instantiate_actor(
+        self,
+        request: fray__pb2.ActorSpec,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.ActorHandle:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="InstantiateActor",
+                service_name="fray.FrayWorker",
+                input=fray__pb2.ActorSpec,
+                output=fray__pb2.ActorHandle,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def execute_actor_method(
+        self,
+        request: fray__pb2.ActorCall,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.TaskResult:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ExecuteActorMethod",
+                service_name="fray.FrayWorker",
+                input=fray__pb2.ActorCall,
+                output=fray__pb2.TaskResult,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def destroy_actor(
+        self,
+        request: fray__pb2.ActorDeleteRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.Empty:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="DestroyActor",
+                service_name="fray.FrayWorker",
+                input=fray__pb2.ActorDeleteRequest,
+                output=fray__pb2.Empty,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def list_actors(
+        self,
+        request: fray__pb2.Empty,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.ActorList:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListActors",
+                service_name="fray.FrayWorker",
+                input=fray__pb2.Empty,
+                output=fray__pb2.ActorList,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class FrayControllerSync(Protocol):
     def submit_task(self, request: fray__pb2.TaskSpec, ctx: RequestContext) -> fray__pb2.TaskHandle:
@@ -433,6 +697,18 @@ class FrayControllerSync(Protocol):
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     def unregister_worker(self, request: fray__pb2.WorkerInfo, ctx: RequestContext) -> fray__pb2.Empty:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    def create_actor(self, request: fray__pb2.ActorSpec, ctx: RequestContext) -> fray__pb2.ActorHandle:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    def call_actor(self, request: fray__pb2.ActorCall, ctx: RequestContext) -> fray__pb2.TaskHandle:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    def get_actor_status(self, request: fray__pb2.ActorHandle, ctx: RequestContext) -> fray__pb2.ActorHandle:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    def delete_actor(self, request: fray__pb2.ActorDeleteRequest, ctx: RequestContext) -> fray__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -524,6 +800,46 @@ class FrayControllerWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.unregister_worker,
+                ),
+                "/fray.FrayController/CreateActor": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="CreateActor",
+                        service_name="fray.FrayController",
+                        input=fray__pb2.ActorSpec,
+                        output=fray__pb2.ActorHandle,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.create_actor,
+                ),
+                "/fray.FrayController/CallActor": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="CallActor",
+                        service_name="fray.FrayController",
+                        input=fray__pb2.ActorCall,
+                        output=fray__pb2.TaskHandle,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.call_actor,
+                ),
+                "/fray.FrayController/GetActorStatus": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetActorStatus",
+                        service_name="fray.FrayController",
+                        input=fray__pb2.ActorHandle,
+                        output=fray__pb2.ActorHandle,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_actor_status,
+                ),
+                "/fray.FrayController/DeleteActor": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="DeleteActor",
+                        service_name="fray.FrayController",
+                        input=fray__pb2.ActorDeleteRequest,
+                        output=fray__pb2.Empty,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.delete_actor,
                 ),
             },
             interceptors=interceptors,
@@ -697,12 +1013,104 @@ class FrayControllerClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
+    def create_actor(
+        self,
+        request: fray__pb2.ActorSpec,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.ActorHandle:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="CreateActor",
+                service_name="fray.FrayController",
+                input=fray__pb2.ActorSpec,
+                output=fray__pb2.ActorHandle,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def call_actor(
+        self,
+        request: fray__pb2.ActorCall,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.TaskHandle:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="CallActor",
+                service_name="fray.FrayController",
+                input=fray__pb2.ActorCall,
+                output=fray__pb2.TaskHandle,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_actor_status(
+        self,
+        request: fray__pb2.ActorHandle,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.ActorHandle:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetActorStatus",
+                service_name="fray.FrayController",
+                input=fray__pb2.ActorHandle,
+                output=fray__pb2.ActorHandle,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def delete_actor(
+        self,
+        request: fray__pb2.ActorDeleteRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.Empty:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="DeleteActor",
+                service_name="fray.FrayController",
+                input=fray__pb2.ActorDeleteRequest,
+                output=fray__pb2.Empty,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
 
 class FrayWorkerSync(Protocol):
     def health_check(self, request: fray__pb2.Empty, ctx: RequestContext) -> fray__pb2.WorkerStatus:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     def list_tasks(self, request: fray__pb2.Empty, ctx: RequestContext) -> fray__pb2.WorkerStatus:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    def instantiate_actor(self, request: fray__pb2.ActorSpec, ctx: RequestContext) -> fray__pb2.ActorHandle:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    def execute_actor_method(self, request: fray__pb2.ActorCall, ctx: RequestContext) -> fray__pb2.TaskResult:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    def destroy_actor(self, request: fray__pb2.ActorDeleteRequest, ctx: RequestContext) -> fray__pb2.Empty:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    def list_actors(self, request: fray__pb2.Empty, ctx: RequestContext) -> fray__pb2.ActorList:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
 
@@ -731,6 +1139,46 @@ class FrayWorkerWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_tasks,
+                ),
+                "/fray.FrayWorker/InstantiateActor": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="InstantiateActor",
+                        service_name="fray.FrayWorker",
+                        input=fray__pb2.ActorSpec,
+                        output=fray__pb2.ActorHandle,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.instantiate_actor,
+                ),
+                "/fray.FrayWorker/ExecuteActorMethod": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ExecuteActorMethod",
+                        service_name="fray.FrayWorker",
+                        input=fray__pb2.ActorCall,
+                        output=fray__pb2.TaskResult,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.execute_actor_method,
+                ),
+                "/fray.FrayWorker/DestroyActor": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="DestroyActor",
+                        service_name="fray.FrayWorker",
+                        input=fray__pb2.ActorDeleteRequest,
+                        output=fray__pb2.Empty,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.destroy_actor,
+                ),
+                "/fray.FrayWorker/ListActors": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListActors",
+                        service_name="fray.FrayWorker",
+                        input=fray__pb2.Empty,
+                        output=fray__pb2.ActorList,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_actors,
                 ),
             },
             interceptors=interceptors,
@@ -778,6 +1226,86 @@ class FrayWorkerClientSync(ConnectClientSync):
                 service_name="fray.FrayWorker",
                 input=fray__pb2.Empty,
                 output=fray__pb2.WorkerStatus,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def instantiate_actor(
+        self,
+        request: fray__pb2.ActorSpec,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.ActorHandle:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="InstantiateActor",
+                service_name="fray.FrayWorker",
+                input=fray__pb2.ActorSpec,
+                output=fray__pb2.ActorHandle,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def execute_actor_method(
+        self,
+        request: fray__pb2.ActorCall,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.TaskResult:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ExecuteActorMethod",
+                service_name="fray.FrayWorker",
+                input=fray__pb2.ActorCall,
+                output=fray__pb2.TaskResult,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def destroy_actor(
+        self,
+        request: fray__pb2.ActorDeleteRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.Empty:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="DestroyActor",
+                service_name="fray.FrayWorker",
+                input=fray__pb2.ActorDeleteRequest,
+                output=fray__pb2.Empty,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def list_actors(
+        self,
+        request: fray__pb2.Empty,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.ActorList:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListActors",
+                service_name="fray.FrayWorker",
+                input=fray__pb2.Empty,
+                output=fray__pb2.ActorList,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
