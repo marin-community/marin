@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Generate ISOFlop sweep steps for varying model sizes, architectures and epochs on a target plant DNA dataset."""
+"""Generate ISOFlop sweep steps for varying model sizes, architectures and epochs on a target DNA dataset."""
 
 import os
 import math
@@ -133,16 +133,16 @@ def format_num(n: int | float) -> str:
 
 @dataclass(frozen=True)
 class IsoFlopDataConfig:
-    dataset_name: str = versioned("plantcad/opengenome2-metagenomes-plantcad2-c4096")
-    dataset_revision: str | None = versioned("913963b5ffe4354a23f9200d39984c0565ef45f9")
-    seq_len: int = 4096
-    total_token_count: int = 10_807_934_976
+    dataset_name: str = versioned("songlab/gpn-animal-promoter-dataset")
+    dataset_revision: str | None = versioned("09d363c86202374986c4a7ed6d39073aa1ac2e23")
+    seq_len: int = 512
+    total_token_count: int = 4_627_637_248  # 9,038,354 * 512
 
 
 @dataclass(frozen=True)
 class IsoFlopTokenizeConfig(HfTokenizeConfig):
     tokenizer: str = versioned("kuleshov-group/PlantCAD2-Small-l24-d0768")
-    format: TextLmDatasetFormat = dataclasses.field(default_factory=lambda: TextLmDatasetFormat(text_key="text"))
+    format: TextLmDatasetFormat = dataclasses.field(default_factory=lambda: TextLmDatasetFormat(text_key="seq"))
     vocab_size: int = 7
     # DNA complement map for reverse-complement augmentation.
     # Maps token IDs to their complements: A↔T (3↔6), C↔G (4↔5), special tokens unchanged.
@@ -157,10 +157,12 @@ class IsoFlopSweepConfig:
     vocab_size: int
     seq_len: int
     total_token_count: int
-    experiment_name: str = "plantcad_isoflop_v1.8"
+    experiment_name: str = "plantcad_isoflop_v1.9"
     complement_map: tuple[int, ...] | None = None
     budgets: list[float] = dataclasses.field(
-        default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
+        # TODO: revert from GPN animal promoter dataset
+        # default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
+        default_factory=lambda: list(np.logspace(np.log10(1e16), np.log10(2e16), 5))
     )
     epochs: list[int] = dataclasses.field(default_factory=lambda: [1])
     steps_per_run: int = 8_192
@@ -170,22 +172,23 @@ class IsoFlopSweepConfig:
     mlp_ratio: int = 4
     base_hidden_layer_ratio: int = 64
     hidden_head_ratio: int = 128
-    lr_max: float | None = 0.02
+    # TODO: revert from GPN animal promoter dataset
+    # lr_max: float | None = 0.02
+    lr_max: float | None = 0.03
     flop_tolerance: float = 0.01
     architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen"])
     per_device_eval_parallelism: int = 512
     max_eval_batches: int = 64
     num_evals: int = 3
-
     lr_constant: float = 0.33
     base_optimizer_config: OptimizerConfig = dataclasses.field(
         default_factory=lambda: CautiousConfig(
-            learning_rate=1.0,  # Placeholder
+            learning_rate=1.0,
             weight_decay=0.1,
             min_lr_ratio=0.0,
             warmup=0.1,
             beta1=0.95,
-            beta2=0.98,  # Placeholder
+            beta2=0.98,
             epsilon=1e-15,
             max_grad_norm=1,
             adamc_weight_decay=True,
@@ -197,8 +200,8 @@ class IsoFlopSweepConfig:
         default_factory=lambda: SimpleTrainConfig(
             resources=ResourceConfig.with_tpu("v5p-8"),
             train_batch_size=1,
-            num_train_steps=50_000,  # Placeholder
-            learning_rate=1.0,  # Placeholder
+            num_train_steps=50_000,
+            learning_rate=1.0,
             weight_decay=0.1,
             min_lr_ratio=0.0,
             lr_schedule="linear",
