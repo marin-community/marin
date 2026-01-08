@@ -23,7 +23,7 @@ from fray.cluster.device_flops import (
 @pytest.mark.parametrize(
     "device_type,dtype,flops",
     [
-        ("a100", "bf16", 312e12),
+        ("a100-80g", "bf16", 312e12),
         ("v4", "bf16", 275e12),
         ("v5litepod", "bf16", 197e12),
     ],

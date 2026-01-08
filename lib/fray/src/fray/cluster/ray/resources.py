@@ -75,7 +75,7 @@ FRAY_TO_RAY_ACCEL_TYPE: dict[str, str] = {
     "h100": "H100",
     "h100-pcie": "H100-PCIE",
     "h200": "H200",
-    "a100": "A100",
+    "a100-80g": "A100-80G",
     "a100-40g": "A100-40G",
     "a10": "A10G",
     "a10g": "A10G",
