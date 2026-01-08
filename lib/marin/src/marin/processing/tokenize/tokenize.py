@@ -264,6 +264,13 @@ def tokenize(config: TokenizeConfigBase):
     Processes train and validation splits separately, writing to Levanter cache format.
     For HuggingFace datasets, downloads them first then tokenizes the downloaded files.
     """
+    # Convert relative paths to absolute paths to ensure Ray workers write to the correct location
+    cache_path = config.cache_path
+    if not cache_path.startswith(("gs://", "s3://", "hdfs://", "/")):
+        cache_path = os.path.abspath(cache_path)
+        logger.info(f"Converted relative cache_path to absolute: {cache_path}")
+        # Create a modified config with the absolute path
+        config = dataclasses.replace(config, cache_path=cache_path)
 
     if isinstance(config, TokenizeConfig):
         train_paths = _get_filepaths_to_tokenize(config.train_paths) if config.train_paths else []
