@@ -252,22 +252,39 @@ class FrayControllerServicer(FrayController):
             self._worker_last_seen[request.worker_id] = time.time()
 
             # Wait for a pending task with 1s timeout to allow graceful shutdown
-            while not self._pending_queue:
+            # For actor tasks, only return them to the worker hosting the actor
+            while True:
+                while not self._pending_queue:
+                    if not self._condition.wait(timeout=1.0):
+                        # Timeout - raise error to allow worker to retry
+                        raise ConnectError(Code.DEADLINE_EXCEEDED, "No tasks available")
+
+                # Find a task this worker can execute
+                for i, task_id in enumerate(self._pending_queue):
+                    task = self._tasks[task_id]
+
+                    # If this is an actor task, only the hosting worker can execute it
+                    if task.actor_id:
+                        actor_info = self._actors.get(task.actor_id)
+                        if actor_info and actor_info.worker_id != request.worker_id:
+                            # This actor task is for a different worker, skip it
+                            continue
+
+                    # Found a suitable task - remove from queue and assign
+                    del self._pending_queue[i]
+                    task.status = fray_pb2.TASK_STATUS_RUNNING
+                    task.worker_id = request.worker_id
+
+                    return fray_pb2.TaskSpec(
+                        task_id=task.task_id,
+                        serialized_fn=task.serialized_fn,
+                        resources=task.resources,
+                        max_retries=task.max_retries,
+                    )
+
+                # No suitable task found in queue - wait for more
                 if not self._condition.wait(timeout=1.0):
-                    # Timeout - raise error to allow worker to retry
                     raise ConnectError(Code.DEADLINE_EXCEEDED, "No tasks available")
-
-            task_id = self._pending_queue.popleft()
-            task = self._tasks[task_id]
-            task.status = fray_pb2.TASK_STATUS_RUNNING
-            task.worker_id = request.worker_id
-
-            return fray_pb2.TaskSpec(
-                task_id=task.task_id,
-                serialized_fn=task.serialized_fn,
-                resources=task.resources,
-                max_retries=task.max_retries,
-            )
 
     async def report_task_complete(self, request: fray_pb2.TaskResult, ctx: RequestContext) -> fray_pb2.Empty:
         """Worker reports successful task completion."""

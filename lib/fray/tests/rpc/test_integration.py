@@ -141,8 +141,8 @@ def test_task_with_exception(controller, worker_factory):
 
     future = ctx.run(failing_task)
 
-    # Getting the result should raise the exception
-    with pytest.raises(RuntimeError, match=r"Task .* failed.*ValueError.*Task failed intentionally"):
+    # Getting the result should re-raise the original exception
+    with pytest.raises(ValueError, match="Task failed intentionally"):
         ctx.get(future)
 
 

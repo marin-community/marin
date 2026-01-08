@@ -300,6 +300,11 @@ class FrayContext:
             name=name or "",
             get_if_exists=get_if_exists,
         )
-        handle = self._client.create_actor(spec)
+        try:
+            handle = self._client.create_actor(spec)
+        except ConnectError as e:
+            if "already exists" in str(e):
+                raise ValueError(f"Actor {name} already exists") from e
+            raise
 
         return _FrayActorHandle(handle.actor_id, self._client)

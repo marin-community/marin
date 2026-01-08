@@ -15,15 +15,18 @@
 """Integration tests for actor restart on worker failure (Phase 2)."""
 
 import asyncio
+import threading
+import time
 
 import cloudpickle
 import httpx
 import pytest
+from uvicorn import Config, Server
 
 from fray.job.rpc.controller import FrayControllerServer
 from fray.job.rpc.proto import fray_pb2
-from fray.job.rpc.proto.fray_connect import FrayControllerClient
-from fray.job.rpc.worker import FrayWorker
+from fray.job.rpc.proto.fray_connect import FrayControllerClient, FrayWorkerASGIApplication
+from fray.job.rpc.worker import FrayWorker, FrayWorkerServicer
 
 
 class Counter:
@@ -60,14 +63,81 @@ def controller_url(controller):
     return f"http://localhost:{port}"
 
 
+@pytest.fixture
+def worker_server():
+    """Start a test worker server for actor instantiation."""
+    servicer = FrayWorkerServicer(worker_id="worker-1")
+    app = FrayWorkerASGIApplication(servicer)
+    config = Config(app=app, host="127.0.0.1", port=0, log_level="error")
+    server = Server(config=config)
+
+    server_thread = threading.Thread(target=server.run, daemon=True)
+    server_thread.start()
+
+    # Wait for server to start
+    max_wait = 5.0
+    start_time = time.time()
+    while not server.started:
+        if time.time() - start_time > max_wait:
+            raise RuntimeError(f"Worker server failed to start within {max_wait}s")
+        time.sleep(0.01)
+
+    actual_port = server.servers[0].sockets[0].getsockname()[1]
+
+    yield server, actual_port
+
+    server.should_exit = True
+    server_thread.join(timeout=2.0)
+
+
+@pytest.fixture
+def two_worker_servers():
+    """Start two test worker servers for actor instantiation."""
+    servers = []
+    threads = []
+    ports = []
+
+    for worker_id in ["worker-1", "worker-2"]:
+        servicer = FrayWorkerServicer(worker_id=worker_id)
+        app = FrayWorkerASGIApplication(servicer)
+        config = Config(app=app, host="127.0.0.1", port=0, log_level="error")
+        server = Server(config=config)
+
+        server_thread = threading.Thread(target=server.run, daemon=True)
+        server_thread.start()
+        servers.append(server)
+        threads.append(server_thread)
+
+    # Wait for servers to start
+    max_wait = 5.0
+    start_time = time.time()
+    for server in servers:
+        while not server.started:
+            if time.time() - start_time > max_wait:
+                raise RuntimeError(f"Worker server failed to start within {max_wait}s")
+            time.sleep(0.01)
+
+    for server in servers:
+        actual_port = server.servers[0].sockets[0].getsockname()[1]
+        ports.append(actual_port)
+
+    yield servers, ports
+
+    for server, thread in zip(servers, threads, strict=False):
+        server.should_exit = True
+        thread.join(timeout=2.0)
+
+
 @pytest.mark.asyncio
-async def test_actor_spec_stored_for_restart(controller_url):
+async def test_actor_spec_stored_for_restart(controller_url, worker_server):
     """Verify that actor specs are stored in actor_specs dict for restart."""
+    _, worker_port = worker_server
+
     async with httpx.AsyncClient() as http_client:
         client = FrayControllerClient(controller_url, session=http_client)
 
-        # Register a worker
-        worker_info = fray_pb2.WorkerInfo(worker_id="worker-1", address="localhost:9999")
+        # Register a worker with the actual server address
+        worker_info = fray_pb2.WorkerInfo(worker_id="worker-1", address=f"localhost:{worker_port}")
         await client.register_worker(worker_info)
 
         # Create an actor
@@ -88,14 +158,16 @@ async def test_actor_spec_stored_for_restart(controller_url):
 
 
 @pytest.mark.asyncio
-async def test_worker_failure_detection_via_unregister(controller_url):
+async def test_worker_failure_detection_via_unregister(controller_url, two_worker_servers):
     """Test that controller detects worker failure when worker unregisters."""
+    _, ports = two_worker_servers
+
     async with httpx.AsyncClient() as http_client:
         client = FrayControllerClient(controller_url, session=http_client)
 
-        # Register two workers
-        worker1 = fray_pb2.WorkerInfo(worker_id="worker-1", address="localhost:9999")
-        worker2 = fray_pb2.WorkerInfo(worker_id="worker-2", address="localhost:9998")
+        # Register two workers with actual server addresses
+        worker1 = fray_pb2.WorkerInfo(worker_id="worker-1", address=f"localhost:{ports[0]}")
+        worker2 = fray_pb2.WorkerInfo(worker_id="worker-2", address=f"localhost:{ports[1]}")
         await client.register_worker(worker1)
         await client.register_worker(worker2)
 

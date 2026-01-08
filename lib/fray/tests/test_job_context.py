@@ -16,6 +16,7 @@
 
 import threading
 import time
+import uuid
 
 import pytest
 from fray.job import RayContext, SimpleActor, SyncContext, ThreadContext, create_job_ctx
@@ -129,11 +130,12 @@ def test_actor_unnamed_isolation(job_context):
 
 def test_actor_named_without_get_if_exists(job_context):
     """Test that named actors without get_if_exists create new instances."""
-    actor1 = job_context.create_actor(SimpleActor, 10, name="actor", get_if_exists=False)
+    unique_name = f"actor_{uuid.uuid4().hex[:8]}"
+    actor1 = job_context.create_actor(SimpleActor, 10, name=unique_name, get_if_exists=False)
     job_context.get(actor1.increment.remote(5))
 
     with pytest.raises(ValueError):
-        job_context.create_actor(SimpleActor, 20, name="actor", get_if_exists=False)
+        job_context.create_actor(SimpleActor, 20, name=unique_name, get_if_exists=False)
 
 
 # Retry tests for RPC actor method calls
