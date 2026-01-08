@@ -108,16 +108,16 @@ def create_eval_steps() -> list:
         )
         steps.append(step)
 
-    logprobs_step = default_lm_log_probs(
-        output_path_of(model).cd("checkpoints"),
-        build_model_config(candidate),
-        dist_eval,
-        resource_config=ResourceConfig.with_tpu("v5p-8"),
-        checkpoint_is_hf=False,
-        name=versioned(f"{name}-DistRobust-ICE-logprobs"),
-    )
+        logprobs_step = default_lm_log_probs(
+            output_path_of(model).cd("checkpoints"),
+            build_model_config(candidate),
+            dist_eval,
+            resource_config=ResourceConfig.with_tpu("v5p-8"),
+            checkpoint_is_hf=False,
+            name=versioned(f"{name}-DistRobust-ICE-logprobs"),
+        )
 
-    steps.append(logprobs_step)
+        steps.append(logprobs_step)
 
     baselines = [
         ("allenai/OLMo-2-1124-7B", "stage2-ingredient3-step8000-tokens34B"),
