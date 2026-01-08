@@ -3,19 +3,21 @@
 
 # Adapter to wire the grug model into the LmHeadModel API.
 
-from typing import Any, Protocol, Type
+from typing import Any, Protocol
 
 import equinox as eqx
 import jax
 import haliax as hax
+import jax.numpy as jnp
 from haliax import Axis, NamedArray
 from jaxtyping import PRNGKeyArray, PyTree
 
 from levanter.grug.attention import AttentionMask
 from levanter.grug.model import activations as grug_activations
 from levanter.grug.model import init_parameters
+from levanter.grug.model import loss_fn as grug_loss_fn
 from levanter.layers.attention import AttentionMask as LevanterAttentionMask
-from levanter.models.lm_model import LmHeadModel, LmConfig, LmT
+from levanter.models.lm_model import LmExample, LmHeadModel
 
 
 class GrugConfigLike(Protocol):
@@ -46,6 +48,31 @@ class GrugLmHeadFn(Protocol):
 
 def _default_lm_head_fn(params: PyTree) -> jax.Array:
     return params.output_proj  # type: ignore[attr-defined]
+
+
+def _mask_from_levanter(attn_mask: LevanterAttentionMask | NamedArray | None) -> AttentionMask | jax.Array | None:
+    mask: AttentionMask | jax.Array | None = None
+    if isinstance(attn_mask, LevanterAttentionMask):
+        if attn_mask.explicit_mask is not None:
+            raise NotImplementedError("Grug does not support explicit masks yet.")
+        if attn_mask.causal_offset is not None:
+            raise NotImplementedError("Grug does not support causal offsets yet.")
+        segment_ids = None
+        if attn_mask.segment_ids is not None:
+            q_seg, kv_seg = attn_mask.segment_ids
+            segment_ids = (q_seg.array, kv_seg.array)
+        mask = AttentionMask(
+            is_causal=attn_mask.is_causal,
+            causal_offset=0,
+            segment_ids=segment_ids,
+            sliding_window=attn_mask.sliding_window,
+        )
+    elif isinstance(attn_mask, NamedArray):
+        raise NotImplementedError(
+            "NamedArray attention masks are not supported by Grug (pass a Levanter AttentionMask)."
+        )
+    return mask
+
 
 class GrugWrapper(LmHeadModel[Any]):
     """Minimal LmHeadModel wrapper around the standalone Grug transformer."""
@@ -107,26 +134,7 @@ class GrugWrapper(LmHeadModel[Any]):
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
         del key, pos_ids  # unused in this lightweight wrapper
-        mask: AttentionMask | jax.Array | None = None
-        if isinstance(attn_mask, LevanterAttentionMask):
-            if attn_mask.explicit_mask is not None:
-                raise NotImplementedError("Grug does not support explicit masks yet.")
-            if attn_mask.causal_offset is not None:
-                raise NotImplementedError("Grug does not support causal offsets yet.")
-            segment_ids = None
-            if attn_mask.segment_ids is not None:
-                q_seg, kv_seg = attn_mask.segment_ids
-                segment_ids = (q_seg.array, kv_seg.array)
-            mask = AttentionMask(
-                is_causal=attn_mask.is_causal,
-                causal_offset=0,
-                segment_ids=segment_ids,
-                sliding_window=attn_mask.sliding_window,
-            )
-        elif isinstance(attn_mask, NamedArray):
-            raise NotImplementedError(
-                "NamedArray attention masks are not supported by Grug (pass a Levanter AttentionMask)."
-            )
+        mask = _mask_from_levanter(attn_mask)
 
         hidden = self.forward_fn(
             self.params,
@@ -138,6 +146,46 @@ class GrugWrapper(LmHeadModel[Any]):
         # Map raw hidden states to a NamedArray with the existing axes plus Embed.
         axes = (*input_ids.axes, self.Embed)
         return hax.named(hidden, axes)
+
+    def compute_next_token_loss(
+        self,
+        example: LmExample,
+        *,
+        key=None,
+        reduction: hax.ReductionFunction | None = hax.mean,
+        reduction_axis: hax.AxisSelection | None = None,
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype | None = jnp.float32,
+        logit_soft_cap: float | None = None,
+    ) -> jnp.ndarray | NamedArray:
+        """Override to use grug's blockwise loss (avoids materializing full logits)."""
+        # NOTE: this wrapper is intentionally minimal; grug core currently doesn't use PRNGs.
+        del key
+
+        # LmExample-ish protocol: expects `.tokens`, `.loss_weight`, `.attn_mask`.
+        tokens = example.tokens
+        loss_weight = example.loss_weight
+        attn_mask = example.attn_mask
+
+        mask = _mask_from_levanter(attn_mask)
+        dtype = jnp.float32 if loss_dtype is None else loss_dtype
+
+        per_pos = grug_loss_fn(
+            self.params,
+            tokens.array,
+            loss_weight.array,
+            self.grug_config,
+            mask=mask,
+            reduction="none",
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=dtype,
+            logit_soft_cap=logit_soft_cap,
+        )
+        loss = hax.named(per_pos, tokens.axes)
+
+        if reduction is None:
+            return loss
+        return reduction(loss, axis=reduction_axis)
 
     def get_lm_head(self) -> NamedArray:
         return hax.named(self.lm_head_fn(self.params), (self.Embed, self.Vocab))

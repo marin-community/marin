@@ -19,6 +19,7 @@ from typing import Literal
 
 import jax
 import jax.numpy as jnp
+from jax.sharding import NamedSharding, PartitionSpec as P, reshard
 
 
 def linear_softmax_cross_entropy_loss_and_logz(
@@ -60,6 +61,10 @@ def linear_softmax_cross_entropy_loss_and_logz(
         # or by clamping the final block slice + masking. For now, the overhead is bounded by
         # `hidden_dim * (block_size - 1)` elements.
         pad = jnp.zeros((hidden_dim, vocab_padded - vocab_size), dtype=lm_head.dtype)
+        # If lm_head is sharded, concatenate requires the pad to have the same sharding.
+        lm_head_sharding = getattr(lm_head, "sharding", None)
+        if isinstance(lm_head_sharding, NamedSharding) and isinstance(lm_head_sharding.spec, P):
+            pad = reshard(pad, lm_head_sharding.spec)
         lm_head = jnp.concatenate([lm_head, pad], axis=1)
     flat_hidden = hidden.reshape((-1, hidden_dim)).astype(dtype)
     flat_labels = labels.reshape((-1,)).astype(jnp.int32)
@@ -67,12 +72,15 @@ def linear_softmax_cross_entropy_loss_and_logz(
     # correct logits: dot(hidden, lm_head[:, label])
     # take along vocab axis (axis=1) -> (hidden_dim, N) then transpose to (N, hidden_dim)
     w_y = jnp.take(lm_head, flat_labels, axis=1).T.astype(dtype)
+    hidden_sharding = getattr(flat_hidden, "sharding", None)
+    if isinstance(hidden_sharding, NamedSharding) and isinstance(hidden_sharding.spec, P):
+        w_y = reshard(w_y, hidden_sharding.spec)
     logit_y = jnp.sum(flat_hidden * w_y, axis=-1)
 
-    num = flat_hidden.shape[0]
     neg_inf = jnp.array(-jnp.inf, dtype=dtype)
-    m0 = jnp.full((num,), neg_inf)
-    s0 = jnp.zeros((num,), dtype=dtype)
+    # Match the sharding of the computed per-example logits so the loop carry types are stable.
+    m0 = jnp.full_like(logit_y, neg_inf)
+    s0 = jnp.zeros_like(logit_y, dtype=dtype)
 
     neg_inf_logits = jnp.array(-jnp.inf, dtype=dtype)
 

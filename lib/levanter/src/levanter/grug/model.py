@@ -15,6 +15,7 @@ from jax.tree_util import register_dataclass
 
 from .attention import AttentionMask, apply_rotary_embedding, attention
 from .config import GrugModelConfig
+from .loss import linear_softmax_cross_entropy_loss_and_logz
 
 
 @register_dataclass
@@ -203,6 +204,66 @@ def activations(
     return _transformer_hidden(params, token_ids, cfg, mask=mask)
 
 
+def loss_fn(
+    params: GrugModelParameters,
+    token_ids: jax.Array,
+    loss_weight: jax.Array,
+    cfg: GrugModelConfig,
+    *,
+    mask: AttentionMask | jax.Array | None = None,
+    reduction: str = "mean",
+    logsumexp_weight: float | None = None,
+    loss_dtype: jnp.dtype = jnp.float32,
+    logit_soft_cap: float | None = None,
+) -> jax.Array:
+    """Compute next-token cross-entropy loss for a batch.
+
+    This is the "activations vs lm_head" friendly path: it avoids materializing full logits.
+
+    Args:
+        params: Model parameters.
+        token_ids: Integer array with shape (batch, seq).
+        loss_weight: Float array with shape (batch, seq), typically 1 except last position (0).
+        cfg: Model config (uses `cfg.cross_entropy_block_size`).
+        mask: Optional attention mask spec.
+        reduction: One of {"mean", "sum", "none"}.
+        logsumexp_weight: Optional z-loss weight (logsumexp^2 term).
+        loss_dtype: Accumulator dtype for logsumexp / loss.
+        logit_soft_cap: Optional tanh soft cap for logits (applied before exp).
+
+    Returns:
+        If reduction=="none": array with shape (batch, seq).
+        Else: scalar array.
+    """
+    if cfg.cross_entropy_block_size is None:
+        raise ValueError("cfg.cross_entropy_block_size must be set for grug loss_fn.")
+
+    hidden = _transformer_hidden(params, token_ids, cfg, mask=mask)
+    labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
+    loss_weight = loss_weight.astype(loss_dtype)
+
+    per_pos_loss, logz = linear_softmax_cross_entropy_loss_and_logz(
+        hidden,
+        params.output_proj,
+        labels,
+        block_size=cfg.cross_entropy_block_size,
+        dtype=loss_dtype,
+        logit_soft_cap=logit_soft_cap,
+    )
+    per_pos_loss = per_pos_loss.astype(loss_dtype) * loss_weight
+    if logsumexp_weight is not None and logsumexp_weight != 0.0:
+        per_pos_loss = per_pos_loss + logsumexp_weight * (logz.astype(loss_dtype) ** 2) * loss_weight
+
+    if reduction == "none":
+        return per_pos_loss
+    if reduction == "sum":
+        return jnp.sum(per_pos_loss)
+    if reduction == "mean":
+        denom = jnp.sum(loss_weight)
+        return jnp.sum(per_pos_loss) / jnp.maximum(denom, jnp.array(1.0, dtype=loss_dtype))
+    raise ValueError(f"Unknown reduction: {reduction}")
+
+
 __all__ = [
     "GrugAttentionParams",
     "GrugBlockParams",
@@ -210,4 +271,5 @@ __all__ = [
     "init_parameters",
     "activations",
     "forward",
+    "loss_fn",
 ]
