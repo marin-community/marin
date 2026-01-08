@@ -19,7 +19,7 @@ from typing import Literal
 
 import jax
 import jax.numpy as jnp
-from jax.sharding import NamedSharding, PartitionSpec as P, reshard
+from jax.sharding import NamedSharding, PartitionSpec as P, get_abstract_mesh, reshard
 
 
 def linear_softmax_cross_entropy_loss_and_logz(
@@ -71,12 +71,21 @@ def linear_softmax_cross_entropy_loss_and_logz(
     # correct logits: dot(hidden, lm_head[:, label])
     # We take rows from lm_head.T (shape [vocab, hidden]) so the gather output is [N, hidden].
     # Under explicit meshes, gather output sharding is otherwise ambiguous, so we supply out_sharding.
-    # Some JAX versions want an output *PartitionSpec* here (not a full Sharding).
+    # Some JAX versions require `out_sharding=` for this gather, and (in some versions) the
+    # value must be a PartitionSpec rather than a full Sharding object.
     out_sharding = None
     labels_sharding = getattr(flat_labels, "sharding", None)
     if isinstance(labels_sharding, NamedSharding) and isinstance(labels_sharding.spec, P):
         first_dim = labels_sharding.spec[0] if labels_sharding.spec else None
         out_sharding = P(first_dim, None)
+    else:
+        # In some tracing contexts we don't get a NamedSharding instance back, but the mesh is
+        # still explicit. Default to the common "data-parallel batch" mapping used in Levanter.
+        mesh = get_abstract_mesh()
+        if mesh is not None and not mesh.empty:
+            batch_axes = tuple(ax for ax in ("replica_dcn", "replica", "data") if ax in mesh.shape)
+            if batch_axes:
+                out_sharding = P(batch_axes, None)
 
     w_y = lm_head.T.at[flat_labels].get(out_sharding=out_sharding).astype(dtype)
     hidden_sharding = getattr(flat_hidden, "sharding", None)
