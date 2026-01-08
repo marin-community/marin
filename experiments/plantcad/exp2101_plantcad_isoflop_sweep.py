@@ -133,16 +133,16 @@ def format_num(n: int | float) -> str:
 
 @dataclass(frozen=True)
 class IsoFlopDataConfig:
-    dataset_name: str = versioned("songlab/gpn-animal-promoter-dataset")
-    dataset_revision: str | None = versioned("09d363c86202374986c4a7ed6d39073aa1ac2e23")
-    seq_len: int = 512
-    total_token_count: int = 4_627_637_248  # 9,038,354 * 512
+    dataset_name: str = versioned("plantcad/vertebrate-genomes-plantcad2-c4096")
+    dataset_revision: str | None = versioned("09cd02e13a059a39a34701da8ad4b9addc589a24")
+    seq_len: int = 4096
+    total_token_count: int = 10_807_934_976  # 2,638,656 * 4,096
 
 
 @dataclass(frozen=True)
 class IsoFlopTokenizeConfig(HfTokenizeConfig):
     tokenizer: str = versioned("kuleshov-group/PlantCAD2-Small-l24-d0768")
-    format: TextLmDatasetFormat = dataclasses.field(default_factory=lambda: TextLmDatasetFormat(text_key="seq"))
+    format: TextLmDatasetFormat = dataclasses.field(default_factory=lambda: TextLmDatasetFormat(text_key="text"))
     vocab_size: int = 7
     # DNA complement map for reverse-complement augmentation.
     # Maps token IDs to their complements: A↔T (3↔6), C↔G (4↔5), special tokens unchanged.
@@ -157,12 +157,10 @@ class IsoFlopSweepConfig:
     vocab_size: int
     seq_len: int
     total_token_count: int
-    experiment_name: str = "plantcad_isoflop_v1.9"
+    experiment_name: str = "plantcad_isoflop_v1.10"
     complement_map: tuple[int, ...] | None = None
     budgets: list[float] = dataclasses.field(
-        # TODO: revert from GPN animal promoter dataset
-        # default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
-        default_factory=lambda: list(np.logspace(np.log10(1e16), np.log10(2e16), 5))
+        default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
     )
     epochs: list[int] = dataclasses.field(default_factory=lambda: [1])
     steps_per_run: int = 8_192
@@ -172,9 +170,7 @@ class IsoFlopSweepConfig:
     mlp_ratio: int = 4
     base_hidden_layer_ratio: int = 64
     hidden_head_ratio: int = 128
-    # TODO: revert from GPN animal promoter dataset
-    # lr_max: float | None = 0.02
-    lr_max: float | None = 0.03
+    lr_max: float | None = 0.02
     flop_tolerance: float = 0.01
     architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen"])
     per_device_eval_parallelism: int = 512
