@@ -25,8 +25,9 @@ from rich.table import Table
 from scipy.interpolate import griddata
 import wandb
 
-RUN_PREFIX = "plantcad_isoflop_v1.8"
-RESULT_PATH = "experiments/plantcad/results/v10"
+RUN_VERSION = "1.9"
+RUN_PREFIX = f"plantcad_isoflop_v{RUN_VERSION}"
+RESULT_PATH = f"experiments/plantcad/results/v{RUN_VERSION}"
 EXPORT_DPI = 300
 DEFAULT_ARCH = "qwen"
 
@@ -71,15 +72,32 @@ def filter_to_finished_runs(df: pd.DataFrame, allow_crashed: bool = False) -> pd
         return df[is_finished]
 
 
-EXPLODED_RUNS = []
+EXPLODED_RUNS: dict[str, list[str]] = {}
+EXPLODED_BUDGETS: dict[str, list[float]] = {
+    "1.9": [1.0e16],
+}
 
 
 def filter_exploded_runs(df: pd.DataFrame) -> pd.DataFrame:
-    """Filter out runs where training exploded."""
-    mask = df["run_name"].isin(EXPLODED_RUNS)
-    for run_name in df.loc[mask, "run_name"]:
+    """Filter out runs where training exploded (by run name or budget)."""
+    exploded_runs = EXPLODED_RUNS.get(RUN_VERSION, [])
+    exploded_budgets = EXPLODED_BUDGETS.get(RUN_VERSION, [])
+
+    # Filter by run name
+    run_mask = df["run_name"].isin(exploded_runs)
+    for run_name in df.loc[run_mask, "run_name"]:
         logger.warning(f"Filtering exploded run: {run_name}")
-    return df[~mask]
+
+    # Filter by budget
+    budget_mask = df["flops_budget"].isin(exploded_budgets)
+    n_budget_filtered = budget_mask.sum()
+    if n_budget_filtered > 0:
+        filtered_budgets = df.loc[budget_mask, "flops_budget"].unique()
+        for budget in filtered_budgets:
+            budget_runs = df.loc[df["flops_budget"] == budget, "run_name"].tolist()
+            logger.warning(f"Filtering {len(budget_runs)} runs at exploded budget {budget:.1e}: {budget_runs}")
+
+    return df[~run_mask & ~budget_mask]
 
 
 def save_figure(fig, output_path: str) -> None:
@@ -723,6 +741,10 @@ def plot_scaling_laws(ax_N, ax_D, analysis_results, colors_N, colors_D):
         ax.set_title(title)
         ax.grid(True, which="both", ls="-", alpha=0.2, axis="x")
         ax.legend()
+        # Set explicit tick positions at budget values only
+        ax.set_xticks(budgets)
+        ax.set_xticklabels([f"{b:.1e}" for b in budgets])
+        ax.minorticks_off()
 
     # Calculate Ratio Function
     ratio_coeff = np.exp(c_D - c_N)
