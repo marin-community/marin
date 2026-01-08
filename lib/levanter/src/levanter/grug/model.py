@@ -234,11 +234,32 @@ def loss_fn(
     labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
     loss_weight = loss_weight.astype(loss_dtype)
 
+    block_size = cfg.cross_entropy_block_size
+    # On TPU, the (tokens_per_shard x vocab_block) matmul can be enormous for large batches/seq lens.
+    # Choose a conservative upper bound to avoid compile-time HBM blowups.
+    if jax.default_backend() == "tpu":
+        mesh = jax.sharding.get_abstract_mesh()
+        shard_factor = 1
+        if mesh is not None and not mesh.empty:
+            for name in ("replica_dcn", "replica", "data"):
+                if name in mesh.shape:
+                    shard_factor *= mesh.shape[name]
+        global_tokens = int(token_ids.shape[0]) * int(token_ids.shape[1])
+        local_tokens = max(1, global_tokens // max(1, shard_factor))
+
+        # Heuristic: cap the per-block logits buffer to ~256MiB per device.
+        bytes_per_element = jnp.dtype(loss_dtype).itemsize
+        target_bytes = 256 * 1024 * 1024
+        max_block = max(128, target_bytes // (max(1, local_tokens) * max(1, bytes_per_element)))
+        # TPU kernels are typically happiest with multiples of 128.
+        max_block = max(128, (int(max_block) // 128) * 128)
+        block_size = min(block_size, int(max_block))
+
     per_pos_loss, logz = linear_softmax_cross_entropy_loss_and_logz(
         hidden,
         params.output_proj,
         labels,
-        block_size=cfg.cross_entropy_block_size,
+        block_size=block_size,
         dtype=loss_dtype,
         logit_soft_cap=logit_soft_cap,
     )
