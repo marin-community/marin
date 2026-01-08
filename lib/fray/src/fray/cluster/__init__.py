@@ -151,7 +151,7 @@ def current_cluster() -> Cluster:
     If a cluster is already set in context, return it.
     If a FRAY_CLUSTER_SPEC is set, create a cluster from it.
     If running inside of Ray, use a Ray cluster.
-    If accelerators are detected locally, initialize Ray with them.
+    For local single-GPU/TPU work, use LocalCluster (avoids Ray's virtualenv issues).
     Otherwise, use a LocalCluster for CPU-only work.
     """
     cluster = _cluster_context.get()
@@ -175,28 +175,19 @@ def current_cluster() -> Cluster:
             cluster = RayCluster()
             set_current_cluster(cluster)
             return cluster
-
-        # Check for local accelerators and initialize Ray with them
-        has_accelerators, custom_resources = _detect_local_accelerators()
-        if has_accelerators:
-            logger.info(f"Detected local accelerators, initializing Ray (custom resources: {custom_resources})")
-            # Let Ray auto-detect GPUs; only pass additional custom resources
-            ray.init(
-                namespace="marin",
-                ignore_reinit_error=True,
-                resources=custom_resources if custom_resources else None,
-            )
-            from fray.cluster.ray.cluster import RayCluster
-
-            cluster = RayCluster()
-            set_current_cluster(cluster)
-            return cluster
     except ImportError:
         pass
 
+    # For local execution (including with local GPUs), use LocalCluster
+    # This avoids Ray's virtualenv/Python version issues on single-machine setups
+    has_accelerators, _ = _detect_local_accelerators()
+    if has_accelerators:
+        logger.info("Detected local accelerators, using LocalCluster for direct execution")
+    else:
+        logger.info("No active cluster found, using LocalCluster")
+
     cluster = LocalCluster()
     set_current_cluster(cluster)
-    logger.info("No active cluster found and Ray is not initialized, using LocalCluster")
     return cluster
 
 

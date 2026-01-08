@@ -115,21 +115,32 @@ class LocalCluster(Cluster):
         processes = []
         process_env = None
         if not self.config.use_isolated_env:
-            if request.environment.env_vars:
-                logger.warning(
-                    "LocalCluster does not support custom environment variables in non-isolated mode, ignored."
-                )
-
             # Run callable in parent process as a thread
             callable_ep = request.entrypoint.callable_entrypoint
             processes = []
+
+            # Wrap callable to apply environment variables
+            env_vars = dict(request.environment.env_vars) if request.environment.env_vars else {}
+
+            def run_with_env():
+                # Apply environment variables for this execution
+                old_env = {k: os.environ.get(k) for k in env_vars}
+                try:
+                    os.environ.update(env_vars)
+                    return callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+                finally:
+                    # Restore original environment
+                    for k, v in old_env.items():
+                        if v is None:
+                            os.environ.pop(k, None)
+                        else:
+                            os.environ[k] = v
+
             for _ in range(replica_count):
                 logger.info(
                     f"Running callable in parent process with args={callable_ep.args}, kwargs={callable_ep.kwargs}"
                 )
-                process = FakeProcess(
-                    target=callable_ep.callable, args=callable_ep.args, kwargs=callable_ep.kwargs, daemon=True
-                )
+                process = FakeProcess(target=run_with_env, daemon=True)
                 process.start()
                 processes.append(process)
         else:
