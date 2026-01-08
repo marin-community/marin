@@ -205,8 +205,8 @@ class RayCluster(Cluster):
         For backwards compatibility with existing Marin usage, we do _not_ start a new job
         in this case, but instead spawn the callable as a ray.remote task.
 
-        For local clusters (single-node), we skip Ray's pip environment setup to avoid
-        virtualenv issues and run directly when already in a Ray task.
+        For local clusters (single-node), we run directly in the current process to avoid
+        Ray's virtualenv/Python version issues.
         """
         entrypoint = request.entrypoint.callable_entrypoint
 
@@ -222,18 +222,10 @@ class RayCluster(Cluster):
         # Check if we're on a local cluster (single-node)
         is_local = self._address == "auto" or self._address.startswith("local")
 
-        # Check if we're already inside a Ray task
-        try:
-            ctx = ray.get_runtime_context()
-            in_ray_task = ctx.get_task_id() is not None
-        except Exception:
-            in_ray_task = False
-
-        # For local clusters already in a Ray task, run directly to avoid:
-        # 1. Nested scheduling deadlock (outer task holds GPU, inner task waits for GPU)
-        # 2. Ray's broken pip virtualenv creation
-        if is_local and in_ray_task:
-            logger.info(f"Running {request.name} directly (already in Ray task on local cluster)")
+        # For local single-node clusters, run directly in the current process
+        # This avoids Ray's virtualenv/Python version mismatch issues
+        if is_local:
+            logger.info(f"Running {request.name} directly (local cluster, avoiding Ray worker issues)")
             # Build runtime env to get the env_vars (especially JAX_PLATFORMS)
             runtime_env = self._get_runtime_env(request, use_absolute_paths=True)
             env_vars = runtime_env.get("env_vars", {})
@@ -257,17 +249,10 @@ class RayCluster(Cluster):
             self._jobs[job_id] = RayJobInfo.completed(request.name, result)
             return job_id
 
-        # Build runtime environment
-        # For local clusters, use absolute paths since we skip working_dir
-        runtime_env = self._get_runtime_env(request, use_absolute_paths=is_local)
+        # Build runtime environment for remote execution
+        runtime_env = self._get_runtime_env(request, use_absolute_paths=False)
         # strip out keys that can only be set at the Job level
         runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
-
-        # For local clusters, skip pip installation (use current environment)
-        # This avoids Ray's broken virtualenv creation on some platforms
-        if is_local and "pip" in runtime_env:
-            logger.info("Local cluster: skipping pip environment, using current virtualenv")
-            del runtime_env["pip"]
 
         remote_fn = ray.remote(num_gpus=num_gpus)(entrypoint.callable)
         ref = remote_fn.options(runtime_env=runtime_env).remote(*entrypoint.args, **entrypoint.kwargs)
