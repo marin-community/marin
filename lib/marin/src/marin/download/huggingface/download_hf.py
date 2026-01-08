@@ -114,9 +114,15 @@ def download_hf(cfg: DownloadConfig) -> None:
     # Set cfg.append_sha_to_path=True to mimic the older behavior of writing to gcs_output_path/<revision>.
     # Some historical datasets were written that way, so this flag keeps backwards compatibility when needed.
 
+    # Convert relative paths to absolute paths to ensure Ray workers write to the correct location
+    gcs_output_path = cfg.gcs_output_path
+    if not gcs_output_path.startswith(("gs://", "s3://", "hdfs://", "/")):
+        gcs_output_path = os.path.abspath(gcs_output_path)
+        logger.info(f"Converted relative path to absolute: {gcs_output_path}")
+
     # Ensure the output path is writable
     try:
-        output_path = os.path.join(cfg.gcs_output_path, cfg.revision) if cfg.append_sha_to_path else cfg.gcs_output_path
+        output_path = os.path.join(gcs_output_path, cfg.revision) if cfg.append_sha_to_path else gcs_output_path
         ensure_fsspec_path_writable(output_path)
     except ValueError as e:
         logger.exception(f"Output path validation failed: {e}")
@@ -157,7 +163,7 @@ def download_hf(cfg: DownloadConfig) -> None:
         Dataset.from_list(download_tasks)
         .map(lambda task: stream_file_to_fsspec(*task))
         .write_jsonl(
-            f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl",
+            f"{gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl",
             # Note: skip_existing=False because the Executor already handles resumption
             # via .executor_status files. Using skip_existing here causes bugs where
             # .metrics files exist but actual data files don't (e.g., after partial runs).
