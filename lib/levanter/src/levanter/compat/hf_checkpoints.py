@@ -659,7 +659,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         ref: Optional[Union[str, RepoRef]] = None,
         config: Optional[HFCompatConfig] = None,
         axis_mapping: Optional[ResourceMapping] = None,
-        resize_vocab_to_match_tokenizer: bool = True,
+        resize_vocab_to_match_tokenizer: bool = False,
         dtype: Optional[jnp.dtype] = None,
     ) -> ModelWithHfSerializationMixin:
         """
@@ -669,6 +669,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
             config: The config to use to load the model class
             ref: The reference to load from. If None, will use the reference_checkpoint
             axis_mapping: The axis mapping to use for sharding. If None, will use the context axis mapping
+            resize_vocab_to_match_tokenizer: If True, resize the model's vocab to match the tokenizer's vocab size.
+                Defaults to False because some models (e.g., Qwen) intentionally pad their embedding matrices
+                beyond the tokenizer vocab size for hardware efficiency (e.g., divisibility by 4).
         """
 
         hf_config = self.hf_config_from_hf_checkpoint(ref)
@@ -702,14 +705,17 @@ class HFCheckpointConverter(Generic[LevConfig]):
             )
 
             if Vocab.size != tokenizer_Vocab.size:
+                logger.info(
+                    f"Model vocab size ({Vocab.size}) does not match tokenizer vocab size ({tokenizer_Vocab.size})."
+                )
                 if resize_vocab_to_match_tokenizer:
                     logger.info(
-                        f"Resizing model from {Vocab.size} to {tokenizer_Vocab.size} to match tokenizer vocab size"
+                        f"Resizing model from {Vocab.size} to {tokenizer_Vocab.size} to match tokenizer vocab size."
                     )
                     lev_model = lev_model.resize_vocab(tokenizer_Vocab.size)
                 else:
-                    logger.warning(
-                        f"Model vocab size ({Vocab.size}) does not match tokenizer vocab size ({tokenizer_Vocab.size})"
+                    logger.info(
+                        f"Leaving model vocab size unchanged."
                     )
 
             lev_model = haliax.shard_with_axis_mapping(lev_model, axis_mapping)
