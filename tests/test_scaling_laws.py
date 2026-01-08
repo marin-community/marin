@@ -152,7 +152,6 @@ def test_generate_isoflop_train_args_snapshot():
     recipe = Marin2025Recipe()
     result = generate_isoflop_train_args(
         budgets=(3e18,),
-        experiment_name="test-snapshot",
         vocab_size=MARIN_TOKENIZER_VOCAB_SIZE,
         recipe=recipe,
     )

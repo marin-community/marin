@@ -61,6 +61,20 @@ def _round_to_power_of_two(x: float) -> int:
     return 2 ** math.ceil(math.log2(x))
 
 
+def _format_run_name(
+    budget: float,
+    hidden_size: int,
+    num_layers: int,
+    batch_size: int,
+    experiment_name: str,
+) -> str:
+    """Format run name using architecture details (hidden size and layers).
+
+    Format: isoflop-{budget}-d{hidden}-L{layers}-B{batch}-{experiment_name}
+    """
+    return f"isoflop-{budget:.0e}-d{hidden_size}-L{num_layers}-B{batch_size}-{experiment_name}"
+
+
 @dataclass(frozen=True)
 class Marin2025Recipe:
     """Marin 2025 scaling recipe with all hyperparameters and formulas.
@@ -320,7 +334,6 @@ def create_isoflop_sweep_steps(
     # Library provides the training arguments (model configs, optimizer configs, etc.)
     train_args_list = generate_isoflop_train_args(
         budgets=budgets,
-        experiment_name=experiment_name,
         vocab_size=vocab_size,
         recipe=recipe,
     )
@@ -346,6 +359,16 @@ def create_isoflop_sweep_steps(
         optimizer_config = recipe.build_optimizer_config(candidate, vocab_size)
         tpu_type = pick_v5p_type(candidate, vocab_size, seq_len, recipe)
 
+        # Use local naming with architecture details for backward compatibility
+        run_name = _format_run_name(
+            candidate.flops_budget,
+            model_config.hidden_dim,
+            model_config.num_layers,
+            candidate.batch_size,
+            experiment_name,
+        )
+        output_path = f"checkpoints/isoflop/{run_name}"
+
         train_cfg = replace(
             base_train_config,
             train_batch_size=candidate.batch_size,
@@ -357,7 +380,7 @@ def create_isoflop_sweep_steps(
 
         # Create training step
         train_step = default_train(
-            name=args.run_name,
+            name=run_name,
             tokenized=tokenized,
             model_config=model_config,
             train_config=train_cfg,
@@ -366,7 +389,7 @@ def create_isoflop_sweep_steps(
         )
 
         # Pin to static output path for checkpoint reuse
-        train_step = train_step.with_output_path(args.output_path)
+        train_step = train_step.with_output_path(output_path)
         train_steps.append(train_step)
         candidates.append(candidate)
 
