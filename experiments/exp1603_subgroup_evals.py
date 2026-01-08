@@ -46,10 +46,7 @@ def create_eval_steps() -> list:
     dist_eval = distributional_eval_sets(llama3_tokenizer)
     for model, candidate in list(zip(*MARIN_SCALING_SUITES["nemotron"], strict=False)):
         total_tokens = candidate.batch_size * candidate.train_steps * 4096
-        name = (
-            f"marin-nemo-{candidate.flops_budget:.0e}C-{total_tokens}T-"
-            f"N{candidate.target_params:.0e}"
-        )
+        name = f"marin-nemo-{candidate.flops_budget:.0e}C-{total_tokens}T-" f"N{candidate.target_params:.0e}"
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
@@ -73,10 +70,7 @@ def create_eval_steps() -> list:
 
     for model, candidate in list(zip(*MARIN_SCALING_SUITES["common_pile"], strict=False)):
         total_tokens = candidate.batch_size * candidate.train_steps * 4096
-        name = (
-            f"marin-comma-{candidate.flops_budget:.0e}C-{total_tokens}T-"
-            f"N{candidate.target_params:.0e}"
-        )
+        name = f"marin-comma-{candidate.flops_budget:.0e}C-{total_tokens}T-" f"N{candidate.target_params:.0e}"
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
@@ -100,10 +94,7 @@ def create_eval_steps() -> list:
 
     for model, candidate in list(zip(*MARIN_SCALING_SUITES["dclm-default"], strict=False)):
         total_tokens = candidate.batch_size * candidate.train_steps * 4096
-        name = (
-            f"marin-dclm-{candidate.flops_budget:.0e}C-{total_tokens}T-"
-            f"N{candidate.target_params:.0e}"
-        )
+        name = f"marin-dclm-{candidate.flops_budget:.0e}C-{total_tokens}T-" f"N{candidate.target_params:.0e}"
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,

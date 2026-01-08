@@ -103,6 +103,7 @@ def pick_v5p_type(
     """
     if recipe is None:
         from marin.scaling_laws.recipe import ScalingRecipe
+
         recipe = ScalingRecipe(name="default")
 
     hidden_size = recipe.hidden_size_for_params(candidate.target_params, vocab_size)
