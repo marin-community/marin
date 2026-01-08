@@ -69,11 +69,19 @@ def linear_softmax_cross_entropy_loss_and_logz(
     flat_labels = labels.reshape((-1,)).astype(jnp.int32)
 
     # correct logits: dot(hidden, lm_head[:, label])
-    # take along vocab axis (axis=1) -> (hidden_dim, N) then transpose to (N, hidden_dim)
-    w_y = jnp.take(lm_head, flat_labels, axis=1).T.astype(dtype)
+    # We take rows from lm_head.T (shape [vocab, hidden]) so the gather output is [N, hidden].
+    # Under explicit meshes, gather output sharding is otherwise ambiguous, so we supply out_sharding.
+    out_sharding = None
+    labels_sharding = getattr(flat_labels, "sharding", None)
+    if isinstance(labels_sharding, NamedSharding) and isinstance(labels_sharding.spec, P):
+        first_dim = labels_sharding.spec[0] if labels_sharding.spec else None
+        out_sharding = NamedSharding(labels_sharding.mesh, P(first_dim, None))
+
+    w_y = lm_head.T.at[flat_labels].get(out_sharding=out_sharding).astype(dtype)
     hidden_sharding = getattr(flat_hidden, "sharding", None)
     if isinstance(hidden_sharding, NamedSharding) and isinstance(hidden_sharding.spec, P):
         w_y = reshard(w_y, hidden_sharding.spec)
+
     logit_y = jnp.sum(flat_hidden * w_y, axis=-1)
 
     neg_inf = jnp.array(-jnp.inf, dtype=dtype)
