@@ -44,6 +44,7 @@ dependencies = [
     "s3fs>=2024",
     "toml",
     "torch>=2.7.0",
+    "torchvision>=0.22.0,<0.24",
     "tqdm",
     "tqdm-loggable",
     "wandb",
@@ -115,11 +116,17 @@ conflicts = [
 
 [project.optional-dependencies]
 
-gpu = ["jax[cuda12]==0.8.0", "torch>=2.7.0"]
+gpu = ["jax[cuda12]==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.24"]
 
-tpu = ["jax[tpu]==0.8.0", "torch>=2.7.0"]
+tpu = ["jax[tpu]==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.24"]
 
-cpu = ["jax==0.8.0", "torch>=2.7.0"]
+cpu = ["jax==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.24"]
+
+vllm_tpu = [
+    # Intentionally empty: vLLM is provided by the TPU runtime image. This extra exists
+    # as a convenient toggle for TPU smoke tests and to avoid hard failures on macOS
+    # where vLLM wheels may be unavailable.
+]
 
 rl = [
     "prime",
@@ -131,6 +138,7 @@ eval = [
     "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
 ]
 
+
 [[tool.uv.index]]
 name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
@@ -140,6 +148,13 @@ torch = [
     # Default to the CPU index for TPU/CPU builds
     { index = "pytorch-cpu", extra="cpu" },
     { index = "pytorch-cpu", extra="tpu" },
+    # GPU index only when --extra gpu
+    { index = "pytorch-cu128", extra = "gpu" },
+]
+torchvision = [
+    # Default to the CPU index for TPU/CPU builds
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cpu", extra = "tpu" },
     # GPU index only when --extra gpu
     { index = "pytorch-cu128", extra = "gpu" },
 ]
