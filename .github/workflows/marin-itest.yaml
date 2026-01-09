@@ -39,7 +39,10 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-packages --extra=cpu
+        # `--no-default-groups` keeps uv from also installing every workspace package's
+        # dev/docs/test groups (e.g. `levanter[docs,test,dev]`), which saves multiple
+        # minutes and avoids re-downloading CUDA wheels unnecessarily on cold caches.
+        run: uv sync --all-packages --extra=cpu --no-default-groups
 
       - name: Check df -h
         run: df -h
