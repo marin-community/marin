@@ -90,11 +90,6 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
     chunk_size = 256 * 1024 * 1024
     max_retries = 10
 
-    # Skip if file already exists (enables resumption)
-    if target_fs.exists(fsspec_file_path):
-        logger.info(f"File already exists, skipping: {fsspec_file_path}")
-        return {"file_path": file_path, "status": "skipped"}
-
     # Retry when there is an error, such as hf rate limit
     for attempt in range(max_retries):
         try:
