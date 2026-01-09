@@ -14,7 +14,6 @@
 
 import os
 import shutil
-import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -23,7 +22,7 @@ from fray.cluster import ResourceConfig
 from fray.cluster.ray import get_scheduling_strategy
 
 from marin.evaluation.evaluation_config import EvalTaskConfig
-from marin.evaluation.utils import download_from_gcs, is_remote_path
+from marin.evaluation.utils import is_remote_path
 
 
 @dataclass(frozen=True)
@@ -68,8 +67,6 @@ class ModelConfig:
     downloaded_to: str | None = field(default=None, init=False, repr=False)
     """Local path used when staging a remote checkpoint for this run."""
 
-    _staging_dir: tempfile.TemporaryDirectory[str] | None = field(default=None, init=False, repr=False)
-
     def ensure_downloaded(self, local_path: str | None = None) -> str | None:
         """
         Ensures that the model checkpoint is downloaded to `local_path` if necessary.
@@ -82,30 +79,16 @@ class ModelConfig:
             # vLLM can stream model weights directly from object stores in this mode.
             return None
         elif is_remote_path(self.path):
-            if local_path is None:
-                if self._staging_dir is None:
-                    cache_root = os.environ.get("MARIN_LOCAL_CACHE_DIR") or os.path.join(
-                        tempfile.gettempdir(), "marin-cache"
-                    )
-                    base_dir = os.path.join(cache_root, "models")
-                    os.makedirs(base_dir, exist_ok=True)
-                    self._staging_dir = tempfile.TemporaryDirectory(dir=base_dir, prefix=f"{self.name}-")
-                local_path = self._staging_dir.name
-            if self.downloaded_to is not None and self.downloaded_to != local_path:
-                shutil.rmtree(self.downloaded_to, ignore_errors=True)
-            download_from_gcs(gcs_path=self.path, destination_path=local_path)
-            self.path = local_path
-            self.downloaded_to = local_path
-            # Show the contents of self.path
-            print(f"Downloaded model checkpoint to {self.path}: {os.listdir(self.path)}")
-            return local_path
+            raise ValueError(
+                f"Refusing to stage remote model checkpoint to local disk: {self.path}. "
+                "vLLM should read directly from object storage; set engine_kwargs['load_format'] "
+                "to 'runai_streamer' (or 'runai_streamer_sharded' for pre-sharded "
+                "'model-rank-*-part-*.safetensors' checkpoints)."
+            )
         return None
 
     def destroy(self) -> None:
         """Deletes the model checkpoint."""
-        if self._staging_dir is not None:
-            self._staging_dir.cleanup()
-            self._staging_dir = None
         if self.downloaded_to and os.path.exists(self.downloaded_to):
             shutil.rmtree(self.downloaded_to, ignore_errors=True)
             print(f"Deleted local checkpoint at {self.downloaded_to}.")

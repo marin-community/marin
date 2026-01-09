@@ -44,4 +44,3 @@ def test_vllm_auto_enables_streaming_for_gcs_paths() -> None:
     assert model.engine_kwargs["load_format"] == "runai_streamer"
     assert model_name_or_path == "gs://bucket/some-model"
     assert model.downloaded_to is None
-    assert model._staging_dir is None
