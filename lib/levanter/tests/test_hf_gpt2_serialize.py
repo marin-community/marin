@@ -24,7 +24,7 @@ import haliax as hax
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.layers.attention import AttentionMask
 from levanter.models.gpt2 import Gpt2Config, Gpt2LMHeadModel
-from levanter.models.lm_model import LmExample, LmHeadModel, compute_next_token_loss
+from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.optim import AdamConfig
 from levanter.utils.tree_utils import inference_mode
 from test_utils import arrays_only, skip_if_no_torch
@@ -147,7 +147,7 @@ def _compare_gpt2_checkpoint_gradients(model_id, revision, config: Optional[Gpt2
 
         def compute_loss(model: LmHeadModel, input_ids):
             example = LmExample.causal(input_ids, eos_id=converter.tokenizer.eos_token_id)
-            return compute_next_token_loss(model, example, key=None).scalar()
+            return model.compute_next_token_loss(example, key=None).scalar()
 
         jax_compute_grad = equinox.filter_value_and_grad(compute_loss, has_aux=False)
         jax_grad: Gpt2LMHeadModel
