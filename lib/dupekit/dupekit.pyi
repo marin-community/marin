@@ -141,6 +141,35 @@ class Transformation:
         """Projects the batch to keep only the specified columns."""
         ...
 
+    @staticmethod
+    def CleanText(input_col: str, output_col: str) -> "Transformation":
+        """Normalizes text (lowercase, remove punctuation, normalize whitespace)."""
+        ...
+
+    @staticmethod
+    def MinHash(input_col: str, output_col: str, num_perms: int, ngram_size: int, seed: int) -> "Transformation":
+        """Computes MinHash signatures for the input text using fused shingling/hashing.
+
+        Args:
+            input_col: Column containing text.
+            output_col: Column to store signature (List[uint64]).
+            num_perms: Number of permutation functions (length of signature).
+            ngram_size: Size of char-ngrams for shingling.
+            seed: Random seed for permutation coefficients.
+        """
+        ...
+
+    @staticmethod
+    def MinHashLSH(input_col: str, output_col: str, num_bands: int) -> "Transformation":
+        """Computes LSH buckets from a MinHash signature.
+
+        Args:
+            input_col: Column containing signatures (List[uint64]).
+            output_col: Column to store buckets (List[uint64]).
+            num_bands: Number of LSH bands.
+        """
+        ...
+
 def transform(batch: pa.RecordBatch, steps: list[Transformation]) -> pa.RecordBatch: ...
 def mark_paragraph_duplicates(
     batch: pa.RecordBatch,
