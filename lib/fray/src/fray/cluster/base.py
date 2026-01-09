@@ -157,7 +157,8 @@ TpuType = Literal[
 
 GpuType = Literal[
     "A10",
-    "A100",
+    "A100-40G",
+    "A100-80G",
     "A10G",
     "B100",
     "H100",

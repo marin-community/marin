@@ -61,23 +61,19 @@ def set_current_cluster(cluster: Cluster) -> None:
     _cluster_context.set(cluster)
 
 
-def _is_running_in_ray_context() -> bool:
-    try:
-        import ray
-
-        ray.get_runtime_context().get_job_id()
-        return True
-    except (ImportError, RuntimeError):
-        return False
-
-
 def current_cluster() -> Cluster:
     """Return a cluster context.
 
-    If a cluster is already set in context, return it.
-    If a FRAY_CLUSTER_SPEC is set, create a cluster from it.
-    If running inside of Ray, use a Ray cluster.
-    If no cluster is specified, use a LocalCluster.
+    For local execution (including with GPUs), uses LocalCluster by default.
+    This runs everything in the current process using the user's venv, avoiding
+    Ray's virtualenv creation and worker process overhead.
+
+    Priority order:
+    1. Already-set cluster context
+    2. FRAY_CLUSTER_SPEC environment variable (for explicit cluster configuration)
+    3. LocalCluster (default for local execution)
+
+    Note: To use Ray for distributed execution, set FRAY_CLUSTER_SPEC=ray?namespace=...
     """
     cluster = _cluster_context.get()
     if cluster is not None:
@@ -89,19 +85,6 @@ def current_cluster() -> Cluster:
         cluster = create_cluster(cluster_spec)
         set_current_cluster(cluster)
         return cluster
-
-    try:
-        import ray
-
-        if ray.is_initialized() or _is_running_in_ray_context():
-            logger.info("Auto-detected Ray cluster")
-            from fray.cluster.ray.cluster import RayCluster
-
-            cluster = RayCluster()
-            set_current_cluster(cluster)
-            return cluster
-    except ImportError:
-        pass
 
     cluster = LocalCluster()
     set_current_cluster(cluster)
