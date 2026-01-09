@@ -61,41 +61,6 @@ def set_current_cluster(cluster: Cluster) -> None:
     _cluster_context.set(cluster)
 
 
-def _has_local_accelerators() -> bool:
-    """Check if local accelerators (GPUs/TPUs) are available.
-
-    Uses nvidia-smi for GPU detection and environment variables for TPU detection.
-    Does not call jax.devices() to avoid taking ownership of devices.
-    """
-    import shutil
-    import subprocess
-
-    # Detect GPUs using nvidia-smi (doesn't take ownership like jax.devices())
-    if shutil.which("nvidia-smi"):
-        try:
-            result = subprocess.run(
-                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                gpu_count = len([line for line in result.stdout.strip().split("\n") if line.strip()])
-                if gpu_count > 0:
-                    logger.info(f"Detected {gpu_count} GPU(s)")
-                    return True
-        except Exception as e:
-            logger.debug(f"nvidia-smi detection failed: {e}")
-
-    # Detect TPUs via environment variable (doesn't call jax.devices())
-    tpu_name = os.environ.get("TPU_NAME") or os.environ.get("CLOUD_TPU_TASK_ID")
-    if tpu_name:
-        logger.info(f"Detected TPU environment: {tpu_name}")
-        return True
-
-    return False
-
-
 def current_cluster() -> Cluster:
     """Return a cluster context.
 
@@ -121,16 +86,9 @@ def current_cluster() -> Cluster:
         set_current_cluster(cluster)
         return cluster
 
-    # Default to LocalCluster for local execution
-    # This avoids Ray's virtualenv creation and worker process overhead
-    # Everything runs in the current process with the user's venv
-    if _has_local_accelerators():
-        logger.info("Using LocalCluster for local execution with accelerators")
-    else:
-        logger.info("Using LocalCluster for local execution")
-
     cluster = LocalCluster()
     set_current_cluster(cluster)
+    logger.info("No active cluster found and Ray is not initialized, using LocalCluster")
     return cluster
 
 
