@@ -482,7 +482,7 @@ def _muon_presets() -> dict[str, MuonConfig]:
 # =========================
 # Resource presets (IMPORTANT!)
 # TODO: edit tpu_type or accelerator_type to match what you have available on your hardware
-# e.g., GpuConfig(gpu_count=8, accelerator_type="H100"),
+# e.g., ResourceConfig.with_gpu("H100", count=8),
 # If you ignore this and there is a mismatch, training cannot start if an unavailable resource is requested!
 # =========================
 

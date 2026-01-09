@@ -27,7 +27,6 @@ import re
 from collections.abc import Iterator, Sequence
 
 import draccus
-import jax
 import transformers
 from datasets import load_dataset_builder
 from fray.job import create_job_ctx, get_default_job_ctx
@@ -248,9 +247,6 @@ def _bundle_files_by_size(file_infos, max_bytes: int):
 
 def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterator[dict]) -> Iterator[dict]:
     """Tokenize a list of batches using the specified tokenizer and format."""
-    jax_devices = jax.devices()
-    assert all(d.platform == "cpu" for d in jax_devices), f"Expected all CPU devices, got: {jax_devices}"
-
     tokenizer = transformers.AutoTokenizer.from_pretrained(config.tokenizer)
     batch_processor = preprocessor_for_format(config.format, tokenizer)
 

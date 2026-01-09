@@ -25,11 +25,9 @@ Usage:
 import hashlib
 import json
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-import draccus
 import fsspec
 from marin.core.runtime import cached_or_construct_output
 
@@ -108,14 +106,3 @@ class TransformFasttextToDolmaConfig:
     input_path: str
     output_path: str
     source: str
-
-
-@draccus.wrap()
-def fasttext_to_dolma_format(cfg: TransformFasttextToDolmaConfig):
-    # Currently Executor framework passes in directory names, but we are converting a singular
-    # Fasttext file to Dolma format, so in the case that the output path is a directory, we need to
-    # append the output filename to it.
-    if not cfg.output_path.endswith(".jsonl.gz"):
-        cfg.output_path = os.path.join(cfg.output_path, "text.jsonl.gz")
-
-    convert_fasttext_to_dolma_format(cfg.input_path, cfg.output_path, cfg.source)

@@ -35,9 +35,8 @@ from marin.processing.classification.dataset_utils import (
     Attribute,
     DatasetConfig,
     Document,
-    rebase_file_path,
 )
-from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm
+from marin.utils import fsspec_cpdir, fsspec_exists, fsspec_glob, fsspec_rm, rebase_file_path
 from zephyr import Backend, Dataset
 
 logger = logging.getLogger(__name__)
