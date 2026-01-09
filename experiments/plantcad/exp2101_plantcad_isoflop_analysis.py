@@ -25,7 +25,7 @@ from rich.table import Table
 from scipy.interpolate import griddata
 import wandb
 
-RUN_VERSION = "1.10"
+RUN_VERSION = "1.12"
 RUN_PREFIX = f"plantcad_isoflop_v{RUN_VERSION}"
 RESULT_PATH = f"experiments/plantcad/results/v{RUN_VERSION}"
 EXPORT_DPI = 300
@@ -76,6 +76,7 @@ EXPLODED_RUNS: dict[str, list[str]] = {}
 EXPLODED_BUDGETS: dict[str, list[float]] = {
     "1.9": [1.0e16],
     "1.10": [3.3e16],
+    "1.12": [3.3e16, 5.2e16],
 }
 
 
@@ -185,7 +186,9 @@ def fetch_plantcad_runs(show_wandb_runs: bool = False):
             "stop_time": stop_time,
             "duration_sec": duration,
             # Metrics
-            "eval_loss": run.summary.get("eval/plantcad2/loss"),
+            # TODO: revert
+            # "eval_loss": run.summary.get("eval/plantcad2/loss"),
+            "eval_loss": run.summary.get("eval/dclm_baseline/loss"),
             "train_loss": run.summary.get("train/loss"),
             "total_gflops": run.summary.get("throughput/total_gflops"),
             "total_tokens": run.summary.get("throughput/total_tokens"),
