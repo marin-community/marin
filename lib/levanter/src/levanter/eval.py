@@ -21,7 +21,7 @@ from haliax.partitioning import ResourceMapping
 import levanter.tracker
 from levanter.callbacks import StepInfo
 from levanter.data import AsyncDataset, DataLoader
-from levanter.models.lm_model import LmExample, LmHeadModel, compute_next_token_loss
+from levanter.models.lm_model import LmExample, LmHeadModel
 from levanter.utils.hf_utils import HfTokenizer, byte_length_of_token
 from levanter.utils.logging import LoadingTimeTrackerIterator
 from levanter.utils.stat_utils import Arrayish, RunningMean
@@ -336,7 +336,7 @@ class TaggedEvaluator:
             with context:
                 if axis_mapping is not None:
                     context.enter_context(hax.axis_mapping(axis_mapping))
-                losses = compute_next_token_loss(m, batch, reduction=None, reduction_axis=())
+                losses = m.compute_next_token_loss(batch, reduction=None, reduction_axis=())
                 weights = batch.loss_weight  # [Batch, Pos]
                 this_tokens = hax.sum(weights)
                 this_loss = hax.einsum("->", losses, weights)  # to scalar

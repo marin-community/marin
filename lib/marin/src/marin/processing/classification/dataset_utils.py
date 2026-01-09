@@ -28,8 +28,47 @@ the streaming data paradigm (it might but not sure).
 import datetime
 
 import datasets
+import json
+import logging
+import os
+from dataclasses import dataclass
+from typing import TypedDict
+
+import fsspec
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger("ray")
+
+
+class Document(TypedDict):
+    id: str
+    source: str
+    text: str
+
+
+class Attribute(TypedDict):
+    id: str
+    source: str
+    attributes: dict
+
+
+@dataclass
+class DatasetConfig:
+    """Configuration for curating a dataset for training a quality classifier
+
+    Attributes:
+        input_doc_path (str): Path to the input dataset directory (Dolma format).
+        label (str): Label for the dataset. This should be in the format "<label>"
+            where <label> is the label for the dataset. For example, "hq" or "lq", respectively.
+        sampling_rate (Optional[float]): Subsampling fraction to construct the dataset.
+        max_sample_size (Optional[int]): Maximum number of examples to include in the dataset.
+    """
+
+    input_doc_path: str
+    label: str
+    sampling_rate: float = 1.0
+    max_sample_size: int | None = None
 
 
 # TODO(chris): Consolidate this with other make json serializable functions
@@ -81,7 +120,6 @@ def read_dataset_streaming(input_filename: str, columns: list[str] | None = None
     Returns:
         Iterator: An iterator over the dataset rows
     """
-    import datasets
 
     # Disable caching for streaming
     datasets.disable_caching()
@@ -114,12 +152,8 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
         append semantics for object stores.
       - Checkpoint restoration should continue to read from the remote path.
     """
-    import json
     import hashlib
-    import os
     import shutil
-
-    import fsspec
 
     mode = "ab" if append else "wb"
 
@@ -173,44 +207,3 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
         return
 
     raise ValueError(f"Unsupported filetype: {output_filename}")
-
-
-def read_dataset(input_filename: str, columns: list[str] | None = None):
-    """Read in a data source and return as a Huggingface Dataset
-
-    Args:
-        input_filename: str
-            The path to the input file. Currently supports .jsonl.gz and .parquet
-
-    Returns:
-        datasets.Dataset: A Huggingface Dataset in-memory without using the disk
-    """
-    datasets.disable_caching()  # Disabling caching or else it spills to disk to cache
-    datasets.logging.set_verbosity_warning()
-    # We use pandas to read in the file so that we don't have to materialize
-    # the entire dataset in disk since we have limited disk space.
-    # Huggingface datasets loads the dataset into disk first and mmaps.
-    if input_filename.endswith(".jsonl.gz"):
-        df = pd.read_json(input_filename, compression="gzip", lines=True)
-    elif input_filename.endswith(".jsonl.zst"):
-        df = pd.read_json(input_filename, compression="zstd", lines=True)
-    elif input_filename.endswith(".parquet"):
-        df = pd.read_parquet(input_filename, columns=columns)
-    else:
-        raise ValueError(f"Unsupported filetype: {input_filename}")
-
-    return datasets.Dataset.from_pandas(df)
-
-
-def write_dataset(dataset, output_filename: str):
-    """Writes a Huggingface Dataset to a file (remote or local)"""
-    if output_filename.endswith(".jsonl.gz"):
-        dataset.to_json(output_filename, compression="gzip")
-    elif output_filename.endswith(".jsonl.zst"):
-        df_pandas = dataset.to_pandas()
-        df_pandas.to_json(output_filename, orient="records", compression="zstd", lines=True)
-        # dataset.to_json(output_filename, to_json_kwargs={"compression": "zstd", "lines": True})
-    elif output_filename.endswith(".parquet"):
-        dataset.to_parquet(output_filename)
-    else:
-        raise ValueError(f"Unsupported filetype: {output_filename}")
