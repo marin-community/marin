@@ -108,7 +108,7 @@ python3 -m MaxText.train src/MaxText/configs/base.yml \
 EOF
 )
 
-UV_PROJECT_ENV="${VENV_PATH}" UV_CACHE_DIR=/tmp/uv-cache uv run python -m marin.run.ray_run \
+UV_PROJECT_ENV="${VENV_PATH}" uv run python -m marin.run.ray_run \
   --cluster "infra/marin-us-central1.yaml" \
   --extra tpu \
   --env_vars WANDB_MODE online \

@@ -11,9 +11,8 @@ cd "$REPO_ROOT"
 
 : "${TMPDIR:=/tmp}"
 : "${RAY_TMPDIR:=/tmp}"
-: "${UV_CACHE_DIR:=/tmp/uv-cache}"
 
-UV_CACHE_DIR="${UV_CACHE_DIR}" uv run python -m marin.run.ray_run \
+uv run python -m marin.run.ray_run \
   --cluster "infra/marin-us-central1.yaml" \
   --extra tpu \
   --env_vars WANDB_MODE online \
