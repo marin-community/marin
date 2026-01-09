@@ -202,33 +202,18 @@ def round_to_power_of_two(x: float) -> int:
     return 2 ** math.ceil(math.log2(x))
 
 
-def round_flops_to_bucket(flops: float) -> float:
-    """Round FLOP count to 1 significant figure (XeYY format).
+def round_flops_to_bucket(flops: float, base: float = 1.1) -> float:
+    """Round FLOP count to the nearest power of base.
 
-    This ensures runs with slightly different achieved FLOPs are grouped
-    together for analysis when they were targeting the same budget.
-    Using 1 significant figure creates buckets at 1e19, 2e19, 3e19, etc.,
-    which matches the typical spacing of isoflop budget targets.
-
-    Note: This means 1.5e19 and 2.4e19 both map to 2e19. For finer granularity,
-    consider using 2 significant figures (round to nearest 0.1 mantissa).
-
-    Examples:
-        1.05e19 → 1e19
-        1.5e19  → 2e19
-        2.8e19  → 3e19
-        9.5e19  → 1e20
+    Args:
+        flops: FLOP count to round.
+        base: Base for the power buckets (default 1.1 for ~10% buckets).
     """
     if flops <= 0:
         return flops
 
-    exponent = math.floor(math.log10(flops))
-    mantissa = flops / (10**exponent)
-    rounded_mantissa = round(mantissa)
-
-    if rounded_mantissa == 10:
-        return 1.0 * (10 ** (exponent + 1))
-    return float(rounded_mantissa) * (10**exponent)
+    k = math.log(flops) / math.log(base)
+    return base ** round(k)
 
 
 def compute_training_flops(
