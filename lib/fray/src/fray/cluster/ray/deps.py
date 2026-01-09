@@ -17,7 +17,6 @@
 import enum
 import hashlib
 import logging
-import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -121,7 +120,7 @@ def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
 
 
 def build_python_path() -> list[str]:
-    """Build the PYTHONPATH for the monorepo workspace.
+    """Build the PYTHONPATH for the given submodules.
 
     Ray's installation process is... non-optimal. `py_modules` just injects
     the exact "py_module" itself into the PYTHONPATH, but not e.g. the src dir.
@@ -130,7 +129,6 @@ def build_python_path() -> list[str]:
     something like -e {module_path} but noooo, that would be too easy. For whatever
     reason, at install time, the py_modules are not yet in a usable state. So instead
     we have to just manually guess what our PYTHONPATH should be.
-
     """
     # Workspace member src directories + experiments directory
     paths = [
@@ -149,21 +147,13 @@ def build_runtime_env_for_packages(
     extra: list[str] | None = None,
     pip_packages: list[str] | None = None,
     env_vars: dict | None = None,
-    absolute_paths: bool = False,
 ) -> RuntimeEnv:
-    """Inject the appropriate UV environment for the given packages.
-
-    Args:
-        extra: Extra dependency groups from pyproject.toml
-        pip_packages: Additional pip packages to install
-        env_vars: Environment variables to include
-        absolute_paths: If True, PYTHONPATH entries are absolute (for local execution)
-    """
+    """Inject the appropriate UV environment for the given packages."""
     env_vars = dict(env_vars or {})
     pip_packages = pip_packages or []
     extra = extra or []
 
-    python_path = build_python_path(absolute=absolute_paths)
+    python_path = build_python_path()
     if "PYTHONPATH" in env_vars:
         python_path.extend(env_vars["PYTHONPATH"].split(":"))
 
