@@ -12,28 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Job execution context module."""
-
-from fray.job.context import (
-    ContextConfig,
-    JobContext,
-    SimpleActor,
-    create_job_ctx,
-    fray_default_job_ctx,
-    get_default_job_ctx,
-)
-from fray.job.ray_ctx import RayContext
-from fray.job.sync_ctx import SyncContext
-from fray.job.threadpool_ctx import ThreadContext
-
-__all__ = [
-    "ContextConfig",
-    "JobContext",
-    "RayContext",
-    "SimpleActor",
-    "SyncContext",
-    "ThreadContext",
-    "create_job_ctx",
-    "fray_default_job_ctx",
-    "get_default_job_ctx",
-]
+"""Generated protobuf files for Fray RPC."""

@@ -46,6 +46,7 @@ EXCLUDE_PATTERNS = [
     ".git/**",
     ".github/**",
     "tests/snapshots/**",
+    "**/*_pb2.py",
     "**/*.gz",
     "**/*.pb",
     "**/*.index",
