@@ -210,7 +210,7 @@ When you need to restart a cluster, follow this policy:
 
 1. **Notify**: Post in the #infra Discord channel about your plan to restart the cluster
 2. **Check for running jobs**: Check if there are any active jobs on the cluster
-3. **Ping affected users** (optional): If there are running jobs and you plan to use `--preserve-jobs=0`, ping e relevant people who own those jobs and give them time to respond (e.g., 15-30 minutes)
+3. **Ping affected users** (optional): If there are running jobs and you plan to use `--preserve-jobs=0`, ping the relevant people who own those jobs and give them time to respond (e.g., 15-30 minutes)
 4. **Proceed with restart**: After notification and any necessary waiting period, proceed with the restart
 
 >[!NOTE]
