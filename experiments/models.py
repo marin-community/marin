@@ -86,6 +86,13 @@ smollm2_1_7b_instruct = download_model_step(
 )
 
 # Note(Will): I don't think we actually support Qwen models in Levanter?
+qwen2_5_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen2.5-7B",
+        hf_revision="d149729398750b98c0af14eb82c78cfe92750796",
+    )
+)
+
 qwen2_5_7b_instruct = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen2.5-7B-Instruct",
@@ -160,6 +167,13 @@ olmo_2_base_32b = download_model_step(
     ModelConfig(
         hf_repo_id="allenai/OLMo-2-0325-32B",
         hf_revision="stage2-ingredient2-step9000-tokens76B",
+    )
+)
+
+olmo_3_1025_7b = download_model_step(
+    ModelConfig(
+        hf_repo_id="allenai/Olmo-3-1025-7B",
+        hf_revision="18b40a1e895f829c68a132befa20109c41488e62",
     )
 )
 
@@ -259,5 +273,12 @@ qwen3_32b = download_model_step(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-32B",
         hf_revision="9216db5781bf21249d130ec9da846c4624c16137",
+    )
+)
+
+apertus_8b = download_model_step(
+    ModelConfig(
+        hf_repo_id="swiss-ai/Apertus-8B-2509",
+        hf_revision="9325d4a",
     )
 )
