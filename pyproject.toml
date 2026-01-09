@@ -42,6 +42,16 @@ zephyr = { workspace = true }
 # it as a path dependency makes it less likely to trigger unnecessary build
 dupekit = { path = "lib/dupekit", editable = true }
 
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
 [tool.black]
 line-length = 121
 target-version = ["py310"]
