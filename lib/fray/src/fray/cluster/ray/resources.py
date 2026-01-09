@@ -68,30 +68,3 @@ def accelerator_descriptor(config: ResourceConfig) -> str | None:
     elif isinstance(config.device, GpuConfig):
         return config.device.variant
     return None
-
-
-# Map fray device types to Ray accelerator types
-FRAY_TO_RAY_ACCEL_TYPE: dict[str, str] = {
-    "h100": "H100",
-    "h100-pcie": "H100-PCIE",
-    "h200": "H200",
-    "a100-80g": "A100-80G",
-    "a100-40g": "A100-40G",
-    "a10": "A10G",
-    "a10g": "A10G",
-    "a40": "A40",
-    "v100": "V100",
-    "v100-sxm": "V100-SXM",
-    "v100s": "V100S-PCIE",
-    "t4": "T4",
-    "a6000": "A6000",
-    "trn1": "TRN1",
-    "v3": "TPU-V3",
-    "v4": "TPU-V4",
-    "v5litepod": "TPU-V5LITEPOD",
-    "v5p": "TPU-V5P",
-    "v6e": "TPU-V6E",
-    "l4": "L4",
-    "l40s": "L40S",
-    "gb10": "GB10",
-}

@@ -486,9 +486,13 @@ def create_job_ctx(
         max_workers: Maximum number of worker threads (threadpool only)
         **ray_options: Additional Ray remote options
 
-    For "auto", defaults to ThreadContext to run in the current process.
-    This avoids Ray worker overhead and ensures the user's venv is used.
-    To explicitly use Ray, pass context_type="ray".
+    For "auto":
+    - If Ray is initialized and we're not in a local cluster context, use RayContext
+    - Otherwise, use ThreadContext to run in current process with user's venv
+
+    This ensures:
+    - Standalone Ray usage (e.g., tests) gets RayContext when Ray is initialized
+    - Local GPU runs use ThreadContext to avoid Ray worker overhead and CUDA library issues
 
     Examples:
         >>> context = create_job_ctx("sync")
@@ -496,9 +500,17 @@ def create_job_ctx(
         >>> context = create_job_ctx("ray")
     """
     if context_type == "auto":
-        # Default to threadpool to run in current process with user's venv
-        # This avoids Ray worker overhead and CUDA library issues
-        context_type = "threadpool"
+        import ray
+
+        # Use Ray if it's initialized, UNLESS we're explicitly running on a local cluster
+        if ray.is_initialized():
+            cluster_spec = os.environ.get("FRAY_CLUSTER_SPEC", "")
+            if cluster_spec.startswith("local"):
+                context_type = "threadpool"
+            else:
+                context_type = "ray"
+        else:
+            context_type = "threadpool"
 
     if context_type == "sync":
         return SyncContext()
