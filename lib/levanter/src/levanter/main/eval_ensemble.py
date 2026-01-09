@@ -19,7 +19,7 @@ from levanter.data import DataLoader
 from levanter.data.text import LMMixtureDatasetConfig, SingleDatasetLMConfigBase
 from levanter.eval import TaggedEvaluator, eval_model
 from levanter.models.gpt2 import Gpt2Config
-from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, compute_next_token_loss
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.trainer import TrainerConfig
 from levanter.utils.jax_utils import use_cpu_device
 from levanter.utils.tree_utils import inference_mode
