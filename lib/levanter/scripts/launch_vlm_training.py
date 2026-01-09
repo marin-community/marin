@@ -24,16 +24,14 @@ Usage:
     # Train with glob pattern
     python launch_vlm_training.py --train_data "/path/to/data/*.parquet"
 
-    # Full training run with optimizations
+    # Full training run
     python launch_vlm_training.py --initialize_from_hf --num_train_steps 10000 --train_batch_size 32
 
-    # High-performance training with all optimizations enabled
+    # High-performance training with all speed optimizations enabled
     python launch_vlm_training.py --initialize_from_hf --mp bfloat16 \\
         --freeze_vision_encoder --per_device_parallelism 8
 
 Performance Optimization Flags:
-    --mp bfloat16           : Use mixed precision (bfloat16) for faster training
-    --no_flash_attention    : Disable flash attention (enabled by default)
     --freeze_vision_encoder : Freeze vision encoder (only train projector + LLM)
     --per_device_parallelism: Number of examples per device (for gradient accumulation)
     --fsdp_axis             : FSDP sharding axis (default: embed)
