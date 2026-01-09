@@ -227,34 +227,15 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
 
     cluster = current_cluster()
 
-    # For LocalCluster, run train_lm.main directly in the current process
-    # This avoids unnecessary nesting (Executor already launched us as a job)
-    # For RayCluster, launch a new job to handle TPU gang scheduling or GPU allocation
-    from fray.cluster.local_cluster import LocalCluster
-
-    if isinstance(cluster, LocalCluster):
-        # Apply environment variables and run directly
-        old_env = {k: os.environ.get(k) for k in env}
-        try:
-            os.environ.update(env)
-            train_lm.main(train_config)
-        finally:
-            for k, v in old_env.items():
-                if v is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = v
-    else:
-        # For RayCluster, launch a proper job for resource allocation
-        job_request = JobRequest(
-            name="train_lm",
-            entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
-            resources=config.resources,
-            environment=EnvironmentConfig.create(env_vars=env),
-            max_retries_failure=10,
-        )
-        job_id = cluster.launch(job_request)
-        cluster.wait(job_id, raise_on_failure=True)
+    job_request = JobRequest(
+        name="train_lm",
+        entrypoint=Entrypoint.from_callable(train_lm.main, args=[train_config]),
+        resources=config.resources,
+        environment=EnvironmentConfig.create(env_vars=env),
+        max_retries_failure=10,
+    )
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)
 
 
 def _doublecheck_paths(config: TrainLmOnPodConfig):

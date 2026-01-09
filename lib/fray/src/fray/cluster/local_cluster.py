@@ -26,7 +26,7 @@ from threading import Thread
 from fray.cluster.base import Cluster, EnvironmentConfig, JobId, JobInfo, JobRequest, TaskStatus
 from fray.isolated_env import TemporaryVenv
 from fray.job.context import SyncContext, fray_default_job_ctx
-from fray.utils import temporary_env_vars
+from fray.environment_context import temporary_env_vars
 
 logger = logging.getLogger(__name__)
 

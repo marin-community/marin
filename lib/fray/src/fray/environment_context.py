@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared utility functions for fray."""
+"""Utilities for temporarily modifying environment variables."""
 
 import contextlib
 import os
