@@ -1,8 +1,20 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
 import math
-import re
-from functools import partial
-from typing import Literal, Sequence, cast
+from typing import Literal, cast
 
 from datasets import Dataset, concatenate_datasets, get_dataset_config_names, load_dataset
 from transformers import PreTrainedTokenizer
@@ -17,7 +29,7 @@ from .math_grading import (
 logger = logging.getLogger(__name__)
 
 
-class MathEnv():
+class MathEnv:
     def __init__(
         self,
         problem: str,
@@ -63,7 +75,10 @@ class MathEnv():
             },
             {
                 "role": "assistant",
-                "content": "Let's spell the word out and number all the letters: 1) s 2) t 3) r 4) a 5) w 6) b 7) e 8) r 9) r 10) y. We have r's at positions 3, 8, and 9. \\boxed{3}",
+                "content": (
+                    "Let's spell the word out and number all the letters: 1) s 2) t 3) r 4) a 5) w 6) b 7) "
+                    "e 8) r 9) r 10) y. We have r's at positions 3, 8, and 9. \\boxed{3}"
+                ),
             },
         ]
 
@@ -75,9 +90,7 @@ def safe_grade(given_answer: str, ground_truth: str, grader: str = "sympy", time
         grader_func = grade_answer_math_verify
     else:
         raise ValueError(f"Invalid grader: {grader}")
-    out = run_with_timeout_signal(
-        grader_func, args=(given_answer, ground_truth), timeout_seconds=int(math.ceil(timeout))
-    )
+    out = run_with_timeout_signal(grader_func, args=(given_answer, ground_truth), timeout_seconds=math.ceil(timeout))
     if out is None:
         logger.warning(f"Timeout grading {given_answer} against {ground_truth}")
         return False
