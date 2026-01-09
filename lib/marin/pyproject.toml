@@ -17,7 +17,7 @@ dependencies = [
     "draccus>=0.11.5",
     "dupekit",
     "fasteners>=0.19",
-    "fasttext",
+    "floret",
     "flask",
     "fsspec>=2025.3.0",
     "gcsfs",
