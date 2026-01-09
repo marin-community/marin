@@ -43,6 +43,7 @@ from zephyr import Backend, Dataset
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
+from marin.utilities.path_utils import is_absolute_path
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
@@ -254,11 +255,6 @@ def _tokenize_batches(config: TokenizeConfig | HfTokenizeConfig, batches: Iterat
         yield from batch_processor(batch)
 
 
-def _is_absolute_path(path: str) -> bool:
-    """Check if a path is absolute (starts with / or contains ://)."""
-    return path.startswith("/") or "://" in path
-
-
 def tokenize(config: TokenizeConfigBase):
     """Tokenize datasets using zephyr pipeline.
 
@@ -266,7 +262,7 @@ def tokenize(config: TokenizeConfigBase):
     For HuggingFace datasets, downloads them first then tokenizes the downloaded files.
     """
     # Require absolute paths to ensure Ray workers write to the correct location
-    if not _is_absolute_path(config.cache_path):
+    if not is_absolute_path(config.cache_path):
         raise ValueError(f"cache_path must be an absolute path (start with / or contain ://), got: {config.cache_path}")
 
     if isinstance(config, TokenizeConfig):

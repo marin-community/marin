@@ -28,6 +28,7 @@ import draccus
 import fsspec
 from huggingface_hub import HfFileSystem
 from marin.execution.executor import THIS_OUTPUT_PATH
+from marin.utilities.path_utils import is_absolute_path
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Backend, Dataset
 from zephyr.writers import atomic_rename
@@ -112,11 +113,6 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
     raise RuntimeError(f"Failed to download {file_path} after {max_retries} attempts")
 
 
-def _is_absolute_path(path: str) -> bool:
-    """Check if a path is absolute (starts with / or contains ://)."""
-    return path.startswith("/") or "://" in path
-
-
 def download_hf(cfg: DownloadConfig) -> None:
     logging.basicConfig(level=logging.INFO)
 
@@ -125,7 +121,7 @@ def download_hf(cfg: DownloadConfig) -> None:
 
     # Require absolute paths to ensure Ray workers write to the correct location
     gcs_output_path = cfg.gcs_output_path
-    if not _is_absolute_path(gcs_output_path):
+    if not is_absolute_path(gcs_output_path):
         raise ValueError(
             f"gcs_output_path must be an absolute path (start with / or contain ://), got: {gcs_output_path}"
         )

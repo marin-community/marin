@@ -26,6 +26,7 @@ from threading import Thread
 from fray.cluster.base import Cluster, EnvironmentConfig, JobId, JobInfo, JobRequest, TaskStatus
 from fray.isolated_env import TemporaryVenv
 from fray.job.context import SyncContext, fray_default_job_ctx
+from fray.utils import temporary_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -123,20 +124,8 @@ class LocalCluster(Cluster):
             env_vars = dict(request.environment.env_vars) if request.environment.env_vars else {}
 
             def run_with_env():
-                import os
-
-                # Apply environment variables for this execution
-                old_env = {k: os.environ.get(k) for k in env_vars}
-                try:
-                    os.environ.update(env_vars)
+                with temporary_env_vars(env_vars):
                     return callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
-                finally:
-                    # Restore original environment
-                    for k, v in old_env.items():
-                        if v is None:
-                            os.environ.pop(k, None)
-                        else:
-                            os.environ[k] = v
 
             for _ in range(replica_count):
                 logger.info(
