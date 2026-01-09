@@ -22,8 +22,7 @@ import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from marin.scaling_laws.isoflop_analysis import CandidateConfig
-    from marin.scaling_laws.recipe import ScalingRecipe
+    from marin.scaling_laws.isoflop_analysis import CandidateConfig, ScalingRecipe
 
 # ---------------- TPU v5p Hardware Constants ----------------
 # These constants are specific to TPU v5p pods.

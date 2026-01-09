@@ -14,36 +14,31 @@
 
 """IsoFLOP analysis for finding compute-optimal training configurations.
 
-This module provides functions and configs for IsoFLOP scaling law analysis:
-1. Read eval metrics from completed training runs
-2. Fit scaling laws to find compute-optimal token counts
-3. Save results to JSON/parquet files
+This module provides the core data types and analysis functions for IsoFLOP
+scaling law analysis. It is intentionally schema-agnostic - experiment code
+should transform raw metrics into IsoFlopRecord before calling these functions.
 
-For programmatic use (without ExecutorStep), see `run_isoflop_analysis()`.
+Key types:
+- IsoFlopRecord: The contract for a single training run's metrics
+- FitScalingLawsResult: Output from fit_scaling_laws()
+- CandidateConfig: Model-agnostic compute allocation from scaling law analysis
+
+Key functions:
+- fit_scaling_laws(records): Fit scaling laws from typed records
+- predict_optimal_config(): Predict optimal training config for a target budget
+- generate_isoflop_train_args(): Generate training args for an isoflop sweep
 """
 
-import json
 import logging
 import math
-import os
-import re
 from collections.abc import Iterator, Sequence
-from dataclasses import asdict, dataclass, field
-from typing import NamedTuple
+from dataclasses import dataclass
+from typing import NamedTuple, Protocol
 
-import fsspec
 import jax.numpy as jnp
-import pandas as pd
 from jaxopt import ScipyMinimize
 
-from levanter.models.llama import LlamaConfig
-
-from marin.scaling_laws.eval_metrics_reader import (
-    EvalMetricsAnalysisConfig,
-    extract_run_name_from_path,
-    read_metrics_dataframe,
-)
-from marin.scaling_laws.recipe import ScalingRecipe
+from levanter.optim.config import OptimizerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -62,17 +57,6 @@ MARIN_TOKENIZER_VOCAB_SIZE = 128256
 # Budgets in training FLOPs (includes 3x multiplier for forward + backward pass).
 # This matches how FLOPs are tracked in WandB via Levanter's log_performance_stats.
 DEFAULT_BUDGETS: tuple[float, ...] = (1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20)
-
-# Derived from Kaiyue's hyperparameter sweep: optimal_LR * hidden_size * sqrt(batch_size)
-LR_CONSTANT = 0.33
-
-# ---------------- WandB Metric Keys ----------------
-# These keys correspond to the metrics logged by Levanter's training callbacks.
-THROUGHPUT_TOKENS_KEY = "throughput/total_tokens"
-THROUGHPUT_GFLOPS_KEY = "throughput/total_gflops"
-PARAMETER_COUNT_KEY = "parameter_count"
-MODEL_CONFIG_KEY = "model"
-TRAINER_CONFIG_KEY = "trainer"
 
 
 # ---------------- Typed Tuples ----------------
@@ -107,6 +91,33 @@ class QuadraticFitCoeffs(NamedTuple):
     """Maximum token count used for fitting."""
 
 
+# ---------------- IsoFlopRecord ----------------
+
+
+@dataclass
+class IsoFlopRecord:
+    """A single training run record for isoflop analysis.
+
+    This is the contract between experiment code (which knows how to extract
+    these fields from raw metrics) and the analysis code (which just does math).
+    """
+
+    tokens: float
+    """Total tokens trained on."""
+
+    metric: float
+    """Evaluation metric value (e.g., bits-per-byte from Paloma)."""
+
+    flops: float
+    """Total training FLOPs (bucketed)."""
+
+    params: float
+    """Parameter count."""
+
+    label: str
+    """Experiment label for grouping (e.g., 'nemo', 'dclm')."""
+
+
 # ---------------- IsoFLOP Sweep Defaults ----------------
 DEFAULT_SEQ_LEN = SEQ_LEN
 DEFAULT_STEPS_PER_RUN = 2**16  # Reference step count for hyperparameter tuning
@@ -134,6 +145,57 @@ class CandidateConfig:
     tokens: float  # = batch_size * train_steps * seq_len
     target_params: int  # Optimal parameter count for this flops_budget
     flops_budget: float  # Compute budget this config was generated for
+
+
+class ModelConfiguration(Protocol):
+    """Protocol for model configs used in scaling law calculations.
+
+    Any model config that implements flops_per_token can be used with the
+    scaling law functions. This allows the library to be model-agnostic
+    while still working with LlamaConfig, QwenConfig, etc.
+    """
+
+    def flops_per_token(self, vocab_size: int, seq_len: int) -> float:
+        """Return FLOPs per token for this model configuration."""
+        ...
+
+
+class ScalingRecipe(Protocol):
+    """Protocol defining the interface for scaling law recipes.
+
+    Concrete implementations (e.g., Marin2025Recipe) should implement these
+    model-specific methods. Orchestration logic (generating training args,
+    predicting optimal configs) is handled by library functions that use
+    these core methods.
+    """
+
+    name: str
+    """Name identifying this recipe (e.g., 'marin-2025')."""
+
+    def build_model_config(
+        self, target_params: int, vocab_size: int, seq_len: int = DEFAULT_SEQ_LEN
+    ) -> ModelConfiguration:
+        """Build a model config for a target parameter count."""
+        ...
+
+    def estimate_memory_bytes(self, model_config: ModelConfiguration, batch_size: int, vocab_size: int) -> int:
+        """Estimate memory usage in bytes for training with this model config."""
+        ...
+
+    def build_optimizer_config(self, candidate: CandidateConfig, vocab_size: int) -> OptimizerConfig:
+        """Build optimizer config for a candidate."""
+        ...
+
+    def candidate_configs(
+        self,
+        budget: float,
+        vocab_size: int,
+        seq_len: int = DEFAULT_SEQ_LEN,
+        steps_per_run: int = DEFAULT_STEPS_PER_RUN,
+        flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
+    ) -> Iterator[CandidateConfig]:
+        """Yield candidate configurations within the FLOP budget."""
+        ...
 
 
 @dataclass
@@ -173,7 +235,6 @@ class MinimaRecord:
     optimal_tokens: float
     loss_at_optimal: float
     optimal_params: float
-    batch_size: int
     scaling_alpha: float | None = None
     scaling_A: float | None = None
 
@@ -217,7 +278,7 @@ def round_flops_to_bucket(flops: float, base: float = 1.1) -> float:
 
 
 def compute_training_flops(
-    model_config: "LlamaConfig",
+    model_config: ModelConfiguration,
     vocab_size: int,
     batch_size: int,
     train_steps: int,
@@ -230,7 +291,7 @@ def compute_training_flops(
     (see train_lm.py) and standard ML conventions (e.g., Chinchilla paper).
 
     Args:
-        model_config: Levanter model config with flops_per_token method (LlamaConfig or subclass).
+        model_config: Model config with flops_per_token method.
         vocab_size: Vocabulary size.
         batch_size: Training batch size.
         train_steps: Number of training steps.
@@ -245,7 +306,7 @@ def compute_training_flops(
 
 
 def solve_for_batch_size(
-    model_config: "LlamaConfig",
+    model_config: ModelConfiguration,
     vocab_size: int,
     target_flops: float,
     train_steps: int,
@@ -257,7 +318,7 @@ def solve_for_batch_size(
     Solve: batch = total_flops / (3 * flops_per_token * steps * seq_len)
 
     Args:
-        model_config: Levanter model config with flops_per_token method.
+        model_config: Model config with flops_per_token method.
         vocab_size: Vocabulary size.
         target_flops: Target total training FLOPs.
         train_steps: Number of training steps.
@@ -271,7 +332,7 @@ def solve_for_batch_size(
 
 
 def solve_for_train_steps(
-    model_config: "LlamaConfig",
+    model_config: ModelConfiguration,
     vocab_size: int,
     target_flops: float,
     batch_size: int,
@@ -283,7 +344,7 @@ def solve_for_train_steps(
     Solve: steps = total_flops / (3 * flops_per_token * batch * seq_len)
 
     Args:
-        model_config: Levanter model config with flops_per_token method.
+        model_config: Model config with flops_per_token method.
         vocab_size: Vocabulary size.
         target_flops: Target total training FLOPs.
         batch_size: Training batch size.
@@ -322,33 +383,6 @@ def candidate_configs(
         CandidateConfig objects for each valid configuration.
     """
     yield from recipe.candidate_configs(budget, vocab_size, seq_len, steps_per_run, flop_tolerance)
-
-
-def _minima_to_candidates(
-    minima_records: list[MinimaRecord],
-) -> list[CandidateConfig]:
-    """Convert minima records to model-agnostic CandidateConfig objects.
-
-    This is used by both run_isoflop_analysis_step() and run_isoflop_analysis()
-    to convert the fitted minima into usable candidate configs.
-
-    Args:
-        minima_records: List of optimal configurations from scaling law fits.
-    """
-    configs = []
-    for rec in minima_records:
-        if rec.optimal_params == 0:
-            continue
-        configs.append(
-            CandidateConfig(
-                batch_size=rec.batch_size,
-                train_steps=int(rec.optimal_tokens / (rec.batch_size * SEQ_LEN)),
-                tokens=rec.optimal_tokens,
-                target_params=int(rec.optimal_params),
-                flops_budget=rec.flops,
-            )
-        )
-    return configs
 
 
 # ---------------- Training Args Generation ----------------
@@ -415,40 +449,6 @@ def generate_isoflop_train_args(
     return results
 
 
-# ---------------- Helpers ----------------
-
-
-def parse_isoflop_run_name(run_name: str) -> str | None:
-    """Parse experiment name from isoflop run name.
-
-    Supports two formats:
-    - New: isoflop-{budget}-N{params}-B{batch}-{experiment_name}
-      E.g., 'isoflop-1e+18-N1e+08-B128-nemo-wider-depth-adapt'
-    - Legacy: isoflop-{budget}-d{hidden}-L{layers}-B{batch}-{experiment_name}
-      E.g., 'isoflop-1e+19-d2048-L16-B1024-nemo-wider-depth-adapt'
-
-    Optionally with a trailing -<hash> which is ignored.
-
-    Returns experiment_name or None if parsing fails.
-    """
-    # Strip optional -<hash> suffix
-    run_name = re.sub(r"-[0-9a-fA-F]{6}$", "", run_name)
-
-    # New format: isoflop-{budget}-N{params}-B{batch}-{experiment_name}
-    new_pattern = r"isoflop-(?:[0-9.e+]+)-N(?:[0-9.e+]+)-B(?:\d+)-(.+)"
-    match = re.match(new_pattern, run_name)
-    if match:
-        return match.group(1)
-
-    # Legacy format: isoflop-{budget}-d{hidden}-L{layers}-B{batch}-{experiment_name}
-    legacy_pattern = r"isoflop-(?:[0-9.e+]+)-d(?:\d+)-L(?:\d+)-B(?:\d+)-(.+)"
-    match = re.match(legacy_pattern, run_name)
-    if match:
-        return match.group(1)
-
-    return None
-
-
 def robust_quad_logx(x: jnp.ndarray, y: jnp.ndarray, delta: float = 1.0) -> tuple[float, float, float]:
     """Fit a robust quadratic in log10(x) space using Huber loss.
 
@@ -491,23 +491,24 @@ def robust_quad_logx(x: jnp.ndarray, y: jnp.ndarray, delta: float = 1.0) -> tupl
 
 
 def fit_scaling_laws(
-    df: pd.DataFrame,
+    records: list[IsoFlopRecord],
 ) -> FitScalingLawsResult:
-    """
-    Fit scaling laws and extract optimal configurations.
+    """Fit scaling laws and extract optimal configurations.
 
     Args:
-        df: DataFrame with columns: tokens, loss, flops, params, name, label
+        records: List of IsoFlopRecord with tokens, metric, flops, params, label, batch_size.
 
     Returns:
         FitScalingLawsResult containing minima_records, scaling_fits, and fit_curves.
     """
-    if df is None or df.empty:
+    if not records:
         return FitScalingLawsResult(minima_records=[], scaling_fits={}, fit_curves={})
 
-    datasets = list(dict.fromkeys(df["label"].tolist()))
+    # Get unique labels preserving order of first appearance
+    datasets = list(dict.fromkeys(r.label for r in records))
 
-    buckets = sorted(df.flops.unique())
+    # Get unique flop buckets
+    buckets = sorted(set(r.flops for r in records))
 
     minima_records: list[MinimaRecord] = []
     fit_curves: dict[tuple[str, float], QuadraticFitCoeffs] = {}
@@ -515,16 +516,19 @@ def fit_scaling_laws(
     # Fit quadratic for each (label, budget) and find minima
     for lab in datasets:
         for C in buckets:
-            sub = df[(df.flops == C) & (df.label == lab)].sort_values("tokens")
-            if sub.empty:
+            sub = sorted(
+                [r for r in records if r.flops == C and r.label == lab],
+                key=lambda r: r.tokens,
+            )
+            if not sub:
                 continue
 
             # Robust quadratic fit in log10(tokens)
             # Use float64 to avoid int32 overflow for token counts > 2^31
-            tokens_array = jnp.array(sub.tokens.values, dtype=jnp.float64)
+            tokens_array = jnp.array([r.tokens for r in sub], dtype=jnp.float64)
             a, b, c = robust_quad_logx(
                 tokens_array,
-                jnp.array(sub.loss.values, dtype=jnp.float64),
+                jnp.array([r.metric for r in sub], dtype=jnp.float64),
             )
             # Store coefficients along with token range used for fitting
             fit_curves[(lab, C)] = QuadraticFitCoeffs(a, b, c, float(tokens_array.min()), float(tokens_array.max()))
@@ -534,28 +538,18 @@ def fit_scaling_laws(
 
             log_D_opt = -b / (2 * a)
             D_star = float(10**log_D_opt)
-            loss_opt = float(a * log_D_opt**2 + b * log_D_opt + c)
+            metric_opt = float(a * log_D_opt**2 + b * log_D_opt + c)
 
-            idx = (sub.tokens - D_star).abs().argmin()
-            nearest_row = sub.iloc[idx]
-
-            # Require params to be present - the 6ND approximation is inaccurate for small models
-            params = nearest_row.get("params")
-            if params is None or pd.isna(params):
-                logger.warning(
-                    f"Missing params for {lab} at {C:.1e} FLOPs - skipping. "
-                    "Ensure runs log parameter_count or have full model config."
-                )
-                continue
+            # Find record with tokens closest to optimal
+            nearest_record = min(sub, key=lambda r: abs(r.tokens - D_star))
 
             minima_records.append(
                 MinimaRecord(
                     label=lab,
                     flops=float(C),
                     optimal_tokens=D_star,
-                    loss_at_optimal=loss_opt,
-                    optimal_params=float(params),
-                    batch_size=int(nearest_row["batch_size"]),
+                    loss_at_optimal=metric_opt,
+                    optimal_params=nearest_record.params,
                 )
             )
 
@@ -589,97 +583,6 @@ def fit_scaling_laws(
         scaling_fits=scaling_fits,
         fit_curves=fit_curves,
     )
-
-
-def transform_metrics_for_isoflop(
-    df: pd.DataFrame,
-    metric_key: str,
-    label_map: dict[str, str] | None = None,
-) -> pd.DataFrame:
-    """Transform raw metrics DataFrame into isoflop analysis format.
-
-    Takes the generic metrics DataFrame from read_metrics_dataframe() and
-    transforms it into the format expected by the analysis:
-    columns: tokens, loss, flops, params, name, label
-
-    The DataFrame contains nested 'config' and 'summary' dicts from tracker_metrics.jsonl.
-
-    Args:
-        df: Raw metrics DataFrame from read_metrics_dataframe()
-        metric_key: Which metric column to use for loss (e.g., 'eval/paloma/c4_en/bpb')
-        label_map: Optional mapping from experiment_name -> display label
-
-    Returns:
-        Transformed DataFrame ready for fit_scaling_laws()
-    """
-    if df.empty:
-        return pd.DataFrame(columns=["tokens", "loss", "flops", "params", "name", "label"])
-
-    records = []
-    for _, row in df.iterrows():
-        run_path = row["run_path"]
-        run_name = extract_run_name_from_path(run_path)
-
-        # Extract config and summary dicts
-        config = row.get("config", {}) or {}
-        summary = row.get("summary", {}) or {}
-        model_config = config.get(MODEL_CONFIG_KEY, {}) or {}
-        trainer_config = config.get(TRAINER_CONFIG_KEY, {}) or {}
-
-        # Get tokens directly from summary
-        tokens = summary.get(THROUGHPUT_TOKENS_KEY)
-        if tokens is None or pd.isna(tokens):
-            logger.warning(f"Missing {THROUGHPUT_TOKENS_KEY} in summary for run {run_name}")
-            continue
-
-        # Get total FLOPs from summary (convert GFLOPs to FLOPs)
-        total_gflops = summary.get(THROUGHPUT_GFLOPS_KEY)
-        if total_gflops is None or pd.isna(total_gflops):
-            logger.warning(f"Missing {THROUGHPUT_GFLOPS_KEY} in summary for run {run_name}")
-            continue
-        flops = round_flops_to_bucket(total_gflops * 1e9)
-
-        if flops < 1e18:
-            continue
-
-        # Get loss from summary[metric_key]
-        loss = summary.get(metric_key)
-        if loss is None or pd.isna(loss):
-            logger.warning(f"Missing metric {metric_key} for run {run_name}")
-            continue
-
-        # Get parameter count from summary (required for accurate scaling analysis)
-        params = summary.get(PARAMETER_COUNT_KEY)
-        if params is None or pd.isna(params):
-            params = None
-
-        # Get model architecture from config
-        hidden_dim = model_config.get("hidden_dim")
-        num_layers = model_config.get("num_layers")
-        batch_size = trainer_config.get("train_batch_size")
-
-        # Determine experiment name and label from run name
-        exp_name = parse_isoflop_run_name(run_name) or run_name
-        if label_map and exp_name in label_map:
-            label = label_map[exp_name]
-        else:
-            label = exp_name
-
-        records.append(
-            dict(
-                tokens=tokens,
-                loss=loss,
-                flops=flops,
-                params=params,
-                hidden_dim=hidden_dim,
-                num_layers=num_layers,
-                batch_size=batch_size,
-                name=run_name,
-                label=label,
-            )
-        )
-
-    return pd.DataFrame.from_records(records)
 
 
 # ---------------- Predict Optimal Config ----------------
@@ -787,173 +690,3 @@ def predict_optimal_configs_for_budgets(
             )
         configs.append(config)
     return configs
-
-
-# ---------------- Result Dataclass ----------------
-
-
-@dataclass
-class IsoFlopAnalysisResult:
-    """Result from scaling ladder analysis containing optimal configs and analysis data."""
-
-    configs: list[CandidateConfig]
-    """List of optimal CandidateConfig for each (label, flops_budget) pair."""
-
-    scaling_fits: dict[str, ScalingFit]
-    """Per-label scaling fits: {label: ScalingFit} for N* ~ A * C^alpha."""
-
-    isoflop_df: pd.DataFrame
-    """Transformed dataframe used for analysis."""
-
-    minima_records: list[MinimaRecord]
-    """Raw minima records with detailed info for each optimum."""
-
-    fit_curves: dict[tuple[str, float], QuadraticFitCoeffs]
-    """Quadratic fit coefficients {(label, flops): QuadraticFitCoeffs} for plotting."""
-
-    def to_json_dict(self) -> dict:
-        """Convert result to JSON-serializable dict (excludes DataFrame and fit_curves)."""
-        return {
-            "configs": [asdict(c) for c in self.configs],
-            "scaling_fits": {k: list(v) for k, v in self.scaling_fits.items()},
-            "minima_records": [asdict(r) for r in self.minima_records],
-        }
-
-
-# ---------------- ExecutorStep Config ----------------
-
-
-@dataclass(frozen=True)
-class IsoFlopAnalysisConfig(EvalMetricsAnalysisConfig):
-    """Configuration for scaling ladder analysis ExecutorStep."""
-
-    recipe: ScalingRecipe = field(kw_only=True)
-    """Scaling recipe for computing optimal hyperparameters."""
-
-    metric_key: str = field(default=DEFAULT_EVAL_METRIC_KEY, kw_only=True)
-    """Metric to use for loss (default: eval/paloma/c4_en/bpb - Paloma benchmark on C4 English)."""
-
-    label_map: tuple[tuple[str, str], ...] | None = field(default=None, kw_only=True)
-    """Optional mapping from experiment_name -> display label as tuple of pairs."""
-
-
-def run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> None:
-    """Execute scaling ladder analysis (called by ExecutorStep)."""
-    raw_df = read_metrics_dataframe(config)
-
-    if raw_df.empty:
-        logger.warning("No eval metrics found in training runs")
-        return
-
-    label_map = dict(config.label_map) if config.label_map else None
-    isoflop_df = transform_metrics_for_isoflop(raw_df, config.metric_key, label_map)
-
-    if isoflop_df.empty:
-        logger.warning("No valid isoflop data after transformation")
-        return
-
-    logger.info(f"Loaded {len(isoflop_df)} runs for scaling ladder analysis")
-    logger.info(f"Labels found: {isoflop_df['label'].unique().tolist()}")
-    logger.info(f"FLOP budgets: {sorted(isoflop_df['flops'].unique())}")
-
-    fit_result = fit_scaling_laws(isoflop_df)
-
-    logger.info(f"Found {len(fit_result.minima_records)} optimal configurations")
-    for label, (alpha, A) in fit_result.scaling_fits.items():
-        logger.info(f"  {label}: N* = {A:.2e} * C^{alpha:.3f}")
-
-    configs = _minima_to_candidates(fit_result.minima_records)
-
-    result = IsoFlopAnalysisResult(
-        configs=configs,
-        scaling_fits=fit_result.scaling_fits,
-        isoflop_df=isoflop_df,
-        minima_records=fit_result.minima_records,
-        fit_curves=fit_result.fit_curves,
-    )
-
-    fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
-    fs.makedirs(config.output_path, exist_ok=True)
-
-    result_path = os.path.join(config.output_path, "isoflop_analysis_result.json")
-    with fs.open(result_path, "w") as f:
-        json.dump(result.to_json_dict(), f, indent=2)
-    logger.info(f"Saved results to {result_path}")
-
-    # Also save the full dataframe and fit curves for downstream plotting
-    df_path = os.path.join(config.output_path, "isoflop_df.parquet")
-    isoflop_df.to_parquet(df_path)
-    logger.info(f"Saved dataframe to {df_path}")
-
-    fit_curves_path = os.path.join(config.output_path, "fit_curves.json")
-    # Convert tuple keys to strings for JSON serialization
-    fit_curves_json = {f"{label}|{flops}": list(coeffs) for (label, flops), coeffs in result.fit_curves.items()}
-    with fs.open(fit_curves_path, "w") as f:
-        json.dump(fit_curves_json, f, indent=2)
-    logger.info(f"Saved fit curves to {fit_curves_path}")
-
-
-# ---------------- Programmatic Interface ----------------
-
-
-def run_isoflop_analysis(
-    training_runs: Sequence[str],
-    recipe: ScalingRecipe,
-    metric_key: str = DEFAULT_EVAL_METRIC_KEY,
-    label_map: dict[str, str] | None = None,
-) -> IsoFlopAnalysisResult:
-    """Analyze isoflop training runs and return optimal training configurations.
-
-    This is the programmatic interface for scaling ladder analysis, useful for
-    notebooks or scripts. For ExecutorStep-based pipelines, use
-    `run_isoflop_analysis_step()` with `IsoFlopAnalysisConfig`.
-
-    Args:
-        training_runs: List of path strings to training run output directories
-        metric_key: Which metric to use for loss (default: eval/paloma/c4_en/bpb)
-        label_map: Optional mapping from experiment_name -> display label
-        recipe: ScalingRecipe with hyperparameter settings
-
-    Returns:
-        IsoFlopAnalysisResult with configs, scaling_fits, and analysis data
-    """
-    config = EvalMetricsAnalysisConfig(
-        training_runs=training_runs,
-        output_path="analysis/scaling_ladder",
-    )
-    raw_df = read_metrics_dataframe(config)
-
-    if raw_df.empty:
-        logger.warning("No eval metrics found")
-        return IsoFlopAnalysisResult(
-            configs=[],
-            scaling_fits={},
-            isoflop_df=pd.DataFrame(),
-            minima_records=[],
-            fit_curves={},
-        )
-
-    isoflop_df = transform_metrics_for_isoflop(raw_df, metric_key, label_map)
-
-    if isoflop_df.empty:
-        logger.warning("No valid isoflop data after transformation")
-        return IsoFlopAnalysisResult(
-            configs=[],
-            scaling_fits={},
-            isoflop_df=pd.DataFrame(),
-            minima_records=[],
-            fit_curves={},
-        )
-
-    logger.info(f"Transformed {len(isoflop_df)} runs for scaling ladder analysis")
-
-    fit_result = fit_scaling_laws(isoflop_df)
-    configs = _minima_to_candidates(fit_result.minima_records)
-
-    return IsoFlopAnalysisResult(
-        configs=configs,
-        scaling_fits=fit_result.scaling_fits,
-        isoflop_df=isoflop_df,
-        minima_records=fit_result.minima_records,
-        fit_curves=fit_result.fit_curves,
-    )

@@ -18,7 +18,10 @@ This script constructs `ExecutorStep` objects that train models of different
 sizes while keeping the total training FLOPs roughly constant.
 """
 
+import logging
 import math
+import os
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 
@@ -42,18 +45,145 @@ from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.processing.tokenize import get_vocab_size_for_tokenizer, lm_mixture_data_config
 from marin.scaling_laws import (
     CandidateConfig,
+    FitScalingLawsResult,
+    IsoFlopRecord,
     ScalingRecipe,
+    fit_scaling_laws,
     generate_isoflop_train_args,
     pick_v5p_type,
+    round_flops_to_bucket,
     solve_for_batch_size,
     solve_for_train_steps,
 )
+from marin.scaling_laws.eval_metrics_reader import read_raw_records
+from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_BUDGETS: tuple[float, ...] = (1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20)
 LEGACY_BUDGETS: tuple[float, ...] = (3e18, 9e18, 1.8e19, 3e19, 9e19, 1.8e20, 3e20)
 DEFAULT_SEQ_LEN: int = 4096
 DEFAULT_STEPS_PER_RUN: int = 2**16
 DEFAULT_FLOP_TOLERANCE: float = 0.01
+
+# ---------------- Levanter WandB Metric Keys ----------------
+# These keys correspond to the metrics logged by Levanter's training callbacks.
+THROUGHPUT_TOKENS_KEY = "throughput/total_tokens"
+THROUGHPUT_GFLOPS_KEY = "throughput/total_gflops"
+PARAMETER_COUNT_KEY = "parameter_count"
+MODEL_CONFIG_KEY = "model"
+TRAINER_CONFIG_KEY = "trainer"
+DEFAULT_METRIC_KEY = "eval/paloma/c4_en/bpb"
+
+
+# ---------------- Levanter Metrics Transform ----------------
+
+
+def parse_isoflop_run_name(run_name: str) -> str | None:
+    """Parse experiment name from isoflop run name.
+
+    Supports two formats:
+    - New: isoflop-{budget}-N{params}-B{batch}-{experiment_name}
+      E.g., 'isoflop-1e+18-N1e+08-B128-nemo-wider-depth-adapt'
+    - Legacy: isoflop-{budget}-d{hidden}-L{layers}-B{batch}-{experiment_name}
+      E.g., 'isoflop-1e+19-d2048-L16-B1024-nemo-wider-depth-adapt'
+
+    Optionally with a trailing -<hash> which is ignored.
+
+    Returns experiment_name or None if parsing fails.
+    """
+    # Strip optional -<hash> suffix
+    run_name = re.sub(r"-[0-9a-fA-F]{6}$", "", run_name)
+
+    # New format: isoflop-{budget}-N{params}-B{batch}-{experiment_name}
+    new_pattern = r"isoflop-(?:[0-9.e+]+)-N(?:[0-9.e+]+)-B(?:\d+)-(.+)"
+    match = re.match(new_pattern, run_name)
+    if match:
+        return match.group(1)
+
+    # Legacy format: isoflop-{budget}-d{hidden}-L{layers}-B{batch}-{experiment_name}
+    legacy_pattern = r"isoflop-(?:[0-9.e+]+)-d(?:\d+)-L(?:\d+)-B(?:\d+)-(.+)"
+    match = re.match(legacy_pattern, run_name)
+    if match:
+        return match.group(1)
+
+    return None
+
+
+def transform_levanter_metrics(
+    raw_records: list[dict],
+    metric_key: str = DEFAULT_METRIC_KEY,
+    label_map: dict[str, str] | None = None,
+    min_flops: float = 1e18,
+) -> list[IsoFlopRecord]:
+    """Transform raw Levanter metrics into IsoFlopRecord list.
+
+    Args:
+        raw_records: Raw records from read_raw_records(), each containing
+            'config', 'summary', and 'run_path' keys.
+        metric_key: Which metric to use (default: eval/paloma/c4_en/bpb).
+        label_map: Optional mapping from experiment_name -> display label.
+        min_flops: Minimum FLOP threshold to include (default: 1e18).
+
+    Returns:
+        List of IsoFlopRecord for records that have all required fields.
+        Records missing required fields are logged and skipped.
+    """
+    records = []
+
+    for raw in raw_records:
+        run_path = raw.get("run_path", "")
+        run_name = os.path.basename(run_path.rstrip("/"))
+
+        summary = raw.get("summary", {}) or {}
+
+        # Extract tokens
+        tokens = summary.get(THROUGHPUT_TOKENS_KEY)
+        if tokens is None:
+            logger.warning(f"Missing {THROUGHPUT_TOKENS_KEY} for run {run_name}, skipping")
+            continue
+
+        # Extract FLOPs (convert GFLOPs to FLOPs and bucket)
+        total_gflops = summary.get(THROUGHPUT_GFLOPS_KEY)
+        if total_gflops is None:
+            logger.warning(f"Missing {THROUGHPUT_GFLOPS_KEY} for run {run_name}, skipping")
+            continue
+        flops = round_flops_to_bucket(total_gflops * 1e9)
+
+        if flops < min_flops:
+            continue
+
+        # Extract metric
+        metric = summary.get(metric_key)
+        if metric is None:
+            logger.warning(f"Missing metric {metric_key} for run {run_name}, skipping")
+            continue
+
+        # Extract params (required)
+        params = summary.get(PARAMETER_COUNT_KEY)
+        if params is None:
+            logger.warning(f"Missing {PARAMETER_COUNT_KEY} for run {run_name}, skipping")
+            continue
+
+        # Determine label from run name
+        exp_name = parse_isoflop_run_name(run_name) or run_name
+        if label_map and exp_name in label_map:
+            label = label_map[exp_name]
+        else:
+            label = exp_name
+
+        records.append(
+            IsoFlopRecord(
+                tokens=float(tokens),
+                metric=float(metric),
+                flops=float(flops),
+                params=float(params),
+                label=label,
+            )
+        )
+
+    logger.info(f"Transformed {len(records)} records from {len(raw_records)} raw records")
+    return records
 
 
 def _round_to_power_of_two(x: float) -> int:
@@ -302,6 +432,123 @@ class Marin2025Recipe:
 
 MARIN_2025_RECIPE = Marin2025Recipe()
 """Default Marin scaling recipe."""
+
+
+# ---------------- IsoFlop Analysis ----------------
+
+
+@dataclass(frozen=True, kw_only=True)
+class IsoFlopAnalysisConfig:
+    """Configuration for IsoFLOP scaling law analysis.
+
+    The training_runs field creates blocking dependencies on the training jobs.
+    This config is for use with ExecutorStep.
+    """
+
+    training_runs: tuple[str, ...]
+    """Training run output paths (executor resolves InputName to str at runtime)."""
+
+    output_path: str
+    """Where to write analysis outputs."""
+
+    recipe: ScalingRecipe
+    """Scaling recipe for computing optimal hyperparameters."""
+
+    metric_key: str = DEFAULT_METRIC_KEY
+    """Metric to use for loss (default: eval/paloma/c4_en/bpb)."""
+
+    label_map: tuple[tuple[str, str], ...] | None = None
+    """Optional mapping from experiment_name -> display label as tuple of pairs."""
+
+    metrics_filename: str = "tracker_metrics.jsonl"
+    """Name of the metrics file within each checkpoint directory."""
+
+    backfill_from_wandb: bool = True
+    """If True, backfill tracker_metrics.jsonl from WandB for runs that completed before this feature."""
+
+    wandb_entity_project: str = f"{WANDB_ENTITY}/{WANDB_PROJECT}"
+    """WandB entity/project to query for backfill (format: 'entity/project')."""
+
+
+def run_isoflop_analysis_step(config: IsoFlopAnalysisConfig) -> FitScalingLawsResult:
+    """Execute IsoFLOP scaling law analysis.
+
+    This is the experiment step function that:
+    1. Reads raw metrics from training runs
+    2. Transforms them using Levanter schema knowledge
+    3. Runs the scaling law analysis
+    4. Saves results to output_path
+
+    Args:
+        config: Analysis config with training_runs and analysis settings
+
+    Returns:
+        FitScalingLawsResult with fitted scaling laws
+    """
+    import json
+
+    import fsspec
+
+    # Read raw records from training runs
+    raw_records = read_raw_records(config)
+
+    if not raw_records:
+        logger.warning("No eval metrics found in training runs")
+        return FitScalingLawsResult(minima_records=[], scaling_fits={}, fit_curves={})
+
+    # Transform to typed records using Levanter schema knowledge
+    label_map = dict(config.label_map) if config.label_map else None
+    records = transform_levanter_metrics(raw_records, config.metric_key, label_map)
+
+    if not records:
+        logger.warning("No valid isoflop data after transformation")
+        return FitScalingLawsResult(minima_records=[], scaling_fits={}, fit_curves={})
+
+    logger.info(f"Loaded {len(records)} runs for scaling law analysis")
+    labels = list(dict.fromkeys(r.label for r in records))
+    flops_budgets = sorted(set(r.flops for r in records))
+    logger.info(f"Labels found: {labels}")
+    logger.info(f"FLOP budgets: {flops_budgets}")
+
+    # Run scaling law analysis
+    result = fit_scaling_laws(records)
+
+    logger.info(f"Found {len(result.minima_records)} optimal configurations")
+    for label, scaling_fit in result.scaling_fits.items():
+        logger.info(f"  {label}: D* = {scaling_fit.A:.2e} * C^{scaling_fit.alpha:.3f}")
+
+    # Save results
+    fs, _, _ = fsspec.get_fs_token_paths(config.output_path)
+    fs.makedirs(config.output_path, exist_ok=True)
+
+    result_path = os.path.join(config.output_path, "isoflop_analysis_result.json")
+    result_dict = {
+        "minima_records": [
+            {
+                "label": r.label,
+                "flops": r.flops,
+                "optimal_tokens": r.optimal_tokens,
+                "loss_at_optimal": r.loss_at_optimal,
+                "optimal_params": r.optimal_params,
+                "scaling_alpha": r.scaling_alpha,
+                "scaling_A": r.scaling_A,
+            }
+            for r in result.minima_records
+        ],
+        "scaling_fits": {k: list(v) for k, v in result.scaling_fits.items()},
+    }
+    with fs.open(result_path, "w") as f:
+        json.dump(result_dict, f, indent=2)
+    logger.info(f"Saved results to {result_path}")
+
+    # Save fit curves for downstream plotting
+    fit_curves_path = os.path.join(config.output_path, "fit_curves.json")
+    fit_curves_json = {f"{label}|{flops}": list(coeffs) for (label, flops), coeffs in result.fit_curves.items()}
+    with fs.open(fit_curves_path, "w") as f:
+        json.dump(fit_curves_json, f, indent=2)
+    logger.info(f"Saved fit curves to {fit_curves_path}")
+
+    return result
 
 
 def create_isoflop_sweep_steps(
