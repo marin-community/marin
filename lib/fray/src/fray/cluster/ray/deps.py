@@ -120,7 +120,7 @@ def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
     return PackageSpec(package_specs=package_specs, py_modules=py_modules)
 
 
-def build_python_path(absolute: bool = False) -> list[str]:
+def build_python_path() -> list[str]:
     """Build the PYTHONPATH for the monorepo workspace.
 
     Ray's installation process is... non-optimal. `py_modules` just injects
@@ -131,8 +131,6 @@ def build_python_path(absolute: bool = False) -> list[str]:
     reason, at install time, the py_modules are not yet in a usable state. So instead
     we have to just manually guess what our PYTHONPATH should be.
 
-    Args:
-        absolute: If True, return absolute paths (needed for local execution without working_dir)
     """
     # Workspace member src directories + experiments directory
     paths = [
@@ -143,10 +141,6 @@ def build_python_path(absolute: bool = False) -> list[str]:
         "lib/marin/src",
         "lib/zephyr/src",
     ]
-
-    if absolute:
-        cwd = os.getcwd()
-        paths = [os.path.join(cwd, p) if not os.path.isabs(p) else p for p in paths]
 
     return paths
 

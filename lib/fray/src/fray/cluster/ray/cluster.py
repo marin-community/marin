@@ -20,7 +20,6 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any
 
 import humanfriendly
 import ray
@@ -42,7 +41,6 @@ from fray.cluster.ray.config import find_config_by_region
 from fray.cluster.ray.deps import build_runtime_env_for_packages
 from fray.cluster.ray.tpu import run_on_pod_ray
 from fray.job.context import RayContext, fray_default_job_ctx
-from fray.utils import temporary_env_vars
 
 logger = logging.getLogger("ray")
 
@@ -56,20 +54,14 @@ class RayJobInfo:
     ref: ray.ObjectRef | None
     submission_id: str | None
     name: str
-    is_completed: bool = False  # For jobs that ran synchronously
 
     @staticmethod
     def from_ref(ref: ray.ObjectRef, name: str) -> "RayJobInfo":
-        return RayJobInfo(ref=ref, submission_id=None, name=name, is_completed=False)
+        return RayJobInfo(ref=ref, submission_id=None, name=name)
 
     @staticmethod
     def from_submission_id(ray_job_id: str, name: str) -> "RayJobInfo":
-        return RayJobInfo(ref=None, submission_id=ray_job_id, name=name, is_completed=False)
-
-    @staticmethod
-    def completed(name: str, result: Any = None) -> "RayJobInfo":
-        """Create a job info for a job that already ran synchronously."""
-        return RayJobInfo(ref=None, submission_id=None, name=name, is_completed=True)
+        return RayJobInfo(ref=None, submission_id=ray_job_id, name=name)
 
 
 def _convert_ray_status(ray_status: RayJobStatus) -> JobStatus:
@@ -205,11 +197,11 @@ class RayCluster(Cluster):
 
         For backwards compatibility with existing Marin usage, we do _not_ start a new job
         in this case, but instead spawn the callable as a ray.remote task.
-
-        For local clusters (single-node), we run directly in the current process to avoid
-        Ray's virtualenv/Python version issues.
         """
         entrypoint = request.entrypoint.callable_entrypoint
+        runtime_env = self._get_runtime_env(request)
+        # strip out keys that can only be set at the Job level
+        runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
 
         if isinstance(request.resources.device, GpuConfig):
             logger.info(
@@ -219,30 +211,6 @@ class RayCluster(Cluster):
             num_gpus = request.resources.device.count
         else:
             num_gpus = 0
-
-        # Check if we're on a local cluster (single-node)
-        is_local = self._address == "auto" or self._address.startswith("local")
-
-        # For local single-node clusters, run directly in the current process
-        # This avoids Ray's virtualenv/Python version mismatch issues
-        if is_local:
-            logger.info(f"Running {request.name} directly (local cluster, avoiding Ray worker issues)")
-            # Build runtime env to get the env_vars (especially JAX_PLATFORMS)
-            runtime_env = self._get_runtime_env(request, use_absolute_paths=True)
-            env_vars = runtime_env.get("env_vars", {})
-
-            with temporary_env_vars(env_vars):
-                logger.info(f"Set env vars for direct execution: JAX_PLATFORMS={os.environ.get('JAX_PLATFORMS')}")
-                result = entrypoint.callable(*entrypoint.args, **entrypoint.kwargs)
-
-            job_id = JobId(f"direct-{id(entrypoint)}")
-            self._jobs[job_id] = RayJobInfo.completed(request.name, result)
-            return job_id
-
-        # Build runtime environment for remote execution
-        runtime_env = self._get_runtime_env(request, use_absolute_paths=False)
-        # strip out keys that can only be set at the Job level
-        runtime_env = {k: v for k, v in runtime_env.items() if k not in ["working_dir", "excludes", "config"]}
 
         remote_fn = ray.remote(num_gpus=num_gpus)(entrypoint.callable)
         ref = remote_fn.options(runtime_env=runtime_env).remote(*entrypoint.args, **entrypoint.kwargs)
@@ -283,13 +251,8 @@ class RayCluster(Cluster):
         self._jobs[job_id] = RayJobInfo.from_ref(object_ref, name=request.name)
         return job_id
 
-    def _get_runtime_env(self, request: JobRequest, *, use_absolute_paths: bool = False) -> dict | None:
-        """Build Ray runtime environment for the given job request.
-
-        Args:
-            request: The job request
-            use_absolute_paths: If True, PYTHONPATH entries are absolute (for local execution)
-        """
+    def _get_runtime_env(self, request: JobRequest) -> dict | None:
+        """Build Ray runtime environment for the given job request."""
         environment = request.environment if request.environment else EnvironmentConfig.create()
 
         env_vars = dict(environment.env_vars)
@@ -317,17 +280,14 @@ class RayCluster(Cluster):
         )
 
         env_vars["FRAY_CLUSTER_SPEC"] = self._get_cluster_spec()
-
         logger.info(
-            f"Building environment with {environment.pip_packages}, "
-            f"extras {environment.extras} for job: {request.name}"
+            f"Building environment with {environment.pip_packages}, extras {environment.extras} for job: {request.name}"
         )
         if environment.pip_packages or environment.extras:
             runtime_env = build_runtime_env_for_packages(
                 extra=list(environment.extras),
                 pip_packages=list(environment.pip_packages),
                 env_vars=env_vars,
-                absolute_paths=use_absolute_paths,
             )
             runtime_env["working_dir"] = environment.workspace
             runtime_env["excludes"] = [".git", "tests/", "docs/", "**/*.pack"]
@@ -406,17 +366,6 @@ class RayCluster(Cluster):
     def poll(self, job_id: JobId) -> JobInfo:
         """Poll job status, returning the current job information."""
         job = self._jobs[job_id]
-
-        # Handle jobs that ran synchronously (already completed)
-        if job.is_completed:
-            return JobInfo(
-                job_id=job_id,
-                status=JobStatus.SUCCEEDED,
-                tasks=[],
-                name=job.name,
-                error_message=None,
-            )
-
         if job.submission_id is None:
             return self._poll_ref_job(job_id, job)
 
