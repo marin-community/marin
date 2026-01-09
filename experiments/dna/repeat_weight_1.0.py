@@ -13,8 +13,9 @@
 # limitations under the License.
 
 """
-Example training experiment with repeat downweighting.
-Adapted from https://github.com/marin-community/marin/blob/0d38a98b63a8566451d3cb9a2fb488ec0d1647ce/experiments/plantcad/exp1729_plantcad_train.py
+DNA training experiment with no repeat downweighting (soft_mask_weight=1.0).
+
+Uses DNALmDatasetFormat but with uniform loss weights (control experiment).
 """
 
 import dataclasses
