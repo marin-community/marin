@@ -24,7 +24,7 @@ from levanter.layers.attention import AttentionBackend
 from levanter.compat.hf_checkpoints import HFCompatConfig
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.qwen import Qwen3Config
+from levanter.models.qwen import Qwen3Config, QwenConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -125,7 +125,7 @@ qwen25_7b_instruct_1m = ModelConfig(
     type="qwen",
     tokenizer="Qwen/Qwen2.5-7B-Instruct-1M",
     checkpoint="Qwen/Qwen2.5-7B-Instruct-1M",
-    config_class=Qwen3Config,  # Qwen2.5 uses same config as Qwen3
+    config_class=QwenConfig,  # Qwen2.5 uses Qwen2Config (not Qwen3Config)
 )
 
 
