@@ -46,7 +46,7 @@ def levanter_to_nnx_state(levanter_model: LmHeadModel) -> dict:
         # vLLM expects the weights to be padded to the next multiple of 128. I assume this is
         # because they want to use Pallas kernels which have this requirement.
         if "self_attn" in split_key_without_weight:
-            if "q_proj" in split_key_without_weight:
+            if "q_proj" in split_key_without_weight and len(value.shape) == 4:
                 kv_heads, q_heads_per_group, head_size, embed = value.shape
                 value = value.reshape(kv_heads * q_heads_per_group, head_size, embed)
 
@@ -93,7 +93,7 @@ def levanter_state_dict_to_nnx_state_on_cpu(state_dict: dict) -> dict:
             # vLLM expects the weights to be padded to the next multiple of 128. I assume this is
             # because they want to use Pallas kernels which have this requirement.
             if "self_attn" in split_key_without_weight:
-                if "q_proj" in split_key_without_weight:
+                if "q_proj" in split_key_without_weight and len(value.shape) == 4:
                     kv_heads, q_heads_per_group, head_size, embed = value.shape
                     value = value.reshape(kv_heads * q_heads_per_group, head_size, embed)
 
