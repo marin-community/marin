@@ -262,43 +262,44 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
     def vocab_size(self) -> int:
         return self.Vocab.size
 
+    def compute_next_token_loss(
+        self,
+        example: LmExample,
+        *,
+        key=None,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+    ) -> jnp.ndarray | NamedArray:
+        """
+        Compute next-token cross-entropy for a language modeling example.
 
-def compute_next_token_loss(
-    model: LmHeadModel,
-    example: LmExample,
-    *,
-    key=None,
-    reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
-    reduction_axis: Optional[hax.AxisSelection] = None,
-    logsumexp_weight: Optional[float] = None,
-    loss_dtype: Optional[jnp.dtype] = jnp.float32,
-    logit_soft_cap: Optional[float] = None,
-) -> jnp.ndarray | NamedArray:
-    """
-    Computes the cross-entropy loss for a language modeling example. If reduction is not None, the loss is reduced
-    across the reduction axis (with reduction_axis=None meaning all axes). If reduction is None, the loss is not
-    reduced, and the result is a named array with axes (*batch axes, sequence_length).
-    """
-    activations = model.activations(example.tokens, example.attn_mask, key=key)
+        If `reduction` is not None, the loss is reduced across `reduction_axis` (`None` means all axes).
+        If `reduction` is None, the loss is returned unreduced as a `NamedArray` with axes
+        (*batch axes, sequence_length).
+        """
+        activations = self.activations(example.tokens, example.attn_mask, key=key)
 
-    aux_loss = 0
-    if isinstance(activations, tuple):
-        activations, aux_loss = activations
+        aux_loss = 0
+        if isinstance(activations, tuple):
+            activations, aux_loss = activations
 
-    loss = maybe_fused_next_token_loss(
-        model.Pos,
-        model.Embed,
-        model.Vocab,
-        activations,
-        model.get_lm_head(),
-        example.tokens,
-        loss_weight=example.loss_weight,
-        reduction=reduction,
-        reduction_axis=reduction_axis,
-        logsumexp_weight=logsumexp_weight,
-        dtype=loss_dtype,
-        block_size=model.config.cross_entropy_block_size,
-        logit_soft_cap=logit_soft_cap,
-    )
+        loss = maybe_fused_next_token_loss(
+            self.Pos,
+            self.Embed,
+            self.Vocab,
+            activations,
+            self.get_lm_head(),
+            example.tokens,
+            loss_weight=example.loss_weight,
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+            logsumexp_weight=logsumexp_weight,
+            dtype=loss_dtype,
+            block_size=self.config.cross_entropy_block_size,
+            logit_soft_cap=logit_soft_cap,
+        )
 
-    return loss + aux_loss
+        return loss + aux_loss

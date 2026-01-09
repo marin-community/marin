@@ -333,7 +333,7 @@ def download_latest_uncheatable_eval(cfg: UncheatableEvalDownloadConfig) -> dict
 
     pipeline = (
         Dataset.from_list(tasks)
-        .map(lambda task: _download_and_convert_single(*task))
+        .map(lambda task: _download_and_convert_single(task))
         .write_jsonl(f"{cfg.output_path}/.metrics/part-{{shard:05d}}.jsonl", skip_existing=True)
     )
     output_paths = Backend.execute(pipeline, max_parallelism=cfg.max_concurrent_downloads)

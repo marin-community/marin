@@ -28,10 +28,24 @@ import draccus
 
 from marin.evaluation.evaluation_config import EvaluationConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
-from marin.evaluation.evaluators.evaluator_factory import get_evaluator
+from marin.evaluation.evaluators.levanter_lm_eval_evaluator import LevanterLmEvalEvaluator
+from marin.evaluation.evaluators.lm_evaluation_harness_evaluator import LMEvaluationHarnessEvaluator
+from marin.evaluation.evaluators.simple_evaluator import SimpleEvaluator
 from marin.evaluation.utils import discover_hf_checkpoints
 
 logger = logging.getLogger(__name__)
+
+EVALUATORS = {
+    "lm_evaluation_harness": LMEvaluationHarnessEvaluator,
+    "levanter_lm_evaluation_harness": LevanterLmEvalEvaluator,
+    "debug": SimpleEvaluator,
+}
+
+
+def get_evaluator(config: EvaluationConfig) -> Evaluator:
+    if config.evaluator not in EVALUATORS:
+        raise ValueError(f"Unknown evaluator: {config.evaluator}. Available: {list(EVALUATORS.keys())}")
+    return EVALUATORS[config.evaluator]()
 
 
 def evaluate(config: EvaluationConfig) -> None:

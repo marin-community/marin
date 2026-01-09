@@ -12,13 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import dataclasses
+"""
+Evaluate OLMo-3-1025-7B on MMLU 0-shot and 5-shot.
+"""
 
-from draccus.utils import DataclassInstance
+from fray.cluster import ResourceConfig
 
+from experiments.evals.evals import default_eval
+from experiments.evals.task_configs import MMLU_0_SHOT, MMLU_5_SHOT
+from experiments.models import olmo_3_1025_7b
+from marin.execution.executor import executor_main
 
-def asdict_without_nones(obj: DataclassInstance) -> dict:
-    """Convert dataclass to dictionary, omitting None values."""
-    if not dataclasses.is_dataclass(obj):
-        raise ValueError(f"Expected dataclass, got '{obj}'")
-    return dataclasses.asdict(obj, dict_factory=lambda x: {k: v for (k, v) in x if v is not None})
+if __name__ == "__main__":
+    mmlu_eval = default_eval(
+        step=olmo_3_1025_7b,
+        resource_config=ResourceConfig.with_tpu("v5p-8"),
+        evals=(MMLU_0_SHOT, MMLU_5_SHOT),
+        discover_latest_checkpoint=False,
+    )
+    executor_main(steps=[mmlu_eval])
