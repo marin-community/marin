@@ -37,6 +37,7 @@ from ray.exceptions import (
     ActorUnavailableError,
     GetTimeoutError,
     NodeDiedError,
+    OwnerDiedError,
     RayActorError,
     RayError,
     RaySystemError,
@@ -214,6 +215,9 @@ def _handle_ray_error(e: RayError):
     # treat node failures as preemptions
     if isinstance(e, NodeDiedError):
         logger.exception("Node died", exc_info=e)
+        return TpuPreempted(e)
+    elif isinstance(e, OwnerDiedError):
+        logger.exception("Owner died", exc_info=e)
         return TpuPreempted(e)
     elif isinstance(e, ActorUnavailableError | ActorDiedError):
         logger.exception("Actor died", exc_info=e)
