@@ -30,7 +30,13 @@ class GrugModelConfig:
     rope: RotaryConfig = field(default_factory=RotaryConfig)
     tie_embeddings: bool = False
 
-    # TODO: strip this out
+    # Controls how we compute logsumexp over the vocab in `levanter.grug.loss_fn`.
+    #
+    # - `None` means "single full-vocab block" (often faster for small-ish models/vocabs).
+    # - Smaller values reduce peak memory, but can be significantly slower in practice.
+    #
+    # TODO(grug): Replace with a faster large-vocab CE kernel so we don't have to pick between
+    # speed and memory.
     cross_entropy_block_size: int | None = 32768
 
     @property

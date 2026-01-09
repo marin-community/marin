@@ -227,115 +227,15 @@ def loss_fn(
         If reduction=="none": array with shape (batch, seq).
         Else: scalar array.
     """
-    if cfg.cross_entropy_block_size is None:
-        raise ValueError("cfg.cross_entropy_block_size must be set for grug loss_fn.")
-
     hidden = _transformer_hidden(params, token_ids, cfg, mask=mask)
     labels = jnp.concatenate([token_ids[:, 1:], token_ids[:, :1] * 0], axis=1).astype(jnp.int32)
     loss_weight = loss_weight.astype(loss_dtype)
 
-    def _ensure_absl_flags_parsed() -> None:
-        # tokamax uses absl.flags for configuration, and will error if flags haven't been parsed.
-        # In library contexts (e.g. pytest, ray workers) absl flags parsing may not have happened.
-        try:
-            from absl import flags as absl_flags  # type: ignore[import-not-found]
-        except Exception:  # noqa: BLE001
-            return
-
-        if not absl_flags.FLAGS.is_parsed():
-            absl_flags.FLAGS(["levanter_grug"])
-
-    # Prefer tokamax's Mosaic TPU implementation when possible: it uses a custom kernel and custom VJP,
-    # avoiding the large (tokens x vocab_block) intermediates that can cause TPU HBM OOMs.
-    #
-    # Limitations:
-    # - tokamax returns a scalar (sum/mean); we only use it when `reduction` is not "none".
-    # - tokamax does not currently support arbitrary per-token weights; we only support the common
-    #   "all ones except last position" case via slicing off the final position.
-    if reduction in {"mean", "sum"} and (logsumexp_weight is None or logsumexp_weight == 0.0):
-        try:
-            import tokamax
-        except ImportError:
-            tokamax = None  # type: ignore[assignment]
-
-        if tokamax is not None:
-            # TODO(grug): Prefer a vendored/fixed kernel that supports:
-            #   - per-token `loss_weight` (padding/ignore_id/etc),
-            #   - `reduction="none"` (to keep per-token losses),
-            #   - optional z-loss / logsumexp regularization,
-            # while still using a custom VJP to avoid TPU HBM blowups from large intermediates.
-            _ensure_absl_flags_parsed()
-            # Next-token: predict token[t+1] from hidden[t]. Drop the final position.
-            x = hidden[:, :-1, :].reshape((-1, hidden.shape[-1]))
-            y = token_ids[:, 1:].reshape((-1,)).astype(jnp.int32)
-
-            # NOTE: this ignores `loss_weight` except for the last-position convention.
-            # If your input uses additional masking (padding/ignore_id/etc), use `reduction="none"`
-            # (or a nonzero `logsumexp_weight`) to force the weighted blockwise fallback.
-            b_block = 1024  # tokamax mosaic_tpu constraint (and default config)
-            if x.shape[0] < b_block:
-                # Too small for mosaic_tpu; use tokamax's XLA fallback.
-                return tokamax.linear_softmax_cross_entropy_loss(
-                    x,
-                    y,
-                    params.output_proj,
-                    reduction=reduction,  # type: ignore[arg-type]
-                    implementation="xla",
-                )
-
-            b_main = (x.shape[0] // b_block) * b_block
-            if b_main == x.shape[0]:
-                return tokamax.linear_softmax_cross_entropy_loss(
-                    x,
-                    y,
-                    params.output_proj,
-                    reduction=reduction,  # type: ignore[arg-type]
-                    implementation="mosaic_tpu",
-                )
-
-            # Mosaic TPU requires B % 1024 == 0. Compute the bulk with mosaic_tpu, and the remainder
-            # with tokamax's XLA fallback to avoid padding (which would bias the loss).
-            bulk_sum = tokamax.linear_softmax_cross_entropy_loss(
-                x[:b_main],
-                y[:b_main],
-                params.output_proj,
-                reduction="sum",
-                implementation="mosaic_tpu",
-            )
-            tail_sum = tokamax.linear_softmax_cross_entropy_loss(
-                x[b_main:],
-                y[b_main:],
-                params.output_proj,
-                reduction="sum",
-                implementation="xla",
-            )
-            total_sum = bulk_sum + tail_sum
-            if reduction == "sum":
-                return total_sum
-            if reduction == "mean":
-                return total_sum / x.shape[0]
-            raise AssertionError(f"Unexpected reduction: {reduction}")
-
+    # NOTE: `block_size=None` corresponds to a single full-vocab block. On the 125M speedrun,
+    # disabling blockwise chunking doubled observed MFU (~20 -> ~40). We'll likely need a better
+    # large-vocab loss kernel eventually (esp. for sharded vocab / padding weights), but this is
+    # good enough for now.
     block_size = cfg.cross_entropy_block_size
-    # On TPU, the (tokens_per_shard x vocab_block) matmul can be enormous for large batches/seq lens.
-    # Choose a conservative upper bound to avoid compile-time HBM blowups.
-    if jax.default_backend() == "tpu":
-        mesh = jax.sharding.get_abstract_mesh()
-        shard_factor = 1
-        if mesh is not None and not mesh.empty:
-            for name in ("replica_dcn", "replica", "data"):
-                if name in mesh.shape:
-                    shard_factor *= mesh.shape[name]
-        global_tokens = int(token_ids.shape[0]) * int(token_ids.shape[1])
-        local_tokens = max(1, global_tokens // max(1, shard_factor))
-
-        # Heuristic: cap the per-block logits buffer to ~256MiB per device.
-        bytes_per_element = jnp.dtype(loss_dtype).itemsize
-        target_bytes = 256 * 1024 * 1024
-        max_block = max(128, target_bytes // (max(1, local_tokens) * max(1, bytes_per_element)))
-        # TPU kernels are typically happiest with multiples of 128.
-        max_block = max(128, (int(max_block) // 128) * 128)
-        block_size = min(block_size, int(max_block))
 
     per_pos_loss, logz = linear_softmax_cross_entropy_loss_and_logz(
         hidden,

@@ -204,3 +204,4 @@ With those pieces, defining a “grug” model could be as simple as providing t
 - Should we support tensor parallel axes beyond `('model',)` at launch, or gate behind a flag until we verify the explicit-sharding rules?
 - For tokenizer caching, is it acceptable to rely solely on HF local cache, or should we add explicit `deserialize_leaves_tensorstore` support for tokenizers stored in checkpoints?
 - What minimum TPU/GPU topology should the CI tests assume (2 devices vs 4)?
+- Loss: the current blockwise CE (`cross_entropy_block_size`) is a tradeoff; in the 125M speedrun we saw MFU jump from ~20 -> ~40 when disabling chunking (`block_size=None`). We need a better large-vocab loss kernel eventually.

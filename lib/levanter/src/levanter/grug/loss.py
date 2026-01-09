@@ -27,7 +27,7 @@ def linear_softmax_cross_entropy_loss_and_logz(
     lm_head: jax.Array,
     labels: jax.Array,
     *,
-    block_size: int,
+    block_size: int | None = None,
     dtype: jnp.dtype = jnp.float32,
     logit_soft_cap: float | None = None,
 ) -> tuple[jax.Array, jax.Array]:
@@ -44,8 +44,8 @@ def linear_softmax_cross_entropy_loss_and_logz(
     Returns:
         (loss, logz) each with shape labels.shape.
     """
-    if block_size <= 0:
-        raise ValueError("block_size must be positive")
+    if block_size is None:
+        block_size = lm_head.shape[1]
 
     hidden_dim = hidden.shape[-1]
     if lm_head.ndim != 2:

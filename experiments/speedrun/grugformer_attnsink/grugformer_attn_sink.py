@@ -261,6 +261,7 @@ def _splash_attention_with_sink(
     sinks_spec = PartitionSpec(None)
 
     if segment_ids is None:
+
         @functools.partial(
             jax.shard_map,
             mesh=mesh,
@@ -269,9 +270,7 @@ def _splash_attention_with_sink(
             check_vma=False,
         )
         def _call_splash_attention(q_, k_, v_, sinks_):
-            return jax.vmap(lambda q_b, k_b, v_b: kernel(q_b, k_b, v_b, sinks=sinks_), in_axes=(0, 0, 0))(
-                q_, k_, v_
-            )
+            return jax.vmap(lambda q_b, k_b, v_b: kernel(q_b, k_b, v_b, sinks=sinks_), in_axes=(0, 0, 0))(q_, k_, v_)
 
         out_bhsd = _call_splash_attention(q_bhsd, k_bhsd, v_bhsd, sinks)
     else:
@@ -449,6 +448,7 @@ speedrun_config = SpeedrunConfig(
         explicit_mesh_axes=True,
     ),
 )
+
 
 def build_run(size: str, *, use_tpu: bool = False) -> tuple[str, SpeedrunConfig]:
     sizes = _size_presets()
