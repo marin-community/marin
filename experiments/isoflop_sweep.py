@@ -41,10 +41,6 @@ from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main
 from marin.processing.tokenize import get_vocab_size_for_tokenizer, lm_mixture_data_config
 from marin.scaling_laws import (
-    DEFAULT_BUDGETS,
-    DEFAULT_FLOP_TOLERANCE,
-    DEFAULT_SEQ_LEN,
-    DEFAULT_STEPS_PER_RUN,
     CandidateConfig,
     ScalingRecipe,
     generate_isoflop_train_args,
@@ -52,6 +48,12 @@ from marin.scaling_laws import (
     solve_for_batch_size,
     solve_for_train_steps,
 )
+
+DEFAULT_BUDGETS: tuple[float, ...] = (1e18, 3e18, 6e18, 1e19, 3e19, 6e19, 1e20)
+LEGACY_BUDGETS: tuple[float, ...] = (3e18, 9e18, 1.8e19, 3e19, 9e19, 1.8e20, 3e20)
+DEFAULT_SEQ_LEN: int = 4096
+DEFAULT_STEPS_PER_RUN: int = 2**16
+DEFAULT_FLOP_TOLERANCE: float = 0.01
 
 
 def _round_to_power_of_two(x: float) -> int:
@@ -438,26 +440,31 @@ MARIN_SCALING_SUITES = {
         tokenized=nemotron_mix,
         experiment_name="nemo-wider-depth-adapt",
         recipe=MARIN_2025_RECIPE,
+        budgets=LEGACY_BUDGETS,
     ),
     "common_pile": create_isoflop_sweep_steps(
         tokenized=comma_main_mixture(permutation_type="linear"),
         experiment_name="comma-mix",
         recipe=MARIN_2025_RECIPE,
+        budgets=LEGACY_BUDGETS,
     ),
     "common_pile_feistel": create_isoflop_sweep_steps(
         tokenized=comma_main_mixture(permutation_type="feistel"),
         experiment_name="comma-mix-feistel",
         recipe=MARIN_2025_RECIPE,
+        budgets=LEGACY_BUDGETS,
     ),
     "dclm-default": create_isoflop_sweep_steps(
         tokenized=dclm_mix,
         experiment_name="dclm-default",
         recipe=MARIN_2025_RECIPE,
+        budgets=LEGACY_BUDGETS,
     ),
     "dolma3_mix_150b": create_isoflop_sweep_steps(
         tokenized=dolma3_mix,
         experiment_name="dolma3-mix-150b-1025",
         recipe=MARIN_2025_RECIPE,
+        budgets=LEGACY_BUDGETS,
     ),
 }
 
