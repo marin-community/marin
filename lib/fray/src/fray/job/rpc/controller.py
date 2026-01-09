@@ -46,35 +46,6 @@ Starting a controller server::
     except KeyboardInterrupt:
         server.stop()
 
-Task Lifecycle
---------------
-1. Client submits task via submit_task() - task enters PENDING state and joins queue
-2. Worker calls get_next_task() - task transitions to RUNNING and assigned to worker
-3. Worker executes task and calls either:
-   - report_task_complete() with result - task transitions to COMPLETED
-   - report_task_failed() with error - task transitions to FAILED
-4. Client polls get_task_status() until complete, then calls get_task_result()
-
-Actor Lifecycle
----------------
-1. Client calls create_actor() with actor spec - controller assigns actor to least-loaded worker
-2. Actor enters CREATING state, then transitions to READY once instantiated
-3. Client calls call_actor() with method calls - routed as tasks to the hosting worker
-4. If worker becomes unavailable, actor status reflects UNAVAILABLE and restart is needed
-5. Client calls delete_actor() to remove actor and free resources
-
-Actor Placement
----------------
-Actors are placed on workers using a least-loaded strategy, counting the number of actors
-per worker and assigning new actors to the worker with the fewest. Named actors support
-singleton patterns with get_if_exists=True to retrieve existing instances.
-
-Thread Safety
--------------
-All state modifications are protected by threading.Lock. The get_next_task() method
-uses threading.Condition for efficient blocking with timeout, allowing workers to
-wait for tasks without busy polling. Actor state access is also protected by the same lock.
-
 Deployment
 ----------
 The controller uses uvicorn's ASGI interface and can be deployed with:
