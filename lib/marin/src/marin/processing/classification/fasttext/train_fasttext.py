@@ -302,7 +302,7 @@ def train_model(
         logger.info(f"Model already exists at {output_path}/model.bin. Skipping training.")
         return
 
-    import fasttext
+    import floret as fasttext
 
     shard_paths = fsspec_glob(os.path.join(input_path, "**/*.jsonl.gz"))
     logger.info(f"Received input paths: {shard_paths}")
