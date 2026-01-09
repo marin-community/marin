@@ -7,7 +7,7 @@ import logging
 import math
 import warnings
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from numbers import Integral
 from typing import Optional, Union, cast, overload
 
@@ -54,7 +54,7 @@ from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
 logger = logging.getLogger(__name__)
 
 
-class AttentionBackend(Enum):
+class AttentionBackend(StrEnum):
     DEFAULT = "default"  # use the default attention type for the accelerator
     NVTE = "nvte"  # with Transformer Engine on NVIDIA GPUs
     SPLASH = "splash"  # on TPU.
