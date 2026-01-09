@@ -272,13 +272,49 @@ def loss_fn(
             # NOTE: this ignores `loss_weight` except for the last-position convention.
             # If your input uses additional masking (padding/ignore_id/etc), use `reduction="none"`
             # (or a nonzero `logsumexp_weight`) to force the weighted blockwise fallback.
-            return tokamax.linear_softmax_cross_entropy_loss(
-                x,
-                y,
+            b_block = 1024  # tokamax mosaic_tpu constraint (and default config)
+            if x.shape[0] < b_block:
+                # Too small for mosaic_tpu; use tokamax's XLA fallback.
+                return tokamax.linear_softmax_cross_entropy_loss(
+                    x,
+                    y,
+                    params.output_proj,
+                    reduction=reduction,  # type: ignore[arg-type]
+                    implementation="xla",
+                )
+
+            b_main = (x.shape[0] // b_block) * b_block
+            if b_main == x.shape[0]:
+                return tokamax.linear_softmax_cross_entropy_loss(
+                    x,
+                    y,
+                    params.output_proj,
+                    reduction=reduction,  # type: ignore[arg-type]
+                    implementation="mosaic_tpu",
+                )
+
+            # Mosaic TPU requires B % 1024 == 0. Compute the bulk with mosaic_tpu, and the remainder
+            # with tokamax's XLA fallback to avoid padding (which would bias the loss).
+            bulk_sum = tokamax.linear_softmax_cross_entropy_loss(
+                x[:b_main],
+                y[:b_main],
                 params.output_proj,
-                reduction=reduction,  # type: ignore[arg-type]
-                implementation=None,
+                reduction="sum",
+                implementation="mosaic_tpu",
             )
+            tail_sum = tokamax.linear_softmax_cross_entropy_loss(
+                x[b_main:],
+                y[b_main:],
+                params.output_proj,
+                reduction="sum",
+                implementation="xla",
+            )
+            total_sum = bulk_sum + tail_sum
+            if reduction == "sum":
+                return total_sum
+            if reduction == "mean":
+                return total_sum / x.shape[0]
+            raise AssertionError(f"Unexpected reduction: {reduction}")
 
     block_size = cfg.cross_entropy_block_size
     # On TPU, the (tokens_per_shard x vocab_block) matmul can be enormous for large batches/seq lens.
