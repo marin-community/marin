@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Custom Mixtral / OLMoE-style MoE model used by speedrun experiments.
+
+Provenance: https://github.com/marin-community/marin/issues/2312
+"""
+
 # nodryrun
 import dataclasses
 from dataclasses import dataclass
