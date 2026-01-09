@@ -143,8 +143,8 @@ eval = [
 ]
 
 vllm = [
-    "vllm-tpu==0.11.1",
-    "torch==2.8.0",
+    "vllm-tpu==0.13.2.post6",
+]
 
 [[tool.uv.index]]
 name = "marin-resiliparse"
