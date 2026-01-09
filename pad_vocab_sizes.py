@@ -103,11 +103,53 @@ MODELS_TO_FIX = [
     #     "target_vocab_size": 152064,  # Base Qwen2.5-7B-Instruct (different!)
     #     "output_path": "gs://marin-us-east5/checkpoints/exp2262e_ot4_math30k_qwen3_32b_bsz128_lr4e_5-51aefe/hf/step-2340-padded-vocab/",
     # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262f_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-cfac80/hf/step-2340/",
+    #     "target_vocab_size": 152064,  # Base Qwen2.5-7B-Instruct (different!)
+    #     "output_path": "gs://marin-us-east5/checkpoints/exp2262f_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-cfac80/hf/step-2340-padded-vocab/",
+    # },
     {
         "name": "qwen2.5-7b-instruct-finetuned",
-        "path": "gs://marin-us-east5/checkpoints/exp2262f_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-cfac80/hf/step-2340/",
+        "path": "gs://marin-eu-west4/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-1000/",
         "target_vocab_size": 152064,  # Base Qwen2.5-7B-Instruct (different!)
-        "output_path": "gs://marin-us-east5/checkpoints/exp2262f_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-cfac80/hf/step-2340-padded-vocab/",
+        "output_path": "gs://marin-eu-west4/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-1000-padded-vocab/",
+    },
+    {
+        "name": "qwen2.5-7b-instruct-finetuned",
+        "path": "gs://marin-eu-west4/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-2000/",
+        "target_vocab_size": 152064,  # Base Qwen2.5-7B-Instruct (different!)
+        "output_path": "gs://marin-eu-west4/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-2000-padded-vocab/",
+    },
+    {
+        "name": "qwen2.5-7b-instruct-finetuned",
+        "path": "gs://marin-eu-west4/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-3000/",
+        "target_vocab_size": 152064,  # Base Qwen2.5-7B-Instruct (different!)
+        "output_path": "gs://marin-eu-west4/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-3000-padded-vocab/",
+    },
+    {
+        "name": "qwen2.5-7b-instruct-finetuned",
+        "path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-1000/",
+        "target_vocab_size": 152064,  # Base Qwen2.5-7B-Instruct (different!)
+        "output_path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-1000-padded-vocab/",
+    },
+    {
+        "name": "qwen2.5-7b-instruct-finetuned",
+        "path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-2000/",
+        "target_vocab_size": 152064,  # Base Qwen2.5-7B-Instruct (different!)
+        "output_path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-2000-padded-vocab/",
+    },
+    {
+        "name": "qwen2.5-7b-instruct-finetuned",
+        "path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-3000/",
+        "target_vocab_size": 152064,  # Base Qwen2.5-7B-Instruct (different!)
+        "output_path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-3000-padded-vocab/",
+    },
+    {
+        "name": "qwen2.5-7b-instruct-finetuned",
+        "path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-4000/",
+        "target_vocab_size": 152064,  # Base Qwen2.5-7B-Instruct (different!)
+        "output_path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-4000-padded-vocab/",
     },
 ]
 
@@ -281,7 +323,31 @@ def pad_model_embeddings(model_path, target_vocab_size, output_path, debug=False
         
         # Resize token embeddings (adds padding with random initialization)
         model.resize_token_embeddings(target_vocab_size)
-        
+
+        # Initialize padded lm_head weights to produce near-zero probability
+        # This prevents random weights from affecting softmax/perplexity calculations
+        with torch.no_grad():
+            lm_head = model.get_output_embeddings()
+            if lm_head is not None:
+                tie_weights = getattr(model.config, 'tie_word_embeddings', True)
+
+                # Zero out weights for padded tokens (only if not tied to input embeddings)
+                if not tie_weights:
+                    lm_head.weight[current_vocab_size:] = 0
+                    print(f"✓ Zeroed lm_head weights for padded tokens [{current_vocab_size}:{target_vocab_size}]")
+                else:
+                    print(f"⚠ Embeddings are tied - cannot zero lm_head weights without affecting input embeddings")
+
+                # Set bias to very negative so padded tokens get ~0 probability
+                if hasattr(lm_head, 'bias') and lm_head.bias is not None:
+                    lm_head.bias[current_vocab_size:] = -1e9
+                    print(f"✓ Set lm_head bias to -1e9 for padded tokens [{current_vocab_size}:{target_vocab_size}]")
+                else:
+                    if tie_weights:
+                        print(f"⚠ No lm_head bias and embeddings are tied - padded tokens will have random logits")
+                    else:
+                        print(f"  (No lm_head bias - zeroed weights give logits=0, which is low probability among {target_vocab_size} tokens)")
+
         # Update config
         model.config.vocab_size = target_vocab_size
         

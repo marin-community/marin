@@ -108,6 +108,8 @@ def evaluate_lm_evaluation_harness(
     wandb_tags: list[str] | None = None,
     discover_latest_checkpoint: bool = True,
     generation_params: dict | None = None,
+    depends_on: "ExecutorStep | None" = None,
+    seed: int | None = None,
 ) -> ExecutorStep:
     """
     Create an ExecutorStep to evaluate the model using LM Evaluation Harness.
@@ -117,10 +119,25 @@ def evaluate_lm_evaluation_harness(
         model_path (str): Path to the model.
         evals (list[EvalTaskConfig]): List of evaluations to run with LM Evaluation Harness.
         generation_params (dict | None): Generation parameters for vLLM (temperature, max_tokens, etc.)
+        depends_on (ExecutorStep | None): Optional step to depend on for serial execution.
+        seed (int | None): Optional seed for reproducibility. If provided, appended to step name after task.
     """
+    from marin.execution.executor import InputName
+
     suffix = '_'.join([e.name for e in evals])
+
+    # Build step name: {model_name}-{task}-seed{N} (seed appended after task if provided)
+    step_name = f"evaluation/lm_evaluation_harness/{model_name}-{suffix}"
+    if seed is not None:
+        step_name = f"{step_name}-seed{seed}"
+
+    # Create dependency InputName if depends_on is specified
+    depends_on_input = None
+    if depends_on is not None:
+        depends_on_input = InputName(step=depends_on, name=None, block_on_step=True)
+
     return ExecutorStep(
-        name=f"evaluation/lm_evaluation_harness/{model_name}-{suffix}",
+        name=step_name,
         fn=evaluate,
         config=EvaluationConfig(
             evaluator="lm_evaluation_harness",
@@ -136,6 +153,7 @@ def evaluate_lm_evaluation_harness(
             apply_chat_template=apply_chat_template,
             wandb_tags=wandb_tags,
             generation_params=generation_params,
+            depends_on=depends_on_input,
         ),
     )
 

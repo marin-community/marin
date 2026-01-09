@@ -13,12 +13,28 @@
 # limitations under the License.
 
 import logging
+import re
 import sys
 
 from experiments.evals.evals import evaluate_lm_evaluation_harness
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.execution.executor import ExecutorStep, executor_main
 from fray.cluster import ResourceConfig
+
+
+def extract_checkpoint_number(path: str) -> str | None:
+    """Extract checkpoint/step number from a model path.
+
+    Examples:
+        gs://bucket/checkpoints/.../hf/step-3000/ -> "3000"
+        gs://bucket/checkpoints/.../hf/step-11718/ -> "11718"
+        gs://bucket/models/some-model/ -> None (no checkpoint number)
+    """
+    # Match "step-" followed by digits
+    match = re.search(r'step-(\d+)', path)
+    if match:
+        return match.group(1)
+    return None
 
 resource_config = ResourceConfig.with_tpu("v5p-8")
 
@@ -51,132 +67,147 @@ EVAL_TASKS = [
     # EvalTaskConfig("gpqa_diamond_zeroshot", num_fewshot=0, task_alias="gpqa_diamond_zeroshot"),
 ]
 
+# Seeds for multiple evaluation runs to compute averaged results
+SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+
 MODELS = [
     # {
-    #     "name": "qwen2.5-7b-instruct-aime25",
+    #     "name": "qwen2.5-7b-instruct",
     #     "path": "gs://marin-us-central2/models/qwen2.5-7b-instruct",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "marin-8b-instruct-aime25",
+    #     "name": "marin-8b-instruct",
     #     "path": "gs://marin-us-central2/models/Marin-8B-Instruct",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-redo_fixed_template-aime24",
-    #     "path": "gs://marin-us-central2/checkpoints/exp2199b_redo_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-2d659d/hf/step-11718-padded-vocab",
+    #     "name": "qwen2.5-7b-instruct-finetuned-redo_fixed_template",
+    #     "path": "gs://marin-us-central2/checkpoints/exp2199b_redo_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-2d659d/hf/step-11718",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-redo_fixed_template_pt2-chkpt10500-aime24",
-    #     "path": "gs://marin-us-central2/checkpoints/exp2199b_redo_pt2_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-1a1aff/hf/step-10500-padded-vocab",
+    #     "name": "qwen2.5-7b-instruct-finetuned-redo_fixed_template_pt2",
+    #     "path": "gs://marin-us-central2/checkpoints/exp2199b_redo_pt2_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-1a1aff/hf/step-10500",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen3-8b-finetuned-aime25",
-    #     "path": "gs://marin-us-east5/checkpoints/exp2199c_sft_qwen3_8b_openthoughts3_bsz512_lr8e_5-accb91/hf/step-11718-padded-vocab/",
+    #     "name": "qwen3-8b-finetuned",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2199c_sft_qwen3_8b_openthoughts3_bsz512_lr8e_5-accb91/hf/step-11718/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "marin-8b-instruct-finetuned-aime25",
+    #     "name": "marin-8b-instruct-finetuned",
     #     "path": "gs://marin-us-east5/checkpoints/exp2199a_sft_marin_8b_instruct_openthoughts3_bsz512_lr8e_5-3a3fd2/hf/step-11718/",  # NOTE: No need for padded vocab
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-1.5b-instruct-finetuned-aime25",
-    #     "path": "gs://marin-us-east5/checkpoints/exp2209a1_sft_qwen2pt5_1pt5b_instruct_ot3_bsz512_lr8e_5-eb7076/hf/step-11718-padded-vocab/",
+    #     "name": "qwen2.5-1.5b-instruct-finetuned",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2209a1_sft_qwen2pt5_1pt5b_instruct_ot3_bsz512_lr8e_5-eb7076/hf/step-11718/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-3b-instruct-finetuned-aime25",
-    #     "path": "gs://marin-us-east5/checkpoints/exp2209b1_sft_qwen2pt5_3b_instruct_openthoughts3_bsz512_lr8e_5-c7d431/hf/step-11718-padded-vocab/",
+    #     "name": "qwen2.5-3b-instruct-finetuned",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2209b1_sft_qwen2pt5_3b_instruct_openthoughts3_bsz512_lr8e_5-c7d431/hf/step-11718/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-1.5b-instruct-finetuned-ot4-qwen3-32b-7.5K-aime25",
-    #     "path": "gs://marin-us-east5/checkpoints/exp2209a2_sft_qwen2pt5_1pt5b_instruct_openthoughts4_1pt2m_qwen3_-0f8594/hf/step-11718-padded-vocab/",
+    #     "name": "qwen2.5-1.5b-instruct-finetuned-ot4-qwen3-32b-7.5K",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2209a2_sft_qwen2pt5_1pt5b_instruct_openthoughts4_1pt2m_qwen3_-0f8594/hf/step-11718/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-3b-instruct-finetuned-ot4-qwen3-32b-7.5K-aime25",
-    #     "path": "gs://marin-us-east5/checkpoints/exp2209b2_sft_qwen2pt5_3b_instruct_openthoughts4_1pt2m_qwen3_3b_-88f693/hf/step-11718-padded-vocab/",
+    #     "name": "qwen2.5-3b-instruct-finetuned-ot4-qwen3-32b-7.5K",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2209b2_sft_qwen2pt5_3b_instruct_openthoughts4_1pt2m_qwen3_3b_-88f693/hf/step-11718/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-qwen3-32b-7.5K-aime25",
-    #     "path": "gs://marin-us-east5/checkpoints/exp2209c2_sft_qwen2pt5_7b_instruct_openthoughts4_1pt2m_qwen3_3b_-740b7d/hf/step-11718-padded-vocab/",
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-qwen3-32b-7.5K",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2209c2_sft_qwen2pt5_7b_instruct_openthoughts4_1pt2m_qwen3_3b_-740b7d/hf/step-11718/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-32b-instruct-finetuned-ot4-qwen3-32b-7.5K-aime24",  # TODO
-    #     "path": "gs://marin-us-central1/checkpoints/exp2209d2_sft_qwen2pt5_32b_instruct_ot4_1pt2m_qwen3_3b_bsz512_lr-86c9db/hf/step-11718-padded-vocab/",
+    #     "name": "qwen2.5-32b-instruct-finetuned-ot4-qwen3-32b-7.5K",  # TODO
+    #     "path": "gs://marin-us-central1/checkpoints/exp2209d2_sft_qwen2pt5_32b_instruct_ot4_1pt2m_qwen3_3b_bsz512_lr-86c9db/hf/step-11718/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "llama-3.1-8b-instruct-aime24",
+    #     "name": "llama-3.1-8b-instruct",
     #     "path": "gs://marin-us-central2/models/llama-3.1-8b-instruct/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-chkpt1170-aime24",
-    #     "path": "gs://marin-us-east5/checkpoints/exp2262a_ot4_math30k_qwen3_32b_bsz128_lr4e_5-ad01cb/hf/step-1170-padded-vocab",
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262a",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262a_ot4_math30k_qwen3_32b_bsz128_lr4e_5-ad01cb/hf/step-1170",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-chkpt1170-aime24",
-    #     "path": "gs://marin-us-east5/checkpoints/exp2262b_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-41ff16/hf/step-1170-padded-vocab",
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262b",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262b_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-41ff16/hf/step-1170",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-ot3-chkpt11718-aime25",
-    #     "path": "gs://marin-us-central2/checkpoints/exp2199b_redo3_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-c05011/hf/step-11718-padded-vocab/",
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot3",
+    #     "path": "gs://marin-us-central2/checkpoints/exp2199b_redo3_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-c05011/hf/step-11718/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "openthinker3-7b-gpqa_diamond",
+    #     "name": "openthinker3-7b",
     #     "path": "gs://marin-us-central2/models/OpenThinker3-7B/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262c-chkpt3000-aime25",
-    #     "path": "gs://marin-us-east5/checkpoints/exp2262c_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-b39be3/hf/step-3000-padded-vocab/",
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262c",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262c_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-b39be3/hf/step-3000/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "marin-8b-longcontext-finetuned-ot3-chkpt11718-aime25",
+    #     "name": "marin-8b-longcontext-finetuned-ot3",
     #     "path": "gs://marin-us-central2/checkpoints/exp2199a2_redo2_sft_longcontext_marin_8b_ot3_bsz512_lr8e_5-fe3bab/hf/step-11718/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262e-chkpt2340-aime25-bsz30",
-    #     "path": "gs://marin-us-east5/checkpoints/exp2262e_ot4_math30k_qwen3_32b_bsz128_lr4e_5-51aefe/hf/step-2340-padded-vocab/",
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262e-bsz30",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262e_ot4_math30k_qwen3_32b_bsz128_lr4e_5-51aefe/hf/step-2340/",
     #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 4,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262f-bsz30",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262f_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-cfac80/hf/step-2340/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262g",
+    #     "path": "gs://marin-eu-west4/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-3000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
     # },
     {
-        "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262f-chkpt2340-aime25-bsz30",
-        "path": "gs://marin-us-east5/checkpoints/exp2262f_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-cfac80/hf/step-2340-padded-vocab/",
+        "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262h",
+        "path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-4681/",
         "apply_chat_template": True,
-        "tensor_parallel_size": 4,
+        "tensor_parallel_size": 1,
     },
 ]
 
@@ -234,10 +265,10 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
                 # Avoid accidental relative local paths like "marin-us-east1/..."
                 gcs_root = "gs://" + base_dir.lstrip("/")
 
-            # Pattern for per-task sample files, e.g.:
+            # Pattern for per-task sample files:
             # {root}/{dataset}_0shot/__tmp__{model}/samples_{dataset}_TIMESTAMP.jsonl
-            pattern = gcs_root.rstrip("/") + "/*/__tmp__*/samples_*.jsonl"
             fs = fsspec.filesystem("gcs")
+            pattern = gcs_root.rstrip("/") + "/*/__tmp__*/samples_*.jsonl"
             sample_files: list[str] = fs.glob(pattern)
 
             if not sample_files:
@@ -249,7 +280,7 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
                 path_parts = sample_file.split("/")
 
                 # Infer dataset_name from the task directory: {dataset}_0shot
-                # e.g. .../qwen-.../aime24_0shot/__tmp__.../samples_aime24_*.jsonl
+                # e.g. .../model-task-seed42-hash/aime24_0shot/__tmp__.../samples_aime24_*.jsonl
                 if len(path_parts) >= 3:
                     task_dir = path_parts[-3]
                     # Strip trailing "_{shot}" suffix (e.g. "_0shot", "_5shot")
@@ -260,8 +291,8 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
                 else:
                     dataset_name = "unknown_dataset"
 
-                # Infer model_name from the model/hash directory
-                # e.g. .../evaluation/lm_evaluation_harness/qwen2.5-7b-instruct-47227c/aime24_0shot/...
+                # Infer model_name from the model/hash directory (4 levels up from samples file)
+                # path: .../{model-task-seed42-hash}/{task}_0shot/__tmp__*/samples_*.jsonl
                 if len(path_parts) >= 4:
                     model_dir = path_parts[-4]
                 elif len(path_parts) >= 2:
@@ -269,6 +300,7 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
                 else:
                     model_dir = "unknown_model"
 
+                # Strip hash suffix from model_dir (e.g. "model-name-seed42-47227c" -> "model-name-seed42")
                 if "-" in model_dir:
                     model_name = model_dir.rsplit("-", 1)[0]
                 else:
@@ -297,7 +329,28 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
         # Convert to DataFrame
         df = pd.DataFrame(all_results)
 
-        # Save compiled results
+        # Extract base model name (without seed suffix) and seed for averaging
+        def extract_base_model_and_seed(model_name):
+            """Extract base model name and seed from model_name like 'openthinker3-7b-seed42-aime25'
+
+            The model_name format is: {original_model_name}-seed{N}-{task_suffix}
+            We want to extract the original_model_name and N.
+            """
+            import re
+            # Match -seed followed by digits, followed by - (task suffix) or end of string
+            match = re.search(r'-seed(\d+)(?=-|$)', model_name)
+            if match:
+                seed = int(match.group(1))
+                # Base model is everything before -seed
+                base_model = model_name[:match.start()]
+                return base_model, seed
+            return model_name, None
+
+        df[['base_model_name', 'seed']] = df['model_name'].apply(
+            lambda x: pd.Series(extract_base_model_and_seed(x))
+        )
+
+        # Save compiled results (all individual runs)
         results_file = f"{output_path}/compiled_results.json"
         with fsspec.open(results_file, "w") as f:
             json.dump(all_results, f, indent=2)
@@ -308,6 +361,101 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
 
         logger.info(f"Compiled results saved to: {results_file}")
 
+        # Compute averaged results across seeds
+        # Check for common accuracy-related columns
+        accuracy_cols = [col for col in df.columns if col in ['exact_match', 'acc', 'accuracy', 'correct']]
+
+        if accuracy_cols and 'base_model_name' in df.columns and 'dataset_name' in df.columns:
+            # First compute per-seed accuracy, then average across seeds
+            # This gives meaningful std (variance across seeds, not variance of 0/1 values)
+            avg_results = []
+            for (base_model, dataset), group in df.groupby(['base_model_name', 'dataset_name']):
+                # Compute accuracy for each seed separately
+                per_seed_accuracies = {}
+                for col in accuracy_cols:
+                    if col in group.columns:
+                        # Group by seed and compute mean accuracy for each seed
+                        seed_accs = group.groupby('seed')[col].mean()
+                        per_seed_accuracies[col] = seed_accs
+
+                result = {
+                    'base_model_name': base_model,
+                    'dataset_name': dataset,
+                    'num_seeds': group['seed'].nunique(),
+                    'seeds': sorted(group['seed'].dropna().unique().tolist()),
+                }
+
+                # Compute mean and std across seeds (not across individual samples)
+                for col in accuracy_cols:
+                    if col in per_seed_accuracies:
+                        seed_accs = per_seed_accuracies[col]
+                        result[f'{col}_mean'] = seed_accs.mean()
+                        result[f'{col}_std'] = seed_accs.std()
+                        # Also store per-seed values for reference
+                        result[f'{col}_per_seed'] = seed_accs.to_dict()
+
+                avg_results.append(result)
+
+            avg_df = pd.DataFrame(avg_results)
+
+            # Save averaged results
+            avg_results_file = f"{output_path}/averaged_results.json"
+            with fsspec.open(avg_results_file, "w") as f:
+                json.dump(avg_results, f, indent=2)
+
+            avg_csv_file = f"{output_path}/averaged_results.csv"
+            with fsspec.open(avg_csv_file, "w") as f:
+                avg_df.to_csv(f, index=False)
+
+            logger.info(f"Averaged results saved to: {avg_results_file}")
+            logger.info(f"Averaged results:\n{avg_df.to_string()}")
+
+            # Log averaged results to W&B - one run per model
+            try:
+                import wandb
+
+                # Create a separate summary run for each base model
+                num_seeds = len(config.get("seeds", []))
+                for base_model in avg_df['base_model_name'].unique():
+                    model_df = avg_df[avg_df['base_model_name'] == base_model]
+
+                    wandb.init(
+                        project="marin",
+                        name=f"{base_model}-averaged-{num_seeds}seeds",
+                        tags=["averaged-results", base_model[:64]],  # Truncate to 64 chars
+                        config={
+                            "base_model_name": base_model,
+                            "num_seeds": len(config.get("seeds", [])),
+                            "seeds": config.get("seeds", []),
+                        },
+                        reinit=True,
+                    )
+
+                    # Log averaged metrics for each dataset
+                    for _, row in model_df.iterrows():
+                        dataset = row['dataset_name']
+
+                        # Log as summary metrics
+                        for col in accuracy_cols:
+                            mean_col = f'{col}_mean'
+                            std_col = f'{col}_std'
+                            if mean_col in row and std_col in row:
+                                wandb.log({
+                                    f"{dataset}/{col}_mean": row[mean_col],
+                                    f"{dataset}/{col}_std": row[std_col],
+                                })
+
+                    # Log this model's averaged results table
+                    wandb.log({"averaged_results": wandb.Table(dataframe=model_df)})
+
+                    wandb.finish()
+                    logger.info(f"Averaged results for {base_model} logged to W&B")
+
+            except Exception as e:
+                logger.warning(f"Failed to log averaged results to W&B: {e}")
+        else:
+            logger.warning("Could not compute averaged results: missing accuracy columns or grouping columns")
+
     # Create input paths and output path
     input_paths = [step.cd("results.json") for step in steps]
     output_path = OutputName("compiled_results")
@@ -315,7 +463,7 @@ def compile_results(steps: list[ExecutorStep]) -> ExecutorStep:
     return ExecutorStep(
         name="scratch/chiheem/compile_results",
         fn=_compile_results_fn,
-        config={"input_paths": input_paths, "output_path": output_path},
+        config={"input_paths": input_paths, "output_path": output_path, "seeds": SEEDS},
         description="Compile results from multiple lm-eval steps into a single DataFrame",
     )
 
@@ -327,35 +475,51 @@ if __name__ == "__main__":
     all_steps = []
 
     for model_config in MODELS:
+        # Build full model name: base name + checkpoint suffix (if path contains step-N)
+        # e.g., "qwen2.5-7b-exp2262g" + path ".../step-3000/" -> "qwen2.5-7b-exp2262g-chkpt3000"
+        base_name = model_config["name"]
+        chkpt_num = extract_checkpoint_number(model_config["path"])
+        full_model_name = f"{base_name}-chkpt{chkpt_num}" if chkpt_num else base_name
+
         for task in EVAL_TASKS:
-            # Use evaluate_lm_evaluation_harness which handles dataset loading from lm-evaluation-harness
             engine_kwargs = {
-                "tensor_parallel_size": model_config.get("tensor_parallel_size", 4),
+                # Default to TP=1 (no tensor parallelism) to avoid vocab padding requirements.
+                # 7B models fit on single v5p chip (95GB HBM). Set to 4 for larger models.
+                "tensor_parallel_size": model_config.get("tensor_parallel_size", 1),
                 "max_num_seqs": 30,  # Batch size for parallel generation
                 "enforce_eager": False,  # Allow graph optimization for better throughput
             }
             # Ensure that max_model_len > max_gen_toks + prompt len.
             # Note that max_gen_toks is controlled by lm-eval
             engine_kwargs["max_model_len"] = int(32768+2048)
-            engine_kwargs["max_gen_toks"] = int(32768) # No point. It will be overwritten by lm-eval task's yaml config
-            
-            lm_eval_task_step = evaluate_lm_evaluation_harness(
-                model_config["name"],
-                model_config["path"],
-                evals=[task],
-                max_eval_instances=None,
-                engine_kwargs=engine_kwargs,
-                resource_config=resource_config,
-                apply_chat_template=model_config.get("apply_chat_template", False),
-                generation_params={
-                    "temperature": 0.7,
-                    "top_p": 1.0,
-                    "do_sample": True,
-                    "n": 1,  # Generate 1 sample per prompt
-                    "seed": 42,
-                },
-            )
-            all_steps.append(lm_eval_task_step)
+            engine_kwargs["max_gen_toks"] = int(32768)  # Overwritten by lm-eval task's yaml config
+
+            # Create individual jobs for each seed
+            for seed in SEEDS:
+                lm_eval_task_step = evaluate_lm_evaluation_harness(
+                    full_model_name,
+                    model_config["path"],
+                    evals=[task],
+                    max_eval_instances=None,
+                    engine_kwargs=engine_kwargs,
+                    resource_config=resource_config,
+                    apply_chat_template=model_config.get("apply_chat_template", False),
+                    wandb_tags=[
+                        # Truncate to 64 chars (wandb tag limit)
+                        base_name[:64],  # Base model name for grouping
+                        full_model_name[:64],  # Full name with checkpoint for filtering
+                    ],
+                    generation_params={
+                        "temperature": 0.7,
+                        "top_p": 1.0,
+                        "do_sample": True,
+                        "n": 1,  # Generate 1 sample per prompt
+                        "seed": seed,
+                    },
+                    seed=seed,  # Append seed to step name
+                )
+
+                all_steps.append(lm_eval_task_step)
 
     # Add compile results step
     compile_step = compile_results(all_steps)

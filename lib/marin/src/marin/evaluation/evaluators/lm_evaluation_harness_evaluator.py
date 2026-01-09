@@ -459,6 +459,14 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             max_num_seqs = engine_kwargs.pop("max_num_seqs", 1)
             enforce_eager = engine_kwargs.pop("enforce_eager", False)
 
+            # Extract engine-level seed from generation_params for vLLM initialization
+            # This is different from per-request seed (which TPU/JAX doesn't support)
+            # The engine seed initializes vLLM's global random state
+            engine_seed = 0  # vLLM default
+            if generation_params is not None and "seed" in generation_params:
+                engine_seed = generation_params["seed"]
+                logger.info(f"Using engine seed: {engine_seed}")
+
             pretrained_args_parts = [
                 f"pretrained={model_name_or_path}",
                 "device=tpu",
@@ -466,6 +474,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 "dtype=bfloat16",
                 f"max_num_seqs={max_num_seqs}",
                 "pipeline_parallel_size=1",
+                f"seed={engine_seed}",
             ]
             # Add distributed_executor_backend=ray for TPU tensor parallelism
             # This is required when using tensor_parallel_size > 1 on TPU
@@ -564,10 +573,17 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 evaluation_tracker_args = simple_parse_args_string(f",output_path={result_filepath}")
                 evaluation_tracker = EvaluationTracker(**evaluation_tracker_args)
 
+                # Build wandb run name: model_name-task-seedN
+                wandb_run_name = model.name
+                if eval_task and eval_task.name:
+                    wandb_run_name = f"{wandb_run_name}-{eval_task.name}"
+                if generation_params and "seed" in generation_params:
+                    wandb_run_name = f"{wandb_run_name}-seed{generation_params['seed']}"
+
                 wandb_args_dict = {
                     "project": "marin",
                     "job_type": "eval",
-                    "name": model.name,
+                    "name": wandb_run_name,
                     "tags": wandb_tags,
                 }
                 # wandb_config_args_dict = simple_parse_args_string("")
@@ -657,6 +673,21 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 # Note: max_gen_toks is passed to lm-eval via model_args.
                 # The vLLM wrapper in lm-eval should extract it from model_args before initializing vLLM.
                 # If max_gen_toks is passed to vLLM's engine initialization, it will cause an error.
+
+                # Process generation_params: pass as gen_kwargs to override task-level generation settings
+                gen_kwargs = None
+                random_seed = 0  # lm-eval default
+                if generation_params is not None:
+                    gen_kwargs = dict(generation_params)  # Make a copy
+                    # Extract seed for lm-eval's random seed params
+                    random_seed = gen_kwargs.pop("seed", 0)
+                    # Remove 'n' as it's not a valid lm-eval gen_kwarg
+                    gen_kwargs.pop("n", None)
+                    # Note: We cannot pass 'seed' to vLLM on TPU/JAX - it raises
+                    # "ValueError: JAX does not support per-request seed."
+                    # The random_seed is still used for lm-eval's random state.
+                    logger.info(f"Using gen_kwargs: {gen_kwargs}, random_seed: {random_seed}")
+
                 results = simple_evaluate(
                     model="vllm",
                     tasks=[eval_task.name],
@@ -667,7 +698,11 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                     confirm_run_unsafe_code=True,
                     limit=max_eval_instances if max_eval_instances is not None else None,
                     evaluation_tracker=evaluation_tracker,
-                    log_samples=True, # This controls whether to log samples to the results file
+                    log_samples=True,  # This controls whether to log samples to the results file
+                    gen_kwargs=gen_kwargs,  # Override task-level generation settings
+                    random_seed=random_seed,
+                    numpy_random_seed=random_seed,
+                    torch_random_seed=random_seed,
                 )
 
                 if results is not None:
