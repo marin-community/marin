@@ -38,10 +38,10 @@ from levanter.utils.mesh import MeshConfig
 from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.scaling_laws.isoflop_analysis import (
     ScalingFit,
+    ScalingRecipe,
     predict_optimal_config,
 )
 from marin.scaling_laws.tpu_utils import pick_v5p_type
-from marin.scaling_laws.recipe import ScalingRecipe
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 
 logger = logging.getLogger(__name__)

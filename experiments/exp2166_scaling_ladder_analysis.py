@@ -24,13 +24,17 @@ The scaling ladder:
 """
 
 from experiments.defaults import default_validation_sets
-from experiments.isoflop_sweep import MARIN_2025_RECIPE, MARIN_SCALING_SUITES, nemotron_mix
+from experiments.isoflop_sweep import (
+    IsoFlopAnalysisConfig,
+    MARIN_2025_RECIPE,
+    MARIN_SCALING_SUITES,
+    nemotron_mix,
+    run_isoflop_analysis_step,
+)
 from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.scaling_laws import (
-    IsoFlopAnalysisConfig,
     ScalingLadderRungConfig,
-    run_isoflop_analysis_step,
     run_scaling_ladder_rung,
 )
 
@@ -52,7 +56,7 @@ analysis_step = ExecutorStep(
     name=f"{EXPERIMENT_NAME}-analysis",
     fn=run_isoflop_analysis_step,
     config=IsoFlopAnalysisConfig(
-        training_runs=[output_path_of(r) for r in nemotron_training],
+        training_runs=tuple(output_path_of(r) for r in nemotron_training),
         output_path=this_output_path(),
         recipe=MARIN_2025_RECIPE,
     ),

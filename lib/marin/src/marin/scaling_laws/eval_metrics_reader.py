@@ -14,21 +14,17 @@
 
 """Base infrastructure for eval metrics analysis.
 
-This module provides a base config and utilities for analysis jobs that
-read tracker_metrics.jsonl files from completed training runs. The subclassing
-pattern mirrors the Evaluator approach in
-lib/marin/src/marin/evaluation/evaluators/evaluator.py, so specific analyses
-(like IsoFlop) should subclass EvalMetricsAnalysisConfig.
+This module provides a config and utilities for analysis jobs that
+read tracker_metrics.jsonl files from completed training runs.
 """
 
 import json
 import logging
 import os
-from dataclasses import dataclass
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import fsspec
-import pandas as pd
 import wandb
 
 from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
@@ -92,9 +88,8 @@ def _backfill_metrics_from_wandb(
 
 @dataclass(frozen=True)
 class EvalMetricsAnalysisConfig:
-    """Base config for analyses that read eval metrics from training runs.
+    """Config for analyses that read eval metrics from training runs.
 
-    Subclass this to create specific analysis types (e.g., IsoFlopAnalysisConfig).
     The training_runs field creates blocking dependencies on the training jobs.
     """
 
@@ -114,9 +109,8 @@ class EvalMetricsAnalysisConfig:
     """WandB entity/project to query for backfill (format: 'entity/project')."""
 
 
-def read_metrics_dataframe(config: EvalMetricsAnalysisConfig) -> pd.DataFrame:
-    """
-    Read eval metrics from training runs into a DataFrame.
+def read_raw_records(config: EvalMetricsAnalysisConfig) -> list[dict]:
+    """Read raw eval metrics from training runs.
 
     This is the shared utility that all analysis subtypes use to load metrics.
     It handles reading JSONL files and optional WandB backfill.
@@ -125,7 +119,7 @@ def read_metrics_dataframe(config: EvalMetricsAnalysisConfig) -> pd.DataFrame:
         config: Analysis config with training_runs and backfill settings
 
     Returns:
-        DataFrame with columns: step, run_index, run_path, + all eval/* metrics
+        List of raw records, each containing config, summary, run_index, and run_path.
     """
     all_records = []
 
@@ -167,9 +161,6 @@ def read_metrics_dataframe(config: EvalMetricsAnalysisConfig) -> pd.DataFrame:
 
     if not all_records:
         logger.warning("No eval metrics found in any training runs")
-        return pd.DataFrame()
 
-    df = pd.DataFrame(all_records)
     logger.info(f"Loaded {len(all_records)} evaluation records from {len(config.training_runs)} runs")
-    logger.info(f"Available columns: {list(df.columns)}")
-    return df
+    return all_records

@@ -19,28 +19,25 @@ the snapshot test which ensures reproducibility of config generation.
 """
 
 import jax.numpy as jnp
-import pandas as pd
 
 from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 from levanter.models.qwen import Qwen3Config
 
 from marin.scaling_laws.isoflop_analysis import (
     DEFAULT_SEQ_LEN,
-    MARIN_TOKENIZER_VOCAB_SIZE,
     IsoFlopTrainArgs,
+    MARIN_TOKENIZER_VOCAB_SIZE,
     candidate_configs,
     compute_training_flops,
     fit_scaling_laws,
     generate_isoflop_train_args,
-    parse_isoflop_run_name,
     robust_quad_logx,
     solve_for_batch_size,
     solve_for_train_steps,
-    transform_metrics_for_isoflop,
 )
 
-# Import the concrete recipe from experiments for testing
-from experiments.isoflop_sweep import Marin2025Recipe
+# Import the concrete recipe and transform function from experiments
+from experiments.isoflop_sweep import Marin2025Recipe, parse_isoflop_run_name, transform_levanter_metrics
 
 # --- FLOP computation tests ---
 
@@ -241,26 +238,31 @@ def test_end_to_end_analysis_pipeline():
     Uses SAMPLE_METRICS_DATA (simulating real wandb metrics) to verify the full
     pipeline: metrics transformation -> curve fitting -> scaling law extraction.
     """
-    raw_df = pd.DataFrame(SAMPLE_METRICS_DATA)
+    from marin.scaling_laws import round_flops_to_bucket
 
-    # Transform metrics
-    isoflop_df = transform_metrics_for_isoflop(raw_df, "eval/paloma/c4_en/bpb")
-    assert len(isoflop_df) == 6
+    # Transform metrics using the Levanter transform function
+    records = transform_levanter_metrics(SAMPLE_METRICS_DATA, "eval/paloma/c4_en/bpb")
+    assert len(records) == 6
 
     # Fit scaling laws
-    fit_result = fit_scaling_laws(isoflop_df)
+    fit_result = fit_scaling_laws(records)
 
-    # Should find two minima (one per budget: 1e18 and 1e19)
+    # Should find two minima (one per budget: ~1e18 and ~1e19)
+    # FLOP values are bucketed by round_flops_to_bucket
     assert len(fit_result.minima_records) == 2
-    assert {rec.flops for rec in fit_result.minima_records} == {1e18, 1e19}
+
+    # Get expected bucketed values
+    bucket_1e18 = round_flops_to_bucket(1e18)
+    bucket_1e19 = round_flops_to_bucket(1e19)
+    assert {rec.flops for rec in fit_result.minima_records} == {bucket_1e18, bucket_1e19}
 
     # Verify fitted minima are near expected optimal points
     minima_by_flops = {rec.flops: rec for rec in fit_result.minima_records}
 
-    # At 1e18: raw data optimal at 2.5B tokens (loss=1.12)
-    assert abs(minima_by_flops[1e18].optimal_tokens - 2.6e9) < 0.2e9
-    assert abs(minima_by_flops[1e18].loss_at_optimal - 1.12) < 0.01
+    # At ~1e18: raw data optimal at 2.5B tokens (loss=1.12)
+    assert abs(minima_by_flops[bucket_1e18].optimal_tokens - 2.6e9) < 0.2e9
+    assert abs(minima_by_flops[bucket_1e18].loss_at_optimal - 1.12) < 0.01
 
-    # At 1e19: raw data optimal at 8B tokens (loss=0.98)
-    assert abs(minima_by_flops[1e19].optimal_tokens - 8.8e9) < 0.2e9
-    assert abs(minima_by_flops[1e19].loss_at_optimal - 0.98) < 0.01
+    # At ~1e19: raw data optimal at 8B tokens (loss=0.98)
+    assert abs(minima_by_flops[bucket_1e19].optimal_tokens - 8.8e9) < 0.2e9
+    assert abs(minima_by_flops[bucket_1e19].loss_at_optimal - 0.98) < 0.01
