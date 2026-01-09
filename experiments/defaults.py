@@ -429,10 +429,6 @@ def default_train(
         fn=run_levanter_train_lm,
         config=config,
         override_output_path=override_output_path,
-        # Note: Resources are passed to document hardware requirements, but for local execution
-        # via LocalCluster, all steps run in the current process. For distributed Ray clusters,
-        # run_levanter_train_lm handles resource allocation internally via cluster.launch().
-        resources=train_config.resources,
     )
 
 
