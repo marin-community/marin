@@ -85,6 +85,7 @@ def create_test_batch(
             token_rewards=token_rewards,
             episode_reward=episode_reward,
             temperature=1.0,
+            top_k=None,
             is_truncated=False,
             metadata=batch_metadata,
         )
@@ -134,7 +135,7 @@ def test_replay_buffer():
     # Convert to training batch to verify format
     training_batch = rollouts_to_training_batch(sampled_rollouts)
     assert training_batch is not None
-    assert training_batch.input_ids.shape == {"batch": 4, "position": 32}
+    assert training_batch.input_ids.shape == {"batch": 4, "position": 16}
 
     # Test data loader
     data_loader = ReplayDataLoader(rollout_reader=reader, replay_buffer=replay_buffer, rollout_fetch_interval=0.1)
