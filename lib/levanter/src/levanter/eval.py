@@ -233,7 +233,12 @@ def cb_tagged_lm_evaluate(
             fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
             fs.makedirs(checkpoint_path, exist_ok=True)
             with fs.open(metrics_file, "a") as f:
-                record = {"step": int(step_count), **metrics_to_write}
+                # Convert numpy/jax floats to Python floats for JSON serialization
+                serializable_metrics = {
+                    k: float(v) if isinstance(v, (np.floating, jnp.floating)) else v
+                    for k, v in metrics_to_write.items()
+                }
+                record = {"step": int(step_count), **serializable_metrics}
                 f.write(json.dumps(record, sort_keys=True) + "\n")
 
         return
