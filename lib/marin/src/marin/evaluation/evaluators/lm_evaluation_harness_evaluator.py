@@ -63,6 +63,12 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 # Some libtpu builds also respect TPU_MIN_LOG_LEVEL for their own logging.
                 # Conventionally: 0=INFO, 1=WARNING, 2=ERROR, 3=FATAL; we set 2 to hide INFO/WARNING.
                 "TPU_MIN_LOG_LEVEL": "2",
+                # Prevent vLLM's EngineCore subprocess from trying to contact HuggingFace Hub
+                # for local model paths. Without these, vLLM may try to validate local paths
+                # as HuggingFace repo IDs, causing "Repo id must be in the form..." errors.
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+                "HF_DATASETS_OFFLINE": "1",
             },  # Human eval tests code from the model which requires permission to run
         )
 
@@ -421,6 +427,15 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             # set_cuda_visible_devices()
             # Download the model from GCS or HuggingFace
             model_name_or_path: str = self.download_model(model)
+
+            # Set HuggingFace offline mode environment variables AFTER model download
+            # to prevent vLLM's EngineCore subprocess from trying to contact HuggingFace
+            # Hub for local model paths. Without these, vLLM may try to validate local
+            # paths as HuggingFace repo IDs, causing "Repo id must be in the form..." errors.
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            os.environ["HF_DATASETS_OFFLINE"] = "1"
+            logger.info("Set HuggingFace offline mode environment variables")
 
             # === DEBUG LOGGING: Check tokenizer ===
             try:

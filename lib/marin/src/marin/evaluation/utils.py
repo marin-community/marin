@@ -38,11 +38,23 @@ def is_remote_path(path: str) -> bool:
 def download_from_gcs(gcs_path: str, destination_path: str) -> None:
     """
     Downloads the folder at `gcs_path` to `destination_path`,
-    unless `destination_path` already exists.
+    unless `destination_path` already exists with a complete download.
+
+    A download is considered complete if config.json exists in the destination.
+    If the directory exists but config.json is missing, the incomplete download
+    is removed and re-downloaded.
     """
+    import shutil
+
     if os.path.exists(destination_path):
-        print(f"Skipping download: {destination_path} already exists.")
-        return
+        config_path = os.path.join(destination_path, "config.json")
+        if os.path.exists(config_path):
+            print(f"Skipping download: {destination_path} already exists with config.json.")
+            return
+        else:
+            # Incomplete download detected - remove and re-download
+            print(f"Incomplete download detected at {destination_path} (missing config.json). Removing and re-downloading.")
+            shutil.rmtree(destination_path)
 
     print(f"Downloading {gcs_path} from GCS to {destination_path}.")
     start_time: float = time.time()

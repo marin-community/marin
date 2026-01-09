@@ -61,7 +61,7 @@ Note for people trying to do evals:
 
 """
 EVAL_TASKS = [
-    # EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
+    EvalTaskConfig("aime24", num_fewshot=0, task_alias="aime24_0shot"),
     EvalTaskConfig("aime25", num_fewshot=0, task_alias="aime25_0shot"),
     # EvalTaskConfig("math_500", num_fewshot=0, task_alias="math_500"),
     # EvalTaskConfig("gpqa_diamond_zeroshot", num_fewshot=0, task_alias="gpqa_diamond_zeroshot"),
@@ -69,6 +69,7 @@ EVAL_TASKS = [
 
 # Seeds for multiple evaluation runs to compute averaged results
 SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+# SEEDS = [42, 43, 44]
 
 MODELS = [
     # {
@@ -162,12 +163,6 @@ MODELS = [
     #     "tensor_parallel_size": 1,
     # },
     # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-ot3",
-    #     "path": "gs://marin-us-central2/checkpoints/exp2199b_redo3_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-c05011/hf/step-11718/",
-    #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 1,
-    # },
-    # {
     #     "name": "openthinker3-7b",
     #     "path": "gs://marin-us-central2/models/OpenThinker3-7B/",
     #     "apply_chat_template": True,
@@ -179,12 +174,8 @@ MODELS = [
     #     "apply_chat_template": True,
     #     "tensor_parallel_size": 1,
     # },
-    # {
-    #     "name": "marin-8b-longcontext-finetuned-ot3",
-    #     "path": "gs://marin-us-central2/checkpoints/exp2199a2_redo2_sft_longcontext_marin_8b_ot3_bsz512_lr8e_5-fe3bab/hf/step-11718/",
-    #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 1,
-    # },
+
+
     # {
     #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262e-bsz30",
     #     "path": "gs://marin-us-east5/checkpoints/exp2262e_ot4_math30k_qwen3_32b_bsz128_lr4e_5-51aefe/hf/step-2340/",
@@ -197,18 +188,82 @@ MODELS = [
     #     "apply_chat_template": True,
     #     "tensor_parallel_size": 1,
     # },
-    # {
-    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262g",
-    #     "path": "gs://marin-eu-west4/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-3000/",
-    #     "apply_chat_template": True,
-    #     "tensor_parallel_size": 1,
-    # },
+
+    # START exp2199
     {
-        "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262h",
-        "path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-4681/",
+        "name": "marin-8b-longcontext-finetuned-ot3-exp2199a2_redo2",
+        "path": "gs://marin-us-central2/checkpoints/exp2199a2_redo2_sft_longcontext_marin_8b_ot3_bsz512_lr8e_5-fe3bab/hf/step-11718/",
+        "apply_chat_template": True,
+        "tensor_parallel_size": 4,
+    },
+    {
+        "name": "qwen2.5-7b-instruct-finetuned-ot3-exp2199b_redo3",
+        "path": "gs://marin-us-central2/checkpoints/exp2199b_redo3_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-c05011/hf/step-11718/",
         "apply_chat_template": True,
         "tensor_parallel_size": 1,
     },
+
+    # START exp2262
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262g",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-1000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262g",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-2000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262g",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-3000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262g",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-4000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-32b-exp2262g",
+    #     "path": "gs://marin-us-east5/checkpoints/exp2262g_ot4_math30k_qwen3_32b_bsz128_lr4e_5-42ab13/hf/step-4681/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262h",
+    #     "path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-1000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262h",
+    #     "path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-2000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262h",
+    #     "path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-3000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262h",
+    #     "path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-4000/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262h",
+    #     "path": "gs://marin-eu-west4/checkpoints/exp2262h_ot4_math30k_qwen3_235b_a22b_bsz128_lr4e_5-4b4170/hf/step-4681/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
 ]
 
 
