@@ -134,6 +134,13 @@ def _convert_value_to_loggable_rec(value: Any):
             return value.item()
         else:
             return np.array(value)
+    elif isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return value.item()
+        else:
+            return value.tolist()
+    elif isinstance(value, np.generic):
+        return value.item()
     elif isinstance(value, Histogram):
         import wandb
 
