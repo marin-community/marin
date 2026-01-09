@@ -98,6 +98,22 @@ message GetTaskRequest {
   string worker_id = 1;
 }
 
+message TaskAssignment {
+  string task_id = 1;
+  bytes serialized_fn = 2;
+  map<string, int32> resources = 3;
+  int32 max_retries = 4;
+  string actor_id = 5;  // Set if this is an actor method call
+}
+
+message TaskResultPayload {
+  string task_id = 1;
+  oneof result {
+    bytes serialized_value = 2;
+    bytes serialized_error = 3;
+  }
+}
+
 message Empty {}
 
 // Controller service - clients submit tasks, workers fetch and report
@@ -109,9 +125,8 @@ service FrayController {
 
   // Worker RPCs
   rpc RegisterWorker(WorkerInfo) returns (Empty);
-  rpc GetNextTask(GetTaskRequest) returns (TaskSpec);
-  rpc ReportTaskComplete(TaskResult) returns (Empty);
-  rpc ReportTaskFailed(TaskResult) returns (Empty);
+  rpc ReportTaskResult(TaskResultPayload) returns (Empty);
+  rpc Heartbeat(WorkerInfo) returns (Empty);
   rpc UnregisterWorker(WorkerInfo) returns (Empty);
 
   // Actor RPCs
@@ -138,6 +153,8 @@ message WorkerStatus {
 service FrayWorker {
   rpc HealthCheck(Empty) returns (WorkerStatus);
   rpc ListTasks(Empty) returns (WorkerStatus);
+  rpc AssignTask(TaskAssignment) returns (Empty);
+  rpc ProbeTask(TaskHandle) returns (WorkerTask);
 
   // Actor RPCs
   rpc InstantiateActor(ActorSpec) returns (ActorHandle);

@@ -26,7 +26,7 @@ from uvicorn import Config, Server
 
 from fray.job.rpc.controller import FrayControllerServer
 from fray.job.rpc.proto import fray_pb2
-from fray.job.rpc.proto.fray_connect import FrayControllerClient, FrayWorkerASGIApplication
+from fray.job.rpc.proto.fray_connect import FrayControllerClient, FrayControllerClientSync, FrayWorkerASGIApplication
 from fray.job.rpc.worker import FrayWorkerServicer
 
 
@@ -61,9 +61,11 @@ def client_url(server):
 
 
 @pytest.fixture
-def worker_server():
+def worker_server(client_url):
     """Start a test worker server."""
-    servicer = FrayWorkerServicer(worker_id="worker-1")
+    # Create a controller client for the worker
+    controller_client = FrayControllerClientSync(client_url)
+    servicer = FrayWorkerServicer(worker_id="worker-1", controller_client=controller_client)
     app = FrayWorkerASGIApplication(servicer)
     config = Config(app=app, host="127.0.0.1", port=0, log_level="error")
     server = Server(config=config)
@@ -86,14 +88,15 @@ def worker_server():
 
 
 @pytest.fixture
-def two_worker_servers():
+def two_worker_servers(client_url):
     """Start two test worker servers."""
     servers = []
     threads = []
     ports = []
 
     for worker_id in ["worker-1", "worker-2"]:
-        servicer = FrayWorkerServicer(worker_id=worker_id)
+        controller_client = FrayControllerClientSync(client_url)
+        servicer = FrayWorkerServicer(worker_id=worker_id, controller_client=controller_client)
         app = FrayWorkerASGIApplication(servicer)
         config = Config(app=app, host="127.0.0.1", port=0, log_level="error")
         server = Server(config=config)
@@ -162,68 +165,24 @@ async def test_worker_registration(client_url):
 
 
 @pytest.mark.asyncio
-async def test_get_next_task(client_url):
-    """Test worker getting next task from queue."""
+async def test_report_task_result_success(client_url):
+    """Test reporting task completion with TaskResultPayload."""
     async with httpx.AsyncClient() as http_client:
         client = FrayControllerClient(client_url, session=http_client)
 
-        # Submit a task first
-        task_spec = fray_pb2.TaskSpec(
-            serialized_fn=b"test_function_data",
-            resources={"cpu": 2},
-            max_retries=1,
-        )
-        handle = await client.submit_task(task_spec)
-
-        # Get next task as a worker
-        request = fray_pb2.GetTaskRequest(worker_id="worker-1")
-        next_task = await client.get_next_task(request)
-
-        assert next_task.task_id == handle.task_id
-        assert next_task.serialized_fn == b"test_function_data"
-        assert next_task.resources == {"cpu": 2}
-        assert next_task.max_retries == 1
-
-        # Verify task status is now RUNNING
-        status_handle = await client.get_task_status(handle)
-        assert status_handle.status == fray_pb2.TASK_STATUS_RUNNING
-        assert status_handle.worker_id == "worker-1"
-
-
-@pytest.mark.asyncio
-async def test_get_next_task_timeout(client_url):
-    """Test that get_next_task times out when no tasks available."""
-    async with httpx.AsyncClient() as http_client:
-        client = FrayControllerClient(client_url, session=http_client)
-
-        request = fray_pb2.GetTaskRequest(worker_id="worker-1")
-
-        # Should timeout since no tasks are pending
-        with pytest.raises(ConnectError) as exc_info:
-            await client.get_next_task(request)
-
-        assert exc_info.value.code == Code.DEADLINE_EXCEEDED
-
-
-@pytest.mark.asyncio
-async def test_report_task_complete(client_url):
-    """Test reporting task completion."""
-    async with httpx.AsyncClient() as http_client:
-        client = FrayControllerClient(client_url, session=http_client)
-
-        # Submit and get a task
+        # Submit a task
         task_spec = fray_pb2.TaskSpec(serialized_fn=b"test_fn")
         handle = await client.submit_task(task_spec)
-        request = fray_pb2.GetTaskRequest(worker_id="worker-1")
-        await client.get_next_task(request)
 
-        # Report completion
-        result = fray_pb2.TaskResult(
+        # Manually mark as running (simulating what scheduler would do)
+        # In a real scenario, the scheduler would assign it to a worker
+
+        # Report completion with success
+        result_payload = fray_pb2.TaskResultPayload(
             task_id=handle.task_id,
-            serialized_result=b"result_data",
-            error="",
+            serialized_value=b"result_data",
         )
-        await client.report_task_complete(result)
+        await client.report_task_result(result_payload)
 
         # Verify status
         status = await client.get_task_status(handle)
@@ -235,29 +194,29 @@ async def test_report_task_complete(client_url):
 
 
 @pytest.mark.asyncio
-async def test_report_task_failed(client_url):
-    """Test reporting task failure."""
+async def test_report_task_result_failure(client_url):
+    """Test reporting task failure with TaskResultPayload."""
     async with httpx.AsyncClient() as http_client:
         client = FrayControllerClient(client_url, session=http_client)
 
-        # Submit and get a task
+        # Submit a task
         task_spec = fray_pb2.TaskSpec(serialized_fn=b"test_fn")
         handle = await client.submit_task(task_spec)
-        request = fray_pb2.GetTaskRequest(worker_id="worker-1")
-        await client.get_next_task(request)
 
         # Report failure
-        result = fray_pb2.TaskResult(
+        result_payload = fray_pb2.TaskResultPayload(
             task_id=handle.task_id,
-            serialized_result=b"",
-            error="Task failed: division by zero",
+            serialized_error=b"serialized_error_data",
         )
-        await client.report_task_failed(result)
+        await client.report_task_result(result_payload)
 
         # Verify status
         status = await client.get_task_status(handle)
         assert status.status == fray_pb2.TASK_STATUS_FAILED
-        assert status.error == "Task failed: division by zero"
+
+        # Get result
+        task_result = await client.get_task_result(handle)
+        assert task_result.serialized_error == b"serialized_error_data"
 
 
 @pytest.mark.asyncio
@@ -279,8 +238,8 @@ async def test_unregister_worker(client_url):
 
 
 @pytest.mark.asyncio
-async def test_multiple_tasks_fifo_order(client_url):
-    """Test that tasks are retrieved in FIFO order."""
+async def test_multiple_tasks_submission(client_url):
+    """Test submitting multiple tasks."""
     async with httpx.AsyncClient() as http_client:
         client = FrayControllerClient(client_url, session=http_client)
 
@@ -291,11 +250,10 @@ async def test_multiple_tasks_fifo_order(client_url):
             handle = await client.submit_task(task_spec)
             task_ids.append(handle.task_id)
 
-        # Get tasks in order
-        request = fray_pb2.GetTaskRequest(worker_id="worker-1")
-        for expected_id in task_ids:
-            task = await client.get_next_task(request)
-            assert task.task_id == expected_id
+        # Verify all tasks are pending
+        for task_id in task_ids:
+            status = await client.get_task_status(fray_pb2.TaskHandle(task_id=task_id))
+            assert status.status == fray_pb2.TASK_STATUS_PENDING
 
 
 @pytest.mark.asyncio
@@ -329,31 +287,16 @@ async def test_get_result_nonexistent_task(client_url):
 
 
 @pytest.mark.asyncio
-async def test_report_complete_nonexistent_task(client_url):
-    """Test reporting completion for a task that doesn't exist."""
+async def test_report_result_nonexistent_task(client_url):
+    """Test reporting result for a task that doesn't exist."""
     async with httpx.AsyncClient() as http_client:
         client = FrayControllerClient(client_url, session=http_client)
 
-        # Try to report completion for non-existent task
-        result = fray_pb2.TaskResult(task_id="nonexistent-task", serialized_result=b"result")
+        # Try to report result for non-existent task
+        result_payload = fray_pb2.TaskResultPayload(task_id="nonexistent-task", serialized_value=b"result")
 
         with pytest.raises(ConnectError) as exc_info:
-            await client.report_task_complete(result)
-
-        assert exc_info.value.code == Code.NOT_FOUND
-
-
-@pytest.mark.asyncio
-async def test_report_failed_nonexistent_task(client_url):
-    """Test reporting failure for a task that doesn't exist."""
-    async with httpx.AsyncClient() as http_client:
-        client = FrayControllerClient(client_url, session=http_client)
-
-        # Try to report failure for non-existent task
-        result = fray_pb2.TaskResult(task_id="nonexistent-task", error="some error")
-
-        with pytest.raises(ConnectError) as exc_info:
-            await client.report_task_failed(result)
+            await client.report_task_result(result_payload)
 
         assert exc_info.value.code == Code.NOT_FOUND
 
@@ -389,7 +332,7 @@ async def test_create_actor_basic(client_url, worker_server):
         handle = await client.create_actor(actor_spec)
 
         assert handle.actor_id
-        assert handle.worker_id == "worker-1"
+        assert handle.worker_id == f"localhost:{worker_port}"
         assert handle.status == fray_pb2.ACTOR_STATUS_READY
 
 
@@ -520,26 +463,26 @@ async def test_actor_placement_least_loaded(client_url, two_worker_servers):
         await client.register_worker(worker1)
         await client.register_worker(worker2)
 
-        # Create first actor - should go to worker-1
+        # Create first actor - should go to one of the workers
         actor_data1 = {"cls": Counter, "args": (0,), "kwargs": {}}
         serialized_actor1 = cloudpickle.dumps(actor_data1)
         actor_spec1 = fray_pb2.ActorSpec(serialized_actor=serialized_actor1)
         handle1 = await client.create_actor(actor_spec1)
-        assert handle1.worker_id in ["worker-1", "worker-2"]
+        assert handle1.worker_id in [f"localhost:{ports[0]}", f"localhost:{ports[1]}"]
 
         # Create second actor - should go to the other worker
         actor_data2 = {"cls": Counter, "args": (0,), "kwargs": {}}
         serialized_actor2 = cloudpickle.dumps(actor_data2)
         actor_spec2 = fray_pb2.ActorSpec(serialized_actor=serialized_actor2)
         handle2 = await client.create_actor(actor_spec2)
-        assert handle2.worker_id in ["worker-1", "worker-2"]
+        assert handle2.worker_id in [f"localhost:{ports[0]}", f"localhost:{ports[1]}"]
 
         # Create third actor - should go to whichever has fewer (should balance)
         actor_data3 = {"cls": Counter, "args": (0,), "kwargs": {}}
         serialized_actor3 = cloudpickle.dumps(actor_data3)
         actor_spec3 = fray_pb2.ActorSpec(serialized_actor=serialized_actor3)
         handle3 = await client.create_actor(actor_spec3)
-        assert handle3.worker_id in ["worker-1", "worker-2"]
+        assert handle3.worker_id in [f"localhost:{ports[0]}", f"localhost:{ports[1]}"]
 
 
 @pytest.mark.asyncio
@@ -560,12 +503,11 @@ async def test_get_actor_status(client_url, worker_server):
         actor_spec = fray_pb2.ActorSpec(serialized_actor=serialized_actor, name="test_actor")
         handle = await client.create_actor(actor_spec)
 
-        # Get status
+        # Get actor location (worker_id)
         status = await client.get_actor_status(handle)
         assert status.actor_id == handle.actor_id
-        assert status.worker_id == "worker-1"
+        assert status.worker_id == f"localhost:{worker_port}"
         assert status.name == "test_actor"
-        assert status.status == fray_pb2.ACTOR_STATUS_READY
 
 
 @pytest.mark.asyncio

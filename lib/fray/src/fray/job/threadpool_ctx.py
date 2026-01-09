@@ -78,8 +78,8 @@ class ThreadContext:
         self._actors_lock = threading.Lock()
 
     def put(self, obj: Any) -> Any:
-        """Identity operation - in-process, no serialization needed."""
-        return obj
+        """Not supported."""
+        raise NotImplementedError("ThreadContext does not support .put()")
 
     def get(self, ref: Any) -> Any:
         """Get result, handling _GeneratorFuture, Future objects and plain values."""

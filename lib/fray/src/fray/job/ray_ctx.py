@@ -37,8 +37,8 @@ class RayContext:
         self.ray_options = ray_options or {}
 
     def put(self, obj: Any):
-        """Store object in Ray's object store."""
-        return ray.put(obj)
+        """Not supported - use ray.put() directly if needed."""
+        raise NotImplementedError("RayContext.put() has been removed - use ray.put() directly if needed")
 
     def get(self, ref):
         """Retrieve an object from Ray's object store."""

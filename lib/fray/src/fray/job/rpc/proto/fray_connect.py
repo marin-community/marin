@@ -41,13 +41,10 @@ class FrayController(Protocol):
     async def register_worker(self, request: fray__pb2.WorkerInfo, ctx: RequestContext) -> fray__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def get_next_task(self, request: fray__pb2.GetTaskRequest, ctx: RequestContext) -> fray__pb2.TaskSpec:
+    async def report_task_result(self, request: fray__pb2.TaskResultPayload, ctx: RequestContext) -> fray__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    async def report_task_complete(self, request: fray__pb2.TaskResult, ctx: RequestContext) -> fray__pb2.Empty:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    async def report_task_failed(self, request: fray__pb2.TaskResult, ctx: RequestContext) -> fray__pb2.Empty:
+    async def heartbeat(self, request: fray__pb2.WorkerInfo, ctx: RequestContext) -> fray__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     async def unregister_worker(self, request: fray__pb2.WorkerInfo, ctx: RequestContext) -> fray__pb2.Empty:
@@ -117,35 +114,25 @@ class FrayControllerASGIApplication(ConnectASGIApplication[FrayController]):
                     ),
                     function=svc.register_worker,
                 ),
-                "/fray.FrayController/GetNextTask": Endpoint.unary(
+                "/fray.FrayController/ReportTaskResult": Endpoint.unary(
                     method=MethodInfo(
-                        name="GetNextTask",
+                        name="ReportTaskResult",
                         service_name="fray.FrayController",
-                        input=fray__pb2.GetTaskRequest,
-                        output=fray__pb2.TaskSpec,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=svc.get_next_task,
-                ),
-                "/fray.FrayController/ReportTaskComplete": Endpoint.unary(
-                    method=MethodInfo(
-                        name="ReportTaskComplete",
-                        service_name="fray.FrayController",
-                        input=fray__pb2.TaskResult,
+                        input=fray__pb2.TaskResultPayload,
                         output=fray__pb2.Empty,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.report_task_complete,
+                    function=svc.report_task_result,
                 ),
-                "/fray.FrayController/ReportTaskFailed": Endpoint.unary(
+                "/fray.FrayController/Heartbeat": Endpoint.unary(
                     method=MethodInfo(
-                        name="ReportTaskFailed",
+                        name="Heartbeat",
                         service_name="fray.FrayController",
-                        input=fray__pb2.TaskResult,
+                        input=fray__pb2.WorkerInfo,
                         output=fray__pb2.Empty,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=svc.report_task_failed,
+                    function=svc.heartbeat,
                 ),
                 "/fray.FrayController/UnregisterWorker": Endpoint.unary(
                     method=MethodInfo(
@@ -289,29 +276,9 @@ class FrayControllerClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def get_next_task(
+    async def report_task_result(
         self,
-        request: fray__pb2.GetTaskRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> fray__pb2.TaskSpec:
-        return await self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetNextTask",
-                service_name="fray.FrayController",
-                input=fray__pb2.GetTaskRequest,
-                output=fray__pb2.TaskSpec,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    async def report_task_complete(
-        self,
-        request: fray__pb2.TaskResult,
+        request: fray__pb2.TaskResultPayload,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
@@ -319,9 +286,9 @@ class FrayControllerClient(ConnectClient):
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="ReportTaskComplete",
+                name="ReportTaskResult",
                 service_name="fray.FrayController",
-                input=fray__pb2.TaskResult,
+                input=fray__pb2.TaskResultPayload,
                 output=fray__pb2.Empty,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
@@ -329,9 +296,9 @@ class FrayControllerClient(ConnectClient):
             timeout_ms=timeout_ms,
         )
 
-    async def report_task_failed(
+    async def heartbeat(
         self,
-        request: fray__pb2.TaskResult,
+        request: fray__pb2.WorkerInfo,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
@@ -339,9 +306,9 @@ class FrayControllerClient(ConnectClient):
         return await self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="ReportTaskFailed",
+                name="Heartbeat",
                 service_name="fray.FrayController",
-                input=fray__pb2.TaskResult,
+                input=fray__pb2.WorkerInfo,
                 output=fray__pb2.Empty,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
@@ -457,6 +424,12 @@ class FrayWorker(Protocol):
     async def list_tasks(self, request: fray__pb2.Empty, ctx: RequestContext) -> fray__pb2.WorkerStatus:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def assign_task(self, request: fray__pb2.TaskAssignment, ctx: RequestContext) -> fray__pb2.Empty:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def probe_task(self, request: fray__pb2.TaskHandle, ctx: RequestContext) -> fray__pb2.WorkerTask:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def instantiate_actor(self, request: fray__pb2.ActorSpec, ctx: RequestContext) -> fray__pb2.ActorHandle:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -500,6 +473,26 @@ class FrayWorkerASGIApplication(ConnectASGIApplication[FrayWorker]):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_tasks,
+                ),
+                "/fray.FrayWorker/AssignTask": Endpoint.unary(
+                    method=MethodInfo(
+                        name="AssignTask",
+                        service_name="fray.FrayWorker",
+                        input=fray__pb2.TaskAssignment,
+                        output=fray__pb2.Empty,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.assign_task,
+                ),
+                "/fray.FrayWorker/ProbeTask": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ProbeTask",
+                        service_name="fray.FrayWorker",
+                        input=fray__pb2.TaskHandle,
+                        output=fray__pb2.WorkerTask,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.probe_task,
                 ),
                 "/fray.FrayWorker/InstantiateActor": Endpoint.unary(
                     method=MethodInfo(
@@ -587,6 +580,46 @@ class FrayWorkerClient(ConnectClient):
                 service_name="fray.FrayWorker",
                 input=fray__pb2.Empty,
                 output=fray__pb2.WorkerStatus,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def assign_task(
+        self,
+        request: fray__pb2.TaskAssignment,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.Empty:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="AssignTask",
+                service_name="fray.FrayWorker",
+                input=fray__pb2.TaskAssignment,
+                output=fray__pb2.Empty,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def probe_task(
+        self,
+        request: fray__pb2.TaskHandle,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.WorkerTask:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ProbeTask",
+                service_name="fray.FrayWorker",
+                input=fray__pb2.TaskHandle,
+                output=fray__pb2.WorkerTask,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -687,13 +720,10 @@ class FrayControllerSync(Protocol):
     def register_worker(self, request: fray__pb2.WorkerInfo, ctx: RequestContext) -> fray__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    def get_next_task(self, request: fray__pb2.GetTaskRequest, ctx: RequestContext) -> fray__pb2.TaskSpec:
+    def report_task_result(self, request: fray__pb2.TaskResultPayload, ctx: RequestContext) -> fray__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
-    def report_task_complete(self, request: fray__pb2.TaskResult, ctx: RequestContext) -> fray__pb2.Empty:
-        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
-
-    def report_task_failed(self, request: fray__pb2.TaskResult, ctx: RequestContext) -> fray__pb2.Empty:
+    def heartbeat(self, request: fray__pb2.WorkerInfo, ctx: RequestContext) -> fray__pb2.Empty:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
     def unregister_worker(self, request: fray__pb2.WorkerInfo, ctx: RequestContext) -> fray__pb2.Empty:
@@ -761,35 +791,25 @@ class FrayControllerWSGIApplication(ConnectWSGIApplication):
                     ),
                     function=service.register_worker,
                 ),
-                "/fray.FrayController/GetNextTask": EndpointSync.unary(
+                "/fray.FrayController/ReportTaskResult": EndpointSync.unary(
                     method=MethodInfo(
-                        name="GetNextTask",
+                        name="ReportTaskResult",
                         service_name="fray.FrayController",
-                        input=fray__pb2.GetTaskRequest,
-                        output=fray__pb2.TaskSpec,
-                        idempotency_level=IdempotencyLevel.UNKNOWN,
-                    ),
-                    function=service.get_next_task,
-                ),
-                "/fray.FrayController/ReportTaskComplete": EndpointSync.unary(
-                    method=MethodInfo(
-                        name="ReportTaskComplete",
-                        service_name="fray.FrayController",
-                        input=fray__pb2.TaskResult,
+                        input=fray__pb2.TaskResultPayload,
                         output=fray__pb2.Empty,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.report_task_complete,
+                    function=service.report_task_result,
                 ),
-                "/fray.FrayController/ReportTaskFailed": EndpointSync.unary(
+                "/fray.FrayController/Heartbeat": EndpointSync.unary(
                     method=MethodInfo(
-                        name="ReportTaskFailed",
+                        name="Heartbeat",
                         service_name="fray.FrayController",
-                        input=fray__pb2.TaskResult,
+                        input=fray__pb2.WorkerInfo,
                         output=fray__pb2.Empty,
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
-                    function=service.report_task_failed,
+                    function=service.heartbeat,
                 ),
                 "/fray.FrayController/UnregisterWorker": EndpointSync.unary(
                     method=MethodInfo(
@@ -933,29 +953,9 @@ class FrayControllerClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
-    def get_next_task(
+    def report_task_result(
         self,
-        request: fray__pb2.GetTaskRequest,
-        *,
-        headers: Headers | Mapping[str, str] | None = None,
-        timeout_ms: int | None = None,
-    ) -> fray__pb2.TaskSpec:
-        return self.execute_unary(
-            request=request,
-            method=MethodInfo(
-                name="GetNextTask",
-                service_name="fray.FrayController",
-                input=fray__pb2.GetTaskRequest,
-                output=fray__pb2.TaskSpec,
-                idempotency_level=IdempotencyLevel.UNKNOWN,
-            ),
-            headers=headers,
-            timeout_ms=timeout_ms,
-        )
-
-    def report_task_complete(
-        self,
-        request: fray__pb2.TaskResult,
+        request: fray__pb2.TaskResultPayload,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
@@ -963,9 +963,9 @@ class FrayControllerClientSync(ConnectClientSync):
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="ReportTaskComplete",
+                name="ReportTaskResult",
                 service_name="fray.FrayController",
-                input=fray__pb2.TaskResult,
+                input=fray__pb2.TaskResultPayload,
                 output=fray__pb2.Empty,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
@@ -973,9 +973,9 @@ class FrayControllerClientSync(ConnectClientSync):
             timeout_ms=timeout_ms,
         )
 
-    def report_task_failed(
+    def heartbeat(
         self,
-        request: fray__pb2.TaskResult,
+        request: fray__pb2.WorkerInfo,
         *,
         headers: Headers | Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
@@ -983,9 +983,9 @@ class FrayControllerClientSync(ConnectClientSync):
         return self.execute_unary(
             request=request,
             method=MethodInfo(
-                name="ReportTaskFailed",
+                name="Heartbeat",
                 service_name="fray.FrayController",
-                input=fray__pb2.TaskResult,
+                input=fray__pb2.WorkerInfo,
                 output=fray__pb2.Empty,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
@@ -1101,6 +1101,12 @@ class FrayWorkerSync(Protocol):
     def list_tasks(self, request: fray__pb2.Empty, ctx: RequestContext) -> fray__pb2.WorkerStatus:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    def assign_task(self, request: fray__pb2.TaskAssignment, ctx: RequestContext) -> fray__pb2.Empty:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    def probe_task(self, request: fray__pb2.TaskHandle, ctx: RequestContext) -> fray__pb2.WorkerTask:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     def instantiate_actor(self, request: fray__pb2.ActorSpec, ctx: RequestContext) -> fray__pb2.ActorHandle:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -1139,6 +1145,26 @@ class FrayWorkerWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_tasks,
+                ),
+                "/fray.FrayWorker/AssignTask": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="AssignTask",
+                        service_name="fray.FrayWorker",
+                        input=fray__pb2.TaskAssignment,
+                        output=fray__pb2.Empty,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.assign_task,
+                ),
+                "/fray.FrayWorker/ProbeTask": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ProbeTask",
+                        service_name="fray.FrayWorker",
+                        input=fray__pb2.TaskHandle,
+                        output=fray__pb2.WorkerTask,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.probe_task,
                 ),
                 "/fray.FrayWorker/InstantiateActor": EndpointSync.unary(
                     method=MethodInfo(
@@ -1226,6 +1252,46 @@ class FrayWorkerClientSync(ConnectClientSync):
                 service_name="fray.FrayWorker",
                 input=fray__pb2.Empty,
                 output=fray__pb2.WorkerStatus,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def assign_task(
+        self,
+        request: fray__pb2.TaskAssignment,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.Empty:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="AssignTask",
+                service_name="fray.FrayWorker",
+                input=fray__pb2.TaskAssignment,
+                output=fray__pb2.Empty,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def probe_task(
+        self,
+        request: fray__pb2.TaskHandle,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> fray__pb2.WorkerTask:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ProbeTask",
+                service_name="fray.FrayWorker",
+                input=fray__pb2.TaskHandle,
+                output=fray__pb2.WorkerTask,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,

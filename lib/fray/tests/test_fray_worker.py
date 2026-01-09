@@ -31,8 +31,10 @@ def worker_server():
     """Start a test worker server."""
     import threading
     import time
+    from unittest.mock import Mock
 
-    servicer = FrayWorkerServicer(worker_id="test-worker-1")
+    controller_client_mock = Mock()
+    servicer = FrayWorkerServicer(worker_id="test-worker-1", controller_client=controller_client_mock)
     app = FrayWorkerASGIApplication(servicer)
     config = Config(app=app, host="127.0.0.1", port=0, log_level="error")
     server = Server(config=config)

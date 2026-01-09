@@ -81,9 +81,13 @@ class _FrayFuture:
         self._result = None
         self._done = False
         self._error: str | None = None
+        self._exception: Exception | None = None
 
     def result(self, timeout: float | None = None) -> Any:
         """Get task result, polling until completion."""
+        if self._exception:
+            raise self._exception
+
         if not self._done:
             handle = fray_pb2.TaskHandle(task_id=self._task_id)  # type: ignore
             start_time = time.time()
@@ -97,15 +101,8 @@ class _FrayFuture:
                 elif status_handle.status == fray_pb2.TASK_STATUS_FAILED:  # type: ignore
                     # Fetch the full task result to get serialized exception
                     task_result = self._client.get_task_result(handle)
-
-                    # If we have a serialized error, deserialize and re-raise the original exception
-                    if task_result.serialized_error:
-                        original_exception = cloudpickle.loads(task_result.serialized_error)
-                        raise original_exception
-
-                    # Fallback to RuntimeError if no serialized error (backward compatibility)
-                    self._error = status_handle.error
-                    raise RuntimeError(f"Task {self._task_id} failed: {self._error}")
+                    original_exception = cloudpickle.loads(task_result.serialized_error)
+                    raise original_exception
 
                 if timeout is not None and (time.time() - start_time) > timeout:
                     raise TimeoutError(f"Task {self._task_id} timed out after {timeout}s")
@@ -158,6 +155,8 @@ class _FrayActorMethod:
         Implements exponential backoff retry for UNAVAILABLE errors (e.g., during actor restart).
         Starting delay is 10ms, doubling each retry, capped at 1s, with default max 10 retries.
         """
+        from fray.job.rpc.proto.fray_connect import FrayWorkerClientSync
+
         payload = {"method": self._method_name, "args": args, "kwargs": kwargs}
         serialized_call = cloudpickle.dumps(payload)
 
@@ -168,8 +167,35 @@ class _FrayActorMethod:
 
         for attempt in range(self._max_retries):
             try:
-                task_handle = self._client.call_actor(call)
-                return _FrayFuture(task_handle.task_id, self._client)
+                # Resolve actor worker location
+                actor_handle_req = fray_pb2.ActorHandle(actor_id=self._actor_id)  # type: ignore
+                actor_handle = self._client.get_actor_status(actor_handle_req)
+
+                # Call worker directly
+                # TODO: Cache worker stubs to avoid repeated connection overhead
+                worker_address = actor_handle.worker_id
+                if not worker_address.startswith("http"):
+                    worker_address = f"http://{worker_address}"
+                worker_stub = FrayWorkerClientSync(worker_address)
+
+                # Execute method and get synchronous result
+                task_result = worker_stub.execute_actor_method(call)
+
+                # Wrap result in a completed future
+                task_id = f"actor_{self._actor_id}_{self._method_name}_{time.time()}"
+                future = _FrayFuture(task_id, self._client)
+                future._done = True
+
+                # Check if the task failed
+                if task_result.serialized_error:
+                    original_exception = cloudpickle.loads(task_result.serialized_error)
+                    future._error = str(original_exception)
+                    # Store the error so result() will raise it
+                    future._exception = original_exception
+                else:
+                    future._result = cloudpickle.loads(task_result.serialized_result)
+
+                return future
             except ConnectError as e:
                 if e.code == Code.UNAVAILABLE and attempt < self._max_retries - 1:
                     # Exponential backoff: start at base_delay, double each time, cap at max_delay
@@ -223,9 +249,9 @@ class FrayContext:
             controller_address = f"http://{controller_address}"
         self._client = FrayControllerClientSync(controller_address)
 
-    def put(self, obj: Any) -> Any:
-        """Storage-first model - return object unchanged."""
-        return obj
+    def put(self, _obj: Any) -> Any:
+        """Not supported - pass objects directly instead."""
+        raise NotImplementedError("FrayContext does not support .put() - pass objects directly")
 
     def get(self, ref: Any) -> Any:
         """Get result, unwrapping _FrayFuture if needed."""

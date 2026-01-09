@@ -341,8 +341,10 @@ def test_worker_handles_controller_unavailable():
 def test_worker_servicer_status_methods():
     """Test FrayWorkerServicer status generation methods directly."""
     from fray.job.rpc.worker import FrayWorkerServicer
+    from unittest.mock import Mock
 
-    servicer = FrayWorkerServicer("test-worker")
+    controller_client_mock = Mock()
+    servicer = FrayWorkerServicer("test-worker", controller_client_mock)
 
     # Test _get_status with no tasks
     status = servicer._get_status()
@@ -373,8 +375,10 @@ def test_worker_servicer_status_methods():
 async def test_worker_servicer_health_check_method():
     """Test FrayWorkerServicer health_check method."""
     from fray.job.rpc.worker import FrayWorkerServicer
+    from unittest.mock import Mock
 
-    servicer = FrayWorkerServicer("test-worker")
+    controller_client_mock = Mock()
+    servicer = FrayWorkerServicer("test-worker", controller_client_mock)
 
     # Mock RequestContext
     class MockContext:
@@ -389,8 +393,10 @@ async def test_worker_servicer_health_check_method():
 async def test_worker_servicer_list_tasks_method():
     """Test FrayWorkerServicer list_tasks method."""
     from fray.job.rpc.worker import FrayWorkerServicer
+    from unittest.mock import Mock
 
-    servicer = FrayWorkerServicer("test-worker")
+    controller_client_mock = Mock()
+    servicer = FrayWorkerServicer("test-worker", controller_client_mock)
     servicer.add_task("task-1", fray_pb2.TASK_STATUS_RUNNING)
 
     # Mock RequestContext
@@ -400,3 +406,125 @@ async def test_worker_servicer_list_tasks_method():
     status = await servicer.list_tasks(fray_pb2.Empty(), MockContext())
     assert status.worker_id == "test-worker"
     assert len(status.current_tasks) == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_servicer_assign_task():
+    """Test worker servicer receives and executes pushed task."""
+    from fray.job.rpc.worker import FrayWorkerServicer
+    from unittest.mock import Mock
+
+    controller_client_mock = Mock()
+    servicer = FrayWorkerServicer("test-worker", controller_client_mock, max_workers=2)
+
+    # Create a task
+    task_data = {"fn": lambda x: x * 2, "args": (5,)}
+    serialized_fn = cloudpickle.dumps(task_data)
+
+    assignment = fray_pb2.TaskAssignment(
+        task_id="test-task-1",
+        serialized_fn=serialized_fn,
+    )
+
+    # Mock RequestContext
+    class MockContext:
+        pass
+
+    # Assign the task
+    await servicer.assign_task(assignment, MockContext())
+
+    # Give the executor time to process
+    import asyncio
+
+    await asyncio.sleep(0.2)
+
+    # Verify the controller was called with the result
+    assert controller_client_mock.report_task_result.called
+    result_call = controller_client_mock.report_task_result.call_args[0][0]
+    assert result_call.task_id == "test-task-1"
+    assert result_call.HasField("serialized_value")
+
+    # Deserialize and check result
+    result_value = cloudpickle.loads(result_call.serialized_value)
+    assert result_value == 10
+
+
+@pytest.mark.asyncio
+async def test_worker_servicer_assign_task_failure():
+    """Test worker servicer reports task failure correctly."""
+    from fray.job.rpc.worker import FrayWorkerServicer
+    from unittest.mock import Mock
+
+    controller_client_mock = Mock()
+    servicer = FrayWorkerServicer("test-worker", controller_client_mock, max_workers=2)
+
+    # Create a failing task
+    def failing_fn():
+        raise ValueError("Test error")
+
+    task_data = {"fn": failing_fn, "args": ()}
+    serialized_fn = cloudpickle.dumps(task_data)
+
+    assignment = fray_pb2.TaskAssignment(
+        task_id="test-task-fail",
+        serialized_fn=serialized_fn,
+    )
+
+    # Mock RequestContext
+    class MockContext:
+        pass
+
+    # Assign the task
+    await servicer.assign_task(assignment, MockContext())
+
+    # Give the executor time to process
+    import asyncio
+
+    await asyncio.sleep(0.2)
+
+    # Verify the controller was called with error
+    assert controller_client_mock.report_task_result.called
+    result_call = controller_client_mock.report_task_result.call_args[0][0]
+    assert result_call.task_id == "test-task-fail"
+    assert result_call.HasField("serialized_error")
+
+    # Deserialize and check error
+    error = cloudpickle.loads(result_call.serialized_error)
+    assert isinstance(error, ValueError)
+    assert "Test error" in str(error)
+
+
+@pytest.mark.asyncio
+async def test_worker_servicer_probe_task():
+    """Test worker servicer probe_task RPC."""
+    from fray.job.rpc.worker import FrayWorkerServicer
+    from unittest.mock import Mock
+
+    controller_client_mock = Mock()
+    servicer = FrayWorkerServicer("test-worker", controller_client_mock)
+
+    # Add a task
+    servicer.add_task("task-probe", fray_pb2.TASK_STATUS_RUNNING)
+
+    # Mock RequestContext
+    class MockContext:
+        pass
+
+    # Probe the task
+    handle = fray_pb2.TaskHandle(task_id="task-probe")
+    worker_task = await servicer.probe_task(handle, MockContext())
+
+    assert worker_task.task_id == "task-probe"
+    assert worker_task.status == fray_pb2.TASK_STATUS_RUNNING
+    assert worker_task.started_at_ms > 0
+
+    # Try probing non-existent task
+    from connectrpc.errors import ConnectError
+
+    handle_missing = fray_pb2.TaskHandle(task_id="nonexistent")
+
+    try:
+        await servicer.probe_task(handle_missing, MockContext())
+        raise AssertionError("Should have raised ConnectError")
+    except ConnectError as e:
+        assert "not found" in str(e).lower()

@@ -61,10 +61,6 @@ class JobContext(Protocol):
     execution logic while using different execution strategies.
     """
 
-    def put(self, obj: Any) -> Any:
-        """Store an object and return a reference to it."""
-        ...
-
     def get(self, ref: Any) -> Any:
         """Retrieve an object from its reference."""
         ...

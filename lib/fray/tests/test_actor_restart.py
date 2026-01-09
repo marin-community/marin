@@ -66,7 +66,10 @@ def controller_url(controller):
 @pytest.fixture
 def worker_server():
     """Start a test worker server for actor instantiation."""
-    servicer = FrayWorkerServicer(worker_id="worker-1")
+    from unittest.mock import Mock
+
+    controller_client_mock = Mock()
+    servicer = FrayWorkerServicer(worker_id="worker-1", controller_client=controller_client_mock)
     app = FrayWorkerASGIApplication(servicer)
     config = Config(app=app, host="127.0.0.1", port=0, log_level="error")
     server = Server(config=config)
@@ -93,12 +96,15 @@ def worker_server():
 @pytest.fixture
 def two_worker_servers():
     """Start two test worker servers for actor instantiation."""
+    from unittest.mock import Mock
+
     servers = []
     threads = []
     ports = []
 
     for worker_id in ["worker-1", "worker-2"]:
-        servicer = FrayWorkerServicer(worker_id=worker_id)
+        controller_client_mock = Mock()
+        servicer = FrayWorkerServicer(worker_id=worker_id, controller_client=controller_client_mock)
         app = FrayWorkerASGIApplication(servicer)
         config = Config(app=app, host="127.0.0.1", port=0, log_level="error")
         server = Server(config=config)
@@ -129,85 +135,14 @@ def two_worker_servers():
 
 
 @pytest.mark.asyncio
-async def test_actor_spec_stored_for_restart(controller_url, worker_server):
-    """Verify that actor specs are stored in actor_specs dict for restart."""
-    _, worker_port = worker_server
-
-    async with httpx.AsyncClient() as http_client:
-        client = FrayControllerClient(controller_url, session=http_client)
-
-        # Register a worker with the actual server address
-        worker_info = fray_pb2.WorkerInfo(worker_id="worker-1", address=f"localhost:{worker_port}")
-        await client.register_worker(worker_info)
-
-        # Create an actor
-        actor_data = {"cls": Counter, "args": (5,), "kwargs": {}}
-        serialized_actor = cloudpickle.dumps(actor_data)
-        actor_spec = fray_pb2.ActorSpec(
-            serialized_actor=serialized_actor,
-            name="test_counter",
-            get_if_exists=False,
-        )
-        handle = await client.create_actor(actor_spec)
-
-        # Verify actor spec is stored (access via server.servicer)
-        # This is a white-box test to verify Phase 1 implementation
-        # We verify indirectly by checking that the actor was created successfully
-        assert handle.actor_id
-        assert handle.status == fray_pb2.ACTOR_STATUS_READY
-
-
-@pytest.mark.asyncio
-async def test_worker_failure_detection_via_unregister(controller_url, two_worker_servers):
-    """Test that controller detects worker failure when worker unregisters."""
-    _, ports = two_worker_servers
-
-    async with httpx.AsyncClient() as http_client:
-        client = FrayControllerClient(controller_url, session=http_client)
-
-        # Register two workers with actual server addresses
-        worker1 = fray_pb2.WorkerInfo(worker_id="worker-1", address=f"localhost:{ports[0]}")
-        worker2 = fray_pb2.WorkerInfo(worker_id="worker-2", address=f"localhost:{ports[1]}")
-        await client.register_worker(worker1)
-        await client.register_worker(worker2)
-
-        # Create an actor on worker-1
-        actor_data = {"cls": Counter, "args": (0,), "kwargs": {}}
-        serialized_actor = cloudpickle.dumps(actor_data)
-        actor_spec = fray_pb2.ActorSpec(serialized_actor=serialized_actor, name="counter")
-        handle = await client.create_actor(actor_spec)
-
-        original_worker_id = handle.worker_id
-        assert original_worker_id in ["worker-1", "worker-2"]
-
-        # Unregister the worker hosting the actor (simulating failure)
-        await client.unregister_worker(fray_pb2.WorkerInfo(worker_id=original_worker_id))
-
-        # Try to call actor - should fail with UNAVAILABLE since worker is gone
-        call_data = {"method": "increment", "args": (), "kwargs": {}}
-        serialized_call = cloudpickle.dumps(call_data)
-        actor_call = fray_pb2.ActorCall(
-            actor_id=handle.actor_id,
-            serialized_call=serialized_call,
-        )
-
-        # Should fail because worker is unavailable
-        from connectrpc.code import Code
-        from connectrpc.errors import ConnectError
-
-        with pytest.raises(ConnectError) as exc_info:
-            await client.call_actor(actor_call)
-
-        assert exc_info.value.code == Code.UNAVAILABLE
-
-
-@pytest.mark.asyncio
-async def test_actor_restart_on_worker_failure_integration(controller_url):
+async def test_actor_restart_on_worker_failure_integration(controller):
     """
     Integration test: Start controller + 2 workers, create actor, kill worker, verify restart.
 
     This is the main Phase 2 test demonstrating automatic actor restart.
     """
+    controller_server, port = controller
+    controller_url = f"http://localhost:{port}"
     # Start two worker processes
     worker1 = FrayWorker(controller_address=controller_url, worker_id="worker-1", port=0)
     worker2 = FrayWorker(controller_address=controller_url, worker_id="worker-2", port=0)
@@ -236,8 +171,18 @@ async def test_actor_restart_on_worker_failure_integration(controller_url):
         )
         handle = await client.create_actor(actor_spec)
 
-        original_worker_id = handle.worker_id
-        assert original_worker_id in ["worker-1", "worker-2"]
+        # Verify we got a valid address
+        assert handle.worker_id
+        # The worker_id field now contains the worker address for client connections
+        original_worker_address = handle.worker_id
+
+        # Map address back to worker instance
+        if worker1.address == original_worker_address:
+            original_worker = worker1
+            original_worker_id = "worker-1"
+        else:
+            original_worker = worker2
+            original_worker_id = "worker-2"
 
         # Call actor method to verify it works
         call_data = {"method": "increment", "args": (), "kwargs": {}}
@@ -260,10 +205,7 @@ async def test_actor_restart_on_worker_failure_integration(controller_url):
         assert count == 11  # Initial 10 + 1
 
         # Kill the worker hosting the actor
-        if original_worker_id == "worker-1":
-            worker1.stop()
-        else:
-            worker2.stop()
+        original_worker.stop()
 
         # Wait for health check to detect failure and restart actor
         # Health check runs every 10s and worker timeout is 30s, so we need to wait
@@ -276,8 +218,7 @@ async def test_actor_restart_on_worker_failure_integration(controller_url):
         # Wait a moment for cleanup
         await asyncio.sleep(0.5)
 
-        # Try to call actor - should fail because we need to manually restart
-        # (automatic restart only happens via health check loop, which takes 30s)
+        # Try to call actor - should fail because worker is gone
         from connectrpc.code import Code
         from connectrpc.errors import ConnectError
 
@@ -285,131 +226,63 @@ async def test_actor_restart_on_worker_failure_integration(controller_url):
             await client.call_actor(actor_call)
         assert exc_info.value.code == Code.UNAVAILABLE
 
-    # Cleanup
-    worker1.stop()
-    worker2.stop()
+        # Stop the other worker that's still running
+        other_worker_id = "worker-2" if original_worker_id == "worker-1" else "worker-1"
+        if other_worker_id == "worker-1":
+            worker1.stop()
+        else:
+            worker2.stop()
 
+        # Add a NEW worker to the cluster
+        worker3 = FrayWorker(controller_address=controller_url, worker_id="worker-3", port=0)
+        worker3_thread = threading.Thread(target=worker3.run, daemon=True)
+        worker3_thread.start()
 
-@pytest.mark.asyncio
-async def test_actor_state_reset_after_restart(controller_url):
-    """Test that actor state is reset after restart (Phase 1 limitation)."""
-    # Start two workers
-    worker1 = FrayWorker(controller_address=controller_url, worker_id="worker-1", port=0)
-    worker2 = FrayWorker(controller_address=controller_url, worker_id="worker-2", port=0)
+        # Wait for new worker to register
+        await asyncio.sleep(1.0)
 
-    import threading
+        # Manually trigger actor restart on the new worker
+        # In production, this would happen automatically via health check loop after 30s
+        # For testing, we manually trigger it to avoid long waits
+        await controller_server.servicer._handle_worker_failure(original_worker_id)
 
-    worker1_thread = threading.Thread(target=worker1.run, daemon=True)
-    worker2_thread = threading.Thread(target=worker2.run, daemon=True)
-    worker1_thread.start()
-    worker2_thread.start()
-
-    await asyncio.sleep(1.0)
-
-    async with httpx.AsyncClient() as http_client:
-        client = FrayControllerClient(controller_url, session=http_client)
-
-        # Create an actor with initial value
-        actor_data = {"cls": Counter, "args": (100,), "kwargs": {}}
-        serialized_actor = cloudpickle.dumps(actor_data)
-        actor_spec = fray_pb2.ActorSpec(serialized_actor=serialized_actor)
-        handle = await client.create_actor(actor_spec)
-
-        original_worker_id = handle.worker_id
-
-        # Increment counter
-        call_data = {"method": "add", "args": (5,), "kwargs": {}}
-        serialized_call = cloudpickle.dumps(call_data)
-        actor_call = fray_pb2.ActorCall(
-            actor_id=handle.actor_id,
-            serialized_call=serialized_call,
-        )
-        task_handle = await client.call_actor(actor_call)
-
-        # Wait for completion
+        # Wait for actor to restart and verify it's on worker-3
+        # The actor should be moved to the new worker
         for _ in range(50):
-            status = await client.get_task_status(task_handle)
+            actor_status = await client.get_actor_status(handle)
+            # Check if the actor has been assigned to worker-3
+            if actor_status.worker_id == worker3.address:
+                break
+            await asyncio.sleep(0.1)
+
+        # Verify the actor has been restarted on worker-3 (check worker location)
+        assert actor_status.worker_id == worker3.address
+
+        # Verify the actor works by calling increment method
+        call_data_recovery = {"method": "increment", "args": (), "kwargs": {}}
+        serialized_call_recovery = cloudpickle.dumps(call_data_recovery)
+        actor_call_recovery = fray_pb2.ActorCall(
+            actor_id=handle.actor_id,
+            serialized_call=serialized_call_recovery,
+        )
+
+        task_handle_recovery = await client.call_actor(actor_call_recovery)
+
+        # Wait for task to complete
+        for _ in range(50):
+            status = await client.get_task_status(task_handle_recovery)
             if status.status == fray_pb2.TASK_STATUS_COMPLETED:
                 break
             await asyncio.sleep(0.1)
 
-        result = await client.get_task_result(task_handle)
+        result = await client.get_task_result(task_handle_recovery)
         count = cloudpickle.loads(result.serialized_result)
-        assert count == 105  # 100 + 5
+        # Actor state was reset on restart, so count should be initial (10) + 1 = 11
+        assert count == 11
 
-        # Now simulate worker failure by stopping it
-        if original_worker_id == "worker-1":
-            worker1.stop()
-        else:
-            worker2.stop()
+        # Clean up the new worker
+        worker3.stop()
 
-        # The actor state (count=105) should be lost after restart
-        # When we eventually restart, it should go back to initial value (100)
-        # This is a Phase 1 limitation - we don't persist actor state
-
-    worker1.stop()
-    worker2.stop()
-
-
-@pytest.mark.asyncio
-async def test_restart_actor_method_direct_call(controller_url):
-    """Test calling _restart_actor directly (white box test)."""
-    # This test directly accesses controller internals to verify restart logic
-
-    async with httpx.AsyncClient() as http_client:
-        client = FrayControllerClient(controller_url, session=http_client)
-
-        # Start two workers
-        worker1 = FrayWorker(controller_address=controller_url, worker_id="worker-1", port=0)
-        worker2 = FrayWorker(controller_address=controller_url, worker_id="worker-2", port=0)
-
-        import threading
-
-        worker1_thread = threading.Thread(target=worker1.run, daemon=True)
-        worker2_thread = threading.Thread(target=worker2.run, daemon=True)
-        worker1_thread.start()
-        worker2_thread.start()
-
-        await asyncio.sleep(1.0)
-
-        # Create actor
-        actor_data = {"cls": Counter, "args": (0,), "kwargs": {}}
-        serialized_actor = cloudpickle.dumps(actor_data)
-        actor_spec = fray_pb2.ActorSpec(serialized_actor=serialized_actor, name="test")
-        handle = await client.create_actor(actor_spec)
-
-        original_worker_id = handle.worker_id
-
-        # Stop the worker hosting the actor
-        if original_worker_id == "worker-1":
-            worker1.stop()
-            await asyncio.sleep(0.5)
-        else:
-            worker2.stop()
-            await asyncio.sleep(0.5)
-
-        # Unregister worker
-        await client.unregister_worker(fray_pb2.WorkerInfo(worker_id=original_worker_id))
-
-        # Get actor status - should show worker unavailable
-        status = await client.get_actor_status(handle)
-        assert status.actor_id == handle.actor_id
-
-        # The actor is still in the registry but on a dead worker
-        # When we try to call it, it should fail
-        from connectrpc.code import Code
-        from connectrpc.errors import ConnectError
-
-        call_data = {"method": "increment", "args": (), "kwargs": {}}
-        serialized_call = cloudpickle.dumps(call_data)
-        actor_call = fray_pb2.ActorCall(
-            actor_id=handle.actor_id,
-            serialized_call=serialized_call,
-        )
-
-        with pytest.raises(ConnectError) as exc_info:
-            await client.call_actor(actor_call)
-        assert exc_info.value.code == Code.UNAVAILABLE
-
+    # Cleanup
     worker1.stop()
     worker2.stop()

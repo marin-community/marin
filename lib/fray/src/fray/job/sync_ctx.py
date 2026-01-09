@@ -63,9 +63,9 @@ class SyncContext:
         self._actors: dict[str, Any] = {}
         self._actor_locks: dict[str, threading.Lock] = {}
 
-    def put(self, obj: Any) -> Any:
-        """Identity operation - no serialization needed."""
-        return obj
+    def put(self, _obj: Any) -> Any:
+        """Not supported."""
+        raise NotImplementedError("SyncContext does not support .put()")
 
     def get(self, ref: Any) -> Any:
         """Get result, unwrapping _SyncFuture if needed."""

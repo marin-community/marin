@@ -100,12 +100,20 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from fray.job.rpc.proto import fray_pb2
-from fray.job.rpc.proto.fray_connect import FrayController, FrayControllerASGIApplication, FrayWorkerClient
+from fray.job.rpc.proto.fray_connect import (
+    FrayController,
+    FrayControllerASGIApplication,
+    FrayWorkerClient,
+    FrayWorkerClientSync,
+)
 
 if TYPE_CHECKING:
     import uvicorn
 
 logger = logging.getLogger(__name__)
+
+ACTOR_INSTANTIATION_TIMEOUT_MS = 10_000  # 10 seconds default
+TASK_ASSIGNMENT_TIMEOUT_MS = 5_000  # 5 seconds default for pushing tasks to workers
 
 
 @dataclass
@@ -161,6 +169,13 @@ class FrayControllerServicer(FrayController):
         self._health_check_task: asyncio.Task | None = None
         self._running = False
 
+        # Worker stub management for pushing tasks
+        self._worker_stubs: dict[str, FrayWorkerClientSync] = {}
+        self._worker_stub_lock = threading.Lock()
+
+        # Task scheduler thread
+        self._scheduler_thread: threading.Thread | None = None
+
     def _create_worker_client(self, worker_id: str) -> FrayWorkerClient:
         """Create a new client stub for the specified worker (not cached)."""
         worker_info = self._workers[worker_id]
@@ -170,12 +185,134 @@ class FrayControllerServicer(FrayController):
             address = f"http://{address}"
         return FrayWorkerClient(address)
 
+    def _get_or_create_worker_stub(self, worker_id: str) -> FrayWorkerClientSync:
+        """Get or create a synchronous client stub for the specified worker."""
+        with self._worker_stub_lock:
+            if worker_id not in self._worker_stubs:
+                worker_info = self._workers[worker_id]
+                address = worker_info.address
+                # Add http:// prefix if missing
+                if not address.startswith("http"):
+                    address = f"http://{address}"
+                self._worker_stubs[worker_id] = FrayWorkerClientSync(address)
+            return self._worker_stubs[worker_id]
+
+    def _assign_task_to_worker(self, task_id: str, worker_id: str) -> None:
+        """
+        Push a task to a worker using the AssignTask RPC.
+
+        This method runs in the scheduler thread and handles errors by re-queueing
+        the task if assignment fails.
+        """
+        # Get task info outside the lock
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                logger.warning(f"Task {task_id} not found, skipping assignment")
+                return
+
+            # Mark task as running and assign to worker
+            task.status = fray_pb2.TASK_STATUS_RUNNING
+            task.worker_id = worker_id
+
+            # Prepare assignment request
+            assignment = fray_pb2.TaskAssignment(
+                task_id=task.task_id,
+                serialized_fn=task.serialized_fn,
+                resources=task.resources,
+                max_retries=task.max_retries,
+                actor_id=task.actor_id or "",
+            )
+
+        # Push to worker outside the lock
+        try:
+            stub = self._get_or_create_worker_stub(worker_id)
+            stub.assign_task(assignment, timeout_ms=TASK_ASSIGNMENT_TIMEOUT_MS)
+            logger.debug(f"Assigned task {task_id} to worker {worker_id}")
+        except Exception as e:
+            logger.error(f"Failed to assign task {task_id} to worker {worker_id}: {e}")
+            # Re-queue the task and mark as pending
+            with self._lock:
+                task = self._tasks.get(task_id)
+                if task is not None:
+                    task.status = fray_pb2.TASK_STATUS_PENDING
+                    task.worker_id = None
+                    self._pending_queue.append(task_id)
+
+    def _task_scheduler_loop(self) -> None:
+        """
+        Background thread that continuously assigns pending tasks to workers.
+
+        This thread pops tasks from the pending queue and pushes them to workers,
+        routing actor tasks to their hosting worker and regular tasks to the
+        least-loaded worker.
+        """
+        logger.info("Task scheduler loop started")
+        while self._running:
+            task_id = None
+            worker_id = None
+            should_wait = False
+
+            # Get next task from queue
+            with self._condition:
+                if self._pending_queue:
+                    task_id = self._pending_queue.popleft()
+                    task = self._tasks.get(task_id)
+
+                    if task is None:
+                        continue
+
+                    # Determine target worker
+                    if task.actor_id:
+                        # Actor task - route to hosting worker
+                        actor_info = self._actors.get(task.actor_id)
+                        if actor_info:
+                            worker_id = actor_info.worker_id
+                        else:
+                            # Actor not found - mark task as failed
+                            task.status = fray_pb2.TASK_STATUS_FAILED
+                            task.error = f"Actor {task.actor_id} not found"
+                            logger.error(f"Actor {task.actor_id} not found for task {task_id}")
+                            continue
+                    else:
+                        # Regular task - assign to least-loaded worker
+                        if not self._workers:
+                            # No workers available - re-queue and wait
+                            self._pending_queue.append(task_id)
+                            logger.debug("No workers available, waiting for worker registration")
+                            should_wait = True
+                            task_id = None  # Don't assign yet
+                        else:
+                            # Count tasks per worker
+                            worker_loads = {w_id: 0 for w_id in self._workers.keys()}
+                            for t in self._tasks.values():
+                                if t.status == fray_pb2.TASK_STATUS_RUNNING and t.worker_id:
+                                    worker_loads[t.worker_id] = worker_loads.get(t.worker_id, 0) + 1
+
+                            worker_id = min(worker_loads.keys(), key=lambda w: worker_loads[w])
+
+                # Wait for notification if no workers available
+                if should_wait:
+                    self._condition.wait(timeout=0.1)
+                    continue
+
+                # If no tasks, wait for new tasks or workers
+                if not task_id:
+                    self._condition.wait(timeout=0.01)
+                    continue
+
+            # Assign task outside the lock
+            if task_id and worker_id:
+                self._assign_task_to_worker(task_id, worker_id)
+
+        logger.info("Task scheduler loop stopped")
+
     async def submit_task(self, request: fray_pb2.TaskSpec, ctx: RequestContext) -> fray_pb2.TaskHandle:
         """
         Client submits a new task for execution.
 
-        Generates a unique task ID, stores the task as PENDING, adds it to the queue,
-        and notifies waiting workers.
+        Generates a unique task ID, stores the task as PENDING, and adds it to the queue.
+        The scheduler thread will push it to a worker.
         """
         task_id = str(uuid.uuid4())
 
@@ -190,7 +327,6 @@ class FrayControllerServicer(FrayController):
         with self._lock:
             self._tasks[task_id] = task
             self._pending_queue.append(task_id)
-            self._condition.notify_all()
 
         return fray_pb2.TaskHandle(
             task_id=task_id,
@@ -230,84 +366,41 @@ class FrayControllerServicer(FrayController):
         with self._lock:
             self._workers[request.worker_id] = request
             self._worker_last_seen[request.worker_id] = time.time()
+            # Notify scheduler that a new worker is available (helps with pending tasks)
+            self._condition.notify_all()
 
+        logger.info(f"Registered worker {request.worker_id} at {request.address}")
         return fray_pb2.Empty()
 
-    async def get_next_task(self, request: fray_pb2.GetTaskRequest, ctx: RequestContext) -> fray_pb2.TaskSpec:
+    async def report_task_result(self, request: fray_pb2.TaskResultPayload, ctx: RequestContext) -> fray_pb2.Empty:
         """
-        Worker requests the next pending task.
+        Worker reports task completion or failure using unified result payload.
 
-        Waits for up to 1 second for a task to become available. If a task is available,
-        pops it from the queue, marks it as RUNNING, assigns the worker, and returns it.
+        Uses the oneof field in TaskResultPayload to distinguish between success and error.
+        For errors, deserializes the exception to extract error message for backward compatibility.
         """
-        # Run the blocking wait in a thread pool to avoid blocking the async event loop
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, self._get_next_task_blocking, request)
-        return result
-
-    def _get_next_task_blocking(self, request: fray_pb2.GetTaskRequest) -> fray_pb2.TaskSpec:
-        """Helper method to handle blocking wait for next task."""
-        with self._condition:
-            # Update worker last seen timestamp
-            self._worker_last_seen[request.worker_id] = time.time()
-
-            # Wait for a pending task with 1s timeout to allow graceful shutdown
-            # For actor tasks, only return them to the worker hosting the actor
-            while True:
-                while not self._pending_queue:
-                    if not self._condition.wait(timeout=1.0):
-                        # Timeout - raise error to allow worker to retry
-                        raise ConnectError(Code.DEADLINE_EXCEEDED, "No tasks available")
-
-                # Find a task this worker can execute
-                for i, task_id in enumerate(self._pending_queue):
-                    task = self._tasks[task_id]
-
-                    # If this is an actor task, only the hosting worker can execute it
-                    if task.actor_id:
-                        actor_info = self._actors.get(task.actor_id)
-                        if actor_info and actor_info.worker_id != request.worker_id:
-                            # This actor task is for a different worker, skip it
-                            continue
-
-                    # Found a suitable task - remove from queue and assign
-                    del self._pending_queue[i]
-                    task.status = fray_pb2.TASK_STATUS_RUNNING
-                    task.worker_id = request.worker_id
-
-                    return fray_pb2.TaskSpec(
-                        task_id=task.task_id,
-                        serialized_fn=task.serialized_fn,
-                        resources=task.resources,
-                        max_retries=task.max_retries,
-                    )
-
-                # No suitable task found in queue - wait for more
-                if not self._condition.wait(timeout=1.0):
-                    raise ConnectError(Code.DEADLINE_EXCEEDED, "No tasks available")
-
-    async def report_task_complete(self, request: fray_pb2.TaskResult, ctx: RequestContext) -> fray_pb2.Empty:
-        """Worker reports successful task completion."""
         with self._lock:
             task = self._tasks.get(request.task_id)
             if task is None:
                 raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
 
-            task.status = fray_pb2.TASK_STATUS_COMPLETED
-            task.result = request.serialized_result
-
-        return fray_pb2.Empty()
-
-    async def report_task_failed(self, request: fray_pb2.TaskResult, ctx: RequestContext) -> fray_pb2.Empty:
-        """Worker reports task failure."""
-        with self._lock:
-            task = self._tasks.get(request.task_id)
-            if task is None:
-                raise ConnectError(Code.NOT_FOUND, f"Task {request.task_id} not found")
-
-            task.status = fray_pb2.TASK_STATUS_FAILED
-            task.error = request.error
-            task.serialized_error = request.serialized_error
+            # Check which field is set in the oneof
+            if request.HasField("serialized_value"):
+                task.status = fray_pb2.TASK_STATUS_COMPLETED
+                task.result = request.serialized_value
+            elif request.HasField("serialized_error"):
+                task.status = fray_pb2.TASK_STATUS_FAILED
+                task.serialized_error = request.serialized_error
+                # Deserialize error to extract message for backward compatibility
+                try:
+                    exc = cloudpickle.loads(request.serialized_error)
+                    task.error = f"{type(exc).__name__}: {exc!s}"
+                except Exception:
+                    task.error = "Failed to deserialize error"
+            else:
+                raise ConnectError(
+                    Code.INVALID_ARGUMENT, "TaskResultPayload must have either serialized_value or serialized_error"
+                )
 
         return fray_pb2.Empty()
 
@@ -332,9 +425,12 @@ class FrayControllerServicer(FrayController):
                     if request.get_if_exists:
                         actor_id = self._named_actors[request.name]
                         actor = self._actors[actor_id]
+                        # Get worker address for client to connect to
+                        worker_info = self._workers.get(actor.worker_id)
+                        worker_address = worker_info.address if worker_info else ""
                         return fray_pb2.ActorHandle(
                             actor_id=actor_id,
-                            worker_id=actor.worker_id,
+                            worker_id=worker_address,
                             name=request.name,
                             status=cast(fray_pb2.ActorStatus, actor.status),
                         )
@@ -344,23 +440,18 @@ class FrayControllerServicer(FrayController):
         # Generate actor ID
         actor_id = str(uuid.uuid4())
 
+        # Store spec for restart
         with self._lock:
-            # Select worker with fewest actors (least-loaded placement)
             if not self._workers:
                 raise ConnectError(Code.UNAVAILABLE, "No workers available")
 
-            worker_id = min(
-                self._workers.keys(), key=lambda w: sum(1 for a in self._actors.values() if a.worker_id == w)
-            )
-
-            # Store spec for restart
             self._actor_specs[actor_id] = request.serialized_actor
 
-            # Create ActorInfo
+            # Create ActorInfo in CREATING state
             current_time = time.time()
             actor_info = ActorInfo(
                 actor_id=actor_id,
-                worker_id=worker_id,
+                worker_id="",  # Will be set after successful placement
                 name=request.name or None,
                 status=fray_pb2.ACTOR_STATUS_CREATING,
                 created_at=current_time,
@@ -371,8 +462,7 @@ class FrayControllerServicer(FrayController):
             if request.name:
                 self._named_actors[request.name] = actor_id
 
-        # Instantiate on worker (async RPC to worker)
-        # Create a new client for each request (httpx async clients need proper lifecycle)
+        # Retry loop with exponential backoff and worker re-selection
         actor_spec = fray_pb2.ActorSpec(
             actor_id=actor_id,
             serialized_actor=request.serialized_actor,
@@ -380,21 +470,35 @@ class FrayControllerServicer(FrayController):
         )
 
         max_retries = 3
+        final_worker_id = None
         for attempt in range(max_retries):
             try:
-                # Create worker client - using async context manager for proper httpx client lifecycle
+                # Re-pick worker on each retry for better load balancing
+                with self._lock:
+                    if not self._workers:
+                        raise ConnectError(Code.UNAVAILABLE, "No workers available")
+
+                    worker_id = min(
+                        self._workers.keys(), key=lambda w: sum(1 for a in self._actors.values() if a.worker_id == w)
+                    )
+                    # Update actor info with selected worker
+                    self._actors[actor_id].worker_id = worker_id
+
+                # Create worker client and instantiate actor
                 worker_client = self._create_worker_client(worker_id)
                 async with worker_client:
-                    await worker_client.instantiate_actor(actor_spec)
+                    await worker_client.instantiate_actor(actor_spec, timeout_ms=ACTOR_INSTANTIATION_TIMEOUT_MS)
 
                 with self._lock:
                     self._actors[actor_id].status = fray_pb2.ACTOR_STATUS_READY
+                final_worker_id = worker_id
                 break
 
             except Exception as e:
                 if attempt < max_retries - 1:
-                    # Wait a bit before retrying (worker server might still be starting)
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    # Exponential backoff: 100ms, 200ms, 400ms
+                    backoff_ms = 100 * (2**attempt)
+                    await asyncio.sleep(backoff_ms / 1000.0)
                 else:
                     with self._lock:
                         self._actors[actor_id].status = fray_pb2.ACTOR_STATUS_FAILED
@@ -402,9 +506,17 @@ class FrayControllerServicer(FrayController):
                         Code.INTERNAL, f"Failed to instantiate actor after {max_retries} attempts: {e}"
                     ) from e
 
+        # Get worker address for client to connect to
+        if final_worker_id is None:
+            raise ConnectError(Code.INTERNAL, "Actor instantiation succeeded but no worker ID was assigned")
+
+        with self._lock:
+            worker_info = self._workers.get(final_worker_id)
+            worker_address = worker_info.address if worker_info else ""
+
         return fray_pb2.ActorHandle(
             actor_id=actor_id,
-            worker_id=worker_id,
+            worker_id=worker_address,
             name=request.name,
             status=fray_pb2.ACTOR_STATUS_READY,
         )
@@ -449,9 +561,8 @@ class FrayControllerServicer(FrayController):
 
         with self._lock:
             self._tasks[task_id] = task
-            # Add to pending queue - worker will pick it up
+            # Add to pending queue - scheduler will push it to worker
             self._pending_queue.append(task_id)
-            self._condition.notify_all()
 
         return fray_pb2.TaskHandle(
             task_id=task_id,
@@ -459,17 +570,20 @@ class FrayControllerServicer(FrayController):
         )
 
     async def get_actor_status(self, request: fray_pb2.ActorHandle, ctx: RequestContext) -> fray_pb2.ActorHandle:
-        """Returns the current status of an actor."""
+        """Returns the worker location for an actor (not the status)."""
         with self._lock:
             actor = self._actors.get(request.actor_id)
             if actor is None:
                 raise ConnectError(Code.NOT_FOUND, f"Actor {request.actor_id} not found")
 
+            # Get worker address for client to connect to
+            worker_info = self._workers.get(actor.worker_id)
+            worker_address = worker_info.address if worker_info else ""
+
             return fray_pb2.ActorHandle(
                 actor_id=actor.actor_id,
-                worker_id=actor.worker_id,
+                worker_id=worker_address,
                 name=actor.name or "",
-                status=cast(fray_pb2.ActorStatus, actor.status),
             )
 
     async def delete_actor(self, request: fray_pb2.ActorDeleteRequest, ctx: RequestContext) -> fray_pb2.Empty:
@@ -629,6 +743,20 @@ class FrayControllerServicer(FrayController):
         if self._health_check_task:
             self._health_check_task.cancel()
 
+    def start_scheduler(self) -> None:
+        """Start the task scheduler thread."""
+        self._running = True
+        self._scheduler_thread = threading.Thread(target=self._task_scheduler_loop, daemon=True)
+        self._scheduler_thread.start()
+        logger.info("Task scheduler thread started")
+
+    def stop_scheduler(self) -> None:
+        """Stop the task scheduler thread."""
+        self._running = False
+        if self._scheduler_thread:
+            self._scheduler_thread.join(timeout=2.0)
+            logger.info("Task scheduler thread stopped")
+
 
 class FrayControllerServer:
     """
@@ -670,6 +798,9 @@ class FrayControllerServer:
         config = uvicorn.Config(self._app, host="::", port=self._port, log_level="warning")
         self._server = uvicorn.Server(config)
 
+        # Start the scheduler thread before server
+        self._servicer.start_scheduler()
+
         # Start the server in a background thread
         def run_server():
             # Start health checks when event loop starts
@@ -697,8 +828,9 @@ class FrayControllerServer:
         return self._port
 
     def stop(self) -> None:
-        """Stop the ASGI server."""
+        """Stop the ASGI server and scheduler."""
         self._servicer.stop_health_checks()
+        self._servicer.stop_scheduler()
         if self._server:
             self._server.should_exit = True
 

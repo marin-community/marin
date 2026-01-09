@@ -147,6 +147,37 @@ class GetTaskRequest(_message.Message):
     worker_id: str
     def __init__(self, worker_id: _Optional[str] = ...) -> None: ...
 
+class TaskAssignment(_message.Message):
+    __slots__ = ()
+    class ResourcesEntry(_message.Message):
+        __slots__ = ()
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: int
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    SERIALIZED_FN_FIELD_NUMBER: _ClassVar[int]
+    RESOURCES_FIELD_NUMBER: _ClassVar[int]
+    MAX_RETRIES_FIELD_NUMBER: _ClassVar[int]
+    ACTOR_ID_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    serialized_fn: bytes
+    resources: _containers.ScalarMap[str, int]
+    max_retries: int
+    actor_id: str
+    def __init__(self, task_id: _Optional[str] = ..., serialized_fn: _Optional[bytes] = ..., resources: _Optional[_Mapping[str, int]] = ..., max_retries: _Optional[int] = ..., actor_id: _Optional[str] = ...) -> None: ...
+
+class TaskResultPayload(_message.Message):
+    __slots__ = ()
+    TASK_ID_FIELD_NUMBER: _ClassVar[int]
+    SERIALIZED_VALUE_FIELD_NUMBER: _ClassVar[int]
+    SERIALIZED_ERROR_FIELD_NUMBER: _ClassVar[int]
+    task_id: str
+    serialized_value: bytes
+    serialized_error: bytes
+    def __init__(self, task_id: _Optional[str] = ..., serialized_value: _Optional[bytes] = ..., serialized_error: _Optional[bytes] = ...) -> None: ...
+
 class Empty(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
