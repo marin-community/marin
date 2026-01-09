@@ -22,7 +22,6 @@ from fray.cluster import ResourceConfig, create_cluster, set_current_cluster
 from levanter.main.train_lm import TrainLmConfig
 from levanter.models.gpt2 import Gpt2Config
 from levanter.trainer import TrainerConfig
-from marin.classifiers.utils import DatasetConfig
 from marin.execution.executor import (
     ExecutorMainConfig,
     ExecutorStep,
@@ -31,13 +30,14 @@ from marin.execution.executor import (
     this_output_path,
     versioned,
 )
+from marin.processing.classification.dataset_utils import DatasetConfig
 from marin.processing.classification.fasttext.train_fasttext import (
     TrainFasttextClassifierConfig,
     train,
 )
 from marin.processing.classification.inference import InferenceConfig, run_inference
 from marin.processing.tokenize import lm_data_config
-from marin.schemas.web.convert import HtmlToMarkdownConfig
+from marin.schemas.web.convert import ResiliparseConfig
 from marin.training.training import TrainLmOnPodConfig, run_levanter_train_lm
 from marin.transform.simple_html_to_md.process import SimpleHtmlToMdConfig, html_to_md
 
@@ -57,10 +57,9 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "pos"),
             output_path=this_output_path(),
-            extract_method=versioned("readability"),
-            config=HtmlToMarkdownConfig.default_config(),
+            extract_method=versioned("resiliparse"),
+            config=ResiliparseConfig(),
         ),
-        pip_dependency_groups=["download_transform"],
     )
 
     transform_lq_data_step = ExecutorStep(
@@ -69,10 +68,9 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
         config=SimpleHtmlToMdConfig(
             input_path=os.path.join(synth_data, "neg"),
             output_path=this_output_path(),
-            extract_method=versioned("readability"),
-            config=HtmlToMarkdownConfig.default_config(),
+            extract_method=versioned("resiliparse"),
+            config=ResiliparseConfig(),
         ),
-        pip_dependency_groups=["download_transform"],
     )
 
     # ############################################################
@@ -119,7 +117,6 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-hq",
         ),
-        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     inference_lq_step = ExecutorStep(
@@ -132,49 +129,11 @@ def create_steps(prefix: str, synth_data: str) -> list[ExecutorStep]:
             model_type="fasttext",
             attribute_name="quickstart-fasttext-quality-lq",
         ),
-        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
     ############################################################
     # Deduplicate
 
-    # dedupe_step = ExecutorStep(
-    #     name=os.path.join(prefix, "dedupe"),
-    #     fn=dedupe,
-    #     config=DedupeConfig(
-    #         input_path=output_path_of(transform_hq_data_step),
-    #         output_path=this_output_path(),
-    #     ),
-    #     pip_dependency_groups=["quality_dedup_consolidate"],
-    # )
-    #
-    ############################################################
-    # Consolidate
-
-    # consolidate_step = ExecutorStep(
-    #     name=os.path.join(prefix, "consolidate"),
-    #     fn=consolidate,
-    #     config=ConsolidateConfig(
-    #         input_path=output_path_of(transform_hq_data_step),
-    #         output_path=this_output_path(),
-    #         filters=[
-    #             FilterConfig(
-    #                 type=versioned("classify"),
-    #                 attribute_path=output_path_of(inference_hq_step),
-    #                 name=versioned("quickstart-fasttext-quality-hq"),
-    #                 label="__label__hq",
-    #                 threshold=versioned(0.1),
-    #             ),
-    #             FilterConfig(
-    #                 type=versioned("remove_spans"),
-    #                 attribute_path=output_path_of(dedupe_step),
-    #                 name=versioned("duplicate_text"),
-    #             ),
-    #         ],
-    #     ),
-    #     pip_dependency_groups=["quality_dedup_consolidate"],
-    # )
-    #
     ############################################################
     # Tokenize
     tokenizer = "gpt2"

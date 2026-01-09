@@ -11,7 +11,7 @@ from draccus import field
 from haliax.partitioning import ResourceMapping
 import jax
 from jax.experimental import mesh_utils
-from jax.sharding import Mesh
+from jax.sharding import AxisType, Mesh
 
 DEFAULT_DP_AXES = ("replica_dcn", "replica", "data")
 DEFAULT_ICI_AXIS_SPEC = {"data": -1, "replica": 1, "model": 1}
@@ -143,6 +143,7 @@ def create_mesh_from_axis_specs(
     dcn_axes: Mapping[str, int],
     devices=None,
     allow_split_physical_axes: bool = True,
+    axis_types: tuple[AxisType, ...] | None = None,
 ) -> Mesh:
     """
     Create a JAX mesh from ICI and DCN axis sizes. Supports both single-slice and multi-slice layouts.
@@ -180,7 +181,10 @@ def create_mesh_from_axis_specs(
             allow_split_physical_axes=allow_split_physical_axes,
         )
 
-    return Mesh(device_mesh, tuple(axis_names))
+    if axis_types is not None and len(axis_types) != len(axis_names):
+        raise ValueError(f"axis_types must match axis_names length: {len(axis_types)} != {len(axis_names)}")
+
+    return Mesh(device_mesh, tuple(axis_names), axis_types=axis_types)
 
 
 def _norm(v: Union[str, Sequence[str]]) -> Union[str, Tuple[str, ...]]:

@@ -22,11 +22,12 @@ import jinja2
 import yaml
 
 # Cluster configuration constants and templates
-LATEST = "4554f82"  # The latest docker tag used for the clusters
+LATEST = "20260104"  # The latest docker tag used for the clusters
 LATEST_VLLM = "20251209"
 DOCKER_TAG_TESTING = "latest"
 DEFAULT_IMAGE_NAME = "marin_cluster"
 VLLM_IMAGE_NAME = "marin_vllm"
+DEFAULT_RAY_AUTH_SECRET = "RAY_AUTH_TOKEN"
 
 
 @dataclass
@@ -129,6 +130,8 @@ CONFIGS = {
         "BUCKET": "marin-us-central2",
         "DOCKER_TAG": DOCKER_TAG_TESTING,
         "IMAGE_NAME": "marin_cluster_test",
+        "RAY_AUTH_MODE": "token",
+        "RAY_AUTH_SECRET": "RAY_AUTH_TOKEN",
         "tpu_generation": "v4",
         "min_workers": 4,
     },
@@ -415,7 +418,12 @@ def update_cluster_configs(infra_path: str = "infra") -> None:
             with open(template_path) as f_template:
                 template = jinja2.Template(f_template.read())
 
-            template_params = {"IMAGE_NAME": DEFAULT_IMAGE_NAME, **config}
+            template_params = {
+                "IMAGE_NAME": DEFAULT_IMAGE_NAME,
+                "RAY_AUTH_MODE": "token",
+                "RAY_AUTH_SECRET": DEFAULT_RAY_AUTH_SECRET,
+                **config,
+            }
             yaml_string = template.render(**template_params)
 
             # pyyaml strips comments, which we'd like to keep

@@ -12,7 +12,7 @@ from jaxtyping import PRNGKeyArray
 
 import haliax
 import haliax.random as hrandom
-from haliax.axis import Axis, AxisSelection, AxisSelector, AxisSpec, axis_name, axis_spec_to_shape_dict
+from haliax.axis import Axis, AxisSelection, AxisSelector, axis_name, axis_spec_to_shape_dict
 from haliax.core import NamedArray
 from haliax.types import PrecisionLike
 
@@ -191,13 +191,6 @@ def prefix_lm_mask(QSeqLen: Axis, KSeqLen: Axis, prefix_len: int, q_start: int =
     prefix = haliax.arange(KSeqLen, start=k_start) < (prefix_len + k_start)
 
     return prefix | causal
-
-
-def dropout_mask(axes: AxisSpec, dropout_rate: float, *, key: PRNGKeyArray) -> NamedArray:
-    """
-    Really just an alias for haliax.random.bernoulli. You can pass in e.g. Head, QPos and KPos
-    """
-    return hrandom.bernoulli(key, shape=axes, p=1 - dropout_rate)
 
 
 def forgetful_causal_mask(KPos: Axis, mask_prob: float, sample_prob: bool = True, *, key: PRNGKeyArray) -> NamedArray:

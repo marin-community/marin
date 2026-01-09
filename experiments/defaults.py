@@ -183,7 +183,6 @@ def default_tokenize(
         description=f"Tokenize raw text using the {tokenizer} tokenizer.",
         fn=tokenize,
         config=config,
-        pip_dependency_groups=["tokenize_train"],
     )
 
 
@@ -364,6 +363,7 @@ def default_train(
             profiler=train_config.profiler,
             profiler_start_step=train_config.profiler_start_step,
             profiler_num_steps=train_config.profiler_num_steps,
+            use_explicit_mesh_axes=train_config.explicit_mesh_axes,
         ),
         initialize_from_checkpoint_path=(
             checkpoint_path_to_load_from if train_config.reset_data_loader_on_init else None
@@ -428,7 +428,6 @@ def default_train(
         ),
         fn=run_levanter_train_lm,
         config=config,
-        pip_dependency_groups=["tokenize_train"],
         override_output_path=override_output_path,
     )
 
