@@ -13,8 +13,9 @@
 # limitations under the License.
 
 """
-Example training experiment with repeat downweighting.
-Adapted from https://github.com/marin-community/marin/blob/0d38a98b63a8566451d3cb9a2fb488ec0d1647ce/experiments/plantcad/exp1729_plantcad_train.py
+Standard DNA training experiment without repeat downweighting.
+
+Uses TextLmDatasetFormat with uniform loss weights across all positions.
 """
 
 import dataclasses
