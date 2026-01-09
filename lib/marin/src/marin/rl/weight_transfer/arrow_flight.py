@@ -376,6 +376,7 @@ class ArrowFlightServer(WeightTransferServer):
             ArrowFlightCoordinator,
             name=self.config.coordinator_name,
             get_if_exists=True,
+            preemptible=False,
         )
         logger.info("Started Arrow Flight weight transfer with config: %s", self.config)
 
