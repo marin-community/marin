@@ -109,7 +109,6 @@ from urllib.parse import urlparse
 import draccus
 import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
-from marin.utilities.path_utils import is_absolute_path
 
 from fray import (
     Cluster,
@@ -680,16 +679,6 @@ class Executor:
         description: str | None = None,
     ):
         self.cluster = current_cluster()
-        # Require absolute paths to ensure workers write to the correct location
-        if not is_absolute_path(prefix):
-            raise ValueError(
-                f"prefix must be an absolute path (start with / or contain ://), got: {prefix}"
-            )
-        if not is_absolute_path(executor_info_base_path):
-            raise ValueError(
-                f"executor_info_base_path must be an absolute path (start with / or contain ://), "
-                f"got: {executor_info_base_path}"
-            )
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description

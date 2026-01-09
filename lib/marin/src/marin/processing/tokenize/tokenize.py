@@ -43,7 +43,6 @@ from zephyr import Backend, Dataset
 from zephyr.readers import load_file
 
 from marin.execution.executor import ExecutorStep, InputName, VersionedValue
-from marin.utilities.path_utils import is_absolute_path
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir, fsspec_size
 
 logger = logging.getLogger(__name__)
@@ -261,9 +260,6 @@ def tokenize(config: TokenizeConfigBase):
     Processes train and validation splits separately, writing to Levanter cache format.
     For HuggingFace datasets, downloads them first then tokenizes the downloaded files.
     """
-    # Require absolute paths to ensure Ray workers write to the correct location
-    if not is_absolute_path(config.cache_path):
-        raise ValueError(f"cache_path must be an absolute path (start with / or contain ://), got: {config.cache_path}")
 
     if isinstance(config, TokenizeConfig):
         train_paths = _get_filepaths_to_tokenize(config.train_paths) if config.train_paths else []

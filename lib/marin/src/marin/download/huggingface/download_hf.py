@@ -28,7 +28,6 @@ import draccus
 import fsspec
 from huggingface_hub import HfFileSystem
 from marin.execution.executor import THIS_OUTPUT_PATH
-from marin.utilities.path_utils import is_absolute_path
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Backend, Dataset
 from zephyr.writers import atomic_rename
@@ -119,16 +118,9 @@ def download_hf(cfg: DownloadConfig) -> None:
     # Set cfg.append_sha_to_path=True to mimic the older behavior of writing to gcs_output_path/<revision>.
     # Some historical datasets were written that way, so this flag keeps backwards compatibility when needed.
 
-    # Require absolute paths to ensure Ray workers write to the correct location
-    gcs_output_path = cfg.gcs_output_path
-    if not is_absolute_path(gcs_output_path):
-        raise ValueError(
-            f"gcs_output_path must be an absolute path (start with / or contain ://), got: {gcs_output_path}"
-        )
-
     # Ensure the output path is writable
     try:
-        output_path = os.path.join(gcs_output_path, cfg.revision) if cfg.append_sha_to_path else gcs_output_path
+        output_path = os.path.join(cfg.gcs_output_path, cfg.revision) if cfg.append_sha_to_path else cfg.gcs_output_path
         ensure_fsspec_path_writable(output_path)
     except ValueError as e:
         logger.exception(f"Output path validation failed: {e}")
@@ -169,11 +161,7 @@ def download_hf(cfg: DownloadConfig) -> None:
         Dataset.from_list(download_tasks)
         .map(lambda task: stream_file_to_fsspec(*task))
         .write_jsonl(
-            f"{gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl",
-            # Note: skip_existing=False because the Executor already handles resumption
-            # via .executor_status files. Using skip_existing here causes bugs where
-            # .metrics files exist but actual data files don't (e.g., after partial runs).
-            skip_existing=False,
+            f"{cfg.gcs_output_path}/.metrics/success-part-{{shard:05d}}-of-{{total:05d}}.jsonl", skip_existing=True
         )
     )
     Backend.execute(pipeline)
