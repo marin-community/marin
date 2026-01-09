@@ -29,17 +29,12 @@ import datetime
 import json
 import logging
 import os
-from collections.abc import Callable, Generator
-from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import TypedDict
 
 import fsspec
 import numpy as np
 import pandas as pd
-from zephyr import Backend, Dataset
-
-from marin.utils import rebase_file_path
 
 logger = logging.getLogger("ray")
 
@@ -133,10 +128,7 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
       - Checkpoint restoration should continue to read from the remote path.
     """
     import hashlib
-    import json
     import shutil
-
-    import fsspec
 
     mode = "ab" if append else "wb"
 
@@ -189,69 +181,3 @@ def write_dataset_streaming(rows_iterator, output_filename: str, append: bool = 
         return
 
     raise ValueError(f"Unsupported filetype: {output_filename}")
-
-
-def label_documents(
-    input_doc_path: str,
-    output_attr_path: str,
-    label_func: Callable[[Document, list[Attribute]], dict],
-    input_attr_paths: list[str] | None = None,
-) -> None:
-    """
-    Create a new attribute by applying label_func to each document and its (optional) associated attributes.
-
-    Args:
-        input_doc_path (str): Path to documents (i.e., gs://$BUCKET/documents/...).
-        output_attr_path (str): Path to write attributes (i.e., gs://$BUCKET/attributes/...).
-        label_func (Callable[[Document, list[Attribute]], dict]): Generates attribute dict
-            from document and other input attributes.
-        input_attr_paths (list[str]): Path to attributes needed to determine new attribute.
-    """
-
-    logger.info(f"Creating custom attribute for documents in {input_doc_path}, writing to {output_attr_path}.")
-
-    def processing_func(input_file_path):
-        attr_file_paths = (
-            [rebase_file_path(input_doc_path, input_file_path, input_attr_path) for input_attr_path in input_attr_paths]
-            if input_attr_paths is not None
-            else []
-        )
-        return label_documents_shard(input_file_path, label_func, attr_file_paths)
-
-    Backend.execute(
-        Dataset.from_files(f"{input_doc_path}/**/*.jsonl.gz")
-        .flat_map(processing_func)
-        .write_jsonl(f"{output_attr_path}/{{shard:05d}}.jsonl.gz")
-    )
-
-
-def label_documents_shard(
-    input_file_path: str, label_func: Callable[[Document, list[Attribute]], dict], attr_file_paths: list[str]
-) -> Generator[dict, None, None]:
-    """
-    Process a shard of documents by applying label_func to each document and its attributes.
-
-    Args:
-        input_file_path (str): Path to the input document file.
-        label_func (Callable[[Document, list[Attribute]], dict]): Function to generate attribute dict.
-        attr_file_paths (list[str]): Paths to attribute files.
-
-    Yields:
-        dict: Labeled document
-    """
-    with ExitStack() as stack:
-        doc_fs = fsspec.open(input_file_path, "r", compression="infer")
-        doc_file = stack.enter_context(doc_fs)
-
-        attr_files = []
-        for attr_file_path in attr_file_paths:
-            attr_fs = fsspec.open(attr_file_path, "r", compression="infer")
-            attr_file = stack.enter_context(attr_fs)
-            attr_files.append(attr_file)
-
-        for doc_line in doc_file:
-            doc = json.loads(doc_line)
-            attrs = [json.loads(attr_file.readline()) for attr_file in attr_files]
-
-            result = label_func(doc, attrs)
-            yield {"id": doc["id"], "source": doc["source"], "attributes": result}
