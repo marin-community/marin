@@ -13,5 +13,7 @@
 # limitations under the License.
 
 from .base import EnvConfig, MarinEnv, load_environment_from_spec
+from .code_r1_env import CodeR1Env
+from .humaneval_plus_env import HumanEvalPlusEnv
 
-__all__ = ["EnvConfig", "MarinEnv", "load_environment_from_spec"]
+__all__ = ["CodeR1Env", "EnvConfig", "HumanEvalPlusEnv", "MarinEnv", "load_environment_from_spec"]
