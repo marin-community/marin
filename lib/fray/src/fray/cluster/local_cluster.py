@@ -25,6 +25,8 @@ from threading import Thread
 
 from fray.cluster.base import Cluster, EnvironmentConfig, JobId, JobInfo, JobRequest, TaskStatus
 from fray.isolated_env import TemporaryVenv
+from fray.job.context import SyncContext, fray_default_job_ctx
+from fray.environment_context import temporary_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +46,8 @@ class FakeProcess(Thread):
 
     def run(self):
         try:
-            super().run()
+            with fray_default_job_ctx(SyncContext()):
+                super().run()
         except BaseException as e:
             self._exception = e
             raise
@@ -113,21 +116,22 @@ class LocalCluster(Cluster):
         processes = []
         process_env = None
         if not self.config.use_isolated_env:
-            if request.environment.env_vars:
-                logger.warning(
-                    "LocalCluster does not support custom environment variables in non-isolated mode, ignored."
-                )
-
             # Run callable in parent process as a thread
             callable_ep = request.entrypoint.callable_entrypoint
             processes = []
+
+            # Wrap callable to apply environment variables
+            env_vars = dict(request.environment.env_vars) if request.environment.env_vars else {}
+
+            def run_with_env():
+                with temporary_env_vars(env_vars):
+                    return callable_ep.callable(*callable_ep.args, **callable_ep.kwargs)
+
             for _ in range(replica_count):
                 logger.info(
                     f"Running callable in parent process with args={callable_ep.args}, kwargs={callable_ep.kwargs}"
                 )
-                process = FakeProcess(
-                    target=callable_ep.callable, args=callable_ep.args, kwargs=callable_ep.kwargs, daemon=True
-                )
+                process = FakeProcess(target=run_with_env, daemon=True)
                 process.start()
                 processes.append(process)
         else:

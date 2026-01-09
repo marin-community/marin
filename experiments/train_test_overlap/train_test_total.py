@@ -114,7 +114,6 @@ def build_step(dataset_config: DatasetConfig) -> ExecutorStep:
         fn=run_train_test_overlap,
         config=dedupe_config,
         description=f"Run dedupe train-test overlap on {dataset_config.name}",
-        pip_dependency_groups=["quality_dedup_consolidate"],
     )
 
 

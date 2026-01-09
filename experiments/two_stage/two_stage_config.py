@@ -380,5 +380,4 @@ def two_stage_train_step(two_stage_config: TwoStageConfig) -> ExecutorStep:
         f"{two_stage_config.model_config.max_seq_len} (seq_len) "
         f"= {two_stage_config.total_tokens:,} tokens.",
         config=train_lm_on_pod_config,
-        pip_dependency_groups=["tokenize_train"],
     )

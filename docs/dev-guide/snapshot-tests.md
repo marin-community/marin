@@ -6,17 +6,6 @@ We use snapshot tests to ensure that our HTML-to-text conversion is working as e
 
 To run the snapshot tests, run `pytest tests/test_snapshot.py`.
 
-### Pandiff
-
-We recommend installing pandiff to get a nice diff output for test failures.
-
-To install, you'll need pandoc:
-
-* MacOS: `brew install pandoc`
-* Linux: `sudo apt-get install pandoc`
-
-Then run `npm install -g pandiff`
-
 ## Adding a test case
 
 To add a test case, do the following:

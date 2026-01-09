@@ -410,24 +410,6 @@ def get_default_projection_points(count_embedding_params: bool = False) -> list[
 # Plotting helpers
 
 
-def plot_fit(actual: np.ndarray, predicted: np.ndarray, title="Power Law Fit") -> None:
-    """
-    Plot predicted vs actual values.
-    """
-    plt.figure()
-    plt.scatter(actual, predicted, alpha=0.7)
-    plt.xlabel("Actual Values")
-    plt.ylabel("Predicted Values")
-    plt.title(title)
-
-    # disable offset notation for the y-axis
-    plt.ticklabel_format(useOffset=False)
-
-    plt.grid(True)
-
-    return plt
-
-
 def plot_actual_vs_predicted(
     y_actual: np.ndarray,
     y_predicted: np.ndarray,

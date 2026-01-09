@@ -26,7 +26,7 @@ import logging
 from dataclasses import dataclass, field
 
 from marin.schemas.web.convert import ExtractionConfig, HtmlToMarkdownConfig
-from zephyr import Dataset, flow_backend, load_jsonl
+from zephyr import Backend, Dataset, load_jsonl
 
 logger = logging.getLogger("ray")
 
@@ -84,19 +84,16 @@ def _html_to_md(data: dict, extract_method: str, config: ExtractionConfig):
 class SimpleHtmlToMdConfig:
     input_path: str  # Input directory containing jsonl.gz files
     output_path: str  # Output directory containing md files
-    extract_method: str = "readability"
-    # Extract method to use. Defaults to readability. Other options are traflatura and resiliparse.
-    config: ExtractionConfig = field(default_factory=HtmlToMarkdownConfig.default_config())
-    # Configuration for the extraction method.
+    extract_method: str = "resiliparse"
+    config: ExtractionConfig = field(default_factory=HtmlToMarkdownConfig)
 
 
 def html_to_md(cfg: SimpleHtmlToMdConfig):
     """Transform HTML content to markdown using the specified extraction method."""
-    backend = flow_backend()
     pipeline = (
         Dataset.from_files(f"{cfg.input_path}/**/*.jsonl.gz")
         .flat_map(load_jsonl)
         .map(lambda data: _html_to_md(data, cfg.extract_method, cfg.config))
         .write_jsonl(f"{cfg.output_path}/data-{{shard:05d}}-of-{{total:05d}}.jsonl.gz")
     )
-    list(backend.execute(pipeline))
+    list(Backend.execute(pipeline))

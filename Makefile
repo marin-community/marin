@@ -102,6 +102,30 @@ cluster_docker_ghcr_push: cluster_docker_build
 cluster_docker: cluster_docker_build cluster_docker_push
 	@echo "Docker image build and push complete."
 
+# Staging/test image flow (does not update lib/marin/src/marin/cluster/config.py)
+# Used by infra/marin-us-central2-staging.yaml, which points at marin_cluster_test:latest.
+TEST_CLUSTER_REPO ?= us-central2
+TEST_DOCKER_IMAGE_NAME ?= marin_cluster_test
+
+.PHONY: cluster_docker_test_build cluster_docker_test_push cluster_docker_test
+
+cluster_docker_test_build:
+	@echo "Building staging Docker image using Dockerfile: docker/marin/Dockerfile.cluster"
+	docker buildx build --platform linux/amd64 --output "type=docker,compression=zstd" -t '$(TEST_DOCKER_IMAGE_NAME):latest' -f docker/marin/Dockerfile.cluster .
+	@echo "Tagging staging Docker image for $(TEST_CLUSTER_REPO)..."
+	docker tag '$(TEST_DOCKER_IMAGE_NAME):latest' '$(TEST_CLUSTER_REPO)-docker.pkg.dev/hai-gcp-models/marin/$(TEST_DOCKER_IMAGE_NAME):latest'
+
+cluster_docker_test_push: cluster_docker_test_build
+	@echo "Authenticating and preparing repository in $(TEST_CLUSTER_REPO)..."
+	gcloud auth configure-docker $(TEST_CLUSTER_REPO)-docker.pkg.dev
+	gcloud artifacts repositories list --location=$(TEST_CLUSTER_REPO) --filter 'name:marin' > /dev/null || \
+		gcloud artifacts repositories create --repository-format=docker --location=$(TEST_CLUSTER_REPO) marin
+	@echo "Pushing staging Docker image..."
+	docker push '$(TEST_CLUSTER_REPO)-docker.pkg.dev/hai-gcp-models/marin/$(TEST_DOCKER_IMAGE_NAME):latest'
+
+cluster_docker_test: cluster_docker_test_push
+	@echo "Staging Docker image build and push complete."
+
 
 # Target to configure GCP registry cleanup policy for all standard regions
 default_registry_name = marin
@@ -155,6 +179,23 @@ get_secret_key: install_gcloud
 	chmod 600 ~/.ssh/marin_ray_cluster.pem
 	gcloud secrets versions access latest --secret=RAY_CLUSTER_PUBLIC_KEY > ~/.ssh/marin_ray_cluster.pub
 
+get_ray_auth_token: install_gcloud
+	mkdir -p $$HOME/.ray
+	gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN > $$HOME/.ray/auth_token
+	chmod 600 $$HOME/.ray/auth_token
+
+init_ray_auth_token_secret: install_gcloud
+	@if [ ! -f "$$HOME/.ray/auth_token" ]; then \
+		echo "Missing $$HOME/.ray/auth_token; generate one first (e.g. export RAY_AUTH_MODE=token && ray get-auth-token --generate)"; \
+		exit 1; \
+	fi
+	@if gcloud secrets describe RAY_AUTH_TOKEN >/dev/null 2>&1; then \
+		echo "Secret RAY_AUTH_TOKEN already exists; refusing to add a new version (token rotation) via Makefile."; \
+		exit 1; \
+	fi
+	gcloud secrets create RAY_AUTH_TOKEN --replication-policy=automatic
+	gcloud secrets versions add RAY_AUTH_TOKEN --data-file="$$HOME/.ray/auth_token"
+
 
 setup_pre_commit:
 	@HOOK_PATH=.git/hooks/pre-commit; \
@@ -163,5 +204,5 @@ setup_pre_commit:
 	chmod +x $$HOOK_PATH; \
 	echo "Installed git pre-commit hook -> $$HOOK_PATH"
 
-dev_setup: install_uv install_gcloud get_secret_key setup_pre_commit
+dev_setup: install_uv install_gcloud get_secret_key get_ray_auth_token setup_pre_commit
 	@echo "Dev setup complete."

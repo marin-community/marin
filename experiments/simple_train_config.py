@@ -94,3 +94,9 @@ class SimpleTrainConfig:
     """Which step to start profiling."""
     profiler_num_steps: int = 100
     """How many steps to profile for once started."""
+
+    explicit_mesh_axes: bool = False
+    """If True, build the device mesh with `AxisType.Explicit` axes.
+
+    Required for models that call `jax.sharding.reshard(..., PartitionSpec(...))`.
+    """

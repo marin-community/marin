@@ -157,7 +157,8 @@ TpuType = Literal[
 
 GpuType = Literal[
     "A10",
-    "A100",
+    "A100-40G",
+    "A100-80G",
     "A10G",
     "B100",
     "H100",
@@ -377,7 +378,7 @@ class ResourceConfig:
         return ResourceConfig(device=CpuConfig(), **kwargs)
 
 
-@dataclass
+@dataclass(frozen=True)
 class EnvironmentConfig:
     """Job environment configuration.
 

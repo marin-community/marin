@@ -758,7 +758,7 @@ def run_on_pod(
     return ray.get(run_on_pod_ray.remote(remote_fn, tpu_type, num_slices, max_retries_preemption, max_retries_failure))
 
 
-@ray.remote(num_cpus=0.0, resources={"head_node": 0.001})
+@ray.remote(num_cpus=0.1, max_retries=-1, retry_exceptions=False)
 def run_on_pod_ray(
     remote_fn: RemoteFunction,
     tpu_type: str,
@@ -1008,62 +1008,4 @@ def run_on_pod_multislice(
             max_retries_failure=0,
             max_retries_preemption=0,
         )
-    )
-
-
-def run_on_pod_resumable(
-    remote_fn: RemoteFunction | Callable,
-    tpu_type: str,
-    max_retries_preemption: int = 1_000_000,
-    max_retries_failure: int = 10,
-):
-    """
-    Repeatedly run a function on a TPU pod until it succeeds or a maximum number of retries is reached.
-
-    Args:
-        remote_fn: A remote function that takes no arguments
-        tpu_type: The type of TPU to run on, e.g. "v4-32"
-        max_retries_preemption: The maximum number of times to retry if the job is preempted
-        max_retries_failure: The maximum number of times to retry if the job fails
-
-    Returns:
-        The result of the function (not an ObjectRef)
-
-    """
-    return run_on_pod(
-        remote_fn,
-        tpu_type,
-        num_slices=1,
-        max_retries_preemption=max_retries_preemption,
-        max_retries_failure=max_retries_failure,
-    )
-
-
-def run_on_pod_multislice_resumable(
-    remote_fn: RemoteFunction | Callable,
-    tpu_type: str,
-    num_slices: int | Sequence[int],
-    max_retries_preemption: int = 1_000_000,
-    max_retries_failure: int = 10,
-):
-    """
-    Repeatedly run a function on a TPU pod until it succeeds or a maximum number of retries is reached.
-
-    Args:
-        remote_fn: A remote function that takes no arguments
-        tpu_type: The type of TPU to run on, e.g. "v4-32"
-        num_slices: The number of slices to run
-        max_retries_preemption: The maximum number of times to retry if the job is preempted
-        max_retries_failure: The maximum number of times to retry if the job fails
-
-    Returns:
-        The result of the function (not an ObjectRef)
-
-    """
-    return run_on_pod(
-        remote_fn,
-        tpu_type,
-        num_slices=num_slices,
-        max_retries_preemption=max_retries_preemption,
-        max_retries_failure=max_retries_failure,
     )
