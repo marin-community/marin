@@ -25,7 +25,7 @@ The scaling ladder:
 
 from experiments.defaults import default_validation_sets
 from experiments.isoflop_sweep import MARIN_2025_RECIPE, MARIN_SCALING_SUITES, nemotron_mix
-from marin.execution.executor import ExecutorStep, executor_main, output_path_of
+from marin.execution.executor import ExecutorStep, executor_main, output_path_of, this_output_path
 from marin.processing.tokenize import add_validation_sets_to_mixture
 from marin.scaling_laws import (
     IsoFlopAnalysisConfig,
@@ -53,7 +53,7 @@ analysis_step = ExecutorStep(
     fn=run_isoflop_analysis_step,
     config=IsoFlopAnalysisConfig(
         training_runs=[output_path_of(r) for r in nemotron_training],
-        output_path=f"analysis/{EXPERIMENT_NAME}",
+        output_path=this_output_path(),
         recipe=MARIN_2025_RECIPE,
     ),
 )
@@ -70,7 +70,7 @@ for budget in TARGET_BUDGETS:
             target_budget=budget,
             label=LABEL,
             tokenized=nemotron_mix_with_validation,
-            output_path=f"checkpoints/{EXPERIMENT_NAME}-optimal-{budget:.0e}",
+            output_path=this_output_path(),
             recipe=MARIN_2025_RECIPE,
         ),
     )
