@@ -109,6 +109,7 @@ from urllib.parse import urlparse
 import draccus
 import fsspec
 import levanter.utils.fsspec_utils as fsspec_utils
+
 from fray import (
     Cluster,
     Entrypoint,
@@ -304,6 +305,9 @@ class ExecutorStep(Generic[ConfigT]):
 
     pip_dependency_groups: list[str] | None = None
     """List of `extra` dependencies from pyproject.toml to include with this step."""
+
+    resources: ResourceConfig | None = None
+    """Resource requirements for this step (GPU, TPU, CPU). If None, defaults to CPU."""
 
     def cd(self, name: str) -> "InputName":
         """Refer to the `name` under `self`'s output_path."""
@@ -841,12 +845,12 @@ class Executor:
 
             step_fn = _call_remote
 
-        # always run driver functions on a non-preemptible node
-        non_preemptible_cpu = ResourceConfig.with_cpu(preemptible=False)
+        # Use the step's resources if specified, otherwise default to CPU
+        step_resources = step.resources if step.resources is not None else ResourceConfig.with_cpu(preemptible=False)
         fray_job = JobRequest(
             name=f"{get_fn_name(step.fn, short=True)}:{step.name}",
             entrypoint=Entrypoint.from_callable(step_fn, args=[config]),
-            resources=non_preemptible_cpu,
+            resources=step_resources,
             environment=EnvironmentConfig.create(extras=step.pip_dependency_groups or []),
         )
 

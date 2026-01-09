@@ -30,7 +30,7 @@ classifiers = [
 dependencies = [
     "haliax>=1.4.dev450",
     "equinox>=0.11.7,!=0.12.0",
-    "jax>=0.8.2",
+    "jax>=0.8.0",
     "fray",
     "zephyr",
     "einops",
@@ -63,7 +63,6 @@ dependencies = [
     "lenses",
     "jinja2",  # needed for apply_chat_template
     "protobuf>=6,<7",  # ensure TB/XProf compatibility; avoid 7+ due to ray
-    "ejkernel @ git+https://github.com/erfanzar/ejkernel.git",
   # "lm-eval==0.4.2",
   # "lm-eval @ git+https://github.com/dlwh/lm-evaluation-harness.git@no_torch"
 ]
@@ -73,8 +72,8 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 "Bug Tracker" = "https://github.com/stanford-crfm/levanter/issues"
 
 [project.optional-dependencies]
-gpu = ["jax[cuda12]>=0.8.2"]
-tpu = ["jax[tpu]>=0.8.2"]
+gpu = ["jax[cuda12]>=0.8.0"]
+tpu = ["jax[tpu]>=0.8.0"]
 torch_test = [
   "torch>=2.7.0",
   "peft>=0.12.0",
