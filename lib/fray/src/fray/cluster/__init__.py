@@ -61,16 +61,6 @@ def set_current_cluster(cluster: Cluster) -> None:
     _cluster_context.set(cluster)
 
 
-def _is_running_in_ray_context() -> bool:
-    try:
-        import ray
-
-        ray.get_runtime_context().get_job_id()
-        return True
-    except (ImportError, RuntimeError):
-        return False
-
-
 def _has_local_accelerators() -> bool:
     """Check if local accelerators (GPUs/TPUs) are available.
 
@@ -109,10 +99,16 @@ def _has_local_accelerators() -> bool:
 def current_cluster() -> Cluster:
     """Return a cluster context.
 
-    If a cluster is already set in context, return it.
-    If a FRAY_CLUSTER_SPEC is set, create a cluster from it.
-    If running inside of Ray or Ray is already initialized, use RayCluster.
-    Otherwise, use LocalCluster (works fine for Zephyr and local execution).
+    For local execution (including with GPUs), uses LocalCluster by default.
+    This runs everything in the current process using the user's venv, avoiding
+    Ray's virtualenv creation and worker process overhead.
+
+    Priority order:
+    1. Already-set cluster context
+    2. FRAY_CLUSTER_SPEC environment variable (for explicit cluster configuration)
+    3. LocalCluster (default for local execution)
+
+    Note: To use Ray for distributed execution, set FRAY_CLUSTER_SPEC=ray?namespace=...
     """
     cluster = _cluster_context.get()
     if cluster is not None:
@@ -125,22 +121,9 @@ def current_cluster() -> Cluster:
         set_current_cluster(cluster)
         return cluster
 
-    try:
-        import ray
-        from fray.cluster.ray.cluster import RayCluster
-
-        # Use RayCluster if Ray is already initialized or we're in a Ray context
-        if ray.is_initialized() or _is_running_in_ray_context():
-            logger.info("Auto-detected Ray cluster")
-            cluster = RayCluster()
-            set_current_cluster(cluster)
-            return cluster
-    except ImportError:
-        pass
-
-    # For local execution, use LocalCluster
-    # This avoids Ray's virtualenv creation and pip installation overhead
-    # Note: Zephyr data processing works fine with LocalCluster
+    # Default to LocalCluster for local execution
+    # This avoids Ray's virtualenv creation and worker process overhead
+    # Everything runs in the current process with the user's venv
     if _has_local_accelerators():
         logger.info("Using LocalCluster for local execution with accelerators")
     else:
