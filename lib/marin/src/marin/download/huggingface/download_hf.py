@@ -30,6 +30,7 @@ from huggingface_hub import HfFileSystem
 from marin.execution.executor import THIS_OUTPUT_PATH
 from marin.utilities.validation_utils import write_provenance_json
 from zephyr import Backend, Dataset
+from zephyr.writers import atomic_rename
 
 logger = logging.getLogger(__name__)
 
@@ -78,19 +79,28 @@ def ensure_fsspec_path_writable(output_path: str) -> None:
 
 
 def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path: str):
-    """Ray task to stream a file from HfFileSystem to another fsspec path."""
+    """Stream a file from HfFileSystem to another fsspec path using atomic write.
+
+    Uses atomic_rename to write to a temp file first, then rename on success.
+    This enables recovery across individual files if the job is interrupted.
+    """
     hf_fs = HfFileSystem(token=os.environ.get("HF_TOKEN", False))
     target_fs, _ = fsspec.core.url_to_fs(gcs_output_path)
     # Use 256 MB chunk size for large files
     chunk_size = 256 * 1024 * 1024
     max_retries = 10
 
+    # Skip if file already exists (enables resumption)
+    if target_fs.exists(fsspec_file_path):
+        logger.info(f"File already exists, skipping: {fsspec_file_path}")
+        return {"file_path": file_path, "status": "skipped"}
+
     # Retry when there is an error, such as hf rate limit
     for attempt in range(max_retries):
         try:
-            with hf_fs.open(file_path, "rb") as src_file:
-                target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
-                with target_fs.open(fsspec_file_path, "wb") as dest_file:
+            target_fs.mkdirs(os.path.dirname(fsspec_file_path), exist_ok=True)
+            with atomic_rename(fsspec_file_path) as temp_path:
+                with hf_fs.open(file_path, "rb") as src_file, fsspec.open(temp_path, "wb") as dest_file:
                     while chunk := src_file.read(chunk_size):
                         dest_file.write(chunk)
             logger.info(f"Streamed {file_path} successfully to {fsspec_file_path}")
@@ -102,17 +112,23 @@ def stream_file_to_fsspec(gcs_output_path: str, file_path: str, fsspec_file_path
     raise RuntimeError(f"Failed to download {file_path} after {max_retries} attempts")
 
 
+def _is_absolute_path(path: str) -> bool:
+    """Check if a path is absolute (starts with / or contains ://)."""
+    return path.startswith("/") or "://" in path
+
+
 def download_hf(cfg: DownloadConfig) -> None:
     logging.basicConfig(level=logging.INFO)
 
     # Set cfg.append_sha_to_path=True to mimic the older behavior of writing to gcs_output_path/<revision>.
     # Some historical datasets were written that way, so this flag keeps backwards compatibility when needed.
 
-    # Convert relative paths to absolute paths to ensure Ray workers write to the correct location
+    # Require absolute paths to ensure Ray workers write to the correct location
     gcs_output_path = cfg.gcs_output_path
-    if not gcs_output_path.startswith(("gs://", "s3://", "hdfs://", "/")):
-        gcs_output_path = os.path.abspath(gcs_output_path)
-        logger.info(f"Converted relative path to absolute: {gcs_output_path}")
+    if not _is_absolute_path(gcs_output_path):
+        raise ValueError(
+            f"gcs_output_path must be an absolute path (start with / or contain ://), got: {gcs_output_path}"
+        )
 
     # Ensure the output path is writable
     try:

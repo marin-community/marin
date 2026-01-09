@@ -21,8 +21,6 @@ fork-strategy = "fewest"
 override-dependencies = [
     "omegaconf>=2.4.0.dev4",
     "antlr4-python3-runtime==4.11",
-    # PyTorch 2.7 requires sympy < 1.14 (1.14 has breaking API changes)
-    "sympy>=1.12.1,<1.14",
 ]
 
 [tool.uv.workspace]

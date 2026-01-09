@@ -95,18 +95,3 @@ FRAY_TO_RAY_ACCEL_TYPE: dict[str, str] = {
     "l40s": "L40S",
     "gb10": "GB10",
 }
-
-
-def jax_device_kind_to_ray_accel_type(device_kind: str) -> str | None:
-    """Map a JAX device kind to a Ray accelerator type.
-
-    Args:
-        device_kind: The JAX device kind (e.g., "NVIDIA A100-SXM4-80GB" or "TPU v4")
-
-    Returns:
-        The Ray accelerator type (e.g., "A100" or "TPU-V4") or None if not recognized
-    """
-    from fray.cluster.device_flops import jax_device_kind_to_fray_device_type
-
-    fray_type = jax_device_kind_to_fray_device_type(device_kind)
-    return FRAY_TO_RAY_ACCEL_TYPE.get(fray_type)

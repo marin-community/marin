@@ -429,6 +429,8 @@ def default_train(
         fn=run_levanter_train_lm,
         config=config,
         override_output_path=override_output_path,
+        # Pass resource requirements to the Executor so it can request appropriate hardware.
+        # Previously, executor defaulted to CPU resources, but training requires GPU/TPU.
         resources=train_config.resources,
     )
 

@@ -678,6 +678,12 @@ class Executor:
         description: str | None = None,
     ):
         self.cluster = current_cluster()
+        # Convert relative paths to absolute to ensure Ray workers write to the correct location
+        if not (prefix.startswith("/") or "://" in prefix):
+            prefix = os.path.abspath(prefix)
+            logger.info(f"Converted relative prefix to absolute: {prefix}")
+        if not (executor_info_base_path.startswith("/") or "://" in executor_info_base_path):
+            executor_info_base_path = os.path.abspath(executor_info_base_path)
         self.prefix = prefix
         self.executor_info_base_path = executor_info_base_path
         self.description = description

@@ -71,23 +71,16 @@ def _is_running_in_ray_context() -> bool:
         return False
 
 
-def _detect_local_accelerators() -> tuple[bool, dict[str, float]]:
-    """Detect local accelerators (GPUs/TPUs).
+def _has_local_accelerators() -> bool:
+    """Check if local accelerators (GPUs/TPUs) are available.
 
-    Returns a tuple of (has_accelerators, custom_resources).
-    - has_accelerators: True if GPUs or TPUs are detected
-    - custom_resources: Additional Ray custom resources (e.g., accelerator_type)
-
-    Note: We don't include "GPU" in custom_resources because Ray auto-detects GPUs.
-    The num_gpus parameter in ray.remote() uses Ray's built-in GPU tracking.
+    Uses nvidia-smi for GPU detection and environment variables for TPU detection.
+    Does not call jax.devices() to avoid taking ownership of devices.
     """
     import shutil
     import subprocess
 
-    has_accelerators = False
-    custom_resources: dict[str, float] = {}
-
-    # detect GPUs using nvidia-smi
+    # Detect GPUs using nvidia-smi (doesn't take ownership like jax.devices())
     if shutil.which("nvidia-smi"):
         try:
             result = subprocess.run(
@@ -97,52 +90,20 @@ def _detect_local_accelerators() -> tuple[bool, dict[str, float]]:
                 timeout=10,
             )
             if result.returncode == 0 and result.stdout.strip():
-                gpu_names = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
-                gpu_count = len(gpu_names)
+                gpu_count = len([line for line in result.stdout.strip().split("\n") if line.strip()])
                 if gpu_count > 0:
-                    has_accelerators = True
-                    # Try to map GPU name to Ray accelerator type (as custom resource)
-                    gpu_name = gpu_names[0].upper()
-                    accel_type = None
-                    if "A100" in gpu_name:
-                        accel_type = "A100-80G" if "80G" in gpu_name else "A100-40G"
-                    elif "H100" in gpu_name:
-                        accel_type = "H100"
-                    elif "V100" in gpu_name:
-                        accel_type = "V100"
-                    elif "A10" in gpu_name:
-                        accel_type = "A10G"
-                    elif "L4" in gpu_name:
-                        accel_type = "L4"
-                    elif "T4" in gpu_name:
-                        accel_type = "T4"
-
-                    if accel_type:
-                        custom_resources[f"accelerator_type:{accel_type}"] = float(gpu_count)
-                        logger.info(f"Detected {gpu_count} GPU(s) of type {accel_type}")
-                    else:
-                        logger.info(f"Detected {gpu_count} GPU(s): {gpu_names[0]}")
+                    logger.info(f"Detected {gpu_count} GPU(s)")
+                    return True
         except Exception as e:
             logger.debug(f"nvidia-smi detection failed: {e}")
 
-    # detect TPUs via environment variable
-    if not has_accelerators:
-        tpu_name = os.environ.get("TPU_NAME") or os.environ.get("CLOUD_TPU_TASK_ID")
-        if tpu_name:
-            # On TPU VMs, detect chip count via JAX (safe since no GPU conflict)
-            try:
-                import jax
+    # Detect TPUs via environment variable (doesn't call jax.devices())
+    tpu_name = os.environ.get("TPU_NAME") or os.environ.get("CLOUD_TPU_TASK_ID")
+    if tpu_name:
+        logger.info(f"Detected TPU environment: {tpu_name}")
+        return True
 
-                devices = jax.devices()
-                tpu_count = sum(1 for d in devices if d.platform == "tpu")
-                if tpu_count > 0:
-                    has_accelerators = True
-                    custom_resources["TPU"] = float(tpu_count)
-                    logger.info(f"Detected {tpu_count} TPU(s)")
-            except Exception as e:
-                logger.debug(f"Could not detect TPUs via JAX: {e}")
-
-    return has_accelerators, custom_resources
+    return False
 
 
 def current_cluster() -> Cluster:
@@ -150,9 +111,8 @@ def current_cluster() -> Cluster:
 
     If a cluster is already set in context, return it.
     If a FRAY_CLUSTER_SPEC is set, create a cluster from it.
-    If running inside of Ray, use a Ray cluster.
-    For local single-machine execution (including with GPUs), use LocalCluster
-    to avoid Ray's virtualenv/pip overhead.
+    If running inside of Ray or Ray is already initialized, use RayCluster.
+    Otherwise, use LocalCluster (works fine for Zephyr and local execution).
     """
     cluster = _cluster_context.get()
     if cluster is not None:
@@ -167,43 +127,24 @@ def current_cluster() -> Cluster:
 
     try:
         import ray
+        from fray.cluster.ray.cluster import RayCluster
 
         # Use RayCluster if Ray is already initialized or we're in a Ray context
-        # Note: Some operations (like Zephyr data processing) require Ray,
-        # so we use RayCluster when Ray is initialized, even for local execution
         if ray.is_initialized() or _is_running_in_ray_context():
             logger.info("Auto-detected Ray cluster")
-            from fray.cluster.ray.cluster import RayCluster
-
-            cluster = RayCluster()
-            set_current_cluster(cluster)
-            return cluster
-
-        # Check for local accelerators and initialize Ray with them
-        has_accelerators, custom_resources = _detect_local_accelerators()
-        if has_accelerators:
-            logger.info(f"Detected local accelerators, initializing Ray (custom resources: {custom_resources})")
-            # Let Ray auto-detect GPUs; only pass additional custom resources
-            ray.init(
-                namespace="marin",
-                ignore_reinit_error=True,
-                resources=custom_resources if custom_resources else None,
-            )
-            from fray.cluster.ray.cluster import RayCluster
-
             cluster = RayCluster()
             set_current_cluster(cluster)
             return cluster
     except ImportError:
         pass
 
-    # For local execution (including with local GPUs), use LocalCluster
+    # For local execution, use LocalCluster
     # This avoids Ray's virtualenv creation and pip installation overhead
-    has_accelerators, _ = _detect_local_accelerators()
-    if has_accelerators:
-        logger.info("Detected local accelerators, using LocalCluster for direct execution")
+    # Note: Zephyr data processing works fine with LocalCluster
+    if _has_local_accelerators():
+        logger.info("Using LocalCluster for local execution with accelerators")
     else:
-        logger.info("No active cluster found, using LocalCluster")
+        logger.info("Using LocalCluster for local execution")
 
     cluster = LocalCluster()
     set_current_cluster(cluster)

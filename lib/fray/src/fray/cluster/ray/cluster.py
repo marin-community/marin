@@ -15,10 +15,12 @@
 """Ray-based cluster implementation."""
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,6 +46,27 @@ from fray.cluster.ray.tpu import run_on_pod_ray
 from fray.job.context import RayContext, fray_default_job_ctx
 
 logger = logging.getLogger("ray")
+
+
+@contextlib.contextmanager
+def temporary_env_vars(env_vars: dict[str, str]) -> Iterator[None]:
+    """Context manager to temporarily set environment variables.
+
+    Args:
+        env_vars: Dictionary of environment variable names to values to set.
+
+    On exit, restores the original environment.
+    """
+    old_env = {k: os.environ.get(k) for k in env_vars}
+    os.environ.update(env_vars)
+    try:
+        yield
+    finally:
+        for k, v in old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
 
 # We can't launch TPU or callable entrypoint jobs directly via Ray, as it
@@ -230,21 +253,9 @@ class RayCluster(Cluster):
             runtime_env = self._get_runtime_env(request, use_absolute_paths=True)
             env_vars = runtime_env.get("env_vars", {})
 
-            # Apply environment variables
-            import os
-
-            old_env = {k: os.environ.get(k) for k in env_vars}
-            try:
-                os.environ.update(env_vars)
+            with temporary_env_vars(env_vars):
                 logger.info(f"Set env vars for direct execution: JAX_PLATFORMS={os.environ.get('JAX_PLATFORMS')}")
                 result = entrypoint.callable(*entrypoint.args, **entrypoint.kwargs)
-            finally:
-                # Restore original environment
-                for k, v in old_env.items():
-                    if v is None:
-                        os.environ.pop(k, None)
-                    else:
-                        os.environ[k] = v
 
             job_id = JobId(f"direct-{id(entrypoint)}")
             self._jobs[job_id] = RayJobInfo.completed(request.name, result)

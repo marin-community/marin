@@ -120,8 +120,8 @@ def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
     return PackageSpec(package_specs=package_specs, py_modules=py_modules)
 
 
-def build_python_path(submodules_dir: str = "submodules", absolute: bool = False) -> list[str]:
-    """Build the PYTHONPATH for the given submodules.
+def build_python_path(absolute: bool = False) -> list[str]:
+    """Build the PYTHONPATH for the monorepo workspace.
 
     Ray's installation process is... non-optimal. `py_modules` just injects
     the exact "py_module" itself into the PYTHONPATH, but not e.g. the src dir.
@@ -132,7 +132,6 @@ def build_python_path(submodules_dir: str = "submodules", absolute: bool = False
     we have to just manually guess what our PYTHONPATH should be.
 
     Args:
-        submodules_dir: Directory containing submodules
         absolute: If True, return absolute paths (needed for local execution without working_dir)
     """
     # Workspace member src directories + experiments directory
@@ -144,19 +143,6 @@ def build_python_path(submodules_dir: str = "submodules", absolute: bool = False
         "lib/marin/src",
         "lib/zephyr/src",
     ]
-
-    if os.path.exists(submodules_dir):
-        # Iterate through the directories inside submodules
-        for submodule in os.listdir(submodules_dir):
-            submodule_path = os.path.join(submodules_dir, submodule)
-
-            # Check if it's a directory
-            if os.path.isdir(submodule_path):
-                # Add both submodule and submodule/src paths, because why not
-                paths.append(submodule_path)
-                src_path = os.path.join(submodule_path, "src")
-                if os.path.isdir(src_path):
-                    paths.append(src_path)
 
     if absolute:
         cwd = os.getcwd()
