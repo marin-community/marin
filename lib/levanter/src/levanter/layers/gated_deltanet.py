@@ -1136,6 +1136,154 @@ def _invert_I_minus_strict_lower_doubling(
     return Inv.astype(jnp.float32)
 
 
+def _apply_I_minus_nilpotent_doubling_to_rhs(
+    A: jnp.ndarray,
+    B: jnp.ndarray,
+    *,
+    precision_mode: str = "fp32",
+    iters: int | None = None,
+) -> jnp.ndarray:
+    """
+    Compute X = (I - A)^(-1) @ B using the exact nilpotent doubling product,
+    WITHOUT forming (I - A)^(-1) explicitly:
+
+        (I - A)^(-1) = (I + A)(I + A^2)(I + A^4)...   exact once 2^k >= N
+
+    Algorithm:
+        X = B
+        Term = A
+        repeat k times:
+            X = (I + Term) X = X + Term @ X
+            Term = Term @ Term
+
+    Works for any nilpotent A (strictly lower OR strictly upper both qualify).
+    """
+    import jax.numpy as jnp
+
+    if A.ndim != 2 or B.ndim != 2:
+        raise ValueError(f"Expected 2D A,B. Got A.ndim={A.ndim}, B.ndim={B.ndim}")
+    n = int(A.shape[0])
+    if A.shape[1] != n:
+        raise ValueError(f"A must be square, got {A.shape}")
+    if B.shape[0] != n:
+        raise ValueError(f"B must have shape [N,R] with N={n}, got {B.shape}")
+
+    # exact once 2^k >= n
+    k = (n - 1).bit_length() if iters is None else max(0, int(iters))
+
+    A = A.astype(jnp.float32)
+    X = B.astype(jnp.float32)
+    Term = A
+
+    for _ in range(k):
+        X = X + _mxu_matmul_f32(Term, X, precision_mode=precision_mode)
+        Term = _mxu_matmul_f32(Term, Term, precision_mode=precision_mode)
+
+    return X.astype(jnp.float32)
+
+
+def _solve_I_minus_strict_lower_trsm_blocked(
+    A_strict: jnp.ndarray,
+    B: jnp.ndarray,
+    *,
+    precision_mode: str = "fp32",
+    base_block: int = 32,
+) -> jnp.ndarray:
+    """
+    Solve (I - A_strict) X = B for X, where A_strict is strictly lower triangular.
+
+    Uses recursive block TRSM:
+      - split into halves
+      - solve top block
+      - update bottom RHS via matmul (MXU)
+      - solve bottom block
+      - concatenate
+
+    Base case uses nilpotent-doubling applied-to-RHS (no explicit inverse).
+    """
+    import jax.numpy as jnp
+
+    n = int(A_strict.shape[0])
+    if A_strict.shape[1] != n:
+        raise ValueError(f"A_strict must be square, got {A_strict.shape}")
+    if B.shape[0] != n:
+        raise ValueError(f"B must have matching leading dim, got A={A_strict.shape}, B={B.shape}")
+
+    A = A_strict.astype(jnp.float32)
+    B = B.astype(jnp.float32)
+
+    # Base or odd fallback: use exact doubling (nilpotent) applied to RHS.
+    if n <= int(base_block) or (n % 2) != 0:
+        return _apply_I_minus_nilpotent_doubling_to_rhs(A, B, precision_mode=precision_mode)
+
+    m = n // 2
+    A11 = A[:m, :m]
+    A21 = A[m:, :m]
+    A22 = A[m:, m:]
+
+    B1 = B[:m, :]
+    B2 = B[m:, :]
+
+    X1 = _solve_I_minus_strict_lower_trsm_blocked(A11, B1, precision_mode=precision_mode, base_block=base_block)
+
+    # (I - A22) X2 = B2 + A21 X1   (because L21 = -A21)
+    B2p = B2 + _mxu_matmul_f32(A21, X1, precision_mode=precision_mode)
+    X2 = _solve_I_minus_strict_lower_trsm_blocked(A22, B2p, precision_mode=precision_mode, base_block=base_block)
+
+    return jnp.concatenate([X1, X2], axis=0).astype(jnp.float32)
+
+
+def _solve_I_minus_strict_lower_trsm_blocked_T(
+    A_strict: jnp.ndarray,
+    B: jnp.ndarray,
+    *,
+    precision_mode: str = "fp32",
+    base_block: int = 16,
+) -> jnp.ndarray:
+    """
+    Solve (I - A_strict)^T Y = B for Y.
+
+    Equivalent to solving (I - A_strict.T) Y = B, where A_strict.T is strictly upper
+    (also nilpotent). We still exploit block structure:
+
+      Y2 = solve((I - A22)^T, B2)
+      Y1 = solve((I - A11)^T, B1 + A21^T Y2)
+
+    Base case uses nilpotent-doubling applied-to-RHS on A^T (no explicit inverse).
+    """
+    import jax.numpy as jnp
+
+    n = int(A_strict.shape[0])
+    if A_strict.shape[1] != n:
+        raise ValueError(f"A_strict must be square, got {A_strict.shape}")
+    if B.shape[0] != n:
+        raise ValueError(f"B must have matching leading dim, got A={A_strict.shape}, B={B.shape}")
+
+    A = A_strict.astype(jnp.float32)
+    B = B.astype(jnp.float32)
+
+    # Base or odd fallback: solve (I - A^T) Y = B via exact doubling on A^T.
+    if n <= int(base_block) or (n % 2) != 0:
+        return _apply_I_minus_nilpotent_doubling_to_rhs(A.T, B, precision_mode=precision_mode)
+
+    m = n // 2
+    A11 = A[:m, :m]
+    A21 = A[m:, :m]
+    A22 = A[m:, m:]
+
+    B1 = B[:m, :]
+    B2 = B[m:, :]
+
+    # Solve bottom first for upper-triangular system
+    Y2 = _solve_I_minus_strict_lower_trsm_blocked_T(A22, B2, precision_mode=precision_mode, base_block=base_block)
+
+    # (I - A11)^T Y1 = B1 + A21^T Y2
+    B1p = B1 + _mxu_matmul_f32(A21.T, Y2, precision_mode=precision_mode)
+    Y1 = _solve_I_minus_strict_lower_trsm_blocked_T(A11, B1p, precision_mode=precision_mode, base_block=base_block)
+
+    return jnp.concatenate([Y1, Y2], axis=0).astype(jnp.float32)
+
+
 def _in_specs_chunk_segment_fwd_tpu(B: int, H: int, Seg: int, Ct: int, K_pad: int, V_pad: int):
     """One program per (b,h). Inputs carry Seg chunks inside the program."""
 
@@ -1209,12 +1357,16 @@ def _gdn_chunk_segment_fwd_kernel_tpu(
         KKT = jnp.matmul(k_beta, k.T)
         A = -KKT * exp_diff * tril_strict
 
-        Inv = _invert_I_minus_strict_lower_doubling(A, precision_mode=precision_mode)
-
-        # Solve both RHS at once: [βV | (βK ⊙ exp_g)]
+        # Solve both RHS at once: [βV | (βK ⊙ exp_g)]  without forming Inv
         k_scaled = k_beta * exp_g[:, None]
         rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)  # (Ct, V+K)
-        sol_all = _mxu_matmul_f32(Inv, rhs_all, precision_mode=precision_mode)  # (Ct, V+K)
+
+        sol_all = _solve_I_minus_strict_lower_trsm_blocked(
+            A,
+            rhs_all,
+            precision_mode=precision_mode,
+            base_block=32,
+        )  # (Ct, V+K)
 
         v_pseudo = lax.slice(sol_all, (0, 0), (Ct, V_pad))  # (Ct, V)
         k_cumdecay = lax.slice(sol_all, (0, V_pad), (Ct, V_pad + K_pad))  # (Ct, K)
@@ -1438,11 +1590,9 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         KKT = jnp.matmul(k_beta, k.T)
         A = -KKT * exp_diff * tril_strict
 
-        Inv = _invert_I_minus_strict_lower_doubling(A, precision_mode=precision_mode)
-
         k_scaled = k_beta * exp_g[:, None]
         rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)
-        sol_all = _mxu_matmul_f32(Inv, rhs_all, precision_mode=precision_mode)
+        sol_all = _solve_I_minus_strict_lower_trsm_blocked(A, rhs_all, precision_mode=precision_mode, base_block=32)
 
         v_pseudo = lax.slice(sol_all, (0, 0), (Ct, V_pad))
         k_cumdecay = lax.slice(sol_all, (0, V_pad), (Ct, V_pad + K_pad))
@@ -1495,9 +1645,8 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
 
         S = state_update_only(S, k, v, g_cum, beta)
 
-    # --- Chunk backward helper (matches your per-chunk kernel math, but pure arrays) ---
+    # --- Chunk backward helper (pure arrays) ---
     def chunk_bwd(S_prev, q, k, v, g_cum, beta, d_out, dS_next):
-        # masks for clipping derivatives
         gcum_inrange = ((g_cum >= -_GDN_EXP_CLIP) & (g_cum <= _GDN_EXP_CLIP)).astype(jnp.float32)
 
         g_cum_cl = jnp.clip(g_cum, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
@@ -1508,7 +1657,6 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         diff_cl = jnp.clip(diff, -_GDN_EXP_CLIP, _GDN_EXP_CLIP)
         exp_diff = jnp.exp(diff_cl)
 
-        # forward recompute core
         v_beta = v * beta[:, None]
         k_beta = k * beta[:, None]
 
@@ -1518,11 +1666,10 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         KKT = jnp.matmul(k_beta, k.T)
         A = -KKT * exp_diff * tril_strict
 
-        Inv = _invert_I_minus_strict_lower_doubling(A, precision_mode=precision_mode)
-
+        # Solve for sol_all directly (no Inv)
         k_scaled = k_beta * exp_g[:, None]
         rhs_all = jnp.concatenate([v_beta, k_scaled], axis=1)
-        sol_all = _mxu_matmul_f32(Inv, rhs_all, precision_mode=precision_mode)
+        sol_all = _solve_I_minus_strict_lower_trsm_blocked(A, rhs_all, precision_mode=precision_mode, base_block=32)
 
         v_pseudo = lax.slice(sol_all, (0, 0), (Ct, V_pad))
         k_cumdecay = lax.slice(sol_all, (0, V_pad), (Ct, V_pad + K_pad))
@@ -1554,11 +1701,9 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         d_q_scaled = jnp.matmul(d_inter, S_prev.T)
         dS_prev = jnp.matmul(q_scaled.T, d_inter)
 
-        # S_next = S_prev*decay_tail + add
         dS_prev = dS_prev + dS_next * decay_tail
         d_decay_tail = jnp.sum(dS_next * S_prev)
 
-        # add = k_w^T @ v_new
         d_add = dS_next
         d_k_w = jnp.matmul(v_new, d_add.T)
         d_v_new = d_v_new + jnp.matmul(k_w, d_add)
@@ -1589,13 +1734,18 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
         d_q = d_q + d_q_scaled * exp_g[:, None]
         d_exp_g = jnp.sum(d_q_scaled * q, axis=-1)
 
-        # solve adjoint via Inv (instead of TRSM loops)
+        # adjoint of solve:
         d_sol_all = jnp.concatenate([d_v_pseudo, d_k_cumdecay], axis=1)  # (Ct,V+K)
-        tmp_all = _mxu_matmul_f32(jnp.transpose(Inv), d_sol_all, precision_mode=precision_mode)  # Inv^T d
+
+        # tmp_all = (I - A)^(-T) @ d_sol_all  (no Inv.T)
+        tmp_all = _solve_I_minus_strict_lower_trsm_blocked_T(
+            A, d_sol_all, precision_mode=precision_mode, base_block=16
+        )
 
         d_v_beta = lax.slice(tmp_all, (0, 0), (Ct, V_pad))
         d_k_scaled = lax.slice(tmp_all, (0, V_pad), (Ct, V_pad + K_pad))
 
+        # dA = tmp_all @ sol_all^T
         dA = _mxu_matmul_f32(tmp_all, jnp.transpose(sol_all), precision_mode=precision_mode)  # (Ct,Ct)
 
         d_k_beta = d_k_scaled * exp_g[:, None]
@@ -1613,7 +1763,6 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
 
         d_g_cum = d_g_cum + d_exp_g * exp_g * gcum_inrange
 
-        # reverse_cumsum(d_g_cum) via MXU: d_g = U_rev @ d_g_cum
         d_g = _mxu_matmul_f32(U_rev, d_g_cum[:, None], precision_mode=precision_mode).reshape((Ct,))
 
         d_v = d_v_beta * beta[:, None]
@@ -1641,7 +1790,6 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
 
         dq, dk, dv, dg, db, dS_prev = chunk_bwd(S_prev, q, k, v, g_cum, beta, d_out, dS_next)
 
-        # Store grads
         dq_ref[dslice(0, 1), dslice(0, 1), dslice(c, 1), dslice(0, Ct), dslice(0, K_pad)] = dq[
             None, None, None, :, :
         ].astype(dq_ref.dtype)
@@ -1660,7 +1808,6 @@ def _gdn_chunk_segment_bwd_kernel_tpu(
 
         dS_next = dS_prev
 
-    # store dS_start
     dSstart_ref[dslice(0, 1), dslice(0, 1), dslice(0, K_pad), dslice(0, V_pad)] = dS_next[None, None, :, :].astype(
         dSstart_ref.dtype
     )
