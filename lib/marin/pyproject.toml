@@ -89,7 +89,7 @@ docs = [
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
-math = ["pylatexenc", "sympy"]
+math = ["pylatexenc", "sympy>=1.12.1,<1.14"]
 
 metrics = ["google-cloud-logging"]
 
@@ -115,7 +115,10 @@ conflicts = [
 
 [project.optional-dependencies]
 
-gpu = ["jax[cuda12]==0.8.0", "torch>=2.7.0"]
+gpu = [
+    "jax[cuda12]==0.8.0",
+    "torch>=2.7.0",
+]
 
 tpu = ["jax[tpu]==0.8.0", "torch>=2.7.0"]
 
@@ -123,7 +126,7 @@ cpu = ["jax==0.8.0", "torch>=2.7.0"]
 
 rl = [
     "prime",
-    "sympy",
+    "sympy>=1.12.1,<1.14",
     "verifiers==0.1.5",
 ]
 
@@ -136,15 +139,13 @@ name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
-torch = [
-    # Default to the CPU index for TPU/CPU builds
-    { index = "pytorch-cpu", extra="cpu" },
-    { index = "pytorch-cpu", extra="tpu" },
-    # GPU index only when --extra gpu
-    { index = "pytorch-cu128", extra = "gpu" },
-]
 resiliparse = { index = "marin-resiliparse" }
-
+# Use CUDA PyTorch for --extra=gpu on Linux, CPU PyTorch for TPU/CPU builds
+torch = [
+    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cpu", extra = "tpu" },
+]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
