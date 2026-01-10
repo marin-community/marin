@@ -17,6 +17,7 @@
 import enum
 import hashlib
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,7 +120,7 @@ def compute_frozen_packages(extra: list[str] | None = None) -> PackageSpec:
     return PackageSpec(package_specs=package_specs, py_modules=py_modules)
 
 
-def build_python_path() -> list[str]:
+def build_python_path(submodules_dir: str = "submodules") -> list[str]:
     """Build the PYTHONPATH for the given submodules.
 
     Ray's installation process is... non-optimal. `py_modules` just injects
@@ -139,6 +140,17 @@ def build_python_path() -> list[str]:
         "lib/marin/src",
         "lib/zephyr/src",
     ]
+
+    if not os.path.exists(submodules_dir):
+        return paths
+
+    for submodule in os.listdir(submodules_dir):
+        submodule_path = os.path.join(submodules_dir, submodule)
+        if os.path.isdir(submodule_path):
+            paths.append(submodule_path)
+            src_path = os.path.join(submodule_path, "src")
+            if os.path.isdir(src_path):
+                paths.append(src_path)
 
     return paths
 
