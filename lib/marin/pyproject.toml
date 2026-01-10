@@ -44,6 +44,7 @@ dependencies = [
     "s3fs>=2024",
     "toml",
     "torch>=2.7.0",
+    "torchvision>=0.22.0,<0.24",
     "tqdm",
     "tqdm-loggable",
     "wandb",
@@ -115,14 +116,11 @@ conflicts = [
 
 [project.optional-dependencies]
 
-gpu = [
-    "jax[cuda12]==0.8.0",
-    "torch>=2.7.0",
-]
+gpu = ["jax[cuda12]==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.24"]
 
-tpu = ["jax[tpu]==0.8.0", "torch>=2.7.0"]
+tpu = ["jax[tpu]==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.24"]
 
-cpu = ["jax==0.8.0", "torch>=2.7.0"]
+cpu = ["jax==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.24"]
 
 rl = [
     "prime",
@@ -134,11 +132,19 @@ eval = [
     "lm-eval[math]@git+https://github.com/stanford-crfm/lm-evaluation-harness@d5e3391f22cde186c827674d5c3ec7c5f4fe0cab",
 ]
 
+
 [[tool.uv.index]]
 name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
+torchvision = [
+    # Default to the CPU index for TPU/CPU builds
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cpu", extra = "tpu" },
+    # GPU index only when --extra gpu
+    { index = "pytorch-cu128", extra = "gpu" },
+]
 resiliparse = { index = "marin-resiliparse" }
 # Use CUDA PyTorch for --extra=gpu on Linux, CPU PyTorch for TPU/CPU builds
 torch = [

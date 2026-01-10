@@ -21,16 +21,15 @@ These models range from 50M to 2B parameters, spanning 11 widths (256 to 3072) a
 Usage:
 1. Import the model step you want to use
 2. Run executor_main([model_step]) to download
-3. Use get_model_local_path(model_step) to get the local path
+3. Use the model step's output path for downstream jobs
 
 Example:
 ```
 from gemstones import gemstone_768x45
-from marin.execution.executor import executor_main
-from experiments.models import get_model_local_path
+from marin.execution.executor import executor_main, output_path_of
 
 executor_main([gemstone_768x45])
-local_path = get_model_local_path(gemstone_768x45)
+model_path = output_path_of(gemstone_768x45)
 ```
 """
 

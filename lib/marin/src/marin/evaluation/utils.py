@@ -71,18 +71,23 @@ def upload_to_gcs(local_path: str, gcs_path: str) -> None:
 
 
 def kill_process_on_port(port: int) -> None:
-    # Iterate over all running processes
-    for proc in psutil.process_iter(["pid", "name", "connections"]):
-        # Check for connections the process has
-        for conn in proc.info["connections"]:
-            if conn.laddr.port == port:
-                try:
-                    print(f"Killing process {proc.info['name']} (PID {proc.info['pid']}) on port {port}")
-                    proc.kill()
-                except psutil.NoSuchProcess:
-                    print(f"Process {proc.info['pid']} no longer exists.")
-                except Exception as e:
-                    print(f"Error killing process: {e}")
+    for conn in psutil.net_connections(kind="inet"):
+        laddr = getattr(conn, "laddr", None)
+        if not laddr or getattr(laddr, "port", None) != port:
+            continue
+        pid = getattr(conn, "pid", None)
+        if pid is None:
+            continue
+        try:
+            proc = psutil.Process(pid)
+            print(f"Killing process {proc.name()} (PID {pid}) on port {port}")
+            proc.kill()
+        except psutil.NoSuchProcess:
+            print(f"Process {pid} no longer exists.")
+        except psutil.AccessDenied:
+            print(f"Access denied killing PID {pid} on port {port}.")
+        except Exception as e:
+            print(f"Error killing PID {pid} on port {port}: {e}")
 
 
 def set_cuda_visible_devices():
