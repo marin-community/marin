@@ -203,18 +203,38 @@ actually do anything under the hood to ensure that a job is actually using the n
 the config file configures each worker with only 120 visible CPUs.
 
 ### Restarting the Cluster
+
+#### Restart Policy
+
+When you need to restart a cluster, follow this policy:
+
+1. **Notify**: Post in the #infra Discord channel about your plan to restart the cluster
+2. **Check for running jobs**: Check if there are any active jobs on the cluster
+3. **Ping affected users** (optional): If there are running jobs and you plan to use `--preserve-jobs=0`, ping the relevant people who own those jobs and give them time to respond (e.g., 15-30 minutes)
+4. **Proceed with restart**: After notification and any necessary waiting period, proceed with the restart
+
+>[!NOTE]
+>The job restoration logic (enabled by default with `--preserve-jobs=1`) works reliably in most cases. However, being considerate of other users' work is still important.
+
+**When to restart**: Restarts are appropriate when:
+- The cluster is in a broken state (e.g., workers not connecting)
+- The autoscaler is not functioning properly
+- Configuration changes require a fresh start
+
+#### Common Restart Scenario
+
 There is currently an error on the Ray autoscaler side with spot-TPU instances, where the Ray autoscaler is not able
 to detect when spot-TPU instances are dead and as a result, we may be left in a state with just the head node and
 no more spot-TPU worker instances starting up. When this state occurs, please message in the #infra Discord
 that you are going to restart the cluster, and then run `uv run scripts/ray/cluster.py --config <config> restart-cluster`.
 
-Notes:
-* Please check whether there are any running jobs from other users before restarting so that you do not kill all their
-jobs without getting permission first.
-* You can specify `--preserve-jobs=0` when restarting the cluster if you want to skip backing up running jobs and start
-with a completely clean slate (the default value is `--preserve-jobs=1`, which backs up jobs and resubmits them after the restart).
-Example: `uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml restart-cluster --preserve-jobs=0`
-* See the instructions below if there are any reserved workers on the cluster, though in many cases the command above is all you need.
+#### Restart Options
+
+* **Job preservation**: By default, `--preserve-jobs=1` backs up running jobs and resubmits them after restart. For a completely clean slate, use `--preserve-jobs=0`:
+  ```bash
+  uv run ./scripts/ray/cluster.py --config=infra/marin-us-central2.yaml restart-cluster --preserve-jobs=0
+  ```
+* **Reserved workers**: If there are any reserved workers on the cluster, see the instructions below, though in many cases the command above is all you need.
 
 ### Adding manual workers
 

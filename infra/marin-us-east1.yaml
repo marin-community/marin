@@ -24,7 +24,7 @@ provider:
 
 
 docker:
-    image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20260102"
+    image: "us-east1-docker.pkg.dev/hai-gcp-models/marin/marin_cluster:20260104"
     container_name: "ray_docker"
     pull_before_run: true
     worker_run_options:
@@ -37,6 +37,13 @@ docker:
       - --shm-size=100gb
       - -v
       - "/tmp:/tmp"
+      - -e MARIN_PREFIX=gs://marin-us-east1
+      - -e BUCKET=marin-us-east1
+      - -e MARIN_LOCAL_CACHE_DIR=/tmp/marin-cache
+      - -e AUTOSCALER_HEARTBEAT_TIMEOUT_S=600
+      - -e TPU_MIN_LOG_LEVEL=3
+      - -e TPU_STDERR_LOG_LEVEL=3
+      - -e TPU_LOG_DIR=disabled
       # this lets the worker run docker commands and have them run as sibling containers
       - -v "/var/run/docker.sock:/var/run/docker.sock"
 
@@ -48,6 +55,13 @@ docker:
       - -v "/tmp:/tmp"
       - --ulimit nofile=1048576:1048576
       - -e RAY_TPU_MAX_CONCURRENT_ACTIVE_CONNECTIONS=64
+      - -e MARIN_PREFIX=gs://marin-us-east1
+      - -e BUCKET=marin-us-east1
+      - -e MARIN_LOCAL_CACHE_DIR=/tmp/marin-cache
+      - -e AUTOSCALER_HEARTBEAT_TIMEOUT_S=600
+      - -e TPU_MIN_LOG_LEVEL=3
+      - -e TPU_STDERR_LOG_LEVEL=3
+      - -e TPU_LOG_DIR=disabled
 
       - -e RAY_AUTH_MODE=token
       - -e RAY_AUTH_TOKEN_PATH=/home/ray/.ray/auth_token
@@ -57,11 +71,6 @@ docker:
 initialization_commands:
   - which docker || (curl -fsSL https://get.docker.com -o get-docker.sh; sudo sh get-docker.sh; sudo usermod -aG docker $USER; sudo systemctl restart docker -f)
   - yes | gcloud auth configure-docker us-east1-docker.pkg.dev
-  - which gcsfuse || (sudo apt-get update && sudo apt-get install -y curl gnupg && sudo mkdir -p /etc/apt/keyrings && curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /etc/apt/keyrings/cloud.google.gpg && echo "deb [signed-by=/etc/apt/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt gcsfuse-$(. /etc/os-release && echo $VERSION_CODENAME) main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list >/dev/null && sudo apt-get update && sudo apt-get install -y gcsfuse)
-  - sudo sh -c "grep -q '^user_allow_other$' /etc/fuse.conf 2>/dev/null || echo user_allow_other >> /etc/fuse.conf"
-  - if [ -e /tmp/gcsfuse_mount ] && [ ! -d /tmp/gcsfuse_mount ]; then rm -f /tmp/gcsfuse_mount; fi
-  - mkdir -p /tmp/gcsfuse_mount
-  - gcsfuse --implicit-dirs --client-protocol grpc --cache-dir /dev/shm --file-cache-max-size-mb 160000 --dir-mode 0777 --file-mode 0666 -o allow_other --only-dir gcsfuse_mount marin-us-east1 /tmp/gcsfuse_mount || true
   # always run this because ray doesn't run with sudo
   - sudo usermod -aG docker $USER
   # we want to launch docker containers from inside docker, which means we need to loosen the permissions on the docker
@@ -84,17 +93,9 @@ setup_commands:
   - gcloud secrets versions access latest --secret=RAY_AUTH_TOKEN > $HOME/.ray/auth_token
   - chmod 600 $HOME/.ray/auth_token
 
-  - echo 'export MARIN_PREFIX="gs://marin-us-east1"' >> $HOME/.bashrc
-  - echo 'export BUCKET="marin-us-east1"' >> $HOME/.bashrc
+  - mkdir -p /tmp/marin-cache
   # cf https://github.com/ray-project/ray/blob/0bc6ec86ffd0fc0d4e43fb339ffe0ac03ee5531b/python/ray/autoscaler/_private/constants.py#L66
   # this is set to 30s by default, which is much too short for our use case
-  - echo 'export AUTOSCALER_HEARTBEAT_TIMEOUT_S=600' >> $HOME/.bashrc
-  - echo 'export TPU_MIN_LOG_LEVEL=3' >> $HOME/.bashrc
-  - echo 'export TPU_STDERR_LOG_LEVEL=3' >> $HOME/.bashrc
-  - echo 'export TPU_LOG_DIR=disabled' >> $HOME/.bashrc
-  # gcsfuse runs on the host (mounted at /tmp/gcsfuse_mount); expose it at the conventional in-container path.
-  - if [ -e /opt/gcsfuse_mount ] && [ ! -L /opt/gcsfuse_mount ]; then sudo rm -rf /opt/gcsfuse_mount; fi
-  - sudo ln -sfn /tmp/gcsfuse_mount /opt/gcsfuse_mount
 
 worker_setup_commands:
   # delete any old ray session data

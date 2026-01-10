@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
 import os
 import shutil
 import subprocess
@@ -19,7 +20,8 @@ import tempfile
 import time
 from abc import ABC
 from dataclasses import dataclass
-from typing import Literal
+from typing import ClassVar, Literal
+from urllib.parse import urlparse
 
 import requests
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
@@ -45,24 +47,59 @@ class VllmServerHandle:
 
 
 class VllmTpuEvaluator(Evaluator, ABC):
-    """For `Evaluator`s that runs inference with VLLM on TPUs."""
+    """For `Evaluator`s that runs inference with vLLM on TPUs."""
 
-    # Where to store checkpoints, cache inference results, etc.
-    CACHE_PATH: str = "/tmp"
-    HOST_GCSFUSE_MOUNT_ENV: str = "MARIN_VLLM_HOST_GCSFUSE_MOUNT"
+    _STREAMING_LOAD_FORMATS: ClassVar[set[str]] = {"runai_streamer", "runai_streamer_sharded"}
     VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
 
     @staticmethod
-    def download_model(model: ModelConfig) -> str:
+    def _vllm_env() -> dict[str, str]:
+        env = dict(os.environ)
+        # tpu_inference defaults MODEL_IMPL_TYPE=auto, which selects flax_nnx for many
+        # architectures. flax_nnx currently fails without an auto mesh context, so
+        # default to the vllm implementation unless the user overrides it.
+        env.setdefault("MODEL_IMPL_TYPE", "vllm")
+        return env
+
+    @staticmethod
+    def _is_object_store_path(path: str) -> bool:
+        parsed = urlparse(path)
+        return parsed.scheme in {"gs", "s3"}
+
+    @staticmethod
+    def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
+        if model.path is None:
+            return model
+        if not VllmTpuEvaluator._is_object_store_path(model.path):
+            return model
+        if "load_format" in model.engine_kwargs:
+            return model
+
+        engine_kwargs = dict(model.engine_kwargs)
+        # Default to the non-sharded streamer for maximum compatibility.
+        # `runai_streamer_sharded` only works for checkpoints that are already sharded
+        # into `model-rank-*-part-*.safetensors`.
+        engine_kwargs["load_format"] = "runai_streamer"
+        return dataclasses.replace(model, engine_kwargs=engine_kwargs)
+
+    @staticmethod
+    def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
+        args: list[str] = []
+        load_format = engine_kwargs.get("load_format")
+        if isinstance(load_format, str):
+            args.extend(["--load-format", load_format])
+        return args
+
+    @staticmethod
+    def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
+        """Resolve the `model` argument to pass to vLLM.
+
+        - If `model.path` is set, use it (and auto-enable streaming for `gs://` / `s3://`).
+        - Otherwise, fall back to `model.name` (e.g. an HF repo id).
         """
-        Download the model if it's not already downloaded
-        """
-        downloaded_path: str | None = model.ensure_downloaded(
-            local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
-        )
-        # Use the model name if a path is not specified (e.g., for Hugging Face models)
-        model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
-        return model_name_or_path
+        model = VllmTpuEvaluator._maybe_enable_streaming(model)
+        model_name_or_path = model.path if model.path is not None else model.name
+        return model_name_or_path, model
 
     @staticmethod
     def start_vllm_server_in_background(
@@ -75,16 +112,20 @@ class VllmTpuEvaluator(Evaluator, ABC):
         docker_image: str | None = None,
         docker_run_args: list[str] | None = None,
     ) -> VllmServerHandle:
+        """Start `vllm serve` and wait until `/v1/models` responds.
+
+        Defaults to docker mode unless overridden by `mode` or `MARIN_VLLM_MODE`.
         """
-        Serve the model with a local vLLM server in the background.
-        Returns a handle that can be used to stop the server.
-        """
-        # Use the model name if a path is not specified (e.g., for Hugging Face models)
-        model_name_or_path: str = VllmTpuEvaluator.download_model(model)
+
+        model_name_or_path, model = VllmTpuEvaluator.resolve_model_name_or_path(model)
 
         mode_str = (mode if mode is not None else os.environ.get("MARIN_VLLM_MODE", "docker")).lower()
         if mode_str not in ("native", "docker"):
             raise ValueError(f"Unknown MARIN_VLLM_MODE={mode_str!r}; expected 'native' or 'docker'.")
+
+        engine_cli_args = VllmTpuEvaluator._engine_kwargs_to_cli_args(model.engine_kwargs)
+        extra_cli_args = [*engine_cli_args, *(extra_args or [])]
+
         if mode_str == "docker":
             resolved_image = docker_image or os.environ.get("MARIN_VLLM_DOCKER_IMAGE")
             if not resolved_image:
@@ -93,48 +134,14 @@ class VllmTpuEvaluator(Evaluator, ABC):
                     "Set it to a vllm-tpu image tag, e.g. vllm/vllm-tpu:<tag>."
                 )
 
-            volumes: list[tuple[str, str]] = [("/tmp", "/tmp")]
-            host_gcsfuse_mount = os.environ.get(VllmTpuEvaluator.HOST_GCSFUSE_MOUNT_ENV)
-            if not host_gcsfuse_mount and os.path.isdir("/tmp/gcsfuse_mount"):
-                # Cluster configs mount GCS once on the host at `/tmp/gcsfuse_mount` and expose it
-                # inside the Ray container via a symlink at `/opt/gcsfuse_mount`. Since the Docker
-                # daemon sees the host filesystem, we must bind-mount the host path (under `/tmp`),
-                # not the in-container symlink path (under `/opt`).
-                host_gcsfuse_mount = "/tmp/gcsfuse_mount"
-            if host_gcsfuse_mount:
-                volumes.append((host_gcsfuse_mount, "/opt/gcsfuse_mount"))
-            elif model_name_or_path.startswith("/opt/gcsfuse_mount/"):
-                raise RuntimeError(
-                    f"Model path {model_name_or_path!r} is under /opt/gcsfuse_mount, but "
-                    f"{VllmTpuEvaluator.HOST_GCSFUSE_MOUNT_ENV} is not set. When using docker sidecars, "
-                    "any host mounts must be visible to the Docker daemon (host filesystem). "
-                    "Either set the env var to a host path that contains the model (and is gcsfuse-mounted on the host),"
-                    "or ensure the host has GCS mounted at /tmp/gcsfuse_mount, "
-                    "or use an HF repo id and let vLLM download inside the sidecar."
-                )
-
-            if (
-                os.path.isabs(model_name_or_path)
-                and os.path.exists(model_name_or_path)
-                and not (
-                    model_name_or_path.startswith("/tmp/")
-                    or model_name_or_path == "/tmp"
-                    or model_name_or_path.startswith("/opt/gcsfuse_mount/")
-                    or model_name_or_path == "/opt/gcsfuse_mount"
-                )
-            ):
-                volumes.append((model_name_or_path, model_name_or_path))
-
-            env: dict[str, str] = {"TOKENIZERS_PARALLELISM": "false"}
-            for key in ("HF_TOKEN", "WANDB_API_KEY", "HF_HOME", "HF_HUB_CACHE", "TRANSFORMERS_CACHE"):
+            env: dict[str, str] = {
+                "TOKENIZERS_PARALLELISM": "false",
+                "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "vllm"),
+            }
+            for key in ("HF_TOKEN", "WANDB_API_KEY"):
                 value = os.environ.get(key)
                 if value:
                     env[key] = value
-
-            if host_gcsfuse_mount and "HF_HOME" not in env:
-                env["HF_HOME"] = "/opt/gcsfuse_mount/hf-cache"
-                env.setdefault("HF_HUB_CACHE", "/opt/gcsfuse_mount/hf-cache/hub")
-                env.setdefault("TRANSFORMERS_CACHE", "/opt/gcsfuse_mount/hf-cache")
 
             docker_args = ["--privileged"]
             if docker_run_args:
@@ -146,8 +153,8 @@ class VllmTpuEvaluator(Evaluator, ABC):
                 host=host,
                 port=port,
                 env=env,
-                volumes=volumes,
-                extra_vllm_args=(extra_args or []),
+                volumes=[("/tmp", "/tmp")],
+                extra_vllm_args=extra_cli_args,
                 docker_run_args=docker_args,
             )
             docker_handle = start_vllm_docker_server(config, timeout_seconds=timeout_seconds)
@@ -158,15 +165,9 @@ class VllmTpuEvaluator(Evaluator, ABC):
                 docker_container_name=docker_handle.container_name,
             )
 
-        vllm_bin = shutil.which("vllm")
-        if vllm_bin is None:
-            raise RuntimeError(
-                "`vllm` CLI not found on PATH. Install vLLM in the job runtime environment "
-                "(e.g. via `EnvironmentConfig(pip_packages=[...])`) before using VllmTpuEvaluator."
-            )
-
         resolved_port = port if port is not None else 8000
 
+        vllm_bin = shutil.which("vllm") or "vllm"
         cmd: list[str] = [
             vllm_bin,
             "serve",
@@ -176,21 +177,19 @@ class VllmTpuEvaluator(Evaluator, ABC):
             host,
             "--port",
             str(resolved_port),
+            *extra_cli_args,
         ]
-        if extra_args:
-            cmd.extend(extra_args)
 
         log_dir = tempfile.mkdtemp(prefix="vllm_server_")
         stdout_path = os.path.join(log_dir, "stdout.log")
         stderr_path = os.path.join(log_dir, "stderr.log")
         stdout_f = open(stdout_path, "w")
         stderr_f = open(stderr_path, "w")
-        process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True)
+        process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=VllmTpuEvaluator._vllm_env())
 
-        # Check that the server has started by sending heartbeat checks
         server_url: str = f"http://{host}:{resolved_port}/v1"
         start_time: float = time.time()
-        elapsed_time: float = 0
+        elapsed_time: float = 0.0
 
         def tail(path: str, max_lines: int = 200) -> str:
             try:
@@ -212,20 +211,16 @@ class VllmTpuEvaluator(Evaluator, ABC):
                     f"--- stdout (tail) ---\n{tail(stdout_path)}\n"
                     f"--- stderr (tail) ---\n{tail(stderr_path)}"
                 )
+
             try:
-                # Attempt to send a request to the server's health endpoint
                 response = requests.get(f"{server_url}/models", timeout=5)
                 if response.status_code == 200:
-                    # If the /models endpoint responds, the server is up.
-                    print(f"vLLM server is up and running at {server_url}: {response.text}")
                     break
             except requests.ConnectionError:
-                # If the connection is refused, wait and try again
-                print(f"vLLM server is not ready yet. Elapsed time in seconds: {elapsed_time}")
+                pass
             except requests.Timeout:
-                print(f"vLLM server is not ready yet (timeout). Elapsed time in seconds: {elapsed_time}")
+                pass
 
-            # Check if the timeout has been reached
             elapsed_time = time.time() - start_time
             if elapsed_time > timeout_seconds:
                 process.kill()
@@ -233,11 +228,10 @@ class VllmTpuEvaluator(Evaluator, ABC):
                 stderr_f.close()
                 raise TimeoutError("Failed to start vLLM server within timeout period.")
 
-            time.sleep(5)  # Wait 5 seconds before retrying
+            time.sleep(5)
 
         stdout_f.close()
         stderr_f.close()
-        print(f"vLLM server is ready at {server_url} ({elapsed_time}s).")
         return VllmServerHandle(
             server_url=server_url,
             port=resolved_port,
@@ -247,25 +241,18 @@ class VllmTpuEvaluator(Evaluator, ABC):
         )
 
     @staticmethod
-    def cleanup(
-        model: ModelConfig,
-        vllm_server: VllmServerHandle | None = None,
-    ) -> None:
-        """
-        Clean up the vLLM server and any other resources.
-        """
+    def cleanup(model: ModelConfig, vllm_server: VllmServerHandle | None = None) -> None:
+        """Clean up the vLLM server and any other resources."""
+
         print("Cleaning up resources.")
-        # Kill the vLLM server
         try:
             if vllm_server is not None and vllm_server.mode == "docker" and vllm_server.docker_container_name:
                 stop_vllm_docker_server_by_name(vllm_server.docker_container_name)
-            elif vllm_server is not None and vllm_server.mode == "native":
-                if vllm_server.process is not None:
-                    vllm_server.process.kill()
+            elif vllm_server is not None and vllm_server.mode == "native" and vllm_server.process is not None:
+                vllm_server.process.kill()
         except Exception as e:
-            print(f"Failed to kill vLLM server: {e}")
+            print(f"Failed to stop vLLM server: {e}")
 
-        # Delete the checkpoint
         model.destroy()
 
     def launch_evaluate_with_ray(
@@ -277,9 +264,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         max_eval_instances: int | None = None,
         wandb_tags: list[str] | None = None,
     ) -> None:
-        """
-        Launches the evaluation run with Fray.
-        """
+        """Launch the evaluation run with Fray."""
 
         def launch(
             model: ModelConfig,
@@ -293,12 +278,14 @@ class VllmTpuEvaluator(Evaluator, ABC):
             logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", force=True)
             self.evaluate(model, evals, output_path, max_eval_instances, wandb_tags)
 
-        def _run():
+        def _run() -> None:
             with remove_tpu_lockfile_on_exit():
                 launch(model, evals, output_path, max_eval_instances, wandb_tags)
 
         if resource_config is None:
             resource_config = ResourceConfig()
+
+        mode_str = os.environ.get("MARIN_VLLM_MODE", "docker").lower()
 
         job_request = JobRequest(
             name="vllm-tpu-evaluation",
@@ -306,11 +293,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
             resources=resource_config,
             environment=EnvironmentConfig.create(
                 extras=["eval", "tpu"],
-                pip_packages=(
-                    self.VLLM_NATIVE_PIP_PACKAGES
-                    if os.environ.get("MARIN_VLLM_MODE", "docker").lower() == "native"
-                    else ()
-                ),
+                pip_packages=(self.VLLM_NATIVE_PIP_PACKAGES if mode_str == "native" else ()),
             ),
         )
 

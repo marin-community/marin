@@ -10,7 +10,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 GCP_CLEANUP_POLICY = [
     {
         "name": "delete-stale",
@@ -38,20 +37,6 @@ def _rm(path):
         os.remove(path)
     elif path.exists():
         raise RuntimeError(f"Remove failed. Path ({path}) is neither a directory nor a file.")
-
-
-def _cp(src, dst):
-    src = Path(src)
-    dst = Path(dst)
-    # delete dst if exists
-    _rm(dst)
-
-    if src.is_dir():
-        shutil.copytree(src, dst)
-    elif src.is_file():
-        shutil.copy(src, dst)
-    else:
-        raise RuntimeError(f"Copy failed. Source path ({src}) is neither a directory nor a file. Check if it exists.")
 
 
 def _run(argv):

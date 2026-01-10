@@ -10,25 +10,22 @@ from dataclasses import fields
 from typing import Any, Callable, Optional, TypeVar
 
 import equinox as eqx
+import haliax as hax
 import haliax.partitioning
-import humanfriendly
 import jax
 import numpy as np
+from haliax import is_named_array
+from haliax._src.util import index_where
+from haliax.jax_utils import is_jax_array_like
+from haliax.partitioning import ResourceAxis, ResourceMapping
 from jax import numpy as jnp
 from jax._src.mesh import get_concrete_mesh
 from jax.experimental.multihost_utils import host_local_array_to_global_array
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from jaxtyping import PRNGKeyArray, PyTree
 
-import haliax as hax
-from haliax import is_named_array
-from haliax._src.util import index_where
-from haliax.jax_utils import is_jax_array_like
-from haliax.partitioning import ResourceAxis, ResourceMapping
 from levanter.utils.mesh import create_mesh_from_axis_specs
-
 from levanter.utils.tree_utils import key_path_to_str, tree_flatten_one_level_with_keys
-
 
 X = TypeVar("X")
 T = TypeVar("T", bound=PyTree)
@@ -73,11 +70,6 @@ def local_cpu_mesh():
 def is_inside_jit():
     """Returns True if we're currently inside a jit"""
     return isinstance(jnp.zeros(()), jax.core.Tracer)
-
-
-def flops_estimate(fn, *args, **kwargs):
-    """Estimates the flop count of a function"""
-    return jax.jit(fn).lower(*args).cost_analysis()["flops"]
 
 
 def parameter_count(model: PyTree):
@@ -286,13 +278,6 @@ def tree_filter_like(template: X, tree: X) -> X:
     return jax.tree_util.tree_map(match_like, template, tree, is_leaf=lambda x: x is None)
 
 
-def as_arrayish(x):
-    if hasattr(x, "shape") and hasattr(x, "dtype"):
-        return x
-    else:
-        return jnp.asarray(x)
-
-
 def best_effort_sharding(shape, *, devices=None, mesh=None):
     if hasattr(shape, "shape"):
         shape = shape.shape
@@ -373,58 +358,6 @@ def estimated_free_device_memory(device=None) -> Optional[float]:
             total += (limit - in_use) // (1024.0**3)
 
     return total
-
-
-def memory_info_string() -> str:
-    """
-    Returns a string with memory usage information for all devices.
-    """
-    lines = []
-    total_free = 0
-    total_in_use = 0
-    for device in jax.devices():
-        info = device.memory_stats()
-        print(info)
-        limit_mem = info["bytes_limit"] if info is not None else None
-        # bytes_in_use
-        in_use_mem = info["bytes_in_use"] if info is not None else 0
-
-        if in_use_mem is not None:
-            free_mem = limit_mem - in_use_mem if limit_mem is not None else None
-            total_in_use += in_use_mem
-        else:
-            free_mem = None
-
-        if free_mem is not None:
-            total_free += free_mem
-
-        if free_mem is None:
-            free_str = "unknown"
-        else:
-            free_str = humanfriendly.format_size(free_mem)
-
-        if in_use_mem is None:
-            in_use_str = "unknown"
-        else:
-            in_use_str = humanfriendly.format_size(in_use_mem)
-
-        lines.append(
-            f"Device {device.id} ({device.platform}, {device.device_kind}): Free {free_str}, In use {in_use_str}"
-        )
-
-    if total_free == 0:
-        total_free_str = "unknown"
-    else:
-        total_free_str = humanfriendly.format_size(total_free)
-
-    if total_in_use == 0:
-        total_in_use_str = "unknown"
-    else:
-        total_in_use_str = humanfriendly.format_size(total_in_use)
-
-    lines.append(f"Total: Free {total_free_str}, In use {total_in_use_str}")
-
-    return "\n".join(lines)
 
 
 def zeros_like_tree(tree: T, axis_mapping: Optional[ResourceMapping] = None, dtype: Optional[jnp.dtype] = None) -> T:
