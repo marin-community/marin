@@ -76,25 +76,25 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 5
-TRAIN_BATCH_SIZE = 256  # CHANGED
+TRAIN_BATCH_SIZE = 512  # CHANGED
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 # Path to long-context Marin 8B checkpoint
 longcontext_marin8b_checkpoint = InputName.hardcoded("checkpoints/tootsie-8b-giraffe-phase3-64k-21219c/hf/step-2999/")
 
 mixture_sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v5p-64"),
+    resources=ResourceConfig.with_tpu("v5p-128"),
     tokenizer=marin_tokenizer,
     initialize_from_hf=longcontext_marin8b_checkpoint,
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=8e-5,  # CHANGED
+    learning_rate=4e-4,  # CHANGED
     max_seq_len=16384,
     seed=0,
     steps_per_checkpoint=(total_examples/TRAIN_BATCH_SIZE)//4,  # Every quarter epoch
     lr_schedule="cosine",
-    warmup=0.02,  # CHANGED
-    decay=0.98,  # CHANGED
+    warmup=0.1,  # CHANGED
+    decay=0.9,  # CHANGED
     weight_decay=0.0,
     beta1=0.9,
     beta2=0.999,
@@ -110,7 +110,7 @@ mixture_config = lm_mixture_data_config(
 )
 
 exp2199a2_redo2_sft_longcontext_marin_8b_openthoughts3 = default_sft(
-    name="exp2199a2_lr_sweep_longcontext_marin_8b_ot3_bsz256_lr8e_5",  # CHANGED
+    name="exp2199a2_lr_sweep_longcontext_marin_8b_ot3_bsz512_lr4e_4__v5litepod_128",  # CHANGED
     tokenized=mixture_config,
     model_config=llama_8b_64k,
     sft_config=mixture_sft_config,
