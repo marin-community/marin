@@ -248,6 +248,8 @@ def create_vllm_inference_config():
             max_tokens=16,
             logprobs=1,
             stop=None,
+            # Workaround for vllm-project/tpu-inference#1386: default top_k forces greedy sampling
+            top_k=4096,
         ),
     )
 

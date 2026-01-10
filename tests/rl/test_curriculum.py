@@ -33,7 +33,9 @@ from marin.rl.types import RolloutStats
 
 def create_test_rollout_stats(episode_reward: float, lesson_id: str = "test") -> RolloutStats:
     """Helper to create rollout stats for testing."""
-    return RolloutStats(lesson_id=lesson_id, episode_reward=episode_reward, env_example_id="test_example")
+    return RolloutStats(
+        lesson_id=lesson_id, episode_reward=episode_reward, env_example_id="test_example", temperature=1.0, top_k=8
+    )
 
 
 def test_update_performance_stats():
@@ -68,6 +70,7 @@ def test_update_performance_stats():
 def test_single_lesson_curriculum():
     """Test curriculum with a single lesson."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "only_lesson": LessonConfig(
                 lesson_id="only_lesson",
@@ -76,7 +79,7 @@ def test_single_lesson_curriculum():
                     env_args={"task_type": "cats", "seed": 42},
                 ),
             )
-        }
+        },
     )
 
     curriculum = Curriculum(config)
@@ -100,6 +103,7 @@ def test_weight_computation_at_different_success_rates():
     """Test that weights peak at intermediate success rates."""
     # Create multiple lessons to avoid normalization issues
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             f"lesson{i}": LessonConfig(
                 lesson_id=f"lesson{i}",
@@ -109,7 +113,7 @@ def test_weight_computation_at_different_success_rates():
                 ),
             )
             for i in range(5)
-        }
+        },
     )
 
     curriculum = Curriculum(config)
@@ -153,6 +157,7 @@ def test_weight_computation_at_different_success_rates():
 def test_sampling_distribution():
     """Test that sampling respects weight distribution."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "easy": LessonConfig(
                 lesson_id="easy",
@@ -175,7 +180,7 @@ def test_sampling_distribution():
                     env_args={"task_type": "opposites"},
                 ),
             ),
-        }
+        },
     )
 
     curriculum = Curriculum(config)
@@ -271,6 +276,7 @@ def test_circular_dependency_detection():
     """Test that circular dependencies are detected during initialization."""
     # Create lessons with circular dependency: A -> B -> A
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "lessonA": LessonConfig(
                 lesson_id="lessonA",
@@ -288,7 +294,7 @@ def test_circular_dependency_detection():
                 ),
                 dependencies=[LessonDependency(dependency_id="lessonA")],
             ),
-        }
+        },
     )
 
     with pytest.raises(ValueError, match="Circular dependency"):
@@ -298,6 +304,7 @@ def test_circular_dependency_detection():
 def test_unknown_dependency():
     """Test that unknown dependencies are detected."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "lesson1": LessonConfig(
                 lesson_id="lesson1",
@@ -307,7 +314,7 @@ def test_unknown_dependency():
                 ),
                 dependencies=[LessonDependency(dependency_id="nonexistent")],
             )
-        }
+        },
     )
 
     with pytest.raises(ValueError, match="unknown lesson"):
@@ -317,6 +324,7 @@ def test_unknown_dependency():
 def test_progressive_unlocking():
     """Test that lessons unlock progressively as dependencies are met."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "basic": LessonConfig(
                 lesson_id="basic",
@@ -333,7 +341,7 @@ def test_progressive_unlocking():
                 ),
                 dependencies=[LessonDependency(dependency_id="basic", reward_threshold=0.5)],
             ),
-        }
+        },
     )
 
     curriculum = Curriculum(config)
@@ -365,6 +373,7 @@ def test_progressive_unlocking():
 def test_multiple_dependencies():
     """Test lessons with multiple dependencies."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "lesson1": LessonConfig(
                 lesson_id="lesson1",
@@ -391,7 +400,7 @@ def test_multiple_dependencies():
                     LessonDependency(dependency_id="lesson2", reward_threshold=0.5),
                 ],
             ),
-        }
+        },
     )
 
     curriculum = Curriculum(config)
@@ -471,6 +480,7 @@ def test_plateau_detection_improving_trend():
 def test_graduation():
     """Test that lessons graduate when mastered."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "easy_lesson": LessonConfig(
                 lesson_id="easy_lesson",
@@ -480,7 +490,7 @@ def test_graduation():
                 ),
                 stop_threshold=0.9,
             )
-        }
+        },
     )
 
     curriculum = Curriculum(config)
@@ -510,6 +520,7 @@ def test_graduation():
 def test_graduation_requires_plateau():
     """Test that lessons don't graduate until plateaued."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "improving_lesson": LessonConfig(
                 lesson_id="improving_lesson",
@@ -519,7 +530,7 @@ def test_graduation_requires_plateau():
                 ),
                 stop_threshold=0.8,
             )
-        }
+        },
     )
 
     curriculum = Curriculum(config)
@@ -553,6 +564,7 @@ def test_graduation_requires_plateau():
 def test_graduated_lessons_excluded_from_weights():
     """Test that graduated lessons are excluded from sampling weights."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "graduated": LessonConfig(
                 lesson_id="graduated",
@@ -568,7 +580,7 @@ def test_graduated_lessons_excluded_from_weights():
                     env_args={"task_type": "addition"},
                 ),
             ),
-        }
+        },
     )
 
     curriculum = Curriculum(config)
@@ -588,6 +600,7 @@ def test_graduated_lessons_excluded_from_weights():
 def test_exploration_bonus_for_new_lessons():
     """Test that new lessons receive exploration bonus."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "new_lesson": LessonConfig(
                 lesson_id="new_lesson",
@@ -603,7 +616,7 @@ def test_exploration_bonus_for_new_lessons():
                     env_args={"task_type": "addition"},
                 ),
             ),
-        }
+        },
     )
 
     curriculum = Curriculum(config)
@@ -623,6 +636,7 @@ def test_exploration_bonus_for_new_lessons():
 def test_exploration_bonus_decay():
     """Test that exploration bonus decays with increasing samples."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "varying_lesson": LessonConfig(
                 lesson_id="varying_lesson",
@@ -638,7 +652,7 @@ def test_exploration_bonus_decay():
                     env_args={"task_type": "addition"},
                 ),
             ),
-        }
+        },
     )
 
     curriculum = Curriculum(config)
@@ -666,6 +680,7 @@ def test_exploration_bonus_decay():
 def test_exploration_bonus_converges():
     """Test that exploration bonus converges to minimal effect at high sample counts."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "lesson1": LessonConfig(
                 lesson_id="lesson1",
@@ -681,7 +696,7 @@ def test_exploration_bonus_converges():
                     env_args={"task_type": "addition"},
                 ),
             ),
-        }
+        },
     )
 
     curriculum = Curriculum(config)
@@ -703,6 +718,7 @@ def test_checkpoint_save_and_load(tmp_path):
     checkpoint_dir = tmp_path / "checkpoints"
 
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "lesson1": LessonConfig(
                 lesson_id="lesson1",
@@ -759,6 +775,7 @@ def test_checkpoint_save_and_load(tmp_path):
 def test_checkpoint_without_checkpoint_dir(tmp_path):
     """Test that restore_checkpoint returns early when no checkpoint exists."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "lesson1": LessonConfig(
                 lesson_id="lesson1",
@@ -785,6 +802,7 @@ def test_checkpoint_preserves_reward_history(tmp_path):
     checkpoint_dir = tmp_path / "checkpoints"
 
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "lesson": LessonConfig(
                 lesson_id="lesson",
@@ -820,6 +838,7 @@ def test_checkpoint_graduated_lessons(tmp_path):
     checkpoint_dir = tmp_path / "checkpoints"
 
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "lesson1": LessonConfig(
                 lesson_id="lesson1",
@@ -853,7 +872,9 @@ def test_checkpoint_graduated_lessons(tmp_path):
 
 def test_rollout_stats_dataclass():
     """Test RolloutStats dataclass creation and serialization."""
-    rollout_stats = RolloutStats(lesson_id="test_lesson", episode_reward=1.5, env_example_id="example_123")
+    rollout_stats = RolloutStats(
+        lesson_id="test_lesson", episode_reward=1.5, env_example_id="example_123", temperature=1.0, top_k=8
+    )
 
     assert rollout_stats.lesson_id == "test_lesson"
     assert rollout_stats.episode_reward == 1.5
@@ -875,12 +896,13 @@ def test_rollout_stats_dataclass():
 def test_curriculum_update_lesson_stats():
     """Test update_lesson_stats method."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "test_lesson": LessonConfig(
                 lesson_id="test_lesson",
                 env_config=EnvConfig(env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "cats"}),
             )
-        }
+        },
     )
 
     curriculum = Curriculum(config)
@@ -906,6 +928,7 @@ def test_curriculum_update_lesson_stats():
 def test_curriculum_get_metrics():
     """Test get_metrics method."""
     config = CurriculumConfig(
+        max_seq_len=1024,
         lessons={
             "lesson1": LessonConfig(
                 lesson_id="lesson1",
@@ -917,7 +940,7 @@ def test_curriculum_get_metrics():
                     env_class="marin.rl.environments.mock_env.MockEnv", env_args={"task_type": "addition"}
                 ),
             ),
-        }
+        },
     )
 
     curriculum = Curriculum(config)

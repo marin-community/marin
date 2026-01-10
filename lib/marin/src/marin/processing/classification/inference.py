@@ -92,6 +92,7 @@ def process_file_with_quality_classifier_streaming(
     total_processed = len(finished_ids)
     total_skipped = 0
 
+    # TODO fix
     task_queue = Queue()
     result_queue = Queue()
 
@@ -143,16 +144,15 @@ def process_file_with_quality_classifier_streaming(
     while num_collected_batches < num_batches:
         processed_batch = result_queue.get()
         num_collected_batches += 1
-        output_rows = convert_batch_dict_to_output_rows(
-            processed_batch, dataset_schema.output_columns, len(processed_batch[dataset_schema.output_columns[0]])
-        )
+        batch_len = len(processed_batch[dataset_schema.output_columns[0]])
+        output_rows = convert_batch_dict_to_output_rows(processed_batch, dataset_schema.output_columns, batch_len)
         output_rows_buffer.extend(output_rows)
 
         if num_collected_batches % num_batches_per_upload == 0:
             write_dataset_streaming(output_rows_buffer, output_filename, append=append_mode or total_processed > 0)
             output_rows_buffer = []
 
-        total_processed += len(processed_batch)
+        total_processed += batch_len
         logger.info(f"[*] Processed {total_processed} rows (skipped {total_skipped}) from {input_filename}")
 
     if output_rows_buffer:
