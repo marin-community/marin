@@ -18,6 +18,18 @@ import jax.numpy as jnp
 from levanter.models.lm_model import LmHeadModel
 
 
+def _get_nnx_key_name(split_key: list[str]) -> str:
+    """
+    Determine the NNX key name from the split Levanter key.
+    If the key ends in 'bias', append '_bias' to the parameter name.
+    Otherwise (e.g. 'weight'), use the parameter name directly.
+    """
+    key_name = split_key[-2]
+    if split_key[-1] == "bias":
+        key_name = f"{key_name}_bias"
+    return key_name
+
+
 def levanter_to_nnx_state(levanter_model: LmHeadModel) -> dict:
     # The format of this state dict is flat like:
     # model.layers.0.self_attn.q_proj.weight -> jax array
@@ -67,10 +79,7 @@ def levanter_to_nnx_state(levanter_model: LmHeadModel) -> dict:
                     # pad 3rd dimension to 128 (e.g., (8, 2048, 64) -> (8, 2048, 128))
                     value = jnp.pad(value, ((0, 0), (0, 0), (0, next_multiple_of_128 - head_size)))
 
-        key_name = split_key_without_weight[-1]
-        if split_key[-1] == "bias":
-            key_name = f"{key_name}_bias"
-        current[key_name] = nnx.Param(value)
+        current[_get_nnx_key_name(split_key)] = nnx.Param(value)
     return nnx.State(nested_state_dict)
 
 
@@ -132,9 +141,6 @@ def levanter_state_dict_to_nnx_state_on_cpu(state_dict: dict) -> dict:
                         if head_size < next_multiple_of_128:
                             value = jnp.pad(value, ((0, 0), (0, 0), (0, next_multiple_of_128 - head_size)))
 
-            key_name = split_key_without_weight[-1]
-            if split_key[-1] == "bias":
-                key_name = f"{key_name}_bias"
-            current[key_name] = nnx.Param(value)
+            current[_get_nnx_key_name(split_key)] = nnx.Param(value)
 
         return nnx.State(nested_state_dict)
