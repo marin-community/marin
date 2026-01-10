@@ -29,9 +29,6 @@ from openai.types.completion_usage import CompletionUsage
 from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
 from levanter.models.lm_model import LmHeadModel
 from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams, TokensPrompt
-from vllm.outputs import RequestOutput
-from vllm.sampling_params import RequestOutputKind
 from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
@@ -39,6 +36,18 @@ from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL
 from marin.rl.environments.inference_ctx.render import Llama3Renderer, Qwen3Renderer, Renderer, Message
 
 logger = logging.getLogger(__name__)
+
+try:
+    from vllm import LLM, SamplingParams, TokensPrompt
+    from vllm.outputs import RequestOutput
+    from vllm.sampling_params import RequestOutputKind
+except ImportError:
+    logger.warning("vLLM is not installed, so we will not be able to use vLLM inference context.")
+    LLM = None
+    SamplingParams = None
+    TokensPrompt = None
+    RequestOutput = None
+    RequestOutputKind = None
 
 # Disable multiprocessing to have direct access to the model weights
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
