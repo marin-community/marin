@@ -27,7 +27,6 @@ from marin.scaling_laws.isoflop_analysis import (
     QuadraticFitCoeffs,
     ScalingFit,
     ScalingRecipe,
-    candidate_configs,
     compute_training_flops,
     fit_scaling_laws,
     generate_isoflop_train_args,
@@ -70,7 +69,6 @@ __all__ = [
     "ScalingLadderRungConfig",
     "ScalingRecipe",
     # Functions
-    "candidate_configs",
     "compute_training_flops",
     "create_isoflop_plot",
     "create_scaling_plot",

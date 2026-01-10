@@ -27,7 +27,6 @@ from marin.scaling_laws.isoflop_analysis import (
     DEFAULT_SEQ_LEN,
     IsoFlopTrainArgs,
     MARIN_TOKENIZER_VOCAB_SIZE,
-    candidate_configs,
     compute_training_flops,
     fit_scaling_laws,
     generate_isoflop_train_args,
@@ -99,13 +98,17 @@ def test_candidate_configs_within_tolerance():
     flop_tolerance = 0.01
     seq_len = DEFAULT_SEQ_LEN
 
-    for candidate in candidate_configs(budget, MARIN_TOKENIZER_VOCAB_SIZE, recipe, flop_tolerance=flop_tolerance):
+    for candidate in recipe.candidate_configs(
+        budget, MARIN_TOKENIZER_VOCAB_SIZE, seq_len, flop_tolerance=flop_tolerance
+    ):
+        # Compute training schedule from recipe
+        batch_size, train_steps = recipe.compute_training_schedule(candidate, MARIN_TOKENIZER_VOCAB_SIZE, seq_len)
         model_config = recipe.build_model_config(candidate.target_params, MARIN_TOKENIZER_VOCAB_SIZE, seq_len)
         achieved = compute_training_flops(
             model_config,
             MARIN_TOKENIZER_VOCAB_SIZE,
-            candidate.batch_size,
-            candidate.train_steps,
+            batch_size,
+            train_steps,
             seq_len,
         )
         relative_error = abs(achieved - budget) / budget
@@ -157,10 +160,11 @@ def test_generate_isoflop_train_args_snapshot():
 
     for i, (args, expected) in enumerate(zip(result, EXPECTED_ISOFLOP_CONFIGS_3E18, strict=True)):
         assert isinstance(args, IsoFlopTrainArgs)
-        c = args.candidate
-        assert c.batch_size == expected["batch_size"], f"Config {i}: batch_size mismatch"
-        assert c.train_steps == expected["train_steps"], f"Config {i}: train_steps mismatch"
-        assert c.flops_budget == expected["flops_budget"], f"Config {i}: flops_budget mismatch"
+        # batch_size and train_steps are computed from recipe
+        batch_size, train_steps = recipe.compute_training_schedule(args.candidate, MARIN_TOKENIZER_VOCAB_SIZE)
+        assert batch_size == expected["batch_size"], f"Config {i}: batch_size mismatch"
+        assert train_steps == expected["train_steps"], f"Config {i}: train_steps mismatch"
+        assert args.candidate.flops_budget == expected["flops_budget"], f"Config {i}: flops_budget mismatch"
 
 
 # --- End-to-end integration test ---

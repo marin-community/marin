@@ -96,14 +96,8 @@ class EvalMetricsAnalysisConfig:
     training_runs: Sequence[str]
     """List of training run output paths (executor resolves InputName to str at runtime)."""
 
-    output_path: str
-    """Where to write analysis outputs."""
-
     metrics_filename: str = "tracker_metrics.jsonl"
     """Name of the metrics file within each checkpoint directory."""
-
-    backfill_from_wandb: bool = True
-    """If True, backfill tracker_metrics.jsonl from WandB for runs that completed before this feature."""
 
     wandb_entity_project: str = f"{WANDB_ENTITY}/{WANDB_PROJECT}"
     """WandB entity/project to query for backfill (format: 'entity/project')."""
@@ -113,7 +107,7 @@ def read_raw_records(config: EvalMetricsAnalysisConfig) -> list[dict]:
     """Read raw eval metrics from training runs.
 
     This is the shared utility that all analysis subtypes use to load metrics.
-    It handles reading JSONL files and optional WandB backfill.
+    It handles reading JSONL files and WandB backfill when files are missing.
 
     Args:
         config: Analysis config with training_runs and backfill settings
@@ -129,23 +123,16 @@ def read_raw_records(config: EvalMetricsAnalysisConfig) -> list[dict]:
         fs, _, _ = fsspec.get_fs_token_paths(metrics_file)
 
         if not fs.exists(metrics_file):
-            logger.info(f"{metrics_file} does not exist")
+            logger.info(f"{metrics_file} does not exist, attempting to backfill from WandB...")
 
-            if config.backfill_from_wandb:
-                logger.info("Attempting to backfill from WandB...")
-
-                success = _backfill_metrics_from_wandb(
-                    checkpoint_path=run_path,
-                    metrics_file=metrics_file,
-                    entity_project=config.wandb_entity_project,
-                )
-                if not success:
-                    raise RuntimeError(
-                        f"Backfill from WandB failed for run {i} (path={run_path}, metrics_file={metrics_file})"
-                    )
-            else:
+            success = _backfill_metrics_from_wandb(
+                checkpoint_path=run_path,
+                metrics_file=metrics_file,
+                entity_project=config.wandb_entity_project,
+            )
+            if not success:
                 raise RuntimeError(
-                    f"Metrics file missing for run {i} (path={run_path}), and backfill_from_wandb is disabled"
+                    f"Backfill from WandB failed for run {i} (path={run_path}, metrics_file={metrics_file})"
                 )
 
         with fs.open(metrics_file, "r") as f:

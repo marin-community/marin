@@ -19,10 +19,8 @@ selecting appropriate TPU slice sizes for training runs.
 """
 
 import math
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from marin.scaling_laws.isoflop_analysis import CandidateConfig, ScalingRecipe
+from marin.scaling_laws.isoflop_analysis import CandidateConfig, ScalingRecipe
 
 # ---------------- TPU v5p Hardware Constants ----------------
 # These constants are specific to TPU v5p pods.
@@ -38,18 +36,18 @@ V5P_CORE_OPTIONS = [8, 16, 32, 128, 256, 512]
 
 
 def pick_v5p_type(
-    candidate: "CandidateConfig",
+    candidate: CandidateConfig,
     vocab_size: int,
     seq_len: int,
-    recipe: "ScalingRecipe",
+    recipe: ScalingRecipe,
 ) -> str:
     """Select the smallest TPU v5p slice that fits the model in float32.
 
     Args:
-        candidate: CandidateConfig with target_params and batch_size.
+        candidate: CandidateConfig with target_params and tokens.
         vocab_size: Vocabulary size.
         seq_len: Sequence length.
-        recipe: ScalingRecipe to determine architecture.
+        recipe: ScalingRecipe for memory estimation.
 
     Returns:
         TPU slice name, e.g., "v5p-8" or "v5p-32".
@@ -57,8 +55,7 @@ def pick_v5p_type(
     Raises:
         ValueError: If the model is too large for available v5p slices.
     """
-    model_config = recipe.build_model_config(candidate.target_params, vocab_size, seq_len)
-    need_bytes = recipe.estimate_memory_bytes(model_config, candidate.batch_size, vocab_size)
+    need_bytes = recipe.estimate_memory_bytes(candidate, vocab_size, seq_len)
     chip_bytes = HBM_PER_CHIP_GIB * 1024**3
     chips = math.ceil(need_bytes / chip_bytes)
     cores_req = chips * CORES_PER_CHIP
