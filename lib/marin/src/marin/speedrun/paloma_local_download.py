@@ -43,4 +43,4 @@ def speedrun_paloma_tokenized(tokenizer: str = llama3_tokenizer):
 
 
 if __name__ == "__main__":
-    executor_main(steps=[paloma_speedrun, *speedrun_paloma_tokenized])
+    executor_main(steps=[paloma_speedrun, *speedrun_paloma_tokenized().values()])
