@@ -41,7 +41,7 @@ from jax.sharding import PartitionSpec
 from jaxtyping import PRNGKeyArray
 
 from levanter.grug.attention import AttentionMask, apply_rotary_embedding
-from levanter.grug.config import GrugModelConfig
+from levanter.grug.model import GrugModelConfig
 from levanter.grug.model import rms_norm, mlp
 from levanter.models.grug_wrapper import GrugWrapper
 from levanter.models.lm_model import LmConfig

@@ -12,7 +12,7 @@ from levanter.store.cache import TreeCache
 
 # Levanter's DataLoader expects an axis name for the batch dimension. We map it to
 # the replica/data axes so each data shard loads only its local share.
-DEFAULT_AXIS_MAPPING = {"batch": ("replica", "data")}
+DEFAULT_AXIS_MAPPING = {"batch": ("replica_dcn", "replica", "data")}
 
 
 def make_token_dataset(cache: TreeCache[dict], *, seq_len: int) -> TokenSeqDataset:

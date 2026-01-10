@@ -10,7 +10,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 
 from levanter.grug.attention import AttentionMask, attention, reference_attention
 from levanter.grug.attention import _positions_from_segment_ids_2d as grug_positions_from_segments
-from levanter.grug.config import GrugModelConfig
+from levanter.grug.model import GrugModelConfig
 from levanter.grug.model import forward, init_parameters
 
 

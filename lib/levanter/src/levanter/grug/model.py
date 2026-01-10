@@ -14,8 +14,7 @@ from jax.sharding import PartitionSpec as P, reshard
 from jax.tree_util import register_dataclass
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
-from .attention import AttentionMask, apply_rotary_embedding, attention
-from .config import GrugModelConfig
+from .attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from .loss import linear_softmax_cross_entropy_loss_and_logz
 
 
@@ -44,6 +43,52 @@ Pbatch = P(
     ("replica_dcn", "replica", "data"),
 )
 Pvocab = P(None, None)
+
+
+@dataclass(frozen=True)
+class GrugModelConfig:
+    """Hyperparameters for the Grug Llama-style transformer."""
+
+    vocab_size: int
+    hidden_dim: int = 2048
+    intermediate_dim: int = 5632
+    num_layers: int = 24
+    num_heads: int = 16
+    num_kv_heads: int = 16
+    head_dim: int | None = None
+    max_seq_len: int = 4096
+    dropout_rate: float = 0.0
+    layer_norm_eps: float = 1e-5
+    initializer_std: float = 0.02
+    rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
+
+    # Controls how we compute logsumexp over the vocab in `levanter.grug.loss_fn`.
+    #
+    # - `None` means "single full-vocab block" (often faster for small-ish models/vocabs).
+    # - Smaller values reduce peak memory, but can be significantly slower in practice.
+    #
+    # TODO(grug): Replace with a faster large-vocab CE kernel so we don't have to pick between
+    # speed and memory.
+    cross_entropy_block_size: int | None = 32768
+
+    def __post_init__(self) -> None:
+        _ = self.inferred_head_dim
+        if self.num_heads % self.num_kv_heads != 0:
+            raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
+        if self.vocab_size <= 0:
+            raise ValueError("vocab_size must be positive")
+        if self.max_seq_len <= 0:
+            raise ValueError("max_seq_len must be positive")
+
+    @property
+    def inferred_head_dim(self) -> int:
+        if self.head_dim is not None:
+            return self.head_dim
+        if self.hidden_dim % self.num_heads != 0:
+            raise ValueError(
+                f"hidden_dim={self.hidden_dim} is not divisible by num_heads={self.num_heads}; set head_dim explicitly"
+            )
+        return self.hidden_dim // self.num_heads
 
 
 def unshard(x: jax.Array) -> jax.Array:

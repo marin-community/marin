@@ -10,7 +10,7 @@ from jax.sharding import AbstractMesh, AxisType, NamedSharding, PartitionSpec as
 from jax._src import config as jax_config
 
 from levanter.grug.attention import AttentionMask
-from levanter.grug.config import GrugModelConfig
+from levanter.grug.model import GrugModelConfig
 from levanter.grug.model import init_parameters, loss_fn
 
 

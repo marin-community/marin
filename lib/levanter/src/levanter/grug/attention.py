@@ -13,7 +13,13 @@ from jaxtyping import Array, Bool, Float, Int
 
 from haliax.partitioning import _get_mesh
 
-from .config import RotaryConfig
+
+@dataclass(frozen=True)
+class RotaryConfig:
+    """Lightweight rotary embedding configuration."""
+
+    theta: float = 10000.0
+    scaling_factor: float | None = None
 
 
 def _positions_from_segment_ids_2d(segment_ids: Int[Array, "B S"], *, pad_value: int) -> Int[Array, "B S"]:
@@ -364,6 +370,7 @@ def attention(
 
 __all__ = [
     "AttentionMask",
+    "RotaryConfig",
     "apply_rotary_embedding",
     "attention",
     "reference_attention",

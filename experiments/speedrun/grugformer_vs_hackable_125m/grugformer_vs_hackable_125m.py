@@ -31,7 +31,7 @@ from fray.cluster import ResourceConfig
 from haliax import Axis
 from jaxtyping import PRNGKeyArray
 
-from levanter.grug.config import GrugModelConfig
+from levanter.grug.model import GrugModelConfig
 from levanter.models.grug_wrapper import GrugWrapper
 from levanter.models.lm_model import LmConfig
 from levanter.utils.flop_utils import lm_flops_per_token

@@ -15,7 +15,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from levanter.grug.config import GrugModelConfig, GrugTrainingConfig
+from levanter.grug.config import GrugTrainingConfig
+from levanter.grug.model import GrugModelConfig
 from levanter.grug.main import run_training
 
 

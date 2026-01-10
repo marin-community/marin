@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from jax.sharding import AxisType, Mesh
 
 from levanter.grug.attention import AttentionMask
-from levanter.grug.config import GrugModelConfig
+from levanter.grug.model import GrugModelConfig
 from levanter.grug.model import activations, init_parameters, loss_fn
 from levanter.layers.attention import AttentionMask as LevanterAttentionMask
 from levanter.models.grug_wrapper import GrugWrapper
