@@ -12,7 +12,7 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 - **Few methods**: prefer top level functions to lots of methods (i.e. torch-style class hierarchies). Use `@dataclass`es for parameter/state containers, but keep logic in functions. Accessors are okay for small helpers (e.g. `def get_attention_params(model_params): ...`).
 - **No array-involved methods in jit**: avoid class methods that operate on `jax.Array` fields inside `@jax.jit`-compiled functions. There are a few corner cases where they behave surprisingly. (Mostly we need to avoid `jit(module.compute_loss)`).
 - **Keep dependencies small.** Prefer `einshard`, `optax`, JAX core libs, HF tokenizers, and Levanter’s `data` + `tracker` + TensorStore serialization APIs. Grug doesn't want to reinvent wheels, but we also don't want heavy frameworks obscuring the core logic.
-- **Fast kernels are allowed, but keep the surface simple.** For now, grug core hard-depends on `ejkernel` for block-sparse attention (`ejkernel.modules.operations.blocksparse_attention`) and keeps a separate reference implementation for debugging/regressions.
+- **Fast kernels are allowed, but keep the surface simple.** On TPU, Grug uses JAX Splash attention (via `jax.experimental.pallas.ops.tpu.splash_attention`). We keep a separate reference implementation for debugging/regressions.
 - **Serializable state.** Trainer state must round-trip through `levanter.tensorstore_serialization.tree_{de,}serialize_leaves_tensorstore` with no custom logic.
 - **Consumption-ready.** Provide a `uv run python -m marin.grugpt.train` entrypoint plus tests. Tracking hooks log loss/perplexity through Levanter’s tracker interface.
 - **Limit config knobs.** In general, it's better to copy-paste experimental code than to bake every possible option into the core. Keep the config surface minimal and stable. As an example, attention sinks should be added by copy-pasting/editing the attention callsite in a speedrun script, not by adding a `cfg.use_attention_sinks` flag. But changing the number of layers etc. should be easy via config. This is a judgment call.
@@ -35,7 +35,8 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 
 - **Keep `levanter.grug` core-only.** The `levanter.grug` package should stay “notebook-like”: raw `jax.Array` inputs/outputs, top-level functions, small dataclasses, and minimal plumbing.
 - **Adapters live outside grug.** Integration with Levanter model interfaces (`LmHeadModel`, `NamedArray`, etc.) lives in `levanter.models`, currently `levanter.models.grug_wrapper`.
-- **Mask spec is simple.** Grug’s attention mask is a small spec (`levanter.grug.attention.AttentionMask`) storing only raw JAX arrays/ints (no NamedArray fields and no explicit dense masks yet).
+- **Mask spec is simple.** Grug’s attention mask is a small spec (`levanter.grug.attention.AttentionMask`) storing only raw JAX arrays/ints (no NamedArray fields). Dense masks are currently accepted only by the reference attention path (TPU Splash does not support dense masks).
+- **Prefer jaxtyping for the grug core.** Grug uses jaxtyping-style shape hints in `levanter.grug` (e.g. `Int[Array, "B S"]`, `Float[Array, "B Q H D"]`) to keep the core readable and to document expected conventions without introducing runtime checks.
 
 ## Misc Style
 - Use `einops.rearrange` for `[batch, seq, heads, head_dim]` manipulations where it improves clarity.

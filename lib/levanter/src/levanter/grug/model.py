@@ -12,6 +12,7 @@ from einops import rearrange
 from jax import random
 from jax.sharding import PartitionSpec as P, reshard
 from jax.tree_util import register_dataclass
+from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from .attention import AttentionMask, apply_rotary_embedding, attention
 from .config import GrugModelConfig
@@ -78,12 +79,12 @@ class GrugModelParameters:
     final_norm: jax.Array
 
 
-def _init_weight(key: jax.Array, shape: tuple[int, ...], std: float) -> jax.Array:
+def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float[Array, "..."]:
     return std * random.truncated_normal(key, -3, 3, shape)
 
 
 @partial(jax.jit, static_argnames=("cfg",))
-def init_parameters(cfg: GrugModelConfig, *, key: jax.Array) -> GrugModelParameters:
+def init_parameters(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> GrugModelParameters:
     head_dim = cfg.inferred_head_dim
     keys = random.split(key, 3 + 7 * cfg.num_layers)
     embed_key, out_key, final_norm_key, *rest = keys
@@ -131,14 +132,14 @@ def init_parameters(cfg: GrugModelConfig, *, key: jax.Array) -> GrugModelParamet
     )
 
 
-def rms_norm(x: jax.Array, weight: jax.Array, eps: float) -> jax.Array:
+def rms_norm(x: Float[Array, "... D"], weight: Float[Array, "D"], eps: float) -> Float[Array, "... D"]:
     weight = unshard(weight)
     variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
     normed = x * jax.lax.rsqrt(variance + eps)
     return normed * weight
 
 
-def mlp(block: GrugBlockParams, x: jax.Array) -> jax.Array:
+def mlp(block: GrugBlockParams, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
     gate = jnp.einsum("bsh,hm->bsm", x, block.mlp_gate)
     up = jnp.einsum("bsh,hm->bsm", x, block.mlp_up)
     activated = jax.nn.silu(gate) * up
@@ -147,11 +148,11 @@ def mlp(block: GrugBlockParams, x: jax.Array) -> jax.Array:
 
 def _transformer_hidden(
     params: GrugModelParameters,
-    token_ids: jax.Array,
+    token_ids: Int[Array, "B S"],
     cfg: GrugModelConfig,
     *,
     mask: AttentionMask | jax.Array | None,
-) -> jax.Array:
+) -> Float[Array, "B S D"]:
     head_dim = cfg.inferred_head_dim
     seq_len = token_ids.shape[1]
 
@@ -183,11 +184,11 @@ def _transformer_hidden(
 
 def forward(
     params: GrugModelParameters,
-    token_ids: jax.Array,
+    token_ids: Int[Array, "B S"],
     cfg: GrugModelConfig,
     *,
     mask: AttentionMask | jax.Array | None = None,
-) -> jax.Array:
+) -> Float[Array, "B S V"]:
     hidden = _transformer_hidden(params, token_ids, cfg, mask=mask)
     logits = jnp.einsum("bsh,hd->bsd", hidden, params.output_proj, out_sharding=Pbatch)
     return logits
@@ -195,19 +196,19 @@ def forward(
 
 def activations(
     params: GrugModelParameters,
-    token_ids: jax.Array,
+    token_ids: Int[Array, "B S"],
     cfg: GrugModelConfig,
     *,
     mask: AttentionMask | jax.Array | None = None,
-) -> jax.Array:
+) -> Float[Array, "B S D"]:
     """Return final hidden states with shape (batch, seq, hidden_dim)."""
     return _transformer_hidden(params, token_ids, cfg, mask=mask)
 
 
 def loss_fn(
     params: GrugModelParameters,
-    token_ids: jax.Array,
-    loss_weight: jax.Array,
+    token_ids: Int[Array, "B S"],
+    loss_weight: Float[Array, "B S"],
     cfg: GrugModelConfig,
     *,
     mask: AttentionMask | jax.Array | None = None,

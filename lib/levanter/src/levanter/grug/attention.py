@@ -9,13 +9,14 @@ from jax import numpy as jnp
 from jax.experimental.shard_map import shard_map
 from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.tree_util import register_dataclass
+from jaxtyping import Array, Bool, Float, Int
 
 from haliax.partitioning import _get_mesh
 
 from .config import RotaryConfig
 
 
-def _positions_from_segment_ids_2d(segment_ids: jax.Array, *, pad_value: int) -> jax.Array:
+def _positions_from_segment_ids_2d(segment_ids: Int[Array, "B S"], *, pad_value: int) -> Int[Array, "B S"]:
     """Compute per-token positions that reset at segment boundaries.
 
     `segment_ids` uses -1 for padding. This helper is sharding-friendly: it keeps the batch
@@ -68,7 +69,9 @@ class AttentionMask:
     def causal(cls, *, offset: int = 0, sliding_window: int | None = None) -> "AttentionMask":
         return cls(is_causal=True, causal_offset=offset, sliding_window=sliding_window)
 
-    def with_segment_ids(self, q_segment_ids: jax.Array, kv_segment_ids: jax.Array | None = None) -> "AttentionMask":
+    def with_segment_ids(
+        self, q_segment_ids: Int[Array, "..."], kv_segment_ids: Int[Array, "..."] | None = None
+    ) -> "AttentionMask":
         kv_ids = q_segment_ids if kv_segment_ids is None else kv_segment_ids
         return AttentionMask(
             is_causal=self.is_causal,
@@ -85,7 +88,7 @@ class AttentionMask:
             sliding_window=sliding_window,
         )
 
-    def materialize_mask(self, q_len: int, k_len: int) -> jax.Array | None:
+    def materialize_mask(self, q_len: int, k_len: int) -> Bool[Array, "..."] | None:
         """Return a boolean mask (True = allowed) or None.
 
         Shapes:
@@ -123,7 +126,7 @@ class AttentionMask:
         return mask
 
 
-def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[jax.Array, jax.Array]:
+def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[Float[Array, "S D"], Float[Array, "S D"]]:
     half_dim = head_dim // 2
     inv_freq = 1.0 / (rope.theta ** (jnp.arange(0, half_dim, dtype=jnp.float32) / half_dim))
     positions = jnp.arange(seq_len, dtype=jnp.float32)
@@ -134,18 +137,18 @@ def _rotary_cache(seq_len: int, head_dim: int, rope: RotaryConfig) -> tuple[jax.
 
 
 def apply_rotary_embedding(
-    q: jax.Array,
-    k: jax.Array,
+    q: Float[Array, "B S H D"],
+    k: Float[Array, "B S H D"],
     *,
     seq_len: int,
     head_dim: int,
     rope: RotaryConfig,
-) -> tuple[jax.Array, jax.Array]:
+) -> tuple[Float[Array, "B S H D"], Float[Array, "B S H D"]]:
     cos, sin = _rotary_cache(seq_len, head_dim, rope)
     cos = cos[None, :, None, :]
     sin = sin[None, :, None, :]
 
-    def _apply(x: jax.Array) -> jax.Array:
+    def _apply(x: Float[Array, "B S H D"]) -> Float[Array, "B S H D"]:
         x1, x2 = jnp.split(x, 2, axis=-1)
         return jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
 
@@ -153,13 +156,13 @@ def apply_rotary_embedding(
 
 
 def reference_attention(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    mask: AttentionMask | jax.Array | None,
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     logits_dtype: jnp.dtype | None,
-) -> jax.Array:
+) -> Float[Array, "B Q Hq D"]:
     head_dim = q.shape[-1]
     num_q_heads = q.shape[2]
     num_kv_heads = k.shape[2]
@@ -227,11 +230,11 @@ def _spec_shard_factor(entry: str | tuple[str, ...] | None, mesh) -> int:
 
 
 def _tpu_splash_attention(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | jax.Array | None,
-) -> jax.Array:
+) -> Float[Array, "B Q Hq D"]:
     from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
     from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds as SplashSegmentIds
 
@@ -347,11 +350,11 @@ def _tpu_splash_attention(
 
 
 def attention(
-    q: jax.Array,
-    k: jax.Array,
-    v: jax.Array,
-    mask: AttentionMask | jax.Array | None,
-) -> jax.Array:
+    q: Float[Array, "B Q Hq D"],
+    k: Float[Array, "B K Hkv D"],
+    v: Float[Array, "B K Hkv D"],
+    mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
+) -> Float[Array, "B Q Hq D"]:
     if jax.default_backend() == "tpu":
         if isinstance(mask, jax.Array):
             return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
