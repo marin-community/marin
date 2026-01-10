@@ -88,7 +88,8 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
 
     The recipe handles all model-specific decisions:
     - Model config is built via `recipe.build_model_config(target_params, vocab_size)`
-    - Optimizer config is built via `recipe.build_optimizer_config(candidate, vocab_size)`
+    - Training schedule is built via `recipe.compute_training_schedule(candidate, vocab_size)`
+    - Optimizer config is built via `recipe.build_optimizer_config(candidate, batch_size, vocab_size)`
     """
     result_path = os.path.join(config.analysis_output_path, "isoflop_analysis_result.json")
     fs, _, _ = fsspec.get_fs_token_paths(result_path)
@@ -121,13 +122,15 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
     logger.info(
         f"Training with optimal config for {config.target_budget:.2e} FLOPs:\n"
         f"  target_params={candidate.target_params:.2e}\n"
-        f"  batch_size={candidate.batch_size}, train_steps={candidate.train_steps}\n"
         f"  tokens={candidate.tokens:.2e}"
     )
 
     model_cfg = config.recipe.build_model_config(candidate.target_params, vocab_size, config.seq_len)
-    optimizer_cfg = config.recipe.build_optimizer_config(candidate, vocab_size)
+    optimizer_cfg = config.recipe.build_optimizer_config(candidate, vocab_size, config.seq_len)
     tpu_type = pick_v5p_type(candidate, vocab_size, config.seq_len, config.recipe)
+
+    # Compute training schedule - recipe-specific, not in protocol
+    batch_size, train_steps = config.recipe.compute_training_schedule(candidate, vocab_size, config.seq_len)
 
     train_config = TrainLmConfig(
         data=config.tokenized,
@@ -142,8 +145,8 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
                 ],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),
-            train_batch_size=candidate.batch_size,
-            num_train_steps=candidate.train_steps,
+            train_batch_size=batch_size,
+            num_train_steps=train_steps,
             steps_per_eval=1000,
             checkpointer=CheckpointerConfig(
                 save_interval=timedelta(minutes=10),
