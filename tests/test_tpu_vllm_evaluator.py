@@ -39,7 +39,7 @@ def test_vllm_auto_enables_streaming_for_gcs_paths() -> None:
         engine_kwargs={},
     )
 
-    model_name_or_path, model = VllmTpuEvaluator.download_model(model)
+    model_name_or_path, model = VllmTpuEvaluator.resolve_model_name_or_path(model)
 
     assert model.engine_kwargs["load_format"] == "runai_streamer"
     assert model_name_or_path == "gs://bucket/some-model"

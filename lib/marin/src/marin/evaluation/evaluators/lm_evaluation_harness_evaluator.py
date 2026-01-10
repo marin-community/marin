@@ -69,7 +69,7 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
             # NOTE(chris): This is not supported on TPUs
             # set_cuda_visible_devices()
             # Download the model from GCS or HuggingFace
-            model_name_or_path, model = self.download_model(model)
+            model_name_or_path, model = self.resolve_model_name_or_path(model)
 
             pretrained_args: str = f"pretrained={model_name_or_path}"
             if model.engine_kwargs:

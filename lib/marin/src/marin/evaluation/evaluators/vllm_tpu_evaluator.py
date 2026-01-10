@@ -73,22 +73,14 @@ class VllmTpuEvaluator(Evaluator, ABC):
         return args
 
     @staticmethod
-    def download_model(model: ModelConfig) -> tuple[str, ModelConfig]:
-        """
-        Download the model if it's not already downloaded
+    def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
+        """Resolve the `model` argument to pass to vLLM.
+
+        - If `model.path` is set, use it (and auto-enable streaming for `gs://` / `s3://`).
+        - Otherwise, fall back to `model.name` (e.g. an HF repo id).
         """
         model = VllmTpuEvaluator._maybe_enable_streaming(model)
-        downloaded_path: str | None = model.ensure_downloaded(local_path=None)
-        # Use the model name if a path is not specified (e.g., for Hugging Face models). If the
-        # model has a remote path and streaming is enabled, keep the remote path.
-        if downloaded_path is not None:
-            model_name_or_path = downloaded_path
-        elif (
-            model.path is not None and model.engine_kwargs.get("load_format") in VllmTpuEvaluator._STREAMING_LOAD_FORMATS
-        ):
-            model_name_or_path = model.path
-        else:
-            model_name_or_path = model.name
+        model_name_or_path = model.path if model.path is not None else model.name
         return model_name_or_path, model
 
     @staticmethod
@@ -100,7 +92,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Returns the port the server is running on.
         """
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
-        model_name_or_path, model = VllmTpuEvaluator.download_model(model)
+        model_name_or_path, model = VllmTpuEvaluator.resolve_model_name_or_path(model)
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
         command: list[str] = [
