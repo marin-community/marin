@@ -147,19 +147,34 @@ class IsoFlopSweepConfig:
     vocab_size: int
     seq_len: int
     total_token_count: int
-    experiment_name: str = "plantcad_isoflop_v2.2"
+    experiment_name: str = "plantcad_isoflop_v2.3"
+
+    # low-compute (current): 5e15 to 6.25e16, steps=2_048 (v2.3)
     budgets: list[float] = dataclasses.field(
-        default_factory=lambda: list(np.logspace(np.log10(8e16), np.log10(1e18), 5))
+        default_factory=lambda: list(np.logspace(np.log10(5e15), np.log10(6.25e16), 5))
     )
+    steps_per_run: int = 2_048
+
+    # mid-compute (4x): 2e16 to 2.5e17, steps=8_192 (v2.4)
+    # budgets: list[float] = dataclasses.field(
+    #     default_factory=lambda: list(np.logspace(np.log10(2e16), np.log10(2.5e17), 5))
+    # )
+    # steps_per_run: int = 8_192
+
+    # high-compute (16x): 8e16 to 1e18, steps=32_768 (v2.2)
+    # budgets: list[float] = dataclasses.field(
+    #     default_factory=lambda: list(np.logspace(np.log10(8e16), np.log10(1e18), 5))
+    # )
+    # steps_per_run: int = 32_768
+
     epochs: list[int] = dataclasses.field(default_factory=lambda: [1])
-    steps_per_run: int = 32_768
     min_hidden_pow: int = 8
     max_hidden_pow: int = 10
-    hidden_step_size: int = 96
+    hidden_step_size: int = 112
     mlp_ratio: int = 4
     base_hidden_layer_ratio: int = 64
     hidden_head_ratio: int = 128
-    lr_max: float | None = 0.02
+    lr_max: float | None = 0.03
     flop_tolerance: float = 0.01
     architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen"])
     # TODO: adjust eval example count to account for num tpus in the even that v5p-8 is not used
@@ -338,8 +353,13 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
             # Halve batch size until LR is stable
             if cfg.lr_max is not None:
                 while lr > cfg.lr_max:
+                    old_batch = batch_size
                     batch_size //= 2
                     lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
+                    logger.warning(
+                        f"Halving batch size for ({architecture=}, {hidden_size=}): "
+                        f"{old_batch} -> {batch_size} (lr={lr:.4f}, lr_max={cfg.lr_max})"
+                    )
 
             # Set beta2 based on https://arxiv.org/pdf/2507.07101
             b2 = 0.98 ** (batch_size / 128)

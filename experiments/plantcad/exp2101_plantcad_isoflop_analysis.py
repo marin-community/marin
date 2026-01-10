@@ -25,7 +25,7 @@ from rich.table import Table
 from scipy.interpolate import griddata
 import wandb
 
-RUN_VERSION = "2.2"
+RUN_VERSION = "2.3"
 RUN_PREFIX = f"plantcad_isoflop_v{RUN_VERSION}"
 RESULT_PATH = f"experiments/plantcad/results/v{RUN_VERSION}"
 EXPORT_DPI = 300
