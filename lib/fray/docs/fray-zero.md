@@ -143,10 +143,27 @@ A job template defines:
  * _resources_ (a set of accelerators, memory, ports, etc)
 
 A user may request multiple instantiations of a job template, and a friendly
-name prefix for grouping (e.g. `{user}/rl/rollout/`). Job instances are provided
-the expected environment variables (`FRAY_JOB_NAME`, `FRAY_JOB_ID`,
-`FRAY_CLUSTER_ADDRESS`, etc) to bootstrap their environment. Every job receives
+name prefix for grouping (e.g. `{user}/rl/rollout/`). Every job receives
 a globally unique ID.
+
+**Namespaces**: When a user starts a top-level job, the cluster creates a new
+namespace derived from the job name. Sub-jobs launched from within that job
+inherit the same namespace. Actor names are scoped to namespaces, so actors in
+different namespaces don't collide.
+
+**Environment Variables**: The cluster injects standard environment variables
+into every job process:
+
+* `FRAY_JOB_ID` - Unique identifier for this job instance
+* `FRAY_JOB_NAME` - User-provided job name
+* `FRAY_NAMESPACE` - Namespace for actor registration/lookup
+* `FRAY_CLUSTER_ADDRESS` - Address of the cluster controller
+
+**Health Monitoring**: The cluster monitors job health via:
+
+* Process status monitoring (exit codes, crashes)
+* Optional health check endpoint - jobs can expose a health route that the
+  cluster pings periodically
 
 The cluster system provides access to job logs, and handles task failures and
 pre-emption recovery. It attempts to minimize the startup time of tasks by
@@ -154,109 +171,123 @@ reusing warm environments and re-using warm workers when possible. The cluster
 system _will not_ attempt to reuse warm processes, thus the target startup time
 for tasks is expected to be <10s for a warm image.
 
-### Job/Actor Discovery
+### Metadata Service
 
-In addition to the expected ability to list jobs and their information, we also
-need a mechanism to map actors (described below) to the supporting job. To do
-this, we'll provide a metadata store on the cluster which specifically maps
-against job IDs. This will look something like:
+The cluster provides a metadata service that maps actor names to endpoints
+(job ID + address + port). Because the cluster owns both the jobs and the
+metadata service, it can:
 
-```
-create_mapping(job_id, port_name, namespace, actor_name)
-```
+* Automatically clean up mappings when jobs terminate
+* Atomically update mappings when jobs restart after failure
+* Garbage collect stale entries
 
-Because the cluster manager owns the jobs and the mapping service, it can
-automatically clean up mappings which correpond to terminated jobs, and update
-mappings in the case of task failures.
+The metadata service is internal to the cluster. Clients interact with it
+through a **Resolver**.
 
-### Actor System
+### Resolver
 
-Great, so now we have reservations, and jobs, and tasks within those jobs, and
-we can see the logs: this is a good start -- we're trying to provide a
-simplified version of the VM environment from a cloud provider. Now we need to
-make it _simple_ to setup communication within our jobs as needed.
-
-Recall that Ray provides 3 mechanisms for communication: the object store
-(`.put/get`), actors, and remote task calls. In our experience, the actor model
-has the most consistent behavior around failures: you can reconnect to actors
-but it's the user's responsibility to ensure that the actor recovers to a
-consistent state.  To this end, we propose an actor system on top of Connect/RPC
-(or gRPC) which simplifies managing tasks in a Fray environment.
-
-Since users are understandably hesistant to write protos, we'll provide a
-simpler class based API on top of the raw RPC system. We'll make a simplifying
-assumption that the number of actors is small, and rely on our cluster manager
-to store indirection information.
+A Resolver provides actor discovery and connection management. It maps actor
+names to live endpoints and handles reconnection on failure.
 
 ```python
-# client
-resolver = fray_resolver(env["FRAY_NAMESPACE"])
-actor = resolver.lookup(f"inference_0")
-actor.predict(x)
+# Create resolver (explicitly, from cluster or environment)
+resolver = ClusterResolver(cluster)  # uses cluster's metadata service
+resolver = FixedResolver("localhost:8080")  # for testing, fixed target
+
+# Look up actors
+actor = resolver.lookup("inference_0")  # single actor
+actors = resolver.lookup_all("inference_pool")  # multiple for load balancing
+
+# Call methods
+result = actor.predict(x)
 ```
 
+Resolvers are independent from clusters - `ClusterResolver` is one
+implementation backed by a cluster's metadata service, but other
+implementations (e.g., `FixedResolver` for testing) can resolve to fixed
+targets.
+
+The resolver handles:
+
+* **Worker resolution**: Maps actor names to current addresses
+* **Fault tolerance**: Re-resolves addresses when workers fail and restart
+* **Load balancing**: Distributes calls across multiple actors registered under the same name
+
+### ActorServer
+
+ActorServer lets users expose Python classes as RPC services without writing
+protos. It takes the cluster for registration (uses the cluster's metadata
+service) and handles serialization automatically.
+
+Actor methods receive an `ActorContext` as their first argument, which provides
+access to the cluster, resolver, and job information - enabling actors to call
+other actors.
+
 ```python
-# server
 class InferenceActor:
-  def __init__(self):
-    self.model = load_model()
+    def __init__(self):
+        self.model = load_model()
 
-  def predict(self, x):
-    return self.model(x)
+    def predict(self, ctx: ActorContext, x):
+        # ctx.resolver available if this actor needs to call other actors
+        return self.model(x)
 
-resolver = fray_resolver()
-server = FrayActorServer(resolver)
-server.register(f"inference_{task_id}", InferenceActor)
+cluster = current_cluster()
+server = ActorServer(cluster)
+server.register("inference_0", InferenceActor())
+server.serve()  # blocks, handling requests
 ```
 
-The resolver neatly handles a few common challenges:
-
-_Worker resolution_: We can consistently identify the worker address for a given actor name.
-_Fault tolerance_: As we use an indirect address for our actors, we can re-resolve the owning worker automatically when tasks fail.
-_Load balancing_: If we allow registering multiple targets for a given name, we can automatically load-balance between backends in our RPC interface.
-
-The resolver backend needn't be the same process as the cluster manager, but for
-convenience we assume they are co-located for the moment.
+When a job hosting an ActorServer fails and restarts, the cluster automatically
+updates the metadata mappings. Clients holding actor handles will transparently
+reconnect to the new instance on their next call.
 
 ### Back to Ray
 
-Note that if we can build a resolver which is _backed_ by our job and metadata
-service, we can recover the dynamic task dispatch behavior of Ray. For example,
-we can startup a pool of Worker actors, dispatching tasks to available workers,
-and relying on our metadata resolution to ensure we always connect to a valid
-worker.
+With a ClusterResolver backed by the metadata service, we can recover Ray-like
+dynamic task dispatch. Start a pool of worker actors, dispatch tasks to
+available workers, and rely on resolution to always connect to a valid worker.
 
 ```python
-class DynamicResolver:
-    cluster: Cluster
-    workers: Dict[str, Worker]
-    resource_config: ResourceConfig
+class WorkerPool:
+    def __init__(self, cluster: Cluster, num_workers: int):
+        self.cluster = cluster
+        self.resolver = ClusterResolver(cluster)
+        # Launch worker jobs that register as "worker_pool"
+        for i in range(num_workers):
+            cluster.launch(worker_job_request(i))
 
-    def run(self, fn, *args, **kw):
-        # find idle worker
-        # if not available, ask cluster for new worker
-        # run fn on worker
-        # return future
+    def run(self, fn, *args, **kwargs):
+        # lookup_all returns all workers, round-robin or pick idle
+        workers = self.resolver.lookup_all("worker_pool")
+        worker = pick_idle(workers)
+        return worker.execute(fn, *args, **kwargs)
 ```
 
 ### Use Case Implementations
 
-* *Training* is straightforward, just a cluster job launch
-* *Inference* requires multiple jobs, with either a proxy for round-robin or dispatch via the resolver
-* *Zephyr* may either start a fixed worker pool and manually dispatch work  _or_ starting a new job for each work chunk. Alternatively Zephyr could leverage the dynamic resolver above should it prove useful.
-* *RL*
+* **Training**: Single cluster job launch, no actors needed
+* **Inference**: Launch N server jobs, each registers with same actor name, clients use `lookup_all()` for load balancing
+* **Zephyr**: Launches worker jobs via cluster, coordinates via object storage (no actors)
+* **RL**: Coordinator job hosts shared actors (curriculum, weights), workers connect via resolver
 
-```
-# controller.py
-# by default, Fray sets up a new namespace for each top-level job
-curriculum = cluster.launch(curriculum_actor, ports={"actor_service"})
-training_actor = cluster.launch(training_actor, ports={"actor_service"})
+```python
+# rl_controller.py
+cluster = current_cluster()
+resolver = ClusterResolver(cluster)
 
-# start worker jobs
-worker_jobs = cluster.launch(rl.worker)
+# Launch coordinator hosting shared actors
+cluster.launch(coordinator_job)
 
-resolver = fray_resolver()
-rl_worker = RLWorker(resolver.lookup(curriculum.id))
+# Launch workers - they connect to coordinator via resolver
+cluster.launch(train_worker_job)
+for i in range(num_rollout_workers):
+    cluster.launch(rollout_worker_job(i))
+
+# Workers internally do:
+#   resolver = ClusterResolver(cluster)
+#   curriculum = resolver.lookup("curriculum")
+#   curriculum.get_lesson()
 ```
 
 
@@ -287,19 +318,28 @@ adding features and complexity:
 
 ## Detailed Design
 
-This section provides the complete Python interfaces for the Fray system. These
-interfaces extend and refine the existing `fray.cluster` and `fray.job` APIs
-while maintaining backward compatibility where possible.
+This section provides the complete Python interfaces for the Fray system. The
+architecture consists of three components:
+
+1. **Cluster** - Job lifecycle management (launch, monitor, terminate). Owns a
+   Metadata service for actor registration.
+2. **Resolver** - Actor discovery and connection management. Maps actor names
+   to endpoints and handles reconnection on failure. Independent from Cluster.
+3. **ActorServer** - Hosts actor instances, handles RPC calls, registers with
+   a Resolver.
+
+There is no Ray-like `JobContext` with `run()`/`get()`/`wait()`. Jobs are
+processes; actors are services within those jobs; resolvers provide the
+discovery glue.
 
 ### Core Types
 
 ```python
 from dataclasses import dataclass, field
-from typing import Any, Callable, Literal, Protocol, Sequence, TypeVar
+from typing import Any, Protocol, Sequence, TypeVar, NewType
 from enum import StrEnum
 
 
-# Existing types from fray.cluster.base (unchanged)
 JobId = NewType("JobId", str)
 ActorId = NewType("ActorId", str)
 ReservationId = NewType("ReservationId", str)
@@ -312,48 +352,32 @@ class JobStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     STOPPED = "stopped"
-
-
-class ActorStatus(StrEnum):
-    PENDING = "pending"
-    RUNNING = "running"
-    STOPPED = "stopped"
-    FAILED = "failed"
 ```
 
-### Reservation & Job Group APIs
-
-These new types extend the existing `JobRequest` to support co-location and
-resource pooling.
+### Job Management Types
 
 ```python
 @dataclass
 class JobGroupConfig:
     """Configuration for a group of co-located jobs.
 
-    Jobs within a group are scheduled together and have network locality
+    Jobs within a group are scheduled together with network locality
     guarantees. Use this for RL training where inference workers should
     be close to training workers.
     """
     name: str
     namespace: Namespace | None = None
-
-    # Locality constraints
     same_region: bool = True
     same_zone: bool = False  # Stricter locality for low-latency RPCs
 
 
 @dataclass
 class ReservationConfig:
-    """Resource reservation for elastic job scheduling.
-
-    Reservations allow the cluster to pre-allocate resources for a set of
-    jobs, improving startup latency and ensuring availability.
-    """
+    """Resource reservation for elastic job scheduling."""
     min_resources: ResourceConfig
     max_resources: ResourceConfig
-    priority: int = 0  # Higher priority reservations are filled first
-    ttl_seconds: int = 3600  # Auto-release after this duration
+    priority: int = 0
+    ttl_seconds: int = 3600
     preemptible: bool = True
 
 
@@ -364,22 +388,32 @@ class ReservationInfo:
     allocated_resources: ResourceConfig
     pending_resources: ResourceConfig
     jobs: list[JobId]
-    expires_at: float  # Unix timestamp
+    expires_at: float
 ```
 
-### Extended Cluster Interface
+### Cluster Interface
+
+The Cluster is responsible solely for job lifecycle management. It does not
+provide task execution primitives - jobs are complete processes that run
+independently.
 
 ```python
 class Cluster(Protocol):
     """Abstract interface for cluster job scheduling.
 
-    Implementations: RayCluster, FrayCluster, LocalCluster
+    The Cluster manages job lifecycle: launching, monitoring, and terminating
+    jobs. Jobs are independent processes - there is no distributed task
+    execution through the Cluster interface.
+
+    Implementations: FrayCluster, LocalCluster
     """
 
-    # === Existing methods (unchanged) ===
-
     def launch(self, request: JobRequest) -> JobId:
-        """Launch a job on the cluster."""
+        """Launch a job on the cluster.
+
+        The job runs as an independent process with its own lifecycle.
+        Use the Metadata service to discover actors within jobs.
+        """
         ...
 
     def monitor(self, job_id: JobId) -> JobInfo:
@@ -406,15 +440,8 @@ class Cluster(Protocol):
         """Block until job(s) complete."""
         ...
 
-    # === New methods for Fray Zero ===
-
     def create_reservation(self, config: ReservationConfig) -> ReservationId:
-        """Create a resource reservation for upcoming jobs.
-
-        The cluster will attempt to allocate resources matching the
-        reservation config. Jobs launched with this reservation will
-        use pre-allocated resources for faster startup.
-        """
+        """Create a resource reservation for upcoming jobs."""
         ...
 
     def release_reservation(self, reservation_id: ReservationId) -> None:
@@ -435,142 +462,198 @@ class Cluster(Protocol):
 
         All jobs in the group are scheduled together with locality
         guarantees. If any job cannot be scheduled, none are started.
-
-        Args:
-            requests: Job specifications to launch
-            group: Co-location configuration
-            reservation_id: Optional reservation to draw resources from
-
-        Returns:
-            List of job IDs in the same order as requests
         """
         ...
 
-    def get_namespace(self) -> Namespace:
-        """Get the current namespace for this cluster connection.
+    @property
+    def namespace(self) -> Namespace:
+        """The namespace for this cluster connection."""
+        ...
 
-        Namespaces isolate actors and job metadata between different
-        top-level jobs or users.
-        """
+    @property
+    def metadata(self) -> "Metadata":
+        """The Metadata service for this cluster."""
         ...
 
 
 def current_cluster() -> Cluster:
     """Get the current cluster from environment.
 
-    Reads FRAY_CLUSTER_SPEC environment variable to determine which
-    cluster implementation to use. Falls back to LocalCluster if unset.
+    Reads FRAY_CLUSTER_SPEC environment variable:
+    - "local" or unset: LocalCluster
+    - "fray://host:port": FrayCluster connecting to controller
+
+    Jobs inherit namespace from FRAY_NAMESPACE environment variable.
     """
     ...
 ```
 
-### Resolver Interface
+### Metadata Service (Internal)
 
-The resolver provides actor discovery and fault-tolerant reconnection.
+The Metadata service is internal to the Cluster. It maps actor names to
+endpoints (job ID + address + port). The Cluster owns it and automatically:
+
+* Cleans up entries when jobs terminate
+* Updates entries atomically when jobs restart after failure
+* Garbage collects stale entries based on TTL
+
+Clients do not interact with Metadata directly - they use a Resolver.
 
 ```python
 @dataclass
 class ActorEndpoint:
     """Endpoint information for a registered actor."""
     actor_id: ActorId
-    address: str  # host:port
+    name: str
+    address: str  # host:port for RPC connection
     job_id: JobId
+    namespace: Namespace
     metadata: dict[str, str] = field(default_factory=dict)
 
 
-class Resolver(Protocol):
-    """Actor discovery and resolution service.
+class Metadata(Protocol):
+    """Internal actor registration service owned by the Cluster."""
 
-    The resolver maintains a mapping from actor names to endpoints,
-    enabling clients to find and connect to actors by name. It handles
-    automatic re-resolution when actors move or restart.
+    def register(
+        self,
+        name: str,
+        address: str,
+        job_id: JobId,
+        metadata: dict[str, str] | None = None,
+    ) -> ActorId:
+        """Register an actor endpoint (called by ActorServer)."""
+        ...
+
+    def unregister(self, actor_id: ActorId) -> None:
+        """Remove an actor registration."""
+        ...
+
+    def lookup(self, name: str) -> ActorEndpoint:
+        """Look up an actor by exact name."""
+        ...
+
+    def lookup_all(self, name: str) -> list[ActorEndpoint]:
+        """Look up all actors registered under a name."""
+        ...
+
+    def list_actors(self, prefix: str = "") -> list[ActorEndpoint]:
+        """List all registered actors, optionally filtered by name prefix."""
+        ...
+```
+
+### Resolver Interface
+
+A Resolver provides actor discovery and connection management. It's the
+client-facing interface for finding and connecting to actors.
+
+Resolvers are independent from Clusters. `ClusterResolver` is one implementation
+that uses a Cluster's Metadata service; other implementations exist for testing
+or special use cases.
+
+```python
+class Resolver(Protocol):
+    """Actor discovery and connection management.
+
+    Resolvers map actor names to handles and manage reconnection on failure.
     """
 
-    def lookup(self, name: str) -> ActorHandle:
+    def lookup(self, name: str) -> "ActorHandle":
         """Look up an actor by name and return a handle.
 
-        The returned handle automatically reconnects if the actor
-        restarts or moves to a different worker.
-
-        Args:
-            name: Actor name (unique within namespace)
-
-        Returns:
-            ActorHandle for making method calls
+        The handle automatically reconnects if the actor restarts.
 
         Raises:
             ActorNotFoundError: If no actor with this name exists
         """
         ...
 
-    def lookup_all(self, name: str) -> list[ActorHandle]:
-        """Look up all actors matching a name pattern.
+    def lookup_all(self, name: str) -> list["ActorHandle"]:
+        """Look up all actors registered under a name.
 
-        Use this for load-balanced actor pools where multiple actors
-        are registered under the same logical name.
-
-        Args:
-            name: Actor name pattern (may match multiple actors)
-
-        Returns:
-            List of ActorHandles (may be empty)
+        Use for load-balanced actor pools where multiple actors register
+        under the same logical name.
         """
         ...
 
-    def register(
+    def wait_for_actor(
         self,
         name: str,
-        endpoint: ActorEndpoint,
-        ttl_seconds: int = 60,
-    ) -> None:
-        """Register an actor endpoint with the resolver.
+        timeout: float = 60.0,
+    ) -> "ActorHandle":
+        """Wait for an actor to become available.
 
-        Registration must be renewed before ttl_seconds expires.
-        The ActorServer handles this automatically.
-
-        Args:
-            name: Actor name for lookup
-            endpoint: Actor endpoint information
-            ttl_seconds: Registration time-to-live
+        Useful during startup when actors may not be registered yet.
         """
         ...
 
-    def unregister(self, name: str, actor_id: ActorId) -> None:
-        """Remove an actor registration."""
-        ...
 
-    def list_actors(self, prefix: str = "") -> list[ActorEndpoint]:
-        """List all registered actors, optionally filtered by name prefix."""
-        ...
+class ClusterResolver(Resolver):
+    """Resolver backed by a Cluster's Metadata service.
 
-
-def fray_resolver(namespace: Namespace | None = None) -> Resolver:
-    """Create a resolver for the given namespace.
-
-    If namespace is None, uses FRAY_NAMESPACE from environment or
-    creates a new namespace scoped to the current job.
+    This is the standard resolver for production use. It queries the
+    Cluster's metadata service and handles reconnection when actors
+    restart.
     """
-    ...
+
+    def __init__(self, cluster: Cluster):
+        ...
+
+
+class FixedResolver(Resolver):
+    """Resolver that connects to a fixed address.
+
+    Useful for testing or when connecting to a known endpoint.
+    """
+
+    def __init__(self, address: str):
+        ...
 ```
 
 ### Actor System
+
+The Actor system provides RPC-based communication between jobs:
+
+- **ActorServer**: Hosts actor instances, registers with the cluster's Metadata service
+- **ActorHandle**: Client-side proxy returned by `resolver.lookup()`
+- **ActorContext**: Passed to actor methods, enables actors to call other actors
+
+**Scope notes**: Streaming responses are not supported. RPC tracing is not
+included in the initial implementation.
 
 ```python
 T = TypeVar("T")
 
 
+@dataclass
+class ActorContext:
+    """Context passed to actor methods as first argument.
+
+    Enables actors to call other actors and access cluster services.
+    """
+    cluster: Cluster
+    resolver: Resolver
+    job_id: JobId
+    namespace: Namespace
+
+    @classmethod
+    def from_environment(cls) -> "ActorContext":
+        """Create context from FRAY_* environment variables."""
+        ...
+
+
 class ActorHandle(Protocol[T]):
-    """Handle for calling methods on a remote actor.
+    """Client-side handle for calling methods on a remote actor.
 
-    Method calls are made via attribute access, returning futures:
+    Obtained via resolver.lookup(). Method calls are made via attribute access:
 
-        handle = resolver.lookup("my_actor")
+        resolver = ClusterResolver(cluster)
+        handle = resolver.lookup("inference_0")
+        result = handle.predict(x)  # Synchronous call
+
+    For async calls:
+
         future = handle.predict.remote(x)
         result = future.result()
-
-    Or with the synchronous shortcut:
-
-        result = handle.predict(x)  # Blocks until complete
     """
 
     @property
@@ -578,7 +661,12 @@ class ActorHandle(Protocol[T]):
         """Unique identifier for this actor."""
         ...
 
-    def __getattr__(self, method_name: str) -> ActorMethod:
+    @property
+    def address(self) -> str:
+        """RPC address of the actor."""
+        ...
+
+    def __getattr__(self, method_name: str) -> "ActorMethod":
         """Get a method wrapper for calling remote methods."""
         ...
 
@@ -586,7 +674,7 @@ class ActorHandle(Protocol[T]):
 class ActorMethod(Protocol):
     """Wrapper for calling a specific method on an actor."""
 
-    def remote(self, *args: Any, **kwargs: Any) -> ActorFuture:
+    def remote(self, *args: Any, **kwargs: Any) -> "ActorFuture":
         """Call method asynchronously, returning a future."""
         ...
 
@@ -611,28 +699,29 @@ class ActorFuture(Protocol[T]):
         ...
 
 
-class FrayActorServer:
+class ActorServer:
     """Server for hosting actors and handling RPC calls.
 
-    The actor server manages the lifecycle of actors, handles incoming
-    RPC requests, and maintains registration with the resolver.
+    Takes a Cluster (or Metadata service) for registration. The server reads
+    FRAY_JOB_ID from environment to associate registrations with the current job.
 
     Usage:
-        server = FrayActorServer(resolver)
+        cluster = current_cluster()
+        server = ActorServer(cluster)
         server.register("my_actor", MyActor(config))
         server.serve()  # Blocks, serving requests
     """
 
     def __init__(
         self,
-        resolver: Resolver,
+        cluster: Cluster,
         host: str = "0.0.0.0",
         port: int = 0,  # 0 = auto-assign
     ):
         """Initialize actor server.
 
         Args:
-            resolver: Resolver for actor registration
+            cluster: Cluster for actor registration (uses cluster.metadata)
             host: Host address to bind
             port: Port to bind (0 for auto-assignment)
         """
@@ -640,7 +729,7 @@ class FrayActorServer:
 
     @property
     def address(self) -> str:
-        """Get the server's bound address (host:port)."""
+        """The server's bound address (host:port)."""
         ...
 
     def register(
@@ -651,10 +740,21 @@ class FrayActorServer:
     ) -> ActorId:
         """Register an actor instance with the server.
 
+        The actor is registered with the cluster's Metadata service using
+        the job_id from FRAY_JOB_ID environment variable.
+
+        Actor methods should accept ActorContext as their first argument:
+
+            class MyActor:
+                def process(self, ctx: ActorContext, data: dict) -> dict:
+                    # ctx.resolver allows calling other actors
+                    other = ctx.resolver.lookup("other_actor")
+                    return other.transform(data)
+
         Args:
-            name: Name for resolver lookup
+            name: Name for lookup (scoped to namespace)
             actor: Actor instance (any object with callable methods)
-            metadata: Optional metadata for discovery
+            metadata: Optional key-value metadata for discovery
 
         Returns:
             Unique actor ID
@@ -662,7 +762,7 @@ class FrayActorServer:
         ...
 
     def unregister(self, name: str) -> None:
-        """Unregister and stop an actor."""
+        """Unregister an actor."""
         ...
 
     def serve(self) -> None:
@@ -676,136 +776,20 @@ class FrayActorServer:
     def shutdown(self, grace_period: float = 5.0) -> None:
         """Gracefully shutdown the server."""
         ...
-
-
-# Decorator for defining actor classes
-def actor(
-    name: str | None = None,
-    num_cpus: float = 1,
-    num_gpus: float = 0,
-    memory: str | None = None,
-):
-    """Decorator to mark a class as an actor.
-
-    Usage:
-        @actor(name="inference", num_gpus=1)
-        class InferenceActor:
-            def __init__(self, model_path: str):
-                self.model = load_model(model_path)
-
-            def predict(self, x):
-                return self.model(x)
-    """
-    ...
 ```
 
-### JobContext Interface
+### Local Development
 
-The existing `JobContext` protocol is extended to support actor creation:
-
-```python
-class JobContext(Protocol):
-    """Protocol for execution contexts within a job.
-
-    Implementations: RayContext, ThreadContext, SyncContext, FrayContext
-    """
-
-    def get(self, ref: Any) -> Any:
-        """Retrieve an object from its reference."""
-        ...
-
-    def run(self, fn: Callable, *args: Any) -> Any:
-        """Execute a function with arguments and return a future."""
-        ...
-
-    def wait(
-        self,
-        futures: list,
-        num_returns: int = 1
-    ) -> tuple[list, list]:
-        """Wait for futures to complete."""
-        ...
-
-    def create_actor(
-        self,
-        actor_class: type[T],
-        *args: Any,
-        name: str | None = None,
-        get_if_exists: bool = False,
-        lifetime: Literal["non_detached", "detached"] = "non_detached",
-        **kwargs: Any,
-    ) -> ActorHandle[T]:
-        """Create an actor within this execution context.
-
-        Args:
-            actor_class: Class to instantiate as actor
-            *args: Constructor positional arguments
-            name: Optional name for the actor
-            get_if_exists: Return existing actor with same name
-            lifetime: "detached" actors survive job completion
-            **kwargs: Constructor keyword arguments
-
-        Returns:
-            Handle for calling actor methods
-        """
-        ...
-
-
-class FrayContext(JobContext):
-    """RPC-based execution context for Fray clusters.
-
-    Connects to a FrayController to execute tasks and manage actors
-    across distributed workers.
-    """
-
-    def __init__(self, controller_address: str):
-        """Connect to a Fray controller.
-
-        Args:
-            controller_address: Controller URL (e.g., "http://localhost:50051")
-        """
-        ...
-
-
-def create_job_ctx(
-    context_type: Literal["ray", "threadpool", "sync", "fray", "auto"] = "auto",
-    max_workers: int = 1,
-    controller_address: str | None = None,
-    **options: Any,
-) -> JobContext:
-    """Create a job context for the specified backend.
-
-    Args:
-        context_type: Backend type ("auto" selects based on environment)
-        max_workers: Worker count for threadpool backend
-        controller_address: Required for "fray" backend
-        **options: Backend-specific options
-
-    Returns:
-        JobContext implementation
-    """
-    ...
-
-
-def get_default_job_ctx() -> JobContext:
-    """Get the current default job context."""
-    ...
-
-
-@contextmanager
-def fray_default_job_ctx(ctx: JobContext):
-    """Set the default job context for a scope."""
-    ...
-```
-
-### Local Cluster (Development)
+For local development, all components have in-process implementations that
+preserve the same interfaces. Code written for production works locally
+without modification.
 
 ```python
 class LocalCluster(Cluster):
     """Local cluster for development and testing.
 
-    Runs all jobs in the current process using threading or multiprocessing.
-    Provides the same interface as remote clusters for seamless development.
+    Runs jobs as threads or subprocesses in the current environment.
+    Includes an embedded Metadata service.
     """
 
     def __init__(
@@ -813,46 +797,50 @@ class LocalCluster(Cluster):
         max_workers: int = 4,
         use_processes: bool = False,
     ):
-        """Initialize local cluster.
-
-        Args:
-            max_workers: Maximum concurrent jobs
-            use_processes: Use processes instead of threads
-        """
         ...
 
 
 class LocalResolver(Resolver):
     """In-process resolver for local development.
 
-    Actors are hosted in the same process, enabling debugging with
-    standard Python tools.
+    Can be backed by a LocalCluster's metadata or operate standalone
+    for unit tests.
     """
-    ...
+
+    def __init__(self, cluster: LocalCluster | None = None):
+        ...
 
 
-class LocalActorServer(FrayActorServer):
-    """Actor server for local development.
+# Example: local development workflow
+cluster = LocalCluster()
+resolver = LocalResolver(cluster)
 
-    Handles actor calls synchronously in the same process.
-    """
-    ...
+# Server side (same code as production)
+server = ActorServer(cluster)  # Takes cluster for registration
+server.register("my_actor", MyActor())
+server.serve_background()
+
+# Client side (same code as production)
+handle = resolver.lookup("my_actor")
+result = handle.process(data)
 ```
 
-### Zephyr Backend Integration
+### Zephyr Integration
+
+Zephyr continues to work unchanged. It uses its own backend abstraction
+which can launch Fray jobs internally.
 
 ```python
-# In zephyr/backends.py
-
 class FrayBackend(Backend):
     """Zephyr backend using Fray for distributed execution.
 
-    Uses Fray's job management for worker orchestration instead of Ray.
+    Launches worker jobs via the Cluster and dispatches work to them.
+    Workers are stateless - all coordination happens through object storage.
     """
 
     def __init__(
         self,
-        cluster: Cluster,
+        cluster: Cluster | None = None,  # None = current_cluster()
         max_parallelism: int = 100,
         memory_per_worker: str = "2GB",
     ):
@@ -861,23 +849,6 @@ class FrayBackend(Backend):
     def execute(self, dataset: Dataset) -> list[Any]:
         """Execute a dataset pipeline on Fray workers."""
         ...
-
-
-# Factory function
-def get_backend(
-    backend_type: Literal["ray", "fray", "threadpool", "auto"] = "auto",
-    **kwargs: Any,
-) -> Backend:
-    """Get a Zephyr backend.
-
-    Args:
-        backend_type: Backend type ("auto" selects based on environment)
-        **kwargs: Backend-specific configuration
-
-    Returns:
-        Backend implementation
-    """
-    ...
 ```
 
 ## Example Usage
@@ -1036,13 +1007,14 @@ from typing import Iterator
 
 from fray.cluster import (
     current_cluster,
+    ClusterResolver,
     Entrypoint,
     EnvironmentConfig,
     JobGroupConfig,
     JobRequest,
     ResourceConfig,
 )
-from fray.rpc import FrayActorServer, fray_resolver
+from fray.rpc import ActorContext, ActorServer
 
 
 @dataclass
@@ -1062,51 +1034,59 @@ class InferenceActor:
 
         self.model = load_model(model_path)
         self.device_count = jax.device_count()
-        print(f"Loaded model on {self.device_count} devices")
 
-    def predict(self, prompts: list[str]) -> list[str]:
-        """Generate completions for a batch of prompts."""
+    def predict(self, ctx: ActorContext, prompts: list[str]) -> list[str]:
+        # ctx available if this actor needs to call other actors
         return self.model.generate(prompts)
-
-    def health_check(self) -> dict:
-        """Return server health status."""
-        return {"status": "healthy", "devices": self.device_count}
 
 
 def inference_server_main(config: InferenceConfig, server_id: int):
     """Entrypoint for inference server jobs."""
-    import os
+    cluster = current_cluster()
+    server = ActorServer(cluster)
 
-    resolver = fray_resolver()
-    server = FrayActorServer(resolver, port=0)
-
-    # Register actor with a unique name
     actor = InferenceActor(config.model_path)
     server.register(f"inference_{server_id}", actor)
-
-    # Also register under a pool name for load balancing
-    server.register("inference_pool", actor)
-
-    print(f"Inference server {server_id} ready at {server.address}")
-    server.serve()  # Blocks
+    server.register("inference_pool", actor)  # Pool name for load balancing
+    server.serve()
 
 
-def launch_inference_pool(config: InferenceConfig) -> "InferencePool":
-    """Launch a pool of inference servers.
+class InferencePool:
+    """Client for dispatching work to inference servers."""
 
-    Returns an InferencePool object that can be used to dispatch work.
-    """
+    def __init__(self, cluster, job_ids: list, config: InferenceConfig):
+        self.cluster = cluster
+        self.resolver = ClusterResolver(cluster)
+        self.job_ids = job_ids
+        self.config = config
+
+    def predict(self, prompts: list[str]) -> list[str]:
+        """Run inference on prompts, load-balancing across servers."""
+        handles = self.resolver.lookup_all("inference_pool")
+        results = []
+
+        for i in range(0, len(prompts), self.config.batch_size):
+            batch = prompts[i:i + self.config.batch_size]
+            handle = handles[i // self.config.batch_size % len(handles)]
+            results.extend(handle.predict(batch))
+
+        return results
+
+    def shutdown(self):
+        for job_id in self.job_ids:
+            self.cluster.terminate(job_id)
+
+
+def launch_inference_pool(config: InferenceConfig) -> InferencePool:
+    """Launch a pool of inference servers."""
     cluster = current_cluster()
+    resolver = ClusterResolver(cluster)
 
-    # Launch all inference servers as a co-located group
     requests = [
         JobRequest(
             name=f"inference-{i}",
             resources=ResourceConfig.with_tpu(config.tpu_type),
-            entrypoint=Entrypoint.from_callable(
-                inference_server_main,
-                args=(config, i),
-            ),
+            entrypoint=Entrypoint.from_callable(inference_server_main, args=(config, i)),
             environment=EnvironmentConfig.create(extras=["tpu"]),
         )
         for i in range(config.num_servers)
@@ -1117,71 +1097,11 @@ def launch_inference_pool(config: InferenceConfig) -> "InferencePool":
         group=JobGroupConfig(name="inference-pool", same_region=True),
     )
 
-    # Wait for servers to be ready (poll until actors are registered)
-    resolver = fray_resolver()
-    import time
-    for _ in range(60):  # 60 second timeout
-        actors = resolver.list_actors(prefix="inference_pool")
-        if len(actors) == config.num_servers:
-            break
-        time.sleep(1)
-    else:
-        raise RuntimeError("Inference servers failed to start")
+    # Wait for all servers to register
+    for i in range(config.num_servers):
+        resolver.wait_for_actor(f"inference_{i}")
 
-    return InferencePool(job_ids, resolver, config)
-
-
-class InferencePool:
-    """Client for dispatching work to inference servers."""
-
-    def __init__(self, job_ids: list, resolver, config: InferenceConfig):
-        self.job_ids = job_ids
-        self.resolver = resolver
-        self.config = config
-
-    def predict(self, prompts: list[str]) -> list[str]:
-        """Run inference on prompts, load-balancing across servers."""
-        # Get handles to all inference actors
-        handles = self.resolver.lookup_all("inference_pool")
-
-        # Batch prompts across servers
-        results = []
-        batch_size = self.config.batch_size
-
-        for i in range(0, len(prompts), batch_size):
-            batch = prompts[i:i + batch_size]
-            # Round-robin to servers
-            handle = handles[i // batch_size % len(handles)]
-            results.extend(handle.predict(batch))
-
-        return results
-
-    def predict_async(
-        self,
-        prompts: Iterator[list[str]]
-    ) -> Iterator[list[str]]:
-        """Stream inference results for batches of prompts."""
-        handles = self.resolver.lookup_all("inference_pool")
-        pending_futures = []
-
-        for i, batch in enumerate(prompts):
-            handle = handles[i % len(handles)]
-            future = handle.predict.remote(batch)
-            pending_futures.append(future)
-
-            # Yield completed results as they become available
-            while pending_futures and pending_futures[0].done():
-                yield pending_futures.pop(0).result()
-
-        # Drain remaining futures
-        for future in pending_futures:
-            yield future.result()
-
-    def shutdown(self):
-        """Terminate all inference servers."""
-        cluster = current_cluster()
-        for job_id in self.job_ids:
-            cluster.terminate(job_id)
+    return InferencePool(cluster, job_ids, config)
 
 
 # Example usage
@@ -1206,19 +1126,19 @@ RL requires coordinating training workers, rollout workers, and shared actors.
 
 ```python
 # marin/rl/fray_rl_job.py
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import os
-from typing import Iterator
 
 from fray.cluster import (
     current_cluster,
+    ClusterResolver,
     Entrypoint,
     EnvironmentConfig,
     JobGroupConfig,
     JobRequest,
     ResourceConfig,
 )
-from fray.rpc import FrayActorServer, fray_resolver, ActorHandle
+from fray.rpc import ActorContext, ActorServer
 
 
 @dataclass
@@ -1227,167 +1147,92 @@ class RLConfig:
     train_tpu_type: str = "v5litepod-16"
     inference_tpu_type: str = "v5litepod-4"
     num_rollout_workers: int = 4
-    rollout_storage_path: str = "gs://bucket/rollouts"
     checkpoint_path: str = "gs://bucket/checkpoints"
 
 
 # === Shared Actors ===
 
 class CurriculumActor:
-    """Manages training curriculum and lesson selection.
+    """Manages training curriculum - shared across all workers."""
 
-    Shared across all workers to coordinate which lessons to sample.
-    """
-
-    def __init__(self, curriculum_config: dict):
-        self.config = curriculum_config
+    def __init__(self, lessons: dict):
+        self.lessons = lessons
         self.step = 0
-        self.lesson_stats: dict[str, dict] = {}
 
-    def get_lesson(self) -> dict:
-        """Get the next lesson to run."""
-        # Select lesson based on curriculum strategy
-        lesson_name = self._select_lesson()
-        return self.config["lessons"][lesson_name]
+    def get_lesson(self, ctx: ActorContext) -> dict:
+        lesson_name = list(self.lessons.keys())[self.step % len(self.lessons)]
+        return self.lessons[lesson_name]
 
-    def report_result(self, lesson_name: str, reward: float):
-        """Report results from a completed rollout."""
-        if lesson_name not in self.lesson_stats:
-            self.lesson_stats[lesson_name] = {"count": 0, "total_reward": 0}
-
-        self.lesson_stats[lesson_name]["count"] += 1
-        self.lesson_stats[lesson_name]["total_reward"] += reward
-
-    def get_stats(self) -> dict:
-        """Get curriculum statistics."""
-        return {"step": self.step, "lessons": self.lesson_stats}
-
-    def _select_lesson(self) -> str:
-        # Implement lesson selection logic
-        lessons = list(self.config["lessons"].keys())
-        return lessons[self.step % len(lessons)]
+    def report_result(self, ctx: ActorContext, lesson_name: str, reward: float):
+        self.step += 1
 
 
 class WeightCoordinator:
-    """Coordinates weight synchronization between train and rollout workers.
+    """Coordinates weight sync between train and rollout workers."""
 
-    The training worker publishes new checkpoints; rollout workers poll
-    for updates.
-    """
-
-    def __init__(self, checkpoint_path: str):
-        self.checkpoint_path = checkpoint_path
+    def __init__(self):
         self.current_step = 0
-        self.current_checkpoint: str | None = None
+        self.checkpoint_path: str | None = None
 
-    def publish_checkpoint(self, step: int, path: str):
-        """Called by training worker when new weights are ready."""
+    def publish_checkpoint(self, ctx: ActorContext, step: int, path: str):
         self.current_step = step
-        self.current_checkpoint = path
+        self.checkpoint_path = path
 
-    def get_latest_checkpoint(self) -> tuple[int, str | None]:
-        """Get the latest checkpoint (step, path)."""
-        return self.current_step, self.current_checkpoint
+    def get_latest_checkpoint(self, ctx: ActorContext) -> tuple[int, str | None]:
+        return self.current_step, self.checkpoint_path
 
 
-# === Worker Implementations ===
+# === Worker Entrypoints ===
 
-def train_worker_main(config: RLConfig, run_id: str):
-    """Training worker entrypoint."""
-    import logging
-    logging.basicConfig(level=logging.INFO)
+def coordinator_main(config: RLConfig):
+    """Coordinator job hosting shared actors."""
+    cluster = current_cluster()
+    server = ActorServer(cluster)
 
-    resolver = fray_resolver()
+    server.register("curriculum", CurriculumActor({"math": {}, "code": {}}))
+    server.register("weight_coordinator", WeightCoordinator())
+    server.serve()
 
-    # Connect to shared actors
-    curriculum: ActorHandle = resolver.lookup("curriculum")
-    weight_coord: ActorHandle = resolver.lookup("weight_coordinator")
 
-    # Initialize model and optimizer
+def train_worker_main(config: RLConfig):
+    """Training worker - connects to shared actors."""
+    cluster = current_cluster()
+    resolver = ClusterResolver(cluster)
+
+    curriculum = resolver.wait_for_actor("curriculum")
+    weight_coord = resolver.wait_for_actor("weight_coordinator")
+
+    # Training loop
     from marin.rl.train_worker import TrainWorker
     worker = TrainWorker(config)
 
-    step = 0
-    while True:
-        # Fetch rollouts from storage
-        rollouts = worker.fetch_rollouts(config.rollout_storage_path)
-
-        if not rollouts:
-            import time
-            time.sleep(1)
-            continue
-
-        # Train on rollouts
-        metrics = worker.train_step(rollouts)
-        step += 1
-
-        # Periodically save checkpoint and notify coordinator
+    for step in worker.train_loop():
         if step % 100 == 0:
             ckpt_path = f"{config.checkpoint_path}/step-{step}"
             worker.save_checkpoint(ckpt_path)
             weight_coord.publish_checkpoint(step, ckpt_path)
 
-        # Log metrics
-        if step % 10 == 0:
-            stats = curriculum.get_stats()
-            print(f"Step {step}: loss={metrics['loss']:.4f}, curriculum={stats}")
 
+def rollout_worker_main(config: RLConfig, worker_id: int):
+    """Rollout worker - generates training data."""
+    cluster = current_cluster()
+    resolver = ClusterResolver(cluster)
 
-def rollout_worker_main(config: RLConfig, worker_id: int, run_id: str):
-    """Rollout worker entrypoint."""
-    import logging
-    logging.basicConfig(level=logging.INFO)
+    curriculum = resolver.wait_for_actor("curriculum")
+    weight_coord = resolver.wait_for_actor("weight_coordinator")
 
-    resolver = fray_resolver()
-
-    # Connect to shared actors
-    curriculum: ActorHandle = resolver.lookup("curriculum")
-    weight_coord: ActorHandle = resolver.lookup("weight_coordinator")
-
-    # Initialize inference model
     from marin.rl.rollout_worker import RolloutWorker
     worker = RolloutWorker(config, worker_id)
 
-    last_checkpoint_step = 0
-
     while True:
-        # Check for new weights
-        step, checkpoint_path = weight_coord.get_latest_checkpoint()
-        if step > last_checkpoint_step and checkpoint_path:
-            worker.load_checkpoint(checkpoint_path)
-            last_checkpoint_step = step
+        step, ckpt = weight_coord.get_latest_checkpoint()
+        if ckpt:
+            worker.load_checkpoint(ckpt)
 
-        # Get lesson from curriculum
         lesson = curriculum.get_lesson()
-
-        # Generate rollouts
         rollouts, reward = worker.generate_rollout(lesson)
-
-        # Report results to curriculum
         curriculum.report_result(lesson["name"], reward)
-
-        # Write rollouts to storage
-        worker.write_rollouts(rollouts, config.rollout_storage_path)
-
-
-def coordinator_main(config: RLConfig, run_id: str):
-    """Coordinator job that hosts shared actors."""
-    import logging
-    logging.basicConfig(level=logging.INFO)
-
-    resolver = fray_resolver()
-    server = FrayActorServer(resolver, port=0)
-
-    # Create and register shared actors
-    curriculum_config = {"lessons": {"math": {}, "code": {}, "reasoning": {}}}
-    curriculum = CurriculumActor(curriculum_config)
-    server.register("curriculum", curriculum)
-
-    weight_coord = WeightCoordinator(config.checkpoint_path)
-    server.register("weight_coordinator", weight_coord)
-
-    print(f"Coordinator ready at {server.address}")
-    server.serve()  # Blocks
+        worker.write_rollouts(rollouts)
 
 
 # === Job Orchestration ===
@@ -1398,101 +1243,51 @@ class RLJob:
     def __init__(self, config: RLConfig):
         self.config = config
         self.cluster = current_cluster()
+        self.resolver = ClusterResolver(self.cluster)
         self.run_id = f"rl-{os.urandom(4).hex()}"
 
     def run(self) -> dict:
-        """Launch all workers and wait for completion."""
-        # Create job group for co-location
-        group = JobGroupConfig(
-            name=f"rl-{self.run_id}",
-            same_region=True,
-        )
+        group = JobGroupConfig(name=f"rl-{self.run_id}", same_region=True)
 
-        # Build job requests
-        requests = []
-
-        # 1. Coordinator (hosts shared actors)
-        requests.append(
+        requests = [
+            # Coordinator
             JobRequest(
                 name=f"rl-coordinator-{self.run_id}",
                 resources=ResourceConfig.with_cpu(cpu=4, ram="8g"),
-                entrypoint=Entrypoint.from_callable(
-                    coordinator_main,
-                    args=(self.config, self.run_id),
-                ),
-                environment=EnvironmentConfig.create(),
-            )
-        )
-
-        # 2. Training worker
-        requests.append(
+                entrypoint=Entrypoint.from_callable(coordinator_main, args=(self.config,)),
+            ),
+            # Training worker
             JobRequest(
                 name=f"rl-train-{self.run_id}",
                 resources=ResourceConfig.with_tpu(self.config.train_tpu_type),
-                entrypoint=Entrypoint.from_callable(
-                    train_worker_main,
-                    args=(self.config, self.run_id),
-                ),
+                entrypoint=Entrypoint.from_callable(train_worker_main, args=(self.config,)),
                 environment=EnvironmentConfig.create(extras=["tpu"]),
-            )
-        )
+            ),
+        ]
 
-        # 3. Rollout workers
+        # Rollout workers
         for i in range(self.config.num_rollout_workers):
             requests.append(
                 JobRequest(
                     name=f"rl-rollout-{self.run_id}-{i}",
                     resources=ResourceConfig.with_tpu(self.config.inference_tpu_type),
-                    entrypoint=Entrypoint.from_callable(
-                        rollout_worker_main,
-                        args=(self.config, i, self.run_id),
-                    ),
+                    entrypoint=Entrypoint.from_callable(rollout_worker_main, args=(self.config, i)),
                     environment=EnvironmentConfig.create(extras=["tpu"]),
                 )
             )
 
-        # Launch all jobs as a group
         self.job_ids = self.cluster.launch_group(requests, group=group)
 
-        # Wait for coordinator to be ready
-        resolver = fray_resolver()
-        import time
-        for _ in range(60):
-            try:
-                resolver.lookup("curriculum")
-                resolver.lookup("weight_coordinator")
-                break
-            except Exception:
-                time.sleep(1)
-        else:
-            raise RuntimeError("Coordinator actors failed to start")
+        # Wait for coordinator actors
+        self.resolver.wait_for_actor("curriculum")
+        self.resolver.wait_for_actor("weight_coordinator")
 
-        print(f"RL job {self.run_id} started with {len(self.job_ids)} workers")
-
-        # Monitor training worker (it's the primary job)
-        train_job_id = self.job_ids[1]  # Second job is training
-        result = self.cluster.monitor(train_job_id)
-
-        return {"status": result.status, "run_id": self.run_id}
+        # Monitor training worker
+        return self.cluster.monitor(self.job_ids[1])
 
     def shutdown(self):
-        """Terminate all workers."""
         for job_id in self.job_ids:
             self.cluster.terminate(job_id)
-
-
-# Example usage
-if __name__ == "__main__":
-    config = RLConfig(
-        model_path="gs://bucket/models/llama-8b",
-        train_tpu_type="v5litepod-16",
-        inference_tpu_type="v5litepod-4",
-        num_rollout_workers=4,
-    )
-
-    job = RLJob(config)
-    result = job.run()
-    print(f"RL training completed: {result}")
 ```
 
 ### 5. Multi-Slice Training (Flex)
@@ -1503,21 +1298,19 @@ join and leave.
 ```python
 # marin/training/multislice_training.py
 from dataclasses import dataclass
-from typing import Iterator
-import time
 
 from fray.cluster import (
     current_cluster,
+    ClusterResolver,
     Entrypoint,
     EnvironmentConfig,
-    JobGroupConfig,
     JobId,
     JobRequest,
     JobStatus,
     ReservationConfig,
     ResourceConfig,
 )
-from fray.rpc import FrayActorServer, fray_resolver, ActorHandle
+from fray.rpc import ActorContext, ActorServer
 
 
 @dataclass
@@ -1530,266 +1323,141 @@ class MultiSliceConfig:
 
 
 class SliceCoordinator:
-    """Coordinates multiple training slices.
+    """Coordinates slice membership and synchronization barriers."""
 
-    Manages slice membership, synchronization barriers, and gradient
-    aggregation across a dynamic set of slices.
-    """
-
-    def __init__(self, config: MultiSliceConfig):
-        self.config = config
-        self.registered_slices: dict[str, dict] = {}
+    def __init__(self, min_slices: int):
+        self.min_slices = min_slices
+        self.slices: dict[str, str] = {}  # slice_id -> address
         self.current_step = 0
         self.barrier_count = 0
-        self.gradient_buffers: dict[str, bytes] = {}
 
-    def register_slice(self, slice_id: str, address: str) -> dict:
-        """Register a new slice with the coordinator."""
-        self.registered_slices[slice_id] = {
-            "address": address,
-            "registered_at": time.time(),
-            "last_heartbeat": time.time(),
-        }
-        return {
-            "slice_id": slice_id,
-            "current_step": self.current_step,
-            "peer_slices": list(self.registered_slices.keys()),
-        }
+    def register_slice(self, ctx: ActorContext, slice_id: str, address: str) -> dict:
+        self.slices[slice_id] = address
+        return {"step": self.current_step, "peers": list(self.slices.keys())}
 
-    def unregister_slice(self, slice_id: str):
-        """Remove a slice from the coordinator."""
-        self.registered_slices.pop(slice_id, None)
+    def unregister_slice(self, ctx: ActorContext, slice_id: str):
+        self.slices.pop(slice_id, None)
 
-    def heartbeat(self, slice_id: str) -> dict:
-        """Update heartbeat and return current cluster state."""
-        if slice_id in self.registered_slices:
-            self.registered_slices[slice_id]["last_heartbeat"] = time.time()
+    def heartbeat(self, ctx: ActorContext, slice_id: str) -> dict:
+        return {"step": self.current_step, "slice_count": len(self.slices)}
 
-        return {
-            "current_step": self.current_step,
-            "peer_slices": list(self.registered_slices.keys()),
-            "slice_count": len(self.registered_slices),
-        }
-
-    def barrier_enter(self, slice_id: str, step: int) -> bool:
-        """Enter synchronization barrier. Returns True when all slices ready."""
+    def barrier_enter(self, ctx: ActorContext, slice_id: str, step: int) -> bool:
         if step != self.current_step:
             return False
-
         self.barrier_count += 1
-        return self.barrier_count >= len(self.registered_slices)
+        return self.barrier_count >= len(self.slices)
 
-    def barrier_exit(self, slice_id: str, step: int):
-        """Exit synchronization barrier."""
-        if self.barrier_count >= len(self.registered_slices):
+    def barrier_exit(self, ctx: ActorContext, slice_id: str, step: int):
+        if self.barrier_count >= len(self.slices):
             self.current_step += 1
             self.barrier_count = 0
 
-    def submit_gradients(self, slice_id: str, gradients: bytes):
-        """Submit gradients for aggregation."""
-        self.gradient_buffers[slice_id] = gradients
 
-    def get_aggregated_gradients(self) -> bytes | None:
-        """Get aggregated gradients if all slices have submitted."""
-        if len(self.gradient_buffers) < len(self.registered_slices):
-            return None
+def coordinator_main(config: MultiSliceConfig):
+    """Coordinator hosting the SliceCoordinator actor."""
+    cluster = current_cluster()
+    server = ActorServer(cluster)
 
-        # In practice, aggregation happens via JAX collectives
-        # This is just for metadata coordination
-        result = list(self.gradient_buffers.values())[0]
-        self.gradient_buffers.clear()
-        return result
-
-    def get_cluster_state(self) -> dict:
-        """Get current cluster state."""
-        # Prune stale slices
-        now = time.time()
-        stale_threshold = 60  # seconds
-        stale = [
-            sid for sid, info in self.registered_slices.items()
-            if now - info["last_heartbeat"] > stale_threshold
-        ]
-        for sid in stale:
-            self.unregister_slice(sid)
-
-        return {
-            "step": self.current_step,
-            "slice_count": len(self.registered_slices),
-            "slices": list(self.registered_slices.keys()),
-        }
+    server.register("slice_coordinator", SliceCoordinator(config.min_slices))
+    server.serve()
 
 
 def slice_worker_main(config: MultiSliceConfig, slice_id: str):
     """Training worker for a single slice."""
+    cluster = current_cluster()
+    resolver = ClusterResolver(cluster)
+
+    coordinator = resolver.wait_for_actor("slice_coordinator")
+
     import jax
-    import logging
-    logging.basicConfig(level=logging.INFO)
+    address = f"{jax.process_index()}@{jax.local_devices()[0]}"
+    coordinator.register_slice(slice_id, address)
 
-    resolver = fray_resolver()
-    coordinator: ActorHandle = resolver.lookup("slice_coordinator")
-
-    # Register with coordinator
-    my_address = f"{jax.process_index()}@{os.environ.get('HOSTNAME', 'localhost')}"
-    registration = coordinator.register_slice(slice_id, my_address)
-    print(f"Slice {slice_id} registered, peers: {registration['peer_slices']}")
-
-    # Initialize model
     from marin.training.trainer import Trainer
     trainer = Trainer(config.model_path)
 
     try:
         while True:
-            # Heartbeat and get cluster state
             state = coordinator.heartbeat(slice_id)
-            peer_count = state["slice_count"]
+            if state["slice_count"] < config.min_slices:
+                continue  # Wait for more slices
 
-            if peer_count < config.min_slices:
-                print(f"Waiting for more slices ({peer_count}/{config.min_slices})")
-                time.sleep(5)
-                continue
-
-            # Synchronization barrier
-            step = state["current_step"]
-            while not coordinator.barrier_enter(slice_id, step):
-                time.sleep(0.1)
-
-            # Run training step with JAX collectives across slices
-            # JAX handles the actual gradient synchronization
-            metrics = trainer.train_step()
-
-            # Exit barrier
+            step = state["step"]
+            coordinator.barrier_enter(slice_id, step)
+            trainer.train_step()
             coordinator.barrier_exit(slice_id, step)
 
             if step % 100 == 0:
                 trainer.save_checkpoint(f"{config.checkpoint_path}/step-{step}")
-
-            print(f"Slice {slice_id} step {step}: loss={metrics['loss']:.4f}")
-
     finally:
         coordinator.unregister_slice(slice_id)
 
 
-def coordinator_main(config: MultiSliceConfig):
-    """Coordinator for multi-slice training."""
-    import logging
-    logging.basicConfig(level=logging.INFO)
-
-    resolver = fray_resolver()
-    server = FrayActorServer(resolver, port=0)
-
-    coordinator = SliceCoordinator(config)
-    server.register("slice_coordinator", coordinator)
-
-    print(f"Multi-slice coordinator ready at {server.address}")
-    server.serve()
-
-
 class MultiSliceJob:
-    """Manages a flexible multi-slice training job."""
+    """Manages elastic multi-slice training."""
 
     def __init__(self, config: MultiSliceConfig):
         self.config = config
         self.cluster = current_cluster()
+        self.resolver = ClusterResolver(self.cluster)
         self.slice_jobs: dict[str, JobId] = {}
-        self.coordinator_job: JobId | None = None
 
     def run(self):
-        """Run multi-slice training with dynamic scaling."""
-        # Create reservation for elastic scaling
+        # Create elastic reservation
         reservation = self.cluster.create_reservation(
             ReservationConfig(
-                min_resources=ResourceConfig.with_tpu(
-                    self.config.tpu_type,
-                    slice_count=self.config.min_slices
-                ),
-                max_resources=ResourceConfig.with_tpu(
-                    self.config.tpu_type,
-                    slice_count=self.config.max_slices
-                ),
-                priority=1,
+                min_resources=ResourceConfig.with_tpu(self.config.tpu_type, slice_count=self.config.min_slices),
+                max_resources=ResourceConfig.with_tpu(self.config.tpu_type, slice_count=self.config.max_slices),
                 preemptible=True,
             )
         )
 
         try:
             # Launch coordinator
-            self.coordinator_job = self.cluster.launch(
+            self.cluster.launch(
                 JobRequest(
                     name="multislice-coordinator",
                     resources=ResourceConfig.with_cpu(cpu=4, ram="8g"),
-                    entrypoint=Entrypoint.from_callable(
-                        coordinator_main,
-                        args=(self.config,),
-                    ),
-                    environment=EnvironmentConfig.create(),
+                    entrypoint=Entrypoint.from_callable(coordinator_main, args=(self.config,)),
                 )
             )
-
-            # Wait for coordinator
-            resolver = fray_resolver()
-            for _ in range(30):
-                try:
-                    resolver.lookup("slice_coordinator")
-                    break
-                except Exception:
-                    time.sleep(1)
+            self.resolver.wait_for_actor("slice_coordinator")
 
             # Launch initial slices
             for i in range(self.config.min_slices):
-                self._launch_slice(i, reservation)
+                self._launch_slice(i)
 
-            # Main loop: monitor and scale
+            # Monitor and scale
             while True:
-                self._check_slice_health()
-                self._maybe_scale(reservation)
-                time.sleep(10)
-
+                self._check_health_and_scale(reservation)
         finally:
             self.cluster.release_reservation(reservation)
 
-    def _launch_slice(self, slice_idx: int, reservation_id):
-        """Launch a new slice worker."""
-        slice_id = f"slice-{slice_idx}"
-
+    def _launch_slice(self, idx: int):
         job_id = self.cluster.launch(
             JobRequest(
-                name=f"multislice-worker-{slice_idx}",
+                name=f"multislice-worker-{idx}",
                 resources=ResourceConfig.with_tpu(self.config.tpu_type),
-                entrypoint=Entrypoint.from_callable(
-                    slice_worker_main,
-                    args=(self.config, slice_id),
-                ),
+                entrypoint=Entrypoint.from_callable(slice_worker_main, args=(self.config, f"slice-{idx}")),
                 environment=EnvironmentConfig.create(extras=["tpu"]),
             )
         )
+        self.slice_jobs[f"slice-{idx}"] = job_id
 
-        self.slice_jobs[slice_id] = job_id
-
-    def _check_slice_health(self):
-        """Check health of slice workers and restart failed ones."""
+    def _check_health_and_scale(self, reservation):
+        # Restart failed slices, scale up if resources available
         for slice_id, job_id in list(self.slice_jobs.items()):
-            info = self.cluster.poll(job_id)
+            if self.cluster.poll(job_id).status in (JobStatus.FAILED, JobStatus.STOPPED):
+                self._launch_slice(int(slice_id.split("-")[1]))
 
-            if info.status in (JobStatus.FAILED, JobStatus.STOPPED):
-                print(f"Slice {slice_id} failed, restarting...")
-                slice_idx = int(slice_id.split("-")[1])
-                self._launch_slice(slice_idx, None)
-
-    def _maybe_scale(self, reservation_id):
-        """Scale slices based on reservation availability."""
-        reservation = self.cluster.get_reservation(reservation_id)
-
-        # If we have more resources available, add slices
-        current_slices = len(self.slice_jobs)
-        available_slices = reservation.allocated_resources.replicas
-
-        if available_slices > current_slices < self.config.max_slices:
-            print(f"Scaling up from {current_slices} to {available_slices} slices")
-            for i in range(current_slices, available_slices):
-                self._launch_slice(i, reservation_id)
+        # Scale based on reservation
+        reservation_info = self.cluster.get_reservation(reservation)
+        available = reservation_info.allocated_resources.replicas
+        if available > len(self.slice_jobs) < self.config.max_slices:
+            for i in range(len(self.slice_jobs), available):
+                self._launch_slice(i)
 
 
-# Example usage
 if __name__ == "__main__":
     config = MultiSliceConfig(
         model_path="gs://bucket/models/llama-70b",
@@ -1804,77 +1472,45 @@ if __name__ == "__main__":
 
 ### 6. Local Development
 
-All examples above work locally with minimal changes thanks to the LocalCluster.
+All examples work locally with the same code - just use `LocalCluster` and
+`LocalResolver` instead of production implementations.
 
 ```python
 # tests/test_local_development.py
-"""Example showing local development workflow."""
+"""Local development uses identical patterns to production."""
 
-from fray.cluster import LocalCluster, current_cluster
-from fray.rpc import LocalResolver, LocalActorServer
-import os
+from fray.cluster import LocalCluster, LocalResolver
+from fray.rpc import ActorServer, ActorContext
 
 
 def test_local_inference():
-    """Test inference locally without a cluster."""
-    # Set up local cluster
-    os.environ["FRAY_CLUSTER_SPEC"] = "local"
+    """Test inference locally - same code pattern as production."""
+    cluster = LocalCluster()
+    resolver = LocalResolver(cluster)
 
-    cluster = current_cluster()
-    assert isinstance(cluster, LocalCluster)
-
-    # Create a simple actor
+    # Server side (identical to production)
     class MockInferenceActor:
-        def predict(self, prompts):
+        def predict(self, ctx: ActorContext, prompts: list[str]) -> list[str]:
             return [f"Response to: {p}" for p in prompts]
 
-    # Register actor locally
-    resolver = LocalResolver()
-    server = LocalActorServer(resolver)
+    server = ActorServer(cluster)
     server.register("inference", MockInferenceActor())
+    server.serve_background()
 
-    # Look up and call actor (synchronous in local mode)
+    # Client side (identical to production)
     handle = resolver.lookup("inference")
     result = handle.predict(["Hello", "World"])
 
     assert result == ["Response to: Hello", "Response to: World"]
+    server.shutdown()
 
 
-def test_local_zephyr_pipeline():
-    """Test Zephyr pipeline locally."""
-    from zephyr import Backend, Dataset
+def test_fixed_resolver():
+    """FixedResolver for testing against known endpoints."""
+    from fray.cluster import FixedResolver
 
-    # Pipeline runs locally with threadpool backend
-    pipeline = (
-        Dataset.from_list([{"x": i} for i in range(100)])
-        .map(lambda d: {"x": d["x"] * 2})
-        .filter(lambda d: d["x"] > 50)
-    )
-
-    # Execute locally
-    results = Backend.execute(pipeline, max_parallelism=4)
-    assert len(results) == 75  # 26-50 doubled = 52-100, filter keeps > 50
-
-
-def test_switch_to_cluster():
-    """Show how code switches between local and cluster."""
-    # This function works identically in both modes
-    def run_pipeline(data: list[dict]) -> list[dict]:
-        from zephyr import Backend, Dataset
-
-        pipeline = (
-            Dataset.from_list(data)
-            .map(lambda d: {**d, "processed": True})
-        )
-
-        return Backend.execute(pipeline)
-
-    # Locally
-    os.environ["FRAY_CLUSTER_SPEC"] = "local"
-    result = run_pipeline([{"x": 1}])
-    assert result == [{"x": 1, "processed": True}]
-
-    # On cluster (would connect to real cluster)
-    # os.environ["FRAY_CLUSTER_SPEC"] = "fray://controller:50051"
-    # result = run_pipeline([{"x": 1}])
+    # Connect directly to a known address (useful for debugging)
+    resolver = FixedResolver("localhost:8080")
+    handle = resolver.lookup("my_actor")
+    # handle.some_method()
 ```
