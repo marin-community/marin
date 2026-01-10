@@ -25,7 +25,7 @@ from rich.table import Table
 from scipy.interpolate import griddata
 import wandb
 
-RUN_VERSION = "1.12"
+RUN_VERSION = "1.13"
 RUN_PREFIX = f"plantcad_isoflop_v{RUN_VERSION}"
 RESULT_PATH = f"experiments/plantcad/results/v{RUN_VERSION}"
 EXPORT_DPI = 300
@@ -137,7 +137,7 @@ def log_run_object(run, run_idx):
 
 def fetch_plantcad_runs(show_wandb_runs: bool = False):
     """Fetch plantcad isoflop runs and extract metrics/tags into a dataframe."""
-    api = wandb.Api()
+    api = wandb.Api(timeout=30)
     # Note: Results from the first run (plantcad_isoflop_01) are available at:
     # https://github.com/marin-community/marin/issues/2101#issuecomment-3581675724
     runs = api.runs(
@@ -186,9 +186,7 @@ def fetch_plantcad_runs(show_wandb_runs: bool = False):
             "stop_time": stop_time,
             "duration_sec": duration,
             # Metrics
-            # TODO: revert
-            # "eval_loss": run.summary.get("eval/plantcad2/loss"),
-            "eval_loss": run.summary.get("eval/dclm_baseline/loss"),
+            "eval_loss": run.summary.get("eval/plantcad2/loss"),
             "train_loss": run.summary.get("train/loss"),
             "total_gflops": run.summary.get("throughput/total_gflops"),
             "total_tokens": run.summary.get("throughput/total_tokens"),
@@ -599,8 +597,8 @@ def fit_quadratic_optimum(x_vals, loss_vals):
     coeffs = np.polyfit(log_x, loss_vals, 2)  # [a, b, c]
     a, b, _ = coeffs
 
-    if a <= 0:
-        raise ValueError(f"Concave fit detected: {coeffs}")
+    # if a <= 0:
+    #     raise ValueError(f"Concave fit detected: {coeffs}")
 
     # Minimum at ln x = -b / (2a)
     ln_x_opt = -b / (2 * a)

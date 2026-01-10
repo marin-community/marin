@@ -21,11 +21,12 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 import yaml
-from ray.job_submission import JobSubmissionClient
+from ray.job_submission import JobStatus, JobSubmissionClient
 
 from marin.cluster.config import find_config_by_region
 from fray.cluster.ray import DashboardConfig, ray_dashboard
@@ -120,8 +121,12 @@ async def submit_and_track_job(
     entrypoint_num_gpus: float | None = None,
     entrypoint_memory: int | None = None,
     entrypoint_resources: dict | None = None,
-):
-    """Submit a job to Ray and optionally track logs."""
+) -> JobStatus | None:
+    """Submit a job to Ray and optionally track logs.
+
+    Returns:
+        The final JobStatus if waiting for the job, None if no_wait is True.
+    """
     client = make_client()
     current_dir = os.getcwd()
 
@@ -170,11 +175,16 @@ async def submit_and_track_job(
     logger.info(f"Job URL: {client.get_address()}/#/jobs/{submission_id}")
 
     if no_wait:
-        return
+        return None
 
     # Stream logs asynchronously
     async for lines in client.tail_job_logs(submission_id):
         print(lines, end="")
+
+    # Check final job status after log streaming completes
+    final_status = client.get_job_status(submission_id)
+    logger.info(f"Job {submission_id} finished with status: {final_status}")
+    return final_status
 
 
 def main():
@@ -322,9 +332,9 @@ def main():
     else:
         submission_id = generate_submission_id(full_cmd)
 
-    async def run_job():
+    async def run_job() -> JobStatus | None:
         try:
-            await submit_and_track_job(
+            return await submit_and_track_job(
                 full_cmd,
                 args.extra,
                 env_vars,
@@ -336,22 +346,24 @@ def main():
                 entrypoint_resources=entrypoint_resources,
             )
         except KeyboardInterrupt:
-            pass
+            return None
         except asyncio.CancelledError:
             logger.info("Job tracking cancelled by user.")
-            pass
+            return None
         except Exception as e:
             logger.error(f"Error submitting or tracking job: {e}")
             raise
 
+    final_status: JobStatus | None = None
     try:
         if cluster_config:
             with ray_dashboard(DashboardConfig.from_cluster(cluster_config)):
-                asyncio.run(run_job())
+                final_status = asyncio.run(run_job())
         else:
-            asyncio.run(run_job())
+            final_status = asyncio.run(run_job())
     except Exception:
         logger.error("Failed to run job", exc_info=True)
+        sys.exit(1)
     finally:
         if args.auto_stop:
             logger.info(f"Auto-stopping job {submission_id}...")
@@ -363,6 +375,23 @@ def main():
             else:
                 client = make_client()
                 client.stop_job(submission_id)
+
+    # Exit with appropriate code based on job status
+    if final_status is None:
+        # no_wait mode or interrupted - exit successfully
+        sys.exit(0)
+    elif final_status == JobStatus.SUCCEEDED:
+        sys.exit(0)
+    elif final_status == JobStatus.FAILED:
+        logger.error(f"Job {submission_id} failed")
+        sys.exit(1)
+    elif final_status == JobStatus.STOPPED:
+        logger.warning(f"Job {submission_id} was stopped")
+        sys.exit(2)
+    else:
+        # Unexpected status (PENDING, RUNNING shouldn't happen after log streaming)
+        logger.warning(f"Job {submission_id} ended with unexpected status: {final_status}")
+        sys.exit(3)
 
 
 if __name__ == "__main__":
