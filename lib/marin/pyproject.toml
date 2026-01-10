@@ -44,7 +44,7 @@ dependencies = [
     "s3fs>=2024",
     "toml",
     "torch>=2.7.0",
-    "torchvision>=0.22.0,<0.24.1",
+    "torchvision==0.24.0",
     "tqdm",
     "tqdm-loggable",
     "triton == 3.5.0",
@@ -125,11 +125,20 @@ conflicts = [
 
 [project.optional-dependencies]
 
-gpu = ["jax[cuda12]==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.25"]
+gpu = ["jax[cuda12]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
 
-tpu = ["jax[tpu]==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.25"]
+tpu = ["jax[tpu]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
 
-cpu = ["jax==0.8.0", "torch>=2.7.0", "torchvision>=0.22.0,<0.25"]
+cpu = [
+  "jax==0.8.0",
+  "torch==2.9.0",
+  # Linux x86_64
+  "torchvision==0.24.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  # Windows x86_64 (AMD64)
+  "torchvision==0.24.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  # Linux aarch64, macOS arm64: PyPI default wheel
+  "torchvision==0.24.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+]
 
 rl = [
     "prime",
