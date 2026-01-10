@@ -74,8 +74,7 @@ class QwenConfig(LlamaConfig):
             layer_norm_epsilon=hf_config.rms_norm_eps,
             tie_word_embeddings=hf_config.tie_word_embeddings,
             rope=rope_config,
-            use_bias=not getattr(hf_config, "no_bias", True),
-
+            use_bias=getattr(hf_config, "mlp_bias", False),  # Qwen2 defaults to bias=False for MLPs
         )
 
     def to_hf_config(self, vocab_size: int, config_overrides: Optional[Dict] = None) -> HfQwenConfig:
