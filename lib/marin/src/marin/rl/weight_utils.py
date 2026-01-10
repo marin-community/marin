@@ -67,7 +67,10 @@ def levanter_to_nnx_state(levanter_model: LmHeadModel) -> dict:
                     # pad 3rd dimension to 128 (e.g., (8, 2048, 64) -> (8, 2048, 128))
                     value = jnp.pad(value, ((0, 0), (0, 0), (0, next_multiple_of_128 - head_size)))
 
-        current[split_key_without_weight[-1]] = nnx.Param(value)
+        key_name = split_key_without_weight[-1]
+        if split_key[-1] == "bias":
+            key_name = f"{key_name}_bias"
+        current[key_name] = nnx.Param(value)
     return nnx.State(nested_state_dict)
 
 
@@ -129,6 +132,9 @@ def levanter_state_dict_to_nnx_state_on_cpu(state_dict: dict) -> dict:
                         if head_size < next_multiple_of_128:
                             value = jnp.pad(value, ((0, 0), (0, 0), (0, next_multiple_of_128 - head_size)))
 
-            current[split_key_without_weight[-1]] = nnx.Param(value)
+            key_name = split_key_without_weight[-1]
+            if split_key[-1] == "bias":
+                key_name = f"{key_name}_bias"
+            current[key_name] = nnx.Param(value)
 
         return nnx.State(nested_state_dict)
