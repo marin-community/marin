@@ -38,7 +38,7 @@ qwen25_7b_instruct_1m = ModelConfig(
     tokenizer="Qwen/Qwen2.5-7B-Instruct-1M",
     checkpoint="Qwen/Qwen2.5-7B-Instruct-1M",
     config_class=QwenConfig,  # Qwen2.5 uses Qwen2Config (not Qwen3Config)
-    pip_dependency_groups=["vllm", "math"],  # Assuming we need math group too or just vllm?
+    pip_dependency_groups=["vllm", "evalplus"],
 )
 
 
