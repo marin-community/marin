@@ -65,9 +65,9 @@ def test_parameter_sharding_specs_are_named():
     with jax.set_mesh(mesh):
         params = init_parameters(cfg, key=jax.random.key(0))
 
-        expected_vocab = P(None, None) if jax.default_backend() == "tpu" else P("data", None)
-        assert getattr(params.token_embed.sharding, "spec", None) == expected_vocab
-        assert getattr(params.output_proj.sharding, "spec", None) == expected_vocab
+        expected_vocab = P(None, None)
+        assert params.token_embed.sharding.spec == expected_vocab
+        assert params.output_proj.sharding.spec == expected_vocab
         assert getattr(params.blocks[0].attn.w_q.sharding, "spec", None) == P("data", "model")
 
 

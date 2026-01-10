@@ -195,17 +195,21 @@ Goal: use Grug as a “copy-pasteable” reference implementation inside a singl
      - “To change masking: edit `AttentionMask` / `mask` construction in `forward()`.”
      - “To change sharding: edit `PartitionSpec`s in init + `out_sharding=` callsites.”
 
-## Future Integration with Levanter Trainer
+## Integration Direction
 
-To plug a “grug-defined” model into Levanter’s trainer (`lib/levanter/src/levanter/trainer.py`), we’d need:
+Grug currently integrates with Levanter via a thin wrapper (`levanter.models.grug_wrapper`). That’s fine as an adapter, but it should not become a long-term architectural dependency.
 
-1. **Model interface parity.** Implement a wrapper that presents `forward(batch, *, train)` and exposes parameter/state PyTrees the way Levanter expects (see `lib/levanter/src/levanter/models/lm_model.py`). Our current dataclasses are close; we’d just need adapters for attention masks, loss computation, and optional KV cache state.
-2. **Loss adapter.** The trainer takes arbitrary batches and a loss function. We’d supply a simple callable that takes the trainer’s batch (whatever structure we choose) plus model params/rng and returns `(loss, metrics)`. No need to emit `LmExample`s if we keep the batch format consistent.
-3. **Config plumbing.** Expose the grug model config via Levanter’s config system (Draccus). That means a small adapter class registered under `LmConfig` that instantiates `GrugModelParameters` and returns the forward/loss function pointers. See `lib/levanter/src/levanter/models/llama.py` for reference.
-4. **Optimizer/state hooks.** Levanter’s trainer manages optimizer state, gradient accumulation, and checkpointing. Our `TrainingState` would need to slot into that (likely by reusing Levanter’s `OptimizerState` structures) so serialization and resume work seamlessly.
-5. **Sharding compatibility.** Ensure our explicit `PartitionSpec`s line up with Levanter’s mesh/resource mapping. Either reuse Levanter’s mapping utilities or provide a translation layer so both sides agree on axis names.
+Longer term, we want one of:
 
-With those pieces, defining a “grug” model could be as simple as providing the dataclasses + forward function, and letting Levanter’s trainer handle data flow, logging, checkpointing, and multi-host orchestration.
+1) **A grug-native trainer** (preferred for “hackable” workflows)
+   - Minimal surface: plain pytrees + explicit mesh + small config.
+   - Owns data loading, checkpointing, and evaluation in a way that’s easy to copy/paste into speedrun scripts.
+
+2) **Evolve Levanter/Marin to support grug natively**
+   - Make Levanter’s trainer accept a “grug-style” model (pure functions + pytrees) without requiring a wrapper that reifies NamedArray/Haliax concepts.
+   - Goal: the core stays `jax.Array`-first, and the training stack becomes more flexible rather than forcing everything into `LmHeadModel`-style interfaces.
+
+The wrapper remains a pragmatic bridge, but the intended direction is to shrink/remove it over time.
 
 ## Open Questions & Follow-Ups
 

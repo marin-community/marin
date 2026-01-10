@@ -38,6 +38,15 @@ class GrugModelConfig:
     # speed and memory.
     cross_entropy_block_size: int | None = 32768
 
+    def __post_init__(self) -> None:
+        _ = self.inferred_head_dim
+        if self.num_heads % self.num_kv_heads != 0:
+            raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
+        if self.vocab_size <= 0:
+            raise ValueError("vocab_size must be positive")
+        if self.max_seq_len <= 0:
+            raise ValueError("max_seq_len must be positive")
+
     @property
     def inferred_head_dim(self) -> int:
         if self.head_dim is not None:
@@ -61,19 +70,8 @@ class GrugTrainingConfig:
     global_batch_size: int = 8
 
 
-def validate_config(cfg: GrugModelConfig) -> None:
-    _ = cfg.inferred_head_dim
-    if cfg.num_heads % cfg.num_kv_heads != 0:
-        raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
-    if cfg.vocab_size <= 0:
-        raise ValueError("vocab_size must be positive")
-    if cfg.max_seq_len <= 0:
-        raise ValueError("max_seq_len must be positive")
-
-
 __all__ = [
     "RotaryConfig",
     "GrugModelConfig",
     "GrugTrainingConfig",
-    "validate_config",
 ]

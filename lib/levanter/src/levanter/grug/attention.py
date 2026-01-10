@@ -201,21 +201,6 @@ def reference_attention(
     return ctx.astype(v.dtype)
 
 
-def _pspec_from_sharding(x: jax.Array) -> P:
-    sharding = getattr(x, "sharding", None)
-    if isinstance(sharding, NamedSharding) and isinstance(sharding.spec, P):
-        return sharding.spec
-    # In tracing contexts we may not have a concrete sharding available.
-    # Default to the common "data-parallel batch" convention used by grug.
-    if x.ndim == 4:
-        return P(("replica", "data"), None, None, None)
-    if x.ndim == 3:
-        return P(("replica", "data"), None, None)
-    if x.ndim == 2:
-        return P(("replica", "data"), None)
-    return P(*(None,) * x.ndim)
-
-
 def _spec_shard_factor(entry: object, mesh) -> int:
     if entry is None or mesh is None:
         return 1
@@ -255,9 +240,19 @@ def _tpu_splash_attention(
     if mesh is None or getattr(mesh, "empty", False):
         raise RuntimeError("TPU splash attention requires a JAX mesh context.")
 
-    q_pspec = _pspec_from_sharding(q_)
-    k_pspec = _pspec_from_sharding(k_)
-    v_pspec = _pspec_from_sharding(v_)
+    q_sharding = q_.sharding
+    k_sharding = k_.sharding
+    v_sharding = v_.sharding
+    if (
+        not isinstance(q_sharding, NamedSharding)
+        or not isinstance(k_sharding, NamedSharding)
+        or not isinstance(v_sharding, NamedSharding)
+    ):
+        raise TypeError("TPU splash attention expects NamedSharding on q/k/v under an explicit mesh.")
+
+    q_pspec = q_sharding.spec
+    k_pspec = k_sharding.spec
+    v_pspec = v_sharding.spec
 
     # KV sequence must not be sharded for splash attention.
     if k_pspec[2] is not None:
@@ -268,35 +263,6 @@ def _tpu_splash_attention(
 
     head_shards = _spec_shard_factor(q_pspec[1], mesh)
     q_seq_shards = _spec_shard_factor(q_pspec[2], mesh)
-
-    # Choose blocks per-shard so we avoid partial blocks.
-    def _compatible_block(shard_len: int, max_block: int) -> int:
-        if shard_len <= 0:
-            return max_block
-        cap = min(max_block, shard_len)
-        for step in (128, 1):
-            candidate = cap - (cap % step)
-            while candidate >= step:
-                if shard_len % candidate == 0:
-                    return candidate
-                candidate -= step
-        return 1
-
-    block_size = 512
-    shard_Sq = max(1, Sq // max(1, q_seq_shards))
-    block_q = _compatible_block(shard_Sq, block_size)
-    block_kv = _compatible_block(Sk, block_size)
-
-    block_sizes = splash_attention_kernel.BlockSizes(
-        block_q=block_q,
-        block_kv_compute=block_kv,
-        block_kv=block_kv,
-        block_q_dkv=block_q,
-        block_kv_dkv=block_kv,
-        block_kv_dkv_compute=block_q,
-        block_q_dq=block_q,
-        block_kv_dq=block_kv,
-    )
 
     if mask is None:
         base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
@@ -323,10 +289,14 @@ def _tpu_splash_attention(
 
         if mask.segment_ids is not None:
             q_segment_ids, kv_segment_ids = mask.segment_ids
+            q_seg_sharding = q_segment_ids.sharding
+            kv_seg_sharding = kv_segment_ids.sharding
+            if not isinstance(q_seg_sharding, NamedSharding) or not isinstance(kv_seg_sharding, NamedSharding):
+                raise TypeError("TPU splash attention expects NamedSharding on segment_ids under an explicit mesh.")
             segment_ids = SplashSegmentIds(q_segment_ids, kv_segment_ids)
             segment_ids_axes = SplashSegmentIds(
-                _pspec_from_sharding(q_segment_ids),
-                _pspec_from_sharding(kv_segment_ids),
+                q_seg_sharding.spec,
+                kv_seg_sharding.spec,
             )
             segment_batch_axis = SplashSegmentIds(
                 0 if q_segment_ids.ndim == 2 else None,
@@ -345,7 +315,6 @@ def _tpu_splash_attention(
         mask=kernel_mask,
         head_shards=head_shards,
         q_seq_shards=q_seq_shards,
-        block_sizes=block_sizes,
     )
 
     kernel_sharding = NamedSharding(mesh, P(q_pspec[1], q_pspec[2]))

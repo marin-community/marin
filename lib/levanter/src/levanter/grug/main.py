@@ -14,7 +14,7 @@ from jax.sharding import AxisType
 
 from levanter.store.cache import TreeCache
 
-from levanter.grug.config import GrugModelConfig, GrugTrainingConfig, validate_config
+from levanter.grug.config import GrugModelConfig, GrugTrainingConfig
 from levanter.grug.data import DEFAULT_AXIS_MAPPING, build_token_loader
 from levanter.grug.model import GrugModelParameters, forward, init_parameters
 
@@ -53,11 +53,10 @@ def create_mesh() -> jax.sharding.Mesh:
     if not devices:
         raise RuntimeError("No JAX devices available")
     mesh = jax.make_mesh(
-        (1, 1, len(devices)),
+        (1, 1, len(devices), 1),
         axis_names=("replica_dcn", "replica", "data", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
     )
-    jax.set_mesh(mesh)
     return mesh
 
 
@@ -93,41 +92,41 @@ def load_cache(cache_dir: str, *, seq_len: int) -> TreeCache[dict]:
 
 
 def run_training(train_cfg: GrugTrainingConfig, *, cache_dir: str | None = None) -> None:
-    validate_config(train_cfg.model)
     mesh = create_mesh()
 
-    rng = jax.random.key(train_cfg.seed)
-    rng, init_rng = jax.random.split(rng)
-    params = init_parameters(train_cfg.model, key=init_rng)
-    optimizer = optax.adamw(learning_rate=train_cfg.learning_rate, weight_decay=train_cfg.weight_decay)
-    opt_state = optimizer.init(params)
-    state = TrainingState(step=0, params=params, opt_state=opt_state)
+    with jax.set_mesh(mesh):
+        rng = jax.random.key(train_cfg.seed)
+        rng, init_rng = jax.random.split(rng)
+        params = init_parameters(train_cfg.model, key=init_rng)
+        optimizer = optax.adamw(learning_rate=train_cfg.learning_rate, weight_decay=train_cfg.weight_decay)
+        opt_state = optimizer.init(params)
+        state = TrainingState(step=0, params=params, opt_state=opt_state)
 
-    seq_len = train_cfg.model.max_seq_len
-    train_step = make_train_step(train_cfg.model, optimizer)
+        seq_len = train_cfg.model.max_seq_len
+        train_step = make_train_step(train_cfg.model, optimizer)
 
-    if cache_dir:
-        cache = load_cache(cache_dir, seq_len=seq_len)
-        loader = build_token_loader(
-            cache=cache,
-            seq_len=seq_len,
-            batch_size=train_cfg.global_batch_size,
-            mesh=mesh,
-            axis_mapping=DEFAULT_AXIS_MAPPING,
-        )
-        batch_iter = dataloader_iterator(iter(loader), seq_len=seq_len)
-    else:
-        batch_iter = synthetic_batch_iterator(
-            rng=rng,
-            batch_size=train_cfg.global_batch_size,
-            seq_len=seq_len,
-            vocab_size=train_cfg.model.vocab_size,
-        )
+        if cache_dir:
+            cache = load_cache(cache_dir, seq_len=seq_len)
+            loader = build_token_loader(
+                cache=cache,
+                seq_len=seq_len,
+                batch_size=train_cfg.global_batch_size,
+                mesh=mesh,
+                axis_mapping=DEFAULT_AXIS_MAPPING,
+            )
+            batch_iter = dataloader_iterator(iter(loader), seq_len=seq_len)
+        else:
+            batch_iter = synthetic_batch_iterator(
+                rng=rng,
+                batch_size=train_cfg.global_batch_size,
+                seq_len=seq_len,
+                vocab_size=train_cfg.model.vocab_size,
+            )
 
-    for _ in range(train_cfg.steps):
-        batch = next(batch_iter)
-        state, metrics = train_step(state, batch)
-        print(f"step={state.step:03d} loss={float(metrics['loss']):.4f} ppl={float(metrics['ppl']):.2f}")
+        for _ in range(train_cfg.steps):
+            batch = next(batch_iter)
+            state, metrics = train_step(state, batch)
+            print(f"step={state.step:03d} loss={float(metrics['loss']):.4f} ppl={float(metrics['ppl']):.2f}")
 
 
 @dataclass(frozen=True)
