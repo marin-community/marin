@@ -23,18 +23,19 @@ import pandas as pd
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 
-from levanter.data.text import LMMixtureDatasetConfig, UrlDatasetSourceConfig
+from levanter.data.text import TextLmDatasetFormat
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
 
-from experiments.defaults import default_train
+from experiments.defaults import default_train, _prepare_data_config
 from experiments.evals.task_configs import EvalTaskConfig
-from experiments.llama import compute_num_parameters, llama3_tokenizer, llama3_tokenizer_vocab_size
+from experiments.llama import compute_num_parameters
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, executor_main
+from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path, versioned
+from marin.processing.tokenize.tokenize import HfTokenizeConfig, tokenize
 from fray.cluster import ResourceConfig
 
 logger = logging.getLogger("ray")
@@ -50,20 +51,21 @@ ModelConfig = LlamaConfig | Qwen3Config
 
 def simulated_epoch_train(
     name: str,
-    tokenized: LMMixtureDatasetConfig,
+    tokenized: InputName | ExecutorStep,
     model_config: ModelConfig,
     train_config: "SimpleTrainConfig",
     train_tokens: int,
     dataset_tokens: int,
     epoch_count: int = 1,
     tags: Sequence[str] = (),
+    use_default_validation: bool = False,
     eval_harness_tasks: Sequence[EvalTaskConfig] = (),
 ) -> ExecutorStep:
     """Train with simulated epoching. When epoch_count=1, uses full dataset."""
     if not isinstance(epoch_count, int) or epoch_count < 1:
         raise ValueError(f"epoch_count must be int >= 1, got {epoch_count}")
 
-    pretraining_data = tokenized
+    pretraining_data = _prepare_data_config(tokenized, use_default_validation)
 
     if epoch_count == 1:
         return default_train(
@@ -72,8 +74,8 @@ def simulated_epoch_train(
             model_config=model_config,
             train_config=train_config,
             tags=tags,
+            use_default_validation=use_default_validation,
             eval_harness_tasks=eval_harness_tasks,
-            use_default_validation=False,
         )
 
     # To use simulated epoching in Levanter, we need to first address the fact that
@@ -104,8 +106,8 @@ def simulated_epoch_train(
         model_config=model_config,
         train_config=train_config,
         tags=tags,
+        use_default_validation=use_default_validation,
         eval_harness_tasks=eval_harness_tasks,
-        use_default_validation=False,
     )
 
 
@@ -126,24 +128,26 @@ def format_num(n: int | float) -> str:
 
 @dataclass(frozen=True)
 class IsoFlopDataConfig:
-    # Use pretokenized DCLM baseline from GCS (control experiment)
-    # Absolute path in same region used to avoid re-downloading when running with a different MARIN_PREFIX
-    # (i.e. marin-dna-us-central1)
-    tokenized_path: str = "gs://marin-us-central1/tokenized/dclm_baseline-0206f1"
-    tokenizer: str = llama3_tokenizer
-    vocab_size: int = llama3_tokenizer_vocab_size
+    dataset_name: str = versioned("plantcad/synthetic-genomes-plantcad2-c4096")
+    dataset_revision: str | None = versioned("ebf7ac0d3e469e8e956944ca46d503dcf3c8b1ce")
     seq_len: int = 4096
-    # Keep consistent with PlantCAD total token count even though DCLM has far, far more
-    total_token_count: int = 10_807_934_976  # 2,638,656 * 4,096
+    total_token_count: int = 10_807_934_976  # 2,638,656 examples * 4,096 in train split
+
+
+@dataclass(frozen=True)
+class IsoFlopTokenizeConfig(HfTokenizeConfig):
+    tokenizer: str = versioned("kuleshov-group/PlantCAD2-Small-l24-d0768")
+    format: TextLmDatasetFormat = dataclasses.field(default_factory=lambda: TextLmDatasetFormat(text_key="text"))
+    vocab_size: int = 7
 
 
 @dataclass(frozen=True)
 class IsoFlopSweepConfig:
-    tokenized_dataset: LMMixtureDatasetConfig
+    tokenized_dataset: InputName | str
     vocab_size: int
     seq_len: int
     total_token_count: int
-    experiment_name: str = "plantcad_isoflop_v1.12"
+    experiment_name: str = "plantcad_isoflop_v1.13"
     budgets: list[float] = dataclasses.field(
         default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
     )
@@ -155,13 +159,14 @@ class IsoFlopSweepConfig:
     mlp_ratio: int = 4
     base_hidden_layer_ratio: int = 64
     hidden_head_ratio: int = 128
-    lr_max: float | None = 0.02
+    lr_max: float | None = 0.03
     flop_tolerance: float = 0.01
     architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen"])
     # TODO: adjust eval example count to account for num tpus in the even that v5p-8 is not used
-    per_device_eval_parallelism: int = 8
-    max_eval_batches: int = 1024
+    per_device_eval_parallelism: int = 512
+    max_eval_batches: int = 64
     num_evals: int = 3
+
     lr_constant: float = 0.33
     base_optimizer_config: OptimizerConfig = dataclasses.field(
         default_factory=lambda: CautiousConfig(
@@ -201,8 +206,7 @@ def estimate_bytes(
     vocab: int,
     optim_mult: int = 3,
     dtype_size: int = 4,
-    # TODO: revert to 2 for OOMs on DCLM
-    fudge_factor: float = 4,
+    fudge_factor: float = 2,
 ) -> int:
     """Estimate memory usage (in bytes) for one training step."""
     param_bytes = param_count * optim_mult * dtype_size
@@ -242,29 +246,6 @@ def round_to_power_of_two(x: float) -> int:
     return 2 ** math.ceil(math.log2(x))
 
 
-def compute_param_count(config: LlamaConfig, vocab_size: int) -> tuple[int, int, int]:
-    # Copied from compute_num_parameters in experiments/llama.py and modified to
-    # return multiple results
-    head_size = config.hidden_dim // config.num_heads
-    q_params = config.num_heads * head_size * config.hidden_dim
-    k_params = config.num_kv_heads * head_size * config.hidden_dim
-    v_params = config.num_kv_heads * head_size * config.hidden_dim
-    o_params = config.num_heads * head_size * config.hidden_dim
-    attention_params = q_params + k_params + v_params + o_params
-
-    layer_norm_params = 2 * config.hidden_dim
-
-    gate_params = config.hidden_dim * config.intermediate_dim
-    up_params = config.hidden_dim * config.intermediate_dim
-    down_params = config.intermediate_dim * config.hidden_dim
-    mlp_params = gate_params + up_params + down_params
-
-    nonembedding_params = config.num_layers * (attention_params + mlp_params + layer_norm_params)
-    embedding_params = 2 * vocab_size * config.hidden_dim
-
-    return embedding_params, nonembedding_params, nonembedding_params + embedding_params
-
-
 def compute_total_flops(
     batch: int,
     num_layers: int,
@@ -300,6 +281,8 @@ class IsoFlopRunConfig:
     n_heads: int
     n_kv_heads: int
     batch_size: int
+    batch_exact: float
+    batch_rounded: int
     train_steps: int
     lr: float
     beta2: float
@@ -308,12 +291,8 @@ class IsoFlopRunConfig:
     train_tokens: int
     dataset_tokens: int
     num_params: int
-    embed_params: int
     epoch_count: int
     model_config: ModelConfig
-    batch_target: int  # Original batch size before LR-based halving
-    batch_exact: float  # Exact batch before power-of-2 rounding
-    batch_round_factor: float  # batch_size / batch_exact (1.0 to ~2.0)
 
 
 def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[IsoFlopRunConfig]:
@@ -333,7 +312,7 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
             n_kv_heads = n_heads
 
             # Calculate batch size to meet budget with fixed steps
-            batch_exact_val = budget / compute_total_flops(
+            batch_exact = budget / compute_total_flops(
                 batch=1,
                 num_layers=num_layers,
                 hidden=hidden_size,
@@ -345,9 +324,8 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
                 vocab_size=cfg.vocab_size,
             )
 
-            batch_size = round_to_power_of_two(batch_exact_val)
-            batch_round_factor = batch_size / batch_exact_val
-            batch_target = batch_size  # Store original before LR-based halving
+            batch_rounded = round_to_power_of_two(batch_exact)
+            batch_size = batch_rounded
 
             # Scale LR with sqrt(batch) and hidden size
             # Reference: https://arxiv.org/pdf/2203.03466 (Section 10 Related Works)
@@ -435,8 +413,7 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
             else:
                 raise ValueError(f"Unknown architecture: {architecture}")
 
-            # num_params = compute_num_parameters(model_cfg, cfg.vocab_size)
-            embed_params, _, num_params = compute_param_count(model_cfg, cfg.vocab_size)
+            num_params = compute_num_parameters(model_cfg, cfg.vocab_size)
 
             for epoch_count in cfg.epochs:
                 yield IsoFlopRunConfig(
@@ -447,6 +424,8 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
                     n_heads=n_heads,
                     n_kv_heads=n_kv_heads,
                     batch_size=batch_size,
+                    batch_exact=batch_exact,
+                    batch_rounded=batch_rounded,
                     train_steps=train_steps,
                     lr=lr,
                     beta2=b2,
@@ -455,12 +434,8 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
                     train_tokens=train_tokens,
                     dataset_tokens=dataset_tokens,
                     num_params=num_params,
-                    embed_params=embed_params,
                     epoch_count=epoch_count,
                     model_config=model_cfg,
-                    batch_target=batch_target,
-                    batch_exact=batch_exact_val,
-                    batch_round_factor=batch_round_factor,
                 )
 
 
@@ -472,8 +447,6 @@ def _log_isoflop_run_configs(all_configs: list[IsoFlopRunConfig]):
         # Format large numbers for readability
         if "num_params" in df.columns:
             df["num_params"] = df["num_params"].apply(format_num)
-        if "embed_params" in df.columns:
-            df["embed_params"] = df["embed_params"].apply(format_num)
         if "train_tokens" in df.columns:
             df["train_tokens"] = df["train_tokens"].apply(format_num)
 
@@ -559,6 +532,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
             dataset_tokens=c.dataset_tokens,
             epoch_count=c.epoch_count,
             eval_harness_tasks=[],
+            use_default_validation=False,
             tags=(
                 f"architecture={c.architecture}",
                 f"flops_budget={c.budget:.1e}",
@@ -570,6 +544,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
                 f"params={param_count}",
                 f"tokens={c.train_tokens}",
                 f"epochs={c.epoch_count}",
+                f"vocab_size={config.vocab_size}",
             ),
         )
         steps.append(step)
@@ -578,7 +553,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
 
 
 def generate_isoflop_sweep(
-    tokenized: LMMixtureDatasetConfig,
+    tokenized: ExecutorStep,
     **kwargs,
 ) -> list[ExecutorStep]:
     sweep_cfg = IsoFlopSweepConfig(tokenized_dataset=tokenized, **kwargs)
@@ -587,34 +562,32 @@ def generate_isoflop_sweep(
     return steps
 
 
-def get_data_config() -> tuple[LMMixtureDatasetConfig, IsoFlopDataConfig]:
-    """Use pretokenized DCLM baseline dataset from GCS.
+def tokenize_plantcad() -> tuple[ExecutorStep, IsoFlopDataConfig]:
+    """Tokenize the PlantCAD dataset directly from HuggingFace.
 
     Returns:
-        A tuple of (LMMixtureDatasetConfig, IsoFlopDataConfig with dataset metadata).
+        A tuple of (tokenized ExecutorStep, IsoFlopDataConfig with dataset metadata).
     """
     data_config = IsoFlopDataConfig()
-    # Create LMMixtureDatasetConfig directly with absolute GCS path (no download needed)
-    mixture_config = LMMixtureDatasetConfig(
-        configs={
-            "dclm_baseline": UrlDatasetSourceConfig(
-                cache_dir=data_config.tokenized_path,
-            )
-        },
-        train_weights={"dclm_baseline": 1.0},
-        tokenizer=data_config.tokenizer,
-        num_validation_sequences={"dclm_baseline": 131_072},
+    step = ExecutorStep(
+        name="tokenized/plantcad2",
+        fn=tokenize,
+        config=IsoFlopTokenizeConfig(
+            id=data_config.dataset_name,
+            revision=data_config.dataset_revision,
+            cache_path=this_output_path(),
+        ),
     )
-    return mixture_config, data_config
+    return step, data_config
 
 
 def main():
-    mixture_config, data_config = get_data_config()
+    plantcad_tokenized, data_config = tokenize_plantcad()
 
     # Generate sweep steps
     plantcad_sweep = generate_isoflop_sweep(
-        tokenized=mixture_config,
-        vocab_size=data_config.vocab_size,
+        tokenized=plantcad_tokenized,
+        vocab_size=plantcad_tokenized.config.vocab_size,
         seq_len=data_config.seq_len,
         total_token_count=data_config.total_token_count,
     )
@@ -634,7 +607,7 @@ def main():
         if os.environ.get("DRY_RUN"):
             logger.info("DRY RUN; skipping execution")
             continue
-        executor_main(steps=batch)
+        executor_main(steps=[plantcad_tokenized, *batch])
 
 
 if __name__ == "__main__":
