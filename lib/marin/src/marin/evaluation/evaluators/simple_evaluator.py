@@ -145,7 +145,7 @@ class SimpleEvaluator(VllmTpuEvaluator):
 
             # Download and load the model with vLLM
             # Use the model name if a path is not specified (e.g., for Hugging Face models)
-            model_name_or_path: str = self.download_model(model)
+            model_name_or_path, model = self.resolve_model_name_or_path(model)
             llm = LLM(model=model_name_or_path, enforce_eager=False, trust_remote_code=True)
 
             inference_times: dict[str, float] = {}

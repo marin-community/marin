@@ -18,6 +18,37 @@ from .config import GrugModelConfig
 from .loss import linear_softmax_cross_entropy_loss_and_logz
 
 
+#### Conventions
+
+# Mesh meanings:
+# - "replica_dcn": replica for multislice or similar training setups. We replicate parameters over this axis.
+# - "replica": standard data parallel replica axis. We replicate parameters over this axis.
+# - "data": data parallel sharding axis. We also shard parameters over this axis.
+# - "model": model parallel sharding axis. TP
+
+# Dim names:
+# - B = batch
+# - D = embedding / hidden dim
+# - S = sequence length
+# - N = num heads
+# - M = num kv heads
+# - H = head dim
+# - I = intermediate dim
+
+#### PartitionSpecs and sharding
+
+# convenience shorthand for batch sharding.
+# if this were Haliax, we'd say {"batch": ("replica_dcn", "replica", "data")}
+Pbatch = P(
+    ("replica_dcn", "replica", "data"),
+)
+Pvocab = P(None, None)
+
+
+def unshard(x: jax.Array) -> jax.Array:
+    return reshard(x, P((None,)))
+
+
 @register_dataclass
 @dataclass(frozen=True)
 class GrugAttentionParams:
@@ -58,44 +89,28 @@ def init_parameters(cfg: GrugModelConfig, *, key: jax.Array) -> GrugModelParamet
     embed_key, out_key, final_norm_key, *rest = keys
     layer_keys = [rest[i * 7 : (i + 1) * 7] for i in range(cfg.num_layers)]
 
-    # Sharding vocab-sized weights over `data` can trigger TPU collectives (e.g. reduce-scatter fusions)
-    # in the output projection / loss that are extremely sensitive to XLA's tiny on-chip "sflag" space.
-    # We prefer to keep vocab weights replicated on TPU unless/until we implement a more robust strategy.
-    vocab_pspec = P(None, None) if jax.default_backend() == "tpu" else P("data", None)
-
-    token_embed = reshard(
-        _init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std),
-        vocab_pspec,
-    )
-    if cfg.tie_embeddings:
-        output_proj = token_embed.T
-    else:
-        output_proj = reshard(
-            _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std),
-            vocab_pspec,
-        )
-    if cfg.tie_embeddings:
-        output_proj = reshard(output_proj, vocab_pspec)
+    token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
+    output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
     final_norm = reshard(jnp.ones((cfg.hidden_dim,), dtype=jnp.float32), P(None))
 
     blocks: list[GrugBlockParams] = []
     for i in range(cfg.num_layers):
         k_q, k_k, k_v, k_o, k_gate, k_up, k_down = layer_keys[i]
         # extract shape sizes for brevity and consistency
-        H, N, M, D, I = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, head_dim, cfg.intermediate_dim
+        D, N, M, H, I = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, head_dim, cfg.intermediate_dim
 
         attn = GrugAttentionParams(
-            w_q=reshard(_init_weight(k_q, (H, N * D), cfg.initializer_std), P("data", "model")),
-            w_k=reshard(_init_weight(k_k, (H, M * D), cfg.initializer_std), P("data", "model")),
-            w_v=reshard(_init_weight(k_v, (H, M * D), cfg.initializer_std), P("data", "model")),
-            w_o=reshard(_init_weight(k_o, (N * D, H), cfg.initializer_std), P("model", "data")),
+            w_q=reshard(_init_weight(k_q, (D, N * H), cfg.initializer_std), P("data", "model")),
+            w_k=reshard(_init_weight(k_k, (D, M * H), cfg.initializer_std), P("data", "model")),
+            w_v=reshard(_init_weight(k_v, (D, M * H), cfg.initializer_std), P("data", "model")),
+            w_o=reshard(_init_weight(k_o, (N * H, D), cfg.initializer_std), P("model", "data")),
         )
-        mlp_gate = reshard(_init_weight(k_gate, (H, I), cfg.initializer_std), P("data", "model"))
-        mlp_up = reshard(_init_weight(k_up, (H, I), cfg.initializer_std), P("data", "model"))
-        mlp_down = reshard(_init_weight(k_down, (I, H), cfg.initializer_std), P("model", "data"))
+        mlp_gate = reshard(_init_weight(k_gate, (D, I), cfg.initializer_std), P("data", "model"))
+        mlp_up = reshard(_init_weight(k_up, (D, I), cfg.initializer_std), P("data", "model"))
+        mlp_down = reshard(_init_weight(k_down, (I, D), cfg.initializer_std), P("model", "data"))
         # keep rms replicated
-        rms_attn = jnp.ones((H,), dtype=jnp.float32)
-        rms_mlp = jnp.ones((H,), dtype=jnp.float32)
+        rms_attn = jnp.ones((D,), dtype=jnp.float32)
+        rms_mlp = jnp.ones((D,), dtype=jnp.float32)
 
         blocks.append(
             GrugBlockParams(
@@ -116,15 +131,8 @@ def init_parameters(cfg: GrugModelConfig, *, key: jax.Array) -> GrugModelParamet
     )
 
 
-def _unshard(x: jax.Array) -> jax.Array:
-    return reshard(x, P((None,) * x.ndim))
-
-
-_Pbatch = P(("replica_dcn", "replica", "data"), None)
-
-
 def rms_norm(x: jax.Array, weight: jax.Array, eps: float) -> jax.Array:
-    weight = _unshard(weight)
+    weight = unshard(weight)
     variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
     normed = x * jax.lax.rsqrt(variance + eps)
     return normed * weight
@@ -134,7 +142,7 @@ def mlp(block: GrugBlockParams, x: jax.Array) -> jax.Array:
     gate = jnp.einsum("bsh,hm->bsm", x, block.mlp_gate)
     up = jnp.einsum("bsh,hm->bsm", x, block.mlp_up)
     activated = jax.nn.silu(gate) * up
-    return jnp.einsum("bsm,mh->bsh", activated, block.mlp_down, out_sharding=_Pbatch)
+    return jnp.einsum("bsm,mh->bsh", activated, block.mlp_down, out_sharding=Pbatch)
 
 
 def _transformer_hidden(
@@ -152,7 +160,7 @@ def _transformer_hidden(
     elif isinstance(mask, AttentionMask) and not mask.is_causal:
         mask = dataclasses.replace(mask, is_causal=True)
 
-    hidden = params.token_embed.at[token_ids].get(out_sharding=_Pbatch)
+    hidden = params.token_embed.at[token_ids].get(out_sharding=Pbatch)
 
     for block in params.blocks:
         attn_in = rms_norm(hidden, block.rms_attn, cfg.layer_norm_eps)
@@ -162,7 +170,7 @@ def _transformer_hidden(
         q, k = apply_rotary_embedding(q, k, seq_len=seq_len, head_dim=head_dim, rope=cfg.rope)
         attn_out = attention(q, k, v, mask)
         attn_out = rearrange(attn_out, "... n d -> ... (n d)")
-        attn_out = jnp.einsum("bsh,hd->bsd", attn_out, block.attn.w_o, out_sharding=_Pbatch)
+        attn_out = jnp.einsum("bsh,hd->bsd", attn_out, block.attn.w_o, out_sharding=Pbatch)
 
         hidden = hidden + attn_out
         mlp_in = rms_norm(hidden, block.rms_mlp, cfg.layer_norm_eps)
@@ -181,7 +189,7 @@ def forward(
     mask: AttentionMask | jax.Array | None = None,
 ) -> jax.Array:
     hidden = _transformer_hidden(params, token_ids, cfg, mask=mask)
-    logits = jnp.einsum("bsh,hd->bsd", hidden, params.output_proj, out_sharding=_Pbatch)
+    logits = jnp.einsum("bsh,hd->bsd", hidden, params.output_proj, out_sharding=Pbatch)
     return logits
 
 

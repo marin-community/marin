@@ -46,8 +46,6 @@ class EvalLmConfig:
     log_top2_gap: bool = False
     log_param_stats: bool = False
 
-    local_model_dir: str = "/opt/gcsfuse_mount/models"
-
 
 def main(config: EvalLmConfig):
     levanter.initialize(config)

@@ -28,7 +28,6 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     rope: RotaryConfig = field(default_factory=RotaryConfig)
-    tie_embeddings: bool = False
 
     # Controls how we compute logsumexp over the vocab in `levanter.grug.loss_fn`.
     #
