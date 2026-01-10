@@ -14,20 +14,18 @@ import asyncio
 from dataclasses import dataclass
 from typing import Iterable, Iterator, Literal, Optional, Sequence, TypeVar
 
+import haliax as hax
 import jax
 import jax.numpy as jnp
 import numpy as np
 import tensorstore as ts
 from jaxtyping import PyTree
 
-import haliax as hax
-
 from levanter.data import AsyncDataset
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmExample
 from levanter.store.jagged_array import JaggedArrayStore
 from levanter.utils.jax_utils import leaf_key_paths, local_cpu_mesh, tree_broadcast_to
-
 
 # cf https://github.com/tensorflow/tensor2tensor/blob/bafdc1b67730430d38d6ab802cbd51f9d053ba2e/tensor2tensor/data_generators/generator_utils.py#L623
 
@@ -324,13 +322,6 @@ def greedy_pack_prompt_completions(
         out.append(LmExample(tokens=tokens, loss_weight=loss_weight, attn_mask=attn_mask))
 
     return out
-
-
-def _segment_ids_from_lengths(doc_ids: list[int], lengths: list[int]) -> list[int]:
-    segment_ids = []
-    for doc_id, length in zip(doc_ids, lengths):
-        segment_ids.extend([doc_id] * length)
-    return segment_ids
 
 
 def pack_documents(

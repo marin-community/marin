@@ -58,7 +58,14 @@ DEVICE_FLOPS: dict[str, dict[str, float]] = {
         "int8": 3.958e15 / 2,
     },
     # source: https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf
-    "a100": {
+    "a100": {  # Alias for backwards compatibility, defaults to 40G variant
+        "fp64": 19.5e12,
+        "fp32": 19.5e12,
+        "tf32": 156e12,
+        "fp16": 312e12,
+        "bf16": 312e12,
+    },
+    "a100-40g": {
         "fp64": 19.5e12,
         "fp32": 19.5e12,
         "tf32": 156e12,
@@ -255,8 +262,13 @@ def jax_device_kind_to_fray_device_type(kind: str) -> str:
         return "h100-pcie"
     if "h200" in kind:
         return "h200"
-    if "a100" in kind:
-        return "a100"
+    # Check for A100 variants - JAX returns "80gb" or "40gb" (with 'b')
+    if "a100" in kind and "80g" in kind:  # Matches both "80g" and "80gb"
+        return "a100-80g"
+    if "a100" in kind and "40g" in kind:  # Matches both "40g" and "40gb"
+        return "a100-40g"
+    if "a100" in kind:  # Fallback to a100-40g if no memory size specified
+        return "a100-40g"
     if "a10g" in kind:
         return "a10g"
     if "a10" in kind:

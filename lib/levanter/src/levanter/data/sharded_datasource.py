@@ -165,10 +165,6 @@ def datasource_from_json(urls_or_paths: Sequence[str]) -> ShardedDataSource[dict
     return JsonDataSource(urls_or_paths)
 
 
-def datasource_from_parquet(urls_or_paths: Sequence[str]) -> ShardedDataSource[dict]:
-    return ParquetDataSource(urls_or_paths)
-
-
 class WrappedHFDataSource(ShardedDataSource[dict]):
     """
     This class is responsible for loading a dataset from HuggingFace Datasets and returning the shards.

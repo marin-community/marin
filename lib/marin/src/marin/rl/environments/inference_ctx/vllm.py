@@ -45,8 +45,9 @@ except ImportError:
     logger.warning("vLLM is not installed, so we will not be able to use vLLM inference context.")
     LLM = None
     SamplingParams = None
-    RequestOutput = None
     TokensPrompt = None
+    RequestOutput = None
+    RequestOutputKind = None
 
 # Disable multiprocessing to have direct access to the model weights
 os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"

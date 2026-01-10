@@ -6,7 +6,6 @@ import os
 
 import braceexpand
 import fsspec
-from fsspec.asyn import AsyncFileSystem
 
 
 def exists(url, **kwargs) -> bool:
@@ -47,16 +46,6 @@ def remove(url, *, recursive=False, **kwargs):
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
 
     fs.rm(path, recursive=recursive)
-
-
-async def async_remove(url, *, recursive=False, **kwargs):
-    """Remove a file from a remote filesystem."""
-    fs, path = fsspec.core.url_to_fs(url, **kwargs)
-
-    if isinstance(fs, AsyncFileSystem):
-        return await fs._rm(path, recursive=recursive)
-    else:
-        fs.rm(path, recursive=recursive)
 
 
 def join_path(lhs, rhs):

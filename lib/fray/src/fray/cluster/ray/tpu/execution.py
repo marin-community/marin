@@ -37,6 +37,7 @@ from ray.exceptions import (
     ActorUnavailableError,
     GetTimeoutError,
     NodeDiedError,
+    OwnerDiedError,
     RayActorError,
     RayError,
     RaySystemError,
@@ -214,6 +215,9 @@ def _handle_ray_error(e: RayError):
     # treat node failures as preemptions
     if isinstance(e, NodeDiedError):
         logger.exception("Node died", exc_info=e)
+        return TpuPreempted(e)
+    elif isinstance(e, OwnerDiedError):
+        logger.exception("Owner died", exc_info=e)
         return TpuPreempted(e)
     elif isinstance(e, ActorUnavailableError | ActorDiedError):
         logger.exception("Actor died", exc_info=e)
@@ -819,20 +823,26 @@ def run_on_pod_ray(
             future_to_index: dict[ray.ObjectRef, int] = {}  # maps futures to their index in the results list
             global_index = 0  # index into results list
 
-            for i, tpu_slice in enumerate(slice_pool):
-                if head_slice_info is not None:
-                    multislice_info = _multislice_info_from_head(head_slice_info, i, len(slice_pool))
-                    mxla_env = _multislice_info_to_env_vars(multislice_info)
-                else:
-                    mxla_env = {}
+            try:
+                for i, tpu_slice in enumerate(slice_pool):
+                    if head_slice_info is not None:
+                        multislice_info = _multislice_info_from_head(head_slice_info, i, len(slice_pool))
+                        mxla_env = _multislice_info_to_env_vars(multislice_info)
+                    else:
+                        mxla_env = {}
 
-                futures_for_slice = _start_fn_on_slice(tpu_slice.actor, remote_fn, mxla_env)
-                logger.info(f"Futures for slice {tpu_slice.actor_info.slice_name}: {futures_for_slice}")
+                    futures_for_slice = _start_fn_on_slice(tpu_slice.actor, remote_fn, mxla_env)
+                    logger.info(f"Futures for slice {tpu_slice.actor_info.slice_name}: {futures_for_slice}")
 
-                futures.extend(futures_for_slice)
-                for future in futures_for_slice:
-                    future_to_index[future] = global_index
-                    global_index += 1
+                    futures.extend(futures_for_slice)
+                    for future in futures_for_slice:
+                        future_to_index[future] = global_index
+                        global_index += 1
+            except RayError as e:
+                logger.exception("Failed to start remote function on slice", exc_info=e)
+                problems.append(e)
+                num_preemptions += 1
+                continue
 
             if not futures:
                 error = "Failed to schedule any futures"
@@ -1008,62 +1018,4 @@ def run_on_pod_multislice(
             max_retries_failure=0,
             max_retries_preemption=0,
         )
-    )
-
-
-def run_on_pod_resumable(
-    remote_fn: RemoteFunction | Callable,
-    tpu_type: str,
-    max_retries_preemption: int = 1_000_000,
-    max_retries_failure: int = 10,
-):
-    """
-    Repeatedly run a function on a TPU pod until it succeeds or a maximum number of retries is reached.
-
-    Args:
-        remote_fn: A remote function that takes no arguments
-        tpu_type: The type of TPU to run on, e.g. "v4-32"
-        max_retries_preemption: The maximum number of times to retry if the job is preempted
-        max_retries_failure: The maximum number of times to retry if the job fails
-
-    Returns:
-        The result of the function (not an ObjectRef)
-
-    """
-    return run_on_pod(
-        remote_fn,
-        tpu_type,
-        num_slices=1,
-        max_retries_preemption=max_retries_preemption,
-        max_retries_failure=max_retries_failure,
-    )
-
-
-def run_on_pod_multislice_resumable(
-    remote_fn: RemoteFunction | Callable,
-    tpu_type: str,
-    num_slices: int | Sequence[int],
-    max_retries_preemption: int = 1_000_000,
-    max_retries_failure: int = 10,
-):
-    """
-    Repeatedly run a function on a TPU pod until it succeeds or a maximum number of retries is reached.
-
-    Args:
-        remote_fn: A remote function that takes no arguments
-        tpu_type: The type of TPU to run on, e.g. "v4-32"
-        num_slices: The number of slices to run
-        max_retries_preemption: The maximum number of times to retry if the job is preempted
-        max_retries_failure: The maximum number of times to retry if the job fails
-
-    Returns:
-        The result of the function (not an ObjectRef)
-
-    """
-    return run_on_pod(
-        remote_fn,
-        tpu_type,
-        num_slices=num_slices,
-        max_retries_preemption=max_retries_preemption,
-        max_retries_failure=max_retries_failure,
     )

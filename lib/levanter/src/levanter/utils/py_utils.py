@@ -1,19 +1,18 @@
 # Copyright 2025 The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import contextlib
-import os
-import sys
-import time
-from dataclasses import dataclass
-import json
 import datetime
 import decimal
-import uuid
-import pathlib
-import base64
 import enum
-from dataclasses import is_dataclass, asdict
+import json
+import os
+import pathlib
+import sys
+import time
+import uuid
+from dataclasses import asdict, dataclass, is_dataclass
 
 
 def logical_cpu_core_count() -> int:
@@ -26,22 +25,6 @@ def logical_cpu_core_count() -> int:
         return os.cpu_count() or 1
     except NotImplementedError:
         return 1
-
-
-def logical_cpu_memory_size():
-    """Returns the total amount of memory in GB available to the process or logical memory for SLURM."""
-    mem = os.getenv("SLURM_MEM_PER_NODE", None)
-    tasks = os.getenv("SLURM_NTASKS_PER_NODE", None)
-    if mem is not None and tasks is not None:
-        return float(mem) / int(tasks) / 1024.0  # MEM_PER_NODE is in MB
-
-    try:
-        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-        return total / (1024.0**3)
-    except ValueError:
-        import psutil
-
-        return psutil.virtual_memory().total / (1024.0**3)
 
 
 def non_caching_cycle(iterable):

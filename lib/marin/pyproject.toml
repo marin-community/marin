@@ -17,7 +17,7 @@ dependencies = [
     "draccus>=0.11.5",
     "dupekit",
     "fasteners>=0.19",
-    "fasttext",
+    "floret",
     "flask",
     "fsspec>=2025.3.0",
     "gcsfs",
@@ -44,6 +44,7 @@ dependencies = [
     "s3fs>=2024",
     "toml",
     "torch>=2.7.0",
+    "torchvision==0.24.0",
     "tqdm",
     "tqdm-loggable",
     "triton == 3.5.0",
@@ -90,7 +91,7 @@ docs = [
     "mkdocs-include-markdown-plugin>=7.1.5",
 ]
 
-math = ["pylatexenc", "sympy"]
+math = ["pylatexenc", "sympy>=1.12.1,<1.14"]
 
 metrics = ["google-cloud-logging"]
 
@@ -124,15 +125,24 @@ conflicts = [
 
 [project.optional-dependencies]
 
-gpu = ["jax[cuda12]==0.8.0", "torch>=2.7.0"]
+gpu = ["jax[cuda12]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
 
-tpu = ["jax[tpu]==0.8.0", "torch>=2.7.0"]
+tpu = ["jax[tpu]==0.8.0", "torch==2.9.0", "torchvision==0.24.0"]
 
-cpu = ["jax==0.8.0", "torch>=2.7.0"]
+cpu = [
+  "jax==0.8.0",
+  "torch==2.9.0",
+  # Linux x86_64
+  "torchvision==0.24.0+cpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+  # Windows x86_64 (AMD64)
+  "torchvision==0.24.0+cpu; sys_platform == 'win32' and platform_machine == 'AMD64'",
+  # Linux aarch64, macOS arm64: PyPI default wheel
+  "torchvision==0.24.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
+]
 
 rl = [
     "prime",
-    "sympy",
+    "sympy>=1.12.1,<1.14",
     "verifiers==0.1.5",
 ]
 
@@ -151,15 +161,20 @@ name = "marin-resiliparse"
 url = "https://marin-community.github.io/chatnoir-resiliparse/simple"
 
 [tool.uv.sources]
-torch = [
+torchvision = [
     # Default to the CPU index for TPU/CPU builds
-    { index = "pytorch-cpu", extra="cpu" },
-    { index = "pytorch-cpu", extra="tpu" },
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cpu", extra = "tpu" },
     # GPU index only when --extra gpu
     { index = "pytorch-cu128", extra = "gpu" },
 ]
 resiliparse = { index = "marin-resiliparse" }
-
+# Use CUDA PyTorch for --extra=gpu on Linux, CPU PyTorch for TPU/CPU builds
+torch = [
+    { index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cpu", extra = "tpu" },
+]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

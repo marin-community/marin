@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
 import os
 import subprocess
 import time
 from abc import ABC
+from typing import ClassVar
+from urllib.parse import urlparse
 
 import requests
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
@@ -29,20 +32,56 @@ from marin.utils import remove_tpu_lockfile_on_exit
 class VllmTpuEvaluator(Evaluator, ABC):
     """For `Evaluator`s that runs inference with VLLM on TPUs."""
 
-    # Where to store checkpoints, cache inference results, etc.
-    CACHE_PATH: str = "/tmp"
+    _STREAMING_LOAD_FORMATS: ClassVar[set[str]] = {"runai_streamer", "runai_streamer_sharded"}
 
     @staticmethod
-    def download_model(model: ModelConfig) -> str:
+    def _vllm_env() -> dict[str, str]:
+        env = dict(os.environ)
+        # tpu_inference defaults MODEL_IMPL_TYPE=auto, which selects flax_nnx for many
+        # architectures. flax_nnx currently fails without an auto mesh context, so
+        # default to the vllm implementation unless the user overrides it.
+        env.setdefault("MODEL_IMPL_TYPE", "vllm")
+        return env
+
+    @staticmethod
+    def _is_object_store_path(path: str) -> bool:
+        parsed = urlparse(path)
+        return parsed.scheme in {"gs", "s3"}
+
+    @staticmethod
+    def _maybe_enable_streaming(model: ModelConfig) -> ModelConfig:
+        if model.path is None:
+            return model
+        if not VllmTpuEvaluator._is_object_store_path(model.path):
+            return model
+        if "load_format" in model.engine_kwargs:
+            return model
+
+        engine_kwargs = dict(model.engine_kwargs)
+        # Default to the non-sharded streamer for maximum compatibility.
+        # `runai_streamer_sharded` only works for checkpoints that are already sharded
+        # into `model-rank-*-part-*.safetensors`.
+        engine_kwargs["load_format"] = "runai_streamer"
+        return dataclasses.replace(model, engine_kwargs=engine_kwargs)
+
+    @staticmethod
+    def _engine_kwargs_to_cli_args(engine_kwargs: dict) -> list[str]:
+        args: list[str] = []
+        load_format = engine_kwargs.get("load_format")
+        if isinstance(load_format, str):
+            args.extend(["--load-format", load_format])
+        return args
+
+    @staticmethod
+    def resolve_model_name_or_path(model: ModelConfig) -> tuple[str, ModelConfig]:
+        """Resolve the `model` argument to pass to vLLM.
+
+        - If `model.path` is set, use it (and auto-enable streaming for `gs://` / `s3://`).
+        - Otherwise, fall back to `model.name` (e.g. an HF repo id).
         """
-        Download the model if it's not already downloaded
-        """
-        downloaded_path: str | None = model.ensure_downloaded(
-            local_path=os.path.join(VllmTpuEvaluator.CACHE_PATH, model.name)
-        )
-        # Use the model name if a path is not specified (e.g., for Hugging Face models)
-        model_name_or_path: str = model.name if downloaded_path is None else downloaded_path
-        return model_name_or_path
+        model = VllmTpuEvaluator._maybe_enable_streaming(model)
+        model_name_or_path = model.path if model.path is not None else model.name
+        return model_name_or_path, model
 
     @staticmethod
     def start_vllm_server_in_background(
@@ -53,18 +92,23 @@ class VllmTpuEvaluator(Evaluator, ABC):
         Returns the port the server is running on.
         """
         # Use the model name if a path is not specified (e.g., for Hugging Face models)
-        model_name_or_path: str = VllmTpuEvaluator.download_model(model)
+        model_name_or_path, model = VllmTpuEvaluator.resolve_model_name_or_path(model)
 
         # From https://docs.vllm.ai/en/v0.4.0/models/engine_args.html
-        command: str = (
-            f"vllm serve {model_name_or_path} "
-            f"--trust-remote-code "
-            f"--host {host} "
-            f"--port {port} "
-            f"--device tpu "
-            f"--distributed-executor-backend ray"
-        )
-        process = subprocess.Popen(command, shell=True)
+        command: list[str] = [
+            "vllm",
+            "serve",
+            model_name_or_path,
+            "--trust-remote-code",
+            "--host",
+            host,
+            "--port",
+            str(port),
+            "--distributed-executor-backend",
+            "ray",
+            *VllmTpuEvaluator._engine_kwargs_to_cli_args(model.engine_kwargs),
+        ]
+        process = subprocess.Popen(command, env=VllmTpuEvaluator._vllm_env())
 
         # Check that the server has started by sending heartbeat checks
         server_url: str = f"http://{host}:{port}/v1"

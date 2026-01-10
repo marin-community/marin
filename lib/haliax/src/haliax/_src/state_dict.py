@@ -6,14 +6,13 @@
 # Module to support torch-style "state dict" serialization via safetensors
 import dataclasses
 import typing
-from typing import Any, Sequence, TypeVar
+from typing import Any, TypeVar
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import ShapeDtypeStruct
-from haliax.jax_utils import sync_global_devices
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from jax.tree_util import DictKey, FlattenedIndexKey, GetAttrKey, SequenceKey
 from jaxtyping import PyTree
@@ -21,7 +20,7 @@ from jaxtyping import PyTree
 import haliax.partitioning as partitioning
 from haliax._src.util import index_where
 from haliax.core import NamedArray, named
-from haliax.jax_utils import is_jax_array_like, is_scalarish
+from haliax.jax_utils import is_jax_array_like, is_scalarish, sync_global_devices
 from haliax.tree_util import scan_aware_tree_map
 
 try:
@@ -331,17 +330,6 @@ def default_eqx_module_to_state_dict(mod: eqx.Module, prefix: str | None = None)
         # TODO: should we check for conflicts?
         state_dict.update(child)
     return state_dict
-
-
-def format_path_for_state_dict(prefix: str | None, path: Sequence) -> str:
-    res = "".join(_format_key_path_element(path_elem) for path_elem in path)
-    # res will have a .
-    if prefix is not None:
-        res = f"{prefix}{res}"
-    elif res.startswith("."):
-        res = res[1:]
-
-    return res
 
 
 # Torch compatible KeyPath formatting. Torch just always uses .

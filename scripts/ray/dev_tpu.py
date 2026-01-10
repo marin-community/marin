@@ -666,7 +666,7 @@ def execute(ctx, command, username, sync_path, env, forward_all_env):
     # Build environment variables
     env_dict = build_env_dict(extra_env=list(env), forward_all=forward_all_env)
 
-    command_str = " ".join(command)
+    command_str = shlex.join(command)
     ssh_cmd = build_ssh_command(host_alias, command_str, env_dict)
 
     print(f"Running: {ssh_cmd}")
@@ -816,7 +816,7 @@ def watch(ctx, command, username, sync_path, debounce, env, forward_all_env):
     # Build environment variables
     env_dict = build_env_dict(extra_env=list(env), forward_all=forward_all_env)
 
-    command_str = " ".join(command)
+    command_str = shlex.join(command)
 
     process_mgr = RemoteProcessManager(host_alias, command_str, sync_path, env_dict)
     atexit.register(process_mgr.kill)  # ensure we clean up on exit
