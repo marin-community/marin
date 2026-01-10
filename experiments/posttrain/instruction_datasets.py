@@ -453,6 +453,66 @@ INSTRUCTION_DATASET_NAME_TO_CONFIG = {
         name="GeneralReasoning/GeneralThought-195K-modelreasoning",
         splits=["train"],
     ),
+    # nvidia/OpenMathReasoning - CoT split (Chain of Thought reasoning)
+    "nvidia/OpenMathReasoning/cot": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/OpenMathReasoning",
+        revision="d3d0866",
+        adapter=instruction_response_adapter(
+            instruction_column="problem",
+            response_column="generated_solution",
+        ),
+        metadata_columns=[
+            "expected_answer",
+            "problem_source",
+            "problem_type",
+            "generation_model",
+            "inference_mode",
+            "pass_rate_72b_tir",
+            "used_in_kaggle",
+        ],
+        name="nvidia/OpenMathReasoning/cot",
+        splits=["cot"],
+    ),
+    # nvidia/OpenMathReasoning - TIR split (Tool-Integrated Reasoning)
+    "nvidia/OpenMathReasoning/tir": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/OpenMathReasoning",
+        revision="d3d0866",
+        adapter=instruction_response_adapter(
+            instruction_column="problem",
+            response_column="generated_solution",
+        ),
+        metadata_columns=[
+            "expected_answer",
+            "problem_source",
+            "problem_type",
+            "generation_model",
+            "inference_mode",
+            "pass_rate_72b_tir",
+            "used_in_kaggle",
+        ],
+        name="nvidia/OpenMathReasoning/tir",
+        splits=["tir"],
+    ),
+    # nvidia/OpenMathReasoning - genselect split (curated subset)
+    "nvidia/OpenMathReasoning/genselect": InstructionDatasetConfig(
+        hf_dataset_id="nvidia/OpenMathReasoning",
+        revision="d3d0866",
+        adapter=instruction_response_adapter(
+            instruction_column="problem",
+            response_column="generated_solution",
+        ),
+        metadata_columns=[
+            "expected_answer",
+            "problem_source",
+            "problem_type",
+            "generation_model",
+            "inference_mode",
+            "pass_rate_72b_tir",
+            "used_in_kaggle",
+        ],
+        name="nvidia/OpenMathReasoning/genselect",
+        splits=["genselect"],
+    ),
 }
 
 for split_name in SMOLTALK2_SPLITS:
