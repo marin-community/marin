@@ -22,15 +22,6 @@ from marin.rl.environments.inference_ctx.vllm import InferenceMode, vLLMInferenc
 
 logger = logging.getLogger(__name__)
 
-try:
-    from vllm import LLM, SamplingParams
-    from vllm.outputs import RequestOutput
-except ImportError:
-    logger.warning("vLLM is not installed, so we will not be able to use vLLM inference context.")
-    LLM = None
-    SamplingParams = None
-    RequestOutput = None
-
 
 os.environ["VLLM_ALLOW_INSECURE_SERIALIZATION"] = "1"
 

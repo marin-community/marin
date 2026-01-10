@@ -46,10 +46,7 @@ from marin.rl.rollout_worker import RolloutTrackerConfig
 from marin.rl.weight_transfer import WeightTransferConfig, WeightTransferMode
 from marin.rl.environments.inference_ctx import vLLMInferenceContextConfig
 
-try:
-    from vllm import SamplingParams
-except ImportError:
-    SamplingParams = None
+from vllm import SamplingParams
 
 logger = logging.getLogger(__name__)
 
