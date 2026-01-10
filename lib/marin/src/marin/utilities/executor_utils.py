@@ -38,9 +38,8 @@ def ckpt_path_to_step_name(path: str | InputName) -> str:
 
     If an input name, it expect the InputName's name to be something like "checkpoints/step-{train_step_number}"
     """
-    from marin.execution.executor import InputName
 
-    def _get_step(path: str) -> bool:
+    def _get_step(path: str) -> str:
         # make sure it looks like step-{train_step_number}
         g = re.match(r"step-(\d+)/?$", path)
         if g is None:
@@ -49,16 +48,27 @@ def ckpt_path_to_step_name(path: str | InputName) -> str:
         return g.group(1)
 
     if isinstance(path, str):
-        # see if it looks like an hf hub path: "org/model". If so, just return the last component
-        if (
-            re.match("^[^/]+/[^/]+$", path) or "gcsfuse_mount/models" in path
-        ):  # exactly 1 slash or in the pretrained gcsfuse dir
+        # If this looks like an HF hub path ("org/model"), return the last component.
+        if re.match("^[^/]+/[^/]+$", path):
             return path.split("/")[-1]
 
-        # we want llama-8b-tootsie-phase2-730000
         if path.endswith("/"):
             path = path[:-1]
 
+        last_component = path.split("/")[-1]
+        # If this looks like a Levanter checkpoint directory but doesn't end in a step,
+        # treat it as invalid rather than falling back to the basename.
+        if re.search(r"(^|/)checkpoints/[^/]+/checkpoints$", path) or re.search(
+            r"(^|/)checkpoints/[^/]+/checkpoints/", path
+        ):
+            if not last_component.startswith("step-"):
+                raise ValueError(f"Invalid path: {path}")
+
+        # Otherwise, treat it as a generic path and use its basename.
+        if not last_component.startswith("step-"):
+            return last_component
+
+        # we want llama-8b-tootsie-phase2-730000
         components = path.split("/")
         name = components[-3].split("/")[-1]
         step = _get_step(components[-1])
@@ -69,7 +79,12 @@ def ckpt_path_to_step_name(path: str | InputName) -> str:
             components = path.name.split("/")
             if not components[-1]:
                 components = components[:-1]
-            step = _get_step(components[-1])
+            if components[-1].startswith("step-"):
+                step = _get_step(components[-1])
+            elif len(components) >= 2 and components[-2] == "checkpoints":
+                raise ValueError(f"Invalid path: {path.name}")
+            else:
+                return components[-1]
         else:
             return name
 
