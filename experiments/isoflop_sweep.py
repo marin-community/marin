@@ -42,7 +42,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main
-from marin.processing.tokenize import lm_mixture_data_config
+from marin.processing.tokenize import get_vocab_size_for_tokenizer, lm_mixture_data_config
 from marin.scaling_laws import (
     CandidateConfig,
     FitScalingLawsResult,
@@ -217,8 +217,13 @@ class Marin2025Recipe:
     """
 
     name: str = "marin-2025"
-    vocab_size: int = 128256
-    """Vocabulary size for the tokenizer. Default is for stanford-crfm/marin-tokenizer."""
+    tokenizer: str = "stanford-crfm/marin-tokenizer"
+    """Tokenizer to use. vocab_size is derived from this."""
+
+    @property
+    def vocab_size(self) -> int:
+        """Vocabulary size derived from the tokenizer."""
+        return get_vocab_size_for_tokenizer(self.tokenizer)
 
     # --- Learning rate scaling ---
     # lr = lr_constant * sqrt(batch_size) / hidden_dim
