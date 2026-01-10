@@ -37,6 +37,7 @@ uv run pytest lib/dupekit/tests/bench/test_marshaling.py --run-benchmark
 uv run pytest lib/dupekit/tests/bench/test_batch_tuning.py --run-benchmark
 uv run pytest lib/dupekit/tests/bench/test_io.py --run-benchmark
 uv run pytest lib/dupekit/tests/bench/test_hashing.py --run-benchmark
+uv run pytest lib/dupekit/tests/bench/test_minhash.py --run-benchmark
 ```
 Note: Run separated by type of benchmark (otherwise results are mixed within one table)
 

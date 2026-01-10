@@ -4,6 +4,7 @@ mod bloom;
 mod dedupe;
 mod hashing;
 mod marshaling;
+mod minhash_ops;
 mod ops;
 mod pipeline;
 
