@@ -128,8 +128,8 @@ def format_num(n: int | float) -> str:
 
 @dataclass(frozen=True)
 class IsoFlopDataConfig:
-    dataset_name: str = versioned("plantcad/synthetic-genomes-plantcad2-c4096")
-    dataset_revision: str | None = versioned("ebf7ac0d3e469e8e956944ca46d503dcf3c8b1ce")
+    dataset_name: str = versioned("plantcad/plantcad2-c4096")
+    dataset_revision: str | None = versioned("e551075a775a2fd2c04f0f97741dc68b09bde653")
     seq_len: int = 4096
     total_token_count: int = 10_807_934_976  # 2,638,656 examples * 4,096 in train split
 
@@ -137,7 +137,7 @@ class IsoFlopDataConfig:
 @dataclass(frozen=True)
 class IsoFlopTokenizeConfig(HfTokenizeConfig):
     tokenizer: str = versioned("kuleshov-group/PlantCAD2-Small-l24-d0768")
-    format: TextLmDatasetFormat = dataclasses.field(default_factory=lambda: TextLmDatasetFormat(text_key="text"))
+    format: TextLmDatasetFormat = dataclasses.field(default_factory=lambda: TextLmDatasetFormat(text_key="seq"))
     vocab_size: int = 7
 
 
@@ -147,19 +147,19 @@ class IsoFlopSweepConfig:
     vocab_size: int
     seq_len: int
     total_token_count: int
-    experiment_name: str = "plantcad_isoflop_v1.13"
+    experiment_name: str = "plantcad_isoflop_v2.2"
     budgets: list[float] = dataclasses.field(
-        default_factory=lambda: list(np.logspace(np.log10(3.3e16), np.log10(2.03e17), 5))
+        default_factory=lambda: list(np.logspace(np.log10(8e16), np.log10(1e18), 5))
     )
     epochs: list[int] = dataclasses.field(default_factory=lambda: [1])
-    steps_per_run: int = 8_192
+    steps_per_run: int = 32_768
     min_hidden_pow: int = 8
     max_hidden_pow: int = 10
-    hidden_step_size: int = 128
+    hidden_step_size: int = 96
     mlp_ratio: int = 4
     base_hidden_layer_ratio: int = 64
     hidden_head_ratio: int = 128
-    lr_max: float | None = 0.03
+    lr_max: float | None = 0.02
     flop_tolerance: float = 0.01
     architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen"])
     # TODO: adjust eval example count to account for num tpus in the even that v5p-8 is not used
@@ -309,6 +309,10 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
             intermediate_dim = hidden_size * cfg.mlp_ratio
             num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))
             n_heads = max(1, hidden_size // cfg.hidden_head_ratio)
+            # Ensure n_heads is 1, 2, or any even number (avoid odd numbers > 1); avoid errors like:
+            # `ValueError: Cannot concatenate arrays along axis head_size of size 147 with total size 146`
+            if n_heads > 1 and n_heads % 2 == 1:
+                n_heads -= 1
             n_kv_heads = n_heads
 
             # Calculate batch size to meet budget with fixed steps
@@ -576,6 +580,7 @@ def tokenize_plantcad() -> tuple[ExecutorStep, IsoFlopDataConfig]:
             id=data_config.dataset_name,
             revision=data_config.dataset_revision,
             cache_path=this_output_path(),
+            window_size_bytes=50_000_000,
         ),
     )
     return step, data_config

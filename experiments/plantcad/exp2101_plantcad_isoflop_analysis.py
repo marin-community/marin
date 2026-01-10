@@ -25,7 +25,7 @@ from rich.table import Table
 from scipy.interpolate import griddata
 import wandb
 
-RUN_VERSION = "1.13"
+RUN_VERSION = "2.2"
 RUN_PREFIX = f"plantcad_isoflop_v{RUN_VERSION}"
 RESULT_PATH = f"experiments/plantcad/results/v{RUN_VERSION}"
 EXPORT_DPI = 300
@@ -77,6 +77,7 @@ EXPLODED_BUDGETS: dict[str, list[float]] = {
     "1.9": [1.0e16],
     "1.10": [3.3e16],
     "1.12": [3.3e16, 5.2e16],
+    "2.2": [8.0e16],
 }
 
 
