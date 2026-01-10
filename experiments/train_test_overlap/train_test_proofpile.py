@@ -28,7 +28,7 @@ import logging
 from marin.execution.executor import ExecutorStep, executor_main, this_output_path
 from marin.processing.classification.decon import DeconConfig, DeconMode, NGramConfig, decontaminate
 
-from experiments.pretraining_datasets.simple import tokenized
+from experiments.pretraining_datasets.simple import downloads
 from experiments.train_test_overlap.eval_datasets_overlap import EVAL_DATASET_STEPS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -52,7 +52,7 @@ def run_train_test_overlap(config: DeconConfig) -> str:
 
 def build_proofpile_step() -> ExecutorStep:
     dedupe_config = DeconConfig(
-        input_path=tokenized["proofpile_2"],
+        input_path=downloads["proofpile_2"],
         output_path=this_output_path(),
         decontaminate_source=EVAL_DATASET_STEPS,
         attribute_name="ngram_overlap",
