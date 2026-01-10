@@ -24,7 +24,7 @@ from levanter.layers.attention import AttentionBackend
 from levanter.compat.hf_checkpoints import HFCompatConfig
 from levanter.distributed import RayConfig
 from levanter.models.llama import LlamaConfig
-from levanter.models.qwen import Qwen3Config
+
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
@@ -64,55 +64,11 @@ class ModelConfig:
         return self.name.replace("/", "-").lower()
 
 
-qwen4b = ModelConfig(
-    name="Qwen/Qwen3-4B-Instruct-2507",
-    type="qwen",
-    tokenizer="Qwen/Qwen3-4B-Instruct-2507",
-    checkpoint="Qwen/Qwen3-4B-Instruct-2507",
-    config_class=Qwen3Config,
-)
-llama1b = ModelConfig(
-    name="meta-llama/Llama-3.2-1B-Instruct",
-    type="llama",
-    tokenizer="meta-llama/Llama-3.2-1B-Instruct",
-    checkpoint="meta-llama/Llama-3.2-1B-Instruct",
-    config_class=LlamaConfig,
-)
-qwen3_1_7b = ModelConfig(
-    name="Qwen/Qwen3-1.7B",
-    type="qwen",
-    tokenizer="Qwen/Qwen3-1.7B",
-    checkpoint="Qwen/Qwen3-1.7B",
-    config_class=Qwen3Config,
-)
-qwen3_8b = ModelConfig(
-    name="Qwen/Qwen3-8B",
-    type="qwen",
-    tokenizer="Qwen/Qwen3-8B",
-    checkpoint="Qwen/Qwen3-8B",
-    config_class=Qwen3Config,
-)
-
-
-qwen3_0_6b = ModelConfig(
-    name="Qwen/Qwen3-0.6B",
-    type="qwen",
-    tokenizer="Qwen/Qwen3-0.6B",
-    checkpoint="Qwen/Qwen3-0.6B",
-    config_class=Qwen3Config,
-)
 llama_3_1_8b = ModelConfig(
     name="meta-llama/Llama-3.1-8B-Instruct",
     type="llama",
     tokenizer="meta-llama/Llama-3.1-8B-Instruct",
     checkpoint="meta-llama/Llama-3.1-8B-Instruct",
-    config_class=LlamaConfig,
-)
-marin_8b_instruct = ModelConfig(
-    name="marin-community/marin-8b-instruct",
-    type="llama",
-    tokenizer="marin-community/marin-8b-instruct",
-    checkpoint="marin-community/marin-8b-instruct",
     config_class=LlamaConfig,
 )
 
@@ -168,55 +124,10 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
         n_generations_per_prompt=experiment_config.n_generations_per_prompt,
         max_output_tokens=experiment_config.max_output_tokens,
         top_k=4096,
-        # stop_tokens=stop_tokens(experiment_config.model_config.tokenizer),
         stop_tokens=None,
     )
 
-    # story_sampling = SamplingParams(
-    #     temperature=1.0,
-    #     n_prompts=8,
-    #     n_generations_per_prompt=8,
-    #     max_tokens=MAX_OUTPUT_TOKENS,
-    #     stop_tokens=None,
-    # )
-
     lessons = {
-        # "number_comparison": LessonConfig(
-        #     lesson_id="number_comparison",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "number_comparison", "seed": 42},
-        #     ),
-        #     dependencies=[],
-        #     sampling_params=default_sampling,
-        # ),
-        # "addition_easy": LessonConfig(
-        #     lesson_id="addition_easy",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "addition", "difficulty": "easy", "seed": 42},
-        #     ),
-        #     dependencies=[LessonDependency(dependency_id="number_comparison", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
-        # "addition_medium": LessonConfig(
-        #     lesson_id="addition_medium",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "addition", "difficulty": "medium", "seed": 42},
-        #     ),
-        #     dependencies=[LessonDependency(dependency_id="addition_easy", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
-        # "addition_hard": LessonConfig(
-        #     lesson_id="addition_hard",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "addition", "difficulty": "hard", "seed": 42},
-        #     ),
-        #     dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
         "math_full": LessonConfig(
             lesson_id="math_full",
             env_config=EnvConfig(
@@ -224,28 +135,8 @@ def create_math_curriculum(run_id: str, experiment_config: ExperimentConfig) -> 
                 env_args={"seed": 42},
             ),
             dependencies=[],
-            # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
             sampling_params=default_sampling,
         ),
-        # "story_generation": LessonConfig(
-        #     lesson_id="story_generation",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.mock_env.MockEnv",
-        #         env_args={"task_type": "story_generation", "seed": 42},
-        #     ),
-        #     dependencies=[],
-        #     sampling_params=story_sampling,
-        # ),
-        # "gsm8k": LessonConfig(
-        #     lesson_id="gsm8k",
-        #     env_config=EnvConfig(
-        #         env_class="marin.rl.environments.gsm8k_env.GSM8KEnv",
-        #         env_args={"seed": 42},
-        #     ),
-        #     dependencies=[],
-        #     # dependencies=[LessonDependency(dependency_id="addition_medium", reward_threshold=0.8)],
-        #     sampling_params=default_sampling,
-        # ),
     }
 
     return CurriculumConfig(
@@ -278,9 +169,6 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             name=name,
             tags=["rl", "math", experiment_config.model_config.name.split("/")[-1]],
         ),
-        # tracker=TensorboardConfig(
-        #     logdir=OutputName("tblogs"),
-        # ),
         log_xla_hlo=False,
         log_jaxprs=False,
         mp=jmp.get_policy("p=f32,c=bfloat16"),
@@ -300,9 +188,6 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
             shared_mapping={"mlp": "model", "heads": "model", "position": "context"},
         ),
         ray=RayConfig(auto_start_cluster=False),
-        # distributed=DistributedConfig(
-        #     initialize_jax_distributed=False,
-        # )
     )
 
     opt_config = AdamConfig(
@@ -344,7 +229,6 @@ def rl_train(name: str, experiment_config: ExperimentConfig) -> ExecutorStep:
         curriculum=curriculum_config,
         tokenizer=experiment_config.model_config.tokenizer,
         inference_type="vllm",
-        # inference_type="levanter",
         inference_config=vLLMInferenceContextConfig(
             model_name=experiment_config.model_config.name,
             max_model_len=experiment_config.max_input_tokens + experiment_config.max_output_tokens,
