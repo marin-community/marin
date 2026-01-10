@@ -361,7 +361,9 @@ def _build_single_shard_cache(
 
     def records():
         batch = []
-        pbar = tqdm_logging(desc=f"Shard {shard_name}")
+        if hasattr(source, "shard_row_count"):
+            total_rows = source.shard_row_count(shard_name)
+        pbar = tqdm_logging(desc=f"Shard {shard_name}", total=total_rows)
         for example in source.open_shard_at_row(shard_name, 0):
             batch.append(example)
             if len(batch) >= options.batch_size:
@@ -622,8 +624,9 @@ async def _extend_cache_metadata_with_other(
         source_num_rows = await source.async_len()
 
         async def _copy_one_array(dest_array: JaggedArrayStore, source_array: JaggedArrayStore, data_offset: int):
-            if source_array.shapes is not None:
-                source_shapes = source_array.shapes
+            source_shapes_store = source_array.shapes
+            if source_shapes_store is not None:
+                source_shapes = source_shapes_store[:source_num_rows]
                 async with ts.Transaction() as txn:
                     dest_shapes = dest_array.shapes
                     assert dest_shapes is not None
