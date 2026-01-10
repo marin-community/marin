@@ -66,6 +66,18 @@ def levanter_qwen_to_vllm_mapping():
         {
             "model.layers.*.self_attn.q_norm": ("model.layers.*.self_attn.q_norm.scale", (None,)),
             "model.layers.*.self_attn.k_norm": ("model.layers.*.self_attn.k_norm.scale", (None,)),
+            "model.layers.*.self_attn.q_proj_bias": (
+                "model.layers.*.self_attn.q_proj.bias",
+                ("model", None),
+            ),
+            "model.layers.*.self_attn.k_proj_bias": (
+                "model.layers.*.self_attn.k_proj.bias",
+                ("model", None),
+            ),
+            "model.layers.*.self_attn.v_proj_bias": (
+                "model.layers.*.self_attn.v_proj.bias",
+                ("model", None),
+            ),
         }
     )
     return mapping
@@ -80,6 +92,9 @@ llama_transpose_keys = {
     "k_proj": (2, 0, 1),
     "v_proj": (2, 0, 1),
     "o_proj": (1, 2, 0),
+    "q_proj_bias": (0, 1),
+    "k_proj_bias": (0, 1),
+    "v_proj_bias": (0, 1),
 }
 
 MODEL_MAPPINGS = {
