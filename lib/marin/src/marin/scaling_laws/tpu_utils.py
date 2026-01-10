@@ -37,7 +37,6 @@ V5P_CORE_OPTIONS = [8, 16, 32, 128, 256, 512]
 
 def pick_v5p_type(
     candidate: CandidateConfig,
-    vocab_size: int,
     seq_len: int,
     recipe: ScalingRecipe,
 ) -> str:
@@ -45,9 +44,8 @@ def pick_v5p_type(
 
     Args:
         candidate: CandidateConfig with target_params and tokens.
-        vocab_size: Vocabulary size.
         seq_len: Sequence length.
-        recipe: ScalingRecipe for memory estimation.
+        recipe: ScalingRecipe for memory estimation (includes vocab_size).
 
     Returns:
         TPU slice name, e.g., "v5p-8" or "v5p-32".
@@ -55,7 +53,7 @@ def pick_v5p_type(
     Raises:
         ValueError: If the model is too large for available v5p slices.
     """
-    need_bytes = recipe.estimate_memory_bytes(candidate, vocab_size, seq_len)
+    need_bytes = recipe.estimate_memory_bytes(candidate, seq_len)
     chip_bytes = HBM_PER_CHIP_GIB * 1024**3
     chips = math.ceil(need_bytes / chip_bytes)
     cores_req = chips * CORES_PER_CHIP

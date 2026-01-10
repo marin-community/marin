@@ -26,7 +26,6 @@ from levanter.models.qwen import Qwen3Config
 from marin.scaling_laws.isoflop_analysis import (
     DEFAULT_SEQ_LEN,
     IsoFlopTrainArgs,
-    MARIN_TOKENIZER_VOCAB_SIZE,
     compute_training_flops,
     fit_scaling_laws,
     generate_isoflop_train_args,
@@ -98,15 +97,13 @@ def test_candidate_configs_within_tolerance():
     flop_tolerance = 0.01
     seq_len = DEFAULT_SEQ_LEN
 
-    for candidate in recipe.candidate_configs(
-        budget, MARIN_TOKENIZER_VOCAB_SIZE, seq_len, flop_tolerance=flop_tolerance
-    ):
-        # Compute training schedule from recipe
-        batch_size, train_steps = recipe.compute_training_schedule(candidate, MARIN_TOKENIZER_VOCAB_SIZE, seq_len)
-        model_config = recipe.build_model_config(candidate.target_params, MARIN_TOKENIZER_VOCAB_SIZE, seq_len)
+    for candidate in recipe.candidate_configs(budget, seq_len, flop_tolerance=flop_tolerance):
+        # Compute training schedule from recipe (vocab_size is owned by recipe)
+        batch_size, train_steps = recipe.compute_training_schedule(candidate, seq_len)
+        model_config = recipe.build_model_config(candidate.target_params, seq_len)
         achieved = compute_training_flops(
             model_config,
-            MARIN_TOKENIZER_VOCAB_SIZE,
+            recipe.vocab_size,
             batch_size,
             train_steps,
             seq_len,
@@ -152,7 +149,6 @@ def test_generate_isoflop_train_args_snapshot():
     recipe = Marin2025Recipe()
     result = generate_isoflop_train_args(
         budgets=(3e18,),
-        vocab_size=MARIN_TOKENIZER_VOCAB_SIZE,
         recipe=recipe,
     )
 
@@ -160,8 +156,8 @@ def test_generate_isoflop_train_args_snapshot():
 
     for i, (args, expected) in enumerate(zip(result, EXPECTED_ISOFLOP_CONFIGS_3E18, strict=True)):
         assert isinstance(args, IsoFlopTrainArgs)
-        # batch_size and train_steps are computed from recipe
-        batch_size, train_steps = recipe.compute_training_schedule(args.candidate, MARIN_TOKENIZER_VOCAB_SIZE)
+        # batch_size and train_steps are computed from recipe (vocab_size is owned by recipe)
+        batch_size, train_steps = recipe.compute_training_schedule(args.candidate)
         assert batch_size == expected["batch_size"], f"Config {i}: batch_size mismatch"
         assert train_steps == expected["train_steps"], f"Config {i}: train_steps mismatch"
         assert args.candidate.flops_budget == expected["flops_budget"], f"Config {i}: flops_budget mismatch"

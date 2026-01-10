@@ -50,9 +50,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_EVAL_METRIC_KEY = "eval/paloma/c4_en/bpb"
 SEQ_LEN = 4096
 
-# Marin tokenizer vocab size (stanford-crfm/marin-tokenizer)
-MARIN_TOKENIZER_VOCAB_SIZE = 128256
-
 # ---------------- IsoFLOP Sweep Constants ----------------
 # Budgets in training FLOPs (includes 3x multiplier for forward + backward pass).
 # This matches how FLOPs are tracked in WandB via Levanter's log_performance_stats.
@@ -169,18 +166,25 @@ class ScalingRecipe(Protocol):
     model-specific methods. Orchestration logic (generating training args,
     predicting optimal configs) is handled by library functions that use
     these core methods.
+
+    The recipe owns the vocab_size, which is derived from the tokenizer choice.
+    This ensures consistency and simplifies the API by not requiring vocab_size
+    to be threaded through every function call.
     """
 
     name: str
     """Name identifying this recipe (e.g., 'marin-2025')."""
 
+    vocab_size: int
+    """Vocabulary size for the tokenizer used with this recipe."""
+
     def build_model_config(
-        self, target_params: int, vocab_size: int, seq_len: int = DEFAULT_SEQ_LEN
+        self, target_params: int, seq_len: int = DEFAULT_SEQ_LEN
     ) -> ModelConfiguration:
         """Build a model config for a target parameter count."""
         ...
 
-    def estimate_memory_bytes(self, candidate: CandidateConfig, vocab_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> int:
+    def estimate_memory_bytes(self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN) -> int:
         """Estimate memory usage in bytes for training a candidate configuration.
 
         The implementation can access candidate.target_params, candidate.tokens, and
@@ -190,7 +194,7 @@ class ScalingRecipe(Protocol):
         ...
 
     def build_optimizer_config(
-        self, candidate: CandidateConfig, vocab_size: int, seq_len: int = DEFAULT_SEQ_LEN
+        self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN
     ) -> OptimizerConfig:
         """Build optimizer config for a candidate."""
         ...
@@ -198,7 +202,6 @@ class ScalingRecipe(Protocol):
     def candidate_configs(
         self,
         budget: float,
-        vocab_size: int,
         seq_len: int = DEFAULT_SEQ_LEN,
         steps_per_run: int = DEFAULT_STEPS_PER_RUN,
         flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
@@ -216,6 +219,12 @@ class ScalingRecipe(Protocol):
         """
         ...
 
+    def compute_training_schedule(
+        self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN
+    ) -> tuple[int, int]:
+        """Compute training schedule (batch_size, train_steps) for a candidate."""
+        ...
+
 
 @dataclass
 class IsoFlopTrainArgs:
@@ -229,11 +238,11 @@ class IsoFlopTrainArgs:
     the responsibility of experiment code which may have its own conventions.
 
     Example:
-        >>> args = generate_isoflop_train_args(budgets, vocab_size, recipe)[0]
-        >>> # Recipe converts candidate to model-specific configs
-        >>> model_config = recipe.build_model_config(args.candidate.target_params, vocab_size)
-        >>> batch_size, train_steps = recipe.compute_training_schedule(args.candidate, vocab_size)
-        >>> optimizer_config = recipe.build_optimizer_config(args.candidate, batch_size, vocab_size)
+        >>> args = generate_isoflop_train_args(budgets, recipe)[0]
+        >>> # Recipe converts candidate to model-specific configs (vocab_size is owned by recipe)
+        >>> model_config = recipe.build_model_config(args.candidate.target_params)
+        >>> batch_size, train_steps = recipe.compute_training_schedule(args.candidate)
+        >>> optimizer_config = recipe.build_optimizer_config(args.candidate)
     """
 
     candidate: CandidateConfig
@@ -382,7 +391,6 @@ def solve_for_train_steps(
 
 def generate_isoflop_train_args(
     budgets: Sequence[float],
-    vocab_size: int,
     recipe: ScalingRecipe,
     seq_len: int = DEFAULT_SEQ_LEN,
     steps_per_run: int = DEFAULT_STEPS_PER_RUN,
@@ -396,8 +404,7 @@ def generate_isoflop_train_args(
 
     Args:
         budgets: Sequence of FLOP budgets to generate configs for.
-        vocab_size: Vocabulary size for the tokenizer.
-        recipe: ScalingRecipe with architecture/hyperparameter settings.
+        recipe: ScalingRecipe with architecture/hyperparameter settings (includes vocab_size).
         seq_len: Sequence length for training.
         steps_per_run: Reference step count for FLOP budget calculation.
         flop_tolerance: Tolerance for matching FLOP budget.
@@ -408,24 +415,23 @@ def generate_isoflop_train_args(
     Example:
         >>> from marin.scaling_laws import generate_isoflop_train_args, DEFAULT_BUDGETS
         >>> # Use a concrete recipe implementation (e.g., from experiments/isoflop_sweep.py)
-        >>> # recipe = Marin2025Recipe()
+        >>> # recipe = Marin2025Recipe()  # vocab_size is a property of the recipe
         >>> train_args = generate_isoflop_train_args(
         ...     budgets=DEFAULT_BUDGETS,
-        ...     vocab_size=128256,
         ...     recipe=recipe,
         ... )
         >>> for args in train_args:
         ...     # Recipe converts model-agnostic candidate to model-specific configs
-        ...     model_config = recipe.build_model_config(args.candidate.target_params, vocab_size)
-        ...     batch_size, train_steps = recipe.compute_training_schedule(args.candidate, vocab_size)
-        ...     optimizer_config = recipe.build_optimizer_config(args.candidate, batch_size, vocab_size)
+        ...     model_config = recipe.build_model_config(args.candidate.target_params)
+        ...     batch_size, train_steps = recipe.compute_training_schedule(args.candidate)
+        ...     optimizer_config = recipe.build_optimizer_config(args.candidate)
     """
     results: list[IsoFlopTrainArgs] = []
 
     for budget in budgets:
-        for candidate in recipe.candidate_configs(budget, vocab_size, seq_len, steps_per_run, flop_tolerance):
+        for candidate in recipe.candidate_configs(budget, seq_len, steps_per_run, flop_tolerance):
             # Compute training schedule from recipe (for tags)
-            batch_size, train_steps = recipe.compute_training_schedule(candidate, vocab_size, seq_len)
+            batch_size, train_steps = recipe.compute_training_schedule(candidate, seq_len)
 
             tags = (
                 f"FLOPs={budget:.1e}",
@@ -588,7 +594,6 @@ def predict_optimal_config(
     scaling_fits: dict[str, ScalingFit],
     target_flops: float,
     label: str,
-    vocab_size: int,
     recipe: ScalingRecipe,
     seq_len: int = DEFAULT_SEQ_LEN,
     steps_per_run: int = DEFAULT_STEPS_PER_RUN,
@@ -607,8 +612,7 @@ def predict_optimal_config(
         scaling_fits: Dict of {label: ScalingFit} from scaling ladder result.
         target_flops: Target compute budget in FLOPs.
         label: Dataset/experiment label to use for scaling fit.
-        vocab_size: Vocabulary size.
-        recipe: ScalingRecipe with architecture/hyperparameter settings.
+        recipe: ScalingRecipe with architecture/hyperparameter settings (includes vocab_size).
         seq_len: Sequence length for training.
         steps_per_run: Reference step count for FLOP budget calculation.
         flop_tolerance: Tolerance for matching FLOP budget.
@@ -626,7 +630,7 @@ def predict_optimal_config(
 
     logger.info(f"Predicted optimal tokens for {target_flops:.2e} FLOPs: {optimal_tokens:.2e}")
 
-    candidates = list(recipe.candidate_configs(target_flops, vocab_size, seq_len, steps_per_run, flop_tolerance))
+    candidates = list(recipe.candidate_configs(target_flops, seq_len, steps_per_run, flop_tolerance))
 
     if not candidates:
         logger.warning(f"No valid candidates found for budget {target_flops:.2e}")
@@ -648,7 +652,6 @@ def predict_optimal_configs_for_budgets(
     scaling_fits: dict[str, ScalingFit],
     target_budgets: list[float],
     label: str,
-    vocab_size: int,
     recipe: ScalingRecipe,
     seq_len: int = DEFAULT_SEQ_LEN,
     steps_per_run: int = DEFAULT_STEPS_PER_RUN,
@@ -660,8 +663,7 @@ def predict_optimal_configs_for_budgets(
         scaling_fits: Dict of {label: ScalingFit} from scaling ladder result.
         target_budgets: List of target compute budgets in FLOPs.
         label: Dataset/experiment label to use for scaling fit.
-        vocab_size: Vocabulary size.
-        recipe: ScalingRecipe with architecture/hyperparameter settings.
+        recipe: ScalingRecipe with architecture/hyperparameter settings (includes vocab_size).
         seq_len: Sequence length for training.
         steps_per_run: Reference step count for FLOP budget calculation.
         flop_tolerance: Tolerance for matching FLOP budget.
@@ -675,7 +677,7 @@ def predict_optimal_configs_for_budgets(
     configs = []
     for budget in target_budgets:
         config = predict_optimal_config(
-            scaling_fits, budget, label, vocab_size, recipe, seq_len, steps_per_run, flop_tolerance
+            scaling_fits, budget, label, recipe, seq_len, steps_per_run, flop_tolerance
         )
         if config is None:
             raise RuntimeError(

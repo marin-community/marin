@@ -42,7 +42,7 @@ from experiments.simple_train_config import SimpleTrainConfig
 from experiments.tootsie.exp1295_32b import nemotron_mix
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, InputName, executor_main
-from marin.processing.tokenize import get_vocab_size_for_tokenizer, lm_mixture_data_config
+from marin.processing.tokenize import lm_mixture_data_config
 from marin.scaling_laws import (
     CandidateConfig,
     FitScalingLawsResult,
@@ -212,9 +212,13 @@ class Marin2025Recipe:
     """Marin 2025 scaling recipe with all hyperparameters and formulas.
 
     This recipe implements all the Marin-specific decisions for scaling experiments.
+    The vocab_size is derived from the tokenizer, making the recipe self-contained
+    for all model configuration decisions.
     """
 
     name: str = "marin-2025"
+    vocab_size: int = 128256
+    """Vocabulary size for the tokenizer. Default is for stanford-crfm/marin-tokenizer."""
 
     # --- Learning rate scaling ---
     # lr = lr_constant * sqrt(batch_size) / hidden_dim
@@ -277,14 +281,14 @@ class Marin2025Recipe:
             return self.large_budget_step_size
         return self.small_budget_step_size
 
-    def _compute_params_for_hidden_size(self, hidden_size: int, vocab_size: int) -> int:
+    def _compute_params_for_hidden_size(self, hidden_size: int) -> int:
         """Compute approximate parameter count for a given hidden size."""
         num_layers = self.compute_num_layers(hidden_size)
         intermediate_dim = hidden_size * self.mlp_ratio
         n_heads = max(1, hidden_size // self.hidden_head_ratio)
         head_size = hidden_size // n_heads
 
-        embed_params = vocab_size * hidden_size * 2
+        embed_params = self.vocab_size * hidden_size * 2
         q_proj = hidden_size * head_size * n_heads
         kv_proj = 2 * hidden_size * head_size * n_heads
         o_proj = head_size * n_heads * hidden_size
@@ -297,16 +301,16 @@ class Marin2025Recipe:
 
         return embed_params + total_layer_params + final_norm
 
-    def hidden_size_for_params(self, target_params: int, vocab_size: int) -> int:
+    def hidden_size_for_params(self, target_params: int) -> int:
         """Find the hidden size that gives approximately target_params."""
         min_hidden = 2**self.min_hidden_pow
         max_hidden = 2**self.max_hidden_pow
 
         best_hidden = min_hidden
-        best_diff = abs(self._compute_params_for_hidden_size(min_hidden, vocab_size) - target_params)
+        best_diff = abs(self._compute_params_for_hidden_size(min_hidden) - target_params)
 
         for hidden_size in range(min_hidden, max_hidden + 1, 64):
-            params = self._compute_params_for_hidden_size(hidden_size, vocab_size)
+            params = self._compute_params_for_hidden_size(hidden_size)
             diff = abs(params - target_params)
             if diff < best_diff:
                 best_diff = diff
@@ -314,9 +318,9 @@ class Marin2025Recipe:
 
         return best_hidden
 
-    def build_model_config(self, target_params: int, vocab_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
+    def build_model_config(self, target_params: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
         """Build a Qwen3 model config for a target parameter count."""
-        hidden_size = self.hidden_size_for_params(target_params, vocab_size)
+        hidden_size = self.hidden_size_for_params(target_params)
         num_layers = self.compute_num_layers(hidden_size)
         intermediate_dim = hidden_size * self.mlp_ratio
         n_heads = max(1, hidden_size // self.hidden_head_ratio)
@@ -350,30 +354,29 @@ class Marin2025Recipe:
     def estimate_memory_bytes(
         self,
         candidate: CandidateConfig,
-        vocab_size: int,
         seq_len: int = DEFAULT_SEQ_LEN,
         optim_mult: int = 3,
         dtype_size: int = 4,
         fudge_factor: float = 2.0,
     ) -> int:
         """Estimate float32 memory usage in bytes for training."""
-        hidden_size = self.hidden_size_for_params(candidate.target_params, vocab_size)
+        hidden_size = self.hidden_size_for_params(candidate.target_params)
         model_config = self._build_model_config_from_hidden_size(hidden_size, seq_len)
-        batch_size, _ = self.compute_training_schedule(candidate, vocab_size, seq_len)
+        batch_size, _ = self.compute_training_schedule(candidate, seq_len)
 
-        param_count = self._compute_params_for_hidden_size(hidden_size, vocab_size)
+        param_count = self._compute_params_for_hidden_size(hidden_size)
         param_bytes = param_count * optim_mult * dtype_size
         act_bytes = (batch_size * model_config.max_seq_len) * (
-            (model_config.hidden_dim * model_config.num_layers) + vocab_size * fudge_factor
+            (model_config.hidden_dim * model_config.num_layers) + self.vocab_size * fudge_factor
         )
         total_bytes = param_bytes + act_bytes
         return int(total_bytes * fudge_factor)
 
     def compute_training_schedule(
-        self, candidate: CandidateConfig, vocab_size: int, seq_len: int = DEFAULT_SEQ_LEN
+        self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN
     ) -> tuple[int, int]:
         """Compute training schedule (batch_size, train_steps) for a candidate."""
-        hidden_size = self.hidden_size_for_params(candidate.target_params, vocab_size)
+        hidden_size = self.hidden_size_for_params(candidate.target_params)
 
         # Start with batch_size that gives us ~DEFAULT_STEPS_PER_RUN steps for the tokens
         target_steps = DEFAULT_STEPS_PER_RUN
@@ -396,11 +399,11 @@ class Marin2025Recipe:
         return (batch_size, train_steps)
 
     def build_optimizer_config(
-        self, candidate: CandidateConfig, vocab_size: int, seq_len: int = DEFAULT_SEQ_LEN
+        self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN
     ) -> OptimizerConfig:
         """Build optimizer config for a candidate."""
-        batch_size, _ = self.compute_training_schedule(candidate, vocab_size, seq_len)
-        hidden_size = self.hidden_size_for_params(candidate.target_params, vocab_size)
+        batch_size, _ = self.compute_training_schedule(candidate, seq_len)
+        hidden_size = self.hidden_size_for_params(candidate.target_params)
         learning_rate = self._compute_learning_rate(batch_size, hidden_size)
         beta2 = self._compute_beta2(batch_size)
 
@@ -421,7 +424,6 @@ class Marin2025Recipe:
     def candidate_configs(
         self,
         budget: float,
-        vocab_size: int,
         seq_len: int = DEFAULT_SEQ_LEN,
         steps_per_run: int = DEFAULT_STEPS_PER_RUN,
         flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
@@ -440,7 +442,7 @@ class Marin2025Recipe:
             model_config = self._build_model_config_from_hidden_size(hidden_size, seq_len)
 
             # Compute batch_size to hit FLOP budget
-            batch_exact = solve_for_batch_size(model_config, vocab_size, budget, steps_per_run, seq_len)
+            batch_exact = solve_for_batch_size(model_config, self.vocab_size, budget, steps_per_run, seq_len)
             batch_size = _round_to_power_of_two(batch_exact)
 
             # Adjust batch_size to respect learning rate constraints
@@ -452,15 +454,17 @@ class Marin2025Recipe:
             if batch_size < self.min_batch_size:
                 continue
 
-            train_steps = round(solve_for_train_steps(model_config, vocab_size, budget, batch_size, seq_len))
+            train_steps = round(solve_for_train_steps(model_config, self.vocab_size, budget, batch_size, seq_len))
 
             # Validate achieved FLOPs are within tolerance
-            achieved_flops = 3 * model_config.flops_per_token(vocab_size, seq_len) * batch_size * train_steps * seq_len
+            achieved_flops = (
+                3 * model_config.flops_per_token(self.vocab_size, seq_len) * batch_size * train_steps * seq_len
+            )
             if abs(achieved_flops - budget) / budget > flop_tolerance:
                 continue
 
             tokens = batch_size * train_steps * seq_len
-            target_params = self._compute_params_for_hidden_size(hidden_size, vocab_size)
+            target_params = self._compute_params_for_hidden_size(hidden_size)
 
             # Yield simplified CandidateConfig (without batch_size/train_steps)
             yield CandidateConfig(
@@ -593,7 +597,6 @@ def create_isoflop_sweep_steps(
     experiment_name: str,
     recipe: ScalingRecipe,
     budgets: tuple[float, ...] = DEFAULT_BUDGETS,
-    tokenizer: str = "stanford-crfm/marin-tokenizer",
     eval_tasks: tuple[EvalTaskConfig, ...] | None = None,
     seq_len: int = 4096,
 ) -> tuple[list[ExecutorStep], list[CandidateConfig]]:
@@ -605,22 +608,20 @@ def create_isoflop_sweep_steps(
     Args:
         tokenized: Tokenized dataset to train on.
         experiment_name: Name suffix for the experiment (e.g., 'nemo', 'dclm').
-        recipe: ScalingRecipe with hyperparameters - must be explicitly specified.
+        recipe: ScalingRecipe with hyperparameters (includes vocab_size).
         budgets: FLOP budgets to sweep over.
-        tokenizer: Tokenizer to use for vocab size.
         eval_tasks: Optional evaluation tasks to run after training.
+        seq_len: Sequence length for training.
 
     Returns:
         A tuple of:
         - steps: Training and evaluation ExecutorSteps for the sweep.
         - candidates: CandidateConfig for each training run with full config details.
     """
-    vocab_size = get_vocab_size_for_tokenizer(tokenizer)
-
     # Library provides the training arguments (model configs, optimizer configs, etc.)
+    # vocab_size is owned by the recipe
     train_args_list = generate_isoflop_train_args(
         budgets=budgets,
-        vocab_size=vocab_size,
         recipe=recipe,
     )
 
@@ -640,13 +641,13 @@ def create_isoflop_sweep_steps(
     for args in train_args_list:
         candidate = args.candidate
 
-        # Build model and optimizer configs using the recipe
-        model_config = recipe.build_model_config(candidate.target_params, vocab_size, seq_len)
-        optimizer_config = recipe.build_optimizer_config(candidate, vocab_size, seq_len)
-        tpu_type = pick_v5p_type(candidate, vocab_size, seq_len, recipe)
+        # Build model and optimizer configs using the recipe (vocab_size is owned by recipe)
+        model_config = recipe.build_model_config(candidate.target_params, seq_len)
+        optimizer_config = recipe.build_optimizer_config(candidate, seq_len)
+        tpu_type = pick_v5p_type(candidate, seq_len, recipe)
 
         # Compute training schedule from recipe
-        batch_size, num_steps = recipe.compute_training_schedule(candidate, vocab_size, seq_len)
+        batch_size, num_steps = recipe.compute_training_schedule(candidate, seq_len)
 
         # Use local naming with architecture details for backward compatibility
         run_name = _format_run_name(

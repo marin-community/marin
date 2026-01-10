@@ -35,7 +35,6 @@ from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
-from marin.processing.tokenize import get_vocab_size_for_tokenizer
 from marin.scaling_laws.isoflop_analysis import (
     ScalingFit,
     ScalingRecipe,
@@ -55,7 +54,8 @@ class ScalingLadderRungConfig:
     the target compute budget. At runtime, the optimal config is loaded
     from the analysis output.
 
-    The ScalingRecipe handles all model-specific decisions (architecture, optimizer).
+    The ScalingRecipe handles all model-specific decisions (architecture, optimizer)
+    and owns the vocab_size (derived from the tokenizer choice).
     """
 
     analysis_output_path: str
@@ -74,10 +74,7 @@ class ScalingLadderRungConfig:
     """Where to write training outputs."""
 
     recipe: ScalingRecipe
-    """Scaling recipe that handles model/optimizer config building."""
-
-    tokenizer: str = "stanford-crfm/marin-tokenizer"
-    """Tokenizer to use."""
+    """Scaling recipe that handles model/optimizer config building (includes vocab_size)."""
 
     seq_len: int = 4096
     """Sequence length for training."""
@@ -86,10 +83,10 @@ class ScalingLadderRungConfig:
 def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
     """Run one rung of the scaling ladder (one compute-optimal training run).
 
-    The recipe handles all model-specific decisions:
-    - Model config is built via `recipe.build_model_config(target_params, vocab_size)`
-    - Training schedule is built via `recipe.compute_training_schedule(candidate, vocab_size)`
-    - Optimizer config is built via `recipe.build_optimizer_config(candidate, batch_size, vocab_size)`
+    The recipe handles all model-specific decisions (vocab_size is owned by the recipe):
+    - Model config is built via `recipe.build_model_config(target_params)`
+    - Training schedule is built via `recipe.compute_training_schedule(candidate)`
+    - Optimizer config is built via `recipe.build_optimizer_config(candidate)`
     """
     result_path = os.path.join(config.analysis_output_path, "isoflop_analysis_result.json")
     fs, _, _ = fsspec.get_fs_token_paths(result_path)
@@ -103,13 +100,10 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
             raise ValueError(f"Expected 2 scaling fit values for '{key}', got {len(value)}")
         scaling_fits[key] = ScalingFit(float(value[0]), float(value[1]))
 
-    vocab_size = get_vocab_size_for_tokenizer(config.tokenizer)
-
     candidate = predict_optimal_config(
         scaling_fits=scaling_fits,
         target_flops=config.target_budget,
         label=config.label,
-        vocab_size=vocab_size,
         recipe=config.recipe,
         seq_len=config.seq_len,
     )
@@ -125,12 +119,12 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
         f"  tokens={candidate.tokens:.2e}"
     )
 
-    model_cfg = config.recipe.build_model_config(candidate.target_params, vocab_size, config.seq_len)
-    optimizer_cfg = config.recipe.build_optimizer_config(candidate, vocab_size, config.seq_len)
-    tpu_type = pick_v5p_type(candidate, vocab_size, config.seq_len, config.recipe)
+    model_cfg = config.recipe.build_model_config(candidate.target_params, config.seq_len)
+    optimizer_cfg = config.recipe.build_optimizer_config(candidate, config.seq_len)
+    tpu_type = pick_v5p_type(candidate, config.seq_len, config.recipe)
 
-    # Compute training schedule - recipe-specific, not in protocol
-    batch_size, train_steps = config.recipe.compute_training_schedule(candidate, vocab_size, config.seq_len)
+    # Compute training schedule - recipe-specific
+    batch_size, train_steps = config.recipe.compute_training_schedule(candidate, config.seq_len)
 
     train_config = TrainLmConfig(
         data=config.tokenized,
