@@ -110,11 +110,6 @@ class BaseInferenceContext:
         """Construct Rollout from a choice with validation."""
 
         prompt_tokens = self.tokenize_prompt(prompt, choice, system_prompt)
-        # print(f"prompt_tokens: {prompt_tokens}")
-        # print(f"prompt token ids: {choice.prompt_token_ids}")
-
-        # assert choice.prompt_token_ids == prompt_tokens,
-        # f"Prompt token IDs mismatch: {choice.prompt_token_ids} != {prompt_tokens}"
         response_tokens = self.response_tokens_from_choice(choice)
         response_logprobs = self.logprobs_from_choice(choice)
 
