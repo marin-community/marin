@@ -56,7 +56,6 @@ class AttentionMask:
 
     This is deliberately simpler than `levanter.layers.attention.AttentionMask`:
     - Stores raw JAX arrays (no NamedArray fields).
-    - Does not support explicit masks (for now).
     - Supports causal masking, sliding windows, and segment IDs.
     """
 
@@ -174,26 +173,34 @@ def reference_attention(
 
     scale = 1.0 / math.sqrt(head_dim)
     scores = jnp.einsum("bqhd,bkhd->bhqk", q * scale, k)
-    if isinstance(mask, AttentionMask):
-        mask = mask.materialize_mask(scores.shape[-2], scores.shape[-1])
 
-    if mask is not None:
-        if mask.dtype == jnp.bool_:
-            if mask.ndim == 2:
-                mask = mask[None, None, :, :]
-            elif mask.ndim == 3:
-                mask = mask[:, None, :, :]
-            else:
-                raise ValueError(f"mask must be 2D or 3D, got shape={mask.shape}")
-            scores = jnp.where(mask, scores, jnp.array(-1e9, dtype=scores.dtype))
+    explicit = None
+    if mask is None:
+        explicit = None
+    elif isinstance(mask, AttentionMask):
+        explicit = mask.materialize_mask(scores.shape[-2], scores.shape[-1])
+    else:
+        explicit = mask
+
+    if explicit is not None:
+        # Standardize dense masks to [B, Q, K] (bool = allowed, float = additive bias).
+        if explicit.ndim == 2:
+            explicit = explicit[None, :, :]
+        if explicit.ndim != 3:
+            raise ValueError(f"explicit mask must have shape [batch, q, k], got shape={explicit.shape}")
+        if explicit.shape[0] not in (1, q.shape[0]):
+            raise ValueError(f"explicit mask batch dim must be 1 or {q.shape[0]}, got {explicit.shape[0]}")
+        if explicit.shape[1] != scores.shape[-2] or explicit.shape[2] != scores.shape[-1]:
+            raise ValueError(
+                "explicit mask must match attention shapes: "
+                f"got mask={explicit.shape}, expected [batch,{scores.shape[-2]},{scores.shape[-1]}]"
+            )
+
+        explicit = explicit[:, None, :, :]  # -> [B, 1, Q, K], broadcast across heads.
+        if explicit.dtype == jnp.bool_:
+            scores = jnp.where(explicit, scores, jnp.array(-1e9, dtype=scores.dtype))
         else:
-            if mask.ndim == 2:
-                mask = mask[None, None, :, :]
-            elif mask.ndim == 3:
-                mask = mask[:, None, :, :]
-            else:
-                raise ValueError(f"mask must be 2D or 3D, got shape={mask.shape}")
-            scores = scores + mask
+            scores = scores + explicit
     if logits_dtype is not None:
         scores = scores.astype(logits_dtype)
     weights = jax.nn.softmax(scores, axis=-1).astype(v.dtype)
@@ -201,7 +208,12 @@ def reference_attention(
     return ctx.astype(v.dtype)
 
 
-def _spec_shard_factor(entry: object, mesh) -> int:
+def _spec_shard_factor(entry: str | tuple[str, ...] | None, mesh) -> int:
+    """
+    Compute the size of the mesh axes associated with a PartitionSpec entry.
+
+    Splash attention can handle various kinds of sequence parallelism but needs this to function
+    """
     if entry is None or mesh is None:
         return 1
     if isinstance(entry, str):
@@ -328,12 +340,7 @@ def _tpu_splash_attention(
         check_rep=False,
     )
     def wrap(q_bhsd, k_bhsd, v_bhsd, seg_ids, kernel):
-        def call_kernel(q_b, k_b, v_b, si):
-            if si is None:
-                return kernel(q_b, k_b, v_b)
-            return kernel(q_b, k_b, v_b, segment_ids=si)
-
-        return jax.vmap(call_kernel, in_axes=(0, 0, 0, segment_batch_axis))(q_bhsd, k_bhsd, v_bhsd, seg_ids)
+        return jax.vmap(kernel, in_axes=(0, 0, 0, segment_batch_axis))(q_bhsd, k_bhsd, v_bhsd, seg_ids)
 
     out = wrap(q_, k_, v_, segment_ids, splash_kernel)
     return jnp.transpose(out, (0, 2, 1, 3)).astype(v.dtype)
@@ -346,6 +353,8 @@ def attention(
     mask: AttentionMask | jax.Array | None,
 ) -> jax.Array:
     if jax.default_backend() == "tpu":
+        if isinstance(mask, jax.Array):
+            return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
         return _tpu_splash_attention(q, k, v, mask)
     return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
 
