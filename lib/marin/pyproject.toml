@@ -44,7 +44,7 @@ dependencies = [
     "s3fs>=2024",
     "toml",
     "torch>=2.7.0",
-    "torchvision>=0.22.0,<0.25",
+    "torchvision>=0.22.0,<0.24.1",
     "tqdm",
     "tqdm-loggable",
     "triton == 3.5.0",
