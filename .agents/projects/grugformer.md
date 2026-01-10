@@ -15,10 +15,19 @@ Inspired by [grugbrain.dev](https://grugbrain.dev/) and Andrej Karpathy’s [Nan
 - **Fast kernels are allowed, but keep the surface simple.** For now, grug core hard-depends on `ejkernel` for block-sparse attention (`ejkernel.modules.operations.blocksparse_attention`) and keeps a separate reference implementation for debugging/regressions.
 - **Serializable state.** Trainer state must round-trip through `levanter.tensorstore_serialization.tree_{de,}serialize_leaves_tensorstore` with no custom logic.
 - **Consumption-ready.** Provide a `uv run python -m marin.grugpt.train` entrypoint plus tests. Tracking hooks log loss/perplexity through Levanter’s tracker interface.
+- **Limit config knobs.** In general, it's better to copy-paste experimental code than to bake every possible option into the core. Keep the config surface minimal and stable. As an example, attention sinks should be added by copy-pasting/editing the attention callsite in a speedrun script, not by adding a `cfg.use_attention_sinks` flag. But changing the number of layers etc. should be easy via config. This is a judgment call.
+  An exception to this principle is when constructing an A/B test in a speedrun file (see docs/recipes/change_grug.md)—in that case, it's okay (even preferred) to add temporary flags to your copy-pasted grug core to toggle between two behaviors for comparison.
+
+## Working Agreement: How Grug Evolves
+
+- Canonical “best guess” lives in `lib/levanter/src/levanter/grug/`.
+- The evolving speedrun entrypoint is `experiments/speedrun/grugformer_starter/grugformer_speedrun.py`.
+- One-off speedruns under `experiments/speedrun/…` are snapshots/edit surfaces; they should not silently become the source of truth.
+- When we upstream a successful experiment, we update tests and record/clean up old experiments per `docs/recipes/change_grug.md`. This involves deletion of incompatible experiments but leaving a trail.
 
 ### JAX/ML Principles
 
-- **Mesh-first mental model.** We always create one mesh axis per logical unit. For now, `['replica', 'data', 'model']`. Work must still run on a single GPU (mesh axes collapse to size 1) but should seamlessly extend to 4-device TPU v4-8 pods for CI. Mesh creation and validation live in one place.
+- **Mesh-first mental model.** We always create one mesh axis per logical unit. For now, `['replica_dcn', 'replica', 'data', 'model']`. Work must still run on a single GPU (mesh axes collapse to size 1) but should seamlessly extend to 4-device TPU v4-8 pods for CI. Mesh creation and validation live in one place.
 - **Use good kernels when available.** Grug is happy to call out to other people's fast attention kernels (ejkernel blocksparse today) as long as the surface stays simple and the fallback reference path remains.
 - **Explicit sharding everywhere.** Arrays carry `PartitionSpec`s in their types. By using `set_mesh` with `AxisType.Explicit` we'll always know every Array's sharding. Any op with ambiguous shardings must either supply `out_sharding=` or run inside `auto_axes`. Prefer the former.
 
