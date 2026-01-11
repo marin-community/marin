@@ -25,11 +25,14 @@ from rich.table import Table
 from scipy.interpolate import griddata
 import wandb
 
-RUN_VERSION = "2.3"
+RUN_VERSION = "2.9"
 RUN_PREFIX = f"plantcad_isoflop_v{RUN_VERSION}"
 RESULT_PATH = f"experiments/plantcad/results/v{RUN_VERSION}"
 EXPORT_DPI = 300
 DEFAULT_ARCH = "qwen"
+
+# When True, use non-embedding params (from params_nonembed tag) instead of total params
+NON_EMBED_PARAMS_ONLY = False
 
 console = Console(record=True)
 logger = logging.getLogger(__name__)
@@ -78,6 +81,11 @@ EXPLODED_BUDGETS: dict[str, list[float]] = {
     "1.10": [3.3e16],
     "1.12": [3.3e16, 5.2e16],
     "2.2": [8.0e16],
+    "2.4": [2.0e16],
+    "2.5": [4.0e16, 7.5e16],
+    "2.6": [1.0e16],
+    "2.7": [3.2e17],
+    "2.9": [6.4e17, 1.2e18],
 }
 
 
@@ -180,6 +188,20 @@ def fetch_plantcad_runs(show_wandb_runs: bool = False):
         else:
             duration = None
 
+        if "eval/plantcad2/loss" in run.summary:
+            eval_metric = "eval/plantcad2/loss"
+        elif "eval/dclm_baseline/loss" in run.summary:
+            eval_metric = "eval/dclm_baseline/loss"
+        else:
+            logger.warning(f"No eval metric found in run {run.name}")
+            eval_metric = None
+
+        # Determine which param count to use based on flag
+        if NON_EMBED_PARAMS_ONLY:
+            params_value = tags_dict.get("params_nonembed")
+        else:
+            params_value = tags_dict.get("params")
+
         row = {
             "run_name": run.name,
             "state": run.state,
@@ -187,7 +209,7 @@ def fetch_plantcad_runs(show_wandb_runs: bool = False):
             "stop_time": stop_time,
             "duration_sec": duration,
             # Metrics
-            "eval_loss": run.summary.get("eval/plantcad2/loss"),
+            "eval_loss": run.summary.get(eval_metric) if eval_metric else None,
             "train_loss": run.summary.get("train/loss"),
             "total_gflops": run.summary.get("throughput/total_gflops"),
             "total_tokens": run.summary.get("throughput/total_tokens"),
@@ -198,7 +220,7 @@ def fetch_plantcad_runs(show_wandb_runs: bool = False):
             "flops_budget": tags_dict.get("flops_budget"),
             "hidden_size": tags_dict.get("hidden_size"),
             "num_layers": tags_dict.get("num_layers"),
-            "params": tags_dict.get("params"),
+            "params": params_value,
             "steps": tags_dict.get("steps"),
             "tokens": tags_dict.get("tokens"),
             "tpu": tags_dict.get("tpu"),
@@ -228,6 +250,16 @@ def validate_runs(df):
         logger.warning(duplicates[["run_name", *key_cols]].to_string())
     else:
         logger.info(f"Validation passed: rows are unique by {key_cols}")
+
+    # Check that total_tokens matches tokens (within 0.1% tolerance) for finished runs only
+    df_finished = filter_to_finished_runs(df)
+    tolerance = 0.001 * df_finished["tokens"]
+    mismatch_mask = abs(df_finished["total_tokens"] - df_finished["tokens"]) > tolerance
+    if mismatch_mask.any():
+        mismatches = df_finished.loc[mismatch_mask, ["run_name", "tokens", "total_tokens"]].copy()
+        mismatches["diff"] = mismatches["total_tokens"] - mismatches["tokens"]
+        mismatches["pct_diff"] = (mismatches["diff"] / mismatches["tokens"] * 100).round(2)
+        raise AssertionError(f"total_tokens != tokens for {mismatch_mask.sum()} runs:\n{mismatches.to_string()}")
 
 
 def summarize_runs(df):
@@ -679,9 +711,9 @@ def plot_isoflop_curves(ax_N, ax_D, analysis_results, colors_N, colors_D):
         # Plot Data - D (Greens)
         ax_D.scatter(group["tokens"], group["eval_loss"], color=color_d, alpha=0.7, s=20, label=f"{budget:.1e}")
 
-        # Plot Fits
-        N_range = np.logspace(np.log10(group["params"].min() * 0.5), np.log10(group["params"].max() * 2.0), 100)
-        D_range = np.logspace(np.log10(group["tokens"].min() * 0.5), np.log10(group["tokens"].max() * 2.0), 100)
+        # Plot Fits (only between min and max x-values in the data)
+        N_range = np.logspace(np.log10(group["params"].min()), np.log10(group["params"].max()), 100)
+        D_range = np.logspace(np.log10(group["tokens"].min()), np.log10(group["tokens"].max()), 100)
 
         L_pred_N = np.polyval(row["coeffs_N"], np.log(N_range))
         L_pred_D = np.polyval(row["coeffs_D"], np.log(D_range))
