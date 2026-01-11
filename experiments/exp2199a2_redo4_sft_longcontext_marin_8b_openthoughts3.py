@@ -13,9 +13,17 @@
 # limitations under the License.
 
 """
-Learning rate sweep for long-context Marin 8B on OpenThoughts3.
-Uses exp2199a2_redo2_sft_longcontext_marin_8b_openthoughts3.py as base config.
-Changes LR and warmup.
+Fine-tunes long context-extended Marin-8B model on the OpenThoughts3 dataset (open-thoughts/OpenThoughts3-1.2M).
+Some adjustments:
+  - Era shuffling (shuffle every epoch)
+REDO:
+  - Does NOT include optimization-related changes (changes to learning rate, batch size, # epoch)
+  - Does include fixed shuffling from previous run (era shuffling to shuffle dataset every epoch)
+  - Fixes max_seq_len bug: actually trains ons 16384 seq len (instead of 4096 as before)
+REDO #2:
+  - Actually initializes from pretrained checkpoint (was training from scratch earlier)
+REDO #4:
+  - Higher LR
 """
 import dataclasses
 import math
@@ -76,7 +84,7 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 5
-TRAIN_BATCH_SIZE = 512  # CHANGED
+TRAIN_BATCH_SIZE = 512
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 # Path to long-context Marin 8B checkpoint
@@ -88,13 +96,13 @@ mixture_sft_config = SimpleSFTConfig(
     initialize_from_hf=longcontext_marin8b_checkpoint,
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=4e-4,  # CHANGED
+    learning_rate=1e-3,
     max_seq_len=16384,
     seed=0,
     steps_per_checkpoint=(total_examples/TRAIN_BATCH_SIZE)//4,  # Every quarter epoch
     lr_schedule="cosine",
-    warmup=0.1,  # CHANGED
-    decay=0.9,  # CHANGED
+    warmup=0.1,
+    decay=0.9,
     weight_decay=0.0,
     beta1=0.9,
     beta2=0.999,
@@ -109,8 +117,8 @@ mixture_config = lm_mixture_data_config(
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )
 
-exp2199a2_redo2_sft_longcontext_marin_8b_openthoughts3 = default_sft(
-    name="exp2199a2_lr_sweep_longcontext_marin_8b_ot3_bsz512_lr4e_4",  # CHANGED
+exp2199a2_redo4_sft_longcontext_marin_8b_openthoughts3 = default_sft(
+    name="exp2199a2_redo4_sft_longcontext_marin_8b_ot3_bsz512_lr1e_3",
     tokenized=mixture_config,
     model_config=llama_8b_64k,
     sft_config=mixture_sft_config,
@@ -119,4 +127,4 @@ exp2199a2_redo2_sft_longcontext_marin_8b_openthoughts3 = default_sft(
 
 
 if __name__ == "__main__":
-    executor_main(steps=[exp2199a2_redo2_sft_longcontext_marin_8b_openthoughts3])
+    executor_main(steps=[exp2199a2_redo4_sft_longcontext_marin_8b_openthoughts3])

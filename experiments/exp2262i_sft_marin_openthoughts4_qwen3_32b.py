@@ -13,28 +13,25 @@
 # limitations under the License.
 
 """
-Learning rate sweep for long-context Marin 8B on OpenThoughts3.
-Uses exp2199a2_redo2_sft_longcontext_marin_8b_openthoughts3.py as base config.
-Changes LR and warmup.
+Fine-tunes long context-extended Marin-8B model on marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens.
+20 epochs.
 """
 import dataclasses
 import math
 import re
 
 from levanter.data.text import ChatLmDatasetFormat
-from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
+from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 
 from experiments.defaults import default_sft, default_tokenize
 from experiments.evals.evals import default_sft_eval
-from experiments.llama import llama_8b
-from experiments.qwen3 import qwen3_4b
 from experiments.marin_models import marin_tokenizer
 from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     get_instruction_dataset,
 )
 from experiments.simple_sft_config import SimpleSFTConfig
-from experiments.tootsie.exp2062_long_context_8b import llama_8b_64k, phase3_final_checkpoint
+from experiments.tootsie.exp2062_long_context_8b import llama_8b_64k
 from fray.cluster import ResourceConfig
 from marin.execution.executor import ExecutorStep, executor_main, InputName
 from marin.processing.tokenize import lm_mixture_data_config
@@ -50,8 +47,8 @@ def _slugify(value: str) -> str:
 def build_dataset_specs() -> tuple[dict[str, str], dict[str, int]]:
     datasets: dict[str, str] = {}
     weights: dict[str, int] = {}
-    datasets["openthoughts3"] = "open-thoughts/OpenThoughts3-1.2M"
-    weights["openthoughts3"] = 1200000  # Has exactly 1.2M rows
+    datasets["open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens"] = "marin-community/open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens"
+    weights["open-thoughts-4-30k-math-qwen3-32b-annotated-16384-tokens"] = 29963
     return datasets, weights
 
 
@@ -75,26 +72,26 @@ tokenized_datasets = {
 assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
-TARGET_EPOCHS = 5
-TRAIN_BATCH_SIZE = 512  # CHANGED
+TARGET_EPOCHS = 20
+TRAIN_BATCH_SIZE = 128
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 # Path to long-context Marin 8B checkpoint
 longcontext_marin8b_checkpoint = InputName.hardcoded("checkpoints/tootsie-8b-giraffe-phase3-64k-21219c/hf/step-2999/")
 
 mixture_sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v5p-128"),
+    resources=ResourceConfig.with_tpu("v5p-64"),
     tokenizer=marin_tokenizer,
     initialize_from_hf=longcontext_marin8b_checkpoint,
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=4e-4,  # CHANGED
+    learning_rate=4e-5,
     max_seq_len=16384,
     seed=0,
     steps_per_checkpoint=(total_examples/TRAIN_BATCH_SIZE)//4,  # Every quarter epoch
     lr_schedule="cosine",
-    warmup=0.1,  # CHANGED
-    decay=0.9,  # CHANGED
+    warmup=0.1,
+    decay=0.9,
     weight_decay=0.0,
     beta1=0.9,
     beta2=0.999,
@@ -106,17 +103,18 @@ mixture_config = lm_mixture_data_config(
     permutation_type="feistel",
     shuffle=total_examples,  # IMPORTANT: Era shuffling (shuffle after every epoch). `shuffle=True` leads to same shuffle used in every epoch
     missing_weights_are_validation=True,
-    mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
+    mixture_block_size=12288,  # Doesn't matter for mixtures with 1 dataset
 )
 
-exp2199a2_redo2_sft_longcontext_marin_8b_openthoughts3 = default_sft(
-    name="exp2199a2_lr_sweep_longcontext_marin_8b_ot3_bsz512_lr4e_4",  # CHANGED
+exp2262i_sft_marin_openthoughts4_qwen3_32b = default_sft(
+    name="exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr4e_5",
     tokenized=mixture_config,
     model_config=llama_8b_64k,
     sft_config=mixture_sft_config,
-    tags=["marin", "openthoughts3", "sft"],
+    tags=["marin", "openthoughts4", "sft"],
 )
 
+exp2262i_pt1_checkpoint = exp2262i_sft_marin_openthoughts4_qwen3_32b.cd(f"hf/step-{NUM_TRAIN_STEPS - 1}").nonblocking()
 
 if __name__ == "__main__":
-    executor_main(steps=[exp2199a2_redo2_sft_longcontext_marin_8b_openthoughts3])
+    executor_main(steps=[exp2262i_sft_marin_openthoughts4_qwen3_32b])
