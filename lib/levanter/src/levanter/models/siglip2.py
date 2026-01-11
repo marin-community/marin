@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Optional, Tuple, Type
 
 import jax
+from levanter.models.vlm_model import VisionEncoderConfig
 import jax.image
 import equinox as eqx
 import jax.numpy as jnp
@@ -46,8 +47,9 @@ class Siglip2VisionModelOutput:
     hidden_states: Optional[Tuple[NamedArray, ...]] = None
 
 
+@VisionEncoderConfig.register_subclass("siglip2")
 @dataclass(frozen=True)
-class Siglip2VisionConfig:
+class Siglip2VisionConfig(VisionEncoderConfig["Siglip2VisionModel"]):
     """
     Configuration class for Siglip2 Vision Encoder (marin version).
 
