@@ -59,6 +59,16 @@ def create_code_curriculum(run_id: str, experiment_config: RLExperimentConfig) -
         stop_tokens=None,
     )
 
+    # Code-R1 evaluation params (Greedy)
+    code_eval_sampling = SamplingParams(
+        temperature=0.0,
+        n_prompts=experiment_config.n_prompts,
+        n_generations_per_prompt=1,  # Greedy only needs 1 generation
+        max_output_tokens=experiment_config.max_output_tokens,
+        top_k=1,
+        stop_tokens=None,
+    )
+
     lessons = {
         "code_r1": LessonConfig(
             lesson_id="code_r1",
@@ -68,6 +78,7 @@ def create_code_curriculum(run_id: str, experiment_config: RLExperimentConfig) -
             ),
             dependencies=[],
             sampling_params=code_sampling,
+            eval_sampling_params=code_eval_sampling,
         ),
     }
 

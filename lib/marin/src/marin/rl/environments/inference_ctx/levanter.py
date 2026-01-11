@@ -106,6 +106,7 @@ class LevanterInferenceContext(BaseInferenceContext):
         top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
+        prefill: str | None = None,
     ) -> list[ChatCompletion]:
         """Call OpenAI API in batches with concurrency control."""
 

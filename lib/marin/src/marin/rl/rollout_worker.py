@@ -350,10 +350,15 @@ class RolloutWorker:
         lesson_config = self.config.curriculum_config.lessons[lesson_id]
 
         # Get sampling params from lesson config
-        temperature = lesson_config.sampling_params.temperature
-        top_k = lesson_config.sampling_params.top_k
-        stop_tokens = lesson_config.sampling_params.stop_tokens
-        max_tokens = lesson_config.sampling_params.max_output_tokens
+        if mode == "train" or lesson_config.eval_sampling_params is None:
+            sampling_params = lesson_config.sampling_params
+        else:
+            sampling_params = lesson_config.eval_sampling_params
+
+        temperature = sampling_params.temperature
+        top_k = sampling_params.top_k
+        stop_tokens = sampling_params.stop_tokens
+        max_tokens = sampling_params.max_output_tokens
 
         rollout_groups, metrics = env.sample(
             inference_ctx=self._policy_ctx,

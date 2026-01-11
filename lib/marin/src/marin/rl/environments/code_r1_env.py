@@ -50,8 +50,10 @@ CODE_R1_SYSTEM_PROMPT = (
     "enclosed within <think>...</think> and <answer>...</answer> tags, respectively."
 )
 
-# Code-R1 user prompt template
-CODE_R1_USER_TEMPLATE = "Solve the programming task below in a Python markdown code block.\n{problem}"
+# Code-R1 user prompt template for LeetCode (Training)
+CODE_R1_USER_TEMPLATE = (
+    "Please solve the programming task below using a self-contained code snippet in a markdown code block.\n\n{problem}"
+)
 
 # Default timeout for code execution (seconds)
 CODE_EXECUTION_TIMEOUT = 5
@@ -304,8 +306,18 @@ class CodeR1Env(MarinEnv):
         if not problem or not test_cases:
             return None
 
-        # Format prompt using Code-R1 template
-        processed_prompt = CODE_R1_USER_TEMPLATE.format(problem=problem)
+        # Determine which template to use based on the source
+        if "canonical_solution" in item:
+            # HumanEvalPlus (Eval) - Use EvalPlus standard instruction
+            # we mimic evalplus logic here: instruction + fenced block
+            instruction_prefix = (
+                "Please provide a self-contained Python script that"
+                " solves the following problem in a markdown code block:"
+            )
+            processed_prompt = f"{instruction_prefix}\n```\n{problem.strip()}\n```\n"
+        else:
+            # LeetCode (Train) - Use Code-R1 training template
+            processed_prompt = CODE_R1_USER_TEMPLATE.format(problem=problem)
 
         return CodeExample(
             problem=problem,
@@ -348,7 +360,24 @@ class CodeR1Env(MarinEnv):
         # Use Code-R1 system prompt if not overridden
         effective_system_prompt = system_prompt or self.system_prompt
 
+        # Determine if we are in EvalPlus mode to use prefill
+        prefill = None
+        prompts = []
+
+        is_val_mode = mode == "eval" and self.eval_source == HUMANEVAL_DATASET
+
+        if is_val_mode:
+            # EvalPlus logic:
+            # Response Prefix = Assistant Prefill
+            response_prefix = (
+                "Below is a Python script with a self-contained function that"
+                " solves the problem and passes corresponding tests:"
+            )
+            # Prepare the prefill string to match EvalPlus exactly
+            prefill = f"{response_prefix}\n```python\n"
+
         prompts = [example.processed_prompt for example in sampled_examples]
+
         completions = inference_ctx.batch_completions(
             prompts=prompts,
             temperature=temperature,
@@ -357,6 +386,7 @@ class CodeR1Env(MarinEnv):
             top_k=top_k,
             stop=stop,
             system_prompt=effective_system_prompt,
+            prefill=prefill,
         )
 
         rollout_groups: list[RolloutGroup] = []

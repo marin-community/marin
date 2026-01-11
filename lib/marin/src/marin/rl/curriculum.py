@@ -114,6 +114,9 @@ class LessonConfig:
     sampling_params: SamplingParams = field(default_factory=SamplingParams)
     """Per-lesson sampling configuration (overrides global defaults)."""
 
+    eval_sampling_params: SamplingParams | None = None
+    """Optional sampling configuration for evaluation. If None, uses sampling_params."""
+
 
 @dataclass
 class CurriculumConfig:

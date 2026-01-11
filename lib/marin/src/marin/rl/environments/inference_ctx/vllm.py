@@ -113,7 +113,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         else:
             raise ValueError(f"Unsupported model type for {model_name}. Only Qwen3 and Llama3.1 models are supported.")
 
-    def _render_messages_to_tokens(self, messages: list[Message]) -> list[int]:
+    def _render_messages_to_tokens(self, messages: list[Message], prefill: str | None = None) -> list[int]:
         """Render a list of messages to token IDs using the appropriate renderer.
 
         Uses the renderer's build_generation_prompt method to generate the complete
@@ -121,11 +121,12 @@ class vLLMInferenceContext(BaseInferenceContext):
 
         Args:
             messages: List of message dictionaries with 'role' and 'content' keys
+            prefill: Optional prefill for the assistant response
 
         Returns:
             List of token IDs ready to be passed to vLLM
         """
-        return self.renderer.build_generation_prompt(messages)
+        return self.renderer.build_generation_prompt(messages, prefill=prefill)
 
     @staticmethod
     def _patch_tpu_inference_registry():
@@ -330,6 +331,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
+        prefill: str | None = None,
     ) -> list[ChatCompletion]:
         """Batch completions from the inference server.
 
@@ -340,6 +342,7 @@ class vLLMInferenceContext(BaseInferenceContext):
             max_tokens: Maximum tokens to generate
             stop: Stop sequences
             system_prompt: Optional system prompt (only used if prompts are strings)
+            prefill: Optional prefill for the assistant response (only used with non-list prompts)
         """
         if SamplingParams is None:
             raise ImportError("vLLM is not installed. Please install it with: pip install vllm")
@@ -374,7 +377,7 @@ class vLLMInferenceContext(BaseInferenceContext):
         # Render messages to token IDs using the appropriate renderer
         prompt_token_ids = []
         for messages in message_lists:
-            tokens = self._render_messages_to_tokens(messages)
+            tokens = self._render_messages_to_tokens(messages, prefill=prefill)
             prompt_token_ids.append(tokens)
 
         # Pass token IDs directly to vLLM

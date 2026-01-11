@@ -48,6 +48,7 @@ class BaseInferenceContext:
         top_k: int | None = None,
         stop: list[str] | None = None,
         system_prompt: str | None = None,
+        prefill: str | None = None,
     ) -> list[ChatCompletion]:
         """Batch completions from the inference server."""
         raise NotImplementedError
