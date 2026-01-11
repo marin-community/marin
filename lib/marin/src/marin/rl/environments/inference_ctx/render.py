@@ -252,6 +252,59 @@ class Llama3Renderer(Renderer):
         return parse_response_for_stop_token(response, self.tokenizer, self._end_message_token)
 
 
+class Qwen2Renderer(Renderer):
+    """
+    Format like this:
+        <|im_start|>system
+        You are a helpful assistant.<|im_end|>
+        <|im_start|>user
+        What can you help me with?<|im_end|>
+        <|im_start|>assistant
+        I can help you with...<|im_end|>
+    """
+
+    def _render_message(self, message: Message) -> tuple[list[int], list[int], list[int]]:
+        assert message.get("thinking") is None, "CoT tokens not supported in Qwen2 renderer"
+        ob_str = f"<|im_start|>{message['role']}\n"
+        # Observation (prompt) part
+        ac_str = f"{message['content']}<|im_end|>\n"
+        # Action part
+        ac_tail_str = ""  # No action tail needed for Qwen format
+        # Action part that's only included in the last message in SFT
+        return (
+            self.tokenizer.encode(ob_str, add_special_tokens=False),
+            self.tokenizer.encode(ac_str, add_special_tokens=False),
+            self.tokenizer.encode(ac_tail_str, add_special_tokens=False),
+        )
+
+    def build_generation_prompt(
+        self, messages: list[Message], role: Role = "assistant", prefill: str | None = None
+    ) -> list[int]:
+        tokens: list[int] = []
+        for message in messages:
+            ob_part, action_part, action_tail = self._render_message(message)
+            tokens.extend(ob_part)
+            tokens.extend(action_part)
+        # Add generation prompt
+        # We manually construct the start of the assistant message to allow prefill
+        # Qwen2: <|im_start|>assistant\n{prefill}
+        ob_str = f"<|im_start|>{role}\n"
+        tokens.extend(self.tokenizer.encode(ob_str, add_special_tokens=False))
+        tokens.extend(self.tokenizer.encode(prefill or "", add_special_tokens=False))
+        return tokens
+
+    @property
+    def _end_message_token(self) -> int:
+        (token,) = self.tokenizer.encode("<|im_end|>", add_special_tokens=False)
+        return token
+
+    def get_stop_sequences(self) -> list[int]:
+        return [self._end_message_token]
+
+    def parse_response(self, response: list[int]) -> tuple[Message, bool]:
+        return parse_response_for_stop_token(response, self.tokenizer, self._end_message_token)
+
+
 class Qwen3Renderer(Renderer):
     """
     Format like this:

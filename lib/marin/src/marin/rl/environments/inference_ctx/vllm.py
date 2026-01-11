@@ -33,7 +33,7 @@ from marin.rl.weight_utils import levanter_state_dict_to_nnx_state_on_cpu
 from marin.rl.environments.inference_ctx.base import BaseInferenceContext
 from marin.rl.environments.inference_ctx.inflight.worker import SyncVLLMWrapper
 from marin.rl.environments.inference_ctx.vllm_utils import MODEL_MAPPINGS, MODEL_TRANSPOSE_KEYS
-from marin.rl.environments.inference_ctx.render import Llama3Renderer, Qwen3Renderer, Renderer, Message
+from marin.rl.environments.inference_ctx.render import Llama3Renderer, Qwen3Renderer, Qwen2Renderer, Renderer, Message
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +107,16 @@ class vLLMInferenceContext(BaseInferenceContext):
         """Get the appropriate renderer based on model name."""
         model_name_lower = model_name.lower()
         if "qwen" in model_name_lower:
-            return Qwen3Renderer(tokenizer)
+            if "qwen3" in model_name_lower:
+                logger.info(f"Using Qwen3Renderer for model {model_name}")
+                return Qwen3Renderer(tokenizer)
+            logger.info(f"Using Qwen2Renderer for model {model_name}")
+            return Qwen2Renderer(tokenizer)
         elif "llama" in model_name_lower:
+            logger.info(f"Using Llama3Renderer for model {model_name}")
             return Llama3Renderer(tokenizer)
         else:
-            raise ValueError(f"Unsupported model type for {model_name}. Only Qwen3 and Llama3.1 models are supported.")
+            raise ValueError(f"Unsupported model type for {model_name}. Only Qwen and Llama3 models are supported.")
 
     def _render_messages_to_tokens(self, messages: list[Message], prefill: str | None = None) -> list[int]:
         """Render a list of messages to token IDs using the appropriate renderer.
