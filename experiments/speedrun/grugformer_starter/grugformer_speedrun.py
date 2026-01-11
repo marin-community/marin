@@ -55,7 +55,7 @@ def _get_num_train_steps(param_count: int, batch_size: int, max_seq_len: int, tp
 
 
 def _size_presets() -> dict[str, "GrugformerConfig"]:
-    base = dict(max_seq_len=2048, tie_embeddings=False, head_dim=None)
+    base = dict(max_seq_len=2048, head_dim=None)
     return {
         "130m": GrugformerConfig(
             hidden_dim=512, intermediate_dim=1792, num_layers=6, num_heads=8, num_kv_heads=8, **base
@@ -108,6 +108,8 @@ class GrugformerConfig(LmConfig[GrugWrapper]):
     num_kv_heads: int = 16
     head_dim: int | None = None
 
+    # Grug core currently always has separate token embed + output projection; keep this knob
+    # for param counting / compatibility with other LmConfig-based scripts.
     tie_embeddings: bool = False
 
     # ---- LmConfig API ----
@@ -130,7 +132,6 @@ class GrugformerConfig(LmConfig[GrugWrapper]):
             num_kv_heads=self.num_kv_heads,
             head_dim=self.head_dim,
             max_seq_len=self.max_seq_len,
-            tie_embeddings=self.tie_embeddings,
         )
         return GrugWrapper.init(Vocab, grug_cfg, key=key)
 
