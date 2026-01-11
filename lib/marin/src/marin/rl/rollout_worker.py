@@ -157,6 +157,9 @@ class RolloutWorkerConfig:
     inflight_weight_updates: bool = False
     """Whether to use inflight weight updates."""
 
+    worker_index: int = 0
+    """Index of this worker among all rollout workers."""
+
 
 def find_open_port() -> int:
     """Find an open port on localhost."""
