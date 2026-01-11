@@ -1,0 +1,275 @@
+// Copyright 2025 The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package fluster.cluster;
+
+option py_generic_services = true;
+
+// ============================================================================
+// SHARED TYPES
+// ============================================================================
+
+message Empty {}
+
+enum JobState {
+  JOB_STATE_UNSPECIFIED = 0;
+  JOB_STATE_PENDING = 1;
+  JOB_STATE_BUILDING = 2;
+  JOB_STATE_RUNNING = 3;
+  JOB_STATE_SUCCEEDED = 4;
+  JOB_STATE_FAILED = 5;
+  JOB_STATE_KILLED = 6;
+}
+
+// ============================================================================
+// RESOURCE SPECIFICATION
+// ============================================================================
+
+// Device configuration - used in ResourceSpec
+message DeviceConfig {
+  oneof device {
+    CpuDevice cpu = 1;
+    GpuDevice gpu = 2;
+    TpuDevice tpu = 3;
+  }
+}
+
+message CpuDevice {
+  string variant = 1;  // Always "cpu"
+}
+
+message GpuDevice {
+  string variant = 1;  // e.g., "A100", "H100", "auto"
+  int32 count = 2;     // Number of GPUs
+}
+
+message TpuDevice {
+  string variant = 1;       // e.g., "v5litepod-16", "v4-8"
+  string topology = 2;      // Optional topology spec (e.g., "2x2x1")
+}
+
+// Unified resource specification for jobs
+// Used by both controller (for scheduling) and worker (for enforcement)
+message ResourceSpec {
+  // Compute resources
+  int32 cpu = 1;              // Number of CPU cores
+  string memory = 2;          // RAM (e.g., "8g", "16g", "128m")
+  string disk = 3;            // Disk space (e.g., "1g", "100g")
+
+  // Device configuration
+  DeviceConfig device = 5;
+
+  // Multi-instance configuration
+  int32 replicas = 6;         // Number of replicas/slices
+
+  // Scheduling preferences
+  bool preemptible = 7;
+  repeated string regions = 8; // Preferred cloud regions
+}
+
+// ============================================================================
+// ENVIRONMENT CONFIGURATION
+// ============================================================================
+
+// Job environment configuration
+// Exactly one of workspace or docker_image must be set (enforced in client)
+message EnvironmentConfig {
+  oneof source {
+    string workspace = 1;        // Path to workspace root for uv-based execution
+    string docker_image = 2;     // Docker image for containerized execution
+  }
+
+  repeated string pip_packages = 3;  // Additional pip packages to install
+  map<string, string> env_vars = 4;  // Environment variables to set
+  repeated string extras = 5;         // Extra dependency groups for uv (e.g., ["tpu", "eval"])
+}
+
+// ============================================================================
+// CONTROLLER MESSAGES (Job Management & Endpoint Registry)
+// ============================================================================
+
+message JobSpec {
+  string name = 1;
+  bytes serialized_entrypoint = 2;   // cloudpickle(Entrypoint)
+  ResourceSpec resources = 3;         // Full resource specification
+  EnvironmentConfig environment = 4;  // Environment configuration
+
+  // Bundle information (client zips workspace and provides reference)
+  string bundle_gcs_path = 5;        // gs://bucket/path/bundle.zip
+  string bundle_hash = 6;            // SHA256 hash for caching
+}
+
+message JobHandle {
+  string job_id = 1;
+  JobState status = 2;
+  string worker_id = 3;
+  string error = 4;
+}
+
+message ListJobsRequest {
+  string namespace = 1;
+}
+
+message ListJobsResponse {
+  repeated JobStatus jobs = 1;
+}
+
+// Endpoint Registry (Generic service discovery - NOT actor-specific)
+
+message Endpoint {
+  string endpoint_id = 1;
+  string name = 2;
+  string address = 3;              // host:port
+  string job_id = 4;
+  string namespace = 5;
+  map<string, string> metadata = 6;
+}
+
+message RegisterEndpointRequest {
+  string name = 1;
+  string address = 2;
+  string job_id = 3;
+  string namespace = 4;
+  map<string, string> metadata = 5;
+}
+
+message LookupRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+message LookupResponse {
+  repeated Endpoint endpoints = 1;
+}
+
+message ListEndpointsRequest {
+  string prefix = 1;
+  string namespace = 2;
+}
+
+// ============================================================================
+// WORKER MESSAGES (Job Execution)
+// ============================================================================
+
+message RunJobRequest {
+  string job_id = 1;
+
+  // Serialized Python objects and workspace bundle for execution
+  bytes serialized_entrypoint = 2;   // cloudpickle(Entrypoint)
+  EnvironmentConfig environment = 3;  // Environment configuration
+  string bundle_gcs_path = 4;        // gs://bucket/path/bundle.zip
+
+  // Resource specification
+  ResourceSpec resources = 6;
+
+  // Environment variables to inject (merged with environment.env_vars)
+  map<string, string> env_vars = 7;
+
+  int32 timeout_seconds = 8;
+
+  // Port requests
+  repeated string ports = 9;
+}
+
+message RunJobResponse {
+  string job_id = 1;
+  JobState state = 2;
+}
+
+message GetStatusRequest {
+  string job_id = 1;
+}
+
+message ResourceUsage {
+  int64 memory_mb = 1;
+  int64 disk_mb = 2;
+  int32 cpu_millicores = 3;
+}
+
+message JobStatus {
+  string job_id = 1;
+  JobState state = 2;
+  int32 exit_code = 3;
+  string error = 4;
+  int64 started_at_ms = 5;
+  int64 finished_at_ms = 6;
+
+  // Port allocations
+  map<string, int32> ports = 7;
+
+  ResourceUsage resource_usage = 8;
+}
+
+message LogEntry {
+  int64 timestamp_ms = 1;
+  string source = 2;  // "stdout", "stderr"
+  string data = 3;    // Log line content
+}
+
+message FetchLogsFilter {
+  string regex = 1;
+  int64 start_line = 2;
+  int64 start_ms = 3;
+  int64 end_ms = 4;
+  int64 max_lines = 5;
+}
+
+message FetchLogsRequest {
+  string job_id = 1;
+  FetchLogsFilter filter = 2;
+}
+
+message FetchLogsResponse {
+  repeated LogEntry logs = 1;
+}
+
+message KillJobRequest {
+  string job_id = 1;
+  int32 term_timeout_ms = 2; // Time to wait for graceful termination before SIGKILL
+}
+
+message HealthResponse {
+  bool healthy = 1;
+  int64 uptime_ms = 2;
+  int32 running_jobs = 3;
+}
+
+// ============================================================================
+// SERVICES
+// ============================================================================
+
+service ControllerService {
+  // Job lifecycle
+  rpc LaunchJob(JobSpec) returns (JobHandle);
+  rpc GetJobStatus(JobHandle) returns (JobHandle);
+  rpc TerminateJob(JobHandle) returns (Empty);
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+
+  // Endpoint registry (generic service discovery)
+  rpc RegisterEndpoint(RegisterEndpointRequest) returns (Endpoint);
+  rpc UnregisterEndpoint(Endpoint) returns (Empty);
+  rpc LookupEndpoints(LookupRequest) returns (LookupResponse);
+  rpc ListEndpoints(ListEndpointsRequest) returns (LookupResponse);
+}
+
+service WorkerService {
+  rpc RunJob(RunJobRequest) returns (RunJobResponse);
+  rpc GetJobStatus(GetStatusRequest) returns (JobStatus);
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc FetchLogs(FetchLogsRequest) returns (FetchLogsResponse);
+  rpc KillJob(KillJobRequest) returns (Empty);
+  rpc HealthCheck(Empty) returns (HealthResponse);
+}

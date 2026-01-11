@@ -1,7 +1,6 @@
 version: v2
 modules:
-  - path: src/fluster/cluster/controller/proto
-  - path: src/fluster/cluster/worker/proto
+  - path: src/fluster/proto
   - path: src/fluster/actor/proto
 lint:
   use:

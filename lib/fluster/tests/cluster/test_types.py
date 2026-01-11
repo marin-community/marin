@@ -22,12 +22,10 @@ from fluster.cluster.types import (
     Endpoint,
     EndpointId,
     Entrypoint,
-    EnvironmentConfig,
     GpuConfig,
     JobId,
     JobInfo,
     JobRequest,
-    JobStatus,
     Namespace,
     ResourceConfig,
     TaskStatus,
@@ -36,23 +34,18 @@ from fluster.cluster.types import (
     VMInfo,
     create_environment,
     get_tpu_topology,
+    is_job_finished,
 )
+from fluster import cluster_pb2
 
 
-class TestJobStatus:
-    def test_enum_values(self):
-        assert JobStatus.PENDING == "pending"
-        assert JobStatus.RUNNING == "running"
-        assert JobStatus.SUCCEEDED == "succeeded"
-        assert JobStatus.FAILED == "failed"
-        assert JobStatus.STOPPED == "stopped"
-
+class TestJobState:
     def test_finished(self):
-        assert not JobStatus.finished(JobStatus.PENDING)
-        assert not JobStatus.finished(JobStatus.RUNNING)
-        assert JobStatus.finished(JobStatus.SUCCEEDED)
-        assert JobStatus.finished(JobStatus.FAILED)
-        assert JobStatus.finished(JobStatus.STOPPED)
+        assert not is_job_finished(cluster_pb2.JOB_STATE_PENDING)
+        assert not is_job_finished(cluster_pb2.JOB_STATE_RUNNING)
+        assert is_job_finished(cluster_pb2.JOB_STATE_SUCCEEDED)
+        assert is_job_finished(cluster_pb2.JOB_STATE_FAILED)
+        assert is_job_finished(cluster_pb2.JOB_STATE_KILLED)
 
 
 class TestTpuTopology:
@@ -160,45 +153,21 @@ class TestResourceConfig:
         assert config.chip_count() == 128  # 32 chips * 4 slices
 
 
-class TestEnvironmentConfig:
-    def test_workspace_config(self):
-        config = EnvironmentConfig(workspace="/path/to/workspace")
-        assert config.workspace == "/path/to/workspace"
-        assert config.docker_image is None
-
-    def test_docker_config(self):
-        config = EnvironmentConfig(docker_image="python:3.11")
-        assert config.docker_image == "python:3.11"
-        assert config.workspace is None
-
-    def test_both_workspace_and_docker_fails(self):
-        with pytest.raises(ValueError, match="Cannot specify both"):
-            EnvironmentConfig(workspace="/path", docker_image="image:tag")
-
-    def test_neither_workspace_nor_docker_fails(self):
-        with pytest.raises(ValueError, match="Must specify either"):
-            EnvironmentConfig()
-
-    def test_with_extras_and_packages(self):
-        config = EnvironmentConfig(workspace="/path", pip_packages=["numpy", "pandas"], extras=["tpu", "eval"])
-        assert list(config.pip_packages) == ["numpy", "pandas"]
-        assert list(config.extras) == ["tpu", "eval"]
-
-
 class TestCreateEnvironment:
     def test_default_workspace(self):
         config = create_environment()
         assert config.workspace == os.getcwd()
-        assert config.docker_image is None
+        assert config.WhichOneof("source") == "workspace"
 
     def test_explicit_workspace(self):
         config = create_environment(workspace="/custom/path")
         assert config.workspace == "/custom/path"
+        assert config.WhichOneof("source") == "workspace"
 
     def test_docker_image(self):
         config = create_environment(docker_image="python:3.11")
         assert config.docker_image == "python:3.11"
-        assert config.workspace is None
+        assert config.WhichOneof("source") == "docker_image"
 
     def test_default_env_vars(self):
         config = create_environment()
@@ -232,6 +201,10 @@ class TestCreateEnvironment:
         config = create_environment(pip_packages=["numpy"], extras=["tpu"])
         assert list(config.pip_packages) == ["numpy"]
         assert list(config.extras) == ["tpu"]
+
+    def test_both_workspace_and_docker_fails(self):
+        with pytest.raises(ValueError, match="Cannot specify both"):
+            create_environment(workspace="/path", docker_image="image:tag")
 
 
 class TestEntrypoint:
@@ -297,24 +270,24 @@ class TestJobRequest:
 
 class TestTaskStatusAndJobInfo:
     def test_task_status(self):
-        task = TaskStatus(status=JobStatus.RUNNING)
-        assert task.status == JobStatus.RUNNING
+        task = TaskStatus(state=cluster_pb2.JOB_STATE_RUNNING)
+        assert task.state == cluster_pb2.JOB_STATE_RUNNING
         assert task.error_message is None
 
     def test_task_status_with_error(self):
-        task = TaskStatus(status=JobStatus.FAILED, error_message="Connection refused")
-        assert task.status == JobStatus.FAILED
+        task = TaskStatus(state=cluster_pb2.JOB_STATE_FAILED, error_message="Connection refused")
+        assert task.state == cluster_pb2.JOB_STATE_FAILED
         assert task.error_message == "Connection refused"
 
     def test_job_info(self):
         job = JobInfo(
             job_id=JobId("job-123"),
-            status=JobStatus.RUNNING,
-            tasks=[TaskStatus(status=JobStatus.RUNNING)],
+            state=cluster_pb2.JOB_STATE_RUNNING,
+            tasks=[TaskStatus(state=cluster_pb2.JOB_STATE_RUNNING)],
             name="test-job",
         )
         assert job.job_id == JobId("job-123")
-        assert job.status == JobStatus.RUNNING
+        assert job.state == cluster_pb2.JOB_STATE_RUNNING
         assert len(job.tasks) == 1
         assert job.name == "test-job"
         assert job.error_message is None

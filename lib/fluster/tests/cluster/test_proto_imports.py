@@ -15,30 +15,17 @@
 """Test that generated proto code can be imported."""
 
 
-def test_controller_proto_imports():
-    """Verify controller proto messages and services are importable."""
-    from fluster import controller_pb2
+def test_cluster_proto_imports():
+    """Verify cluster proto messages and services are importable."""
+    from fluster import cluster_pb2
 
-    # Can instantiate messages
-    job_spec = controller_pb2.JobSpec(name="test")
+    # Controller messages
+    job_spec = cluster_pb2.JobSpec(name="test")
     assert job_spec.name == "test"
 
-    # Enums are accessible
-    assert controller_pb2.JOB_STATUS_PENDING == 1
-    assert controller_pb2.JOB_STATUS_RUNNING == 3
-
-
-def test_worker_proto_imports():
-    """Verify worker proto messages and services are importable."""
-    from fluster import worker_pb2
-
-    # Can instantiate messages
-    req = worker_pb2.RunJobRequest(job_id="test-123")
+    # Worker messages
+    req = cluster_pb2.RunJobRequest(job_id="test-123")
     assert req.job_id == "test-123"
-
-    # Enums are accessible
-    assert worker_pb2.JOB_STATUS_BUILDING == 2
-    assert worker_pb2.JOB_STATUS_SUCCEEDED == 4
 
 
 def test_actor_proto_imports():

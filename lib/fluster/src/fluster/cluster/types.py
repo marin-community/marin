@@ -20,9 +20,10 @@ Types are ported from fray but simplified according to the fray-zero design.
 
 import os
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Any, NewType
 from collections.abc import Callable, Sequence
+
+from fluster import cluster_pb2
 
 # Type aliases for clarity
 JobId = NewType("JobId", str)
@@ -32,19 +33,17 @@ VMId = NewType("VMId", str)
 EndpointId = NewType("EndpointId", str)
 
 
-class JobStatus(StrEnum):
-    """Status of a job in the cluster."""
+def is_job_finished(state: int) -> bool:
+    """Check if job has reached terminal state."""
+    return state in (
+        cluster_pb2.JOB_STATE_SUCCEEDED,
+        cluster_pb2.JOB_STATE_FAILED,
+        cluster_pb2.JOB_STATE_KILLED,
+    )
 
-    PENDING = "pending"
-    RUNNING = "running"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-    STOPPED = "stopped"
 
-    @staticmethod
-    def finished(status: "JobStatus") -> bool:
-        """Check if job has reached terminal state."""
-        return status in (JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED)
+# Use proto enum directly
+JobState = cluster_pb2.JobState
 
 
 # TPU Topology Information
@@ -265,47 +264,13 @@ class ResourceConfig:
 # Environment Configuration
 
 
-@dataclass(frozen=True)
-class EnvironmentConfig:
-    """Job environment configuration.
-
-    Can specify either a workspace (for uv-based dependency resolution)
-    or a docker image (for containerized execution).
-
-    Args:
-        workspace: Path to workspace root for uv-based execution
-        docker_image: Docker image for containerized execution
-        pip_packages: Additional pip packages to install
-        env_vars: Environment variables to set
-        extras: Extra dependency groups for uv (e.g., ["tpu", "eval"])
-    """
-
-    workspace: str | None = None
-    docker_image: str | None = None
-    pip_packages: Sequence[str] = field(default_factory=list)
-    env_vars: dict[str, str] = field(default_factory=dict)
-    extras: Sequence[str] = field(default_factory=list)
-
-    def __post_init__(self):
-        # Validation: exactly one of workspace or docker_image must be set
-        if self.workspace and self.docker_image:
-            raise ValueError("Cannot specify both workspace and docker_image")
-        if not self.workspace and not self.docker_image:
-            raise ValueError("Must specify either workspace or docker_image")
-
-    @staticmethod
-    def create(*args, **kw):
-        """Convenience method that calls create_environment()."""
-        return create_environment(*args, **kw)
-
-
 def create_environment(
     workspace: str | None = None,
     docker_image: str | None = None,
     pip_packages: Sequence[str] | None = None,
     env_vars: dict[str, str] | None = None,
     extras: Sequence[str] | None = None,
-) -> EnvironmentConfig:
+) -> cluster_pb2.EnvironmentConfig:
     """Create an EnvironmentConfig with sensible defaults.
 
     Default environment variables:
@@ -322,8 +287,15 @@ def create_environment(
         extras: Extra dependency groups for uv
 
     Returns:
-        EnvironmentConfig with defaults applied
+        EnvironmentConfig proto message with defaults applied
+
+    Raises:
+        ValueError: If both workspace and docker_image are specified, or if neither is specified
     """
+    # Validation: exactly one of workspace or docker_image must be set
+    if workspace and docker_image:
+        raise ValueError("Cannot specify both workspace and docker_image")
+
     if workspace is None and docker_image is None:
         workspace = os.getcwd()
 
@@ -337,13 +309,20 @@ def create_environment(
     # Filter out None values
     merged_env_vars = {k: v for k, v in {**default_env_vars, **(env_vars or {})}.items() if v is not None}
 
-    return EnvironmentConfig(
-        workspace=workspace,
-        docker_image=docker_image,
+    # Construct proto message
+    config = cluster_pb2.EnvironmentConfig(
         pip_packages=list(pip_packages or []),
         env_vars=merged_env_vars,
         extras=list(extras or []),
     )
+
+    # Set exactly one of workspace or docker_image using oneof
+    if workspace:
+        config.workspace = workspace
+    else:
+        config.docker_image = docker_image
+
+    return config
 
 
 # Job Specification
@@ -383,7 +362,7 @@ class JobRequest:
     name: str
     entrypoint: Entrypoint
     resources: ResourceConfig = field(default_factory=ResourceConfig)
-    environment: EnvironmentConfig | None = None
+    environment: cluster_pb2.EnvironmentConfig | None = None
 
     max_retries_failure: int = 0
     max_retries_preemption: int = 100
@@ -398,11 +377,11 @@ class TaskStatus:
     """Status of an individual task in a job.
 
     Args:
-        status: Current status of the task
+        state: Current state of the task
         error_message: Error message if task failed
     """
 
-    status: JobStatus
+    state: JobState
     error_message: str | None = None
 
 
@@ -412,14 +391,14 @@ class JobInfo:
 
     Args:
         job_id: Unique job identifier
-        status: Current job status
+        state: Current job state
         tasks: List of task statuses
         name: Job name
         error_message: Error message if job failed
     """
 
     job_id: JobId
-    status: JobStatus
+    state: JobState
     tasks: list[TaskStatus]
     name: str
     error_message: str | None = None
