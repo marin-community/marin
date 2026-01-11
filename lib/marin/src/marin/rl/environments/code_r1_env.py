@@ -164,6 +164,7 @@ class CodeR1Env(MarinEnv):
         self,
         train_source: str = LEETCODE_DATASET,
         eval_source: str | None = HUMANEVAL_DATASET,
+        eval_split: str | None = None,
         *,
         max_train_examples: int | None = None,
         max_eval_examples: int | None = None,
@@ -190,6 +191,7 @@ class CodeR1Env(MarinEnv):
         """
         self.train_source = train_source
         self.eval_source = eval_source
+        self.eval_split = eval_split
         self.max_train_examples = max_train_examples
         self.max_eval_examples = max_eval_examples
         self._trust_remote_code = trust_remote_code
@@ -208,15 +210,29 @@ class CodeR1Env(MarinEnv):
 
         # For eval, use provided dataset or skip if no eval_source
         if eval_dataset is not None:
+            # User provided explicit dataset iterator
             self.eval_examples = self._prepare_split(
                 split_name="eval",
-                hf_split="train",  # LeetCode dataset only has train split
+                hf_split="train",  # Dummy split name when using iterator
                 examples_iter=eval_dataset,
                 source=eval_source or train_source,
                 limit=max_eval_examples,
             )
+        elif self.eval_source is not None:
+            # Load from HuggingFace source
+            effective_eval_split = self.eval_split
+            if effective_eval_split is None:
+                effective_eval_split = "test" if self.eval_source == HUMANEVAL_DATASET else "train"
+
+            self.eval_examples = self._prepare_split(
+                split_name="eval",
+                hf_split=effective_eval_split,
+                examples_iter=None,
+                source=self.eval_source,
+                limit=max_eval_examples,
+            )
         else:
-            # Use a subset of train as eval if no separate eval dataset
+            # No eval dataset
             self.eval_examples = []
 
         logger.info(
@@ -259,16 +275,23 @@ class CodeR1Env(MarinEnv):
         """Convert a raw dataset item into a CodeExample."""
 
         # Detect dataset schema
-        if "task_id" in item and "prompt" in item:
+        if "canonical_solution" in item:
             # HumanEvalPlus format
             problem = item["prompt"]
             test_cases = item["test"]
             solution = item["canonical_solution"]
             difficulty = None
-            # Use task_id as example_id if available, otherwise fallback to generated one
-            example_id = item["task_id"]
-        elif "content" in item and "test" in item:
-            # LeetCodeDataset format
+            # Use task_id as example_id if available
+            example_id = item.get("task_id", example_id)
+        elif "problem_description" in item:
+            # LeetCodeDataset format (new schema)
+            problem = item["problem_description"]
+            test_cases = item["test"]
+            solution = item.get("completion")
+            difficulty = item.get("difficulty")
+            example_id = item.get("task_id", example_id)
+        elif "content" in item:
+            # LeetCodeDataset format (old schema/fallback)
             problem = item.get("content", "")
             test_cases = item.get("test", "")
             solution = item.get("python", None)
