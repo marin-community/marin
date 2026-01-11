@@ -368,6 +368,9 @@ class CodeR1Env(MarinEnv):
 
         if is_val_mode:
             # EvalPlus logic:
+            # System Prompt = None (Standard EvalPlus behavior)
+            effective_system_prompt = None
+
             # Response Prefix = Assistant Prefill
             response_prefix = (
                 "Below is a Python script with a self-contained function that"
