@@ -9,11 +9,12 @@ description = "Marin workspace root and experiments"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
-    "marin",
-    "levanter",
-    "zephyr",
-    "haliax",
+    "fluster",
     "fray",
+    "haliax",
+    "levanter",
+    "marin",
+    "zephyr",
 ]
 
 [tool.uv]
@@ -25,14 +26,16 @@ override-dependencies = [
 
 [tool.uv.workspace]
 members = [
-    "lib/marin",
-    "lib/levanter",
-    "lib/zephyr",
-    "lib/haliax",
+    "lib/fluster",
     "lib/fray",
+    "lib/haliax",
+    "lib/levanter",
+    "lib/marin",
+    "lib/zephyr",
 ]
 
 [tool.uv.sources]
+fluster = { workspace = true }
 fray = { workspace = true }
 haliax = { workspace = true }
 levanter = { workspace = true }
@@ -59,7 +62,7 @@ line-length = 121
 target-version = "py310"
 
 # Note :: Grow more strict over time!
-extend-exclude = ["scripts/", "lib/fray/src/fray/job/rpc/proto/"]
+extend-exclude = ["scripts/"]
 
 [tool.ruff.lint]
 select = ["A", "B", "E", "F", "I", "NPY", "RUF", "UP", "W"]

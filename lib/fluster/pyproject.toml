@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fluster"
+version = "0.1.0"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "typing-extensions>=4.0",
+    "cloudpickle>=3.1.2",
+    "httpx>=0.28.1",
+    "uvicorn[standard]>=0.23.0",
+    "docker>=7.0.0",
+    "connect-python @ git+https://github.com/connectrpc/connect-python.git@5342eacecef85e52717604ee5ac7e03a1e16c7ac",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.2",
+    "pytest-asyncio",
+    "pytest-timeout",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fluster"]

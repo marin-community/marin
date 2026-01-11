@@ -1,0 +1,108 @@
+// Copyright 2025 The Marin Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package fluster.cluster.controller;
+
+option py_generic_services = true;
+
+// ============ Job Management ============
+
+message JobSpec {
+  string name = 1;
+  bytes serialized_entrypoint = 2;  // cloudpickle(Entrypoint)
+  bytes serialized_resources = 3;   // cloudpickle(ResourceConfig)
+  bytes serialized_environment = 4; // cloudpickle(EnvironmentConfig)
+
+  // Bundle information (client zips workspace and provides reference)
+  string bundle_gcs_path = 5;       // gs://bucket/path/bundle.zip
+  string bundle_hash = 6;           // SHA256 hash for caching
+}
+
+message JobHandle {
+  string job_id = 1;
+  JobStatus status = 2;
+  string worker_id = 3;
+  string error = 4;
+}
+
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  JOB_STATUS_PENDING = 1;
+  JOB_STATUS_BUILDING = 2;
+  JOB_STATUS_RUNNING = 3;
+  JOB_STATUS_SUCCEEDED = 4;
+  JOB_STATUS_FAILED = 5;
+  JOB_STATUS_KILLED = 6;
+}
+
+// ============ Endpoint Registry (Generic - NOT actor-specific) ============
+
+message Endpoint {
+  string endpoint_id = 1;
+  string name = 2;
+  string address = 3;              // host:port
+  string job_id = 4;
+  string namespace = 5;
+  map<string, string> metadata = 6;
+}
+
+message RegisterEndpointRequest {
+  string name = 1;
+  string address = 2;
+  string job_id = 3;
+  string namespace = 4;
+  map<string, string> metadata = 5;
+}
+
+message LookupRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+message LookupResponse {
+  repeated Endpoint endpoints = 1;
+}
+
+message ListJobsRequest {
+  string namespace = 1;
+}
+
+message ListJobsResponse {
+  repeated JobHandle jobs = 1;
+}
+
+message ListEndpointsRequest {
+  string prefix = 1;
+  string namespace = 2;
+}
+
+message Empty {}
+
+// ============ Controller Service ============
+
+service ControllerService {
+  // Job lifecycle
+  rpc LaunchJob(JobSpec) returns (JobHandle);
+  rpc GetJobStatus(JobHandle) returns (JobHandle);
+  rpc TerminateJob(JobHandle) returns (Empty);
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+
+  // Endpoint registry (generic service discovery)
+  rpc RegisterEndpoint(RegisterEndpointRequest) returns (Endpoint);
+  rpc UnregisterEndpoint(Endpoint) returns (Empty);
+  rpc LookupEndpoints(LookupRequest) returns (LookupResponse);
+  rpc ListEndpoints(ListEndpointsRequest) returns (LookupResponse);
+}
