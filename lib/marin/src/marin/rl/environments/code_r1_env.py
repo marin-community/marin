@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 LEETCODE_DATASET = "newfacade/LeetCodeDataset"
 
+HUMANEVAL_DATASET = "evalplus/humanevalplus"
+
 # Code-R1 system prompt for training
 CODE_R1_SYSTEM_PROMPT = (
     "You are a helpful programming assistant. The user will ask you a question and you as "
@@ -161,7 +163,7 @@ class CodeR1Env(MarinEnv):
     def __init__(
         self,
         train_source: str = LEETCODE_DATASET,
-        eval_source: str | None = None,
+        eval_source: str | None = HUMANEVAL_DATASET,
         *,
         max_train_examples: int | None = None,
         max_eval_examples: int | None = None,
@@ -255,11 +257,26 @@ class CodeR1Env(MarinEnv):
 
     def _clean_example(self, item: dict[str, Any], example_id: str) -> CodeExample | None:
         """Convert a raw dataset item into a CodeExample."""
-        # LeetCodeDataset has: content (problem), python (solution), test (test cases)
-        problem = item.get("content", "")
-        test_cases = item.get("test", "")
-        solution = item.get("python", None)
-        difficulty = item.get("difficulty", None)
+
+        # Detect dataset schema
+        if "task_id" in item and "prompt" in item:
+            # HumanEvalPlus format
+            problem = item["prompt"]
+            test_cases = item["test"]
+            solution = item["canonical_solution"]
+            difficulty = None
+            # Use task_id as example_id if available, otherwise fallback to generated one
+            example_id = item["task_id"]
+        elif "content" in item and "test" in item:
+            # LeetCodeDataset format
+            problem = item.get("content", "")
+            test_cases = item.get("test", "")
+            solution = item.get("python", None)
+            difficulty = item.get("difficulty", None)
+        else:
+            # Unknown format
+            logger.warning(f"Unknown dataset format for example {example_id}. Keys: {item.keys()}")
+            return None
 
         if not problem or not test_cases:
             return None
