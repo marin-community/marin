@@ -404,9 +404,13 @@ class CodeR1Env(MarinEnv):
             group_rollouts: list[Rollout] = []
 
             for choice in completion.choices:
+                # Prepend the prefill to the response content so the evaluator can parse it correctly
+                # (e.g. including the opening ```python block)
+                full_response = (prefill or "") + choice.message.content
+
                 reward, passed, code_extracted = self._score_choice(
                     example=example,
-                    response_text=choice.message.content,
+                    response_text=full_response,
                 )
 
                 rollout = inference_ctx.create_rollout_from_choice(
