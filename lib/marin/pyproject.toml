@@ -47,7 +47,6 @@ dependencies = [
     "torchvision==0.24.0",
     "tqdm",
     "tqdm-loggable",
-    "triton == 3.5.0",
     "wandb",
     "warcio",
     "resiliparse>=0.17.2",
