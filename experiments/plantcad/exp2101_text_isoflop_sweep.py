@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Generate ISOFlop sweep steps for varying model sizes, architectures and epochs on a target DNA dataset."""
+"""Generate ISOFlop sweep steps for model sizes, architectures, and epochs on pre-tokenized text."""
 
 import os
 import math
@@ -23,19 +23,19 @@ import pandas as pd
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 
-from levanter.data.text import TextLmDatasetFormat
+from levanter.data.text import LMMixtureDatasetConfig, UrlDatasetSourceConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import Qwen3Config
 from levanter.optim.cautious import CautiousConfig
 from levanter.optim.config import OptimizerConfig
 from levanter.utils.flop_utils import lm_flops_per_token
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 
-from experiments.defaults import default_train, _prepare_data_config
+from experiments.defaults import default_train
 from experiments.evals.task_configs import EvalTaskConfig
-from experiments.llama import compute_num_parameters
+from experiments.llama import llama3_tokenizer, llama3_tokenizer_vocab_size
 from experiments.simple_train_config import SimpleTrainConfig
-from marin.execution.executor import ExecutorStep, InputName, executor_main, this_output_path, versioned
-from marin.processing.tokenize.tokenize import HfTokenizeConfig, tokenize
+from marin.execution.executor import ExecutorStep, executor_main
 from fray.cluster import ResourceConfig
 
 logger = logging.getLogger("ray")
@@ -51,21 +51,20 @@ ModelConfig = LlamaConfig | Qwen3Config
 
 def simulated_epoch_train(
     name: str,
-    tokenized: InputName | ExecutorStep,
+    tokenized: LMMixtureDatasetConfig,
     model_config: ModelConfig,
     train_config: "SimpleTrainConfig",
     train_tokens: int,
     dataset_tokens: int,
     epoch_count: int = 1,
     tags: Sequence[str] = (),
-    use_default_validation: bool = False,
     eval_harness_tasks: Sequence[EvalTaskConfig] = (),
 ) -> ExecutorStep:
     """Train with simulated epoching. When epoch_count=1, uses full dataset."""
     if not isinstance(epoch_count, int) or epoch_count < 1:
         raise ValueError(f"epoch_count must be int >= 1, got {epoch_count}")
 
-    pretraining_data = _prepare_data_config(tokenized, use_default_validation)
+    pretraining_data = tokenized
 
     if epoch_count == 1:
         return default_train(
@@ -74,8 +73,8 @@ def simulated_epoch_train(
             model_config=model_config,
             train_config=train_config,
             tags=tags,
-            use_default_validation=use_default_validation,
             eval_harness_tasks=eval_harness_tasks,
+            use_default_validation=False,
         )
 
     # To use simulated epoching in Levanter, we need to first address the fact that
@@ -106,8 +105,8 @@ def simulated_epoch_train(
         model_config=model_config,
         train_config=train_config,
         tags=tags,
-        use_default_validation=use_default_validation,
         eval_harness_tasks=eval_harness_tasks,
+        use_default_validation=False,
     )
 
 
@@ -128,49 +127,35 @@ def format_num(n: int | float) -> str:
 
 @dataclass(frozen=True)
 class IsoFlopDataConfig:
-    dataset_name: str = versioned("plantcad/plantcad2-c4096")
-    dataset_revision: str | None = versioned("e551075a775a2fd2c04f0f97741dc68b09bde653")
+    # Use pretokenized DCLM baseline from GCS (control experiment)
+    # Absolute path in same region used to avoid re-downloading when running with a different MARIN_PREFIX
+    # (i.e. marin-dna-us-central1)
+    tokenized_path: str = "gs://marin-us-central1/tokenized/dclm_baseline-0206f1"
+    tokenizer: str = llama3_tokenizer
+    vocab_size: int = llama3_tokenizer_vocab_size
     seq_len: int = 4096
-    total_token_count: int = 10_807_934_976  # 2,638,656 examples * 4,096 in train split
-
-
-@dataclass(frozen=True)
-class IsoFlopTokenizeConfig(HfTokenizeConfig):
-    tokenizer: str = versioned("kuleshov-group/PlantCAD2-Small-l24-d0768")
-    format: TextLmDatasetFormat = dataclasses.field(default_factory=lambda: TextLmDatasetFormat(text_key="seq"))
-    vocab_size: int = 7
+    # Keep consistent with PlantCAD total token count even though DCLM has far, far more
+    total_token_count: int = 2_600_000_000_000  # 2.6T
 
 
 @dataclass(frozen=True)
 class IsoFlopSweepConfig:
-    tokenized_dataset: InputName | str
+    tokenized_dataset: LMMixtureDatasetConfig
     vocab_size: int
     seq_len: int
     total_token_count: int
-    experiment_name: str = "plantcad_isoflop_v2.3"
-
-    # low-compute (current): 5e15 to 6.25e16, steps=2_048 (v2.3)
+    experiment_name: str = "plantcad_isoflop_v2.9"
     budgets: list[float] = dataclasses.field(
-        default_factory=lambda: list(np.logspace(np.log10(5e15), np.log10(6.25e16), 5))
+        # default_factory=lambda: list(np.logspace(np.log10(6.4e17), np.log10(8e18), 5))
+        default_factory=lambda: list(
+            v for i, v in enumerate(np.logspace(np.log10(6.4e17), np.log10(8e18), 5)) if i in [0, 1, 4]
+        )
     )
-    steps_per_run: int = 2_048
-
-    # mid-compute (4x): 2e16 to 2.5e17, steps=8_192 (v2.4)
-    # budgets: list[float] = dataclasses.field(
-    #     default_factory=lambda: list(np.logspace(np.log10(2e16), np.log10(2.5e17), 5))
-    # )
-    # steps_per_run: int = 8_192
-
-    # high-compute (16x): 8e16 to 1e18, steps=32_768 (v2.2)
-    # budgets: list[float] = dataclasses.field(
-    #     default_factory=lambda: list(np.logspace(np.log10(8e16), np.log10(1e18), 5))
-    # )
-    # steps_per_run: int = 32_768
-
     epochs: list[int] = dataclasses.field(default_factory=lambda: [1])
-    min_hidden_pow: int = 8
-    max_hidden_pow: int = 10
-    hidden_step_size: int = 112
+    steps_per_run: int = 65_536
+    min_hidden_pow: int = 9
+    max_hidden_pow: int = 12
+    hidden_step_size: int = 128
     mlp_ratio: int = 4
     base_hidden_layer_ratio: int = 64
     hidden_head_ratio: int = 128
@@ -178,10 +163,9 @@ class IsoFlopSweepConfig:
     flop_tolerance: float = 0.01
     architectures: list[str] = dataclasses.field(default_factory=lambda: ["qwen"])
     # TODO: adjust eval example count to account for num tpus in the even that v5p-8 is not used
-    per_device_eval_parallelism: int = 512
-    max_eval_batches: int = 64
+    per_device_eval_parallelism: int = 8
+    max_eval_batches: int = 1024
     num_evals: int = 3
-
     lr_constant: float = 0.33
     base_optimizer_config: OptimizerConfig = dataclasses.field(
         default_factory=lambda: CautiousConfig(
@@ -221,7 +205,8 @@ def estimate_bytes(
     vocab: int,
     optim_mult: int = 3,
     dtype_size: int = 4,
-    fudge_factor: float = 2,
+    # TODO: determine why this needs to be higher than the original 2 to avoid OOMs on DCLM
+    fudge_factor: float = 4,
 ) -> int:
     """Estimate memory usage (in bytes) for one training step."""
     param_bytes = param_count * optim_mult * dtype_size
@@ -241,7 +226,7 @@ def pick_v5p_type(
     vocab: int,
 ) -> str:
     """Select the smallest TPU v5p slice that fits the model in float32."""
-    param_count = compute_num_parameters(config, vocab)
+    _, _, param_count = compute_param_count(config, vocab)
     need_bytes = estimate_bytes(param_count, hidden, layers, batch, seq_len, vocab)
     chip_bytes = HBM_PER_CHIP_GIB * 1024**3
     chips = math.ceil(need_bytes / chip_bytes)
@@ -259,6 +244,30 @@ def round_to_power_of_two(x: float) -> int:
     if x <= 1:
         return 1
     return 2 ** math.ceil(math.log2(x))
+
+
+def compute_param_count(config: LlamaConfig, vocab_size: int) -> tuple[int, int, int]:
+    # Copied from compute_num_parameters in experiments/llama.py and modified to
+    # return multiple results; see:
+    # https://github.com/marin-community/marin/blob/bc58ab8ee62ba5e38ce4f1e2d7d64271431be160/experiments/llama.py#L249-L267
+    head_size = config.hidden_dim // config.num_heads
+    q_params = config.num_heads * head_size * config.hidden_dim
+    k_params = config.num_kv_heads * head_size * config.hidden_dim
+    v_params = config.num_kv_heads * head_size * config.hidden_dim
+    o_params = config.num_heads * head_size * config.hidden_dim
+    attention_params = q_params + k_params + v_params + o_params
+
+    layer_norm_params = 2 * config.hidden_dim
+
+    gate_params = config.hidden_dim * config.intermediate_dim
+    up_params = config.hidden_dim * config.intermediate_dim
+    down_params = config.intermediate_dim * config.hidden_dim
+    mlp_params = gate_params + up_params + down_params
+
+    nonembedding_params = config.num_layers * (attention_params + mlp_params + layer_norm_params)
+    embedding_params = 2 * vocab_size * config.hidden_dim
+
+    return embedding_params, nonembedding_params, nonembedding_params + embedding_params
 
 
 def compute_total_flops(
@@ -296,8 +305,7 @@ class IsoFlopRunConfig:
     n_heads: int
     n_kv_heads: int
     batch_size: int
-    batch_exact: float
-    batch_rounded: int
+    batch_target: int  # Original batch size before LR-based halving
     train_steps: int
     lr: float
     beta2: float
@@ -306,6 +314,7 @@ class IsoFlopRunConfig:
     train_tokens: int
     dataset_tokens: int
     num_params: int
+    embed_params: int
     epoch_count: int
     model_config: ModelConfig
 
@@ -323,15 +332,14 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
             hs_pow = math.log2(hidden_size)
             intermediate_dim = hidden_size * cfg.mlp_ratio
             num_layers = round(hidden_size / (cfg.base_hidden_layer_ratio + (hs_pow * 4) - cfg.min_hidden_pow))
+            assert (
+                hidden_size % cfg.hidden_head_ratio == 0
+            ), f"hidden_size ({hidden_size}) must be evenly divisible by hidden_head_ratio ({cfg.hidden_head_ratio})"
             n_heads = max(1, hidden_size // cfg.hidden_head_ratio)
-            # Ensure n_heads is 1, 2, or any even number (avoid odd numbers > 1); avoid errors like:
-            # `ValueError: Cannot concatenate arrays along axis head_size of size 147 with total size 146`
-            if n_heads > 1 and n_heads % 2 == 1:
-                n_heads -= 1
             n_kv_heads = n_heads
 
             # Calculate batch size to meet budget with fixed steps
-            batch_exact = budget / compute_total_flops(
+            batch_exact_val = budget / compute_total_flops(
                 batch=1,
                 num_layers=num_layers,
                 hidden=hidden_size,
@@ -343,8 +351,8 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
                 vocab_size=cfg.vocab_size,
             )
 
-            batch_rounded = round_to_power_of_two(batch_exact)
-            batch_size = batch_rounded
+            batch_size = round_to_power_of_two(batch_exact_val)
+            batch_target = batch_size  # Store original before LR-based halving
 
             # Scale LR with sqrt(batch) and hidden size
             # Reference: https://arxiv.org/pdf/2203.03466 (Section 10 Related Works)
@@ -353,13 +361,12 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
             # Halve batch size until LR is stable
             if cfg.lr_max is not None:
                 while lr > cfg.lr_max:
-                    old_batch = batch_size
-                    batch_size //= 2
-                    lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
                     logger.warning(
                         f"Halving batch size for ({architecture=}, {hidden_size=}): "
-                        f"{old_batch} -> {batch_size} (lr={lr:.4f}, lr_max={cfg.lr_max})"
+                        f"{batch_size} -> {batch_size // 2} (lr={lr:.4f}, lr_max={cfg.lr_max})"
                     )
+                    batch_size //= 2
+                    lr = (cfg.lr_constant * math.sqrt(batch_size)) / hidden_size
 
             # Set beta2 based on https://arxiv.org/pdf/2507.07101
             b2 = 0.98 ** (batch_size / 128)
@@ -433,11 +440,13 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
                     num_heads=n_heads,
                     num_kv_heads=n_kv_heads,
                     num_layers=num_layers,
+                    rope=Llama3RotaryEmbeddingsConfig(),
                 )
             else:
                 raise ValueError(f"Unknown architecture: {architecture}")
 
-            num_params = compute_num_parameters(model_cfg, cfg.vocab_size)
+            # num_params = compute_num_parameters(model_cfg, cfg.vocab_size)
+            embed_params, _, num_params = compute_param_count(model_cfg, cfg.vocab_size)
 
             for epoch_count in cfg.epochs:
                 yield IsoFlopRunConfig(
@@ -448,8 +457,7 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
                     n_heads=n_heads,
                     n_kv_heads=n_kv_heads,
                     batch_size=batch_size,
-                    batch_exact=batch_exact,
-                    batch_rounded=batch_rounded,
+                    batch_target=batch_target,
                     train_steps=train_steps,
                     lr=lr,
                     beta2=b2,
@@ -458,6 +466,7 @@ def generate_run_configs(cfg: IsoFlopSweepConfig, budget: float) -> Iterator[Iso
                     train_tokens=train_tokens,
                     dataset_tokens=dataset_tokens,
                     num_params=num_params,
+                    embed_params=embed_params,
                     epoch_count=epoch_count,
                     model_config=model_cfg,
                 )
@@ -471,6 +480,8 @@ def _log_isoflop_run_configs(all_configs: list[IsoFlopRunConfig]):
         # Format large numbers for readability
         if "num_params" in df.columns:
             df["num_params"] = df["num_params"].apply(format_num)
+        if "embed_params" in df.columns:
+            df["embed_params"] = df["embed_params"].apply(format_num)
         if "train_tokens" in df.columns:
             df["train_tokens"] = df["train_tokens"].apply(format_num)
 
@@ -492,6 +503,29 @@ def _log_isoflop_run_configs(all_configs: list[IsoFlopRunConfig]):
         logger.info("Configs per Architecture")
         logger.info("=" * 50)
         logger.info("\n" + str(df.groupby("architecture").size()))
+
+        # Create table of unique param count mappings
+        logger.info("\n" + "=" * 50)
+        logger.info("Param Count Mapping")
+        logger.info("=" * 50)
+        raw_df = pd.DataFrame([dataclasses.asdict(c) for c in all_configs])
+        param_mapping = raw_df[["num_params", "embed_params"]].drop_duplicates()
+        param_mapping["nonembedding_params"] = param_mapping["num_params"] - param_mapping["embed_params"]
+        param_mapping["pct_embedding_params"] = (
+            param_mapping["embed_params"] / param_mapping["num_params"] * 100
+        ).round(2)
+        param_mapping = param_mapping[
+            ["num_params", "embed_params", "nonembedding_params", "pct_embedding_params"]
+        ].sort_values("num_params")
+        param_mapping = param_mapping.rename(
+            columns={
+                "num_params": "Total Params",
+                "embed_params": "Embedding Params",
+                "nonembedding_params": "Non-Embedding Params",
+                "pct_embedding_params": "% Embedding",
+            }
+        )
+        logger.info("\n" + param_mapping.to_string(index=False))
 
         logger.info("=" * 50 + "\n")
     else:
@@ -556,7 +590,6 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
             dataset_tokens=c.dataset_tokens,
             epoch_count=c.epoch_count,
             eval_harness_tasks=[],
-            use_default_validation=False,
             tags=(
                 f"architecture={c.architecture}",
                 f"flops_budget={c.budget:.1e}",
@@ -566,9 +599,10 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
                 f"steps={c.train_steps}",
                 f"tpu={tpu_type}",
                 f"params={param_count}",
+                f"params_embed={c.embed_params}",
+                f"params_nonembed={c.num_params - c.embed_params}",
                 f"tokens={c.train_tokens}",
                 f"epochs={c.epoch_count}",
-                f"vocab_size={config.vocab_size}",
             ),
         )
         steps.append(step)
@@ -577,7 +611,7 @@ def generate_isoflop_steps(config: IsoFlopSweepConfig) -> list[ExecutorStep]:
 
 
 def generate_isoflop_sweep(
-    tokenized: ExecutorStep,
+    tokenized: LMMixtureDatasetConfig,
     **kwargs,
 ) -> list[ExecutorStep]:
     sweep_cfg = IsoFlopSweepConfig(tokenized_dataset=tokenized, **kwargs)
@@ -586,33 +620,35 @@ def generate_isoflop_sweep(
     return steps
 
 
-def tokenize_plantcad() -> tuple[ExecutorStep, IsoFlopDataConfig]:
-    """Tokenize the PlantCAD dataset directly from HuggingFace.
+def get_data_config() -> tuple[LMMixtureDatasetConfig, IsoFlopDataConfig]:
+    """Use pretokenized DCLM baseline dataset from GCS.
 
     Returns:
-        A tuple of (tokenized ExecutorStep, IsoFlopDataConfig with dataset metadata).
+        A tuple of (LMMixtureDatasetConfig, IsoFlopDataConfig with dataset metadata).
     """
     data_config = IsoFlopDataConfig()
-    step = ExecutorStep(
-        name="tokenized/plantcad2",
-        fn=tokenize,
-        config=IsoFlopTokenizeConfig(
-            id=data_config.dataset_name,
-            revision=data_config.dataset_revision,
-            cache_path=this_output_path(),
-            window_size_bytes=50_000_000,
-        ),
+    # Create LMMixtureDatasetConfig directly with absolute GCS path (no download needed)
+    mixture_config = LMMixtureDatasetConfig(
+        configs={
+            "dclm_baseline": UrlDatasetSourceConfig(
+                cache_dir=data_config.tokenized_path,
+            )
+        },
+        train_weights={"dclm_baseline": 1.0},
+        tokenizer=data_config.tokenizer,
+        # TODO: reduce this after ruling out eval noise (back to ~1024)
+        num_validation_sequences={"dclm_baseline": 131_072},
     )
-    return step, data_config
+    return mixture_config, data_config
 
 
 def main():
-    plantcad_tokenized, data_config = tokenize_plantcad()
+    mixture_config, data_config = get_data_config()
 
     # Generate sweep steps
     plantcad_sweep = generate_isoflop_sweep(
-        tokenized=plantcad_tokenized,
-        vocab_size=plantcad_tokenized.config.vocab_size,
+        tokenized=mixture_config,
+        vocab_size=data_config.vocab_size,
         seq_len=data_config.seq_len,
         total_token_count=data_config.total_token_count,
     )
@@ -632,7 +668,7 @@ def main():
         if os.environ.get("DRY_RUN"):
             logger.info("DRY RUN; skipping execution")
             continue
-        executor_main(steps=[plantcad_tokenized, *batch])
+        executor_main(steps=batch)
 
 
 if __name__ == "__main__":
