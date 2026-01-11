@@ -127,14 +127,17 @@ def _load_llm_weights(model, checkpoint_path, axis_mapping, mp, Vocab):
 
 
 def _compute_max_num_patches(config, first_ex=None):
-    """Compute maximum number of patches for anyres image processing.
+    """Compute maximum number of grid patches for anyres image processing.
+
+    This returns the max number of GRID patches (excluding the base patch).
+    The total patches = max_num_patches + 1 (for base) is computed in _pad_pixel_values().
 
     Args:
         config: VLM training config with model.image_grid_pinpoints and vision_config
         first_ex: Optional first example from dataset for fallback
 
     Returns:
-        Maximum number of patches (int)
+        Maximum number of grid patches (excluding base)
     """
     grid_pinpoints = config.model.image_grid_pinpoints
     patch_size = config.model.vision_config.image_size
@@ -142,9 +145,11 @@ def _compute_max_num_patches(config, first_ex=None):
     if grid_pinpoints:
         max_resolution = max(max(h, w) for h, w in grid_pinpoints)
         max_patches_per_dim = max_resolution // patch_size
-        return max_patches_per_dim * max_patches_per_dim + 1  # +1 for base image
+        # Return grid patches only; +1 for base is added in _pad_pixel_values()
+        return max_patches_per_dim * max_patches_per_dim
     elif first_ex is not None:
-        return first_ex["pixel_values"].shape[0]
+        # first_ex has total patches (including base), subtract 1 for grid patches only
+        return first_ex["pixel_values"].shape[0] - 1
     else:
         return DEFAULT_NUM_PATCHES
 
@@ -439,12 +444,19 @@ def main(config: TrainVLMConfig):
             logger.info(f"Overriding data seed with {config.data_seed}")
             data_key = jrandom.PRNGKey(config.data_seed)
 
+        # Compute max_num_patches early from model config (needed for streaming dataset creation)
+        # This ensures BatchImageProcessor pads to the correct size before the loader sees the data
+        max_num_patches = _compute_max_num_patches(config, first_ex=None)
+
         # Build datasets - only build eval if no_eval not set
+        # Pass max_num_patches for streaming mode to ensure correct padding
         if config.no_eval:
             eval_datasets = {}
         else:
-            eval_datasets = config.data.validation_sets()
-        train_dataset_mixture = config.data.train_set(key=data_key, epochs=config.epoch)
+            eval_datasets = config.data.validation_sets(max_num_patches=max_num_patches)
+        train_dataset_mixture = config.data.train_set(
+            key=data_key, epochs=config.epoch, max_num_patches=max_num_patches
+        )
 
         # Get shape info from first example (required for axes setup)
         first_ex = _get_first_example(train_dataset_mixture)
@@ -457,9 +469,11 @@ def main(config: TrainVLMConfig):
         # Define axes from config (works for both cached and streaming modes)
         Pos = hax.Axis("position", config.data.max_length)
 
+        # Recompute max_num_patches with first_ex for fallback (if grid_pinpoints not configured)
         max_num_patches = _compute_max_num_patches(config, first_ex)
 
-        NumPatches = hax.Axis("num_patches", max_num_patches)
+        # Total patches = max_num_patches (grid) + 1 (base)
+        NumPatches = hax.Axis("num_patches", max_num_patches + 1)
         Channels = hax.Axis("channels", first_ex["pixel_values"].shape[1])
         Height = hax.Axis("height", first_ex["pixel_values"].shape[2])
         Width = hax.Axis("width", first_ex["pixel_values"].shape[3])

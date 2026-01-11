@@ -414,12 +414,19 @@ def _extract_anyres_params(
     vision_feature_height = patch_size // 14
     max_num_patches = None
 
+    # Try to get max_num_patches from vision_aspect_ratio (LLaVA-specific)
     vision_aspect_ratio = getattr(image_processor, "vision_aspect_ratio", None)
     if vision_aspect_ratio and isinstance(vision_aspect_ratio, str) and "anyres_max_" in vision_aspect_ratio:
         try:
             max_num_patches = int(vision_aspect_ratio.split("anyres_max_")[-1])
         except (ValueError, IndexError):
             pass
+
+    # Fallback: compute from grid_pinpoints if available
+    if max_num_patches is None and grid_pinpoints:
+        max_resolution = max(max(h, w) for h, w in grid_pinpoints)
+        max_patches_per_dim = max_resolution // patch_size
+        max_num_patches = max_patches_per_dim * max_patches_per_dim  # +1 for base is added in _pad_pixel_values
 
     return grid_pinpoints, patch_size, vision_feature_height, max_num_patches
 
@@ -984,6 +991,11 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         # Override with sized arrays when max_num_patches is configured
         if self.max_num_patches is not None:
             total_patches = self.max_num_patches + 1
+            # Fixed-size pixel_values for cache schema
+            exemplar["pixel_values"] = np.zeros(
+                (total_patches, 3, self.patch_size, self.patch_size),
+                dtype=np.float32
+            )
             exemplar["grid_mask"] = np.zeros((total_patches,), dtype=np.bool_)
             # Include sized unpad_indices when vision_feature_height is also configured
             if self.vision_feature_height is not None:
@@ -1286,6 +1298,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         messages_key: str = "messages",
         images_key: str = "images",
         cache_size: int = DEFAULT_CACHE_SIZE,
+        max_num_patches: Optional[int] = None,
     ):
         super().__init__()
         self.source = source
@@ -1297,7 +1310,14 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         self.cache_size = cache_size
 
         # Extract grid_pinpoints and related params from processor for anyres support
-        grid_pinpoints, patch_size, vision_feature_height, max_num_patches = _extract_anyres_params(processor)
+        grid_pinpoints, patch_size, vision_feature_height, extracted_max_num_patches = _extract_anyres_params(
+            processor
+        )
+        # Use passed max_num_patches if provided, otherwise use extracted value
+        if max_num_patches is not None:
+            final_max_num_patches = max_num_patches
+        else:
+            final_max_num_patches = extracted_max_num_patches
 
         # Build the batch processor (runs on CPU in background thread)
         self._batch_processor = BatchImageProcessor(
@@ -1309,7 +1329,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
             grid_pinpoints=grid_pinpoints,
             patch_size=patch_size,
             vision_feature_height=vision_feature_height,
-            max_num_patches=max_num_patches,
+            max_num_patches=final_max_num_patches,
         )
 
         # Use per-processor lock - HuggingFace tokenizer is NOT thread-safe
@@ -1502,6 +1522,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         messages_key: str = "messages",
         images_key: str = "images",
         cache_size: int = DEFAULT_CACHE_SIZE,
+        max_num_patches: Optional[int] = None,
     ) -> "StreamingImageDataset":
         """Build a streaming dataset from a source."""
         return StreamingImageDataset(
@@ -1512,6 +1533,7 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
             messages_key=messages_key,
             images_key=images_key,
             cache_size=cache_size,
+            max_num_patches=max_num_patches,
         )
 
 
@@ -1946,8 +1968,9 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
         *,
         key: Optional[PRNGKeyArray] = None,
         epochs: Optional[int] = None,
+        max_num_patches: Optional[int] = None,
     ) -> AsyncDataset[ImageTextDict]:
-        image_datasets = self.training_sets()
+        image_datasets = self.training_sets(max_num_patches=max_num_patches)
 
         if key is None:
             key = jax.random.PRNGKey(0)
@@ -1988,21 +2011,31 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
 
         return mixture
 
-    def training_sets(self) -> Mapping[str, AsyncDataset[ImageTextDict]]:
+    def training_sets(
+        self, max_num_patches: Optional[int] = None
+    ) -> Mapping[str, AsyncDataset[ImageTextDict]]:
         if self.use_cache:
             return self.build_caches("train")
         else:
-            return self.build_streaming_datasets("train")
+            return self.build_streaming_datasets("train", max_num_patches=max_num_patches)
 
-    def validation_sets(self) -> Mapping[str, AsyncDataset[ImageTextDict]]:
+    def validation_sets(
+        self, max_num_patches: Optional[int] = None
+    ) -> Mapping[str, AsyncDataset[ImageTextDict]]:
         if self.use_cache:
             return self.build_caches("validation")
         else:
-            return self.build_streaming_datasets("validation")
+            return self.build_streaming_datasets("validation", max_num_patches=max_num_patches)
 
-    def build_streaming_datasets(self, split: str) -> Dict[str, StreamingImageDataset]:
+    def build_streaming_datasets(
+        self, split: str, max_num_patches: Optional[int] = None
+    ) -> Dict[str, StreamingImageDataset]:
         """Build streaming datasets that process images on-the-fly without caching."""
         datasets_dict = {}
+
+        # Use provided max_num_patches, otherwise try to extract from processor
+        if max_num_patches is None:
+            _, _, _, max_num_patches = _extract_anyres_params(self.the_processor)
 
         for name, source_config in self.configs.items():
             weight = self.train_weights.get(name, 0)
@@ -2039,6 +2072,7 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
                 padding=self.padding,
                 messages_key=messages_key,
                 images_key=images_key,
+                max_num_patches=max_num_patches,
             )
 
             datasets_dict[name] = streaming_ds
