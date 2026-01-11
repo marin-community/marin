@@ -46,7 +46,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_NUM_PATCHES = 3 * 3 + 1  # 3x3 grid + base image for default anyres_max_9 config
 STREAMING_MAX_BUFFERED_BATCHES = 4  # Memory-efficient buffering for streaming mode
 STREAMING_PREFETCH_SIZE = 2  # Minimal prefetch to avoid OOM in streaming mode
-RGB_CHANNELS = 3  # Standard RGB image channels
 
 
 def _load_vision_weights(model, checkpoint_path, axis_mapping, mp):
@@ -156,6 +155,47 @@ def _get_vocab_size_from_hf_config(hf_config):
     if vocab_size is None and hasattr(hf_config, "text_config"):
         vocab_size = hf_config.text_config.vocab_size
     return vocab_size
+
+
+def _get_first_example(dataset):
+    """Extract the first example from a dataset (cached or streaming).
+
+    This is used to determine image axes (Channels, Height, Width) from actual data.
+    For streaming datasets, this uses get_batch which processes data on-the-fly
+    without affecting subsequent iteration.
+
+    Args:
+        dataset: An AsyncDataset or MixtureDataset
+
+    Returns:
+        The first example dict, or None if extraction failed
+    """
+    import asyncio
+
+    try:
+        # MixtureDataset case - get from first underlying dataset
+        if hasattr(dataset, "datasets"):
+            first_ds = next(iter(dataset.datasets.values()))
+            return _get_first_example(first_ds)
+
+        # ProcessedImageCache case - use cache directly
+        if hasattr(dataset, "cache"):
+            return dataset.cache.get_batch_sync([0])[0]
+
+        # StreamingImageDataset or other AsyncDataset - use get_batch
+        if hasattr(dataset, "get_batch"):
+            # Run async get_batch synchronously
+            loop = asyncio.new_event_loop()
+            try:
+                result = loop.run_until_complete(dataset.get_batch([0]))
+                return result[0]
+            finally:
+                loop.close()
+
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to extract first example: {e}")
+        return None
 
 
 def _determine_vocab_size(config, converter, tokenizer):
@@ -399,34 +439,20 @@ def main(config: TrainVLMConfig):
             logger.info(f"Overriding data seed with {config.data_seed}")
             data_key = jrandom.PRNGKey(config.data_seed)
 
-        # Check if streaming mode first (before building datasets)
-        is_streaming = hasattr(config.data, "use_cache") and not config.data.use_cache
-
-        # Build datasets - only build eval if not in streaming mode or no_eval not set
+        # Build datasets - only build eval if no_eval not set
         if config.no_eval:
             eval_datasets = {}
         else:
             eval_datasets = config.data.validation_sets()
         train_dataset_mixture = config.data.train_set(key=data_key, epochs=config.epoch)
 
-        # Get shape info - try from cache first, fallback to config for streaming mode
-        first_ex = None
-        if not is_streaming:
-            try:
-                # For MixtureDataset, we need to access one of the underlying caches
-                # Use the already-created train_dataset_mixture to avoid duplicate loading
-                if hasattr(train_dataset_mixture, "datasets"):
-                    # MixtureDataset case
-                    first_cache = next(iter(train_dataset_mixture.datasets.values()))
-                    if hasattr(first_cache, "cache"):
-                        first_examples = first_cache.cache.get_batch_sync([0])
-                        first_ex = first_examples[0]
-                elif hasattr(train_dataset_mixture, "cache"):
-                    # Single dataset case with cache
-                    first_examples = train_dataset_mixture.cache.get_batch_sync([0])
-                    first_ex = first_examples[0]
-            except (AttributeError, StopIteration) as e:
-                logger.info(f"Could not extract first example from cache, using config defaults: {e}")
+        # Get shape info from first example (required for axes setup)
+        first_ex = _get_first_example(train_dataset_mixture)
+        if first_ex is None:
+            raise RuntimeError(
+                "Could not extract first example from dataset. "
+                "This is required to determine image axes (Channels, Height, Width)."
+            )
 
         # Define axes from config (works for both cached and streaming modes)
         Pos = hax.Axis("position", config.data.max_length)
@@ -434,16 +460,9 @@ def main(config: TrainVLMConfig):
         max_num_patches = _compute_max_num_patches(config, first_ex)
 
         NumPatches = hax.Axis("num_patches", max_num_patches)
-        # Standard image values - use first_ex if available, otherwise use vision config
-        if first_ex is not None:
-            Channels = hax.Axis("channels", first_ex["pixel_values"].shape[1])
-            Height = hax.Axis("height", first_ex["pixel_values"].shape[2])
-            Width = hax.Axis("width", first_ex["pixel_values"].shape[3])
-        else:
-            # Use vision config for streaming mode
-            Channels = hax.Axis("channels", RGB_CHANNELS)
-            Height = hax.Axis("height", config.model.vision_config.image_size)
-            Width = hax.Axis("width", config.model.vision_config.image_size)
+        Channels = hax.Axis("channels", first_ex["pixel_values"].shape[1])
+        Height = hax.Axis("height", first_ex["pixel_values"].shape[2])
+        Width = hax.Axis("width", first_ex["pixel_values"].shape[3])
 
         # Determine pixel dtype based on trainer's compute precision
         # This ensures data is transferred to TPU in the correct dtype to save memory
@@ -554,6 +573,9 @@ def main(config: TrainVLMConfig):
         # Create data loader - ImageDataLoader converts raw ImageTextDict to ImageTextExample
         # during batching, handling grid_mask computation and NamedArray creation
         pixel_dtype = np.dtype(compute_dtype)
+
+        # Check if streaming mode for loader configuration
+        is_streaming = hasattr(config.data, "use_cache") and not config.data.use_cache
 
         # Build loader kwargs with common parameters
         loader_kwargs = {

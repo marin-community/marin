@@ -326,7 +326,7 @@ def test_batch_image_processor():
         assert "pixel_values" in result
         assert "input_ids" in result
         assert "attention_mask" in result
-        assert "labels" in result
+        assert "loss_mask" in result
         assert result["input_ids"].shape == (max_length,)
 
 
@@ -552,7 +552,7 @@ def test_vlm_loss_consistency():
     Uses ImageDataLoader to load batched data from parquet file, matching the actual training pipeline.
     """
     from levanter.data.loader import ImageDataLoader
-    from levanter.data.image import ProcessedImageCache, ConversationUrlDataSource
+    from levanter.data.image import ProcessedImageCache, ImageConversationUrlDataSource
     from levanter.models.llava_onevision import LlavaOnevisionModel
     from levanter.trainer import TrainerConfig
     from levanter.store.cache import CacheOptions
@@ -574,7 +574,7 @@ def test_vlm_loss_consistency():
         hf_dataset.to_parquet(parquet_path)
 
         # Create data source from parquet file
-        source = ConversationUrlDataSource([parquet_path], messages_key="messages", images_key="images")
+        source = ImageConversationUrlDataSource([parquet_path], messages_key="messages", images_key="images")
 
         # Build cache using ProcessedImageCache.build_or_load with custom processor
         print("\n=== Building cache from parquet data ===")
@@ -695,7 +695,7 @@ def test_vlm_gradient_consistency():
     Verifies gradients reach all model components (vision tower, projector, language model).
     """
     from levanter.data.loader import ImageDataLoader
-    from levanter.data.image import ProcessedImageCache, ConversationUrlDataSource
+    from levanter.data.image import ProcessedImageCache, ImageConversationUrlDataSource
     from levanter.models.llava_onevision import LlavaOnevisionModel
     from levanter.trainer import TrainerConfig
     from levanter.store.cache import CacheOptions
@@ -719,7 +719,7 @@ def test_vlm_gradient_consistency():
         hf_dataset.to_parquet(parquet_path)
 
         # Create data source from parquet file
-        source = ConversationUrlDataSource([parquet_path], messages_key="messages", images_key="images")
+        source = ImageConversationUrlDataSource([parquet_path], messages_key="messages", images_key="images")
 
         # Build cache using ProcessedImageCache.build_or_load with custom processor
         print("\n=== Building cache from parquet data ===")
@@ -1115,7 +1115,7 @@ def test_vlm_loss_mask_correctness():
     Test 5: Verify that loss masking correctly excludes user prompts.
 
     This test ensures that:
-    1. Loss is only computed on assistant responses (labels != -100)
+    1. Loss is only computed on assistant responses (loss_mask == 1.0)
     2. Image tokens and user prompts are properly masked
     3. The mask is correctly shifted for next-token prediction
     """
@@ -1142,18 +1142,18 @@ def test_vlm_loss_mask_correctness():
         )
         pair = test_pairs[0]
 
-    # Get labels from processed data
-    labels_np = np.array(pair.lev.labels)
+    # Get loss_mask from processed data
+    loss_mask_np = np.array(pair.lev.loss_mask)
 
     print("\n=== Loss Mask Analysis ===")
 
-    # Analyze the labels
-    total_positions = len(labels_np)
-    masked_positions = np.sum(labels_np == -100)
-    unmasked_positions = total_positions - masked_positions
+    # Analyze the loss_mask
+    total_positions = len(loss_mask_np)
+    masked_positions = np.sum(loss_mask_np == 0.0)
+    unmasked_positions = np.sum(loss_mask_np == 1.0)
 
     print(f"Total positions: {total_positions}")
-    print(f"Masked positions (labels=-100): {masked_positions} ({100*masked_positions/total_positions:.1f}%)")
+    print(f"Masked positions (loss_mask=0.0): {masked_positions} ({100*masked_positions/total_positions:.1f}%)")
     print(f"Unmasked positions (compute loss): {unmasked_positions} ({100*unmasked_positions/total_positions:.1f}%)")
 
     # Verify that unmasked positions exist
@@ -1251,21 +1251,21 @@ def test_text_only_conversation():
     assert result["pixel_values"] is None, "Text-only should have None pixel_values"
     assert result["image_sizes"] is None, "Text-only should have None image_sizes"
     assert result["input_ids"].shape == (2048,), "input_ids should be padded to max_length"
-    assert result["labels"].shape == (2048,), "labels should be padded to max_length"
+    assert result["loss_mask"].shape == (2048,), "loss_mask should be padded to max_length"
 
-    # Check that labels have some non-ignored values (assistant response)
-    non_ignore_count = np.sum(result["labels"] != -100)
-    assert non_ignore_count > 0, "Labels should have some non-ignored values for assistant response"
+    # Check that loss_mask has some non-zero values (assistant response)
+    non_ignore_count = np.sum(result["loss_mask"] == 1.0)
+    assert non_ignore_count > 0, "loss_mask should have some 1.0 values for assistant response"
 
     # Test ImageTextExample with text-only
     Position = Axis("position", 2048)
     input_ids_named = NamedArray(result["input_ids"], (Position,))
-    labels_named = NamedArray(result["labels"], (Position,))
+    loss_mask_named = NamedArray(result["loss_mask"], (Position,))
 
     example = ImageTextExample.init(
         pixel_values=None,
         input_ids=input_ids_named,
-        labels=labels_named,
+        loss_mask=loss_mask_named,
     )
 
     assert example.pixel_values is None, "ImageTextExample should have None pixel_values"
@@ -1386,13 +1386,13 @@ def test_multiround_image_input():
     assert result["pixel_values"] is not None, "Multi-image should have pixel_values"
     assert result["image_sizes"] is not None, "Multi-image should have image_sizes"
 
-    # Check labels - should have assistant responses
-    non_ignore_count = np.sum(result["labels"] != -100)
-    assert non_ignore_count > 0, "Labels should have non-ignored values for assistant responses"
+    # Check loss_mask - should have assistant responses
+    non_ignore_count = np.sum(result["loss_mask"] == 1.0)
+    assert non_ignore_count > 0, "loss_mask should have 1.0 values for assistant responses"
 
     # The assistant responses should include both turns
     # Check that we have reasonable number of non-ignored tokens
-    print(f"Non-ignored label count: {non_ignore_count}")
+    print(f"Non-ignored token count: {non_ignore_count}")
 
     print("PASS: Multi-round image input test passed!")
 
@@ -1453,21 +1453,21 @@ def test_multiround_mixed_conversation():
     assert result["pixel_values"] is not None, "Should have pixel_values"
     assert result["image_sizes"] is not None, "Should have image_sizes"
 
-    # Check labels - should have all assistant responses (3 turns)
-    non_ignore_count = np.sum(result["labels"] != -100)
-    assert non_ignore_count > 0, "Labels should have non-ignored values"
+    # Check loss_mask - should have all assistant responses (3 turns)
+    non_ignore_count = np.sum(result["loss_mask"] == 1.0)
+    assert non_ignore_count > 0, "loss_mask should have 1.0 values"
 
     # All 3 assistant turns should be included
     # We should have more non-ignored tokens than a single turn
-    print(f"Non-ignored label count: {non_ignore_count}")
+    print(f"Non-ignored token count: {non_ignore_count}")
     assert non_ignore_count > 10, "Should have substantial non-ignored tokens for 3 assistant turns"
 
     print("PASS: Multi-round mixed conversation test passed!")
 
 
 @skip_if_no_torch
-def test_labels_mask_correctness_text_only():
-    """Verify that _create_labels correctly masks text-only conversations."""
+def test_loss_mask_correctness_text_only():
+    """Verify that _create_loss_mask correctly masks text-only conversations."""
     from transformers import AutoProcessor
     from levanter.data.image import BatchImageProcessor
 
@@ -1487,15 +1487,15 @@ def test_labels_mask_correctness_text_only():
 
     # Decode and verify
     input_ids = result["input_ids"]
-    labels = result["labels"]
+    loss_mask = result["loss_mask"]
 
-    # Count non-ignored labels
-    non_ignore_indices = np.where(labels != -100)[0]
+    # Count non-masked positions (where loss_mask == 1.0)
+    non_ignore_indices = np.where(loss_mask == 1.0)[0]
     print(f"Non-ignored positions: {len(non_ignore_indices)}")
 
     # Verify that only assistant content is included
     # The non-ignored tokens should correspond to assistant content + <|im_end|>
-    assert len(non_ignore_indices) > 0, "Should have some non-ignored labels"
+    assert len(non_ignore_indices) > 0, "Should have some non-masked tokens"
 
     # Decode the non-ignored tokens
     non_ignore_tokens = input_ids[non_ignore_indices]
@@ -1505,12 +1505,12 @@ def test_labels_mask_correctness_text_only():
     # The decoded content should contain the assistant response
     assert "Python" in decoded or "programming" in decoded, "Non-ignored content should include assistant response"
 
-    print("PASS: Labels mask correctness (text-only) test passed!")
+    print("PASS: Loss mask correctness (text-only) test passed!")
 
 
 @skip_if_no_torch
-def test_labels_mask_correctness_with_image():
-    """Verify that _create_labels correctly masks conversations with images."""
+def test_loss_mask_correctness_with_image():
+    """Verify that _create_loss_mask correctly masks conversations with images."""
     from transformers import AutoProcessor
     from levanter.data.image import BatchImageProcessor
 
@@ -1532,10 +1532,10 @@ def test_labels_mask_correctness_with_image():
     result = results[0]
 
     input_ids = result["input_ids"]
-    labels = result["labels"]
+    loss_mask = result["loss_mask"]
 
-    # Count non-ignored labels
-    non_ignore_indices = np.where(labels != -100)[0]
+    # Count non-masked positions (where loss_mask == 1.0)
+    non_ignore_indices = np.where(loss_mask == 1.0)[0]
     print(f"Non-ignored positions: {len(non_ignore_indices)}")
 
     # Non-ignored tokens should be assistant content
@@ -1551,39 +1551,35 @@ def test_labels_mask_correctness_with_image():
     if image_token_id != tokenizer.unk_token_id:
         assert image_token_id not in non_ignore_tokens, "Image tokens should be masked"
 
-    print("PASS: Labels mask correctness (with image) test passed!")
+    print("PASS: Loss mask correctness (with image) test passed!")
 
 
 @skip_if_no_torch
 def test_replace_tokenizer_with_qwen3():
-    """Test that _replace_tokenizer correctly replaces processor tokenizer with Qwen3 tokenizer."""
+    """Test that CustomVLMProcessor correctly uses Qwen3 tokenizer."""
     from transformers import AutoProcessor, AutoTokenizer
-    from levanter.data.image import BatchImageProcessor
+    from levanter.data.image import BatchImageProcessor, CustomVLMProcessor
 
     processor = AutoProcessor.from_pretrained(MODEL_NAME_7B)
     llm_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B")
 
-    # Store original tokenizer reference
-    original_tokenizer = processor.tokenizer
-
     # Create BatchImageProcessor with LLM tokenizer
-    _ = BatchImageProcessor(processor, tokenizer=llm_tokenizer, max_length=2048)
+    bp = BatchImageProcessor(processor, tokenizer=llm_tokenizer, max_length=2048)
 
-    # Verify tokenizer was replaced
-    assert processor.tokenizer is llm_tokenizer, "Tokenizer should be replaced"
-    assert id(processor.tokenizer) != id(original_tokenizer), "Tokenizer ID should be different"
-    assert id(processor.tokenizer) == id(llm_tokenizer), "Tokenizer should be the LLM tokenizer"
+    # Verify bp.processor is a CustomVLMProcessor with the new tokenizer
+    assert isinstance(bp.processor, CustomVLMProcessor), "bp.processor should be CustomVLMProcessor"
+    assert bp.processor.tokenizer is llm_tokenizer, "bp.processor.tokenizer should be the LLM tokenizer"
 
     print("PASS: Tokenizer replacement test passed!")
 
 
 @skip_if_no_torch
 def test_replace_tokenizer_qwen3_thinking_tokens():
-    """Test that replaced Qwen3 tokenizer can correctly encode Qwen3-specific thinking tokens.
+    """Test that CustomVLMProcessor with Qwen3 tokenizer can correctly encode thinking tokens.
 
     Qwen3 has special <think> and </think> tokens (IDs 151667 and 151668) that are not
-    present in the original processor tokenizer. After replacement, these should be
-    encoded as single tokens instead of being split into multiple tokens.
+    present in the original processor tokenizer. The CustomVLMProcessor's tokenizer should
+    encode these as single tokens instead of being split into multiple tokens.
     """
     from transformers import AutoProcessor, AutoTokenizer
     from levanter.data.image import BatchImageProcessor
@@ -1591,7 +1587,7 @@ def test_replace_tokenizer_qwen3_thinking_tokens():
     processor = AutoProcessor.from_pretrained(MODEL_NAME_7B)
     llm_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B")
 
-    # Test encoding BEFORE replacement
+    # Test encoding with original processor tokenizer
     text_with_thinking = "<think>Let me think...</think>Answer is 42."
     original_encoding = processor.tokenizer.encode(text_with_thinking, add_special_tokens=False)
 
@@ -1607,23 +1603,23 @@ def test_replace_tokenizer_qwen3_thinking_tokens():
         end_think_token_id not in original_encoding
     ), f"Original tokenizer should not have </think> as single token, got: {original_encoding}"
 
-    # Create BatchImageProcessor with LLM tokenizer (this replaces the tokenizer)
-    _ = BatchImageProcessor(processor, tokenizer=llm_tokenizer, max_length=2048)
+    # Create BatchImageProcessor with LLM tokenizer (creates CustomVLMProcessor)
+    bp = BatchImageProcessor(processor, tokenizer=llm_tokenizer, max_length=2048)
 
-    # Test encoding AFTER replacement
-    new_encoding = processor.tokenizer.encode(text_with_thinking, add_special_tokens=False)
+    # Test encoding with bp.processor.tokenizer (the CustomVLMProcessor's tokenizer)
+    new_encoding = bp.processor.tokenizer.encode(text_with_thinking, add_special_tokens=False)
 
-    # After replacement, <think> and </think> should be single tokens
+    # The CustomVLMProcessor's tokenizer should have <think> and </think> as single tokens
     assert (
         think_token_id in new_encoding
-    ), f"Replaced tokenizer should have <think> as single token (ID {think_token_id}), got: {new_encoding}"
+    ), f"CustomVLMProcessor tokenizer should have <think> as single token (ID {think_token_id}), got: {new_encoding}"
     assert (
         end_think_token_id in new_encoding
-    ), f"Replaced tokenizer should have </think> as single token (ID {end_think_token_id}), got: {new_encoding}"
+    ), f"CustomVLMProcessor tokenizer should have </think> as single token (ID {end_think_token_id}), got: {new_encoding}"
 
-    # Verify the token count is different (fewer tokens after replacement)
+    # Verify the token count is different (fewer tokens with Qwen3 tokenizer)
     assert len(new_encoding) < len(original_encoding), (
-        f"Replaced tokenizer should produce fewer tokens: "
+        f"CustomVLMProcessor tokenizer should produce fewer tokens: "
         f"original={len(original_encoding)}, new={len(new_encoding)}"
     )
 
@@ -1701,7 +1697,7 @@ def test_replace_tokenizer_processing_with_thinking():
     # Verify the output structure
     assert result["pixel_values"] is not None
     assert result["input_ids"] is not None
-    assert result["labels"] is not None
+    assert result["loss_mask"] is not None
 
     # Verify thinking tokens are in the input_ids
     input_ids = result["input_ids"]
@@ -1711,28 +1707,27 @@ def test_replace_tokenizer_processing_with_thinking():
     assert think_token_id in input_ids, f"<think> token should be in input_ids: {input_ids[:50]}..."
     assert end_think_token_id in input_ids, "</think> token should be in input_ids"
 
-    # Verify labels have non-ignored values (assistant response should be included)
-    non_ignore_count = np.sum(result["labels"] != -100)
-    assert non_ignore_count > 0, "Labels should have non-ignored values for assistant response"
+    # Verify loss_mask has non-zero values (assistant response should be included)
+    non_ignore_count = np.sum(result["loss_mask"] == 1.0)
+    assert non_ignore_count > 0, "loss_mask should have 1.0 values for assistant response"
 
     print(f"Input IDs length: {len(input_ids)}")
-    print(f"Non-ignored labels count: {non_ignore_count}")
+    print(f"Non-ignored token count: {non_ignore_count}")
     print("PASS: Processing with thinking tokens test passed!")
 
 
 @skip_if_no_torch
 def test_replace_tokenizer_uses_qwen3_image_token():
-    """Test that processor uses Qwen3's <|image_pad|> token after tokenizer replacement."""
+    """Test that CustomVLMProcessor uses Qwen3's <|image_pad|> token."""
     from transformers import AutoProcessor, AutoTokenizer
     from levanter.data.image import BatchImageProcessor
 
     processor = AutoProcessor.from_pretrained(MODEL_NAME_7B)
     llm_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B")
 
-    # Before replacement: processor uses <image> token
+    # Original processor uses <image> token
     assert processor.image_token == "<image>"
-    old_processor_image_id = processor.image_token_id
-    print(f"Original: image_token='{processor.image_token}', id={old_processor_image_id}")
+    print(f"Original: image_token='{processor.image_token}', id={processor.image_token_id}")
 
     # Qwen3 tokenizer has <|image_pad|> token pre-defined
     qwen3_image_token = "<|image_pad|>"
@@ -1741,25 +1736,25 @@ def test_replace_tokenizer_uses_qwen3_image_token():
     print(f"Qwen3 <|image_pad|> ID: {qwen3_image_id}")
 
     # Create BatchImageProcessor with Qwen3 tokenizer
-    _ = BatchImageProcessor(processor, tokenizer=llm_tokenizer, max_length=2048)
+    bp = BatchImageProcessor(processor, tokenizer=llm_tokenizer, max_length=2048)
 
-    # After replacement: processor should use Qwen3's <|image_pad|> token
+    # bp.processor (CustomVLMProcessor) should use Qwen3's <|image_pad|> token
     assert (
-        processor.image_token == qwen3_image_token
-    ), f"Processor should use Qwen3's image token: got '{processor.image_token}'"
+        bp.processor.image_token == qwen3_image_token
+    ), f"CustomVLMProcessor should use Qwen3's image token: got '{bp.processor.image_token}'"
     assert (
-        processor.image_token_id == qwen3_image_id
-    ), f"Processor image_token_id should match Qwen3: got {processor.image_token_id}"
-    print(f"Updated: image_token='{processor.image_token}', id={processor.image_token_id}")
+        bp.processor.image_token_id == qwen3_image_id
+    ), f"CustomVLMProcessor image_token_id should match Qwen3: got {bp.processor.image_token_id}"
+    print(f"CustomVLMProcessor: image_token='{bp.processor.image_token}', id={bp.processor.image_token_id}")
 
     # Same for video token
-    assert processor.video_token == "<|video_pad|>"
+    assert bp.processor.video_token == "<|video_pad|>"
     qwen3_video_id = llm_tokenizer.convert_tokens_to_ids("<|video_pad|>")
-    assert processor.video_token_id == qwen3_video_id
+    assert bp.processor.video_token_id == qwen3_video_id
 
     # Verify encoding works correctly with the new image token
     text_with_image = f"Hello {qwen3_image_token} world"
-    encoded = processor.tokenizer.encode(text_with_image, add_special_tokens=False)
+    encoded = bp.processor.tokenizer.encode(text_with_image, add_special_tokens=False)
     assert qwen3_image_id in encoded, f"<|image_pad|> token should be in encoded output: {encoded}"
 
     print("PASS: Qwen3 image token test passed!")

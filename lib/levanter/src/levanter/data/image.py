@@ -63,7 +63,7 @@ from levanter.data import AsyncDataset
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.dataset import EpochDataset, MappedAsyncDataset
 from levanter.data.sharded_datasource import (
-    ConversationUrlDataSource,
+    ImageConversationUrlDataSource,
     ImageTextUrlDataSource,
     ShardedDataSource,
     WrappedHFDataSource,
@@ -92,6 +92,147 @@ import requests  # noqa: E402
 from PIL import Image  # noqa: E402
 
 logger = logging.getLogger("levanter.data.image")
+
+
+class CustomVLMProcessor(ProcessorMixin):
+    """
+    Custom VLM processor that combines components from different sources.
+
+    This allows using a different tokenizer (e.g., Qwen3-1.7B) while keeping
+    the image/video processing from the original processor. Instead of mutating
+    the original processor's tokenizer, this creates a new processor instance
+    that properly combines the components.
+    """
+
+    attributes = ["image_processor", "tokenizer", "video_processor"]
+    image_processor_class = "AutoImageProcessor"
+    tokenizer_class = "AutoTokenizer"
+    video_processor_class = "AutoVideoProcessor"
+
+    # Critical tokens for validation when combining processors
+    CRITICAL_SPECIAL_TOKENS = ["<|im_start|>", "<|im_end|>"]
+    CRITICAL_ROLE_TOKENS = ["assistant", "user", "system"]
+
+    def __init__(
+        self,
+        image_processor,
+        tokenizer,
+        video_processor=None,
+        *,
+        chat_template=None,
+        image_token="<image>",
+        video_token="<video>",
+        num_image_tokens=None,
+        vision_feature_select_strategy=None,
+        **kwargs,
+    ):
+        """
+        Initialize the custom processor with combined components.
+
+        Args:
+            image_processor: Image processor from the original VLM processor
+            tokenizer: New tokenizer to use (e.g., from Qwen3-1.7B)
+            video_processor: Optional video processor from the original VLM processor
+            chat_template: Chat template for formatting conversations
+            image_token: Token used for image placeholders
+            video_token: Token used for video placeholders
+            num_image_tokens: Number of tokens per image
+            vision_feature_select_strategy: Strategy for selecting vision features
+        """
+        self.num_image_tokens = num_image_tokens
+        self.vision_feature_select_strategy = vision_feature_select_strategy
+        self.image_token = image_token
+        self.video_token = video_token
+        self.image_token_id = tokenizer.convert_tokens_to_ids(image_token)
+        self.video_token_id = tokenizer.convert_tokens_to_ids(video_token)
+
+        super().__init__(image_processor, tokenizer, video_processor, chat_template=chat_template)
+
+    @classmethod
+    def from_processor_and_tokenizer(
+        cls,
+        original_processor: ProcessorMixin,
+        new_tokenizer: PreTrainedTokenizerBase,
+    ) -> "CustomVLMProcessor":
+        """
+        Create a CustomVLMProcessor by combining original processor components with a new tokenizer.
+
+        This factory method validates that the new tokenizer is compatible with the original
+        processor's tokenizer, then creates a new processor instance that combines them.
+
+        Args:
+            original_processor: The original VLM processor (e.g., LlavaOnevisionProcessor)
+            new_tokenizer: The new tokenizer to use (e.g., from Qwen3-1.7B)
+
+        Returns:
+            A new CustomVLMProcessor instance
+
+        Raises:
+            AssertionError: If tokenizers are incompatible (vocab_size, critical tokens, etc.)
+            NotImplementedError: If the new tokenizer type is not supported
+        """
+        old_tokenizer = original_processor.tokenizer
+
+        # Validate vocab_size matches
+        assert old_tokenizer.vocab_size == new_tokenizer.vocab_size, (
+            f"Tokenizer vocab size mismatch: processor has {old_tokenizer.vocab_size}, "
+            f"new tokenizer has {new_tokenizer.vocab_size}"
+        )
+
+        # Validate critical special tokens have the same IDs
+        for token in cls.CRITICAL_SPECIAL_TOKENS:
+            old_id = old_tokenizer.convert_tokens_to_ids(token)
+            new_id = new_tokenizer.convert_tokens_to_ids(token)
+            assert old_id == new_id, (
+                f"Critical special token '{token}' ID mismatch: "
+                f"processor has {old_id}, new tokenizer has {new_id}"
+            )
+
+        # Validate role tokens have the same IDs
+        for token in cls.CRITICAL_ROLE_TOKENS:
+            old_id = old_tokenizer.convert_tokens_to_ids(token)
+            new_id = new_tokenizer.convert_tokens_to_ids(token)
+            assert old_id == new_id, (
+                f"Critical role token '{token}' ID mismatch: "
+                f"processor has {old_id}, new tokenizer has {new_id}"
+            )
+
+        # Validate eos_token_id matches
+        assert old_tokenizer.eos_token_id == new_tokenizer.eos_token_id, (
+            f"eos_token_id mismatch: processor has {old_tokenizer.eos_token_id}, "
+            f"new tokenizer has {new_tokenizer.eos_token_id}"
+        )
+
+        # Detect Qwen3 tokenizer and use appropriate image/video tokens
+        # Qwen3 has <|image_pad|>, <|video_pad|>, <think>, </think> tokens
+        qwen3_image_token = "<|image_pad|>"
+        qwen3_image_token_id = new_tokenizer.convert_tokens_to_ids(qwen3_image_token)
+        is_qwen3 = qwen3_image_token_id != new_tokenizer.unk_token_id
+
+        if is_qwen3:
+            image_token = "<|image_pad|>"
+            video_token = "<|video_pad|>"
+            logger.info(f"Using Qwen3 tokens: image={image_token}, video={video_token}")
+        else:
+            raise NotImplementedError(f"Tokenizer {type(new_tokenizer).__name__} is not supported")
+
+        result = cls(
+            image_processor=original_processor.image_processor,
+            tokenizer=new_tokenizer,
+            video_processor=getattr(original_processor, "video_processor", None),
+            chat_template=getattr(original_processor, "chat_template", None),
+            image_token=image_token,
+            video_token=video_token,
+            num_image_tokens=getattr(original_processor, "num_image_tokens", None),
+            vision_feature_select_strategy=getattr(original_processor, "vision_feature_select_strategy", None),
+        )
+
+        logger.info(
+            f"Created CustomVLMProcessor with {type(new_tokenizer).__name__} "
+            f"(vocab_size={new_tokenizer.vocab_size})"
+        )
+
+        return result
 
 
 def expand_urls_with_folder_support(urls: List[str]) -> List[str]:
@@ -184,7 +325,7 @@ class ImageTextDict(TypedDict, total=False):
     input_ids: np.ndarray  # (seq_len,)
     attention_mask: np.ndarray  # (seq_len,)
     image_sizes: Optional[np.ndarray]  # (num_images, 2) or None - original image sizes (H, W)
-    labels: np.ndarray  # (seq_len,)
+    loss_mask: np.ndarray  # (seq_len,) float32 - 1.0 for compute loss, 0.0 for ignore
     # Grid mask for fixed-shape processing - indicates which patches are valid (not padding)
     grid_mask: Optional[np.ndarray]  # (TOTAL_PATCHES,) boolean - True for valid patches
     # Unpad indices for anyres processing
@@ -196,17 +337,17 @@ ImageTextDict_exemplar: ImageTextDict = {
     "input_ids": np.zeros((1,), dtype=np.int32),
     "attention_mask": np.zeros((1,), dtype=np.int32),
     "image_sizes": np.zeros((1, 2), dtype=np.int32),
-    "labels": np.zeros((1,), dtype=np.int32),
+    "loss_mask": np.zeros((1,), dtype=np.float32),
     "grid_mask": None,  # Always included, may be None
     "unpad_indices": None,  # Always included, may be None
 }
 
 
 def load_image_from_path_or_url(path_or_url: str) -> Image.Image:
-    """Load an image from a local path or URL.
+    """Load an image from a local path, URL, or cloud storage.
 
     Args:
-        path_or_url: Local file path or URL to the image
+        path_or_url: Local file path, URL, or cloud storage path (gs://, s3://) to the image
 
     Returns:
         PIL Image in RGB format
@@ -215,6 +356,10 @@ def load_image_from_path_or_url(path_or_url: str) -> Image.Image:
         response = requests.get(path_or_url, timeout=30)
         response.raise_for_status()
         image = Image.open(BytesIO(response.content))
+    elif path_or_url.startswith(("gs://", "s3://")):
+        with fsspec.open(path_or_url, "rb") as f:
+            image = Image.open(f)
+            image.load()
     else:
         image = Image.open(path_or_url)
 
@@ -286,7 +431,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
     This processor handles the conversation format used by VLMs like LLaVA:
     - Applies chat template to convert messages to text with image placeholders
     - Processes images using the HuggingFace processor
-    - Creates labels for training (masking non-assistant tokens with -100)
+    - Creates loss_mask for training (1.0 for assistant tokens, 0.0 for others)
 
     Input format:
     {
@@ -296,16 +441,49 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         ],
         "images": [<image_data>]  # PIL, path, URL, or HF bytes dict
     }
+
+    Output format (ImageTextDict):
+    {
+        "pixel_values": np.ndarray or None,
+            # Shape: (TOTAL_PATCHES, C, H, W) where TOTAL_PATCHES = max_num_patches + 1
+            # Preprocessed image patches ready for the vision encoder. Padded to fixed size
+            # for JIT compatibility. For single image: includes base patch + anyres grid patches.
+            # For multiple images: only base patches (one per image). None for text-only examples.
+
+        "input_ids": np.ndarray,
+            # Shape: (seq_len,) dtype: int32
+            # Tokenized text sequence with image placeholder tokens inserted where images appear.
+            # The image placeholder token (e.g., <|image_pad|>) is repeated for each image feature.
+
+        "attention_mask": np.ndarray,
+            # Shape: (seq_len,) dtype: int32
+            # Binary mask indicating valid tokens (1) vs padding tokens (0).
+            # Used to prevent attention to padding positions.
+
+        "image_sizes": np.ndarray or None,
+            # Shape: (num_images, 2) dtype: int32
+            # Original image dimensions as (height, width) for each image.
+            # Used by the model for spatial unpadding in anyres processing. None for text-only.
+
+        "loss_mask": np.ndarray,
+            # Shape: (seq_len,) dtype: float32
+            # Training loss mask for causal language modeling. 1.0 for assistant response
+            # tokens that should contribute to the loss; 0.0 for all other tokens
+            # (system, user, special) that should be ignored during training.
+
+        "grid_mask": np.ndarray or None,
+            # Shape: (TOTAL_PATCHES,) dtype: bool
+            # Boolean mask indicating which patches are real (True) vs padding (False).
+            # Enables fixed-shape tensors for JIT while tracking actual patch count.
+            # None if max_num_patches is not configured.
+
+        "unpad_indices": np.ndarray or None,
+            # Shape: (num_image_tokens,) dtype: int32
+            # Index mapping from HuggingFace's unpadded feature order to Levanter's padded order.
+            # Used to reorder vision features after encoding to match HF's spatial unpadding.
+            # Only computed for single-image anyres case; None otherwise.
+    }
     """
-
-    # Ignore index for loss computation (standard value used by HuggingFace)
-    IGNORE_INDEX = -100
-
-    # Critical special tokens that must match between processor and LLM tokenizer
-    # These are essential for chat template formatting and label masking
-    CRITICAL_SPECIAL_TOKENS = ["<|im_start|>", "<|im_end|>"]
-    # Tokens used for role identification in chat templates
-    CRITICAL_ROLE_TOKENS = ["assistant", "user", "system"]
 
     def __init__(
         self,
@@ -338,7 +516,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             messages_key: Key for messages list in input dictionaries
             images_key: Key for images list in input dictionaries
             add_generation_prompt: Whether to add generation prompt at the end
-            mask_prompt: Whether to mask (set to -100) non-assistant tokens in labels
+            mask_prompt: Whether to mask non-assistant tokens (set loss_mask to 0.0)
             override_resources: Optional resource overrides
             grid_pinpoints: List of grid resolutions for anyres processing, e.g., [[384,384], [768,384], ...]
             patch_size: Size of each image patch (default 384)
@@ -370,100 +548,20 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             self._grid_w = None
             self._grid_area = None
 
-        # Replace processor's tokenizer with provided tokenizer if specified
+        # Create a custom processor with the new tokenizer if specified
         if tokenizer is not None:
-            self._replace_tokenizer(tokenizer)
+            self.processor = CustomVLMProcessor.from_processor_and_tokenizer(processor, tokenizer)
 
         # Cache padding mode for __call__
         self._padding_mode = "max_length" if self.padding else False
 
-        # Eagerly cache token IDs for _create_labels (after any tokenizer replacement)
+        # Eagerly cache token IDs for _create_loss_mask (after any tokenizer replacement)
         final_tokenizer = self.processor.tokenizer
         self._cached_im_start_id: int = final_tokenizer.convert_tokens_to_ids("<|im_start|>")
         self._cached_im_end_id: int = final_tokenizer.convert_tokens_to_ids("<|im_end|>")
         assistant_ids = final_tokenizer.encode("assistant", add_special_tokens=False)
         self._cached_num_assistant_tokens: int = len(assistant_ids)
         self._cached_assistant_token_ids_array: np.ndarray = np.array(assistant_ids, dtype=np.int32)
-
-    def _replace_tokenizer(self, new_tokenizer: PreTrainedTokenizerBase) -> None:
-        """
-        Replace the processor's tokenizer with a new tokenizer.
-
-        This is useful when you want to use an LLM's tokenizer (e.g., Qwen3-1.7B) instead of
-        the processor's default tokenizer, to ensure consistent tokenization during training.
-
-        The method will:
-        1. Verify critical special tokens match between old and new tokenizer
-        2. Add image/video tokens to the new tokenizer if missing
-        3. Update processor's image_token_id/video_token_id to match the new tokenizer
-
-        Args:
-            new_tokenizer: The new tokenizer to use (e.g., from AutoTokenizer.from_pretrained("Qwen/Qwen3-1.7B"))
-
-        Raises:
-            AssertionError: If critical special tokens don't match between old and new tokenizer
-        """
-        old_tokenizer = self.processor.tokenizer
-
-        # Verify vocab size matches
-        assert old_tokenizer.vocab_size == new_tokenizer.vocab_size, (
-            f"Tokenizer vocab size mismatch: processor has {old_tokenizer.vocab_size}, "
-            f"new tokenizer has {new_tokenizer.vocab_size}"
-        )
-
-        # Verify critical special tokens have the same IDs
-        for token in self.CRITICAL_SPECIAL_TOKENS:
-            old_id = old_tokenizer.convert_tokens_to_ids(token)
-            new_id = new_tokenizer.convert_tokens_to_ids(token)
-            assert old_id == new_id, (
-                f"Critical special token '{token}' ID mismatch: " f"processor has {old_id}, new tokenizer has {new_id}"
-            )
-
-        # Verify role tokens have the same IDs
-        for token in self.CRITICAL_ROLE_TOKENS:
-            old_id = old_tokenizer.convert_tokens_to_ids(token)
-            new_id = new_tokenizer.convert_tokens_to_ids(token)
-            assert old_id == new_id, (
-                f"Critical role token '{token}' ID mismatch: " f"processor has {old_id}, new tokenizer has {new_id}"
-            )
-
-        # Verify eos_token_id matches
-        assert old_tokenizer.eos_token_id == new_tokenizer.eos_token_id, (
-            f"eos_token_id mismatch: processor has {old_tokenizer.eos_token_id}, "
-            f"new tokenizer has {new_tokenizer.eos_token_id}"
-        )
-
-        # Check if this is a Qwen3 tokenizer by looking for Qwen3-specific tokens
-        # Qwen3 has <|image_pad|>, <|video_pad|>, <think>, </think> tokens
-        qwen3_image_token = "<|image_pad|>"
-        qwen3_video_token = "<|video_pad|>"
-        # convert_tokens_to_ids returns unk_token_id for unknown tokens, not None
-        qwen3_image_token_id = new_tokenizer.convert_tokens_to_ids(qwen3_image_token)
-        is_qwen3 = qwen3_image_token_id != new_tokenizer.unk_token_id
-
-        if is_qwen3:
-            # Update processor's image_token to Qwen3's <|image_pad|>
-            new_image_id = new_tokenizer.convert_tokens_to_ids(qwen3_image_token)
-            old_image_id = getattr(self.processor, "image_token_id", None)
-            self.processor.image_token = qwen3_image_token
-            self.processor.image_token_id = new_image_id
-            logger.info(f"Updated processor image_token: {old_image_id} -> {new_image_id} ({qwen3_image_token})")
-
-            # Update processor's video_token to Qwen3's <|video_pad|>
-            new_video_id = new_tokenizer.convert_tokens_to_ids(qwen3_video_token)
-            old_video_id = getattr(self.processor, "video_token_id", None)
-            self.processor.video_token = qwen3_video_token
-            self.processor.video_token_id = new_video_id
-            logger.info(f"Updated processor video_token: {old_video_id} -> {new_video_id} ({qwen3_video_token})")
-        else:
-            raise NotImplementedError(f"Tokenizer {type(new_tokenizer).__name__} is not supported")
-
-        # Replace the tokenizer
-        self.processor.tokenizer = new_tokenizer
-        logger.info(
-            f"Replaced processor tokenizer with {type(new_tokenizer).__name__} "
-            f"(vocab_size={new_tokenizer.vocab_size})"
-        )
 
     def get_token_ids(self) -> Dict[str, Optional[int]]:
         """Get current token IDs from the processor.
@@ -646,12 +744,13 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         return pixel_values, grid_mask
 
-    def _create_labels(self, input_ids: np.ndarray) -> np.ndarray:
+    def _create_loss_mask(self, input_ids: np.ndarray) -> np.ndarray:
         """
-        Create labels for training by masking non-assistant tokens.
+        Create loss mask for training by identifying assistant response tokens.
 
         For causal LM training, we only compute loss on assistant responses.
-        All other tokens (system, user, special tokens) are masked with IGNORE_INDEX.
+        Returns a float32 mask where 1.0 indicates tokens that should contribute
+        to the loss, and 0.0 indicates tokens that should be ignored.
 
         This is an efficient vectorized implementation that works directly on token IDs
         without decoding, similar to HuggingFace's return_assistant_tokens_mask.
@@ -665,23 +764,23 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             input_ids: Token IDs array
 
         Returns:
-            Labels array with IGNORE_INDEX for masked positions
+            Loss mask array (float32) with 1.0 for valid positions, 0.0 for masked
         """
         if not self.mask_prompt:
-            return input_ids.copy()
+            return np.ones(len(input_ids), dtype=np.float32)
 
         n = len(input_ids)
         num_ast = self._cached_num_assistant_tokens
-        empty_labels = np.full_like(input_ids, self.IGNORE_INDEX)
+        empty_mask = np.zeros(n, dtype=np.float32)
 
         if n < 3:
-            return empty_labels
+            return empty_mask
 
         # Find all <|im_start|> positions and filter to valid ones
         im_start_positions = np.where(input_ids == self._cached_im_start_id)[0]
         valid_positions = im_start_positions[im_start_positions + 1 + num_ast <= n]
         if len(valid_positions) == 0:
-            return empty_labels
+            return empty_mask
 
         # Vectorized check for assistant tokens following <|im_start|>
         offsets = np.arange(1, num_ast + 1)
@@ -690,12 +789,12 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         matches = np.all(check_tokens == self._cached_assistant_token_ids_array, axis=1)
         pattern_starts = valid_positions[matches]
         if len(pattern_starts) == 0:
-            return empty_labels
+            return empty_mask
 
         # Find all <|im_end|> positions
         im_end_positions = np.where(input_ids == self._cached_im_end_id)[0]
         if len(im_end_positions) == 0:
-            return empty_labels
+            return empty_mask
 
         # Content starts after: <|im_start|> + assistant_tokens
         # Note: The \n after "assistant" is INCLUDED in loss (matches HF behavior)
@@ -703,7 +802,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         valid_mask = content_starts < n
         content_starts = content_starts[valid_mask]
         if len(content_starts) == 0:
-            return empty_labels
+            return empty_mask
 
         # Use searchsorted to find matching <|im_end|> for each content_start
         end_indices = np.searchsorted(im_end_positions, content_starts, side="left")
@@ -711,7 +810,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         content_starts = content_starts[valid_ends]
         end_indices = end_indices[valid_ends]
         if len(content_starts) == 0:
-            return empty_labels
+            return empty_mask
 
         # End positions include <|im_end|> token
         end_positions = im_end_positions[end_indices] + 1
@@ -722,7 +821,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         np.add.at(diff, end_positions, -1)
         mask = np.cumsum(diff[:-1]) > 0
 
-        return np.where(mask, input_ids, self.IGNORE_INDEX).astype(input_ids.dtype)
+        return mask.astype(np.float32)
 
     def __call__(self, batch: Sequence[Dict[str, Any]]) -> Sequence[ImageTextDict]:
         """
@@ -839,7 +938,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 gh, gw = self._compute_grid_shape((orig_height, orig_width))
                 patches_height = patches_width = self.vision_feature_height
                 features_per_patch = patches_height * patches_width
-                unpad_indices = self._compute_unpad_indices_for_image(
+                unpad_indices_raw = self._compute_unpad_indices_for_image(
                     orig_height=orig_height,
                     orig_width=orig_width,
                     patches_height=patches_height,
@@ -848,6 +947,13 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                     scale_width=gw,
                     features_per_patch=features_per_patch,
                 )
+                # Pad unpad_indices to fixed size for consistent array shapes
+                if self.max_num_patches is not None:
+                    max_features = (self.max_num_patches + 1) * features_per_patch
+                    unpad_indices = np.zeros(max_features, dtype=np.int32)
+                    unpad_indices[: len(unpad_indices_raw)] = unpad_indices_raw
+                else:
+                    unpad_indices = unpad_indices_raw
 
             # Create labels and build result
             result: ImageTextDict = {
@@ -855,7 +961,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 "input_ids": input_ids,
                 "attention_mask": attention_mask_batch[i],
                 "image_sizes": image_sizes,
-                "labels": self._create_labels(input_ids),
+                "loss_mask": self._create_loss_mask(input_ids),
                 "grid_mask": grid_mask,
                 "unpad_indices": unpad_indices,
             }
@@ -977,15 +1083,42 @@ class ConversationDatasetSourceConfig:
     """Configuration for a conversation-format image-text dataset source.
 
     This is used for VLM training data with conversation format like LLaVA.
+    Supports single image, multiple images, and interleaved image/text content.
 
-    Expected data format:
+    1. Single image:
     {
         "messages": [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "..."}]},
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe this image."}]},
             {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
         ],
         "images": ["path/to/image.jpg"]
     }
+
+    2. Multiple images:
+    {
+        "messages": [
+            {"role": "user", "content": [{"type": "image"}, {"type": "image"}, {"type": "text", "text": "Compare these two images."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+        ],
+        "images": ["path/to/image1.jpg", "path/to/image2.jpg"]
+    }
+
+    3. Interleaved image and text:
+    {
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "First image:"},
+                {"type": "image"},
+                {"type": "text", "text": "Second image:"},
+                {"type": "image"},
+                {"type": "text", "text": "What are the differences?"}
+            ]},
+            {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+        ],
+        "images": ["path/to/image1.jpg", "path/to/image2.jpg"]
+    }
+
+    Note: {"type": "image"} placeholders are replaced with images from the "images" list in order.
     """
 
     id: Optional[str] = None  # HuggingFace dataset id or path
@@ -1028,7 +1161,7 @@ class ConversationDatasetSourceConfig:
                 return None
             return cast(
                 ShardedDataSource[ConversationDict],
-                ConversationUrlDataSource(split_urls, messages_key=self.messages_key, images_key=self.images_key),
+                ImageConversationUrlDataSource(split_urls, messages_key=self.messages_key, images_key=self.images_key),
             )
 
     def doc_iterator(self, split: str) -> Iterator[ConversationDict]:
@@ -1042,7 +1175,7 @@ class ConversationDatasetSourceConfig:
                 }
         else:
             urls = self.urls_for_split(split)
-            for doc in ConversationUrlDataSource(urls, messages_key=self.messages_key, images_key=self.images_key):
+            for doc in ImageConversationUrlDataSource(urls, messages_key=self.messages_key, images_key=self.images_key):
                 yield cast(ConversationDict, doc)
 
     def urls_for_split(self, split: str) -> List[str]:
@@ -1627,8 +1760,7 @@ class ImageTextExample(eqx.Module):
     def init(
         pixel_values: Optional[NamedArray],
         input_ids: NamedArray,
-        labels: Optional[NamedArray] = None,
-        ignore_id: Optional[int] = None,
+        loss_mask: Optional[NamedArray] = None,
         grid_mask: Optional[NamedArray] = None,
     ) -> "ImageTextExample":
         """Initialize an ImageTextExample with optional loss masking.
@@ -1636,34 +1768,21 @@ class ImageTextExample(eqx.Module):
         Args:
             pixel_values: Image pixel values (FIXED shape, padded), or None for text-only
             input_ids: Token IDs
-            labels: Training labels with -100 for tokens to ignore (HF-compatible).
-                    If provided, loss_mask is created from labels != -100.
-            ignore_id: Alternative way to create loss_mask from input_ids != ignore_id.
-                       Only used if labels is None.
+            loss_mask: Loss mask (float32) with 1.0 for valid tokens, 0.0 for masked.
             grid_mask: Boolean mask indicating valid patches (TOTAL_PATCHES,)
         """
-        if labels is not None:
-            # HuggingFace-compatible: use labels to create loss mask
-            # labels == -100 means the token should be ignored
-            # Use numpy operations to keep data on CPU during data loading
-            # Use bool (1 byte) instead of float32 (4 bytes) to save memory
-            # Will be converted to float during loss computation
-            labels_array = labels.array if hasattr(labels, "array") else labels
-            mask_array = (labels_array != -100).astype(np.bool_)
-            # Use NamedArray directly to avoid jnp.asarray()
-            loss_mask = NamedArray(mask_array, labels.axes)
-        elif ignore_id is not None:
-            # Legacy behavior: use input_ids to create loss mask
-            input_ids_array = input_ids.array if hasattr(input_ids, "array") else input_ids
-            mask_array = (input_ids_array != ignore_id).astype(np.bool_)
-            loss_mask = NamedArray(mask_array, input_ids.axes)
-        else:
-            loss_mask = None
+        result_loss_mask = None
+        if loss_mask is not None:
+            # Ensure float32 dtype for loss computation
+            mask_array = loss_mask.array if hasattr(loss_mask, "array") else loss_mask
+            if mask_array.dtype != np.float32:
+                mask_array = mask_array.astype(np.float32)
+            result_loss_mask = NamedArray(mask_array, loss_mask.axes)
 
         return ImageTextExample(
             pixel_values=pixel_values,
             input_ids=input_ids,
-            loss_mask=loss_mask,
+            loss_mask=result_loss_mask,
             grid_mask=grid_mask,
         )
 
@@ -1680,7 +1799,6 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
         Height: Axis,
         Width: Axis,
         key: Optional[PRNGKeyArray] = None,
-        ignore_index: Optional[int] = None,
         pixel_dtype: Optional[np.dtype] = None,
         grid_pinpoints: Optional[List[List[int]]] = None,
         patch_size: int = 384,
@@ -1694,7 +1812,6 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
             Height: Axis for image height
             Width: Axis for image width
             key: Optional random key
-            ignore_index: Token ID to ignore in loss computation
             pixel_dtype: dtype for pixel values when moving to device.
                         If None, uses the original dtype (float32).
                         Set to jnp.bfloat16 to save memory on TPU.
@@ -1708,7 +1825,6 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
         self.Height = Height
         self.Width = Width
         self.key = key
-        self.ignore_id = ignore_index
         self.pixel_dtype = pixel_dtype
         self.grid_pinpoints = grid_pinpoints
         self.patch_size = patch_size
@@ -1756,9 +1872,9 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
             # Keep input_ids as numpy array
             input_ids = NamedArray(inputs["input_ids"], (self.Position,))
 
-            labels = None
-            if "labels" in inputs:
-                labels = NamedArray(inputs["labels"], (self.Position,))
+            loss_mask = None
+            if "loss_mask" in inputs:
+                loss_mask = NamedArray(inputs["loss_mask"], (self.Position,))
 
             # Extract grid_mask from preprocessing (for fixed-shape processing)
             gm_arr = inputs.get("grid_mask")
@@ -1772,8 +1888,7 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
             out = ImageTextExample.init(
                 pixel_values,
                 input_ids,
-                labels=labels,
-                ignore_id=self.ignore_id,
+                loss_mask=loss_mask,
                 grid_mask=grid_mask,
             )
             return out

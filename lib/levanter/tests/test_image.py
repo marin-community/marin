@@ -16,7 +16,7 @@ from levanter.data.image import (
 )
 from levanter.data.sharded_datasource import (
     ImageTextUrlDataSource,
-    ConversationUrlDataSource,
+    ImageConversationUrlDataSource,
 )
 from levanter.store.cache import SerialCacheWriter
 import jax
@@ -105,8 +105,8 @@ class TestImageTextUrlDataSource:
         assert records[0]["text"] == "Caption 1"
 
 
-class TestConversationUrlDataSource:
-    """Tests for ConversationUrlDataSource."""
+class TestImageConversationUrlDataSource:
+    """Tests for ImageConversationUrlDataSource."""
 
     @pytest.fixture
     def conversation_jsonl(self, tmp_path):
@@ -135,12 +135,12 @@ class TestConversationUrlDataSource:
 
     def test_shard_names(self, conversation_jsonl):
         """Test that shard names are correct."""
-        ds = ConversationUrlDataSource([conversation_jsonl])
+        ds = ImageConversationUrlDataSource([conversation_jsonl])
         assert len(ds.shard_names) == 1
 
     def test_open_shard(self, conversation_jsonl):
         """Test reading conversation data."""
-        ds = ConversationUrlDataSource([conversation_jsonl])
+        ds = ImageConversationUrlDataSource([conversation_jsonl])
         shard_name = ds.shard_names[0]
         records = list(ds.open_shard(shard_name))
         assert len(records) == 2
@@ -154,7 +154,7 @@ class TestConversationUrlDataSource:
 
     def test_open_shard_at_row(self, conversation_jsonl):
         """Test reading from a specific row."""
-        ds = ConversationUrlDataSource([conversation_jsonl])
+        ds = ImageConversationUrlDataSource([conversation_jsonl])
         shard_name = ds.shard_names[0]
         records = list(ds.open_shard_at_row(shard_name, 1))
         assert len(records) == 1
@@ -530,12 +530,12 @@ def test_batch_image_processor(processor, dataset):
         assert "input_ids" in result
         assert "attention_mask" in result
         assert "image_sizes" in result
-        assert "labels" in result
+        assert "loss_mask" in result
 
         # Check shapes
         assert result["input_ids"].shape == (2048,), f"Expected (2048,), got {result['input_ids'].shape}"
         assert result["attention_mask"].shape == (2048,), f"Expected (2048,), got {result['attention_mask'].shape}"
-        assert result["labels"].shape == (2048,), f"Expected (2048,), got {result['labels'].shape}"
+        assert result["loss_mask"].shape == (2048,), f"Expected (2048,), got {result['loss_mask'].shape}"
 
         # pixel_values should have proper dimensions
         assert result["pixel_values"].ndim >= 3
@@ -561,9 +561,9 @@ def test_batch_image_processor_with_masking(processor, dataset):
     assert len(results) == 1
     result = results[0]
 
-    # Labels should be mostly -100 (masked) for non-assistant tokens
+    # loss_mask should be mostly 0.0 (masked) for non-assistant tokens
     # At least some tokens should be masked
-    assert (result["labels"] == -100).any(), "Expected some tokens to be masked"
+    assert (result["loss_mask"] == 0.0).any(), "Expected some tokens to be masked"
 
 
 def test_serial_cache_write_and_read(processor, dataset):
@@ -605,7 +605,7 @@ def test_serial_cache_write_and_read(processor, dataset):
             for ex in cached_examples:
                 assert ex["input_ids"].shape == (8192,), f"Expected (8192,), got {ex['input_ids'].shape}"
                 assert ex["attention_mask"].shape == (8192,), f"Expected (8192,), got {ex['attention_mask'].shape}"
-                assert ex["labels"].shape == (8192,), f"Expected (8192,), got {ex['labels'].shape}"
+                assert ex["loss_mask"].shape == (8192,), f"Expected (8192,), got {ex['loss_mask'].shape}"
 
 
 def test_metadata(processor):
@@ -677,12 +677,12 @@ async def test_hf_image_ray_pipeline():
             assert "pixel_values" in t, "pixel_values should be present"
             assert "input_ids" in t, "input_ids should be present"
             assert "attention_mask" in t, "attention_mask should be present"
-            assert "labels" in t, "labels should be present"
+            assert "loss_mask" in t, "loss_mask should be present"
             assert t["input_ids"].shape == (8192,), f"Expected input_ids shape (8192,), got {t['input_ids'].shape}"
             assert t["attention_mask"].shape == (
                 8192,
             ), f"Expected attention_mask shape (8192,), got {t['attention_mask'].shape}"
-            assert t["labels"].shape == (8192,), f"Expected labels shape (8192,), got {t['labels'].shape}"
+            assert t["loss_mask"].shape == (8192,), f"Expected loss_mask shape (8192,), got {t['loss_mask'].shape}"
             # pixel_values should have proper dimensions (num_patches, channels, height, width)
             assert t["pixel_values"].ndim >= 3, f"Expected pixel_values ndim >= 3, got {t['pixel_values'].ndim}"
 
@@ -1302,7 +1302,7 @@ def test_cache_vs_streaming_data_consistency():
 
     This test ensures that:
     1. Both modes load and process the same raw data
-    2. The processed outputs (input_ids, pixel_values, labels) are identical
+    2. The processed outputs (input_ids, pixel_values, loss_mask) are identical
     3. Streaming mode is a valid drop-in replacement for cache mode
 
     Note: This is a sync test because cache building internally uses asyncio.run(),
@@ -1392,7 +1392,7 @@ def test_cache_vs_streaming_data_consistency():
         all_input_ids_match = True
         all_attention_mask_match = True
         all_pixel_values_match = True
-        all_labels_match = True
+        all_loss_mask_match = True
 
         for i in range(num_to_compare):
             cache_ex = cache_examples[i]
@@ -1425,14 +1425,14 @@ def test_cache_vs_streaming_data_consistency():
                 all_pixel_values_match = False
                 print(f"  Example {i}: pixel_values MISMATCH (max_diff={pixel_max_diff:.6f})")
 
-            # Compare labels
-            labels_match = np.array_equal(cache_ex["labels"], streaming_ex["labels"])
-            if not labels_match:
-                all_labels_match = False
-                print(f"  Example {i}: labels MISMATCH")
+            # Compare loss_mask
+            loss_mask_match = np.array_equal(cache_ex["loss_mask"], streaming_ex["loss_mask"])
+            if not loss_mask_match:
+                all_loss_mask_match = False
+                print(f"  Example {i}: loss_mask MISMATCH")
 
             # Print success for each example
-            if input_ids_match and attention_mask_match and pixel_values_match and labels_match:
+            if input_ids_match and attention_mask_match and pixel_values_match and loss_mask_match:
                 print(f"  Example {i}: ✓ All fields match")
 
         # ====== Summary ======
@@ -1440,13 +1440,13 @@ def test_cache_vs_streaming_data_consistency():
         print(f"  input_ids match: {all_input_ids_match}")
         print(f"  attention_mask match: {all_attention_mask_match}")
         print(f"  pixel_values match: {all_pixel_values_match}")
-        print(f"  labels match: {all_labels_match}")
+        print(f"  loss_mask match: {all_loss_mask_match}")
 
         # Assert all match
         assert all_input_ids_match, "input_ids mismatch between cache and streaming modes"
         assert all_attention_mask_match, "attention_mask mismatch between cache and streaming modes"
         assert all_pixel_values_match, "pixel_values mismatch between cache and streaming modes"
-        assert all_labels_match, "labels mismatch between cache and streaming modes"
+        assert all_loss_mask_match, "loss_mask mismatch between cache and streaming modes"
 
         print("\n✓ Cache and streaming modes produce identical data!")
 
@@ -1517,7 +1517,7 @@ def test_streaming_dataset_basic():
                 assert "input_ids" in ex, f"Example {i} missing input_ids"
                 assert "pixel_values" in ex, f"Example {i} missing pixel_values"
                 assert "attention_mask" in ex, f"Example {i} missing attention_mask"
-                assert "labels" in ex, f"Example {i} missing labels"
+                assert "loss_mask" in ex, f"Example {i} missing loss_mask"
                 assert "image_sizes" in ex, f"Example {i} missing image_sizes"
 
                 # Verify shapes
@@ -1525,7 +1525,7 @@ def test_streaming_dataset_basic():
                 assert ex["attention_mask"].shape == (
                     2048,
                 ), f"Example {i} attention_mask wrong shape: {ex['attention_mask'].shape}"
-                assert ex["labels"].shape == (2048,), f"Example {i} labels wrong shape: {ex['labels'].shape}"
+                assert ex["loss_mask"].shape == (2048,), f"Example {i} loss_mask wrong shape: {ex['loss_mask'].shape}"
                 print(f"  Example {i}: input_ids={ex['input_ids'].shape}, pixel_values={ex['pixel_values'].shape}")
 
             return True
