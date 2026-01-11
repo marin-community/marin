@@ -1167,6 +1167,7 @@ dependencies = [
     { name = "httpx" },
     { name = "typing-extensions" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "xxhash" },
 ]
 
 [package.dev-dependencies]
@@ -1186,6 +1187,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "typing-extensions", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
+    { name = "xxhash", specifier = ">=3.0.0" },
 ]
 
 [package.metadata.requires-dev]
