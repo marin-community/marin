@@ -88,8 +88,30 @@ You don't generate comments that merely restate the code, e.g.
 - Run the appropriate tests for your changes (for example, `uv run pytest` under the relevant directory); consult subproject guides for preferred markers.
 - Use pytest features like fixtures and parameterization to avoid duplication and write clean code.
 
+PREFER:
+
+- Integration style tests which exercise behavior and test the output
+
+DO NOT:
+
+- Create tests which validate obvious features: if a type exists, a constant has a value, etc.
+
+
 ## Environment
 
 - Prefer to use `uv` when possible. If you can't (for instance, due to sandbox restrictions) you can use `.venv/bin/python`
 
 > This file will be expanded as agent workflows and best practices evolve.
+
+## Task Management
+
+You'll use the `weaver` tool to manage tasks. When you encounter a problem that is not directly in scope, you
+should file a `weaver` task and notify the user with:
+
+`weaver create <task_title> --description='... <detailed task description and context>'`
+
+You can add parent tasks as well as needed:
+
+`weaver create "User authentication system"` # prints task id
+`weaver create "Design auth schema" --parent <parent_task_id>`
+`weaver create "Implement JWT generation" --parent <parent_task_id>`
