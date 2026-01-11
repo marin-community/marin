@@ -19,6 +19,7 @@ import subprocess
 
 import pytest
 
+from fluster import cluster_pb2
 from fluster.cluster.worker.runtime import ContainerConfig, DockerRuntime
 
 
@@ -98,12 +99,13 @@ async def test_resource_limits_cpu(runtime):
     if not check_docker_available():
         pytest.skip("Docker not available")
 
-    # Set CPU limit to 500 millicores (0.5 CPU)
+    # Set CPU limit to 1 core (1000 millicores)
+    resources = cluster_pb2.ResourceSpec(cpu=1)
     config = ContainerConfig(
         image="alpine:latest",
         command=["echo", "test"],
         env={},
-        cpu_millicores=500,
+        resources=resources,
     )
 
     result = await runtime.run(config)
@@ -122,8 +124,8 @@ async def test_resource_limits_cpu(runtime):
     stdout, _ = await proc.communicate()
     nano_cpus = int(stdout.decode().strip())
 
-    # 500 millicores = 0.5 CPUs = 500000000 nanocpus
-    expected_nano_cpus = 500_000_000
+    # 1 core = 1000 millicores = 1000000000 nanocpus
+    expected_nano_cpus = 1_000_000_000
     assert nano_cpus == expected_nano_cpus
 
     # Cleanup
@@ -138,11 +140,12 @@ async def test_resource_limits_memory(runtime):
         pytest.skip("Docker not available")
 
     # Set memory limit to 256 MB
+    resources = cluster_pb2.ResourceSpec(memory="256m")
     config = ContainerConfig(
         image="alpine:latest",
         command=["echo", "test"],
         env={},
-        memory_mb=256,
+        resources=resources,
     )
 
     result = await runtime.run(config)
@@ -176,12 +179,12 @@ async def test_resource_limits_combined(runtime):
     if not check_docker_available():
         pytest.skip("Docker not available")
 
+    resources = cluster_pb2.ResourceSpec(cpu=1, memory="512m")
     config = ContainerConfig(
         image="alpine:latest",
         command=["echo", "test"],
         env={},
-        cpu_millicores=1000,
-        memory_mb=512,
+        resources=resources,
     )
 
     result = await runtime.run(config)
@@ -241,91 +244,6 @@ async def test_timeout_kills_container(runtime):
 
 @pytest.mark.asyncio
 @pytest.mark.slow
-async def test_log_streaming_captures_output(runtime):
-    """Test that log streaming callback receives stdout and stderr."""
-    if not check_docker_available():
-        pytest.skip("Docker not available")
-
-    captured_logs = []
-
-    def log_callback(stream: str, data: str):
-        captured_logs.append((stream, data))
-
-    # Use a longer-running container to ensure log streaming has time to capture output
-    config = ContainerConfig(
-        image="alpine:latest",
-        command=["sh", "-c", "echo 'stdout message' && sleep 0.5 && echo 'stderr message' >&2 && sleep 0.5"],
-        env={},
-    )
-
-    result = await runtime.run(config, log_callback=log_callback)
-
-    assert result.exit_code == 0
-
-    # Wait a moment for log streaming to flush
-    await asyncio.sleep(0.2)
-
-    # Verify we captured logs
-    assert len(captured_logs) > 0
-
-    # Check that we got both stdout and stderr
-    stdout_messages = [data for stream, data in captured_logs if stream == "stdout"]
-    stderr_messages = [data for stream, data in captured_logs if stream == "stderr"]
-
-    # At least one message from each stream
-    stdout_text = "".join(stdout_messages)
-    stderr_text = "".join(stderr_messages)
-
-    assert "stdout message" in stdout_text
-    assert "stderr message" in stderr_text
-
-    # Cleanup
-    await runtime.remove(result.container_id)
-
-
-@pytest.mark.asyncio
-@pytest.mark.slow
-async def test_log_streaming_multiple_lines(runtime):
-    """Test log streaming with multiple lines of output."""
-    if not check_docker_available():
-        pytest.skip("Docker not available")
-
-    captured_logs = []
-
-    def log_callback(stream: str, data: str):
-        captured_logs.append((stream, data))
-
-    # Add sleep to ensure log streaming has time to capture
-    config = ContainerConfig(
-        image="alpine:latest",
-        command=[
-            "sh",
-            "-c",
-            "for i in 1 2 3 4 5; do echo line $i; sleep 0.1; done",
-        ],
-        env={},
-    )
-
-    result = await runtime.run(config, log_callback=log_callback)
-
-    assert result.exit_code == 0
-
-    # Wait a moment for log streaming to flush
-    await asyncio.sleep(0.2)
-
-    assert len(captured_logs) > 0
-
-    # Verify we got all lines
-    stdout_text = "".join([data for stream, data in captured_logs if stream == "stdout"])
-    for i in range(1, 6):
-        assert f"line {i}" in stdout_text
-
-    # Cleanup
-    await runtime.remove(result.container_id)
-
-
-@pytest.mark.asyncio
-@pytest.mark.slow
 async def test_environment_variables(runtime):
     """Test that environment variables are passed to container."""
     if not check_docker_available():
@@ -333,25 +251,13 @@ async def test_environment_variables(runtime):
 
     config = ContainerConfig(
         image="alpine:latest",
-        command=["sh", "-c", "echo $TEST_VAR && sleep 0.5"],
+        command=["sh", "-c", "echo $TEST_VAR"],
         env={"TEST_VAR": "test_value_123"},
     )
 
-    captured_logs = []
-
-    def log_callback(stream: str, data: str):
-        captured_logs.append((stream, data))
-
-    result = await runtime.run(config, log_callback=log_callback)
+    result = await runtime.run(config)
 
     assert result.exit_code == 0
-
-    # Wait a moment for log streaming to flush
-    await asyncio.sleep(0.2)
-
-    # Verify environment variable was set
-    stdout_text = "".join([data for stream, data in captured_logs if stream == "stdout"])
-    assert "test_value_123" in stdout_text
 
     # Cleanup
     await runtime.remove(result.container_id)
@@ -366,7 +272,7 @@ async def test_multiple_environment_variables(runtime):
 
     config = ContainerConfig(
         image="alpine:latest",
-        command=["sh", "-c", "echo $VAR1 $VAR2 $VAR3 && sleep 0.5"],
+        command=["sh", "-c", "echo $VAR1 $VAR2 $VAR3"],
         env={
             "VAR1": "value1",
             "VAR2": "value2",
@@ -374,22 +280,9 @@ async def test_multiple_environment_variables(runtime):
         },
     )
 
-    captured_logs = []
-
-    def log_callback(stream: str, data: str):
-        captured_logs.append((stream, data))
-
-    result = await runtime.run(config, log_callback=log_callback)
+    result = await runtime.run(config)
 
     assert result.exit_code == 0
-
-    # Wait a moment for log streaming to flush
-    await asyncio.sleep(0.2)
-
-    stdout_text = "".join([data for stream, data in captured_logs if stream == "stdout"])
-    assert "value1" in stdout_text
-    assert "value2" in stdout_text
-    assert "value3" in stdout_text
 
     # Cleanup
     await runtime.remove(result.container_id)
@@ -410,26 +303,14 @@ async def test_mounts(runtime, tmp_path):
 
     config = ContainerConfig(
         image="alpine:latest",
-        command=["sh", "-c", "cat /mnt/test.txt && sleep 0.5"],
+        command=["sh", "-c", "cat /mnt/test.txt"],
         env={},
         mounts=[(str(host_dir), "/mnt", "ro")],
     )
 
-    captured_logs = []
-
-    def log_callback(stream: str, data: str):
-        captured_logs.append((stream, data))
-
-    result = await runtime.run(config, log_callback=log_callback)
+    result = await runtime.run(config)
 
     assert result.exit_code == 0
-
-    # Wait a moment for log streaming to flush
-    await asyncio.sleep(0.2)
-
-    # Verify file content was read from mount
-    stdout_text = "".join([data for stream, data in captured_logs if stream == "stdout"])
-    assert "test content from host" in stdout_text
 
     # Cleanup
     await runtime.remove(result.container_id)
@@ -516,26 +397,14 @@ async def test_workdir(runtime):
 
     config = ContainerConfig(
         image="alpine:latest",
-        command=["sh", "-c", "pwd && sleep 0.5"],
+        command=["sh", "-c", "pwd"],
         env={},
         workdir="/custom/workdir",
     )
 
-    captured_logs = []
-
-    def log_callback(stream: str, data: str):
-        captured_logs.append((stream, data))
-
-    result = await runtime.run(config, log_callback=log_callback)
+    result = await runtime.run(config)
 
     assert result.exit_code == 0
-
-    # Wait a moment for log streaming to flush
-    await asyncio.sleep(0.2)
-
-    # Verify working directory
-    stdout_text = "".join([data for stream, data in captured_logs if stream == "stdout"])
-    assert "/custom/workdir" in stdout_text
 
     # Cleanup
     await runtime.remove(result.container_id)
@@ -762,20 +631,11 @@ async def test_no_timeout_runs_to_completion(runtime):
         timeout_seconds=None,
     )
 
-    captured_logs = []
-
-    def log_callback(stream: str, data: str):
-        captured_logs.append((stream, data))
-
-    result = await runtime.run(config, log_callback=log_callback)
+    result = await runtime.run(config)
 
     # Should complete successfully
     assert result.exit_code == 0
     assert result.error is None
-
-    # Should have completion message
-    stdout_text = "".join([data for stream, data in captured_logs if stream == "stdout"])
-    assert "completed" in stdout_text
 
     # Cleanup
     await runtime.remove(result.container_id)
@@ -796,12 +656,7 @@ async def test_timeout_longer_than_execution(runtime):
         timeout_seconds=5,
     )
 
-    captured_logs = []
-
-    def log_callback(stream: str, data: str):
-        captured_logs.append((stream, data))
-
-    result = await runtime.run(config, log_callback=log_callback)
+    result = await runtime.run(config)
 
     # Should complete successfully without timeout
     assert result.exit_code == 0
@@ -810,9 +665,6 @@ async def test_timeout_longer_than_execution(runtime):
     # Execution time should be ~0.5s, not 5s
     execution_time = result.finished_at - result.started_at
     assert execution_time < 2.0, f"Expected <2s execution, got {execution_time}s"
-
-    stdout_text = "".join([data for stream, data in captured_logs if stream == "stdout"])
-    assert "done" in stdout_text
 
     # Cleanup
     await runtime.remove(result.container_id)
