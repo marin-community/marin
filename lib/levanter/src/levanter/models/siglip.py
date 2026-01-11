@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple, Type
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
+from levanter.models.vlm_model import VisionEncoderConfig
 
 
 silence_transformer_nag()
@@ -47,8 +48,9 @@ class SiglipVisionModelOutput:
     hidden_states: Optional[Tuple[NamedArray, ...]] = None
 
 
+@VisionEncoderConfig.register_subclass("siglip")
 @dataclass(frozen=True)
-class SiglipVisionConfig:
+class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
     """
     Configuration class for SigLIP Vision Encoder (standard version, not Siglip2).
 
@@ -201,6 +203,11 @@ class SiglipVisionConfig:
         hf_config = HfSiglipVisionConfig(**config_dict)
 
         return hf_config
+
+    @property
+    def model_type(self) -> Type["SiglipVisionModel"]:
+        """Return the corresponding model class."""
+        return SiglipVisionModel
 
     # Axis definitions following Levanter patterns
     @property

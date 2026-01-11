@@ -17,6 +17,7 @@ from haliax.jax_utils import maybe_rng_split, named_call
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmConfig
+from levanter.models.vlm_model import VlmConfig, VisionEncoderConfig
 from levanter.models.qwen import QwenConfig, QwenLMHeadModel
 from levanter.models.siglip import SiglipVisionConfig, SiglipVisionModel
 from levanter.models.siglip2 import Siglip2VisionConfig, Siglip2VisionModel
@@ -39,6 +40,8 @@ class LlavaOnevisionConfig:
 
     LLaVA OneVision combines a vision encoder (SigLIP or Siglip2) with a Qwen2/Qwen3 language model
     through a multimodal projector.
+
+    Implements the VlmConfig interface (vision_config + text_config) via duck typing.
 
     Args:
         vision_config: Configuration for the vision encoder (SigLIP or Siglip2)
@@ -237,7 +240,23 @@ class LlavaOnevisionConfig:
             **config_overrides,
         )
 
-    # Axis definitions
+    # Axis definitions (implementing VlmConfig interface via duck typing)
+
+    @property
+    def Embed(self) -> Axis:
+        """Text embedding dimension."""
+        return self.text_config.Embed
+
+    @property
+    def max_Pos(self) -> Axis:
+        """Maximum position axis."""
+        return self.text_config.max_Pos
+
+    @property
+    def KeyPos(self) -> Axis:
+        """Key position axis."""
+        return self.text_config.KeyPos
+
     @property
     def VisionEmbed(self) -> Axis:
         """Vision embedding dimension (renamed to avoid collision with text embed)."""
@@ -249,24 +268,9 @@ class LlavaOnevisionConfig:
         return self.text_config.Embed
 
     @property
-    def Embed(self) -> Axis:
-        """Text embedding dimension."""
-        return self.text_config.Embed
-
-    @property
     def Pos(self) -> Axis:
-        """Maximum position axis."""
+        """Maximum position axis (alias for max_Pos)."""
         return self.text_config.max_Pos
-
-    @property
-    def max_Pos(self) -> Axis:
-        """Maximum position axis."""
-        return self.text_config.max_Pos
-
-    @property
-    def KeyPos(self) -> Axis:
-        """Key position axis."""
-        return self.text_config.KeyPos
 
 
 class LlavaOnevisionMultimodalProjector(eqx.Module):
@@ -287,8 +291,7 @@ class LlavaOnevisionMultimodalProjector(eqx.Module):
         """Initialize the multimodal projector."""
         k1, k2 = jrandom.split(key, 2)
 
-        # Create axis for vision embeddings with unique name to avoid collision
-        VisionEmbed = Axis(name="vision_embed", size=config.vision_config.hidden_size)
+        VisionEmbed = config.VisionEmbed
         TextEmbed = config.TextEmbed
         # Create intermediate hidden axis for projector (same size as TextEmbed but different name)
         # This avoids axis collision in linear_2 where In and Out would be the same

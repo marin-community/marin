@@ -30,10 +30,10 @@ from levanter import callbacks
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, save_hf_checkpoint_callback
 from levanter.data.image import (
     ImageIODatasetConfig,
+    ImageDataLoader,
     ImageMixtureDatasetConfig,
     ImageTextDataset,
 )
-from levanter.data.loader import ImageDataLoader
 from levanter.models.llava_onevision import LlavaOnevisionConfig, LlavaOnevisionModel
 from levanter.optim import AdamConfig, OptimizerConfig
 from levanter.trainer import Trainer, TrainerConfig
