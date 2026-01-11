@@ -97,7 +97,7 @@ def main():
             do_trainer_inference_mismatch_importance_sampling=True,
             tis_importance_sampling_ratio_max=2.0,
             do_overlong_filtering=True,
-            vocab_tile_size=152064,  # Qwen vocab size
+            vocab_tile_size=38016,  # Tile size for vocab to save memory (total vocab size = 152064)
         ),
         experiment_name_suffix="code-r1-lr=5e-7",
         train_batch_size=256,  # 16 prompts * 16 generations = 256
