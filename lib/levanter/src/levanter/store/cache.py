@@ -361,9 +361,7 @@ def _build_single_shard_cache(
 
     def records():
         batch = []
-        if hasattr(source, "shard_row_count"):
-            total_rows = source.shard_row_count(shard_name)
-        pbar = tqdm_logging(desc=f"Shard {shard_name}", total=total_rows)
+        pbar = tqdm_logging(desc=f"Shard {shard_name}")
         for example in source.open_shard_at_row(shard_name, 0):
             batch.append(example)
             if len(batch) >= options.batch_size:

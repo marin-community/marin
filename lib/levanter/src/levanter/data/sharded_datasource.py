@@ -57,10 +57,6 @@ class ShardedDataSource(Generic[T_co]):
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[T_co]:
         raise NotImplementedError
 
-    def shard_row_count(self, shard_name: str) -> int | None:
-        """Return the number of rows in a shard, or None if unknown."""
-        return None
-
     def __iter__(self):
         """
         Iterate over all data in the dataset, in order.
@@ -437,7 +433,7 @@ class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
                     raise ValueError(f"Unknown format {format}")
 
 
-class ConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
+class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
     """
     Dataset for conversation-format image-text data (VLM training format).
 
@@ -458,24 +454,6 @@ class ConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
         super().__init__(urls)
         self.messages_key = messages_key
         self.images_key = images_key
-
-    def shard_row_count(self, shard_name: str) -> int | None:
-        """Return the number of rows in a shard."""
-        url = self._shard_name_to_url_mapping[shard_name]
-        format = _sniff_format_for_dataset(url)
-        if format == ".parquet":
-            with fsspec.open(url, "rb") as f:
-                parquet_file = pq.ParquetFile(f)
-                return parquet_file.metadata.num_rows
-        elif format == ".jsonl":
-            # Count lines in jsonl file
-            with fsspec.open(url, "r", compression="infer") as f:
-                return sum(1 for _ in f)
-        elif format == ".json":
-            with fsspec.open(url, "r", compression="infer") as f:
-                data = json.load(f)
-                return len(data)
-        return None
 
     def open_shard_at_row(self, shard_name: str, row: int) -> Iterator[dict]:
         url = self._shard_name_to_url_mapping[shard_name]

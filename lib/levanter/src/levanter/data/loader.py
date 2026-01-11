@@ -47,10 +47,6 @@ Ex = TypeVar("Ex")
 _TensorSliceIndex = tuple[slice, ...]
 logger = logging.getLogger(__name__)
 
-# HuggingFace standard ignore index for labels (tokens with this label are ignored in loss computation)
-IGNORE_INDEX = -100
-
-
 # NOTE: In general there are a lot of different indices flying around. Here's a quick guide:
 # - `step` or `batch_number` or `bn` is the training step or batch number
 # - `global` indices refer to the index into the datastore
@@ -727,13 +723,13 @@ class ImageDataLoader(DataLoader):
 
     def _make_padding_example(self, ex: ImageTextDict) -> ImageTextDict:
         """Create a zero-padded example for padding incomplete batches."""
-        return {
-            "pixel_values": numpy.zeros_like(ex["pixel_values"]),
-            "input_ids": numpy.zeros_like(ex["input_ids"]),
-            "attention_mask": numpy.zeros_like(ex["attention_mask"]),
-            "image_sizes": numpy.zeros_like(ex["image_sizes"]),
-            "labels": numpy.full_like(ex["labels"], IGNORE_INDEX),
-        }
+        padding_dict: ImageTextDict = {}
+        for key, value in ex.items():
+            if value is None:
+                padding_dict[key] = None
+            else:
+                padding_dict[key] = numpy.zeros_like(value)
+        return padding_dict
 
     def iter_from_step(self, start_from_batch: int | None = None):
         start_from_batch = int(start_from_batch) if start_from_batch is not None else None
@@ -746,20 +742,6 @@ class ImageDataLoaderIterator(DataLoaderIterator):
     Inherits batch production and data retrieval from DataLoaderIterator,
     overriding only the image-specific batching logic.
     """
-
-    def _pad_pixel_values_to_num_patches(self, pixel_values: numpy.ndarray, target_num_patches: int) -> numpy.ndarray:
-        """Pad pixel_values to have target_num_patches along the first axis."""
-        current_patches = pixel_values.shape[0]
-        if current_patches > target_num_patches:
-            logger.warning(f"Truncating pixel_values from {current_patches} to {target_num_patches} patches")
-            return pixel_values[:target_num_patches]
-        if current_patches == target_num_patches:
-            return pixel_values
-
-        # Use numpy.pad instead of concatenate for better efficiency
-        pad_size = target_num_patches - current_patches
-        pad_width = [(0, pad_size)] + [(0, 0)] * (pixel_values.ndim - 1)
-        return numpy.pad(pixel_values, pad_width, mode="constant", constant_values=0)
 
     def _pspec_for(self, shape_spec: ShapeSpec | NamedShapeSpec | tuple) -> PartitionSpec:
         """Get partition spec for a given set of axes."""
@@ -837,10 +819,8 @@ class ImageDataLoaderIterator(DataLoaderIterator):
         pixel_shape = tuple(ax.size for ax in pixel_axes)
 
         def get_pixel_values(d: ImageTextDict) -> numpy.ndarray:
-            pv = d["pixel_values"]
-            if pv.ndim == 4 and target_num_patches > 1:
-                pv = self._pad_pixel_values_to_num_patches(pv, target_num_patches)
-            return pv.astype(self.dl.pixel_dtype)
+            # Padding is done in BatchImageProcessor, so pixel_values already has fixed shape
+            return d["pixel_values"].astype(self.dl.pixel_dtype)
 
         pixel_values = make_sharded_array(pixel_shape, pixel_axes, self.dl.pixel_dtype, get_pixel_values)
 
@@ -852,11 +832,9 @@ class ImageDataLoaderIterator(DataLoaderIterator):
 
         input_ids = make_sharded_array(input_shape, input_axes, numpy.int32, get_input_ids)
 
-        # Create loss_mask from labels (labels != IGNORE_INDEX indicates valid tokens for loss)
+        # Get loss_mask directly from preprocessed data
         def get_loss_mask(d: ImageTextDict) -> numpy.ndarray:
-            labels = d["labels"]
-            # Create mask: 1.0 for valid tokens (labels != IGNORE_INDEX), 0.0 for ignored
-            return (labels != IGNORE_INDEX).astype(numpy.float32)
+            return d["loss_mask"].astype(numpy.float32)
 
         loss_mask = make_sharded_array(input_shape, input_axes, numpy.float32, get_loss_mask)
 
@@ -866,24 +844,8 @@ class ImageDataLoaderIterator(DataLoaderIterator):
         grid_mask_shape = (padded_batch_size, target_num_patches)
 
         def get_grid_mask(d: ImageTextDict) -> numpy.ndarray:
-            # Use cached grid_mask from BatchImageProcessor if available
-            cached_mask = d.get("grid_mask")
-            if cached_mask is not None:
-                # Pad or truncate to target size if needed
-                if len(cached_mask) > target_num_patches:
-                    logger.warning(f"Truncating grid_mask from {len(cached_mask)} to {target_num_patches}")
-                    return cached_mask[:target_num_patches]
-                if len(cached_mask) == target_num_patches:
-                    return cached_mask
-                mask = numpy.zeros(target_num_patches, dtype=numpy.bool_)
-                mask[: len(cached_mask)] = cached_mask
-                return mask
-            # Fallback: compute from pixel_values shape (for backwards compatibility)
-            pv = d["pixel_values"]
-            actual_patches = pv.shape[0] if pv.ndim == 4 else 1
-            mask = numpy.zeros(target_num_patches, dtype=numpy.bool_)
-            mask[:actual_patches] = True
-            return mask
+            # grid_mask is pre-computed in BatchImageProcessor with fixed shape
+            return d["grid_mask"]
 
         grid_mask = make_sharded_array(grid_mask_shape, grid_mask_axes, numpy.bool_, get_grid_mask)
 
@@ -894,18 +856,8 @@ class ImageDataLoaderIterator(DataLoaderIterator):
             unpad_shape = (padded_batch_size, self.dl.NumImageTokens.size)
 
             def get_unpad_indices(d: ImageTextDict) -> numpy.ndarray:
-                indices = d.get("unpad_indices")
-                if indices is not None:
-                    target_size = self.dl.NumImageTokens.size
-                    # Pad or truncate to target size
-                    if len(indices) < target_size:
-                        padded = numpy.zeros(target_size, dtype=numpy.int32)
-                        padded[: len(indices)] = indices
-                        return padded
-                    if len(indices) > target_size:
-                        logger.warning(f"Truncating unpad_indices from {len(indices)} to {target_size}")
-                    return indices[:target_size].astype(numpy.int32)
-                return numpy.zeros(self.dl.NumImageTokens.size, dtype=numpy.int32)
+                # unpad_indices is pre-computed in BatchImageProcessor with fixed shape
+                return d["unpad_indices"].astype(numpy.int32)
 
             unpad_indices = make_sharded_array(unpad_shape, unpad_axes, numpy.int32, get_unpad_indices)
 
