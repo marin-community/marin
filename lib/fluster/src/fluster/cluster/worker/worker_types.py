@@ -38,11 +38,27 @@ class Job:
     ports: dict[str, int] = field(default_factory=dict)
     status_message: str = ""
 
+    # Resource tracking
+    current_memory_mb: int = 0
+    peak_memory_mb: int = 0
+    current_cpu_percent: int = 0
+    process_count: int = 0
+    disk_mb: int = 0
+
+    # Build tracking
+    build_started_ms: int | None = None
+    build_finished_ms: int | None = None
+    build_from_cache: bool = False
+    image_tag: str = ""
+
     # Internals
     container_id: str | None = None
     workdir: Path | None = None  # Job working directory with logs
     task: asyncio.Task | None = None
     cleanup_done: bool = False
+
+    # Background tasks
+    stats_task: asyncio.Task | None = None
 
     def transition_to(
         self,
@@ -80,4 +96,18 @@ class Job:
             finished_at_ms=self.finished_at_ms or 0,
             ports=self.ports,
             status_message=self.status_message,
+            resource_usage=cluster_pb2.ResourceUsage(
+                memory_mb=self.current_memory_mb,
+                memory_peak_mb=self.peak_memory_mb,
+                disk_mb=self.disk_mb,
+                cpu_millicores=self.current_cpu_percent * 10,
+                cpu_percent=self.current_cpu_percent,
+                process_count=self.process_count,
+            ),
+            build_metrics=cluster_pb2.BuildMetrics(
+                build_started_ms=self.build_started_ms or 0,
+                build_finished_ms=self.build_finished_ms or 0,
+                from_cache=self.build_from_cache,
+                image_tag=self.image_tag,
+            ),
         )

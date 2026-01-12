@@ -197,6 +197,16 @@ message ResourceUsage {
   int64 memory_mb = 1;
   int64 disk_mb = 2;
   int32 cpu_millicores = 3;
+  int64 memory_peak_mb = 4;
+  int32 cpu_percent = 5;
+  int32 process_count = 6;
+}
+
+message BuildMetrics {
+  int64 build_started_ms = 1;
+  int64 build_finished_ms = 2;
+  bool from_cache = 3;
+  string image_tag = 4;
 }
 
 message JobStatus {
@@ -214,11 +224,13 @@ message JobStatus {
 
   // Status message for current phase (e.g., "downloading bundle", "populating uv cache")
   string status_message = 9;
+
+  BuildMetrics build_metrics = 10;
 }
 
 message LogEntry {
   int64 timestamp_ms = 1;
-  string source = 2;  // "stdout", "stderr"
+  string source = 2;  // "stdout", "stderr", or "build"
   string data = 3;    // Log line content
 }
 

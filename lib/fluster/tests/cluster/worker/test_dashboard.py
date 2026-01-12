@@ -476,8 +476,8 @@ async def test_kill_job_already_completed(service, request_context):
     with pytest.raises(ConnectError) as exc_info:
         await service.kill_job(kill_request, request_context)
 
-    assert exc_info.value.code == Code.NOT_FOUND
-    assert "not running" in str(exc_info.value)
+    assert exc_info.value.code == Code.FAILED_PRECONDITION
+    assert "already completed" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
