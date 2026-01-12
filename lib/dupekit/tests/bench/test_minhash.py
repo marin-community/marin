@@ -11,20 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import logging
 
 import pyarrow as pa
 from typing import Any
 import dupekit
 from dupekit import Transformation
-
-try:
-    # Use the internal _minhash_lsh function to benchmark the Datasketch logic directly
-    # without the Zephyr Dataset API wrapper overhead or type checks.
-    from marin.processing.classification.deduplication.minhash_lsh import _minhash_lsh
-except ImportError:
-    # These benchmark tests are parsed by no run by the build
-    logging.warn("Couldn't import marin")
 
 # Python is slow, can't use too many rows
 BENCHMARK_ROWS = 1000
@@ -40,19 +31,6 @@ def rust_minhash_pipeline(batch: pa.RecordBatch) -> int:
     return len(res)
 
 
-def python_minhash_pipeline_wrapper(batch: pa.RecordBatch) -> int:
-    records = batch.to_pylist()
-    count = 0
-    for _ in _minhash_lsh(records, vector_length=286, num_bands=26, shingle_size=5):
-        count += 1
-    return count
-
-
 def test_bench_rust_minhash(benchmark: Any, sample_batch: pa.RecordBatch) -> None:
     batch = sample_batch.slice(length=BENCHMARK_ROWS)
     benchmark(rust_minhash_pipeline, batch)
-
-
-def test_bench_python_minhash(benchmark: Any, sample_batch: pa.RecordBatch) -> None:
-    batch = sample_batch.slice(length=BENCHMARK_ROWS)
-    benchmark(python_minhash_pipeline_wrapper, batch)
