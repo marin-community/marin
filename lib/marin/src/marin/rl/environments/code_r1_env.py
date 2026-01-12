@@ -58,6 +58,26 @@ CODE_R1_USER_TEMPLATE = (
 # Default timeout for code execution (seconds)
 CODE_EXECUTION_TIMEOUT = 5
 
+# Code-R1 standard imports for LeetCode environment
+# Source: code-r1/examples/data_preprocess/coder1.py
+LEETCODE_IMPORTS = (
+    "import heapq\n"
+    "from math import floor, gcd\n"
+    "import random\n"
+    "import sys\n"
+    "from typing import *\n"
+    "from functools import *\n"
+    "import collections\n"
+    "from collections import *\n"
+    "from itertools import *\n"
+    "from heapq import *\n"
+    "from bisect import *\n"
+    "from string import *\n"
+    "import math\n"
+    "import datetime\n"
+    "inf = float('inf')\n"
+)
+
 
 @dataclass(slots=True)
 class CodeExample:
@@ -145,8 +165,8 @@ def execute_code_with_tests(
         full_code = f"{code}\n\n{test_cases}\n\ncheck({entry_point})"
     else:
         # LeetCode style: tests are self-contained calls
-        # Prepend typing imports as LeetCode solutions often use them
-        full_code = f"from typing import *\n{code}\n\n{test_cases}"
+        # Prepend standard Code-R1 imports (heapq, bisect, etc)
+        full_code = f"{LEETCODE_IMPORTS}\n{code}\n\n{test_cases}"
 
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
