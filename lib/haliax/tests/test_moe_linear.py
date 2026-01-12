@@ -6,9 +6,13 @@
 import jax
 import jax.random as jrandom
 from jax import numpy as jnp
+import numpy as np
+from jax.sharding import Mesh
 
 import haliax as hax
 from haliax.nn import MoELinear
+from haliax.partitioning import ResourceAxis, axis_mapping
+from test_utils import skip_if_not_enough_devices
 
 
 def _expected_moe_linear_output(moe: MoELinear, x: hax.NamedArray, group_sizes: hax.NamedArray):
@@ -74,3 +78,28 @@ def test_moe_linear_gmm_matches_ragged_dot_general():
 
     assert actual.axes == expected.axes
     assert jnp.allclose(actual.array, expected.array, rtol=1e-5, atol=1e-5)
+
+
+@skip_if_not_enough_devices(2)
+def test_moe_linear_gmm_traces_with_sharded_token_axis():
+    data_shards = len(jax.devices())
+    local_tokens = 512
+
+    TokenRepeat = hax.Axis("token_repeat", local_tokens * data_shards)
+    In = hax.Axis("in", 4)
+    Out = hax.Axis("out", 5)
+    Experts = hax.Axis("experts", 2)
+
+    moe = MoELinear.init(Experts, In, Out, key=jrandom.PRNGKey(0), use_gmm=True)
+
+    x = hax.random.normal(jrandom.PRNGKey(1), (TokenRepeat, In))
+    group_sizes = hax.named(
+        jnp.array([local_tokens // 2, local_tokens - local_tokens // 2], dtype=jnp.int32), (Experts,)
+    )
+
+    mesh = Mesh(np.array(jax.devices()), (ResourceAxis.DATA,))
+    with hax.partitioning.set_mesh(mesh), axis_mapping({TokenRepeat.name: ResourceAxis.DATA}):
+        out = hax.named_jit(moe)(x, group_sizes)
+
+    assert out.axes == (TokenRepeat, Out)
+    assert out.array.shape == (TokenRepeat.size, Out.size)

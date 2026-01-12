@@ -34,6 +34,11 @@ class EvaluationConfig:
     evaluator: str
     """Name of the evaluator to run."""
 
+    resource_config: ResourceConfig
+    """
+    Additional keyword arguments to pass to the Ray resources.
+    """
+
     model_name: str | None
     """
     Can be a name of the model in Hugging Face (e.g, google/gemma-2b) or
@@ -81,11 +86,6 @@ class EvaluationConfig:
     engine_kwargs: dict | None = None
     """
     Additional keyword arguments to pass to the vLLM engine.
-    """
-
-    resource_config: ResourceConfig | None = None
-    """
-    Additional keyword arguments to pass to the Ray resources.
     """
 
     generation_params: dict | None = None

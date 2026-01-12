@@ -56,8 +56,9 @@ import sys
 import tempfile
 import time
 
-import wandb
 from huggingface_hub import HfFolder
+
+import wandb
 
 # Setup logger
 logger = logging.getLogger("slurm")
@@ -84,11 +85,6 @@ DEFAULT_SLURM_ARGS = {
     "ntasks-per-node": "1",
     "cpus-per-task": "64",
 }
-
-
-def parse_pip_requirements(line: str) -> list[str]:
-    pattern = r"(?:\[[^\]]*\]|[^,])+"
-    return re.findall(pattern, line)
 
 
 def generate_pythonpath(base_dir="submodules"):
