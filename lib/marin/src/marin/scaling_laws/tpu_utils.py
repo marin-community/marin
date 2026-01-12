@@ -43,7 +43,7 @@ def pick_v5p_type(
     """Select the smallest TPU v5p slice that fits the model in float32.
 
     Args:
-        candidate: CandidateConfig with target_params and tokens.
+        candidate: CandidateConfig with model_config and tokens.
         seq_len: Sequence length.
         recipe: ScalingRecipe for memory estimation (includes vocab_size).
 

@@ -121,35 +121,13 @@ DEFAULT_STEPS_PER_RUN = 2**16  # Reference step count for hyperparameter tuning
 DEFAULT_FLOP_TOLERANCE = 0.01  # Relative error tolerance for FLOP budget
 
 
-# ---------------- Candidate Config ----------------
-
-
-@dataclass
-class CandidateConfig:
-    """Model-agnostic compute allocation from scaling law analysis.
-
-    Contains only the fundamental parameters that scaling laws reason about:
-    - How much compute (flops_budget)
-    - How to allocate it between model size (target_params) and data (tokens)
-
-    The training schedule (batch_size, train_steps) is computed by the
-    ScalingRecipe at training time via compute_training_schedule().
-    """
-
-    target_params: int
-    """Optimal parameter count for this flops_budget."""
-
-    tokens: float
-    """Total tokens to train on."""
-
-    flops_budget: float
-    """Compute budget this config was generated for."""
+# ---------------- Model Configuration Protocol ----------------
 
 
 class ModelConfiguration(Protocol):
     """Protocol for model configs used in scaling law calculations.
 
-    Any model config that implements flops_per_token can be used with the
+    Any model config that implements these methods can be used with the
     scaling law functions. This allows the library to be model-agnostic
     while still working with LlamaConfig, QwenConfig, etc.
     """
@@ -157,6 +135,37 @@ class ModelConfiguration(Protocol):
     def flops_per_token(self, vocab_size: int, seq_len: int) -> float:
         """Return FLOPs per token for this model configuration."""
         ...
+
+    def total_trainable_params(self, vocab_size: int) -> int:
+        """Return total trainable parameter count for this model configuration."""
+        ...
+
+
+# ---------------- Candidate Config ----------------
+
+
+@dataclass
+class CandidateConfig:
+    """Compute allocation from scaling law analysis.
+
+    Contains the model configuration and training parameters:
+    - model_config: The actual model architecture (satisfies ModelConfiguration protocol)
+    - tokens: How many tokens to train on
+    - flops_budget: The compute budget this config was generated for
+
+    Parameter count is derived from model_config.total_trainable_params(vocab_size).
+    Training schedule (batch_size, train_steps) is computed by the ScalingRecipe
+    at training time via compute_training_schedule().
+    """
+
+    model_config: ModelConfiguration
+    """Model configuration for this candidate."""
+
+    tokens: float
+    """Total tokens to train on."""
+
+    flops_budget: float
+    """Compute budget this config was generated for."""
 
 
 class ScalingRecipe(Protocol):
@@ -178,24 +187,16 @@ class ScalingRecipe(Protocol):
     vocab_size: int
     """Vocabulary size for the tokenizer used with this recipe."""
 
-    def build_model_config(
-        self, target_params: int, seq_len: int = DEFAULT_SEQ_LEN
-    ) -> ModelConfiguration:
-        """Build a model config for a target parameter count."""
-        ...
-
     def estimate_memory_bytes(self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN) -> int:
         """Estimate memory usage in bytes for training a candidate configuration.
 
-        The implementation can access candidate.target_params, candidate.tokens, and
+        The implementation can access candidate.model_config, candidate.tokens, and
         candidate.flops_budget to compute memory requirements. This allows the recipe
         to compute the actual batch_size (from tokens) when estimating memory.
         """
         ...
 
-    def build_optimizer_config(
-        self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN
-    ) -> OptimizerConfig:
+    def build_optimizer_config(self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN) -> OptimizerConfig:
         """Build optimizer config for a candidate."""
         ...
 
@@ -208,20 +209,18 @@ class ScalingRecipe(Protocol):
     ) -> Iterator[CandidateConfig]:
         """Yield candidate configurations within the FLOP budget.
 
-        A typical implementation will iterate over hidden sizes (which determine
-        target_params), compute the batch_size needed to hit the FLOP budget,
-        and yield configs where the relative FLOP error is within tolerance.
+        Each candidate includes the model_config directly. A typical implementation
+        will iterate over feasible model architectures, compute the tokens needed
+        to hit the FLOP budget, and yield configs where the relative FLOP error
+        is within tolerance.
 
         The implementation should handle model-specific constraints like:
         - Hidden size increments (e.g., multiples of 64 or 128)
         - Memory constraints affecting maximum batch size
-        - Architecture-specific parameter count formulas
         """
         ...
 
-    def compute_training_schedule(
-        self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN
-    ) -> tuple[int, int]:
+    def compute_training_schedule(self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN) -> tuple[int, int]:
         """Compute training schedule (batch_size, train_steps) for a candidate."""
         ...
 
@@ -230,23 +229,22 @@ class ScalingRecipe(Protocol):
 class IsoFlopTrainArgs:
     """Arguments needed to set up an isoflop training run.
 
-    This dataclass contains the model-agnostic parameters needed for training.
-    The ScalingRecipe is responsible for converting these to model-specific
-    configs (model architecture, optimizer hyperparameters, training schedule).
+    This dataclass contains the parameters needed for training.
+    The ScalingRecipe is responsible for computing training schedules
+    and optimizer hyperparameters from the candidate.
 
     Naming (run_name, output_path) is intentionally not included here - that's
     the responsibility of experiment code which may have its own conventions.
 
     Example:
         >>> args = generate_isoflop_train_args(budgets, recipe)[0]
-        >>> # Recipe converts candidate to model-specific configs (vocab_size is owned by recipe)
-        >>> model_config = recipe.build_model_config(args.candidate.target_params)
+        >>> model_config = args.candidate.model_config  # Model config is on the candidate
         >>> batch_size, train_steps = recipe.compute_training_schedule(args.candidate)
         >>> optimizer_config = recipe.build_optimizer_config(args.candidate)
     """
 
     candidate: CandidateConfig
-    """Model-agnostic compute allocation (target_params, tokens, flops_budget)."""
+    """Compute allocation (model_config, tokens, flops_budget)."""
 
     tags: tuple[str, ...]
     """Tags for tracking/filtering runs."""
@@ -396,11 +394,11 @@ def generate_isoflop_train_args(
     steps_per_run: int = DEFAULT_STEPS_PER_RUN,
     flop_tolerance: float = DEFAULT_FLOP_TOLERANCE,
 ) -> list[IsoFlopTrainArgs]:
-    """Generate model-agnostic training arguments for each candidate in an isoflop sweep.
+    """Generate training arguments for each candidate in an isoflop sweep.
 
-    Returns IsoFlopTrainArgs containing model-agnostic CandidateConfig objects.
-    Use recipe.build_model_config() and recipe.build_optimizer_config() to get
-    model-specific configs. Naming (run_name, output_path) is left to the caller.
+    Returns IsoFlopTrainArgs containing CandidateConfig objects with model configs.
+    Use recipe.build_optimizer_config() to get optimizer configs.
+    Naming (run_name, output_path) is left to the caller.
 
     Args:
         budgets: Sequence of FLOP budgets to generate configs for.
@@ -421,8 +419,7 @@ def generate_isoflop_train_args(
         ...     recipe=recipe,
         ... )
         >>> for args in train_args:
-        ...     # Recipe converts model-agnostic candidate to model-specific configs
-        ...     model_config = recipe.build_model_config(args.candidate.target_params)
+        ...     model_config = args.candidate.model_config  # Model config is on the candidate
         ...     batch_size, train_steps = recipe.compute_training_schedule(args.candidate)
         ...     optimizer_config = recipe.build_optimizer_config(args.candidate)
     """
@@ -432,10 +429,11 @@ def generate_isoflop_train_args(
         for candidate in recipe.candidate_configs(budget, seq_len, steps_per_run, flop_tolerance):
             # Compute training schedule from recipe (for tags)
             batch_size, train_steps = recipe.compute_training_schedule(candidate, seq_len)
+            params = candidate.model_config.total_trainable_params(recipe.vocab_size)
 
             tags = (
                 f"FLOPs={budget:.1e}",
-                f"N={candidate.target_params:.1e}",
+                f"N={params:.1e}",
                 f"B={batch_size}",
                 f"steps={train_steps}",
                 f"tokens={candidate.tokens:.1e}",
@@ -641,9 +639,8 @@ def predict_optimal_config(
     if best.tokens < optimal_tokens:
         best = max(candidates, key=lambda c: c.tokens)
 
-    logger.info(
-        f"Selected config: N={best.target_params:.2e}, " f"tokens={best.tokens:.2e} (optimal: {optimal_tokens:.2e})"
-    )
+    params = best.model_config.total_trainable_params(recipe.vocab_size)
+    logger.info(f"Selected config: N={params:.2e}, tokens={best.tokens:.2e} (optimal: {optimal_tokens:.2e})")
 
     return best
 
@@ -676,9 +673,7 @@ def predict_optimal_configs_for_budgets(
     """
     configs = []
     for budget in target_budgets:
-        config = predict_optimal_config(
-            scaling_fits, budget, label, recipe, seq_len, steps_per_run, flop_tolerance
-        )
+        config = predict_optimal_config(scaling_fits, budget, label, recipe, seq_len, steps_per_run, flop_tolerance)
         if config is None:
             raise RuntimeError(
                 f"Failed to predict optimal config for budget {budget:.2e} FLOPs "

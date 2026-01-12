@@ -84,7 +84,7 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
     """Run one rung of the scaling ladder (one compute-optimal training run).
 
     The recipe handles all model-specific decisions (vocab_size is owned by the recipe):
-    - Model config is built via `recipe.build_model_config(target_params)`
+    - Model config is on the candidate: `candidate.model_config`
     - Training schedule is built via `recipe.compute_training_schedule(candidate)`
     - Optimizer config is built via `recipe.build_optimizer_config(candidate)`
     """
@@ -113,13 +113,14 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
             f"Could not find optimal config for budget {config.target_budget:.2e} and label '{config.label}'"
         )
 
+    params = candidate.model_config.total_trainable_params(config.recipe.vocab_size)
     logger.info(
         f"Training with optimal config for {config.target_budget:.2e} FLOPs:\n"
-        f"  target_params={candidate.target_params:.2e}\n"
+        f"  params={params:.2e}\n"
         f"  tokens={candidate.tokens:.2e}"
     )
 
-    model_cfg = config.recipe.build_model_config(candidate.target_params, config.seq_len)
+    model_cfg = candidate.model_config
     optimizer_cfg = config.recipe.build_optimizer_config(candidate, config.seq_len)
     tpu_type = pick_v5p_type(candidate, config.seq_len, config.recipe)
 
@@ -135,7 +136,7 @@ def run_scaling_ladder_rung(config: ScalingLadderRungConfig) -> None:
                     "optimal-training",
                     f"FLOPs={config.target_budget:.1e}",
                     f"label={config.label}",
-                    f"N={candidate.target_params:.1e}",
+                    f"N={params:.1e}",
                 ],
             ),
             mp=jmp.get_policy("p=f32,c=bfloat16"),

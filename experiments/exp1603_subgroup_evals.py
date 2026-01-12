@@ -20,7 +20,7 @@ from experiments.evals.task_configs import EvalTaskConfig
 from experiments.llama import llama3_tokenizer
 
 from experiments.exp1342_gemstones_scaling_law import distributional_eval_sets
-from experiments.isoflop_sweep import MARIN_2025_RECIPE, MARIN_SCALING_SUITES
+from experiments.isoflop_sweep import MARIN_SCALING_SUITES
 from experiments.models import ModelConfig, download_model_step
 from marin.execution.executor import executor_main, output_path_of, versioned
 from marin.evaluation.log_probs import default_lm_log_probs
@@ -45,8 +45,9 @@ def create_eval_steps() -> list:
     steps = []
     dist_eval = distributional_eval_sets(llama3_tokenizer)
     for model, candidate in list(zip(*MARIN_SCALING_SUITES["nemotron"], strict=False)):
-        total_tokens = candidate.batch_size * candidate.train_steps * 4096
-        name = f"marin-nemo-{candidate.flops_budget:.0e}C-{total_tokens}T-" f"N{candidate.target_params:.0e}"
+        total_tokens = int(candidate.tokens)
+        params = candidate.model_config.total_trainable_params(VOCAB_SIZE)
+        name = f"marin-nemo-{candidate.flops_budget:.0e}C-{total_tokens}T-N{params:.0e}"
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
@@ -56,7 +57,7 @@ def create_eval_steps() -> list:
         )
         steps.append(step)
 
-        model_config = MARIN_2025_RECIPE.build_model_config(candidate.target_params, VOCAB_SIZE)
+        model_config = candidate.model_config
         logprobs_step = default_lm_log_probs(
             output_path_of(model).cd("checkpoints"),
             model_config,
@@ -69,8 +70,9 @@ def create_eval_steps() -> list:
         steps.append(logprobs_step)
 
     for model, candidate in list(zip(*MARIN_SCALING_SUITES["common_pile"], strict=False)):
-        total_tokens = candidate.batch_size * candidate.train_steps * 4096
-        name = f"marin-comma-{candidate.flops_budget:.0e}C-{total_tokens}T-" f"N{candidate.target_params:.0e}"
+        total_tokens = int(candidate.tokens)
+        params = candidate.model_config.total_trainable_params(VOCAB_SIZE)
+        name = f"marin-comma-{candidate.flops_budget:.0e}C-{total_tokens}T-N{params:.0e}"
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
@@ -80,7 +82,7 @@ def create_eval_steps() -> list:
         )
         steps.append(step)
 
-        model_config = MARIN_2025_RECIPE.build_model_config(candidate.target_params, VOCAB_SIZE)
+        model_config = candidate.model_config
         logprobs_step = default_lm_log_probs(
             output_path_of(model).cd("checkpoints"),
             model_config,
@@ -93,8 +95,9 @@ def create_eval_steps() -> list:
         steps.append(logprobs_step)
 
     for model, candidate in list(zip(*MARIN_SCALING_SUITES["dclm-default"], strict=False)):
-        total_tokens = candidate.batch_size * candidate.train_steps * 4096
-        name = f"marin-dclm-{candidate.flops_budget:.0e}C-{total_tokens}T-" f"N{candidate.target_params:.0e}"
+        total_tokens = int(candidate.tokens)
+        params = candidate.model_config.total_trainable_params(VOCAB_SIZE)
+        name = f"marin-dclm-{candidate.flops_budget:.0e}C-{total_tokens}T-N{params:.0e}"
 
         step = evaluate_levanter_lm_evaluation_harness(
             model_name=name,
@@ -104,7 +107,7 @@ def create_eval_steps() -> list:
         )
         steps.append(step)
 
-        model_config = MARIN_2025_RECIPE.build_model_config(candidate.target_params, VOCAB_SIZE)
+        model_config = candidate.model_config
         logprobs_step = default_lm_log_probs(
             output_path_of(model).cd("checkpoints"),
             model_config,
