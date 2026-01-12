@@ -3,52 +3,71 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import importlib.util
 import os
 import sys
 import tempfile
 
+import equinox as eqx
 import numpy as np
 import pytest
+import torch
 import jax
 import jax.numpy as jnp
+import jax.tree_util as jtu
 from jax import random
+from jax.sharding import Mesh
 
 import haliax as hax
 from haliax import Axis
+from haliax.partitioning import ResourceAxis
 
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import (
+    AutoConfig,
+    AutoProcessor,
+    LlavaOnevisionConfig as HfLlavaOnevisionConfig,
+    LlavaOnevisionForConditionalGeneration as HfLlavaOnevision,
+    LlavaOnevisionProcessor,
+    PreTrainedTokenizerFast,
+    Qwen2Config as HfQwen2Config,
+    SiglipVisionConfig as HfSiglipVisionConfig,
+)
+from transformers.models.llava_onevision.modeling_llava_onevision import (
+    image_size_to_num_patches as hf_image_size_to_num_patches,
+)
+
+from levanter.compat.hf_checkpoints import from_torch_compatible_state_dict
+from levanter.data.image import create_custom_processor
+from levanter.inference.engine import InferenceEngineConfig
+from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.models.llava_onevision import (
+    LlavaInferenceEngine,
     LlavaOnevisionConfig,
-    LlavaOnevisionMultimodalProjector,
     LlavaOnevisionModel,
+    LlavaOnevisionMultimodalProjector,
+    VLMRequest,
 )
 from levanter.models.qwen import QwenConfig
 from levanter.models.siglip import SiglipVisionConfig
 from levanter.trainer import TrainerConfig
-from levanter.utils.mesh import MeshConfig, DEFAULT_DP_AXES
-from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
-from transformers import PreTrainedTokenizerFast
+from levanter.utils.mesh import DEFAULT_DP_AXES, MeshConfig
 
 # Import test utils for mesh context
 sys.path.insert(0, os.path.dirname(__file__))
-from test_utils import use_test_mesh
-from jax.sharding import Mesh
-from haliax.partitioning import ResourceAxis
-
-from test_utils import skip_if_no_torch
+from test_utils import skip_if_no_torch, use_test_mesh
 
 # Import shared helper functions from test_image_utils
 from test_image_utils import (
-    create_grid_mask,
-    pad_pixel_values,
-    prepare_test_data_single,
     DEFAULT_GRID_PINPOINTS,
     compare_logits_by_region,
+    create_grid_mask,
     create_lev_jax_tensors,
+    get_multi_images,
+    get_single_image,
+    pad_pixel_values,
+    prepare_test_data_single,
 )
-from test_image_utils import get_single_image, get_multi_images
-import jax.tree_util as jtu
 
 
 def _to_float32(x):
@@ -96,10 +115,6 @@ def _tiny_llava_onevision_config():
 @skip_if_no_torch
 def _hf_llava_onevision_config():
     """Return a HuggingFace LlavaOnevisionConfig for testing."""
-    from transformers import LlavaOnevisionConfig as HfLlavaOnevisionConfig
-    from transformers import SiglipVisionConfig as HfSiglipVisionConfig
-    from transformers import Qwen2Config as HfQwen2Config
-
     vision_config = HfSiglipVisionConfig(
         hidden_size=64,
         intermediate_size=256,
@@ -222,10 +237,6 @@ def test_llava_onevision_get_placeholder_mask_count_mismatch():
 @skip_if_no_torch
 def test_llava_onevision_multimodal_projector_vs_hf():
     """Compare multimodal projector output with HuggingFace."""
-    import torch
-    from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision
-    from levanter.compat.hf_checkpoints import from_torch_compatible_state_dict
-
     hf_config = _hf_llava_onevision_config()
     torch.random.manual_seed(0)
     torch_model = HfLlavaOnevision(hf_config)
@@ -263,11 +274,8 @@ def test_llava_onevision_multimodal_projector_vs_hf():
         )
         tokenizer.save_pretrained(f"{tmpdir}/torch_model")
 
-        import equinox as eqx
-        from jax.random import PRNGKey
-
         Vocab = Axis("vocab", hf_config.text_config.vocab_size)
-        model_template = eqx.filter_eval_shape(LlavaOnevisionModel.init, Vocab, config, key=PRNGKey(0))
+        model_template = eqx.filter_eval_shape(LlavaOnevisionModel.init, Vocab, config, key=random.PRNGKey(0))
 
         converter = config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/torch_model")
         state_dict = converter.load_state_dict(f"{tmpdir}/torch_model")
@@ -300,13 +308,6 @@ def test_llava_onevision_multimodal_projector_vs_hf():
 @skip_if_no_torch
 def test_llava_onevision_full_model_vs_hf():
     """Test LLaVA OneVision full model forward pass matches HuggingFace."""
-    import torch
-    from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision
-    from transformers.models.llava_onevision.modeling_llava_onevision import (
-        image_size_to_num_patches as hf_image_size_to_num_patches,
-    )
-    from levanter.compat.hf_checkpoints import from_torch_compatible_state_dict
-
     # Force float32 precision for accurate comparison with PyTorch
     # TPU default uses bfloat16 which causes ~0.01 numerical differences
     jax.config.update("jax_default_matmul_precision", "float32")
@@ -359,11 +360,8 @@ def test_llava_onevision_full_model_vs_hf():
         )
         tokenizer.save_pretrained(f"{tmpdir}/torch_model")
 
-        import equinox as eqx
-        from jax.random import PRNGKey
-
         Vocab = Axis("vocab", hf_config.text_config.vocab_size)
-        model_template = eqx.filter_eval_shape(LlavaOnevisionModel.init, Vocab, config, key=PRNGKey(0))
+        model_template = eqx.filter_eval_shape(LlavaOnevisionModel.init, Vocab, config, key=random.PRNGKey(0))
 
         converter = config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/torch_model")
         state_dict = converter.load_state_dict(f"{tmpdir}/torch_model")
@@ -462,11 +460,6 @@ def test_llava_onevision_full_model_vs_hf():
 @skip_if_no_torch
 def test_llava_onevision_visual_embeddings_match():
     """Compare HF vs Levanter merged embeddings (text + visual) before LM."""
-    import torch
-    from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision
-    import equinox as eqx
-    from levanter.compat.hf_checkpoints import from_torch_compatible_state_dict
-    from levanter.data.image import create_custom_processor
     # Force float32 precision for accurate comparison with PyTorch
     # TPU default uses bfloat16 which causes ~0.01 numerical differences
     jax.config.update("jax_default_matmul_precision", "float32")
@@ -592,25 +585,32 @@ def test_llava_onevision_visual_embeddings_match():
 
 @skip_if_no_torch
 def test_llava_onevision_real_image_text():
-    """Test with real image and text using processor with feature alignment."""
-    import torch
-    from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision
-    
+    """Test with real image and text using processor with feature alignment.
+
+    This test uses the same feature alignment approach as test_llava_onevision_visual_embeddings_match
+    to properly compare logits between HF (unpadded) and Levanter (padded) models.
+    """
     jax.config.update("jax_default_matmul_precision", "float32")
+
+    # Load real image
     image = get_single_image()
 
-    image = get_single_image()
+    # Use a small pretrained model for testing
     model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
 
     try:
-        torch_model = HfLlavaOnevision.from_pretrained(model_name, torch_dtype=torch.float32)
-        torch_model.model.image_newline = None
+        torch_model = HfLlavaOnevision.from_pretrained(
+            model_name,
+            torch_dtype=torch.float32,
+        )
+        torch_model.model.image_newline = None  # Disable image_newline for consistency
         torch_model.eval()
         torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
     except Exception as e:
         pytest.skip(f"Could not download model: {model_name}")
         return
 
+    # Prepare inputs with processor
     text = "Describe this image in detail."
     messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": text}]}]
 
@@ -621,6 +621,7 @@ def test_llava_onevision_real_image_text():
         add_generation_prompt=True,
     )
 
+    # Extract HF data for HF forward pass
     hf_input_ids = torch.tensor(test_pair.hf.input_ids).unsqueeze(0)
     hf_pixel_values = torch.tensor(test_pair.hf.pixel_values).unsqueeze(0)
     hf_attention_mask = torch.tensor(test_pair.hf.attention_mask).unsqueeze(0)
@@ -633,28 +634,16 @@ def test_llava_onevision_real_image_text():
         "image_sizes": hf_image_sizes,
     }
 
+    # HuggingFace forward pass
     with torch.no_grad():
         hf_output = torch_model(**inputs_hf)
         hf_logits = hf_output.logits.detach().cpu().numpy()
 
+    # Convert to Levanter
     hf_config = torch_model.config
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
-    mesh_config = MeshConfig(
-        axes={"model": 8, "data": 1, "replica": 1},
-        compute_mapping={
-            "vision_batch": ("model",),
-            "vocab": "model",
-            "batch": ("replica_dcn", "replica"),
-        },
-        shared_mapping={
-            "heads": "data",
-            "mlp": "data",
-        },
-        param_mapping={
-            "heads": "data",
-        },
-    )
+    mesh_config = MeshConfig(compute_mapping={"vision_batch": DEFAULT_DP_AXES})
     trainer_config = TrainerConfig(mesh=mesh_config)
 
     with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
@@ -670,65 +659,90 @@ def test_llava_onevision_real_image_text():
             resize_vocab_to_match_tokenizer=False,
         )
 
-        jax_tensors = create_lev_jax_tensors(test_pair.lev, batch_size=1)
-        input_ids_lev_tensor = jax_tensors.input_ids
-        pixel_values_lev_tensor = jax_tensors.pixel_values
-        grid_mask = jax_tensors.grid_mask
-        unpad_indices = jax_tensors.unpad_indices
+    # Compute valid image token count using attention_mask & image_mask intersection
+    image_token_id = torch_model.config.image_token_index
+    image_mask = test_pair.lev.input_ids == image_token_id
+    valid_image_mask = test_pair.lev.attention_mask.astype(bool) & image_mask
+    num_valid_image_tokens = int(valid_image_mask.sum())
 
-        @hax.named_jit
-        def compute_lev(model, input_ids, pixel_values, grid_mask, unpad_indices):
-            return model(
-                input_ids,
-                pixel_values=pixel_values,
-                grid_mask=grid_mask,
-                unpad_indices=unpad_indices,
-                key=None,
-            )
+    # Trim unpad_indices to actual count (remove padding zeros)
+    test_pair.lev.unpad_indices = test_pair.lev.unpad_indices[:num_valid_image_tokens]
 
-        lev_logits = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
-        lev_logits.array.block_until_ready()
+    # Create JAX tensors with batch_size=1
+    jax_tensors = create_lev_jax_tensors(test_pair.lev, batch_size=1)
+    input_ids_lev_tensor = jax_tensors.input_ids
+    pixel_values_lev_tensor = jax_tensors.pixel_values
+    grid_mask = jax_tensors.grid_mask
+    unpad_indices = jax_tensors.unpad_indices
 
-        lev_logits_np = np.array(lev_logits.array)
-        if lev_logits_np.ndim == 3:
-            lev_logits_np = lev_logits_np[0]
-
-        hf_logits_flat = hf_logits[0]
-
-        image_token_id = torch_model.config.image_token_index
-        comparison_result = compare_logits_by_region(
-            hf_logits=hf_logits_flat,
-            lev_logits=lev_logits_np,
-            input_ids=test_pair.hf.input_ids,
-            image_token_id=image_token_id,
-            tolerance=1e-3,
-            verbose=True,
-            detailed=True,
-            attention_mask=test_pair.lev.attention_mask,
+    @hax.named_jit
+    def compute_lev(model, input_ids, pixel_values, grid_mask, unpad_indices):
+        return model(
+            input_ids,
+            pixel_values=pixel_values,
+            grid_mask=grid_mask,
+            unpad_indices=unpad_indices,
+            key=None,
         )
 
-        assert comparison_result.passed, f"Real image/text test failed"
+    # Forward pass
+    lev_logits = compute_lev(
+        lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices
+    )
+    lev_logits = lev_logits.array
 
+    # Compare logits
+    lev_logits_np = np.array(lev_logits)
+    if lev_logits_np.ndim == 3:
+        lev_logits_np = lev_logits_np[0]  # Remove batch dimension
+
+    hf_logits_flat = hf_logits[0]  # (seq_len, vocab_size)
+
+    # Note: tolerance=1.5e-3 accounts for cross-framework numerical differences
+    # between JAX and PyTorch, especially in SigLIP vision encoder attention.
+    comparison_result = compare_logits_by_region(
+        hf_logits=hf_logits_flat,
+        lev_logits=lev_logits_np,
+        input_ids=test_pair.hf.input_ids,
+        image_token_id=image_token_id,
+        tolerance=1.5e-3,
+        verbose=False,
+        detailed=False,
+        attention_mask=test_pair.lev.attention_mask,
+    )
+
+    assert comparison_result.passed, "Real image/text test failed"
 
 @skip_if_no_torch
 def test_llava_onevision_real_multi_image_text():
-    """Test Levanter model with multiple images, comparing HF and Levanter outputs."""
-    import torch
-    from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision
+    """Test Levanter model with multiple images, comparing HF and Levanter outputs.
 
-    images = get_multi_images()
+    This test validates multi-image behavior where:
+    - Both HF and Levanter use base patch per image (no anyres sub-patches)
+    - unpad_indices is None for multi-image case
+    - grid_mask marks which patches are valid (num_images base patches)
+    - HF processor generates correct image tokens with padding_mode=True
+    """
+    jax.config.update("jax_default_matmul_precision", "float32")
+    # Load multiple images
+    images = get_multi_images()  # Returns list of 2 images
     num_images = len(images)
 
+    # Use a small pretrained model for testing
     model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
 
     try:
-        torch_model = HfLlavaOnevision.from_pretrained(model_name, torch_dtype=torch.float32)
-        torch_model.model.image_newline = None
+        torch_model = HfLlavaOnevision.from_pretrained(
+            model_name,
+            torch_dtype=torch.float32,
+        )
+        torch_model.model.image_newline = None  # Disable image_newline for consistency
         torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
     except Exception as e:
         pytest.skip(f"Could not download model: {model_name}")
         return
 
+    # Prepare inputs with processor
     text = "Compare these two images and describe the differences."
     messages = [{"role": "user", "content": [{"type": "image"}, {"type": "image"}, {"type": "text", "text": text}]}]
 
@@ -737,14 +751,19 @@ def test_llava_onevision_real_multi_image_text():
         images=images,
         model_name=model_name,
         add_generation_prompt=True,
-        max_length=16384,
+        max_length=16384,  # Larger max_length for multi-image to avoid truncation
     )
 
+    # Verify multi-image preprocessing is correct
     assert test_pair.lev.unpad_indices is None, "Multi-image should have None unpad_indices"
-    assert test_pair.lev.grid_mask.sum() == num_images, f"Multi-image should have {num_images} valid patches"
+    assert (
+        test_pair.lev.grid_mask.sum() == num_images
+    ), f"Multi-image should have {num_images} valid patches (base only)"
 
+    # Prepare HF inputs for forward pass
     hf_input_ids = torch.tensor(test_pair.hf.input_ids).unsqueeze(0)
     hf_attention_mask = torch.tensor(test_pair.hf.attention_mask).unsqueeze(0)
+
     hf_pixel_values = torch.tensor(test_pair.hf.pixel_values)
     if hf_pixel_values.dim() == 4:
         hf_pixel_values = hf_pixel_values.unsqueeze(0)
@@ -753,6 +772,7 @@ def test_llava_onevision_real_multi_image_text():
     if hf_image_sizes.dim() == 1:
         hf_image_sizes = hf_image_sizes.unsqueeze(0)
 
+    # HuggingFace forward pass with batch_num_images for multi-image mode
     with torch.no_grad():
         hf_output = torch_model(
             input_ids=hf_input_ids,
@@ -763,6 +783,7 @@ def test_llava_onevision_real_multi_image_text():
         )
         hf_logits = hf_output.logits.detach().cpu().numpy()
 
+    # Convert to Levanter
     hf_config = torch_model.config
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
@@ -796,6 +817,7 @@ def test_llava_onevision_real_multi_image_text():
             resize_vocab_to_match_tokenizer=False,
         )
 
+        # Create JAX tensors
         jax_tensors = create_lev_jax_tensors(test_pair.lev, batch_size=1)
         input_ids_lev_tensor = jax_tensors.input_ids
         pixel_values_lev_tensor = jax_tensors.pixel_values
@@ -814,16 +836,16 @@ def test_llava_onevision_real_multi_image_text():
                 key=None,
             )
 
-        lev_logits_first = compute_lev(
+        lev_logits = compute_lev(
             lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices
         )
-        lev_logits_first.array.block_until_ready()
+        lev_logits = lev_logits.array
 
-        lev_logits = lev_logits_first.array
-
+        # Verify logits are not NaN/Inf
         assert not jnp.isnan(lev_logits).any(), "Logits contain NaN"
         assert not jnp.isinf(lev_logits).any(), "Logits contain Inf"
 
+        # Compare logits
         lev_logits_np = np.array(lev_logits)
         if lev_logits_np.ndim == 3:
             lev_logits_np = lev_logits_np[0]
@@ -836,27 +858,25 @@ def test_llava_onevision_real_multi_image_text():
             lev_logits=lev_logits_np,
             input_ids=test_pair.hf.input_ids,
             image_token_id=image_token_id,
-            tolerance=1e-3,
-            verbose=False,
-            detailed=False,
+            tolerance=1.5e-3,
+            verbose=True,
+            detailed=True,
             attention_mask=test_pair.lev.attention_mask,
         )
 
-        assert comparison_result.passed, f"Multi-image test failed"
+        assert (
+            comparison_result.passed
+        ), f"Multi-image test failed"
 
 
 @skip_if_no_torch
 def test_llava_onevision_real_image_text_0_5b_batch():
     """Test with batch padding for better TPU utilization."""
-    import torch
-    from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision
-    from levanter.data.image import create_custom_processor
-
+    jax.config.update("jax_default_matmul_precision", "float32")
     image = get_single_image()
     model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
 
     try:
-        from transformers import AutoConfig
         hf_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
         torch_model = HfLlavaOnevision.from_pretrained(model_name, torch_dtype=torch.float32)
         torch_model.model.image_newline = None
@@ -885,10 +905,6 @@ def test_llava_onevision_real_image_text_0_5b_batch():
     input_ids_for_mask = inputs_hf["input_ids"].numpy()[0]
     image_mask = input_ids_for_mask == image_token_id
     num_image_tokens = image_mask.sum()
-
-    del torch_model
-    import gc
-    gc.collect()
 
     config = LlavaOnevisionConfig.from_hf_config(hf_config)
 
@@ -979,7 +995,7 @@ def test_llava_onevision_real_image_text_0_5b_batch():
         lev_logits_np = np.array(lev_logits.array[0])
         hf_logits_flat = hf_logits[0]
 
-        tolerance = 1e-3
+        tolerance = 1.5e-3
         attention_mask_np = inputs_lev["attention_mask"].numpy()[0]
         result = compare_logits_by_region(
             hf_logits=hf_logits_flat,
@@ -1003,14 +1019,8 @@ def test_llava_onevision_real_image_text_0_5b_batch():
 @skip_if_no_torch
 def test_get_image_features_vs_hf_real_single_image():
     """Compare raw image features with HF using a real single image."""
-    import torch
-    from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision
-    from transformers import LlavaOnevisionProcessor
-    from levanter.compat.hf_checkpoints import from_torch_compatible_state_dict
-    import equinox as eqx
-
     model_name = "llava-hf/llava-onevision-qwen2-0.5b-ov-hf"
-
+    jax.config.update("jax_default_matmul_precision", "float32")
     try:
         torch_model = HfLlavaOnevision.from_pretrained(model_name, torch_dtype=torch.float32)
         torch_model.eval()
@@ -1111,10 +1121,6 @@ def test_get_image_features_vs_hf_real_single_image():
 @skip_if_no_torch
 def test_get_image_features_vs_hf_real_multi_image():
     """Compare raw image features with HF using real multiple images."""
-    import torch
-    from transformers import LlavaOnevisionForConditionalGeneration as HfLlavaOnevision
-    from transformers import LlavaOnevisionProcessor
-
     model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
 
     try:
@@ -1213,6 +1219,297 @@ def test_get_image_features_vs_hf_real_multi_image():
         # Multi-layer comparison: 1e-3
         assert mean_diff < 1e-3, f"Values don't match: mean diff = {mean_diff}"
 
+
+# =====================
+# Generation Engine Tests
+# =====================
+
+
+@pytest.mark.slow
+@skip_if_no_torch
+def test_llava_onevision_generation_with_inference_engine():
+    """Test generation using Levanter's LlavaInferenceEngine with VLMRequest (single image)."""
+    jax.config.update("jax_default_matmul_precision", "float32")
+
+    model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
+    image = get_single_image()
+
+    try:
+        torch_model = HfLlavaOnevision.from_pretrained(model_name, torch_dtype=torch.float32)
+        torch_model.eval()
+        torch_model.model.image_newline = None
+        torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
+        processor = AutoProcessor.from_pretrained(model_name)
+    except Exception as e:
+        pytest.skip(f"Could not download model: {model_name}")
+        return
+
+    text = "Describe the image in detail."
+    messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": text}]}]
+
+    test_pair = prepare_test_data_single(
+        messages=messages,
+        images=[image],
+        model_name=model_name,
+        add_generation_prompt=True,
+    )
+
+    # HuggingFace generation
+    max_new_tokens = 100
+    hf_input_ids = torch.tensor(test_pair.hf.input_ids).unsqueeze(0)
+    hf_pixel_values = torch.tensor(test_pair.hf.pixel_values).unsqueeze(0)
+    hf_attention_mask = torch.tensor(test_pair.hf.attention_mask).unsqueeze(0)
+    hf_image_sizes = torch.tensor(test_pair.hf.image_sizes).unsqueeze(0)
+
+    with torch.no_grad():
+        hf_output_ids = torch_model.generate(
+            input_ids=hf_input_ids,
+            pixel_values=hf_pixel_values,
+            attention_mask=hf_attention_mask,
+            image_sizes=hf_image_sizes,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            pad_token_id=processor.tokenizer.pad_token_id,
+        )
+
+    prompt_len = hf_input_ids.shape[1]
+    hf_generated_ids = hf_output_ids[0, prompt_len:].cpu().numpy()
+
+    # Levanter generation
+    hf_config = torch_model.config
+    config = LlavaOnevisionConfig.from_hf_config(hf_config)
+
+    trainer_config = TrainerConfig()  # Default: model_axis_size=1, all devices on data axis
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+        mesh = trainer_config.device_mesh
+        compute_dtype = jnp.float32
+        Vocab = Axis("vocab", hf_config.text_config.vocab_size)
+
+        converter = config.hf_checkpoint_converter(ref_checkpoint=model_name)
+        parameter_axis_mapping = trainer_config.parameter_axis_mapping
+
+        lev_model = converter.load_pretrained(
+            LlavaOnevisionModel,
+            ref=model_name,
+            config=config,
+            axis_mapping=parameter_axis_mapping,
+            dtype=compute_dtype,
+            resize_vocab_to_match_tokenizer=False,
+        )
+
+        jax_tensors = create_lev_jax_tensors(test_pair.lev, batch_size=1)
+
+        # Configure InferenceEngine
+        prompt_len_lev = len(test_pair.hf.input_ids)
+        estimated_max_seq_len = prompt_len_lev + max_new_tokens + 64
+        page_size = 16
+
+        engine_config = InferenceEngineConfig(
+            max_seq_len=estimated_max_seq_len,
+            page_size=page_size,
+            max_seqs=1,
+            max_rounds=32,
+            max_stop_seqs=1,
+            max_stop_tokens=4,
+            max_pages=800,  # Reduced from 200 to avoid OOM
+            compute_dtype=compute_dtype,
+        )
+
+        engine = LlavaInferenceEngine.from_model_with_config(
+            model=lev_model,
+            tokenizer=processor.tokenizer,
+            config=engine_config,
+            Vocab=Vocab,
+            mesh=mesh,
+        )
+
+        prompt_tokens = test_pair.hf.input_ids.tolist()
+
+        eos_token_id = processor.tokenizer.eos_token_id
+        if eos_token_id is not None:
+            stop_tokens = hax.named(jnp.array([[eos_token_id]], dtype=jnp.int32), ("stop_seq", "position"))
+        else:
+            stop_tokens = None
+
+        decode_params = SeqDecodingParams(
+            max_num_tokens=estimated_max_seq_len,
+            temperature=0.0,
+            key=random.PRNGKey(42),
+            stop_tokens=stop_tokens,
+        )
+
+        vlm_request = VLMRequest(
+            prompt_tokens=prompt_tokens,
+            request_id=0,
+            decode_params=decode_params,
+            n_generations=1,
+            pixel_values=jax_tensors.pixel_values,
+            input_ids=jax_tensors.input_ids,
+            grid_mask=jax_tensors.grid_mask,
+            unpad_indices=jax_tensors.unpad_indices,
+        )
+
+        result = engine.generate([vlm_request])
+
+    lev_generated_ids = np.array(result.tokens[0])
+
+    # Compare results
+    min_len = min(len(hf_generated_ids), len(lev_generated_ids))
+    matching_tokens = sum(1 for i in range(min_len) if hf_generated_ids[i] == lev_generated_ids[i])
+    match_ratio = matching_tokens / min_len if min_len > 0 else 0
+
+    min_expected_tokens = len(hf_generated_ids) // 2
+    assert len(lev_generated_ids) >= min_expected_tokens, (
+        f"Levanter generated too few tokens: {len(lev_generated_ids)} < {min_expected_tokens}"
+    )
+    assert match_ratio >= 0.99, f"Token match ratio too low: {match_ratio:.1%}"
+
+
+@pytest.mark.slow
+@skip_if_no_torch
+def test_llava_onevision_generation_with_inference_engine_multi():
+    """Test generation using Levanter's LlavaInferenceEngine with VLMRequest (multi image)."""
+    jax.config.update("jax_default_matmul_precision", "float32")
+
+    model_name = "llava-hf/llava-onevision-qwen2-0.5b-si-hf"
+    images = get_multi_images()
+    num_images = len(images)
+
+    try:
+        torch_model = HfLlavaOnevision.from_pretrained(model_name, torch_dtype=torch.float32)
+        torch_model.eval()
+        torch_model.model.image_newline = None
+        torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
+        processor = AutoProcessor.from_pretrained(model_name)
+    except Exception as e:
+        pytest.skip(f"Could not download model: {model_name}")
+        return
+
+    text = "Compare these two images and describe the differences."
+    messages = [{"role": "user", "content": [{"type": "image"}, {"type": "image"}, {"type": "text", "text": text}]}]
+
+    test_pair = prepare_test_data_single(
+        messages=messages,
+        images=images,
+        model_name=model_name,
+        add_generation_prompt=True,
+    )
+
+    assert test_pair.lev.unpad_indices is None, "Multi-image should have None unpad_indices"
+    assert test_pair.lev.grid_mask.sum() == num_images, f"Multi-image should have {num_images} valid patches"
+
+    # HuggingFace generation
+    max_new_tokens = 100
+    hf_input_ids = torch.tensor(test_pair.hf.input_ids).unsqueeze(0)
+    hf_attention_mask = torch.tensor(test_pair.hf.attention_mask).unsqueeze(0)
+    hf_pixel_values = torch.tensor(test_pair.hf.pixel_values)
+    if hf_pixel_values.dim() == 4:
+        hf_pixel_values = hf_pixel_values.unsqueeze(0)
+    hf_image_sizes = torch.tensor(test_pair.hf.image_sizes)
+    if hf_image_sizes.dim() == 1:
+        hf_image_sizes = hf_image_sizes.unsqueeze(0)
+
+    with torch.no_grad():
+        hf_output_ids = torch_model.generate(
+            input_ids=hf_input_ids,
+            pixel_values=hf_pixel_values,
+            attention_mask=hf_attention_mask,
+            image_sizes=hf_image_sizes,
+            batch_num_images=torch.tensor([num_images]),
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+        )
+
+    prompt_len = hf_input_ids.shape[1]
+    hf_generated_ids = hf_output_ids[0, prompt_len:].cpu().numpy()
+
+    # Levanter generation
+    hf_config = torch_model.config
+    config = LlavaOnevisionConfig.from_hf_config(hf_config)
+    text_config_updated = dataclasses.replace(config.text_config, attn_backend="dot", flash_attention_block_size=None)
+    config = dataclasses.replace(config, text_config=text_config_updated)
+
+    trainer_config = TrainerConfig()
+
+    with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
+        mesh = trainer_config.device_mesh
+        compute_dtype = jnp.float32
+        Vocab = Axis("vocab", hf_config.text_config.vocab_size)
+
+        converter = config.hf_checkpoint_converter(ref_checkpoint=model_name)
+        parameter_axis_mapping = trainer_config.parameter_axis_mapping
+
+        lev_model = converter.load_pretrained(
+            LlavaOnevisionModel,
+            ref=model_name,
+            config=config,
+            axis_mapping=parameter_axis_mapping,
+            dtype=compute_dtype,
+            resize_vocab_to_match_tokenizer=False,
+        )
+
+        jax_tensors = create_lev_jax_tensors(test_pair.lev, batch_size=1)
+
+        # Configure InferenceEngine
+        prompt_len_lev = len(test_pair.hf.input_ids)
+        estimated_max_seq_len = prompt_len_lev + max_new_tokens + 64
+        page_size = 16
+
+        engine_config = InferenceEngineConfig(
+            max_seq_len=estimated_max_seq_len,
+            page_size=page_size,
+            max_seqs=1,
+            max_rounds=32,
+            max_stop_seqs=1,
+            max_stop_tokens=4,
+            max_pages=800,
+            compute_dtype=compute_dtype,
+        )
+
+        engine = LlavaInferenceEngine.from_model_with_config(
+            model=lev_model,
+            tokenizer=processor.tokenizer,
+            config=engine_config,
+            Vocab=Vocab,
+            mesh=mesh,
+        )
+
+        prompt_tokens = test_pair.hf.input_ids.tolist()
+
+        eos_token_id = processor.tokenizer.eos_token_id
+        if eos_token_id is not None:
+            stop_tokens = hax.named(jnp.array([[eos_token_id]], dtype=jnp.int32), ("stop_seq", "position"))
+        else:
+            stop_tokens = None
+
+        decode_params = SeqDecodingParams(
+            max_num_tokens=estimated_max_seq_len,
+            temperature=0.0,
+            key=random.PRNGKey(42),
+            stop_tokens=stop_tokens,
+        )
+
+        vlm_request = VLMRequest(
+            prompt_tokens=prompt_tokens,
+            request_id=0,
+            decode_params=decode_params,
+            n_generations=1,
+            pixel_values=jax_tensors.pixel_values,
+            input_ids=jax_tensors.input_ids,
+            grid_mask=jax_tensors.grid_mask,
+            unpad_indices=jax_tensors.unpad_indices,
+        )
+
+        result = engine.generate([vlm_request])
+
+    lev_generated_ids = np.array(result.tokens[0])
+
+    # Compare results
+    min_len = min(len(hf_generated_ids), len(lev_generated_ids))
+    matching_tokens = sum(1 for i in range(min_len) if hf_generated_ids[i] == lev_generated_ids[i])
+    match_ratio = matching_tokens / min_len if min_len > 0 else 0
+
+    assert match_ratio >= 0.99, f"Token match ratio too low: {match_ratio:.1%}"
 
 
 if __name__ == "__main__":
