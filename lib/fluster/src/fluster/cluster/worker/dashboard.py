@@ -58,6 +58,8 @@ DASHBOARD_HTML = """
     .status-running { color: blue; }
     .status-succeeded { color: green; }
     .status-failed { color: red; }
+    .job-link { color: #2196F3; text-decoration: none; font-weight: bold; }
+    .job-link:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -65,7 +67,7 @@ DASHBOARD_HTML = """
   <div id="stats"></div>
   <h2>Jobs</h2>
   <table id="jobs">
-    <tr><th>ID</th><th>Status</th><th>Started</th><th>Finished</th><th>Error</th></tr>
+    <tr><th>ID</th><th>Status</th><th>Memory</th><th>CPU</th><th>Started</th><th>Finished</th><th>Error</th></tr>
   </table>
   <script>
     async function refresh() {
@@ -79,16 +81,132 @@ DASHBOARD_HTML = """
         const started = j.started_at ? new Date(j.started_at).toLocaleString() : '-';
         const finished = j.finished_at ? new Date(j.finished_at).toLocaleString() : '-';
         return `<tr>
-          <td>${j.job_id.slice(0, 8)}...</td>
+          <td><a href="/job/${j.job_id}" class="job-link" target="_blank">${j.job_id.slice(0, 8)}...</a></td>
           <td class="status-${j.status}">${j.status}</td>
+          <td>${j.memory_mb || 0}/${j.memory_peak_mb || 0} MB</td>
+          <td>${j.cpu_percent || 0}%</td>
           <td>${started}</td>
           <td>${finished}</td>
           <td>${j.error || '-'}</td>
         </tr>`;
       }).join('');
       document.getElementById('jobs').innerHTML =
-        '<tr><th>ID</th><th>Status</th><th>Started</th><th>Finished</th><th>Error</th></tr>' + tbody;
+        '<tr><th>ID</th><th>Status</th><th>Memory</th><th>CPU</th><th>Started</th><th>Finished</th><th>Error</th></tr>' + tbody;
     }
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
+"""
+
+
+JOB_DETAIL_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Job {{job_id}} - Fluster Worker</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+    .status-running { color: blue; font-weight: bold; }
+    .status-succeeded { color: green; font-weight: bold; }
+    .status-failed { color: red; font-weight: bold; }
+    .tabs { display: flex; border-bottom: 2px solid #4CAF50; }
+    .tab { padding: 10px 20px; cursor: pointer; background: #f0f0f0; margin-right: 2px; border: 1px solid #ddd; border-bottom: none; border-radius: 5px 5px 0 0; }
+    .tab.active { background: #4CAF50; color: white; }
+    .tab-content { display: none; padding: 15px; border: 1px solid #ddd; max-height: 500px; overflow-y: auto; background: #f9f9f9; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
+    .tab-content.active { display: block; }
+    .metrics { display: flex; gap: 30px; flex-wrap: wrap; }
+    .metric { text-align: center; padding: 10px; }
+    .metric-value { font-size: 24px; font-weight: bold; color: #4CAF50; }
+    .metric-label { font-size: 12px; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>Job: <code>{{job_id}}</code></h1>
+  <a href="/">← Back to Dashboard</a>
+
+  <div class="section">
+    <h2>Status: <span id="status"></span></h2>
+    <div id="details"></div>
+  </div>
+
+  <div class="section">
+    <h2>Resources</h2>
+    <div class="metrics" id="resources"></div>
+  </div>
+
+  <div class="section">
+    <h2>Build</h2>
+    <div id="build"></div>
+  </div>
+
+  <div class="section">
+    <h2>Logs</h2>
+    <div class="tabs">
+      <div class="tab active" data-tab="all">ALL</div>
+      <div class="tab" data-tab="stdout">STDOUT</div>
+      <div class="tab" data-tab="stderr">STDERR</div>
+      <div class="tab" data-tab="build">BUILD</div>
+    </div>
+    <div id="log-all" class="tab-content active"></div>
+    <div id="log-stdout" class="tab-content"></div>
+    <div id="log-stderr" class="tab-content"></div>
+    <div id="log-build" class="tab-content"></div>
+  </div>
+
+  <script>
+    const jobId = "{{job_id}}";
+
+    async function refresh() {
+      const job = await fetch(`/api/jobs/${jobId}`).then(r => r.json());
+      if (job.error === "Not found") {
+        document.getElementById('status').textContent = "Not Found";
+        return;
+      }
+
+      document.getElementById('status').innerHTML = `<span class="status-${job.status}">${job.status}</span>`;
+      document.getElementById('details').innerHTML = `
+        <p><b>Started:</b> ${job.started_at ? new Date(job.started_at).toLocaleString() : '-'}</p>
+        <p><b>Finished:</b> ${job.finished_at ? new Date(job.finished_at).toLocaleString() : '-'}</p>
+        <p><b>Exit Code:</b> ${job.exit_code !== null ? job.exit_code : '-'}</p>
+        <p><b>Error:</b> ${job.error || '-'}</p>
+        <p><b>Ports:</b> ${JSON.stringify(job.ports)}</p>
+      `;
+
+      document.getElementById('resources').innerHTML = `
+        <div class="metric"><div class="metric-value">${job.resources.memory_mb}</div><div class="metric-label">Memory (MB)</div></div>
+        <div class="metric"><div class="metric-value">${job.resources.memory_peak_mb}</div><div class="metric-label">Peak Memory (MB)</div></div>
+        <div class="metric"><div class="metric-value">${job.resources.cpu_percent}%</div><div class="metric-label">CPU</div></div>
+        <div class="metric"><div class="metric-value">${job.resources.process_count}</div><div class="metric-label">Processes</div></div>
+        <div class="metric"><div class="metric-value">${job.resources.disk_mb}</div><div class="metric-label">Disk (MB)</div></div>
+      `;
+
+      const buildDuration = job.build.duration_ms > 0 ? (job.build.duration_ms / 1000).toFixed(2) + 's' : '-';
+      document.getElementById('build').innerHTML = `
+        <p><b>Image:</b> <code>${job.build.image_tag || '-'}</code></p>
+        <p><b>Build Time:</b> ${buildDuration}</p>
+        <p><b>From Cache:</b> ${job.build.from_cache ? 'Yes' : 'No'}</p>
+      `;
+
+      const logs = await fetch(`/api/jobs/${jobId}/logs`).then(r => r.json());
+      const format = (logs) => logs.map(l => `[${new Date(l.timestamp).toLocaleTimeString()}] ${l.data}`).join('\\n') || 'No logs';
+      document.getElementById('log-all').textContent = format(logs);
+      document.getElementById('log-stdout').textContent = format(logs.filter(l => l.source === 'stdout'));
+      document.getElementById('log-stderr').textContent = format(logs.filter(l => l.source === 'stderr'));
+      document.getElementById('log-build').textContent = format(logs.filter(l => l.source === 'build'));
+    }
+
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('log-' + tab.dataset.tab).classList.add('active');
+      });
+    });
+
     refresh();
     setInterval(refresh, 5000);
   </script>
@@ -128,6 +246,7 @@ class WorkerDashboard:
         routes = [
             # Web dashboard
             Route("/", self._dashboard),
+            Route("/job/{job_id}", self._job_detail_page),
             # REST API (for dashboard)
             Route("/api/stats", self._stats),
             Route("/api/jobs", self._list_jobs),
@@ -141,6 +260,11 @@ class WorkerDashboard:
     async def _dashboard(self, _request: Request) -> HTMLResponse:
         """Serve web dashboard HTML."""
         return HTMLResponse(DASHBOARD_HTML)
+
+    async def _job_detail_page(self, request: Request) -> HTMLResponse:
+        """Serve detailed job view page."""
+        job_id = request.path_params["job_id"]
+        return HTMLResponse(JOB_DETAIL_HTML.replace("{{job_id}}", job_id))
 
     async def _stats(self, _request: Request) -> JSONResponse:
         """Return job statistics by status."""
@@ -182,6 +306,15 @@ class WorkerDashboard:
                     "started_at": j.started_at_ms,
                     "finished_at": j.finished_at_ms,
                     "error": j.error,
+                    # Add resource metrics
+                    "memory_mb": j.resource_usage.memory_mb,
+                    "memory_peak_mb": j.resource_usage.memory_peak_mb,
+                    "cpu_percent": j.resource_usage.cpu_percent,
+                    "process_count": j.resource_usage.process_count,
+                    "disk_mb": j.resource_usage.disk_mb,
+                    # Add build metrics
+                    "build_from_cache": j.build_metrics.from_cache,
+                    "image_tag": j.build_metrics.image_tag,
                 }
                 for j in jobs
             ]
@@ -208,16 +341,37 @@ class WorkerDashboard:
                 "exit_code": job.exit_code,
                 "error": job.error,
                 "ports": dict(job.ports),
+                "resources": {
+                    "memory_mb": job.resource_usage.memory_mb,
+                    "memory_peak_mb": job.resource_usage.memory_peak_mb,
+                    "cpu_percent": job.resource_usage.cpu_percent,
+                    "disk_mb": job.resource_usage.disk_mb,
+                    "process_count": job.resource_usage.process_count,
+                },
+                "build": {
+                    "started_ms": job.build_metrics.build_started_ms,
+                    "finished_ms": job.build_metrics.build_finished_ms,
+                    "duration_ms": (
+                        (job.build_metrics.build_finished_ms - job.build_metrics.build_started_ms)
+                        if job.build_metrics.build_started_ms
+                        else 0
+                    ),
+                    "from_cache": job.build_metrics.from_cache,
+                    "image_tag": job.build_metrics.image_tag,
+                },
             }
         )
 
     async def _get_logs(self, request: Request) -> JSONResponse:
-        """Get logs with optional tail parameter."""
+        """Get logs with optional tail and source parameters."""
         job_id = request.path_params["job_id"]
 
         # Support ?tail=N for last N lines
         tail = request.query_params.get("tail")
         start_line = -int(tail) if tail else 0
+
+        # Support ?source=stdout|stderr|build for filtering
+        source = request.query_params.get("source")
 
         # Call canonical RPC method
         ctx = FakeRequestContext()
@@ -230,16 +384,20 @@ class WorkerDashboard:
             # RPC raises ConnectError with NOT_FOUND for missing jobs
             return JSONResponse({"error": "Not found"}, status_code=404)
 
-        return JSONResponse(
-            [
-                {
-                    "timestamp": entry.timestamp_ms,
-                    "source": entry.source,
-                    "data": entry.data,
-                }
-                for entry in response.logs
-            ]
-        )
+        logs = [
+            {
+                "timestamp": entry.timestamp_ms,
+                "source": entry.source,
+                "data": entry.data,
+            }
+            for entry in response.logs
+        ]
+
+        # Apply source filter if specified
+        if source:
+            logs = [log for log in logs if log["source"] == source]
+
+        return JSONResponse(logs)
 
     def _status_name(self, status: cluster_pb2.JobState) -> str:
         """Convert status enum to string name."""

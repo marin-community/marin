@@ -17,11 +17,42 @@
 import asyncio
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+
+from pydantic import BaseModel
 
 from fluster import cluster_pb2
 from fluster.cluster.types import is_job_finished
 from fluster.cluster_pb2 import JobState
+
+
+class LogLine(BaseModel):
+    """A single log line with timestamp and source."""
+
+    timestamp: datetime
+    source: str  # "build", "stdout", "stderr"
+    data: str
+
+    @classmethod
+    def now(cls, source: str, data: str) -> "LogLine":
+        return cls(timestamp=datetime.now(timezone.utc), source=source, data=data)
+
+    def to_proto(self) -> cluster_pb2.LogEntry:
+        return cluster_pb2.LogEntry(
+            timestamp_ms=int(self.timestamp.timestamp() * 1000),
+            source=self.source,
+            data=self.data,
+        )
+
+
+class JobLogs(BaseModel):
+    """All logs for a job, stored as structured data."""
+
+    lines: list[LogLine] = []
+
+    def add(self, source: str, data: str) -> None:
+        self.lines.append(LogLine.now(source, data))
 
 
 @dataclass(kw_only=True)
@@ -59,6 +90,9 @@ class Job:
 
     # Background tasks
     stats_task: asyncio.Task | None = None
+
+    # Structured logs (build logs stored here, container logs fetched from Docker)
+    logs: JobLogs = field(default_factory=JobLogs)
 
     def transition_to(
         self,

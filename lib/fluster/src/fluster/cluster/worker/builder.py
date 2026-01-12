@@ -14,6 +14,8 @@
 
 """Virtual environment and Docker image builder with caching."""
 
+from __future__ import annotations
+
 import asyncio
 import os
 import shutil
@@ -22,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import xxhash
+
+from fluster.cluster.worker.worker_types import JobLogs
 
 
 @dataclass
@@ -142,6 +146,7 @@ class ImageBuilder:
         extras: list[str],
         job_id: str,
         deps_hash: str,
+        job_logs: JobLogs | None = None,
     ) -> BuildResult:
         """Build Docker image for job.
 
@@ -151,6 +156,8 @@ class ImageBuilder:
 
         # Check if image exists locally
         if await self._image_exists(image_tag):
+            if job_logs:
+                job_logs.add("build", f"Using cached image: {image_tag}")
             return BuildResult(
                 image_tag=image_tag,
                 deps_hash=deps_hash,
@@ -165,7 +172,7 @@ class ImageBuilder:
             base_image=base_image,
             extras_flags=extras_flags,
         )
-        await self._docker_build(bundle_path, dockerfile, image_tag)
+        await self._docker_build(bundle_path, dockerfile, image_tag, job_logs)
         build_time_ms = int((time.time() - start) * 1000)
 
         await self._evict_old_images()
@@ -177,12 +184,15 @@ class ImageBuilder:
             from_cache=False,
         )
 
-    async def _docker_build(self, context: Path, dockerfile: str, tag: str) -> None:
+    async def _docker_build(self, context: Path, dockerfile: str, tag: str, job_logs: JobLogs | None = None) -> None:
         """Run docker build with BuildKit."""
         dockerfile_path = context / "Dockerfile.fluster"
         dockerfile_path.write_text(dockerfile)
 
         try:
+            if job_logs:
+                job_logs.add("build", f"Starting build for image: {tag}")
+
             cmd = [
                 "docker",
                 "build",
@@ -199,11 +209,28 @@ class ImageBuilder:
                 *cmd,
                 env={**os.environ, "DOCKER_BUILDKIT": "1"},
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
             )
-            _stdout, stderr = await proc.communicate()
+
+            # Stream output to job_logs
+            if proc.stdout:
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    if job_logs:
+                        job_logs.add("build", line.decode().rstrip())
+
+            await proc.wait()
+
+            if job_logs:
+                if proc.returncode == 0:
+                    job_logs.add("build", "Build completed successfully")
+                else:
+                    job_logs.add("build", f"Build failed with exit code {proc.returncode}")
+
             if proc.returncode != 0:
-                raise RuntimeError(f"Docker build failed: {stderr.decode()}")
+                raise RuntimeError(f"Docker build failed with exit code {proc.returncode}")
         finally:
             # Cleanup generated dockerfile
             dockerfile_path.unlink(missing_ok=True)

@@ -18,8 +18,13 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+import docker
+import docker.errors
 
 from fluster import cluster_pb2
+from fluster.cluster.worker.worker_types import LogLine
 
 
 @dataclass
@@ -34,8 +39,6 @@ class ContainerConfig:
     timeout_seconds: int | None = None
     mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
     ports: dict[str, int] = field(default_factory=dict)  # name -> host_port
-    stdout_file: str | None = None  # Host path for stdout redirection
-    stderr_file: str | None = None  # Host path for stderr redirection
 
     def _parse_memory_mb(self, memory_str: str) -> int:
         """Parse memory string like '8g', '128m' to MB."""
@@ -159,32 +162,8 @@ class DockerRuntime:
         for _name, host_port in config.ports.items():
             cmd.extend(["-p", f"{host_port}:{host_port}"])
 
-        # If log files specified, mount them and wrap command with redirection
-        final_command = config.command
-        if config.stdout_file or config.stderr_file:
-            # Mount log file directory
-            from pathlib import Path
-
-            if config.stdout_file:
-                stdout_path = Path(config.stdout_file)
-                stdout_path.parent.mkdir(parents=True, exist_ok=True)
-                stdout_path.touch(exist_ok=True)
-                cmd.extend(["-v", f"{stdout_path}:/logs/STDOUT:rw"])
-
-            if config.stderr_file:
-                stderr_path = Path(config.stderr_file)
-                stderr_path.parent.mkdir(parents=True, exist_ok=True)
-                stderr_path.touch(exist_ok=True)
-                cmd.extend(["-v", f"{stderr_path}:/logs/STDERR:rw"])
-
-            # Wrap command in shell with redirection
-            original_cmd = " ".join(f"'{arg}'" if " " in arg else arg for arg in config.command)
-            stdout_redir = "> /logs/STDOUT" if config.stdout_file else ""
-            stderr_redir = "2> /logs/STDERR" if config.stderr_file else ""
-            final_command = ["/bin/sh", "-c", f"{original_cmd} {stdout_redir} {stderr_redir}"]
-
         cmd.append(config.image)
-        cmd.extend(final_command)
+        cmd.extend(config.command)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -253,3 +232,51 @@ class DockerRuntime:
         _, stderr = await proc.communicate()
         if proc.returncode != 0:
             raise RuntimeError(f"Failed to remove container: {stderr.decode()}")
+
+    def get_logs(self, container_id: str) -> list[LogLine]:
+        """Fetch logs from container using docker library.
+
+        Returns list of LogLine with proper timestamps from Docker.
+        """
+        client = docker.from_env()
+        try:
+            container = client.containers.get(container_id)
+        except docker.errors.NotFound:
+            return []
+
+        logs: list[LogLine] = []
+
+        # Fetch stdout with timestamps
+        stdout_logs = container.logs(stdout=True, stderr=False, timestamps=True)
+        for line in stdout_logs.decode().splitlines():
+            if line:
+                timestamp, data = self._parse_docker_log_line(line)
+                logs.append(LogLine(timestamp=timestamp, source="stdout", data=data))
+
+        # Fetch stderr with timestamps
+        stderr_logs = container.logs(stdout=False, stderr=True, timestamps=True)
+        for line in stderr_logs.decode().splitlines():
+            if line:
+                timestamp, data = self._parse_docker_log_line(line)
+                logs.append(LogLine(timestamp=timestamp, source="stderr", data=data))
+
+        return logs
+
+    def _parse_docker_log_line(self, line: str) -> tuple[datetime, str]:
+        """Parse Docker log line with timestamp.
+
+        Docker format: 2024-01-12T10:30:45.123456789Z message
+        """
+        if len(line) > 30 and line[10] == "T":
+            z_idx = line.find("Z")
+            if 20 < z_idx < 35:
+                ts_str = line[: z_idx + 1]
+                # Truncate nanoseconds to microseconds for fromisoformat
+                if len(ts_str) > 27:
+                    ts_str = ts_str[:26] + "Z"
+                try:
+                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                    return ts, line[z_idx + 2 :]
+                except ValueError:
+                    pass
+        return datetime.now(timezone.utc), line

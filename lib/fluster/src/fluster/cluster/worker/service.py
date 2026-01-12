@@ -103,7 +103,7 @@ class WorkerServiceImpl:
         """
         # Get logs with start_line handling (negative = tail)
         start_line = request.filter.start_line if request.filter.start_line else 0
-        logs = await self._manager.get_logs(request.job_id, start_line=start_line)
+        logs = self._manager.get_logs(request.job_id, start_line=start_line)
 
         # Apply additional filters
         result = []

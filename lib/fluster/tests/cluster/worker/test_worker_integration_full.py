@@ -27,6 +27,7 @@ import zipfile
 import cloudpickle
 import httpx
 import pytest
+import pytest_asyncio
 from fluster import cluster_pb2
 from fluster.cluster.types import Entrypoint
 from fluster.cluster.worker.builder import ImageBuilder, VenvCache
@@ -105,7 +106,7 @@ def test_deps():
     return f"file://{bundle_path}"
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def worker_server(tmp_path, check_docker):
     """Start a real worker server on ephemeral port.
 
@@ -680,3 +681,188 @@ async def test_list_jobs(worker_server, workspace_bundle):
     assert "test-list-0" in job_ids
     assert "test-list-1" in job_ids
     assert "test-list-2" in job_ids
+
+
+def create_entrypoint_memory_allocator():
+    """Create entrypoint that allocates memory and runs for 10+ seconds."""
+
+    def run():
+        import time
+
+        print("Starting memory allocation test")
+        # Allocate approximately 50MB of memory
+        data = []
+        for i in range(50):
+            # Each allocation is ~1MB
+            chunk = "x" * (1024 * 1024)
+            data.append(chunk)
+            if i % 10 == 0:
+                print(f"Allocated {i + 1} MB")
+
+        print("Memory allocated, sleeping for 12 seconds")
+        time.sleep(12)
+        print("Job completed")
+        return len(data)
+
+    return Entrypoint(callable=run, args=(), kwargs={})
+
+
+def create_entrypoint_with_timed_output():
+    """Create entrypoint that prints messages with sleep between them."""
+
+    def run():
+        import time
+
+        print("First message")
+        time.sleep(2)
+        print("Second message")
+        return "done"
+
+    return Entrypoint(callable=run, args=(), kwargs={})
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_resource_monitoring(worker_server, workspace_bundle):
+    """Test that resource metrics are collected during job execution.
+
+    This test verifies that the stats collection loop (5s interval) properly
+    collects memory, CPU, and process count metrics during job execution.
+    """
+    _dashboard, client, _port = worker_server
+
+    entrypoint = create_entrypoint_memory_allocator()
+    request = cluster_pb2.RunJobRequest(
+        job_id="test-resource-monitoring",
+        serialized_entrypoint=cloudpickle.dumps(entrypoint),
+        bundle_gcs_path=workspace_bundle,
+        environment=cluster_pb2.EnvironmentConfig(workspace="/app"),
+        timeout_seconds=60,
+    )
+
+    await client.run_job(request)
+
+    # Wait for job to start running
+    await wait_for_job_state(client, "test-resource-monitoring", {cluster_pb2.JOB_STATE_RUNNING})
+
+    # Wait 6 seconds for at least one stats collection (poll interval is 5s)
+    await asyncio.sleep(6)
+
+    # Get status and verify resource metrics are populated
+    status = await client.get_job_status(cluster_pb2.GetStatusRequest(job_id="test-resource-monitoring"))
+
+    # Verify resource usage is being tracked
+    assert status.resource_usage is not None
+    assert status.resource_usage.memory_mb > 0, "Memory usage should be greater than 0"
+    assert status.resource_usage.process_count > 0, "Process count should be greater than 0"
+    assert status.resource_usage.memory_peak_mb >= status.resource_usage.memory_mb, "Peak memory should be >= current"
+
+    # Wait for job to complete
+    final_status = await wait_for_job_state(
+        client, "test-resource-monitoring", {cluster_pb2.JOB_STATE_SUCCEEDED, cluster_pb2.JOB_STATE_FAILED}
+    )
+
+    assert final_status.state == cluster_pb2.JOB_STATE_SUCCEEDED
+    # Peak memory should reflect the allocated memory
+    assert final_status.resource_usage.memory_peak_mb > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_build_log_capture(worker_server, workspace_bundle):
+    """Test that build logs are captured and retrievable.
+
+    This test verifies that logs with source="build" are properly collected
+    during the image build phase and can be fetched via FetchLogs.
+    """
+    _dashboard, client, _port = worker_server
+
+    entrypoint = create_entrypoint_simple()
+    request = cluster_pb2.RunJobRequest(
+        job_id="test-build-logs",
+        serialized_entrypoint=cloudpickle.dumps(entrypoint),
+        bundle_gcs_path=workspace_bundle,
+        environment=cluster_pb2.EnvironmentConfig(workspace="/app"),
+    )
+
+    await client.run_job(request)
+
+    # Wait for job to complete
+    await wait_for_job_state(client, "test-build-logs", {cluster_pb2.JOB_STATE_SUCCEEDED, cluster_pb2.JOB_STATE_FAILED})
+
+    # Fetch all logs
+    all_logs = await client.fetch_logs(
+        cluster_pb2.FetchLogsRequest(
+            job_id="test-build-logs",
+            filter=cluster_pb2.FetchLogsFilter(),
+        )
+    )
+
+    # Filter for build logs (logs should have source field)
+    build_logs = [log for log in all_logs.logs if log.source == "build"]
+
+    # Assert build logs exist
+    assert len(build_logs) > 0, "Build logs should be captured"
+
+    # Check that build logs contain expected keywords
+    build_log_text = " ".join(log.data.lower() for log in build_logs)
+    # Build logs should mention docker operations
+    build_keywords = ["image", "docker", "cache", "build"]
+    found_keywords = [kw for kw in build_keywords if kw in build_log_text]
+    assert len(found_keywords) > 0, f"Build logs should contain build-related keywords, got: {build_log_text[:200]}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_log_timestamps_accurate(worker_server, workspace_bundle):
+    """Test that log timestamps reflect actual write times.
+
+    This test verifies that LogEntry timestamps are accurate and properly
+    reflect when logs were written, not when they were collected.
+    """
+    _dashboard, client, _port = worker_server
+
+    entrypoint = create_entrypoint_with_timed_output()
+    request = cluster_pb2.RunJobRequest(
+        job_id="test-log-timestamps",
+        serialized_entrypoint=cloudpickle.dumps(entrypoint),
+        bundle_gcs_path=workspace_bundle,
+        environment=cluster_pb2.EnvironmentConfig(workspace="/app"),
+    )
+
+    await client.run_job(request)
+
+    # Wait for job to complete
+    await wait_for_job_state(
+        client, "test-log-timestamps", {cluster_pb2.JOB_STATE_SUCCEEDED, cluster_pb2.JOB_STATE_FAILED}
+    )
+
+    # Fetch logs that contain our messages
+    logs = await client.fetch_logs(
+        cluster_pb2.FetchLogsRequest(
+            job_id="test-log-timestamps",
+            filter=cluster_pb2.FetchLogsFilter(regex="(First message|Second message)"),
+        )
+    )
+
+    # Find the two messages
+    first_message = None
+    second_message = None
+
+    for log in logs.logs:
+        if "First message" in log.data:
+            first_message = log
+        elif "Second message" in log.data:
+            second_message = log
+
+    assert first_message is not None, "First message log not found"
+    assert second_message is not None, "Second message log not found"
+
+    # Calculate time difference in milliseconds
+    time_diff_ms = second_message.timestamp_ms - first_message.timestamp_ms
+
+    # Should be approximately 2000ms (2 seconds), allow ±500ms tolerance
+    assert 1500 <= time_diff_ms <= 2500, (
+        f"Timestamp difference should be ~2000ms (±500ms), got {time_diff_ms}ms. "
+        f"First: {first_message.timestamp_ms}, Second: {second_message.timestamp_ms}"
+    )

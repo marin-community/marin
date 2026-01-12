@@ -301,10 +301,10 @@ async def test_get_logs_with_tail_parameter(client, service):
     request = create_run_job_request(job_id="job-tail")
     await service.run_job(request, Mock())
 
-    # Write logs
+    # Add logs directly to job.logs (since we no longer use file-based logging)
     job = service._manager.get_job("job-tail")
-    stdout_file = job.workdir / "STDOUT"
-    stdout_file.write_text("\n".join(f"Log line {i}" for i in range(100)))
+    for i in range(100):
+        job.logs.add("stdout", f"Log line {i}")
 
     response = client.get("/api/jobs/job-tail/logs?tail=5")
     assert response.status_code == 200
@@ -313,6 +313,120 @@ async def test_get_logs_with_tail_parameter(client, service):
     assert len(logs) == 5
     assert logs[0]["data"] == "Log line 95"
     assert logs[4]["data"] == "Log line 99"
+
+
+@pytest.mark.asyncio
+async def test_get_logs_with_source_filter(client, service):
+    """Test /api/jobs/{job_id}/logs?source=stdout filters by source."""
+    request = create_run_job_request(job_id="job-source-filter")
+    await service.run_job(request, Mock())
+
+    # Add logs directly to job.logs (since we no longer use file-based logging)
+    job = service._manager.get_job("job-source-filter")
+    job.logs.add("stdout", "stdout line 1")
+    job.logs.add("stdout", "stdout line 2")
+    job.logs.add("stderr", "stderr line 1")
+    job.logs.add("stderr", "stderr line 2")
+
+    # Test stdout filter
+    response = client.get("/api/jobs/job-source-filter/logs?source=stdout")
+    assert response.status_code == 200
+    logs = response.json()
+    assert len(logs) == 2
+    assert all(log["source"] == "stdout" for log in logs)
+
+    # Test stderr filter
+    response = client.get("/api/jobs/job-source-filter/logs?source=stderr")
+    assert response.status_code == 200
+    logs = response.json()
+    assert len(logs) == 2
+    assert all(log["source"] == "stderr" for log in logs)
+
+    # Test without filter - should get all logs
+    response = client.get("/api/jobs/job-source-filter/logs")
+    assert response.status_code == 200
+    logs = response.json()
+    assert len(logs) == 4  # 2 stdout + 2 stderr
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_includes_resource_and_build_metrics(client, service):
+    """Test /api/jobs includes resource and build metrics."""
+    request = create_run_job_request(job_id="job-with-metrics")
+    await service.run_job(request, Mock())
+
+    # Set some resource and build metrics
+    job = service._manager.get_job("job-with-metrics")
+    job.current_memory_mb = 256
+    job.peak_memory_mb = 512
+    job.current_cpu_percent = 45
+    job.process_count = 3
+    job.disk_mb = 1024
+    job.build_from_cache = True
+    job.image_tag = "test-image:v1.0"
+
+    response = client.get("/api/jobs")
+    assert response.status_code == 200
+    jobs = response.json()
+
+    job_data = next(j for j in jobs if j["job_id"] == "job-with-metrics")
+    assert job_data["memory_mb"] == 256
+    assert job_data["memory_peak_mb"] == 512
+    assert job_data["cpu_percent"] == 45
+    assert job_data["process_count"] == 3
+    assert job_data["disk_mb"] == 1024
+    assert job_data["build_from_cache"] is True
+    assert job_data["image_tag"] == "test-image:v1.0"
+
+
+@pytest.mark.asyncio
+async def test_get_job_includes_nested_resources_and_build(client, service):
+    """Test /api/jobs/{job_id} includes nested resources and build objects."""
+    request = create_run_job_request(job_id="job-nested-metrics")
+    await service.run_job(request, Mock())
+
+    # Set some resource and build metrics
+    job = service._manager.get_job("job-nested-metrics")
+    job.current_memory_mb = 128
+    job.peak_memory_mb = 256
+    job.current_cpu_percent = 30
+    job.process_count = 2
+    job.disk_mb = 512
+    job.build_started_ms = 1000
+    job.build_finished_ms = 2500
+    job.build_from_cache = False
+    job.image_tag = "test-image:v2.0"
+
+    response = client.get("/api/jobs/job-nested-metrics")
+    assert response.status_code == 200
+    data = response.json()
+
+    # Check resources nested object
+    assert "resources" in data
+    resources = data["resources"]
+    assert resources["memory_mb"] == 128
+    assert resources["memory_peak_mb"] == 256
+    assert resources["cpu_percent"] == 30
+    assert resources["process_count"] == 2
+    assert resources["disk_mb"] == 512
+
+    # Check build nested object
+    assert "build" in data
+    build = data["build"]
+    assert build["started_ms"] == 1000
+    assert build["finished_ms"] == 2500
+    assert build["duration_ms"] == 1500
+    assert build["from_cache"] is False
+    assert build["image_tag"] == "test-image:v2.0"
+
+
+def test_job_detail_page_loads(client):
+    """Test /job/{job_id} page loads successfully."""
+    response = client.get("/job/test-job-123")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
+    assert "Job: <code>test-job-123</code>" in response.text
+    assert "Back to Dashboard" in response.text
 
 
 # ============================================================================
@@ -384,10 +498,10 @@ async def test_fetch_logs_tail_with_negative_start_line(service, request_context
     request = create_run_job_request(job_id="job-logs-tail")
     await service.run_job(request, request_context)
 
-    # Write logs
+    # Add logs directly to job.logs
     job = service._manager.get_job("job-logs-tail")
-    stdout_file = job.workdir / "STDOUT"
-    stdout_file.write_text("\n".join(f"Log line {i}" for i in range(10)))
+    for i in range(10):
+        job.logs.add("stdout", f"Log line {i}")
 
     log_filter = cluster_pb2.FetchLogsFilter(start_line=-3)
     logs_request = cluster_pb2.FetchLogsRequest(job_id="job-logs-tail", filter=log_filter)
@@ -405,10 +519,12 @@ async def test_fetch_logs_with_regex_filter(service, request_context):
     request = create_run_job_request(job_id="job-logs-regex")
     await service.run_job(request, request_context)
 
-    # Write logs with different patterns
+    # Add logs with different patterns
     job = service._manager.get_job("job-logs-regex")
-    stdout_file = job.workdir / "STDOUT"
-    stdout_file.write_text("ERROR: something bad\nINFO: normal log\nERROR: another error\nDEBUG: details")
+    job.logs.add("stdout", "ERROR: something bad")
+    job.logs.add("stdout", "INFO: normal log")
+    job.logs.add("stdout", "ERROR: another error")
+    job.logs.add("stdout", "DEBUG: details")
 
     log_filter = cluster_pb2.FetchLogsFilter(regex="ERROR")
     logs_request = cluster_pb2.FetchLogsRequest(job_id="job-logs-regex", filter=log_filter)
@@ -425,18 +541,14 @@ async def test_fetch_logs_combined_filters(service, request_context):
     request = create_run_job_request(job_id="job-logs-combined")
     await service.run_job(request, request_context)
 
-    # Write logs
+    # Add logs
     job = service._manager.get_job("job-logs-combined")
-    stdout_file = job.workdir / "STDOUT"
-    logs = [
-        "ERROR: first error",
-        "INFO: normal",
-        "ERROR: second error",
-        "ERROR: third error",
-        "ERROR: fourth error",
-        "ERROR: fifth error",
-    ]
-    stdout_file.write_text("\n".join(logs))
+    job.logs.add("stdout", "ERROR: first error")
+    job.logs.add("stdout", "INFO: normal")
+    job.logs.add("stdout", "ERROR: second error")
+    job.logs.add("stdout", "ERROR: third error")
+    job.logs.add("stdout", "ERROR: fourth error")
+    job.logs.add("stdout", "ERROR: fifth error")
 
     # Use regex to filter ERRORs, then limit to 2
     log_filter = cluster_pb2.FetchLogsFilter(regex="ERROR", max_lines=2)

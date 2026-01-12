@@ -18,15 +18,19 @@ import asyncio
 import base64
 import cloudpickle
 import socket
+import tempfile
 import time
 import uuid
 from pathlib import Path
+
+import docker
 
 from fluster import cluster_pb2
 from fluster.cluster.worker.worker_types import Job
 from fluster.cluster.worker.bundle import BundleCache
 from fluster.cluster.worker.builder import VenvCache, ImageBuilder
 from fluster.cluster.worker.runtime import DockerRuntime, ContainerConfig
+from fluster.cluster.worker.stats import collect_container_stats, collect_workdir_size_mb
 
 
 class PortAllocator:
@@ -104,6 +108,7 @@ class JobManager:
         self._runtime = runtime
         self._port_allocator = port_allocator
         self._semaphore = asyncio.Semaphore(max_concurrent_jobs)
+        self._docker_client = docker.from_env()
         # TODO: Jobs are never removed from this dict, causing unbounded memory growth.
         # Need to implement LRU eviction for completed jobs similar to BundleCache/VenvCache.
         self._jobs: dict[str, Job] = {}
@@ -127,7 +132,7 @@ class JobManager:
         ports = dict(zip(port_names, allocated_ports, strict=True))
 
         # Create job working directory
-        workdir = Path(f"/tmp/fluster-worker/jobs/{job_id}")
+        workdir = Path(tempfile.gettempdir()) / "fluster-worker" / "jobs" / job_id
         workdir.mkdir(parents=True, exist_ok=True)
 
         job = Job(
@@ -161,6 +166,7 @@ class JobManager:
 
                 # Phase 2: Build image
                 job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="building image")
+                job.build_started_ms = int(time.time() * 1000)
                 env_config = job.request.environment
                 extras = list(env_config.extras)
 
@@ -168,13 +174,19 @@ class JobManager:
                 deps_hash = self._venv_cache.compute_deps_hash(bundle_path)
 
                 job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="populating uv cache")
+                job.logs.add("build", "Building Docker image...")
                 build_result = await self._image_builder.build(
                     bundle_path=bundle_path,
                     base_image="python:3.11-slim",
                     extras=extras,
                     job_id=job.job_id,
                     deps_hash=deps_hash,
+                    job_logs=job.logs,
                 )
+
+                job.build_finished_ms = int(time.time() * 1000)
+                job.build_from_cache = build_result.from_cache
+                job.image_tag = build_result.image_tag
 
                 # Phase 3: Run container
                 job.transition_to(cluster_pb2.JOB_STATE_RUNNING)
@@ -202,12 +214,13 @@ class JobManager:
                     resources=job.request.resources if job.request.HasField("resources") else None,
                     timeout_seconds=job.request.timeout_seconds or None,
                     ports=job.ports,
-                    stdout_file=str(job.workdir / "STDOUT"),
-                    stderr_file=str(job.workdir / "STDERR"),
                 )
 
                 result = await self._runtime.run(config)
                 job.container_id = result.container_id
+
+                # Start stats collection
+                job.stats_task = asyncio.create_task(self._collect_stats_loop(job))
 
                 # Phase 4: Complete
                 if result.error:
@@ -232,17 +245,20 @@ class JobManager:
             except Exception as e:
                 job.transition_to(cluster_pb2.JOB_STATE_FAILED, error=repr(e))
             finally:
-                # Cleanup: release ports, remove container, remove workdir (only if not already cleaned up)
+                # Cancel stats collection task
+                if job.stats_task and not job.stats_task.done():
+                    job.stats_task.cancel()
+                    try:
+                        await job.stats_task
+                    except asyncio.CancelledError:
+                        pass
+
+                # Cleanup: release ports, remove workdir (keep container for logs)
                 if not job.cleanup_done:
                     job.cleanup_done = True
                     await self._port_allocator.release(list(job.ports.values()))
-                    if job.container_id:
-                        try:
-                            await self._runtime.remove(job.container_id)
-                        except RuntimeError:
-                            # Container may have already been removed
-                            pass
-                    # Remove working directory
+                    # Keep container around for log retrieval via docker logs
+                    # Remove working directory (no longer needed since logs come from Docker)
                     if job.workdir and job.workdir.exists():
                         import shutil
 
@@ -259,6 +275,26 @@ class JobManager:
             "e.callable(*e.args, **e.kwargs)"
         )
         return ["python", "-c", cmd]
+
+    async def _collect_stats_loop(self, job: Job) -> None:
+        """Poll Docker stats every 5 seconds during execution."""
+        while job.status == cluster_pb2.JOB_STATE_RUNNING:
+            try:
+                if job.container_id:
+                    stats = await collect_container_stats(self._docker_client, job.container_id)
+                    if stats.available:
+                        job.current_memory_mb = stats.memory_mb
+                        job.current_cpu_percent = stats.cpu_percent
+                        job.process_count = stats.process_count
+                        if stats.memory_mb > job.peak_memory_mb:
+                            job.peak_memory_mb = stats.memory_mb
+
+                if job.workdir:
+                    job.disk_mb = await collect_workdir_size_mb(job.workdir)
+            except Exception:
+                pass  # Don't fail job on stats collection errors
+
+            await asyncio.sleep(5.0)
 
     def get_job(self, job_id: str) -> Job | None:
         """Get job by ID."""
@@ -320,8 +356,10 @@ class JobManager:
         while job.status in (cluster_pb2.JOB_STATE_RUNNING, cluster_pb2.JOB_STATE_BUILDING):
             await asyncio.sleep(0.1)
 
-    async def get_logs(self, job_id: str, start_line: int = 0) -> list[cluster_pb2.LogEntry]:
+    def get_logs(self, job_id: str, start_line: int = 0) -> list[cluster_pb2.LogEntry]:
         """Get logs for a job.
+
+        Combines build logs (from job.logs) with container logs (from Docker).
 
         Args:
             job_id: Job ID
@@ -329,47 +367,25 @@ class JobManager:
                        (e.g., start_line=-100 returns last 100 lines for tailing).
 
         Returns:
-            List of log entries from STDOUT and STDERR files
+            List of log entries sorted by timestamp
         """
         job = self._jobs.get(job_id)
-        if not job or not job.workdir:
+        if not job:
             return []
 
-        logs = []
+        logs: list[cluster_pb2.LogEntry] = []
 
-        # TODO: Log file access has a race condition - files may be deleted by cleanup
-        # while we're reading them. This is acceptable - we'll get FileNotFoundError
-        # if the file disappears, which is fine for this use case.
+        # Add build logs from job.logs (these have proper timestamps)
+        for log_line in job.logs.lines:
+            logs.append(log_line.to_proto())
 
-        # TODO: Log timestamps are incorrect - they use the current time when get_logs()
-        # is called, not the actual time when the log was written. This makes time-based
-        # filtering meaningless. Should either prepend timestamps when writing logs or
-        # use Docker's --timestamps flag.
+        # Fetch container stdout/stderr from Docker if container exists
+        if job.container_id:
+            container_logs = self._runtime.get_logs(job.container_id)
+            for log_line in container_logs:
+                logs.append(log_line.to_proto())
 
-        # Read from STDOUT file
-        stdout_file = job.workdir / "STDOUT"
-        if stdout_file.exists():
-            for line in stdout_file.read_text().splitlines():
-                if line:  # Skip empty lines
-                    logs.append(
-                        cluster_pb2.LogEntry(
-                            timestamp_ms=int(time.time() * 1000),
-                            source="stdout",
-                            data=line,
-                        )
-                    )
-
-        # Read from STDERR file
-        stderr_file = job.workdir / "STDERR"
-        if stderr_file.exists():
-            for line in stderr_file.read_text().splitlines():
-                if line:  # Skip empty lines
-                    logs.append(
-                        cluster_pb2.LogEntry(
-                            timestamp_ms=int(time.time() * 1000),
-                            source="stderr",
-                            data=line,
-                        )
-                    )
+        # Sort by timestamp
+        logs.sort(key=lambda x: x.timestamp_ms)
 
         return logs[start_line:]
