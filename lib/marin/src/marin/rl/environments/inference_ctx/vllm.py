@@ -106,6 +106,10 @@ class vLLMInferenceContext(BaseInferenceContext):
     def _get_renderer(model_name: str, tokenizer) -> Renderer:
         """Get the appropriate renderer based on model name."""
         model_name_lower = model_name.lower()
+        if "marin" in model_name_lower:
+            return Llama3Renderer(tokenizer)
+        if "tootsie" in model_name_lower:
+            return Llama3Renderer(tokenizer)
         if "qwen" in model_name_lower:
             return Qwen3Renderer(tokenizer)
         elif "llama" in model_name_lower:
