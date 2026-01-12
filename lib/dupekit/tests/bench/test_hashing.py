@@ -16,16 +16,9 @@ from typing import Any
 from collections.abc import Callable
 
 import pytest
-import pyarrow.parquet as pq
+import pyarrow as pa
 import hashlib
 import dupekit
-
-
-@pytest.fixture(scope="module")
-def text_samples(parquet_file: str) -> list[bytes]:
-    table = pq.read_table(parquet_file)
-    texts = table["text"][:10000].to_pylist()
-    return [t.encode("utf-8") for t in texts]
 
 
 def _py_blake2b(text: bytes) -> bytes:
@@ -43,7 +36,9 @@ def _py_blake2b(text: bytes) -> bytes:
         pytest.param(dupekit.hash_xxh3_64_batch, "batch", id="rust_xxh3_64_batch"),
     ],
 )
-def test_hashing_throughput(benchmark: Any, text_samples: list[bytes], func: Callable, mode: str) -> None:
+def test_hashing_throughput(benchmark: Any, sample_batch: pa.RecordBatch, func: Callable, mode: str) -> None:
+    # Use the sample_batch fixture (10k rows) and convert to bytes
+    text_samples = [t.as_py().encode("utf-8") for t in sample_batch["text"]]
 
     def _run() -> list[Any]:
         if mode == "batch":

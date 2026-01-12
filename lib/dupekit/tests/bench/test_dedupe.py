@@ -15,16 +15,8 @@
 import hashlib
 import pytest
 import pyarrow as pa
-import pyarrow.parquet as pq
 from typing import Any
 import dupekit
-
-
-@pytest.fixture(scope="module")
-def sample_data(parquet_file: str) -> pa.RecordBatch:
-    """Loads a single large batch (10k rows) for benchmarking."""
-    pf = pq.ParquetFile(parquet_file)
-    return next(pf.iter_batches(batch_size=10_000))
 
 
 def build_map(hashes: list[str], ids: list[str]) -> dict[str, Any]:
@@ -157,23 +149,23 @@ MARK_FUNCS = {
 
 @pytest.mark.parametrize("granularity", ["paragraphs", "documents"])
 @pytest.mark.parametrize("backend", ["python", "rust"])
-def test_hashing(benchmark: Any, sample_data: pa.RecordBatch, granularity: str, backend: str) -> None:
+def test_hashing(benchmark: Any, sample_batch: pa.RecordBatch, granularity: str, backend: str) -> None:
     """Benchmark the hash generation step."""
     func = PROCESS_FUNCS[(granularity, backend)]
     benchmark.group = f"{granularity.title()}: Hash Generation"
-    benchmark(func, sample_data, "text", "id")
+    benchmark(func, sample_batch, "text", "id")
 
 
 @pytest.mark.parametrize("granularity", ["paragraphs", "documents"])
 @pytest.mark.parametrize("backend", ["python", "rust"])
-def test_deduplication(benchmark: Any, sample_data: pa.RecordBatch, granularity: str, backend: str) -> None:
+def test_deduplication(benchmark: Any, sample_batch: pa.RecordBatch, granularity: str, backend: str) -> None:
     """Benchmark the duplicate marking step (requires pre-calculated map)."""
     process_func = PROCESS_FUNCS[(granularity, "rust")]  # Always use fast Rust version to build map
-    processed = process_func(sample_data, "text", "id")
+    processed = process_func(sample_batch, "text", "id")
     hashes, ids = extract_results(processed)
     dup_map = build_map(hashes, ids)
 
     mark_func = MARK_FUNCS[(granularity, backend)]
     benchmark.group = f"{granularity.title()}: Exact Deduplication"
 
-    benchmark(mark_func, sample_data, "text", "id", dup_map, "dups")
+    benchmark(mark_func, sample_batch, "text", "id", dup_map, "dups")

@@ -19,38 +19,17 @@ Disk -> Parquet Parsing -> Memory -> Rust -> Output Data.
 
 import pytest
 import pyarrow.parquet as pq
-import pyarrow as pa
 from typing import Any
 import dupekit
 
 
-@pytest.fixture(scope="module")
-def small_parquet_file(tmp_path_factory: pytest.TempPathFactory, parquet_file: str) -> str:
-    """
-    Creates a smaller slice (250k rows) of the main parquet file for faster benchmarking.
-    """
-    fn = tmp_path_factory.mktemp("data_io") / "subset.parquet"
-    pf = pq.ParquetFile(parquet_file)
-    first_batch = next(pf.iter_batches(batch_size=250_000))
-    table = pa.Table.from_batches([first_batch])
-    pq.write_table(table, fn)
-    path_str = str(fn)
-
-    # Warm up OS cache
-    with open(path_str, "rb") as f:
-        while f.read(1024**2):
-            pass
-
-    return path_str
-
-
-def test_rust_native(benchmark: Any, small_parquet_file: str) -> None:
+def test_rust_native(benchmark: Any, small_parquet_path: str) -> None:
     """
     Baseline: Rust reads file from disk, parses Parquet, transforms, returns RecordBatch.
     """
 
     def _run() -> int:
-        return len(dupekit.process_native(small_parquet_file))
+        return len(dupekit.process_native(small_parquet_path))
 
     assert benchmark(_run) > 0
 
@@ -62,27 +41,27 @@ def test_rust_native(benchmark: Any, small_parquet_file: str) -> None:
         pytest.param(1024, id="small"),
     ],
 )
-def test_arrow_io_pipeline(benchmark: Any, small_parquet_file: str, batch_size: int) -> None:
+def test_arrow_io_pipeline(benchmark: Any, small_parquet_path: str, batch_size: int) -> None:
     """
     Python End-to-End: Python reads file -> Stream of RecordBatches -> Rust (called per batch).
     Includes Parquet parsing overhead and Python loop overhead.
     """
 
     def _pipeline() -> int:
-        batches = pq.ParquetFile(small_parquet_file).iter_batches(batch_size=batch_size)
+        batches = pq.ParquetFile(small_parquet_path).iter_batches(batch_size=batch_size)
         return sum(len(dupekit.process_arrow_batch(b)) for b in batches)
 
     assert benchmark(_pipeline) > 0
 
 
-def test_dicts_loop_io(benchmark: Any, small_parquet_file: str) -> None:
+def test_dicts_loop_io(benchmark: Any, small_parquet_path: str) -> None:
     """
     Python End-to-End: Read File -> List[dict] -> Loop calling Rust per item -> List[dict].
     Slowest Python approach (Baseline for worst case).
     """
 
     def _pipeline() -> int:
-        docs = pq.read_table(small_parquet_file).to_pylist()
+        docs = pq.read_table(small_parquet_path).to_pylist()
         return len([dupekit.process_dicts_loop(doc) for doc in docs])
 
     assert benchmark(_pipeline) > 0
