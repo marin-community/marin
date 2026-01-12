@@ -134,8 +134,8 @@ class LMEvaluationHarnessEvaluator(VllmTpuEvaluator):
                 if isinstance(model.engine_kwargs.get("tokenizer"), str):
                     tokenizer = model.engine_kwargs.get("tokenizer")
                 elif is_remote_path(model_name_or_path):
-                    staged_tokenizer_dir = self._stage_remote_tokenizer_dir(model_name_or_path)
-                    if staged_tokenizer_dir is None:
+                    tokenizer = self._stage_remote_tokenizer_dir(model_name_or_path)
+                    if tokenizer is None:
                         raise ValueError(
                             "lm-eval's `local-completions` model requires a Hugging Face tokenizer name/path, but "
                             f"the served model id is a remote object-store URI: {model_id!r}, and no tokenizer files "
