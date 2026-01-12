@@ -32,11 +32,11 @@ from marin.rl.rl_experiment_utils import (
 logger = logging.getLogger(__name__)
 
 
-llama_3_1_8b = ModelConfig(
-    name="meta-llama/Llama-3.1-8B-Instruct",
+marin_8b_instruct = ModelConfig(
+    name="marin-community/marin-8b-instruct",
     type="llama",
-    tokenizer="meta-llama/Llama-3.1-8B-Instruct",
-    checkpoint="meta-llama/Llama-3.1-8B-Instruct",
+    tokenizer="marin-community/marin-8b-instruct",
+    checkpoint="marin-community/marin-8b-instruct",
     config_class=LlamaConfig,
 )
 
@@ -80,8 +80,8 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    llama_8b = RLExperimentConfig(
-        model_config=llama_3_1_8b,
+    marin_8b = RLExperimentConfig(
+        model_config=marin_8b_instruct,
         rl_loss=RLOOLoss(
             kl_coef=0.0,
             clip_epsilon_low=0.2,
@@ -104,7 +104,7 @@ def main():
         max_rollout_step_delay=1,
     )
 
-    experiment_configs = [llama_8b]
+    experiment_configs = [marin_8b]
     experiments = []
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     for experiment_config in experiment_configs:
