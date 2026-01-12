@@ -34,6 +34,8 @@ class ContainerConfig:
     timeout_seconds: int | None = None
     mounts: list[tuple[str, str, str]] = field(default_factory=list)  # (host, container, mode)
     ports: dict[str, int] = field(default_factory=dict)  # name -> host_port
+    stdout_file: str | None = None  # Host path for stdout redirection
+    stderr_file: str | None = None  # Host path for stderr redirection
 
     def _parse_memory_mb(self, memory_str: str) -> int:
         """Parse memory string like '8g', '128m' to MB."""
@@ -157,8 +159,32 @@ class DockerRuntime:
         for _name, host_port in config.ports.items():
             cmd.extend(["-p", f"{host_port}:{host_port}"])
 
+        # If log files specified, mount them and wrap command with redirection
+        final_command = config.command
+        if config.stdout_file or config.stderr_file:
+            # Mount log file directory
+            from pathlib import Path
+
+            if config.stdout_file:
+                stdout_path = Path(config.stdout_file)
+                stdout_path.parent.mkdir(parents=True, exist_ok=True)
+                stdout_path.touch(exist_ok=True)
+                cmd.extend(["-v", f"{stdout_path}:/logs/STDOUT:rw"])
+
+            if config.stderr_file:
+                stderr_path = Path(config.stderr_file)
+                stderr_path.parent.mkdir(parents=True, exist_ok=True)
+                stderr_path.touch(exist_ok=True)
+                cmd.extend(["-v", f"{stderr_path}:/logs/STDERR:rw"])
+
+            # Wrap command in shell with redirection
+            original_cmd = " ".join(f"'{arg}'" if " " in arg else arg for arg in config.command)
+            stdout_redir = "> /logs/STDOUT" if config.stdout_file else ""
+            stderr_redir = "2> /logs/STDERR" if config.stderr_file else ""
+            final_command = ["/bin/sh", "-c", f"{original_cmd} {stdout_redir} {stderr_redir}"]
+
         cmd.append(config.image)
-        cmd.extend(config.command)
+        cmd.extend(final_command)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,

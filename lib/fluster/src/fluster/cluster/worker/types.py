@@ -16,11 +16,12 @@
 
 import asyncio
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from fluster import cluster_pb2
 
 
-@dataclass
+@dataclass(kw_only=True)
 class Job:
     """Internal job tracking state."""
 
@@ -35,5 +36,6 @@ class Job:
 
     # Internals
     container_id: str | None = None
-    log_queue: asyncio.Queue | None = None
+    workdir: Path | None = None  # Job working directory with logs
     task: asyncio.Task | None = None
+    cleanup_done: bool = False

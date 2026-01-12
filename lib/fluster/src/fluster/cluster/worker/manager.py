@@ -20,6 +20,7 @@ import cloudpickle
 import socket
 import time
 import uuid
+from pathlib import Path
 
 from fluster import cluster_pb2
 from .types import Job
@@ -110,6 +111,10 @@ class JobManager:
         """Submit job for execution.
 
         Returns job_id immediately, execution happens in background.
+
+        Note: FLUSTER_* environment variables are reserved and will be overwritten:
+        - FLUSTER_JOB_ID: Set to the job ID
+        - FLUSTER_PORT_<NAME>: Set to allocated port numbers (e.g., FLUSTER_PORT_HTTP)
         """
         job_id = request.job_id or str(uuid.uuid4())
 
@@ -118,12 +123,16 @@ class JobManager:
         allocated_ports = await self._port_allocator.allocate(len(port_names)) if port_names else []
         ports = dict(zip(port_names, allocated_ports, strict=True))
 
+        # Create job working directory
+        workdir = Path(f"/tmp/fluster-worker/jobs/{job_id}")
+        workdir.mkdir(parents=True, exist_ok=True)
+
         job = Job(
             job_id=job_id,
             request=request,
             status=cluster_pb2.JOB_STATE_PENDING,
             ports=ports,
-            log_queue=asyncio.Queue(),
+            workdir=workdir,
         )
 
         async with self._lock:
@@ -183,6 +192,8 @@ class JobManager:
                     resources=job.request.resources if job.request.HasField("resources") else None,
                     timeout_seconds=job.request.timeout_seconds or None,
                     ports=job.ports,
+                    stdout_file=str(job.workdir / "STDOUT"),
+                    stderr_file=str(job.workdir / "STDERR"),
                 )
 
                 result = await self._runtime.run(config)
@@ -201,15 +212,31 @@ class JobManager:
                     job.status = cluster_pb2.JOB_STATE_FAILED
                     job.error = f"Exit code: {result.exit_code}"
 
+            except asyncio.CancelledError:
+                # Task was cancelled (likely from kill_job)
+                job.status = cluster_pb2.JOB_STATE_KILLED
+                job.finished_at_ms = int(time.time() * 1000)
+                raise
             except Exception as e:
                 job.status = cluster_pb2.JOB_STATE_FAILED
-                job.error = str(e)
+                job.error = repr(e)
                 job.finished_at_ms = int(time.time() * 1000)
             finally:
-                # Cleanup: release ports, remove container
-                await self._port_allocator.release(list(job.ports.values()))
-                if job.container_id:
-                    await self._runtime.remove(job.container_id)
+                # Cleanup: release ports, remove container, remove workdir (only if not already cleaned up)
+                if not job.cleanup_done:
+                    job.cleanup_done = True
+                    await self._port_allocator.release(list(job.ports.values()))
+                    if job.container_id:
+                        try:
+                            await self._runtime.remove(job.container_id)
+                        except RuntimeError:
+                            # Container may have already been removed
+                            pass
+                    # Remove working directory
+                    if job.workdir and job.workdir.exists():
+                        import shutil
+
+                        shutil.rmtree(job.workdir, ignore_errors=True)
 
     def _build_command(self, entrypoint) -> list[str]:
         """Build command to run entrypoint."""
@@ -223,46 +250,57 @@ class JobManager:
         )
         return ["python", "-c", cmd]
 
-    def _parse_memory(self, memory_str: str | None) -> int | None:
-        """Parse memory string like '8g' to MB."""
-        if not memory_str:
-            return None
-        memory_str = memory_str.lower().strip()
-        if memory_str.endswith("g"):
-            return int(float(memory_str[:-1]) * 1024)
-        elif memory_str.endswith("m"):
-            return int(float(memory_str[:-1]))
-        return int(memory_str)
-
-    async def get_job(self, job_id: str) -> Job | None:
+    def get_job(self, job_id: str) -> Job | None:
         """Get job by ID."""
         return self._jobs.get(job_id)
 
-    async def list_jobs(self, namespace: str | None = None) -> list[Job]:
+    def list_jobs(self) -> list[Job]:
         """List all jobs."""
         return list(self._jobs.values())
 
     async def kill_job(self, job_id: str, term_timeout_ms: int = 5000) -> bool:
-        """Kill a running job."""
+        """Kill a running job.
+
+        Handles race conditions where job may complete between state check and kill.
+        """
         job = self._jobs.get(job_id)
-        if not job or not job.container_id:
+        if not job:
             return False
 
-        if job.status not in (cluster_pb2.JOB_STATE_RUNNING, cluster_pb2.JOB_STATE_BUILDING):
+        # Check if already in terminal state
+        if job.status not in (
+            cluster_pb2.JOB_STATE_RUNNING,
+            cluster_pb2.JOB_STATE_BUILDING,
+            cluster_pb2.JOB_STATE_PENDING,
+        ):
             return False
 
-        # Send SIGTERM
-        await self._runtime.kill(job.container_id, force=False)
+        # Cancel the task to interrupt execution
+        if job.task and not job.task.done():
+            job.task.cancel()
 
-        # Wait for graceful shutdown
-        try:
-            await asyncio.wait_for(
-                self._wait_for_termination(job),
-                timeout=term_timeout_ms / 1000,
-            )
-        except asyncio.TimeoutError:
-            # Force kill
-            await self._runtime.kill(job.container_id, force=True)
+        # If container exists, try to kill it
+        if job.container_id:
+            try:
+                # Send SIGTERM
+                await self._runtime.kill(job.container_id, force=False)
+
+                # Wait for graceful shutdown
+                try:
+                    await asyncio.wait_for(
+                        self._wait_for_termination(job),
+                        timeout=term_timeout_ms / 1000,
+                    )
+                except asyncio.TimeoutError:
+                    # Force kill
+                    try:
+                        await self._runtime.kill(job.container_id, force=True)
+                    except RuntimeError:
+                        # Container may have already stopped
+                        pass
+            except RuntimeError:
+                # Container may have already been removed or stopped
+                pass
 
         job.status = cluster_pb2.JOB_STATE_KILLED
         job.finished_at_ms = int(time.time() * 1000)
@@ -282,23 +320,39 @@ class JobManager:
                        (e.g., start_line=-100 returns last 100 lines for tailing).
 
         Returns:
-            List of log entries
+            List of log entries from STDOUT and STDERR files
         """
         job = self._jobs.get(job_id)
-        if not job:
+        if not job or not job.workdir:
             return []
 
-        # Drain queue to list
         logs = []
-        while not job.log_queue.empty():
-            try:
-                logs.append(job.log_queue.get_nowait())
-            except asyncio.QueueEmpty:
-                break
 
-        # Put back for future reads
-        for log in logs:
-            job.log_queue.put_nowait(log)
+        # Read from STDOUT file
+        stdout_file = job.workdir / "STDOUT"
+        if stdout_file.exists():
+            for line in stdout_file.read_text().splitlines():
+                if line:  # Skip empty lines
+                    logs.append(
+                        cluster_pb2.LogEntry(
+                            timestamp_ms=int(time.time() * 1000),
+                            source="stdout",
+                            data=line,
+                        )
+                    )
+
+        # Read from STDERR file
+        stderr_file = job.workdir / "STDERR"
+        if stderr_file.exists():
+            for line in stderr_file.read_text().splitlines():
+                if line:  # Skip empty lines
+                    logs.append(
+                        cluster_pb2.LogEntry(
+                            timestamp_ms=int(time.time() * 1000),
+                            source="stderr",
+                            data=line,
+                        )
+                    )
 
         # Handle negative start_line (tail behavior)
         if start_line < 0:

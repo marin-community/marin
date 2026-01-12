@@ -288,7 +288,7 @@ async def test_submit_job_returns_job_id(job_manager):
     assert job_id == "test-job-1"
 
     # Job should be tracked
-    job = await job_manager.get_job(job_id)
+    job = job_manager.get_job(job_id)
     assert job is not None
     assert job.job_id == job_id
     assert job.status == cluster_pb2.JOB_STATE_PENDING
@@ -301,11 +301,11 @@ async def test_job_lifecycle_phases(job_manager):
     job_id = await job_manager.submit_job(request)
 
     # Wait for job to complete
-    job = await job_manager.get_job(job_id)
+    job = job_manager.get_job(job_id)
     await asyncio.wait_for(job.task, timeout=5.0)
 
     # Should have gone through phases
-    final_job = await job_manager.get_job(job_id)
+    final_job = job_manager.get_job(job_id)
     assert final_job.status == cluster_pb2.JOB_STATE_SUCCEEDED
     assert final_job.exit_code == 0
     assert final_job.started_at_ms is not None
@@ -318,7 +318,7 @@ async def test_job_with_ports(job_manager):
     request = create_run_job_request(ports=["http", "grpc"])
     job_id = await job_manager.submit_job(request)
 
-    job = await job_manager.get_job(job_id)
+    job = job_manager.get_job(job_id)
     assert len(job.ports) == 2
     assert "http" in job.ports
     assert "grpc" in job.ports
@@ -345,10 +345,10 @@ async def test_job_failure_on_nonzero_exit(job_manager, mock_runtime):
     request = create_run_job_request()
     job_id = await job_manager.submit_job(request)
 
-    job = await job_manager.get_job(job_id)
+    job = job_manager.get_job(job_id)
     await asyncio.wait_for(job.task, timeout=5.0)
 
-    final_job = await job_manager.get_job(job_id)
+    final_job = job_manager.get_job(job_id)
     assert final_job.status == cluster_pb2.JOB_STATE_FAILED
     assert final_job.exit_code == 1
     assert "Exit code: 1" in final_job.error
@@ -370,10 +370,10 @@ async def test_job_failure_on_error(job_manager, mock_runtime):
     request = create_run_job_request()
     job_id = await job_manager.submit_job(request)
 
-    job = await job_manager.get_job(job_id)
+    job = job_manager.get_job(job_id)
     await asyncio.wait_for(job.task, timeout=5.0)
 
-    final_job = await job_manager.get_job(job_id)
+    final_job = job_manager.get_job(job_id)
     assert final_job.status == cluster_pb2.JOB_STATE_FAILED
     assert final_job.error == "Container crashed"
 
@@ -386,10 +386,10 @@ async def test_job_exception_handling(job_manager, mock_bundle_cache):
     request = create_run_job_request()
     job_id = await job_manager.submit_job(request)
 
-    job = await job_manager.get_job(job_id)
+    job = job_manager.get_job(job_id)
     await asyncio.wait_for(job.task, timeout=5.0)
 
-    final_job = await job_manager.get_job(job_id)
+    final_job = job_manager.get_job(job_id)
     assert final_job.status == cluster_pb2.JOB_STATE_FAILED
     assert "Bundle download failed" in final_job.error
 
@@ -409,11 +409,11 @@ async def test_concurrent_job_limiting(job_manager):
     assert len(job_ids) == 10
 
     # Wait for all to complete
-    jobs = [await job_manager.get_job(job_id) for job_id in job_ids]
+    jobs = [job_manager.get_job(job_id) for job_id in job_ids]
     await asyncio.gather(*[job.task for job in jobs])
 
     # All should eventually succeed
-    final_jobs = [await job_manager.get_job(job_id) for job_id in job_ids]
+    final_jobs = [job_manager.get_job(job_id) for job_id in job_ids]
     for job in final_jobs:
         assert job.status == cluster_pb2.JOB_STATE_SUCCEEDED
 
@@ -426,7 +426,7 @@ async def test_list_jobs(job_manager):
     for request in requests:
         await job_manager.submit_job(request)
 
-    jobs = await job_manager.list_jobs()
+    jobs = job_manager.list_jobs()
     assert len(jobs) == 3
     assert {job.job_id for job in jobs} == {"job-0", "job-1", "job-2"}
 
@@ -443,7 +443,7 @@ async def test_kill_running_job(job_manager, mock_runtime):
     await asyncio.sleep(0.1)
 
     # Manually set up the job to simulate it being in RUNNING state
-    job = await job_manager.get_job(job_id)
+    job = job_manager.get_job(job_id)
     job.status = cluster_pb2.JOB_STATE_RUNNING
     job.container_id = "container123"
 
@@ -467,13 +467,17 @@ async def test_kill_nonexistent_job(job_manager):
 
 @pytest.mark.asyncio
 async def test_kill_job_without_container(job_manager):
-    """Test killing a job before container is created."""
+    """Test killing a job before container is created cancels the task."""
     request = create_run_job_request()
     job_id = await job_manager.submit_job(request)
 
     # Try to kill immediately (before container is created)
     result = await job_manager.kill_job(job_id)
-    assert result is False
+    assert result is True
+
+    # Job should be in KILLED state
+    job = job_manager.get_job(job_id)
+    assert job.status == cluster_pb2.JOB_STATE_KILLED
 
 
 @pytest.mark.asyncio
@@ -492,15 +496,10 @@ async def test_get_logs_with_start_line(job_manager):
     request = create_run_job_request()
     job_id = await job_manager.submit_job(request)
 
-    # Manually add some logs to the job
-    job = await job_manager.get_job(job_id)
-    for i in range(10):
-        log_entry = cluster_pb2.LogEntry(
-            timestamp_ms=i * 1000,
-            source="stdout",
-            data=f"Log line {i}",
-        )
-        await job.log_queue.put(log_entry)
+    # Write some logs to the STDOUT file
+    job = job_manager.get_job(job_id)
+    stdout_file = job.workdir / "STDOUT"
+    stdout_file.write_text("\n".join(f"Log line {i}" for i in range(10)))
 
     # Get logs starting from line 5
     logs = await job_manager.get_logs(job_id, start_line=5)
@@ -514,15 +513,10 @@ async def test_get_logs_tail_behavior(job_manager):
     request = create_run_job_request()
     job_id = await job_manager.submit_job(request)
 
-    # Manually add some logs to the job
-    job = await job_manager.get_job(job_id)
-    for i in range(10):
-        log_entry = cluster_pb2.LogEntry(
-            timestamp_ms=i * 1000,
-            source="stdout",
-            data=f"Log line {i}",
-        )
-        await job.log_queue.put(log_entry)
+    # Write some logs to the STDOUT file
+    job = job_manager.get_job(job_id)
+    stdout_file = job.workdir / "STDOUT"
+    stdout_file.write_text("\n".join(f"Log line {i}" for i in range(10)))
 
     # Get last 3 logs
     logs = await job_manager.get_logs(job_id, start_line=-3)
@@ -545,7 +539,7 @@ async def test_cleanup_removes_container(job_manager, mock_runtime):
     request = create_run_job_request()
     job_id = await job_manager.submit_job(request)
 
-    job = await job_manager.get_job(job_id)
+    job = job_manager.get_job(job_id)
     await asyncio.wait_for(job.task, timeout=5.0)
 
     # Verify container was removed
@@ -562,20 +556,3 @@ async def test_build_command_with_entrypoint(job_manager):
     assert command[1] == "-c"
     assert "cloudpickle" in command[2]
     assert "base64" in command[2]
-
-
-@pytest.mark.asyncio
-async def test_parse_memory():
-    """Test _parse_memory handles different formats."""
-    job_manager = JobManager(
-        bundle_cache=AsyncMock(),
-        venv_cache=Mock(),
-        image_builder=AsyncMock(),
-        runtime=AsyncMock(),
-        port_allocator=PortAllocator(),
-    )
-
-    assert job_manager._parse_memory("8g") == 8192
-    assert job_manager._parse_memory("1024m") == 1024
-    assert job_manager._parse_memory("") is None
-    assert job_manager._parse_memory(None) is None
