@@ -188,20 +188,32 @@ class HackableTransformerConfig(LmConfig["HackableLMHeadModel"]):
 # =========================
 
 
-def _sinkhorn_log(logits: jnp.ndarray, num_iters: int, tau: float) -> jnp.ndarray:
-    n = logits.shape[-1]
+def _sinkhorn_log(logits: NamedArray, StreamOut: Axis, StreamIn: Axis, num_iters: int, tau: float) -> NamedArray:
+    """Sinkhorn normalization in log-space for doubly stochastic projection.
+
+    Args:
+        logits: Input logits with shape (StreamOut, StreamIn)
+        StreamOut: Output stream axis (rows)
+        StreamIn: Input stream axis (columns)
+        num_iters: Number of Sinkhorn iterations
+        tau: Temperature parameter
+
+    Returns:
+        Approximately doubly stochastic matrix scaled by n
+    """
+    n = StreamIn.size
     z = logits / tau
-    # Reference: log_marginal = -log(n) for uniform distribution
-    log_marginal = jnp.full((n,), -jnp.log(n), dtype=logits.dtype)
-    u = jnp.zeros((logits.shape[0],), dtype=logits.dtype)
-    v = jnp.zeros((logits.shape[1],), dtype=logits.dtype)
+    log_marginal = -jnp.log(n)
+
+    u = hax.zeros(StreamOut, dtype=logits.dtype)
+    v = hax.zeros(StreamIn, dtype=logits.dtype)
 
     for _ in range(num_iters):
-        u = log_marginal - jnn.logsumexp(z + v[None, :], axis=1)
-        v = log_marginal - jnn.logsumexp(z + u[:, None], axis=0)
+        # Update columns first, then rows - ending with rows favors output mixing
+        v = log_marginal - hnn.logsumexp(z + u, axis=StreamOut)
+        u = log_marginal - hnn.logsumexp(z + v, axis=StreamIn)
 
-    # Reference: scale output by n
-    return jnp.exp(z + u[:, None] + v[None, :]) * n
+    return hax.exp(z + u + v) * n
 
 
 class HackableMlp(eqx.Module):
@@ -232,7 +244,7 @@ class HackableMlp(eqx.Module):
 
 
 class MhcStreamExpander(eqx.Module):
-    """Expands residual stream from C to n×C dimensions (n=4 per paper)."""
+    """Expands residual stream from C to n*C dimensions (n=4 per paper)."""
 
     config: HackableTransformerConfig = eqx.field(static=True)
 
@@ -258,15 +270,15 @@ class MhcHyperConnections(eqx.Module):
     """mHC width/depth connections for a single branch.
 
     Per the paper (arxiv 2512.24880v2), mHC uses both static and dynamic components:
-        ℋ_pre = α_pre · tanh(θ_pre · x̃) + b_pre
-    Where α is a learnable scalar gate, θ is a projection, and b is static bias.
+        H_pre = alpha_pre * tanh(theta_pre * x_tilde) + b_pre
+    Where alpha is a learnable scalar gate, theta is a projection, and b is static bias.
     """
 
     config: HackableTransformerConfig = eqx.field(static=True)
     h_res_logits: NamedArray  # static bias for h_res
     h_pre_logits: NamedArray  # static bias for h_pre
     h_post_logits: NamedArray  # static bias for h_post
-    # Dynamic components per paper: α · tanh(θ · x̃)
+    # Dynamic components per paper: alpha * tanh(theta * x_tilde)
     norm: hnn.RmsNorm
     theta_pre: NamedArray  # (Embed, Streams) projection for h_pre
     alpha_pre: jnp.ndarray  # scalar gate for h_pre
@@ -275,7 +287,7 @@ class MhcHyperConnections(eqx.Module):
 
     @staticmethod
     def init(config: HackableTransformerConfig, *, key) -> "MhcHyperConnections":
-        k_init, k_pre, k_post = jrandom.split(key, 3)
+        k_init, _k_pre, _k_post = jrandom.split(key, 3)
         # Static biases (b in the paper)
         # Use one-hot to avoid int() which fails under vmap/jit tracing
         init_index = jrandom.randint(k_init, (), 0, config.mhc_num_streams)
@@ -284,8 +296,8 @@ class MhcHyperConnections(eqx.Module):
         one_hot = jnn.one_hot(init_index, config.mhc_num_streams)
         h_pre = jnp.full((config.mhc_num_streams,), -8.0) + one_hot * 8.0
         h_post = jnp.zeros((config.mhc_num_streams,))
-        # Dynamic components per paper: α · tanh(θ · x̃) + b
-        # θ initialized to zero, α initialized to small value (1e-2)
+        # Dynamic components per paper: alpha * tanh(theta * x_tilde) + b
+        # theta initialized to zero, alpha initialized to small value (1e-2)
         norm = config.mk_LayerNorm(config.Embed)
         theta_pre = hax.zeros((config.Embed, config.Streams))
         alpha_pre = jnp.array(1e-2)
@@ -304,20 +316,24 @@ class MhcHyperConnections(eqx.Module):
         )
 
     def _project_h_res(self) -> NamedArray:
-        logits = self.h_res_logits.array
-        proj = _sinkhorn_log(logits, num_iters=self.config.mhc_num_iters, tau=self.config.mhc_tau)
-        return hax.named(proj, (self.config.StreamOut, self.config.StreamIn))
+        return _sinkhorn_log(
+            self.h_res_logits,
+            StreamOut=self.config.StreamOut,
+            StreamIn=self.config.StreamIn,
+            num_iters=self.config.mhc_num_iters,
+            tau=self.config.mhc_tau,
+        )
 
     def _width_connection(self, residuals: NamedArray) -> tuple[NamedArray, NamedArray, NamedArray]:
         # h_res via Sinkhorn projection (doubly stochastic)
         h_res = self._project_h_res()
 
-        # Per paper: ℋ_pre = α · tanh(θ · x̃) + b
-        # where x̃ is normalized input, b is static bias (sigmoid for non-negativity)
+        # Per paper: H_pre = alpha * tanh(theta * x_tilde) + b
+        # where x_tilde is normalized input, b is static bias (sigmoid for non-negativity)
         # Aggregate across input streams first, then project to output stream weights
         normed = self.norm(residuals)  # (Streams, Batch, Pos, Embed)
         normed_agg = hax.mean(normed, axis=self.config.Streams)  # (Batch, Pos, Embed)
-        # Dynamic: α · tanh(θ · x̃) -> (Batch, Pos, Streams)
+        # Dynamic: alpha * tanh(theta * x_tilde) -> (Batch, Pos, Streams)
         dynamic_pre = hax.dot(normed_agg, self.theta_pre, axis=self.config.Embed)
         dynamic_pre = hax.tanh(dynamic_pre) * self.alpha_pre
         # Static: sigmoid(b_pre) -> (Streams,) for non-negativity per paper
