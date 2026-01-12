@@ -20,6 +20,7 @@ import zipfile
 from pathlib import Path
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict
 
 
 class BundleCache:
@@ -38,6 +39,7 @@ class BundleCache:
         self._extracts_dir = cache_dir / "extracts"
         self._max_bundles = max_bundles
         self._executor = ThreadPoolExecutor(max_workers=4)
+        self._extract_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
         self._bundles_dir.mkdir(parents=True, exist_ok=True)
         self._extracts_dir.mkdir(parents=True, exist_ok=True)
@@ -64,20 +66,27 @@ class BundleCache:
             extract_path.touch()
             return extract_path
 
-        # Download and extract
-        zip_path = self._bundles_dir / f"{key}.zip"
-        if not zip_path.exists():
-            await self._download(gcs_path, zip_path)
+        # Use a lock per bundle to prevent concurrent extractions to the same path
+        async with self._extract_locks[key]:
+            # Double-check after acquiring lock - another task may have extracted it
+            if extract_path.exists():
+                extract_path.touch()
+                return extract_path
 
-        if expected_hash:
-            actual_hash = await self._compute_hash(zip_path)
-            if actual_hash != expected_hash:
-                raise ValueError(f"Bundle hash mismatch: {actual_hash} != {expected_hash}")
+            # Download and extract
+            zip_path = self._bundles_dir / f"{key}.zip"
+            if not zip_path.exists():
+                await self._download(gcs_path, zip_path)
 
-        await self._extract(zip_path, extract_path)
-        await self._evict_old_bundles()
+            if expected_hash:
+                actual_hash = await self._compute_hash(zip_path)
+                if actual_hash != expected_hash:
+                    raise ValueError(f"Bundle hash mismatch: {actual_hash} != {expected_hash}")
 
-        return extract_path
+            await self._extract(zip_path, extract_path)
+            await self._evict_old_bundles()
+
+            return extract_path
 
     async def _download(self, gcs_path: str, local_path: Path) -> None:
         """Download bundle using fsspec."""

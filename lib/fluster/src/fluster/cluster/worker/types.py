@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from fluster import cluster_pb2
+from fluster.cluster_pb2 import JobState
 
 
 @dataclass(kw_only=True)
@@ -27,7 +28,7 @@ class Job:
 
     job_id: str
     request: cluster_pb2.RunJobRequest
-    status: int = cluster_pb2.JOB_STATE_PENDING
+    status: JobState = cluster_pb2.JOB_STATE_PENDING
     exit_code: int | None = None
     error: str | None = None
     started_at_ms: int | None = None
@@ -39,3 +40,15 @@ class Job:
     workdir: Path | None = None  # Job working directory with logs
     task: asyncio.Task | None = None
     cleanup_done: bool = False
+
+    def to_proto(self) -> cluster_pb2.JobStatus:
+        """Convert job to JobStatus proto."""
+        return cluster_pb2.JobStatus(
+            job_id=self.job_id,
+            state=self.status,
+            exit_code=self.exit_code or 0,
+            error=self.error or "",
+            started_at_ms=self.started_at_ms or 0,
+            finished_at_ms=self.finished_at_ms or 0,
+            ports=self.ports,
+        )
