@@ -536,6 +536,30 @@ data_tools_and_mixture_ready:
   labels: [timeline, data_pipeline, data]
 
 
+data_alpha_attribution:
+  title: "Quantify alpha: new data vs mixing vs synthetic math/code"
+  type: epic
+  status: planned
+  issue: null
+  labels: [data, evals, scaling_laws, agent_friendly]
+  description: |
+    Decide where to invest effort by quantifying the marginal returns from:
+    - adding genuinely new data sources
+    - changing mixture weights / curriculum schedules
+    - adding “more of the same” synthetic math/code data
+
+    Deliverable is a small set of controlled ablations and a simple model of expected gains that is used to guide
+    monthly data work (and to justify “no” on low-upside data requests).
+  definition_of_done: |
+    - We run a small, controlled suite of data/mix ablations with consistent evals and report results.
+    - We produce a short “alpha budget” summary (what helps most, and why) and update the plan accordingly.
+    - The methodology is repeatable by an agent (inputs: configs + data handles; outputs: plots + summary).
+  dependencies:
+    - data_curation_100_experiments
+    - regression_mix_optimization
+    - loss_datasets
+
+
 rl_100b_moe:
   title: "RL 100B MoE"
   type: epic
@@ -618,6 +642,9 @@ rl_job_api:
   status: planned
   labels: [rl, infra, agent_friendly]
   description: |
+    Current state: `RLJob`/`RLJobConfig` exist in `lib/marin/src/marin/rl/rl_job.py`, and we have multiple
+    RL integration tests under `tests/rl/integration/`.
+
     Make it easy to run and test RL without deploying a full cluster job:
     - A minimal local/dev workflow for rollouts + training
     - Config validation and sharp error messages
@@ -658,6 +685,9 @@ rl_rollout_system:
   status: planned
   labels: [rl, infra]
   description: |
+    Current state: `RolloutWorker` exists in `lib/marin/src/marin/rl/rollout_worker.py`, environments are
+    loaded from specs, and we have unit + integration tests for envs and rollout worker behavior.
+
     Hardening and scaling of rollout generation, including multi-env support and inference backends.
   dependencies:
     - rl_multi_env_rollout_support
@@ -703,6 +733,11 @@ rl_training_system:
   type: epic
   status: planned
   labels: [rl, infra]
+  description: |
+    Current state: `TrainWorker` exists in `lib/marin/src/marin/rl/train_worker.py`, with replay buffer
+    integration, periodic weight transfer, and curriculum checkpointing.
+
+    Remaining work is mainly hardening and performance (TPU copies, failure modes, monitoring, etc.).
   dependencies:
     - rl_sync_mode
     - rl_actor_failures
@@ -748,6 +783,9 @@ rl_inference_backends:
   status: planned
   labels: [rl, inference, infra]
   description: |
+    Current state: RL supports both Levanter inference server and vLLM inference contexts under
+    `lib/marin/src/marin/rl/environments/inference_ctx/`.
+
     Ensure inference is fast and reliable across backends (Levanter inference server, vLLM, etc.).
     Includes correctness (logprobs), determinism, and cluster compatibility.
 
@@ -757,6 +795,19 @@ rl_weight_transfer_system:
   type: epic
   status: planned
   labels: [rl, infra]
+  description: |
+    Current state: weight transfer implementations exist under `lib/marin/src/marin/rl/weight_transfer/`
+    (Arrow Flight and JAX paths), and are exercised in RL integration tests.
+
+    Remaining work is robustness, observability, and scaling behavior across different cluster settings.
+  definition_of_done: |
+    - Supported modes (Arrow Flight, JAX transfer server, and checkpoint-based transfer) all work end-to-end with `RLJob`.
+    - Integration tests cover each supported mode and assert that rollouts see at least one successful weight update
+      (e.g. via `tests/rl/integration/test_weight_sync.py` and `tests/rl/integration/test_cats_integration.py`).
+    - Weight transfer metrics (success/failure counts, bytes/sec, and latency breakdown) are emitted in a way we can
+      track over time (logs + tracker integration).
+    - Clear, documented behavior for common failure modes (server restart, partial update, timeout): either retry with
+      backoff or proceed with last-known-good weights without corrupting training state.
   dependencies:
     - rl_arrow_flight_bug
 
@@ -774,6 +825,12 @@ rl_storage_and_serialization:
   type: epic
   status: planned
   labels: [rl, infra, agent_friendly, newbie_friendly]
+  description: |
+    Current state: rollout storage exists in `lib/marin/src/marin/rl/rollout_storage.py` with file and
+    in-memory backends, and core rollout types live in `lib/marin/src/marin/rl/types.py`.
+
+    Remaining work is to replace brittle serialization (e.g. pickle) with stable, versioned formats and
+    add compatibility tests.
   dependencies:
     - rl_stable_serialization
 
@@ -791,6 +848,11 @@ rl_multi_env_and_curriculum:
   type: epic
   status: planned
   labels: [rl, environments]
+  description: |
+    Current state: curriculum logic exists in `lib/marin/src/marin/rl/curriculum.py` and environments are
+    configured per-lesson via `EnvConfig`, with env loader tests under `tests/rl/environments/`.
+
+    Remaining work is expanding the environment suite and improving curriculum observability and control.
   dependencies:
     - full_rl_environments
     - curriculum_env_observability
@@ -810,7 +872,11 @@ rl_observability:
   status: planned
   labels: [rl, infra]
   description: |
-    Make it easy to answer: what envs are we sampling, what’s reward distribution, and why did training regress?
+    Current state: both rollout and training workers log metrics via Levanter trackers, and curriculum exposes
+    summary metrics (`Curriculum.get_metrics()`).
+
+    Remaining work is to make it easy to answer: what envs are we sampling, what’s reward distribution, and
+    why did training regress?
 
 
 rl_throughput_and_scaling:
@@ -863,6 +929,11 @@ rl_algorithms_and_losses:
   type: epic
   status: planned
   labels: [rl, algorithms]
+  description: |
+    Current state: RLOO loss exists in `lib/marin/src/marin/rl/rl_losses.py` with importance sampling and KL
+    regularization, and is exercised in RL integration tests.
+
+    Remaining work is algorithmic improvement, ablations, and better evaluation of off-policy behavior.
   dependencies:
     - rl_loss_ablations
     - rl_importance_sampling_fix
@@ -1355,6 +1426,65 @@ fast_moe:
     - profile_existing_moes
     - moe_mlp_kernel
 
+
+fast_inference_architectures:
+  title: "Fast inference architectures (local/global attention, linear attention, Mamba-like)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [architecture, inference, performance, agent_friendly]
+  description: |
+    Evaluate and (selectively) implement architectures that materially improve inference throughput and/or
+    token-efficiency without tanking quality.
+
+    This is intentionally a “try a few things fast” epic: we want a repeatable harness and a small set of candidate
+    architectures that we can compare apples-to-apples on:
+    - quality (reasoning / code / math / chat)
+    - MFU + inference throughput / latency on our common hardware
+    - training stability and simplicity
+  definition_of_done: |
+    - A small, documented benchmark harness exists to compare candidate architectures (training + inference).
+    - At least 2 candidate architectures are evaluated end-to-end with results logged and reproducible.
+    - We make an explicit decision: adopt one path for “mainline” exploration, and park the rest with notes.
+
+
+low_precision_training:
+  title: "Lower precision training/inference (FP4/FP6/FP8) where it matters"
+  type: epic
+  status: planned
+  issue: null
+  labels: [performance, infra, architecture, agent_friendly]
+  description: |
+    Explore and support lower-precision paths to improve throughput and cost, especially on GPUs.
+
+    Scope includes:
+    - identifying which parts of the stack benefit (weights, activations, optimizer states, KV cache)
+    - correctness tests and numeric stability constraints
+    - hardware-specific implementations (TPU vs NVIDIA GPU)
+  definition_of_done: |
+    - One lower-precision configuration is supported end-to-end for a representative model with clear docs.
+    - Regression tests catch obvious numeric issues (divergence/NaNs) and performance regressions.
+    - We have a measured speed/cost win on at least one real cluster.
+
+
+distillation_program:
+  title: "Distill big models into smaller, fine-tuning-friendly models"
+  type: epic
+  status: planned
+  issue: null
+  labels: [posttraining, community, agent_friendly]
+  description: |
+    Provide a repeatable distillation workflow so the community can produce smaller models (e.g. 8B/1.7B/0.6B)
+    that inherit useful behaviors from larger Marin models.
+
+    This should focus on being easy to run and easy to evaluate, with strong provenance (exact teacher checkpoint,
+    data recipe, and eval set versioning).
+  definition_of_done: |
+    - A documented recipe exists (teacher -> student) with a small “starter” run that fits modest compute.
+    - At least one distilled model is produced with evals showing meaningful transfer (and no obvious regressions).
+    - Artifacts are easy to reproduce and compare (teacher/student checkpoints + configs + eval reports).
+  dependencies:
+    - trained_base_model
 
 profile_existing_moes:
   title: "Profile our existing MOE implementation and MaxText's and identify suboptimalities in ours"
@@ -2010,7 +2140,6 @@ infra2026_program:
     - global_dashboard
     - monitoring
     - cost_tracking
-    - auto_doc
 
 
 llm_guided_research:
@@ -2034,7 +2163,6 @@ llm_guided_research:
     - model_pipeline
     - staged_validation
     - robust_alerting
-    - auto_doc
     - cli_tools
     - cli_logging
 
@@ -2205,6 +2333,32 @@ region_caching_fs:
     - integrate cleanly into existing fsspec usage
 
 
+dataset_storage_backend:
+  title: "Dataset/checkpoint storage backend strategy (reduce GCS dependence)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, data, cost, agent_friendly]
+  description: |
+    We currently lean heavily on GCS-style object storage in a way that can create cost/egress surprises and single-cloud
+    coupling.
+
+    Make an explicit, documented choice for storage backends for:
+    - long-lived datasets
+    - caches / regional mirrors
+    - checkpoints (training + RL)
+
+    Candidates include: GCS, S3-compatible stores, Cloudflare R2, and/or per-region caches coordinated by
+    `region_caching_fs`.
+  definition_of_done: |
+    - We write down a recommended “default storage” for each artifact type (datasets, checkpoints, caches) with cost
+      and reliability tradeoffs.
+    - The recommended path is supported in code (fsspec URLs, auth/docs) and used by at least one pipeline end-to-end.
+    - We have basic monitoring/alerting for storage failures and egress regressions.
+  dependencies:
+    - region_caching_fs
+
+
 dataset_processing:
   title: "Dataset processing: scalable preprocessing beyond Ray"
   type: epic
@@ -2294,7 +2448,7 @@ aot_compilation:
   title: "AOT compilation as a pipeline step"
   type: epic
   status: planned
-  labels: [infra, infra2026, performance]
+  labels: [infra, infra2026, performance, agent_friendly]
   description: |
     Make compilation a first-class pipeline step so expensive accelerators aren’t stranded waiting for XLA.
 
@@ -2302,6 +2456,134 @@ aot_compilation:
     - fail fast on OOM/HBM problems via AOT compile using an “abstract mesh”
     - cache compile artifacts and reuse them in the subsequent training job
     - integrate into Executor / standard training recipes
+    - support an “extended dry run” that actually compiles critical steps (train step, eval step, rollout step)
+      without running a full training job
+
+    This should be thought of as a *preflight check*:
+    - If compilation fails, we want the failure on cheap/short-lived resources.
+    - If compilation succeeds, the subsequent training job should be able to reuse artifacts and start quickly.
+  definition_of_done: |
+    - Users can run a Levanter preflight command that compiles the key kernels for a given training config and produces
+      a compile artifact (or a clear failure report).
+    - The compile artifact is cacheable/reusable across jobs with a well-defined cache key and can optionally be staged
+      to a shared object store (via fsspec paths, e.g. GCS/S3-compatible).
+    - Executor/pipelines can include “compile” as an explicit step before training so ferries don’t burn accelerator
+      time waiting for XLA.
+    - We have at least one regression test / smoke workflow that ensures the preflight path stays working.
+  dependencies:
+    - executor_step_preflight
+    - levanter_compile_preflight
+    - compile_artifact_cache
+    - compile_cache_keys
+    - pipeline_compile_gate
+
+
+executor_step_preflight:
+  title: "Executor: step preflight hooks (compile checks, manifests, etc.)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, developer_experience, executor, agent_friendly]
+  description: |
+    Today `Executor` supports `dry_run`, which plans work without executing steps.
+
+    Add a first-class *step preflight* hook that can run short, bounded checks prior to launching the long-running
+    step. This is not a replacement for `dry_run`; it’s a way to fail fast (and produce artifacts) for things that
+    cannot be validated by static planning (notably compilation).
+
+    Principles:
+    - `dry_run` stays as-is (planning only).
+    - Preflight is opt-in per step and should be safe + bounded.
+    - Preflight outputs are treated as step artifacts (manifest, compile artifacts, reports) and can be surfaced to
+      pipelines and agents.
+  definition_of_done: |
+    - Executor exposes a supported API for steps to declare a preflight action (and its outputs) and to mark it as
+      required/optional.
+    - Pipelines can run preflight for a subset of steps (by name or tags like `compile`) without running the full job.
+    - Preflight results are recorded in a machine-readable way (so agents/pipelines can react) and in a human-readable
+      way (so developers can debug quickly).
+
+
+levanter_compile_preflight:
+  title: "Levanter: compile preflight utility for training/eval steps"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, levanter, agent_friendly]
+  description: |
+    Implement a Levanter utility that compiles the train step (and optionally eval step) for a given config, without
+    running a full training job.
+
+    Key idea: extend “dry run” into something that *actually compiles*:
+    - run enough of the model forward/backward once to force compilation
+    - use an “abstract mesh” / representative shapes to surface HBM/OOM and sharding errors early
+    - emit a compile report (time, memory estimates, compilation cache hits)
+    - optionally stage compilation cache artifacts to a shared object store so a subsequent training job can start fast
+  definition_of_done: |
+    - A preflight command exists that compiles the Levanter train step for a representative batch and exits.
+    - Common failure modes produce actionable errors (sharding mismatch, OOM, unsupported dtype, etc.).
+    - The resulting compiled artifacts can be reused by the actual training job when possible, including in a
+      “compile-first, train-second” pipeline.
+
+
+compile_artifact_cache:
+  title: "Compile artifact cache: store and reuse compiled executables"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, data, agent_friendly]
+  description: |
+    Persist compilation outputs (and associated metadata) so they can be reused by subsequent jobs.
+
+    Requirements:
+    - artifact storage works with our filesystem story (fsspec paths; integrates with `region_caching_fs`)
+    - artifacts are immutable and content-addressed (or keyed by a stable cache key)
+    - supports inspection/debugging (what config produced this artifact; when; on what hardware)
+  definition_of_done: |
+    - Compiled artifacts and a manifest can be written to a configured artifact store path.
+    - Subsequent runs can discover and reuse an existing artifact when the cache key matches.
+    - Basic retention/cleanup policy exists (avoid unbounded growth).
+  dependencies:
+    - region_caching_fs
+
+
+compile_cache_keys:
+  title: "Compile cache keys: stable hashing for compile reuse"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Define what inputs must go into the “compile cache key” so reuse is correct and predictable.
+
+    Likely components:
+    - model architecture/config and relevant hyperparameters
+    - mesh/topology and sharding rules
+    - JAX/XLA versions and key env flags
+    - (maybe) a git SHA or a compatibility version for the compiled code path
+  definition_of_done: |
+    - A cache key function exists and is documented.
+    - We have at least one test that demonstrates key stability when irrelevant fields change and key changes when
+      relevant fields change.
+
+
+pipeline_compile_gate:
+  title: "Pipeline compile gate: compile before launching expensive training jobs"
+  type: task
+  status: planned
+  issue: null
+  labels: [infra, infra2026, pipeline, performance, agent_friendly]
+  description: |
+    Wire the compile preflight into our pipeline conventions so ferries can:
+    1) run compile preflight on cheap/short resources
+    2) only then schedule long-running accelerator jobs
+
+    The gate should:
+    - record compile results in the pipeline UI/status (success/failure, artifact location)
+    - make it easy to retry compilation with debug settings
+  definition_of_done: |
+    - At least one ferry/pipeline uses compile as an explicit step before training.
+    - If compile fails, the pipeline fails early without burning long-running accelerator time.
 
 
 batch_size_calc:
@@ -2319,6 +2601,29 @@ batch_size_calc:
 
   dependencies:
     - aot_compilation
+
+
+jax_gpu_performance:
+  title: "JAX performance on NVIDIA GPUs (kernels, sharding, comms)"
+  type: epic
+  status: planned
+  issue: null
+  labels: [infra, infra2026, performance, agent_friendly]
+  description: |
+    Improve the GPU path so running Marin on NVIDIA clusters is not “second class”.
+
+    This is a grab-bag but should be driven by profiling and concrete bottlenecks, e.g.:
+    - collective communication overhead
+    - slow sharding / resharding
+    - kernel fusion gaps / custom kernels where needed
+    - host<->device transfer overhead and pipeline stalls
+  definition_of_done: |
+    - We pick 1–2 representative workloads (training + inference) and publish a profiling report.
+    - We land fixes that improve throughput by a measurable amount and add regression checks for the bottleneck(s).
+    - The workload runs reliably on a GPU cluster as part of `test_cluster`.
+  dependencies:
+    - support_nvidia_gpu_clusters
+    - test_cluster
 
 
 test_cluster:
@@ -2643,21 +2948,6 @@ vllm_inference:
     - rl_vllm_rollout_worker
 
 
-auto_doc:
-  title: "Auto-doc: generated documentation + hierarchical index"
-  type: epic
-  status: planned
-  labels: [infra, infra2026, docs, agent_friendly]
-  description: |
-    Generate and maintain always-current documentation for humans and agents:
-    - API docs from docstrings
-    - hierarchical module index by functionality
-    - end-to-end examples and troubleshooting guides
-    - publish in CI
-  dependencies:
-    - test_sharding
-
-
 experiment_updates_bot:
   title: "Experiment updates bot: GitHub → Discord (and optional Discord → GitHub summaries)"
   type: epic
@@ -2682,7 +2972,6 @@ experiment_updates_bot:
   dependencies:
     - cli_logging
     - alerting
-    - auto_doc
 
 
 experiment_updates_github_to_discord:
@@ -2763,4 +3052,3 @@ experiment_structure_overhaul:
     - ferry_framework
     - dependency_manager
     - cli_tools
-    - auto_doc
