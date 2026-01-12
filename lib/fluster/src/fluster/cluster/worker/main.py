@@ -48,7 +48,6 @@ def cli():
 @click.option("--max-concurrent-jobs", default=10, type=int, help="Max concurrent jobs")
 @click.option("--port-range", default="30000-40000", help="Port range for job ports (start-end)")
 @click.option("--max-bundles", default=100, type=int, help="Max cached bundles")
-@click.option("--max-venvs", default=20, type=int, help="Max cached venvs")
 @click.option("--max-images", default=50, type=int, help="Max cached Docker images")
 def serve(
     host: str,
@@ -59,7 +58,6 @@ def serve(
     max_concurrent_jobs: int,
     port_range: str,
     max_bundles: int,
-    max_venvs: int,
     max_images: int,
 ):
     """Start the Fluster worker service."""
@@ -73,7 +71,6 @@ def serve(
             max_concurrent_jobs,
             port_range,
             max_bundles,
-            max_venvs,
             max_images,
         )
     )
@@ -88,7 +85,6 @@ async def _serve(
     max_concurrent_jobs: int,
     port_range: str,
     max_bundles: int,
-    max_venvs: int,
     max_images: int,
 ):
     cache_path = Path(cache_dir).expanduser()
@@ -98,7 +94,7 @@ async def _serve(
 
     # Initialize components
     bundle_cache = BundleCache(cache_path, max_bundles=max_bundles)
-    venv_cache = VenvCache(cache_path, uv_cache_path, max_entries=max_venvs)
+    venv_cache = VenvCache(uv_cache_path)
     image_builder = ImageBuilder(cache_path, registry=registry, max_images=max_images)
     runtime = DockerRuntime()
     port_allocator = PortAllocator((port_start, port_end))

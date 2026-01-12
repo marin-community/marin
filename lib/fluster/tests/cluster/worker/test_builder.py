@@ -15,7 +15,6 @@
 """Tests for VenvCache and ImageBuilder."""
 
 import asyncio
-import shutil
 import subprocess
 
 import pytest
@@ -31,6 +30,14 @@ def temp_cache_dir(tmp_path):
     cache_dir.mkdir()
     uv_cache_dir.mkdir()
     return cache_dir, uv_cache_dir
+
+
+@pytest.fixture
+def uv_cache_dir(tmp_path):
+    """Create a temporary UV cache directory."""
+    uv_cache_dir = tmp_path / "uv_cache"
+    uv_cache_dir.mkdir()
+    return uv_cache_dir
 
 
 @pytest.fixture
@@ -110,11 +117,9 @@ packages = ["src/test_package"]
     return bundle_dir
 
 
-@pytest.mark.asyncio
-async def test_compute_deps_hash(temp_cache_dir, test_bundle):
+def test_compute_deps_hash(uv_cache_dir, test_bundle):
     """Test that deps hash is computed from pyproject.toml and uv.lock."""
-    cache_dir, uv_cache_dir = temp_cache_dir
-    cache = VenvCache(cache_dir, uv_cache_dir)
+    cache = VenvCache(uv_cache_dir)
 
     hash1 = cache.compute_deps_hash(test_bundle)
 
@@ -130,115 +135,9 @@ async def test_compute_deps_hash(temp_cache_dir, test_bundle):
     assert hash3 != hash1
 
 
-@pytest.mark.asyncio
-async def test_get_cache_miss(temp_cache_dir, test_bundle):
-    """Test that get returns None for cache miss."""
-    cache_dir, uv_cache_dir = temp_cache_dir
-    cache = VenvCache(cache_dir, uv_cache_dir)
-
-    deps_hash = cache.compute_deps_hash(test_bundle)
-    result = cache.get(deps_hash)
-
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_get_cache_hit(temp_cache_dir, test_bundle):
-    """Test that get returns archive path and updates mtime."""
-    cache_dir, uv_cache_dir = temp_cache_dir
-    cache = VenvCache(cache_dir, uv_cache_dir)
-
-    deps_hash = cache.compute_deps_hash(test_bundle)
-
-    # Create a fake archive
-    archive_path = cache._cache_dir / f"{deps_hash}.tar.zst"
-    archive_path.write_bytes(b"fake archive")
-
-    # Get original mtime
-    original_mtime = archive_path.stat().st_mtime
-
-    # Wait a bit to ensure mtime difference
-    await asyncio.sleep(0.01)
-
-    # Get from cache
-    result = cache.get(deps_hash)
-
-    assert result == archive_path
-    assert result.exists()
-
-    # Mtime should be updated
-    new_mtime = archive_path.stat().st_mtime
-    assert new_mtime >= original_mtime
-
-
-@pytest.mark.asyncio
-async def test_archive_and_extract(temp_cache_dir, test_bundle):
-    """Test archiving and extracting a venv."""
-    cache_dir, uv_cache_dir = temp_cache_dir
-    cache = VenvCache(cache_dir, uv_cache_dir)
-
-    # Create a fake venv directory
-    venv_path = test_bundle / ".venv"
-    venv_path.mkdir()
-    (venv_path / "test_file.txt").write_text("test content")
-
-    # Archive it
-    deps_hash = "test_hash_123"
-    await cache._archive_venv(venv_path, deps_hash)
-
-    # Check archive exists
-    archive_path = cache._cache_dir / f"{deps_hash}.tar.zst"
-    assert archive_path.exists()
-
-    # Remove original venv
-    shutil.rmtree(venv_path)
-    assert not venv_path.exists()
-
-    # Extract to new location
-    target_bundle = temp_cache_dir[0] / "target"
-    target_bundle.mkdir()
-    extracted_path = await cache._extract_venv(archive_path, target_bundle)
-
-    # Verify extraction
-    assert extracted_path == target_bundle / ".venv"
-    assert extracted_path.exists()
-    assert (extracted_path / "test_file.txt").exists()
-    assert (extracted_path / "test_file.txt").read_text() == "test content"
-
-
-@pytest.mark.asyncio
-async def test_lru_eviction(temp_cache_dir, test_bundle):
-    """Test LRU eviction removes oldest archives."""
-    cache_dir, uv_cache_dir = temp_cache_dir
-    cache = VenvCache(cache_dir, uv_cache_dir, max_entries=2)
-
-    # Create 3 fake archives with different times
-    archives = []
-    for i in range(3):
-        archive = cache._cache_dir / f"hash_{i}.tar.zst"
-        archive.write_bytes(b"fake")
-        archives.append(archive)
-
-        # Wait to ensure different mtimes
-        await asyncio.sleep(0.01)
-
-    # All exist initially
-    assert all(a.exists() for a in archives)
-
-    # Trigger eviction
-    await cache._evict_lru()
-
-    # Oldest should be removed, newest 2 should remain
-    assert not archives[0].exists(), "Oldest archive should be evicted"
-    assert archives[1].exists(), "Second archive should remain"
-    assert archives[2].exists(), "Newest archive should remain"
-
-
-@pytest.mark.asyncio
-async def test_ensure_permissions(temp_cache_dir):
+def test_ensure_permissions(uv_cache_dir):
     """Test ensure_permissions sets correct ownership."""
-    cache_dir, uv_cache_dir = temp_cache_dir
-    cache = VenvCache(cache_dir, uv_cache_dir)
+    cache = VenvCache(uv_cache_dir)
 
     # Create some files in uv cache
     test_file = uv_cache_dir / "test.txt"
@@ -255,156 +154,6 @@ async def test_ensure_permissions(temp_cache_dir):
     except PermissionError:
         # Expected on systems where we can't change ownership
         pass
-
-
-@pytest.mark.asyncio
-@pytest.mark.slow
-async def test_build_venv_real(temp_cache_dir, test_bundle_with_deps):
-    """Test building a real venv with uv sync.
-
-    This test requires uv to be installed and is marked as slow.
-    """
-    # Check if uv is available
-    try:
-        subprocess.run(["uv", "--version"], check=True, capture_output=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pytest.skip("uv not available")
-
-    cache_dir, uv_cache_dir = temp_cache_dir
-    cache = VenvCache(cache_dir, uv_cache_dir)
-
-    # Build venv
-    venv_path, deps_hash = await cache.build_venv(test_bundle_with_deps, extras=[])
-
-    # Verify venv exists
-    assert venv_path.exists()
-    assert venv_path.is_dir()
-    assert (venv_path / "pyvenv.cfg").exists()
-
-    # Verify archive was created
-    archive_path = cache._cache_dir / f"{deps_hash}.tar.zst"
-    assert archive_path.exists()
-
-    # Remove venv and build again - should use cache
-    shutil.rmtree(venv_path)
-    assert not venv_path.exists()
-
-    venv_path2, deps_hash2 = await cache.build_venv(test_bundle_with_deps, extras=[])
-
-    # Should have same hash and venv should be restored from cache
-    assert deps_hash2 == deps_hash
-    assert venv_path2.exists()
-    assert (venv_path2 / "pyvenv.cfg").exists()
-
-
-@pytest.mark.asyncio
-@pytest.mark.slow
-async def test_shared_uv_cache_speeds_up_builds(temp_cache_dir, tmp_path):
-    """Test that shared UV cache speeds up subsequent builds.
-
-    This test verifies the shared UV cache benefit by building two bundles
-    with the same dependency and checking the UV cache is populated.
-    """
-    # Check if uv is available
-    try:
-        subprocess.run(["uv", "--version"], check=True, capture_output=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pytest.skip("uv not available")
-
-    cache_dir, uv_cache_dir = temp_cache_dir
-    cache = VenvCache(cache_dir, uv_cache_dir)
-
-    # Create two bundles with the same dependency
-    bundles = []
-    for i in range(2):
-        bundle_dir = tmp_path / f"bundle_{i}"
-        bundle_dir.mkdir()
-
-        # Create package directory structure
-        src_dir = bundle_dir / "src" / f"test_package_{i}"
-        src_dir.mkdir(parents=True)
-        (src_dir / "__init__.py").write_text("# Test package\n")
-
-        pyproject = f"""[project]
-name = "test-package-{i}"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = [
-    "httpx>=0.28.0",
-]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/test_package_{i}"]
-"""
-        (bundle_dir / "pyproject.toml").write_text(pyproject)
-
-        # Generate lock file
-        subprocess.run(["uv", "lock"], cwd=bundle_dir, check=True, capture_output=True)
-        bundles.append(bundle_dir)
-
-    # Build first venv
-    await cache.build_venv(bundles[0], extras=[])
-
-    # UV cache should now contain wheels
-    uv_cache_contents = list(uv_cache_dir.rglob("*"))
-    assert len(uv_cache_contents) > 0, "UV cache should be populated after first build"
-
-    # Build second venv - should reuse wheels from UV cache
-    await cache.build_venv(bundles[1], extras=[])
-
-    # Both venvs should exist
-    assert (bundles[0] / ".venv").exists()
-    assert (bundles[1] / ".venv").exists()
-
-
-@pytest.mark.asyncio
-async def test_build_venv_with_extras(temp_cache_dir, test_bundle):
-    """Test that extras are passed correctly to uv sync."""
-    cache_dir, uv_cache_dir = temp_cache_dir
-    cache = VenvCache(cache_dir, uv_cache_dir)
-
-    # Add extras to pyproject
-    pyproject = """[project]
-name = "test-package"
-version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = []
-
-[project.optional-dependencies]
-dev = []
-test = []
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-"""
-    (test_bundle / "pyproject.toml").write_text(pyproject)
-
-    # Create lock file
-    (test_bundle / "uv.lock").write_text("version = 1\nrequires-python = '>=3.11'\n")
-
-    # Mock _run_uv_sync to capture the command
-    captured_cmd = []
-
-    async def mock_run(_bundle_path, extras):
-        # Just record what would be called
-        captured_cmd.append(extras)
-        # Don't actually run uv
-        raise RuntimeError("Mocked")
-
-    cache._run_uv_sync = mock_run
-
-    try:
-        await cache.build_venv(test_bundle, extras=["dev", "test"])
-    except RuntimeError:
-        pass  # Expected from mock
-
-    # Verify extras were passed
-    assert captured_cmd == [["dev", "test"]]
 
 
 # ImageBuilder Tests

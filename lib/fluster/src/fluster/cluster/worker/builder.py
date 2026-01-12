@@ -34,31 +34,18 @@ class VenvCacheEntry:
 
 
 class VenvCache:
-    """LRU cache for pre-built Python virtual environments.
+    """UV cache manager for dependency caching.
 
-    Uses shared UV cache directory for wheel reuse across builds.
-    Stores compressed venvs keyed by deps_hash (pyproject.toml + uv.lock).
+    UV handles dependency caching natively via BuildKit cache mounts.
+    This class provides utilities for computing dependency hashes and
+    ensuring proper permissions for container access.
 
     Permissions: The UV cache directory must be writable by container user
     (typically UID 1000). Call ensure_permissions() after creating.
-
-    TODO: This class is largely unused. Only compute_deps_hash() is actually called
-    in the job execution path. The build_venv() method is never used because Docker
-    BuildKit handles dependency caching via cache mounts. Consider removing the entire
-    venv caching mechanism and keeping only compute_deps_hash() as a standalone function,
-    or plan to use it for local/non-Docker execution in the future.
     """
 
-    def __init__(
-        self,
-        cache_dir: Path,
-        uv_cache_dir: Path,
-        max_entries: int = 20,
-    ):
-        self._cache_dir = cache_dir / "venvs"
+    def __init__(self, uv_cache_dir: Path):
         self._uv_cache_dir = uv_cache_dir
-        self._max_entries = max_entries
-        self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._uv_cache_dir.mkdir(parents=True, exist_ok=True)
 
     def ensure_permissions(self, uid: int = 1000, gid: int = 1000) -> None:
@@ -88,168 +75,6 @@ class VenvCache:
             if fpath.exists():
                 h.update(fpath.read_bytes())
         return h.hexdigest()
-
-    def get(self, deps_hash: str) -> Path | None:
-        """Get cached venv archive path if exists."""
-        venv_archive = self._cache_dir / f"{deps_hash}.tar.zst"
-        if venv_archive.exists():
-            # Update mtime for LRU
-            venv_archive.touch()
-            return venv_archive
-        return None
-
-    async def build_venv(self, bundle_path: Path, extras: list[str]) -> tuple[Path, str]:
-        """Build venv for bundle, returning (venv_path, deps_hash).
-
-        Uses shared UV cache for fast builds.
-        """
-        deps_hash = self.compute_deps_hash(bundle_path)
-
-        # Check cache first
-        cached = self.get(deps_hash)
-        if cached:
-            venv_path = await self._extract_venv(cached, bundle_path)
-            return venv_path, deps_hash
-
-        # Build new venv with shared UV cache
-        venv_path = bundle_path / ".venv"
-        await self._run_uv_sync(bundle_path, extras)
-
-        # Cache the built venv
-        await self._archive_venv(venv_path, deps_hash)
-        await self._evict_lru()
-
-        return venv_path, deps_hash
-
-    async def _run_uv_sync(self, bundle_path: Path, extras: list[str]) -> None:
-        """Run uv sync with shared cache."""
-        cmd = ["uv", "sync", "--frozen", "--all-packages"]
-        for extra in extras:
-            cmd.extend(["--extra", extra])
-
-        env = {
-            **os.environ,
-            "UV_CACHE_DIR": str(self._uv_cache_dir),
-            "UV_LINK_MODE": "copy",
-        }
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=bundle_path,
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"uv sync failed: {stderr.decode()}")
-
-    async def _archive_venv(self, venv_path: Path, deps_hash: str) -> None:
-        """Compress venv with zstd for storage."""
-        archive_path = self._cache_dir / f"{deps_hash}.tar.zst"
-        # Use piped processes instead of shell to avoid injection risks
-        tar_proc = await asyncio.create_subprocess_exec(
-            "tar",
-            "-cf",
-            "-",
-            "-C",
-            str(venv_path.parent),
-            ".venv",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        assert tar_proc.stdout is not None
-        zstd_proc = await asyncio.create_subprocess_exec(
-            "zstd",
-            "-T0",
-            "-o",
-            str(archive_path),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        # Manually pipe tar stdout to zstd stdin
-        assert zstd_proc.stdin is not None
-
-        async def pipe_data():
-            assert tar_proc.stdout is not None
-            assert zstd_proc.stdin is not None
-            while True:
-                chunk = await tar_proc.stdout.read(65536)
-                if not chunk:
-                    break
-                zstd_proc.stdin.write(chunk)
-                await zstd_proc.stdin.drain()
-            zstd_proc.stdin.close()
-
-        await pipe_data()
-        _stdout, zstd_stderr = await zstd_proc.communicate()
-        await tar_proc.wait()
-
-        if zstd_proc.returncode != 0:
-            raise RuntimeError(f"Failed to archive venv: {zstd_stderr.decode()}")
-        if tar_proc.returncode != 0:
-            raise RuntimeError("tar command failed during venv archiving")
-
-    async def _extract_venv(self, archive: Path, target_bundle: Path) -> Path:
-        """Extract cached venv to target bundle."""
-        # Use piped processes instead of shell to avoid injection risks
-        zstd_proc = await asyncio.create_subprocess_exec(
-            "zstd",
-            "-d",
-            "-c",
-            str(archive),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        assert zstd_proc.stdout is not None
-        tar_proc = await asyncio.create_subprocess_exec(
-            "tar",
-            "-xf",
-            "-",
-            "-C",
-            str(target_bundle),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        # Manually pipe zstd stdout to tar stdin
-        assert tar_proc.stdin is not None
-
-        async def pipe_data():
-            assert zstd_proc.stdout is not None
-            assert tar_proc.stdin is not None
-            while True:
-                chunk = await zstd_proc.stdout.read(65536)
-                if not chunk:
-                    break
-                tar_proc.stdin.write(chunk)
-                await tar_proc.stdin.drain()
-            tar_proc.stdin.close()
-
-        await pipe_data()
-        _stdout, tar_stderr = await tar_proc.communicate()
-        await zstd_proc.wait()
-
-        if tar_proc.returncode != 0:
-            raise RuntimeError(f"Failed to extract venv: {tar_stderr.decode()}")
-        if zstd_proc.returncode != 0:
-            raise RuntimeError("zstd decompression failed during venv extraction")
-        return target_bundle / ".venv"
-
-    async def _evict_lru(self) -> None:
-        """Remove oldest entries when over max_entries."""
-        archives = list(self._cache_dir.glob("*.tar.zst"))
-        if len(archives) <= self._max_entries:
-            return
-
-        archives.sort(key=lambda p: p.stat().st_mtime)
-        for path in archives[: len(archives) - self._max_entries]:
-            path.unlink()
 
 
 @dataclass
