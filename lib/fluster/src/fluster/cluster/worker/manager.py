@@ -149,6 +149,7 @@ class JobManager:
             try:
                 # Phase 1: Download bundle
                 job.status = cluster_pb2.JOB_STATE_BUILDING
+                job.status_message = "downloading bundle"
                 job.started_at_ms = int(time.time() * 1000)
 
                 bundle_path = await self._bundle_cache.get_bundle(
@@ -157,12 +158,14 @@ class JobManager:
                 )
 
                 # Phase 2: Build image
+                job.status_message = "building image"
                 env_config = job.request.environment
                 extras = list(env_config.extras)
 
                 # Compute deps_hash for caching
                 deps_hash = self._venv_cache.compute_deps_hash(bundle_path)
 
+                job.status_message = "populating uv cache"
                 build_result = await self._image_builder.build(
                     bundle_path=bundle_path,
                     base_image="python:3.11-slim",
@@ -173,6 +176,7 @@ class JobManager:
 
                 # Phase 3: Run container
                 job.status = cluster_pb2.JOB_STATE_RUNNING
+                job.status_message = ""
 
                 # Deserialize entrypoint
                 entrypoint = cloudpickle.loads(job.request.serialized_entrypoint)
@@ -202,6 +206,7 @@ class JobManager:
                 # Phase 4: Complete
                 job.exit_code = result.exit_code
                 job.finished_at_ms = int(time.time() * 1000)
+                job.status_message = ""
 
                 if result.error:
                     job.status = cluster_pb2.JOB_STATE_FAILED
@@ -215,10 +220,12 @@ class JobManager:
             except asyncio.CancelledError:
                 # Task was cancelled (likely from kill_job)
                 job.status = cluster_pb2.JOB_STATE_KILLED
+                job.status_message = ""
                 job.finished_at_ms = int(time.time() * 1000)
                 raise
             except Exception as e:
                 job.status = cluster_pb2.JOB_STATE_FAILED
+                job.status_message = ""
                 job.error = repr(e)
                 job.finished_at_ms = int(time.time() * 1000)
             finally:
@@ -303,6 +310,7 @@ class JobManager:
                 pass
 
         job.status = cluster_pb2.JOB_STATE_KILLED
+        job.status_message = ""
         job.finished_at_ms = int(time.time() * 1000)
         return True
 

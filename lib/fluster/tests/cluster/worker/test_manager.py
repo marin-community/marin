@@ -556,3 +556,38 @@ async def test_build_command_with_entrypoint(job_manager):
     assert command[1] == "-c"
     assert "cloudpickle" in command[2]
     assert "base64" in command[2]
+
+
+@pytest.mark.asyncio
+async def test_job_status_message_during_building(job_manager):
+    """Test that status_message is set during BUILDING phase."""
+    request = create_run_job_request()
+    job_id = await job_manager.submit_job(request)
+
+    # Wait a bit for job to start building
+    await asyncio.sleep(0.1)
+
+    job = job_manager.get_job(job_id)
+    # Job should be in BUILDING state with a status_message
+    if job.status == cluster_pb2.JOB_STATE_BUILDING:
+        assert job.status_message in ["downloading bundle", "building image", "populating uv cache"]
+
+    # Wait for completion
+    await asyncio.wait_for(job.task, timeout=5.0)
+
+    # After completion, status_message should be empty
+    final_job = job_manager.get_job(job_id)
+    assert final_job.status_message == ""
+
+
+@pytest.mark.asyncio
+async def test_job_to_proto_includes_status_message(job_manager):
+    """Test that Job.to_proto() includes status_message."""
+    request = create_run_job_request()
+    job_id = await job_manager.submit_job(request)
+
+    job = job_manager.get_job(job_id)
+    job.status_message = "test message"
+
+    proto = job.to_proto()
+    assert proto.status_message == "test message"

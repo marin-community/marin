@@ -211,6 +211,9 @@ message JobStatus {
   map<string, int32> ports = 7;
 
   ResourceUsage resource_usage = 8;
+
+  // Status message for current phase (e.g., "downloading bundle", "populating uv cache")
+  string status_message = 9;
 }
 
 message LogEntry {

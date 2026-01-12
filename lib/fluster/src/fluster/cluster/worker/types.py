@@ -34,6 +34,7 @@ class Job:
     started_at_ms: int | None = None
     finished_at_ms: int | None = None
     ports: dict[str, int] = field(default_factory=dict)
+    status_message: str = ""
 
     # Internals
     container_id: str | None = None
@@ -51,4 +52,5 @@ class Job:
             started_at_ms=self.started_at_ms or 0,
             finished_at_ms=self.finished_at_ms or 0,
             ports=self.ports,
+            status_message=self.status_message,
         )
