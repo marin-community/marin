@@ -17,7 +17,6 @@ from haliax.jax_utils import maybe_rng_split, named_call
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmConfig
-from levanter.models.vlm_model import VlmConfig, VisionEncoderConfig
 from levanter.models.qwen import QwenConfig, QwenLMHeadModel
 from levanter.models.siglip import SiglipVisionConfig, SiglipVisionModel
 from levanter.models.siglip2 import Siglip2VisionConfig, Siglip2VisionModel

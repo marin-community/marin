@@ -11,7 +11,7 @@ from collections import defaultdict
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Generic, Optional, TypeVar
+from typing import Generic, TypeVar
 
 import haliax.partitioning
 import jax

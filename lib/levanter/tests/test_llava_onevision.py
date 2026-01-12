@@ -45,7 +45,6 @@ from levanter.models.llava_onevision import (
     LlavaInferenceEngine,
     LlavaOnevisionConfig,
     LlavaOnevisionModel,
-    LlavaOnevisionMultimodalProjector,
     VLMRequest,
 )
 from levanter.models.qwen import QwenConfig
@@ -433,9 +432,7 @@ def test_llava_onevision_full_model_vs_hf():
     )
 
     PositionFull = Axis("position", seq_len)
-    input_ids_multimodal_lev = hax.named(
-        jnp.array(input_ids_torch.numpy(), dtype=jnp.int32), (Batch, PositionFull)
-    )
+    input_ids_multimodal_lev = hax.named(jnp.array(input_ids_torch.numpy(), dtype=jnp.int32), (Batch, PositionFull))
 
     def compute_multimodal(model, input_ids, pixel_values, grid_mask, unpad_indices):
         return model(
@@ -606,7 +603,7 @@ def test_llava_onevision_real_image_text():
         torch_model.model.image_newline = None  # Disable image_newline for consistency
         torch_model.eval()
         torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
-    except Exception as e:
+    except Exception:
         pytest.skip(f"Could not download model: {model_name}")
         return
 
@@ -686,9 +683,7 @@ def test_llava_onevision_real_image_text():
         )
 
     # Forward pass
-    lev_logits = compute_lev(
-        lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices
-    )
+    lev_logits = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
     lev_logits = lev_logits.array
 
     # Compare logits
@@ -712,6 +707,7 @@ def test_llava_onevision_real_image_text():
     )
 
     assert comparison_result.passed, "Real image/text test failed"
+
 
 @skip_if_no_torch
 def test_llava_onevision_real_multi_image_text():
@@ -738,7 +734,7 @@ def test_llava_onevision_real_multi_image_text():
         )
         torch_model.model.image_newline = None  # Disable image_newline for consistency
         torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
-    except Exception as e:
+    except Exception:
         pytest.skip(f"Could not download model: {model_name}")
         return
 
@@ -836,9 +832,7 @@ def test_llava_onevision_real_multi_image_text():
                 key=None,
             )
 
-        lev_logits = compute_lev(
-            lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices
-        )
+        lev_logits = compute_lev(lev_model, input_ids_lev_tensor, pixel_values_lev_tensor, grid_mask, unpad_indices)
         lev_logits = lev_logits.array
 
         # Verify logits are not NaN/Inf
@@ -864,9 +858,7 @@ def test_llava_onevision_real_multi_image_text():
             attention_mask=test_pair.lev.attention_mask,
         )
 
-        assert (
-            comparison_result.passed
-        ), f"Multi-image test failed"
+        assert comparison_result.passed, "Multi-image test failed"
 
 
 @skip_if_no_torch
@@ -884,7 +876,7 @@ def test_llava_onevision_real_image_text_0_5b_batch():
         torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
         processor_hf = create_custom_processor(model_name, do_pad=False, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS)
         processor_lev = create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=DEFAULT_GRID_PINPOINTS)
-    except Exception as e:
+    except Exception:
         pytest.skip(f"Could not download model: {model_name}")
         return
 
@@ -939,7 +931,6 @@ def test_llava_onevision_real_image_text_0_5b_batch():
         input_ids_lev = hax.named(jnp.array(input_ids_np, dtype=jnp.int32), (Batch, Position))
 
         pixel_values_torch = inputs_lev["pixel_values"]
-        num_patches = pixel_values_torch.shape[1]
         channels = pixel_values_torch.shape[2]
         height = pixel_values_torch.shape[3]
         width = pixel_values_torch.shape[4]
@@ -1008,7 +999,7 @@ def test_llava_onevision_real_image_text_0_5b_batch():
             attention_mask=attention_mask_np,
         )
 
-        assert result.passed, f"Batch test failed"
+        assert result.passed, "Batch test failed"
 
 
 # =====================
@@ -1111,7 +1102,9 @@ def test_get_image_features_vs_hf_real_single_image():
 
     hf_array_reshaped = hf_array.reshape(batch_size, num_patches, -1, hf_array.shape[-1])
 
-    assert hf_array_reshaped.shape == lev_array.shape, f"Shape mismatch: HF={hf_array_reshaped.shape}, Lev={lev_array.shape}"
+    assert (
+        hf_array_reshaped.shape == lev_array.shape
+    ), f"Shape mismatch: HF={hf_array_reshaped.shape}, Lev={lev_array.shape}"
 
     mean_diff = np.mean(np.abs(hf_array_reshaped - lev_array))
     # Multi-layer comparison: 1e-3
@@ -1213,7 +1206,9 @@ def test_get_image_features_vs_hf_real_multi_image():
 
         hf_array_reshaped = hf_array.reshape(original_batch_size, num_patches, -1, hf_array.shape[-1])
 
-        assert hf_array_reshaped.shape == lev_array.shape, f"Shape mismatch: HF={hf_array_reshaped.shape}, Lev={lev_array.shape}"
+        assert (
+            hf_array_reshaped.shape == lev_array.shape
+        ), f"Shape mismatch: HF={hf_array_reshaped.shape}, Lev={lev_array.shape}"
 
         mean_diff = np.mean(np.abs(hf_array_reshaped - lev_array))
         # Multi-layer comparison: 1e-3
@@ -1240,7 +1235,7 @@ def test_llava_onevision_generation_with_inference_engine():
         torch_model.model.image_newline = None
         torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
         processor = AutoProcessor.from_pretrained(model_name)
-    except Exception as e:
+    except Exception:
         pytest.skip(f"Could not download model: {model_name}")
         return
 
@@ -1359,9 +1354,9 @@ def test_llava_onevision_generation_with_inference_engine():
     match_ratio = matching_tokens / min_len if min_len > 0 else 0
 
     min_expected_tokens = len(hf_generated_ids) // 2
-    assert len(lev_generated_ids) >= min_expected_tokens, (
-        f"Levanter generated too few tokens: {len(lev_generated_ids)} < {min_expected_tokens}"
-    )
+    assert (
+        len(lev_generated_ids) >= min_expected_tokens
+    ), f"Levanter generated too few tokens: {len(lev_generated_ids)} < {min_expected_tokens}"
     assert match_ratio >= 0.99, f"Token match ratio too low: {match_ratio:.1%}"
 
 
@@ -1381,7 +1376,7 @@ def test_llava_onevision_generation_with_inference_engine_multi():
         torch_model.model.image_newline = None
         torch_model.model.config.image_grid_pinpoints = DEFAULT_GRID_PINPOINTS
         processor = AutoProcessor.from_pretrained(model_name)
-    except Exception as e:
+    except Exception:
         pytest.skip(f"Could not download model: {model_name}")
         return
 

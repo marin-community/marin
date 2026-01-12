@@ -71,6 +71,7 @@ class VisionEncoderConfig(draccus.PluginRegistry, abc.ABC, Generic[VisionEncoder
 # Vision Encoder Model
 # =====================
 
+
 class VisionEncoderModel(abc.ABC):
     """
     Abstract base class for vision encoder models.
@@ -78,6 +79,7 @@ class VisionEncoderModel(abc.ABC):
     This is a placeholder for type hints. Concrete implementations
     should inherit from both this class and equinox.Module.
     """
+
     pass
 
 
@@ -150,6 +152,7 @@ class VlmConfig(LmConfig[VlmT], abc.ABC, Generic[VlmT]):
 # VLM Model
 # =====================
 
+
 class VlmModel(abc.ABC):
     """
     Abstract base class for Vision-Language Models.
@@ -157,4 +160,5 @@ class VlmModel(abc.ABC):
     This is a placeholder for type hints. Concrete implementations
     should inherit from both this class and equinox.Module.
     """
+
     pass
