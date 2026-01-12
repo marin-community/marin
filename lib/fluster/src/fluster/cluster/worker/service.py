@@ -25,7 +25,7 @@ from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 
 from fluster import cluster_pb2
-from .manager import JobManager
+from fluster.cluster.worker.manager import JobManager
 
 
 class WorkerServiceImpl:
@@ -113,6 +113,9 @@ class WorkerServiceImpl:
                 continue
             if request.filter.end_ms and entry.timestamp_ms > request.filter.end_ms:
                 continue
+            # TODO: Regex filter is vulnerable to DoS via catastrophic backtracking.
+            # Malicious regex like (a+)+ can cause minutes of CPU time. Consider using
+            # the re2 library or adding timeout/complexity limits.
             # Regex filter
             if request.filter.regex:
                 if not re.search(request.filter.regex, entry.data):

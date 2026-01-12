@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""HTTP server with Connect RPC and web dashboard for worker monitoring.
+"""HTTP dashboard with Connect RPC and web UI for worker monitoring.
 
-The WorkerServer provides:
+The WorkerDashboard provides:
 - Connect RPC at /fluster.cluster.WorkerService
 - Web dashboard at / with live job statistics
 - REST API at /api/* for dashboard consumption
+
+REST endpoints are implemented by calling the canonical RPC methods and
+converting proto responses to JSON for browser consumption.
 """
 
 from starlette.applications import Starlette
@@ -27,8 +30,19 @@ from starlette.routing import Mount, Route
 
 from fluster import cluster_pb2
 from fluster.cluster_connect import WorkerServiceASGIApplication
+from fluster.cluster.worker.service import WorkerServiceImpl
 
-from .service import WorkerServiceImpl
+
+class FakeRequestContext:
+    """Minimal stub RequestContext for internal REST-to-RPC bridging.
+
+    The WorkerDashboard translates REST API calls to RPC method calls,
+    which require a RequestContext parameter. Since the RPC methods never
+    actually access the context, this minimal stub satisfies the type signature.
+    """
+
+    pass
+
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -83,8 +97,8 @@ DASHBOARD_HTML = """
 """
 
 
-class WorkerServer:
-    """HTTP server with Connect RPC and web dashboard.
+class WorkerDashboard:
+    """HTTP dashboard with Connect RPC and web UI.
 
     Connect RPC is mounted at /fluster.cluster.WorkerService
     Web dashboard at /
@@ -129,16 +143,20 @@ class WorkerServer:
 
     async def _stats(self, _request: Request) -> JSONResponse:
         """Return job statistics by status."""
-        jobs = self._service._manager.list_jobs()
+        # Call canonical RPC method
+        ctx = FakeRequestContext()
+        response = await self._service.list_jobs(cluster_pb2.ListJobsRequest(), ctx)
+        jobs = response.jobs
+
         return JSONResponse(
             {
-                "running": sum(1 for j in jobs if j.status == cluster_pb2.JOB_STATE_RUNNING),
-                "pending": sum(1 for j in jobs if j.status == cluster_pb2.JOB_STATE_PENDING),
-                "building": sum(1 for j in jobs if j.status == cluster_pb2.JOB_STATE_BUILDING),
+                "running": sum(1 for j in jobs if j.state == cluster_pb2.JOB_STATE_RUNNING),
+                "pending": sum(1 for j in jobs if j.state == cluster_pb2.JOB_STATE_PENDING),
+                "building": sum(1 for j in jobs if j.state == cluster_pb2.JOB_STATE_BUILDING),
                 "completed": sum(
                     1
                     for j in jobs
-                    if j.status
+                    if j.state
                     in (
                         cluster_pb2.JOB_STATE_SUCCEEDED,
                         cluster_pb2.JOB_STATE_FAILED,
@@ -150,12 +168,16 @@ class WorkerServer:
 
     async def _list_jobs(self, _request: Request) -> JSONResponse:
         """List all jobs as JSON."""
-        jobs = self._service._manager.list_jobs()
+        # Call canonical RPC method
+        ctx = FakeRequestContext()
+        response = await self._service.list_jobs(cluster_pb2.ListJobsRequest(), ctx)
+        jobs = response.jobs
+
         return JSONResponse(
             [
                 {
                     "job_id": j.job_id,
-                    "status": self._status_name(j.status),
+                    "status": self._status_name(j.state),
                     "started_at": j.started_at_ms,
                     "finished_at": j.finished_at_ms,
                     "error": j.error,
@@ -167,28 +189,46 @@ class WorkerServer:
     async def _get_job(self, request: Request) -> JSONResponse:
         """Get single job by ID."""
         job_id = request.path_params["job_id"]
-        job = self._service._manager.get_job(job_id)
-        if not job:
+
+        # Call canonical RPC method
+        ctx = FakeRequestContext()
+        try:
+            job = await self._service.get_job_status(cluster_pb2.GetStatusRequest(job_id=job_id), ctx)
+        except Exception:
+            # RPC raises ConnectError with NOT_FOUND for missing jobs
             return JSONResponse({"error": "Not found"}, status_code=404)
+
         return JSONResponse(
             {
                 "job_id": job.job_id,
-                "status": self._status_name(job.status),
+                "status": self._status_name(job.state),
                 "started_at": job.started_at_ms,
                 "finished_at": job.finished_at_ms,
                 "exit_code": job.exit_code,
                 "error": job.error,
-                "ports": job.ports,
+                "ports": dict(job.ports),
             }
         )
 
     async def _get_logs(self, request: Request) -> JSONResponse:
         """Get logs with optional tail parameter."""
         job_id = request.path_params["job_id"]
+
         # Support ?tail=N for last N lines
         tail = request.query_params.get("tail")
         start_line = -int(tail) if tail else 0
-        logs = await self._service._manager.get_logs(job_id, start_line=start_line)
+
+        # Call canonical RPC method
+        ctx = FakeRequestContext()
+        log_filter = cluster_pb2.FetchLogsFilter(start_line=start_line)
+        try:
+            response = await self._service.fetch_logs(
+                cluster_pb2.FetchLogsRequest(job_id=job_id, filter=log_filter), ctx
+            )
+        except Exception:
+            # RPC raises ConnectError with NOT_FOUND for missing jobs
+            return JSONResponse({"error": "Not found"}, status_code=404)
+
         return JSONResponse(
             [
                 {
@@ -196,7 +236,7 @@ class WorkerServer:
                     "source": entry.source,
                     "data": entry.data,
                 }
-                for entry in logs
+                for entry in response.logs
             ]
         )
 

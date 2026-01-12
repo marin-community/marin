@@ -90,7 +90,7 @@ class BundleCache:
 
     async def _download(self, gcs_path: str, local_path: Path) -> None:
         """Download bundle using fsspec."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(self._executor, self._download_sync, gcs_path, local_path)
 
     def _download_sync(self, gcs_path: str, local_path: Path) -> None:
@@ -102,18 +102,23 @@ class BundleCache:
 
     async def _extract(self, zip_path: Path, extract_path: Path) -> None:
         """Extract zip to directory."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(self._executor, self._extract_sync, zip_path, extract_path)
 
     def _extract_sync(self, zip_path: Path, extract_path: Path) -> None:
-        """Synchronous extraction implementation."""
+        """Synchronous extraction implementation with zip slip protection."""
         extract_path.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as zf:
+            # Validate all paths to prevent zip slip attacks
+            for member in zf.namelist():
+                member_path = (extract_path / member).resolve()
+                if not member_path.is_relative_to(extract_path.resolve()):
+                    raise ValueError(f"Zip slip detected: {member} attempts to write outside extract path")
             zf.extractall(extract_path)
 
     async def _compute_hash(self, path: Path) -> str:
         """Compute SHA256 hash of file."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, self._compute_hash_sync, path)
 
     def _compute_hash_sync(self, path: Path) -> str:

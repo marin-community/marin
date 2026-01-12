@@ -35,6 +35,116 @@ def allocator():
     return PortAllocator(port_range=(40000, 40100))
 
 
+@pytest.fixture
+def mock_bundle_cache():
+    """Create mock BundleCache."""
+    cache = AsyncMock(spec=BundleCache)
+    cache.get_bundle = AsyncMock(return_value=Path("/tmp/bundle"))
+    return cache
+
+
+@pytest.fixture
+def mock_venv_cache():
+    """Create mock VenvCache."""
+    cache = Mock(spec=VenvCache)
+    cache.compute_deps_hash = Mock(return_value="abc123")
+    return cache
+
+
+@pytest.fixture
+def mock_image_builder():
+    """Create mock ImageBuilder."""
+    builder = AsyncMock(spec=ImageBuilder)
+    builder.build = AsyncMock(
+        return_value=BuildResult(
+            image_tag="test-image:latest",
+            deps_hash="abc123",
+            build_time_ms=1000,
+            from_cache=False,
+        )
+    )
+    return builder
+
+
+@pytest.fixture
+def mock_runtime():
+    """Create mock DockerRuntime."""
+    runtime = AsyncMock(spec=DockerRuntime)
+    runtime.run = AsyncMock(
+        return_value=ContainerResult(
+            container_id="container123",
+            exit_code=0,
+            started_at=0.0,
+            finished_at=1.0,
+        )
+    )
+    runtime.kill = AsyncMock()
+    runtime.remove = AsyncMock()
+    return runtime
+
+
+@pytest.fixture
+def job_manager(mock_bundle_cache, mock_venv_cache, mock_image_builder, mock_runtime):
+    """Create JobManager with mocked dependencies."""
+    port_allocator = PortAllocator(port_range=(50000, 50100))
+    return JobManager(
+        bundle_cache=mock_bundle_cache,
+        venv_cache=mock_venv_cache,
+        image_builder=mock_image_builder,
+        runtime=mock_runtime,
+        port_allocator=port_allocator,
+        max_concurrent_jobs=5,
+    )
+
+
+def create_test_entrypoint():
+    """Create a simple test entrypoint."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class Entrypoint:
+        callable: object
+        args: tuple = ()
+        kwargs: dict | None = None
+
+        def __post_init__(self):
+            if self.kwargs is None:
+                self.kwargs = {}
+
+    def test_fn():
+        print("Hello from test")
+
+    return Entrypoint(callable=test_fn)
+
+
+def create_run_job_request(job_id: str = "test-job-1", ports: list[str] | None = None):
+    """Create a RunJobRequest for testing."""
+    entrypoint = create_test_entrypoint()
+    serialized_entrypoint = cloudpickle.dumps(entrypoint)
+
+    env_config = cluster_pb2.EnvironmentConfig(
+        workspace="/workspace",
+        env_vars={"TEST_VAR": "value"},
+        extras=["dev"],
+    )
+
+    resources = cluster_pb2.ResourceSpec(
+        cpu=2,
+        memory="4g",
+    )
+
+    return cluster_pb2.RunJobRequest(
+        job_id=job_id,
+        serialized_entrypoint=serialized_entrypoint,
+        environment=env_config,
+        bundle_gcs_path="gs://bucket/bundle.zip",
+        resources=resources,
+        env_vars={"JOB_VAR": "job_value"},
+        timeout_seconds=300,
+        ports=ports or [],
+    )
+
+
 @pytest.mark.asyncio
 async def test_allocate_single_port(allocator):
     """Test allocating a single port."""
@@ -167,116 +277,6 @@ async def test_default_port_range():
 # ============================================================================
 # JobManager Tests
 # ============================================================================
-
-
-@pytest.fixture
-def mock_bundle_cache():
-    """Create mock BundleCache."""
-    cache = AsyncMock(spec=BundleCache)
-    cache.get_bundle = AsyncMock(return_value=Path("/tmp/bundle"))
-    return cache
-
-
-@pytest.fixture
-def mock_venv_cache():
-    """Create mock VenvCache."""
-    cache = Mock(spec=VenvCache)
-    cache.compute_deps_hash = Mock(return_value="abc123")
-    return cache
-
-
-@pytest.fixture
-def mock_image_builder():
-    """Create mock ImageBuilder."""
-    builder = AsyncMock(spec=ImageBuilder)
-    builder.build = AsyncMock(
-        return_value=BuildResult(
-            image_tag="test-image:latest",
-            deps_hash="abc123",
-            build_time_ms=1000,
-            from_cache=False,
-        )
-    )
-    return builder
-
-
-@pytest.fixture
-def mock_runtime():
-    """Create mock DockerRuntime."""
-    runtime = AsyncMock(spec=DockerRuntime)
-    runtime.run = AsyncMock(
-        return_value=ContainerResult(
-            container_id="container123",
-            exit_code=0,
-            started_at=0.0,
-            finished_at=1.0,
-        )
-    )
-    runtime.kill = AsyncMock()
-    runtime.remove = AsyncMock()
-    return runtime
-
-
-@pytest.fixture
-def job_manager(mock_bundle_cache, mock_venv_cache, mock_image_builder, mock_runtime):
-    """Create JobManager with mocked dependencies."""
-    port_allocator = PortAllocator(port_range=(50000, 50100))
-    return JobManager(
-        bundle_cache=mock_bundle_cache,
-        venv_cache=mock_venv_cache,
-        image_builder=mock_image_builder,
-        runtime=mock_runtime,
-        port_allocator=port_allocator,
-        max_concurrent_jobs=5,
-    )
-
-
-def create_test_entrypoint():
-    """Create a simple test entrypoint."""
-    from dataclasses import dataclass
-
-    @dataclass
-    class Entrypoint:
-        callable: object
-        args: tuple = ()
-        kwargs: dict | None = None
-
-        def __post_init__(self):
-            if self.kwargs is None:
-                self.kwargs = {}
-
-    def test_fn():
-        print("Hello from test")
-
-    return Entrypoint(callable=test_fn)
-
-
-def create_run_job_request(job_id: str = "test-job-1", ports: list[str] | None = None):
-    """Create a RunJobRequest for testing."""
-    entrypoint = create_test_entrypoint()
-    serialized_entrypoint = cloudpickle.dumps(entrypoint)
-
-    env_config = cluster_pb2.EnvironmentConfig(
-        workspace="/workspace",
-        env_vars={"TEST_VAR": "value"},
-        extras=["dev"],
-    )
-
-    resources = cluster_pb2.ResourceSpec(
-        cpu=2,
-        memory="4g",
-    )
-
-    return cluster_pb2.RunJobRequest(
-        job_id=job_id,
-        serialized_entrypoint=serialized_entrypoint,
-        environment=env_config,
-        bundle_gcs_path="gs://bucket/bundle.zip",
-        resources=resources,
-        env_vars={"JOB_VAR": "job_value"},
-        timeout_seconds=300,
-        ports=ports or [],
-    )
 
 
 @pytest.mark.asyncio

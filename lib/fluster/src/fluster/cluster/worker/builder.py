@@ -16,7 +16,6 @@
 
 import asyncio
 import os
-import shlex
 import shutil
 import time
 from dataclasses import dataclass
@@ -42,6 +41,12 @@ class VenvCache:
 
     Permissions: The UV cache directory must be writable by container user
     (typically UID 1000). Call ensure_permissions() after creating.
+
+    TODO: This class is largely unused. Only compute_deps_hash() is actually called
+    in the job execution path. The build_venv() method is never used because Docker
+    BuildKit handles dependency caching via cache mounts. Consider removing the entire
+    venv caching mechanism and keeping only compute_deps_hash() as a standalone function,
+    or plan to use it for local/non-Docker execution in the future.
     """
 
     def __init__(
@@ -57,12 +62,22 @@ class VenvCache:
         self._uv_cache_dir.mkdir(parents=True, exist_ok=True)
 
     def ensure_permissions(self, uid: int = 1000, gid: int = 1000) -> None:
-        """Ensure UV cache has correct permissions for container user."""
-        shutil.chown(self._uv_cache_dir, uid, gid)
+        """Ensure UV cache has correct permissions for container user.
+
+        Attempts to chown the UV cache directory to the specified uid/gid.
+        Silently ignores permission errors (e.g., on macOS or when not running as root).
+        """
+        try:
+            shutil.chown(self._uv_cache_dir, uid, gid)
+        except (PermissionError, OSError):
+            # Cannot chown (e.g., macOS, running as non-root user)
+            # This is expected in local development environments
+            pass
+
         for path in self._uv_cache_dir.rglob("*"):
             try:
                 shutil.chown(path, uid, gid)
-            except PermissionError:
+            except (PermissionError, OSError):
                 pass
 
     def compute_deps_hash(self, bundle_path: Path) -> str:
@@ -132,28 +147,98 @@ class VenvCache:
     async def _archive_venv(self, venv_path: Path, deps_hash: str) -> None:
         """Compress venv with zstd for storage."""
         archive_path = self._cache_dir / f"{deps_hash}.tar.zst"
-        # Use zstd with parallel threads for speed
-        cmd = f"tar -cf - -C {shlex.quote(str(venv_path.parent))} .venv | zstd -T0 -o {shlex.quote(str(archive_path))}"
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
+        # Use piped processes instead of shell to avoid injection risks
+        tar_proc = await asyncio.create_subprocess_exec(
+            "tar",
+            "-cf",
+            "-",
+            "-C",
+            str(venv_path.parent),
+            ".venv",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"Failed to archive venv: {stderr.decode()}")
+
+        assert tar_proc.stdout is not None
+        zstd_proc = await asyncio.create_subprocess_exec(
+            "zstd",
+            "-T0",
+            "-o",
+            str(archive_path),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        # Manually pipe tar stdout to zstd stdin
+        assert zstd_proc.stdin is not None
+
+        async def pipe_data():
+            assert tar_proc.stdout is not None
+            assert zstd_proc.stdin is not None
+            while True:
+                chunk = await tar_proc.stdout.read(65536)
+                if not chunk:
+                    break
+                zstd_proc.stdin.write(chunk)
+                await zstd_proc.stdin.drain()
+            zstd_proc.stdin.close()
+
+        await pipe_data()
+        _stdout, zstd_stderr = await zstd_proc.communicate()
+        await tar_proc.wait()
+
+        if zstd_proc.returncode != 0:
+            raise RuntimeError(f"Failed to archive venv: {zstd_stderr.decode()}")
+        if tar_proc.returncode != 0:
+            raise RuntimeError("tar command failed during venv archiving")
 
     async def _extract_venv(self, archive: Path, target_bundle: Path) -> Path:
         """Extract cached venv to target bundle."""
-        cmd = f"zstd -d -c {shlex.quote(str(archive))} | tar -xf - -C {shlex.quote(str(target_bundle))}"
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
+        # Use piped processes instead of shell to avoid injection risks
+        zstd_proc = await asyncio.create_subprocess_exec(
+            "zstd",
+            "-d",
+            "-c",
+            str(archive),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"Failed to extract venv: {stderr.decode()}")
+
+        assert zstd_proc.stdout is not None
+        tar_proc = await asyncio.create_subprocess_exec(
+            "tar",
+            "-xf",
+            "-",
+            "-C",
+            str(target_bundle),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        # Manually pipe zstd stdout to tar stdin
+        assert tar_proc.stdin is not None
+
+        async def pipe_data():
+            assert zstd_proc.stdout is not None
+            assert tar_proc.stdin is not None
+            while True:
+                chunk = await zstd_proc.stdout.read(65536)
+                if not chunk:
+                    break
+                tar_proc.stdin.write(chunk)
+                await tar_proc.stdin.drain()
+            tar_proc.stdin.close()
+
+        await pipe_data()
+        _stdout, tar_stderr = await tar_proc.communicate()
+        await zstd_proc.wait()
+
+        if tar_proc.returncode != 0:
+            raise RuntimeError(f"Failed to extract venv: {tar_stderr.decode()}")
+        if zstd_proc.returncode != 0:
+            raise RuntimeError("zstd decompression failed during venv extraction")
         return target_bundle / ".venv"
 
     async def _evict_lru(self) -> None:

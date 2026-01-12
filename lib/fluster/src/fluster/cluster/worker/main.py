@@ -25,12 +25,12 @@ from pathlib import Path
 
 import click
 
-from .bundle import BundleCache
-from .builder import ImageBuilder, VenvCache
-from .manager import JobManager, PortAllocator
-from .runtime import DockerRuntime
-from .server import WorkerServer
-from .service import WorkerServiceImpl
+from fluster.cluster.worker.bundle import BundleCache
+from fluster.cluster.worker.builder import ImageBuilder, VenvCache
+from fluster.cluster.worker.dashboard import WorkerDashboard
+from fluster.cluster.worker.manager import JobManager, PortAllocator
+from fluster.cluster.worker.runtime import DockerRuntime
+from fluster.cluster.worker.service import WorkerServiceImpl
 
 
 @click.group()
@@ -116,13 +116,13 @@ async def _serve(
     )
 
     service = WorkerServiceImpl(manager)
-    server = WorkerServer(service, host, port)
+    dashboard = WorkerDashboard(service, host, port)
 
     click.echo(f"Starting Fluster worker on {host}:{port}")
     click.echo(f"  Registry: {registry}")
     click.echo(f"  Cache dir: {cache_path}")
     click.echo(f"  Max concurrent jobs: {max_concurrent_jobs}")
-    await server.run_async()
+    await dashboard.run_async()
 
 
 @cli.command()

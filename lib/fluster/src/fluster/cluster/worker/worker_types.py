@@ -15,10 +15,12 @@
 """Internal worker types for job tracking."""
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from fluster import cluster_pb2
+from fluster.cluster.types import is_job_finished
 from fluster.cluster_pb2 import JobState
 
 
@@ -41,6 +43,31 @@ class Job:
     workdir: Path | None = None  # Job working directory with logs
     task: asyncio.Task | None = None
     cleanup_done: bool = False
+
+    def transition_to(
+        self,
+        state: JobState,
+        *,
+        message: str = "",
+        error: str | None = None,
+        exit_code: int | None = None,
+    ) -> None:
+        """Transition to a new state with appropriate side effects.
+
+        Args:
+            state: Target state
+            message: Progress message (only retained in BUILDING state)
+            error: Error message (for FAILED state)
+            exit_code: Process exit code (for terminal states)
+        """
+        self.status = state
+        self.status_message = message
+        if is_job_finished(state):
+            self.finished_at_ms = int(time.time() * 1000)
+            if error:
+                self.error = error
+            if exit_code is not None:
+                self.exit_code = exit_code
 
     def to_proto(self) -> cluster_pb2.JobStatus:
         """Convert job to JobStatus proto."""

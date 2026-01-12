@@ -23,10 +23,10 @@ import uuid
 from pathlib import Path
 
 from fluster import cluster_pb2
-from .worker_types import Job
-from .bundle import BundleCache
-from .builder import VenvCache, ImageBuilder
-from .runtime import DockerRuntime, ContainerConfig
+from fluster.cluster.worker.worker_types import Job
+from fluster.cluster.worker.bundle import BundleCache
+from fluster.cluster.worker.builder import VenvCache, ImageBuilder
+from fluster.cluster.worker.runtime import DockerRuntime, ContainerConfig
 
 
 class PortAllocator:
@@ -104,6 +104,8 @@ class JobManager:
         self._runtime = runtime
         self._port_allocator = port_allocator
         self._semaphore = asyncio.Semaphore(max_concurrent_jobs)
+        # TODO: Jobs are never removed from this dict, causing unbounded memory growth.
+        # Need to implement LRU eviction for completed jobs similar to BundleCache/VenvCache.
         self._jobs: dict[str, Job] = {}
         self._lock = asyncio.Lock()
 
@@ -149,8 +151,7 @@ class JobManager:
         async with self._semaphore:
             try:
                 # Phase 1: Download bundle
-                job.status = cluster_pb2.JOB_STATE_BUILDING
-                job.status_message = "downloading bundle"
+                job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="downloading bundle")
                 job.started_at_ms = int(time.time() * 1000)
 
                 bundle_path = await self._bundle_cache.get_bundle(
@@ -159,14 +160,14 @@ class JobManager:
                 )
 
                 # Phase 2: Build image
-                job.status_message = "building image"
+                job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="building image")
                 env_config = job.request.environment
                 extras = list(env_config.extras)
 
                 # Compute deps_hash for caching
                 deps_hash = self._venv_cache.compute_deps_hash(bundle_path)
 
-                job.status_message = "populating uv cache"
+                job.transition_to(cluster_pb2.JOB_STATE_BUILDING, message="populating uv cache")
                 build_result = await self._image_builder.build(
                     bundle_path=bundle_path,
                     base_image="python:3.11-slim",
@@ -176,8 +177,7 @@ class JobManager:
                 )
 
                 # Phase 3: Run container
-                job.status = cluster_pb2.JOB_STATE_RUNNING
-                job.status_message = ""
+                job.transition_to(cluster_pb2.JOB_STATE_RUNNING)
 
                 # Deserialize entrypoint
                 entrypoint = cloudpickle.loads(job.request.serialized_entrypoint)
@@ -210,30 +210,27 @@ class JobManager:
                 job.container_id = result.container_id
 
                 # Phase 4: Complete
-                job.exit_code = result.exit_code
-                job.finished_at_ms = int(time.time() * 1000)
-                job.status_message = ""
-
                 if result.error:
-                    job.status = cluster_pb2.JOB_STATE_FAILED
-                    job.error = result.error
+                    job.transition_to(
+                        cluster_pb2.JOB_STATE_FAILED,
+                        error=result.error,
+                        exit_code=result.exit_code,
+                    )
                 elif result.exit_code == 0:
-                    job.status = cluster_pb2.JOB_STATE_SUCCEEDED
+                    job.transition_to(cluster_pb2.JOB_STATE_SUCCEEDED, exit_code=0)
                 else:
-                    job.status = cluster_pb2.JOB_STATE_FAILED
-                    job.error = f"Exit code: {result.exit_code}"
+                    job.transition_to(
+                        cluster_pb2.JOB_STATE_FAILED,
+                        error=f"Exit code: {result.exit_code}",
+                        exit_code=result.exit_code,
+                    )
 
             except asyncio.CancelledError:
                 # Task was cancelled (likely from kill_job)
-                job.status = cluster_pb2.JOB_STATE_KILLED
-                job.status_message = ""
-                job.finished_at_ms = int(time.time() * 1000)
+                job.transition_to(cluster_pb2.JOB_STATE_KILLED)
                 raise
             except Exception as e:
-                job.status = cluster_pb2.JOB_STATE_FAILED
-                job.status_message = ""
-                job.error = repr(e)
-                job.finished_at_ms = int(time.time() * 1000)
+                job.transition_to(cluster_pb2.JOB_STATE_FAILED, error=repr(e))
             finally:
                 # Cleanup: release ports, remove container, remove workdir (only if not already cleaned up)
                 if not job.cleanup_done:
@@ -315,9 +312,7 @@ class JobManager:
                 # Container may have already been removed or stopped
                 pass
 
-        job.status = cluster_pb2.JOB_STATE_KILLED
-        job.status_message = ""
-        job.finished_at_ms = int(time.time() * 1000)
+        job.transition_to(cluster_pb2.JOB_STATE_KILLED)
         return True
 
     async def _wait_for_termination(self, job: Job) -> None:
@@ -341,6 +336,15 @@ class JobManager:
             return []
 
         logs = []
+
+        # TODO: Log file access has a race condition - files may be deleted by cleanup
+        # while we're reading them. This is acceptable - we'll get FileNotFoundError
+        # if the file disappears, which is fine for this use case.
+
+        # TODO: Log timestamps are incorrect - they use the current time when get_logs()
+        # is called, not the actual time when the log was written. This makes time-based
+        # filtering meaningless. Should either prepend timestamps when writing logs or
+        # use Docker's --timestamps flag.
 
         # Read from STDOUT file
         stdout_file = job.workdir / "STDOUT"
@@ -368,7 +372,4 @@ class JobManager:
                         )
                     )
 
-        # Handle negative start_line (tail behavior)
-        if start_line < 0:
-            return logs[start_line:]
         return logs[start_line:]
