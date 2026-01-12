@@ -96,7 +96,7 @@ mixture_sft_config = SimpleSFTConfig(
     initialize_from_hf=longcontext_marin8b_checkpoint,
     train_batch_size=TRAIN_BATCH_SIZE,
     num_train_steps=NUM_TRAIN_STEPS,
-    learning_rate=1e-3,
+    learning_rate=3e-4,
     max_seq_len=16384,
     seed=0,
     steps_per_checkpoint=(total_examples/TRAIN_BATCH_SIZE)//4,  # Every quarter epoch
@@ -118,7 +118,7 @@ mixture_config = lm_mixture_data_config(
 )
 
 exp2199a2_redo4_sft_longcontext_marin_8b_openthoughts3 = default_sft(
-    name="exp2199a2_redo4_sft_longcontext_marin_8b_ot3_bsz512_lr1e_3",
+    name="exp2199a2_redo4_sft_longcontext_marin_8b_ot3_bsz512_lr3e_4",
     tokenized=mixture_config,
     model_config=llama_8b_64k,
     sft_config=mixture_sft_config,
