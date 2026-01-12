@@ -56,7 +56,7 @@ CODE_R1_USER_TEMPLATE = (
 )
 
 # Default timeout for code execution (seconds)
-CODE_EXECUTION_TIMEOUT = 5
+CODE_EXECUTION_TIMEOUT = 30
 
 # Code-R1 standard imports for LeetCode environment
 # Source: code-r1/examples/data_preprocess/coder1.py
