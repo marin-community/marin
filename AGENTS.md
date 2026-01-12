@@ -86,6 +86,7 @@ You don't generate comments that merely restate the code, e.g.
 
 - Always fix tests if you broke them.
 - Do not fix tests by relaxing tolerances or hacking around them.
+- Avoid “tautological” tests that merely restate implementation logic as asserts; prefer tests that validate externally-observable behavior, integration points, or realistic failure modes.
 - Run the appropriate tests for your changes (for example, `uv run pytest` under the relevant directory); consult subproject guides for preferred markers.
 - Use pytest features like fixtures and parameterization to avoid duplication and write clean code.
 

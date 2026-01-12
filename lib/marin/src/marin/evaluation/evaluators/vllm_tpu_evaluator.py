@@ -30,6 +30,7 @@ from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.evaluators.evaluator import Evaluator, ModelConfig
 from marin.utils import remove_tpu_lockfile_on_exit
 from marin.vllm.docker_server import (
+    DEFAULT_VLLM_DOCKER_IMAGE,
     VllmDockerServerConfig,
     start_vllm_docker_server,
     stop_vllm_docker_server_by_name,
@@ -53,6 +54,13 @@ class VllmTpuEvaluator(Evaluator, ABC):
     VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
 
     @staticmethod
+    def _resolve_vllm_mode(mode: Literal["native", "docker"] | None) -> Literal["native", "docker"]:
+        mode_str = (mode if mode is not None else os.environ.get("MARIN_VLLM_MODE", "docker")).lower()
+        if mode_str not in ("native", "docker"):
+            raise ValueError(f"Unknown MARIN_VLLM_MODE={mode_str!r}; expected 'native' or 'docker'.")
+        return mode_str  # type: ignore[return-value]
+
+    @staticmethod
     def _default_jax_compilation_cache_dir() -> str:
         marin_prefix = os.environ.get("MARIN_PREFIX")
         if marin_prefix:
@@ -66,6 +74,9 @@ class VllmTpuEvaluator(Evaluator, ABC):
         # architectures. flax_nnx currently fails without an auto mesh context, so
         # default to the vllm implementation unless the user overrides it.
         env.setdefault("MODEL_IMPL_TYPE", "vllm")
+        # Reduce TPU runtime logging noise by default (match training defaults).
+        env.setdefault("TPU_MIN_LOG_LEVEL", "5")
+        env.setdefault("TPU_STDERR_LOG_LEVEL", "5")
         env.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
         env.setdefault("JAX_COMPILATION_CACHE_DIR", VllmTpuEvaluator._default_jax_compilation_cache_dir())
         # vllm-tpu uses XLA compilation caches; this env var is the one it keys off.
@@ -136,71 +147,113 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
         model_name_or_path, model = VllmTpuEvaluator.resolve_model_name_or_path(model)
 
-        mode_str = (mode if mode is not None else os.environ.get("MARIN_VLLM_MODE", "docker")).lower()
-        if mode_str not in ("native", "docker"):
-            raise ValueError(f"Unknown MARIN_VLLM_MODE={mode_str!r}; expected 'native' or 'docker'.")
+        mode_str = VllmTpuEvaluator._resolve_vllm_mode(mode)
 
         engine_cli_args = VllmTpuEvaluator._engine_kwargs_to_cli_args(model.engine_kwargs)
         extra_cli_args = [*engine_cli_args, *(extra_args or [])]
 
         if mode_str == "docker":
-            resolved_image = docker_image or os.environ.get("MARIN_VLLM_DOCKER_IMAGE")
-            if not resolved_image:
-                raise RuntimeError(
-                    "MARIN_VLLM_DOCKER_IMAGE is required when MARIN_VLLM_MODE=docker. "
-                    "Set it to a vllm-tpu image tag, e.g. vllm/vllm-tpu:<tag>."
-                )
-
-            env: dict[str, str] = {
-                "TOKENIZERS_PARALLELISM": "false",
-                # See `_vllm_env`.
-                "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "vllm"),
-                "JAX_ENABLE_COMPILATION_CACHE": os.environ.get("JAX_ENABLE_COMPILATION_CACHE", "1"),
-                "JAX_COMPILATION_CACHE_DIR": os.environ.get(
-                    "JAX_COMPILATION_CACHE_DIR",
-                    VllmTpuEvaluator._default_jax_compilation_cache_dir(),
-                ),
-                "VLLM_XLA_CACHE_PATH": os.environ.get(
-                    "VLLM_XLA_CACHE_PATH",
-                    os.environ.get("JAX_COMPILATION_CACHE_DIR", VllmTpuEvaluator._default_jax_compilation_cache_dir()),
-                ),
-                "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": os.environ.get(
-                    "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1"
-                ),
-                "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": os.environ.get(
-                    "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2"
-                ),
-            }
-            explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
-            if explain_cache_misses is not None:
-                env["JAX_EXPLAIN_CACHE_MISSES"] = explain_cache_misses
-            for key in ("HF_TOKEN", "WANDB_API_KEY"):
-                value = os.environ.get(key)
-                if value:
-                    env[key] = value
-
-            docker_args = ["--privileged"]
-            if docker_run_args:
-                docker_args.extend(docker_run_args)
-
-            config = VllmDockerServerConfig(
-                image=resolved_image,
+            return VllmTpuEvaluator.start_vllm_docker_sidecar_in_background(
                 model_name_or_path=model_name_or_path,
                 host=host,
                 port=port,
-                env=env,
-                volumes=[("/tmp", "/tmp")],
-                extra_vllm_args=extra_cli_args,
-                docker_run_args=docker_args,
-            )
-            docker_handle = start_vllm_docker_server(config, timeout_seconds=timeout_seconds)
-            return VllmServerHandle(
-                server_url=docker_handle.server_url,
-                port=docker_handle.port,
-                mode="docker",
-                docker_container_name=docker_handle.container_name,
+                timeout_seconds=timeout_seconds,
+                extra_cli_args=extra_cli_args,
+                docker_image=docker_image,
+                docker_run_args=docker_run_args,
             )
 
+        return VllmTpuEvaluator.start_vllm_native_server_in_background(
+            model_name_or_path=model_name_or_path,
+            host=host,
+            port=port,
+            timeout_seconds=timeout_seconds,
+            extra_cli_args=extra_cli_args,
+        )
+
+    @staticmethod
+    def start_vllm_docker_sidecar_in_background(
+        *,
+        model_name_or_path: str,
+        host: str = "127.0.0.1",
+        port: int | None = None,
+        timeout_seconds: int = 3600,
+        extra_cli_args: list[str] | None = None,
+        docker_image: str | None = None,
+        docker_run_args: list[str] | None = None,
+    ) -> VllmServerHandle:
+        resolved_image = docker_image or os.environ.get("MARIN_VLLM_DOCKER_IMAGE") or DEFAULT_VLLM_DOCKER_IMAGE
+        if "MARIN_VLLM_DOCKER_IMAGE" not in os.environ and docker_image is None:
+            print(f"MARIN_VLLM_DOCKER_IMAGE not set; defaulting to {resolved_image}")
+
+        env: dict[str, str] = {
+            "TOKENIZERS_PARALLELISM": "false",
+            # See `_vllm_env`.
+            "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "vllm"),
+            "JAX_ENABLE_COMPILATION_CACHE": os.environ.get("JAX_ENABLE_COMPILATION_CACHE", "1"),
+            "JAX_COMPILATION_CACHE_DIR": os.environ.get(
+                "JAX_COMPILATION_CACHE_DIR",
+                VllmTpuEvaluator._default_jax_compilation_cache_dir(),
+            ),
+            "VLLM_XLA_CACHE_PATH": os.environ.get(
+                "VLLM_XLA_CACHE_PATH",
+                os.environ.get("JAX_COMPILATION_CACHE_DIR", VllmTpuEvaluator._default_jax_compilation_cache_dir()),
+            ),
+            "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": os.environ.get(
+                "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1"
+            ),
+            "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": os.environ.get(
+                "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2"
+            ),
+        }
+        explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
+        if explain_cache_misses is not None:
+            env["JAX_EXPLAIN_CACHE_MISSES"] = explain_cache_misses
+        env["TPU_MIN_LOG_LEVEL"] = os.environ.get("TPU_MIN_LOG_LEVEL", "5")
+        env["TPU_STDERR_LOG_LEVEL"] = os.environ.get("TPU_STDERR_LOG_LEVEL", "5")
+        for key in ("HF_TOKEN", "WANDB_API_KEY"):
+            value = os.environ.get(key)
+            if value:
+                env[key] = value
+
+        docker_args = ["--privileged"]
+        if not any(arg.startswith("--shm-size") for arg in docker_run_args or []):
+            docker_args.append("--shm-size=200gb")
+        if docker_run_args:
+            docker_args.extend(docker_run_args)
+
+        config = VllmDockerServerConfig(
+            image=resolved_image,
+            model_name_or_path=model_name_or_path,
+            host=host,
+            port=port,
+            env=env,
+            volumes=[("/tmp", "/tmp")],
+            extra_vllm_args=list(extra_cli_args or []),
+            docker_run_args=docker_args,
+        )
+        print(
+            "Starting vLLM Docker sidecar with "
+            f"TPU_MIN_LOG_LEVEL={env.get('TPU_MIN_LOG_LEVEL')} "
+            f"TPU_STDERR_LOG_LEVEL={env.get('TPU_STDERR_LOG_LEVEL')}"
+        )
+        docker_handle = start_vllm_docker_server(config, timeout_seconds=timeout_seconds)
+        return VllmServerHandle(
+            server_url=docker_handle.server_url,
+            port=docker_handle.port,
+            mode="docker",
+            docker_container_name=docker_handle.container_name,
+        )
+
+    @staticmethod
+    def start_vllm_native_server_in_background(
+        *,
+        model_name_or_path: str,
+        host: str = "127.0.0.1",
+        port: int | None = None,
+        timeout_seconds: int = 3600,
+        extra_cli_args: list[str] | None = None,
+    ) -> VllmServerHandle:
         resolved_port = port if port is not None else 8000
 
         vllm_bin = shutil.which("vllm") or "vllm"
@@ -213,7 +266,7 @@ class VllmTpuEvaluator(Evaluator, ABC):
             host,
             "--port",
             str(resolved_port),
-            *extra_cli_args,
+            *(extra_cli_args or []),
         ]
 
         log_dir = tempfile.mkdtemp(prefix="vllm_server_")
@@ -221,7 +274,13 @@ class VllmTpuEvaluator(Evaluator, ABC):
         stderr_path = os.path.join(log_dir, "stderr.log")
         stdout_f = open(stdout_path, "w")
         stderr_f = open(stderr_path, "w")
-        process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=VllmTpuEvaluator._vllm_env())
+        native_env = VllmTpuEvaluator._vllm_env()
+        print(
+            "Starting vLLM native server with "
+            f"TPU_MIN_LOG_LEVEL={native_env.get('TPU_MIN_LOG_LEVEL')} "
+            f"TPU_STDERR_LOG_LEVEL={native_env.get('TPU_STDERR_LOG_LEVEL')}"
+        )
+        process = subprocess.Popen(cmd, stdout=stdout_f, stderr=stderr_f, text=True, env=native_env)
 
         server_url: str = f"http://{host}:{resolved_port}/v1"
         start_time: float = time.time()

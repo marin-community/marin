@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 
 import requests
 
+DEFAULT_VLLM_DOCKER_IMAGE: str = "vllm/vllm-tpu:nightly-20260104-4a1e25b-0d4044e"
+
 _SENSITIVE_ENV_KEYS = frozenset(
     {
         "HF_TOKEN",

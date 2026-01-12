@@ -30,15 +30,15 @@ docker:
       - --privileged
       - --ulimit memlock=-1:-1  #
       - --ulimit nofile=1048576:1048576
-      - --shm-size=100gb
+      - --shm-size=200gb
       - -v
       - "/tmp:/tmp"
       - -e MARIN_PREFIX=gs://{{BUCKET}}
       - -e BUCKET={{BUCKET}}
       - -e MARIN_LOCAL_CACHE_DIR=/tmp/marin-cache
       - -e AUTOSCALER_HEARTBEAT_TIMEOUT_S=600
-      - -e TPU_MIN_LOG_LEVEL=3
-      - -e TPU_STDERR_LOG_LEVEL=3
+      - -e TPU_MIN_LOG_LEVEL=5
+      - -e TPU_STDERR_LOG_LEVEL=5
       - -e TPU_LOG_DIR=disabled
       # this lets the worker run docker commands and have them run as sibling containers
       - -v "/var/run/docker.sock:/var/run/docker.sock"
@@ -55,8 +55,8 @@ docker:
       - -e BUCKET={{BUCKET}}
       - -e MARIN_LOCAL_CACHE_DIR=/tmp/marin-cache
       - -e AUTOSCALER_HEARTBEAT_TIMEOUT_S=600
-      - -e TPU_MIN_LOG_LEVEL=3
-      - -e TPU_STDERR_LOG_LEVEL=3
+      - -e TPU_MIN_LOG_LEVEL=5
+      - -e TPU_STDERR_LOG_LEVEL=5
       - -e TPU_LOG_DIR=disabled
 {% if RAY_AUTH_MODE == "token" %}
       - -e RAY_AUTH_MODE=token
