@@ -35,7 +35,7 @@ from marin.execution.executor import ExecutorStep, InputName, output_path_of
 from marin.processing.tokenize import add_validation_sets_to_mixture, lm_data_config
 from marin.speedrun.paloma_local_download import speedrun_paloma_tokenized
 from marin.training.training import TrainLmOnPodConfig
-from marin.utilities.wandb_utils import WANDB_ENTITY, WANDB_PROJECT
+from marin.utilities.wandb_utils import WANDB_PROJECT
 from marin.utils import asdict_excluding
 
 import wandb
@@ -208,8 +208,10 @@ class SpeedrunResultsConfig:
 ### Utils and analysis functions ###
 
 
-def get_step_times_from_wandb(run_id: str, entity: str = WANDB_ENTITY, project: str = WANDB_PROJECT) -> list[float]:
+def get_step_times_from_wandb(run_id: str, entity: str | None = None, project: str = WANDB_PROJECT) -> list[float]:
     try:
+        if entity is None:
+            entity = wandb.Api().default_entity
         run = wandb.Api().run(f"{entity}/{project}/{run_id}")
         return [
             row["throughput/duration"]
@@ -398,7 +400,7 @@ def default_speedrun(
         and train_step.config.train_config.trainer
         and train_step.config.train_config.trainer.tracker
     ):
-        wandb_entity = train_step.config.train_config.trainer.tracker.entity or WANDB_ENTITY
+        wandb_entity = train_step.config.train_config.trainer.tracker.entity or wandb.Api().default_entity
         wandb_project = train_step.config.train_config.trainer.tracker.project or WANDB_PROJECT
 
         # (Nikil) this is a hack (the ExecutorStep isn't populated when using an override path, so can't get configs when
