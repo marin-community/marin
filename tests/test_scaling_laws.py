@@ -100,7 +100,7 @@ def test_candidate_configs_within_tolerance():
     for candidate in recipe.candidate_configs(budget, seq_len, flop_tolerance=flop_tolerance):
         # Compute training schedule from recipe (vocab_size is owned by recipe)
         batch_size, train_steps = recipe.compute_training_schedule(candidate, seq_len)
-        model_config = recipe.build_model_config(candidate.target_params, seq_len)
+        model_config = candidate.model_config
         achieved = compute_training_flops(
             model_config,
             recipe.vocab_size,

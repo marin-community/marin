@@ -286,60 +286,6 @@ class Marin2025Recipe:
             return self.large_budget_step_size
         return self.small_budget_step_size
 
-    def _compute_params_for_hidden_size(self, hidden_size: int) -> int:
-        """Compute approximate parameter count for a given hidden size."""
-        num_layers = self.compute_num_layers(hidden_size)
-        intermediate_dim = hidden_size * self.mlp_ratio
-        n_heads = max(1, hidden_size // self.hidden_head_ratio)
-        head_size = hidden_size // n_heads
-
-        embed_params = self.vocab_size * hidden_size * 2
-        q_proj = hidden_size * head_size * n_heads
-        kv_proj = 2 * hidden_size * head_size * n_heads
-        o_proj = head_size * n_heads * hidden_size
-        attn_params = q_proj + kv_proj + o_proj
-        mlp_params = 3 * hidden_size * intermediate_dim
-        norm_params = 2 * hidden_size
-        layer_params = attn_params + mlp_params + norm_params
-        total_layer_params = num_layers * layer_params
-        final_norm = hidden_size
-
-        return embed_params + total_layer_params + final_norm
-
-    def hidden_size_for_params(self, target_params: int) -> int:
-        """Find the hidden size that gives approximately target_params."""
-        min_hidden = 2**self.min_hidden_pow
-        max_hidden = 2**self.max_hidden_pow
-
-        best_hidden = min_hidden
-        best_diff = abs(self._compute_params_for_hidden_size(min_hidden) - target_params)
-
-        for hidden_size in range(min_hidden, max_hidden + 1, 64):
-            params = self._compute_params_for_hidden_size(hidden_size)
-            diff = abs(params - target_params)
-            if diff < best_diff:
-                best_diff = diff
-                best_hidden = hidden_size
-
-        return best_hidden
-
-    def build_model_config(self, target_params: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
-        """Build a Qwen3 model config for a target parameter count."""
-        hidden_size = self.hidden_size_for_params(target_params)
-        num_layers = self.compute_num_layers(hidden_size)
-        intermediate_dim = hidden_size * self.mlp_ratio
-        n_heads = max(1, hidden_size // self.hidden_head_ratio)
-
-        return Qwen3Config(
-            hidden_dim=hidden_size,
-            intermediate_dim=intermediate_dim,
-            num_layers=num_layers,
-            num_heads=n_heads,
-            num_kv_heads=n_heads,
-            max_seq_len=seq_len,
-            rope=Llama3RotaryEmbeddingsConfig(),
-        )
-
     def _build_model_config_from_hidden_size(self, hidden_size: int, seq_len: int = DEFAULT_SEQ_LEN) -> LlamaConfig:
         """Build model config from hidden_size directly."""
         num_layers = self.compute_num_layers(hidden_size)
@@ -365,11 +311,10 @@ class Marin2025Recipe:
         fudge_factor: float = 2.0,
     ) -> int:
         """Estimate float32 memory usage in bytes for training."""
-        hidden_size = self.hidden_size_for_params(candidate.target_params)
-        model_config = self._build_model_config_from_hidden_size(hidden_size, seq_len)
+        model_config = candidate.model_config
         batch_size, _ = self.compute_training_schedule(candidate, seq_len)
 
-        param_count = self._compute_params_for_hidden_size(hidden_size)
+        param_count = model_config.total_trainable_params(self.vocab_size)
         param_bytes = param_count * optim_mult * dtype_size
         act_bytes = (batch_size * model_config.max_seq_len) * (
             (model_config.hidden_dim * model_config.num_layers) + self.vocab_size * fudge_factor
@@ -377,11 +322,9 @@ class Marin2025Recipe:
         total_bytes = param_bytes + act_bytes
         return int(total_bytes * fudge_factor)
 
-    def compute_training_schedule(
-        self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN
-    ) -> tuple[int, int]:
+    def compute_training_schedule(self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN) -> tuple[int, int]:
         """Compute training schedule (batch_size, train_steps) for a candidate."""
-        hidden_size = self.hidden_size_for_params(candidate.target_params)
+        hidden_size = candidate.model_config.hidden_dim
 
         # Start with batch_size that gives us ~DEFAULT_STEPS_PER_RUN steps for the tokens
         target_steps = DEFAULT_STEPS_PER_RUN
@@ -403,12 +346,10 @@ class Marin2025Recipe:
 
         return (batch_size, train_steps)
 
-    def build_optimizer_config(
-        self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN
-    ) -> OptimizerConfig:
+    def build_optimizer_config(self, candidate: CandidateConfig, seq_len: int = DEFAULT_SEQ_LEN) -> OptimizerConfig:
         """Build optimizer config for a candidate."""
         batch_size, _ = self.compute_training_schedule(candidate, seq_len)
-        hidden_size = self.hidden_size_for_params(candidate.target_params)
+        hidden_size = candidate.model_config.hidden_dim
         learning_rate = self._compute_learning_rate(batch_size, hidden_size)
         beta2 = self._compute_beta2(batch_size)
 
@@ -435,9 +376,8 @@ class Marin2025Recipe:
     ) -> Iterator[CandidateConfig]:
         """Yield candidate configurations within the FLOP budget.
 
-        Iterates over hidden sizes, computes batch_size to hit the FLOP budget,
-        validates constraints (LR, min batch size), and yields CandidateConfigs
-        for valid configurations.
+        Iterates over feasible model architectures, computes tokens to hit the
+        FLOP budget, and yields CandidateConfigs with the model_config directly.
         """
         step_size = self._get_step_size(budget)
         min_hidden = 2**self.min_hidden_pow
@@ -469,11 +409,9 @@ class Marin2025Recipe:
                 continue
 
             tokens = batch_size * train_steps * seq_len
-            target_params = self._compute_params_for_hidden_size(hidden_size)
 
-            # Yield simplified CandidateConfig (without batch_size/train_steps)
             yield CandidateConfig(
-                target_params=target_params,
+                model_config=model_config,
                 tokens=tokens,
                 flops_budget=budget,
             )
@@ -646,8 +584,8 @@ def create_isoflop_sweep_steps(
     for args in train_args_list:
         candidate = args.candidate
 
-        # Build model and optimizer configs using the recipe (vocab_size is owned by recipe)
-        model_config = recipe.build_model_config(candidate.target_params, seq_len)
+        # Model config is on the candidate; build optimizer config using the recipe
+        model_config = candidate.model_config
         optimizer_config = recipe.build_optimizer_config(candidate, seq_len)
         tpu_type = pick_v5p_type(candidate, seq_len, recipe)
 
