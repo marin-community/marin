@@ -115,6 +115,7 @@ class WorkerDashboard:
         self._host = host
         self._port = port
         self._app = self._create_app()
+        self._server = None
 
     @property
     def port(self) -> int:
@@ -263,5 +264,10 @@ class WorkerDashboard:
         import uvicorn
 
         config = uvicorn.Config(self._app, host=self._host, port=self._port)
-        server = uvicorn.Server(config)
-        await server.serve()
+        self._server = uvicorn.Server(config)
+        await self._server.serve()
+
+    async def shutdown(self) -> None:
+        """Gracefully shutdown the server."""
+        if self._server:
+            self._server.should_exit = True

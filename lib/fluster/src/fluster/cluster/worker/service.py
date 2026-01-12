@@ -135,12 +135,22 @@ class WorkerServiceImpl:
         _ctx: RequestContext,
     ) -> cluster_pb2.Empty:
         """Kill running job."""
+        # Check if job exists first
+        job = self._manager.get_job(request.job_id)
+        if not job:
+            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found")
+
         success = await self._manager.kill_job(
             request.job_id,
             term_timeout_ms=request.term_timeout_ms or 5000,
         )
         if not success:
-            raise ConnectError(Code.NOT_FOUND, f"Job {request.job_id} not found or not running")
+            # Job exists but is already in terminal state
+            state_name = cluster_pb2.JobState.Name(job.status)
+            raise ConnectError(
+                Code.FAILED_PRECONDITION,
+                f"Job {request.job_id} already completed with state {state_name}",
+            )
         return cluster_pb2.Empty()
 
     async def health_check(

@@ -89,7 +89,8 @@ class BuildResult:
 
 DOCKERFILE_TEMPLATE = """FROM {base_image}
 
-# Install UV
+# Install git (required for git-based dependencies) and UV
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Configure UV
