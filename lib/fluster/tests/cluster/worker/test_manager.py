@@ -239,7 +239,7 @@ def create_test_entrypoint():
     class Entrypoint:
         callable: object
         args: tuple = ()
-        kwargs: dict = None
+        kwargs: dict | None = None
 
         def __post_init__(self):
             if self.kwargs is None:
@@ -295,7 +295,7 @@ async def test_submit_job_returns_job_id(job_manager):
 
 
 @pytest.mark.asyncio
-async def test_job_lifecycle_phases(job_manager, mock_runtime):
+async def test_job_lifecycle_phases(job_manager):
     """Test job transitions through PENDING → BUILDING → RUNNING → SUCCEEDED."""
     request = create_run_job_request()
     job_id = await job_manager.submit_job(request)

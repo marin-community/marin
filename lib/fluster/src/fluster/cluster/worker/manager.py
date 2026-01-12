@@ -223,7 +223,7 @@ class JobManager:
         )
         return ["python", "-c", cmd]
 
-    def _parse_memory(self, memory_str: str) -> int | None:
+    def _parse_memory(self, memory_str: str | None) -> int | None:
         """Parse memory string like '8g' to MB."""
         if not memory_str:
             return None
