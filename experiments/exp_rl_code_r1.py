@@ -84,7 +84,7 @@ def create_code_curriculum(run_id: str, experiment_config: RLExperimentConfig) -
 
     return CurriculumConfig(
         lessons=lessons,
-        eval_frequency=1,  # Run HumanEvalPlus eval after every step
+        eval_frequency=10,  # Run HumanEvalPlus eval after every 10 steps
         micro_eval_frequency=9999999,  # Disable micro-eval
         actor_name=f"curriculum-{run_id}",
         eval_n_examples=164,  # HumanEvalPlus has 164 problems
