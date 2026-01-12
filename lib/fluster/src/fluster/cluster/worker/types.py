@@ -1,0 +1,39 @@
+# Copyright 2025 The Marin Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Internal worker types for job tracking."""
+
+import asyncio
+from dataclasses import dataclass, field
+
+from fluster import cluster_pb2
+
+
+@dataclass
+class Job:
+    """Internal job tracking state."""
+
+    job_id: str
+    request: cluster_pb2.RunJobRequest
+    status: int = cluster_pb2.JOB_STATE_PENDING
+    exit_code: int | None = None
+    error: str | None = None
+    started_at_ms: int | None = None
+    finished_at_ms: int | None = None
+    ports: dict[str, int] = field(default_factory=dict)
+
+    # Internals
+    container_id: str | None = None
+    log_queue: asyncio.Queue | None = None
+    task: asyncio.Task | None = None
