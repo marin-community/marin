@@ -145,7 +145,8 @@ def execute_code_with_tests(
         full_code = f"{code}\n\n{test_cases}\n\ncheck({entry_point})"
     else:
         # LeetCode style: tests are self-contained calls
-        full_code = f"{code}\n\n{test_cases}"
+        # Prepend typing imports as LeetCode solutions often use them
+        full_code = f"from typing import *\n{code}\n\n{test_cases}"
 
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
@@ -306,7 +307,7 @@ class CodeR1Env(MarinEnv):
             test_cases = item["test"]
             solution = item.get("completion")
             difficulty = item.get("difficulty")
-            entry_point = None  # LeetCode usually self-contained in 'test'
+            entry_point = item.get("entry_point")
             example_id = item.get("task_id", example_id)
         elif "content" in item:
             # LeetCodeDataset format (old schema/fallback)
