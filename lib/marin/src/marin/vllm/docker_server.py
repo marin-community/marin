@@ -225,8 +225,10 @@ def start_vllm_docker_server(
             if response.status_code == 200:
                 return handle
         except requests.ConnectionError:
+            # Server not ready yet.
             pass
         except requests.Timeout:
+            # Server not ready yet.
             pass
 
         elapsed_time = time.time() - start_time

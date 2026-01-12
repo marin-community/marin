@@ -453,8 +453,14 @@ class Context:
 
 
 def _maybe_add_ray_verbose(ctx: Context, cmd_args: list[str]) -> list[str]:
-    """Add `-v` to Ray CLI commands when cluster.py verbose mode is enabled."""
+    """Add `-v` to Ray CLI commands when cluster.py verbose mode is enabled.
+
+    Most Ray CLI invocations here are of the form `["ray", "<subcommand>", ...]`.
+    We insert `-v` after the subcommand (e.g. `ray up -v ...`) since Ray exposes per-subcommand verbose flags.
+    """
     if ctx.verbose:
+        if len(cmd_args) < 2:
+            return cmd_args
         return [*cmd_args[:2], "-v", *cmd_args[2:]]
     return cmd_args
 
