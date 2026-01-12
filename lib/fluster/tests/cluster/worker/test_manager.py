@@ -68,7 +68,7 @@ async def test_no_port_reuse_before_release(allocator):
 
 
 @pytest.mark.asyncio
-async def test_ports_reused_after_release(allocator):
+async def test_ports_reused_after_release():
     """Test that ports can be reused after release."""
     # Allocate all available ports in a small range
     allocator_small = PortAllocator(port_range=(40000, 40003))
@@ -104,7 +104,7 @@ async def test_release_partial_ports(allocator):
 
 
 @pytest.mark.asyncio
-async def test_exhausted_port_range(allocator):
+async def test_exhausted_port_range():
     """Test behavior when port range is exhausted."""
     allocator_tiny = PortAllocator(port_range=(40000, 40002))
 
