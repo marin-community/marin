@@ -53,12 +53,26 @@ class VllmTpuEvaluator(Evaluator, ABC):
     VLLM_NATIVE_PIP_PACKAGES: tuple[str, ...] = ("vllm-tpu",)
 
     @staticmethod
+    def _default_jax_compilation_cache_dir() -> str:
+        marin_prefix = os.environ.get("MARIN_PREFIX")
+        if marin_prefix:
+            return os.path.join(marin_prefix, "compilation-cache")
+        return "/tmp/marin-jax-compilation-cache"
+
+    @staticmethod
     def _vllm_env() -> dict[str, str]:
         env = dict(os.environ)
         # tpu_inference defaults MODEL_IMPL_TYPE=auto, which selects flax_nnx for many
         # architectures. flax_nnx currently fails without an auto mesh context, so
         # default to the vllm implementation unless the user overrides it.
         env.setdefault("MODEL_IMPL_TYPE", "vllm")
+        env.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
+        env.setdefault("JAX_COMPILATION_CACHE_DIR", VllmTpuEvaluator._default_jax_compilation_cache_dir())
+        # vllm-tpu uses XLA compilation caches; this env var is the one it keys off.
+        env.setdefault("VLLM_XLA_CACHE_PATH", env["JAX_COMPILATION_CACHE_DIR"])
+        # Cache aggressively for iterative bring-up workflows.
+        env.setdefault("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1")
+        env.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2")
         return env
 
     @staticmethod
@@ -88,6 +102,9 @@ class VllmTpuEvaluator(Evaluator, ABC):
         load_format = engine_kwargs.get("load_format")
         if isinstance(load_format, str):
             args.extend(["--load-format", load_format])
+        max_model_len = engine_kwargs.get("max_model_len")
+        if isinstance(max_model_len, int) and max_model_len > 0:
+            args.extend(["--max-model-len", str(max_model_len)])
         return args
 
     @staticmethod
@@ -136,8 +153,27 @@ class VllmTpuEvaluator(Evaluator, ABC):
 
             env: dict[str, str] = {
                 "TOKENIZERS_PARALLELISM": "false",
+                # See `_vllm_env`.
                 "MODEL_IMPL_TYPE": os.environ.get("MODEL_IMPL_TYPE", "vllm"),
+                "JAX_ENABLE_COMPILATION_CACHE": os.environ.get("JAX_ENABLE_COMPILATION_CACHE", "1"),
+                "JAX_COMPILATION_CACHE_DIR": os.environ.get(
+                    "JAX_COMPILATION_CACHE_DIR",
+                    VllmTpuEvaluator._default_jax_compilation_cache_dir(),
+                ),
+                "VLLM_XLA_CACHE_PATH": os.environ.get(
+                    "VLLM_XLA_CACHE_PATH",
+                    os.environ.get("JAX_COMPILATION_CACHE_DIR", VllmTpuEvaluator._default_jax_compilation_cache_dir()),
+                ),
+                "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES": os.environ.get(
+                    "JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "-1"
+                ),
+                "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS": os.environ.get(
+                    "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "2"
+                ),
             }
+            explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
+            if explain_cache_misses is not None:
+                env["JAX_EXPLAIN_CACHE_MISSES"] = explain_cache_misses
             for key in ("HF_TOKEN", "WANDB_API_KEY"):
                 value = os.environ.get(key)
                 if value:

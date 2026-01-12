@@ -44,3 +44,8 @@ def test_vllm_auto_enables_streaming_for_gcs_paths() -> None:
     assert model.engine_kwargs["load_format"] == "runai_streamer"
     assert model_name_or_path == "gs://bucket/some-model"
     assert model.downloaded_to is None
+
+
+def test_engine_kwargs_to_cli_args_threads_max_model_len() -> None:
+    args = VllmTpuEvaluator._engine_kwargs_to_cli_args({"max_model_len": 8192})
+    assert args == ["--max-model-len", "8192"]

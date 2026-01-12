@@ -16,7 +16,9 @@ import argparse
 import json
 import os
 import sys
+import time
 from typing import Literal
+from urllib.parse import urlparse
 
 import requests
 from fray.cluster import Entrypoint, EnvironmentConfig, JobRequest, ResourceConfig, current_cluster
@@ -43,10 +45,24 @@ def run_one_query(
     *,
     model_name_or_path: str,
     prompt: str,
+    load_format: str | None,
+    max_model_len: int | None,
     mode: Literal["docker", "native"] | None,
     docker_image: str | None,
 ) -> str:
-    model = ModelConfig(name=model_name_or_path, path=None, engine_kwargs={})
+    parsed = urlparse(model_name_or_path)
+    is_object_store = parsed.scheme in {"gs", "s3"}
+    engine_kwargs: dict = {}
+    if load_format is not None:
+        engine_kwargs["load_format"] = load_format
+    if max_model_len is not None:
+        engine_kwargs["max_model_len"] = max_model_len
+
+    if is_object_store:
+        model = ModelConfig(name="smoke-test-model", path=model_name_or_path, engine_kwargs=engine_kwargs)
+    else:
+        model = ModelConfig(name=model_name_or_path, path=None, engine_kwargs=engine_kwargs)
+
     vllm_server: VllmServerHandle | None = None
     try:
         vllm_server = VllmTpuEvaluator.start_vllm_server_in_background(
@@ -84,8 +100,34 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Smoke-test vLLM TPU Docker sidecar via OpenAI-compatible HTTP API.")
     parser.add_argument(
         "--model",
-        default="/opt/gcsfuse_mount/models/meta-llama--Llama-3-3-1B-Instruct",
-        help="Model path or HF repo id (default: Llama 3.3 1B path under /opt/gcsfuse_mount).",
+        required=True,
+        help="Model identifier: HF repo id (e.g. meta-llama/Llama-3.3-8B-Instruct) or object-store path (gs://... or s3://...).",
+    )
+    parser.add_argument(
+        "--load-format",
+        choices=["runai_streamer", "runai_streamer_sharded"],
+        default=None,
+        help="Optional vLLM load format (recommended for gs:// or s3://). Defaults to evaluator auto-selection.",
+    )
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=8192,
+        help="Max model sequence length to configure vLLM with (default: 8192).",
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Number of times to start/stop vLLM and run the query (default: 1). Useful for cache validation.",
+    )
+    parser.add_argument(
+        "--local-cache-dir",
+        default=None,
+        help=(
+            "Optional stable local compilation cache dir (e.g. /tmp/marin-jax-compilation-cache). "
+            "When set, exports JAX_COMPILATION_CACHE_DIR and VLLM_XLA_CACHE_PATH."
+        ),
     )
     parser.add_argument("--prompt", default="Write a short haiku about TPUs.", help="Prompt to send.")
     parser.add_argument(
@@ -111,14 +153,27 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.repeat < 1:
+        raise ValueError("--repeat must be >= 1")
+
     if args.local:
-        output = run_one_query(
-            model_name_or_path=args.model,
-            prompt=args.prompt,
-            mode=args.mode,
-            docker_image=args.docker_image,
-        )
-        print(output)
+        if args.local_cache_dir is not None:
+            os.environ["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
+            os.environ["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
+
+        for i in range(args.repeat):
+            start = time.time()
+            output = run_one_query(
+                model_name_or_path=args.model,
+                prompt=args.prompt,
+                load_format=args.load_format,
+                max_model_len=args.max_model_len,
+                mode=args.mode,
+                docker_image=args.docker_image,
+            )
+            elapsed = time.time() - start
+            print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
+            print(output)
         return 0
 
     mode_str = (args.mode if args.mode is not None else os.environ.get("MARIN_VLLM_MODE", "docker")).lower()
@@ -130,16 +185,25 @@ def main(argv: list[str] | None = None) -> int:
         env_vars["MARIN_VLLM_MODE"] = args.mode
     if args.docker_image is not None:
         env_vars["MARIN_VLLM_DOCKER_IMAGE"] = args.docker_image
+    if args.local_cache_dir is not None:
+        env_vars["JAX_COMPILATION_CACHE_DIR"] = args.local_cache_dir
+        env_vars["VLLM_XLA_CACHE_PATH"] = args.local_cache_dir
 
     def _run() -> None:
         with remove_tpu_lockfile_on_exit():
-            output = run_one_query(
-                model_name_or_path=args.model,
-                prompt=args.prompt,
-                mode=args.mode,
-                docker_image=args.docker_image,
-            )
-            print(output)
+            for i in range(args.repeat):
+                start = time.time()
+                output = run_one_query(
+                    model_name_or_path=args.model,
+                    prompt=args.prompt,
+                    load_format=args.load_format,
+                    max_model_len=args.max_model_len,
+                    mode=args.mode,
+                    docker_image=args.docker_image,
+                )
+                elapsed = time.time() - start
+                print(f"[run {i + 1}/{args.repeat}] {elapsed:.1f}s")
+                print(output)
 
     cluster = current_cluster()
     resources = ResourceConfig.with_tpu(args.tpu_type)
