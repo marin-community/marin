@@ -75,8 +75,8 @@ class VllmTpuEvaluator(Evaluator, ABC):
         # default to the vllm implementation unless the user overrides it.
         env.setdefault("MODEL_IMPL_TYPE", "vllm")
         # Reduce TPU runtime logging noise by default (match training defaults).
-        env.setdefault("TPU_MIN_LOG_LEVEL", "5")
-        env.setdefault("TPU_STDERR_LOG_LEVEL", "5")
+        env.setdefault("TPU_MIN_LOG_LEVEL", "3")
+        env.setdefault("TPU_STDERR_LOG_LEVEL", "3")
         env.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
         env.setdefault("JAX_COMPILATION_CACHE_DIR", VllmTpuEvaluator._default_jax_compilation_cache_dir())
         # vllm-tpu uses XLA compilation caches; this env var is the one it keys off.
@@ -209,8 +209,8 @@ class VllmTpuEvaluator(Evaluator, ABC):
         explain_cache_misses = os.environ.get("JAX_EXPLAIN_CACHE_MISSES")
         if explain_cache_misses is not None:
             env["JAX_EXPLAIN_CACHE_MISSES"] = explain_cache_misses
-        env["TPU_MIN_LOG_LEVEL"] = os.environ.get("TPU_MIN_LOG_LEVEL", "5")
-        env["TPU_STDERR_LOG_LEVEL"] = os.environ.get("TPU_STDERR_LOG_LEVEL", "5")
+        env["TPU_MIN_LOG_LEVEL"] = os.environ.get("TPU_MIN_LOG_LEVEL", "3")
+        env["TPU_STDERR_LOG_LEVEL"] = os.environ.get("TPU_STDERR_LOG_LEVEL", "3")
         for key in ("HF_TOKEN", "WANDB_API_KEY"):
             value = os.environ.get(key)
             if value:
