@@ -209,18 +209,14 @@ class SpeedrunResultsConfig:
 
 
 def get_step_times_from_wandb(run_id: str, entity: str | None = None, project: str = WANDB_PROJECT) -> list[float]:
-    try:
-        if entity is None:
-            entity = wandb.Api().default_entity
-        run = wandb.Api().run(f"{entity}/{project}/{run_id}")
-        return [
-            row["throughput/duration"]
-            for row in run.scan_history(keys=["throughput/duration"])
-            if "throughput/duration" in row
-        ]
-    except Exception as e:
-        logger.error(f"Failed to fetch step times: {e}")
-        return []
+    if entity is None:
+        entity = wandb.Api().default_entity
+    run = wandb.Api().run(f"{entity}/{project}/{run_id}")
+    return [
+        row["throughput/duration"]
+        for row in run.scan_history(keys=["throughput/duration"])
+        if "throughput/duration" in row
+    ]
 
 
 def speedrun_results(config: SpeedrunResultsConfig):
@@ -231,8 +227,10 @@ def speedrun_results(config: SpeedrunResultsConfig):
 
     step_times = get_step_times_from_wandb(run_id=wandb_run_id, entity=config.wandb_entity, project=config.wandb_project)
     if not step_times:
-        logger.error("No step times available; analysis aborted.")
-        return
+        raise ValueError(
+            f"No step times found for run '{config.wandb_entity}/{config.wandb_project}/{wandb_run_id}'. "
+            "Ensure the run logged 'throughput/duration' metrics."
+        )
 
     model_flops = config.speedrun_config.compute_model_flops()
     model_size = config.speedrun_config.model_config.total_trainable_params(config.speedrun_config.vocab_size)
