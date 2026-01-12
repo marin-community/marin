@@ -41,6 +41,16 @@ import argparse
 import asyncio
 import dataclasses
 import logging
+import os
+
+# Initialize JAX distributed BEFORE any JAX-related imports
+# This must happen before importing levanter modules that trigger JAX backend initialization
+import jax
+from jax._src import clusters
+# Check if we're in a distributed environment (TPU pod, Slurm, etc.)
+_is_distributed = any(env.is_env_present() for env in clusters.ClusterEnv._cluster_types)
+if _is_distributed:
+    jax.distributed.initialize()
 
 import jmp  # For mixed precision policy
 
@@ -69,7 +79,7 @@ def parse_args():
     parser.add_argument(
         "--train_data",
         type=str,
-        default="./output",
+        default="gs://marin-vlm/stage1_sharded/*.parquet",
         help="Path to training data. Can be: a single parquet file, a directory containing parquet files, "
         "or a glob pattern (e.g., '/path/to/*.parquet')",
     )
@@ -130,7 +140,7 @@ def parse_args():
     parser.add_argument(
         "--epoch",
         type=int,
-        default=1,
+        default=0,
         help="Number of epochs to train (default: 1). If 0, train indefinitely until num_train_steps is reached. "
         "If > 0, dataset will cycle through the data for the specified number of epochs.",
     )
@@ -403,13 +413,19 @@ def main():
     logger.info(f"  Gradient checkpointing: {not args.no_gradient_checkpointing}")
     logger.info("-" * 60)
 
+    # Helper to format data URLs - don't add file:// if already has a scheme
+    def format_data_url(path: str) -> str:
+        if path.startswith(("gs://", "s3://", "http://", "https://", "file://")):
+            return path
+        return f"file://{path}"
+
     # Create data config
     data_config = ImageMixtureDatasetConfig(
         cache_dir=args.cache_dir,
         configs={
             "train": ConversationDatasetSourceConfig(
-                train_urls=[f"file://{args.train_data}"],
-                validation_urls=[f"file://{args.val_data}"],
+                train_urls=[format_data_url(args.train_data)],
+                validation_urls=[format_data_url(args.val_data)],
                 cache_dir=f"{args.cache_dir}/train",
             ),
         },

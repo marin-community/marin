@@ -18,6 +18,7 @@ import os
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import PurePath
+from typing import Generic, TypeVar
 
 import draccus
 import levanter.infra.cli_helpers
@@ -31,20 +32,24 @@ from fray.cluster import (
     current_cluster,
 )
 from google.api_core.exceptions import Forbidden as GcpForbiddenException
-from levanter.main import train_lm
+from levanter.main import train_lm, train_vlm
 from levanter.main.train_lm import TrainLmConfig
+from levanter.main.train_vlm import TrainVLMConfig
 from mergedeep import mergedeep
 
 from marin.utilities.gcs_utils import get_bucket_location, get_vm_region
 
 logger = logging.getLogger(__name__)
 
+# Type variable for training configs
+TrainConfigT = TypeVar("TrainConfigT", TrainLmConfig, TrainVLMConfig)
+
 
 @dataclass(frozen=True)
-class TrainLmOnPodConfig:
-    """Configuration for language model training on a pod."""
+class TrainOnPodConfig(Generic[TrainConfigT]):
+    """Configuration for model training on a pod. Generic over LM and VLM configs."""
 
-    train_config: train_lm.TrainLmConfig
+    train_config: TrainConfigT
     resources: ResourceConfig
     output_path: str | None = None
     """Base output directory to be used for training, mainly for use with executor framework."""
@@ -67,11 +72,16 @@ class TrainLmOnPodConfig:
     """
 
 
+# Type aliases for backward compatibility and clarity
+TrainLmOnPodConfig = TrainOnPodConfig[TrainLmConfig]
+TrainVlmOnPodConfig = TrainOnPodConfig[TrainVLMConfig]
+
+
 DEFAULT_CHECKPOINTS_PATH = "checkpoints"
 DEFAULT_HF_CHECKPOINTS_PATH = "hf"
 
 
-def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
+def _update_config_to_use_out_path(pod_config: TrainOnPodConfig[TrainConfigT]) -> TrainOnPodConfig[TrainConfigT]:
     """
     Update the config to use the out_path as the base output directory for training.
 
@@ -101,7 +111,7 @@ def _update_config_to_use_out_path(pod_config: TrainLmOnPodConfig) -> TrainLmOnP
     return replace(pod_config, train_config=config)
 
 
-def _suppress_ray_config(config: TrainLmConfig) -> TrainLmConfig:
+def _suppress_ray_config(config: TrainConfigT) -> TrainConfigT:
     """
     Levanter wants to auto-start the Ray cluster, but we're already in a Ray cluster. Disable that.
     """
@@ -123,16 +133,16 @@ def _suppress_ray_config(config: TrainLmConfig) -> TrainLmConfig:
     return config
 
 
-def _maybe_override_auto_build_caches(config: TrainLmConfig, auto_build: bool) -> TrainLmConfig:
+def _maybe_override_auto_build_caches(config: TrainConfigT, auto_build: bool) -> TrainConfigT:
     data = config.data
-    if data.auto_build_caches != auto_build:
+    if hasattr(data, "auto_build_caches") and data.auto_build_caches != auto_build:
         logger.info("Overriding auto_build_caches to %s", auto_build)
         data = dataclasses.replace(data, auto_build_caches=auto_build)
         config = replace(config, data=data)
     return config
 
 
-def _enforce_run_id(config: TrainLmOnPodConfig) -> TrainLmOnPodConfig:
+def _enforce_run_id(config: TrainOnPodConfig[TrainConfigT]) -> TrainOnPodConfig[TrainConfigT]:
     """
     Levanter will auto-generate a run ID if it's not set. We want to enforce that it's set, so that it resumes
     properly after preemption.
@@ -238,7 +248,76 @@ def run_levanter_train_lm(config: TrainLmOnPodConfig):
     cluster.wait(job_id, raise_on_failure=True)
 
 
-def _doublecheck_paths(config: TrainLmOnPodConfig):
+def run_levanter_train_vlm(config: TrainVlmOnPodConfig):
+    """
+    Run the Levanter VLM training main function on a Ray cluster.
+
+    This function is designed to be run on your machine or with sufficient variables in the env dict/os env.
+    It should also be run with a Ray cluster already running.
+
+    - WANDB_API_KEY: The API key for Weights and Biases.
+    - RUN_ID: (Optional) The run ID for this training run. Will default to a random UID if not set.
+    - GIT_COMMIT: (Optional) The git commit hash of the current codebase. Will attempt to fetch it if not set.
+
+    This function makes a number of changes to the config and ensures a few things are set:
+    - The run ID is set, or sets a default if not.
+    - WANDB_API_KEY is set.
+    - It disables the auto-ray-start and auto-worker-start options since we're already in a Ray cluster.
+    - if allow_out_of_region is False, it checks that the data cache paths are in the same region as the VM.
+    """
+    default_launch_config = levanter.infra.cli_helpers.load_config()
+
+    if config.output_path is not None:
+        logger.info(f"Using output path: {config.output_path}")
+        config = _update_config_to_use_out_path(config)
+
+    env = _add_default_env_variables(
+        config.env_vars or {},
+        default_launch_config.env_for_accel(config.resources.device.variant),
+    )
+    # if we're on tpu, ensure we have wandb
+    if isinstance(config.resources.device, TpuConfig):
+        _check_for_wandb_key(env)
+
+    env = _add_run_env_variables(env)
+
+    if "JAX_COMPILATION_CACHE_DIR" not in env:
+        marin_prefix = os.environ.get("MARIN_PREFIX")
+        if marin_prefix:
+            env["JAX_COMPILATION_CACHE_DIR"] = os.path.join(marin_prefix, "compilation-cache")
+            logger.info(f"JAX compilation cache enabled at: {env['JAX_COMPILATION_CACHE_DIR']}")
+        else:
+            logger.warning("MARIN_PREFIX environment variable not set. JAX compilation cache will not be configured.")
+
+    config = _enforce_run_id(config)
+    logger.info(f"Using run ID: {config.train_config.trainer.id}")
+
+    train_config = config.train_config
+    train_config = _suppress_ray_config(train_config)
+    train_config = _maybe_override_auto_build_caches(train_config, config.auto_build_caches)
+
+    # disable accelerator requirement when running without GPU/TPU resources
+    if config.resources.device.kind == "cpu":
+        trainer = replace(train_config.trainer, require_accelerator=False)
+        train_config = replace(train_config, trainer=trainer)
+
+    if not config.allow_out_of_region and not isinstance(config.resources.device, CpuConfig):
+        _doublecheck_paths(config)
+
+    cluster = current_cluster()
+
+    job_request = JobRequest(
+        name="train_vlm",
+        entrypoint=Entrypoint.from_callable(train_vlm.main, args=[train_config]),
+        resources=config.resources,
+        environment=EnvironmentConfig.create(env_vars=env),
+        max_retries_failure=10,
+    )
+    job_id = cluster.launch(job_request)
+    cluster.wait(job_id, raise_on_failure=True)
+
+
+def _doublecheck_paths(config: TrainOnPodConfig[TrainConfigT]):
     """
     Double-check that we're not using local paths in some of the standard places that Levanter sets defaults.
     Also check that the paths are in the same region as the VM, to avoid performance issues and billing surprises.

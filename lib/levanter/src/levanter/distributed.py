@@ -350,6 +350,14 @@ class DistributedConfig:
             logger.info("Skipping jax.distributed.initialize because initialize_jax_distributed=False.")
             return
 
+        # Check if jax.distributed is already initialized
+        if distributed.global_state.coordinator_address is not None:
+            logger.info(
+                f"jax.distributed already initialized with coordinator_address="
+                f"{distributed.global_state.coordinator_address}. Skipping re-initialization."
+            )
+            return
+
         if self._is_distributed():
             device_ids = self.local_device_ids
             coordinator_address = self.coordinator_address

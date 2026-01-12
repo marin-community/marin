@@ -8,6 +8,7 @@ This module provides training functionality for multimodal models that combine
 vision encoders with language models.
 """
 
+import asyncio
 import dataclasses
 import logging
 import os
@@ -29,8 +30,8 @@ import levanter
 from levanter import callbacks
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, save_hf_checkpoint_callback
 from levanter.data.image import (
-    ImageIODatasetConfig,
     ImageDataLoader,
+    ImageIODatasetConfig,
     ImageMixtureDatasetConfig,
     ImageTextDataset,
 )
@@ -44,8 +45,6 @@ logger = logging.getLogger(__name__)
 
 # Constants for VLM training configuration
 DEFAULT_NUM_PATCHES = 3 * 3 + 1  # 3x3 grid + base image for default anyres_max_9 config
-STREAMING_MAX_BUFFERED_BATCHES = 4  # Memory-efficient buffering for streaming mode
-STREAMING_PREFETCH_SIZE = 2  # Minimal prefetch to avoid OOM in streaming mode
 
 
 def _load_vision_weights(model, checkpoint_path, axis_mapping, mp):
@@ -183,6 +182,11 @@ def _get_first_example(dataset):
             first_ds = next(iter(dataset.datasets.values()))
             return _get_first_example(first_ds)
 
+        # EpochDataset case - unwrap and get from underlying dataset
+        # EpochDataset.get_batch calls wait_until_len_at_least which fails for streaming datasets
+        if hasattr(dataset, "dataset") and hasattr(dataset, "max_epochs"):
+            return _get_first_example(dataset.dataset)
+
         # ProcessedImageCache case - use cache directly
         if hasattr(dataset, "cache"):
             return dataset.cache.get_batch_sync([0])[0]
@@ -271,12 +275,18 @@ def compute_vlm_loss(
     grid_mask = getattr(example, "grid_mask", None)
     unpad_indices = getattr(example, "unpad_indices", None)
 
+    # Get precomputed combined_mask and position_ids (for CPU precomputation optimization)
+    combined_mask = getattr(example, "combined_mask", None)
+    position_ids = getattr(example, "position_ids", None)
+
     # Use forward_with_activations for blockwise computation
     activations, lm_head = model.forward_with_activations(
         example.input_ids,
         pixel_values=example.pixel_values,
         grid_mask=grid_mask,
         unpad_indices=unpad_indices,
+        combined_mask=combined_mask,
+        position_ids=position_ids,
         key=key,
     )
 
@@ -372,10 +382,49 @@ class TrainVLMConfig:
     epoch: int = 0
     """Number of epochs to train. If 0, train indefinitely until num_train_steps is reached."""
 
+    # Streaming mode performance tuning
+    streaming_max_buffered_batches: int = 4
+    """Maximum buffered batches in streaming mode (default: 4). Increase for better throughput."""
+    streaming_prefetch_size: int = 2
+    """Prefetch size in streaming mode (default: 2). Increase for better throughput."""
+
 
 def main(config: TrainVLMConfig):
     """Main training function for VLM."""
     tokenizer = config.data.the_tokenizer
+
+    # Calculate num_train_steps based on epoch if specified
+    if config.epoch > 0:
+        logger.info("Building training datasets to calculate epoch-based steps...")
+        # Build training datasets to get the actual dataset size
+        train_datasets = config.data.training_sets()
+
+        # Calculate total dataset size from all training datasets
+        total_dataset_size = 0
+        for name, ds in train_datasets.items():
+            try:
+                ds_len = asyncio.run(ds.async_len())
+                total_dataset_size += ds_len
+                logger.info(f"  Dataset '{name}': {ds_len:,} samples")
+            except Exception as e:
+                logger.warning(f"Could not get length of dataset '{name}': {e}")
+
+        if total_dataset_size > 0:
+            # Calculate steps needed for the specified number of epochs
+            train_batch_size = config.trainer.train_batch_size
+            steps_per_epoch = total_dataset_size // train_batch_size
+            epoch_based_steps = steps_per_epoch * config.epoch
+            logger.info(
+                f"Epoch-based training: {config.epoch} epoch(s) = {epoch_based_steps:,} steps "
+                f"({total_dataset_size:,} samples / {train_batch_size} batch_size * {config.epoch} epochs)"
+            )
+            # Update trainer config with calculated num_train_steps
+            config = dataclasses.replace(
+                config,
+                trainer=dataclasses.replace(config.trainer, num_train_steps=epoch_based_steps),
+            )
+        else:
+            logger.warning("Could not determine dataset size, using num_train_steps from config instead")
 
     # Handle HuggingFace checkpoint initialization
     if config.initialize_from_hf:
@@ -606,16 +655,16 @@ def main(config: TrainVLMConfig):
         }
 
         if is_streaming:
-            # For streaming mode, use minimal prefetch to avoid OOM
+            # For streaming mode, use configurable prefetch settings
             loader_kwargs.update(
                 {
                     "batch_size": trainer.config.train_batch_size,
-                    "max_buffered_batches": STREAMING_MAX_BUFFERED_BATCHES,
-                    "prefetch_size": STREAMING_PREFETCH_SIZE,
+                    "max_buffered_batches": config.streaming_max_buffered_batches,
+                    "prefetch_size": config.streaming_prefetch_size,
                 }
             )
             logger.info(
-                f"Using streaming mode with ImageDataLoader (prefetch_size={STREAMING_PREFETCH_SIZE}, max_buffered={STREAMING_MAX_BUFFERED_BATCHES})"
+                f"Using streaming mode with ImageDataLoader (prefetch_size={config.streaming_prefetch_size}, max_buffered={config.streaming_max_buffered_batches})"
             )
         else:
             loader_kwargs["batch_size"] = Batch

@@ -214,6 +214,8 @@ def test_vlm_loss_and_gradients():
             loss_mask=jax_tensors.loss_mask,
             grid_mask=jax_tensors.grid_mask,
             unpad_indices=jax_tensors.unpad_indices,
+            combined_mask=jax_tensors.combined_mask,
+            position_ids=jax_tensors.position_ids,
         )
 
         def compute_loss(model):

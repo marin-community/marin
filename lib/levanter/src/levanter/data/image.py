@@ -38,26 +38,24 @@ import json
 import logging
 import math
 import os
+import sys
 import threading
+import time
 import weakref
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple, Union, cast
 
 import braceexpand
 import datasets
 import equinox as eqx
 import fsspec
-import haliax as hax
-import jax
 import numpy
 import numpy as np
 from draccus import field
 from haliax import Axis, NamedArray
-from haliax.partitioning import ResourceMapping
-from jax.sharding import Mesh, PartitionSpec
 
 from levanter.data.mixture import MixtureDataset, StopStrategy
 from jaxtyping import PRNGKeyArray
@@ -67,18 +65,25 @@ from levanter.compat.hf_checkpoints import load_processor
 from levanter.data import AsyncDataset
 from levanter.data._preprocessor import BatchProcessor
 from levanter.data.dataset import EpochDataset, MappedAsyncDataset
-from levanter.data.loader import DataLoader, DataLoaderIterator, _Batch
 from levanter.data.sharded_datasource import (
     ShardedDataSource,
     UrlBackedShardedDataSource,
     WrappedHFDataSource,
     _sniff_format_for_dataset,
 )
-from levanter.schedule import IntSchedule
-from levanter.shapes import NamedShapeSpec, ShapeSpec
 from levanter.store.cache import CacheOptions, TreeCache, build_or_load_cache
 from levanter.utils.jax_utils import key_iterator
 from levanter.utils.logging import silence_transformer_nag
+
+# JAX-related imports for ImageDataLoader
+# Note: JAX distributed should be initialized before importing this module in distributed environments
+import haliax as hax
+import jax
+from haliax.partitioning import ResourceMapping
+from jax.sharding import Mesh, PartitionSpec
+from levanter.data.loader import DataLoader, DataLoaderIterator, _Batch
+from levanter.schedule import IntSchedule
+from levanter.shapes import NamedShapeSpec, ShapeSpec
 
 silence_transformer_nag()
 from transformers import (  # noqa: E402
@@ -392,9 +397,13 @@ def expand_urls_with_folder_support(urls: List[str]) -> List[str]:
             return parquet_files
         elif "*" in local_path:
             # Use fsspec for glob expansion
-            fs = fsspec.core.url_to_fs(url)[0]
-            globbed = fs.glob(url)
-            return globbed if globbed else [url]
+            fs, path = fsspec.core.url_to_fs(url)
+            globbed = fs.glob(path)
+            if globbed:
+                # Add protocol prefix back (fs.glob returns paths without protocol)
+                proto = fs.protocol if isinstance(fs.protocol, str) else fs.protocol[0]
+                return [f"{proto}://{p}" if proto else p for p in globbed]
+            return [url]
         else:
             # Single file
             return [url]
@@ -443,6 +452,10 @@ class ImageTextDict(TypedDict, total=False):
     grid_mask: Optional[np.ndarray]  # (TOTAL_PATCHES,) boolean - True for valid patches
     # Unpad indices for anyres processing
     unpad_indices: Optional[np.ndarray]  # (num_image_tokens,) - indices for unpadding image features
+    # Precomputed validity mask for attention (1 for valid text/image, 0 for padding)
+    combined_mask: Optional[np.ndarray]  # (seq_len,) int32 - validity mask
+    # Precomputed position IDs (cumsum of combined_mask - 1, clamped to 0)
+    position_ids: Optional[np.ndarray]  # (seq_len,) int32 - position IDs
 
 
 ImageTextDict_exemplar: ImageTextDict = {
@@ -453,6 +466,8 @@ ImageTextDict_exemplar: ImageTextDict = {
     "loss_mask": np.zeros((1,), dtype=np.float32),
     "grid_mask": None,  # Always included, may be None
     "unpad_indices": None,  # Always included, may be None
+    "combined_mask": None,  # Always included, may be None
+    "position_ids": None,  # Always included, may be None
 }
 
 
@@ -943,6 +958,75 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         return mask.astype(np.float32)
 
+    def _compute_combined_mask(
+        self,
+        input_ids: np.ndarray,
+        grid_mask: Optional[np.ndarray],
+        unpad_indices: Optional[np.ndarray],
+        features_per_patch: int,
+        total_patches: int,
+    ) -> np.ndarray:
+        """Compute combined validity mask on CPU.
+
+        This precomputes the mask that would otherwise be computed in the model's
+        _merge_embeddings() method on GPU/TPU.
+
+        Args:
+            input_ids: Token IDs (seq_len,)
+            grid_mask: Valid patch mask (TOTAL_PATCHES,) or None
+            unpad_indices: Unpad indices (num_image_tokens,) or None
+            features_per_patch: Number of features per patch (e.g., 729 for 27x27)
+            total_patches: Total number of patches (TOTAL_PATCHES)
+
+        Returns:
+            combined_mask: Validity mask (seq_len,) int32
+        """
+        # Get image_token_id and pad_token_id from processor
+        image_token_id = getattr(self.processor, "image_token_id", None)
+        pad_token_id = self.processor.tokenizer.pad_token_id
+
+        # Create special_image_mask: positions where image tokens should be
+        special_image_mask = (input_ids == image_token_id) if image_token_id is not None else np.zeros_like(input_ids, dtype=bool)
+
+        # Create text_mask: valid text tokens (not padding)
+        text_mask = (input_ids != pad_token_id).astype(np.int32)
+
+        if unpad_indices is not None:
+            # When unpad_indices is provided, all image tokens are valid
+            combined_mask = np.where(special_image_mask, 1, text_mask).astype(np.int32)
+        elif grid_mask is not None:
+            # Need to check grid_mask validity for each placeholder position
+            total_image_tokens = total_patches * features_per_patch
+            grid_mask_expanded = np.repeat(grid_mask.astype(np.int32), features_per_patch)
+
+            # Compute image token indices for each position
+            image_token_indices = np.cumsum(special_image_mask.astype(np.int32)) - 1
+            image_token_indices = np.clip(image_token_indices, 0, max(total_image_tokens - 1, 0))
+
+            # Gather image validity from expanded grid_mask
+            image_validity = grid_mask_expanded[image_token_indices]
+            combined_mask = np.where(special_image_mask, image_validity, text_mask).astype(np.int32)
+        else:
+            # No images - just use text_mask
+            combined_mask = text_mask
+
+        return combined_mask
+
+    def _compute_position_ids(self, combined_mask: np.ndarray) -> np.ndarray:
+        """Compute position IDs from combined_mask using cumsum.
+
+        This precomputes the position IDs that would otherwise be computed in the model's
+        _merge_embeddings() method on GPU/TPU.
+
+        Args:
+            combined_mask: Validity mask (seq_len,) int32
+
+        Returns:
+            position_ids: Position IDs (seq_len,) int32
+        """
+        position_ids = np.cumsum(combined_mask.astype(np.int32)) - 1
+        return np.maximum(position_ids, 0).astype(np.int32)
+
     def __call__(self, batch: Sequence[Dict[str, Any]]) -> Sequence[ImageTextDict]:
         """
         Process a batch of conversation data.
@@ -1075,6 +1159,22 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 else:
                     unpad_indices = unpad_indices_raw
 
+            # Compute combined_mask and position_ids on CPU
+            features_per_patch = (
+                self.vision_feature_height * self.vision_feature_height
+                if self.vision_feature_height else 729  # default 27x27
+            )
+            total_patches = (self.max_num_patches + 1) if self.max_num_patches else 1
+
+            combined_mask = self._compute_combined_mask(
+                input_ids=input_ids,
+                grid_mask=grid_mask,
+                unpad_indices=unpad_indices,
+                features_per_patch=features_per_patch,
+                total_patches=total_patches,
+            )
+            position_ids = self._compute_position_ids(combined_mask)
+
             # Create labels and build result
             result: ImageTextDict = {
                 "pixel_values": pixel_values,
@@ -1084,6 +1184,8 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 "loss_mask": self._create_loss_mask(input_ids),
                 "grid_mask": grid_mask,
                 "unpad_indices": unpad_indices,
+                "combined_mask": combined_mask,
+                "position_ids": position_ids,
             }
             out.append(result)
 
@@ -1112,6 +1214,9 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 features_per_patch = self.vision_feature_height * self.vision_feature_height
                 max_features = (self.max_num_patches + 1) * features_per_patch
                 exemplar["unpad_indices"] = np.zeros((max_features,), dtype=np.int32)
+        # Add combined_mask and position_ids with max_length shape
+        exemplar["combined_mask"] = np.zeros((self.max_length,), dtype=np.int32)
+        exemplar["position_ids"] = np.zeros((self.max_length,), dtype=np.int32)
         return exemplar
 
     @property
@@ -1363,19 +1468,25 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
     This avoids the disk space overhead of caching preprocessed pixel_values,
     at the cost of reprocessing images each epoch.
 
-    Key design:
-    - Loads ALL raw data into memory at startup (raw data is small - just text/metadata)
-    - Background thread prefetches data sequentially ahead of consumption
-    - Prefetch cache: items are removed when accessed, freeing space for more prefetch
+    Key design (Lazy Shard Loading):
+    - Only loads shard metadata at startup (fast - just row counts from parquet metadata)
+    - Loads shards on-demand as data is accessed
+    - Pre-fetches next shard when remaining data in current shard < PREFETCH_THRESHOLD
+    - Evicts old shards to limit memory usage (keeps only recent 2 shards)
+    - Background thread prefetches processed data sequentially ahead of consumption
     - Uses per-processor locks for HF tokenizer thread-safety
 
     Flow:
+        Shard loading: [load shard 0] -> [prefetch shard 1 when 1K left] -> [evict shard 0] -> ...
         Prefetch thread: [process 0-31] -> [process 32-63] -> [process 64-95] -> ...
         Main thread:     [access 0-31, pop from cache] -> [access 32-63, pop] -> ...
     """
 
     # How many processed examples to cache in memory
     DEFAULT_CACHE_SIZE = 256  # ~256 examples * ~2MB each = ~512MB
+
+    # When remaining rows in current shard < this threshold, prefetch next shard
+    PREFETCH_THRESHOLD = 1000
 
     # Per-processor locks - each processor instance gets its own lock
     # This allows different processors to run in parallel while ensuring
@@ -1449,10 +1560,20 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         # to run in parallel while ensuring thread-safety for each one
         self._processor_lock = self._get_processor_lock(processor)
 
-        # RAW data stored in memory (small - just text/paths, not images)
-        # This avoids slow re-reading of jsonl files
-        self._raw_data: Optional[List[Dict[str, Any]]] = None
-        self._length: Optional[int] = None
+        # Lazy shard loading state (step-based mode - no pre-counting)
+        self._shard_names: List[str] = []
+        self._loaded_shards: Dict[int, List[Dict[str, Any]]] = {}  # shard_idx -> rows
+        self._shard_load_lock = threading.Lock()
+        self._prefetch_shard_thread: Optional[threading.Thread] = None
+
+        # Sequential iteration state (step-based mode)
+        self._current_shard_idx: int = 0
+        self._current_local_idx: int = 0
+        self._current_shard_data: Optional[List[Dict[str, Any]]] = None
+        self._iteration_lock = threading.Lock()
+
+        # Initialization flag (replaces _length check)
+        self._initialized: bool = False
         self._data_lock = threading.Lock()
         self._data_loaded = threading.Event()
 
@@ -1467,47 +1588,161 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         self._stop_prefetch = threading.Event()
 
     def _ensure_data_loaded(self):
-        """Load all raw data into memory (synchronous)."""
-        if self._raw_data is not None:
+        """Initialize dataset in step-based mode (no pre-counting of rows).
+
+        In distributed training, each worker only loads its assigned subset of shards
+        to avoid GCS bandwidth contention. Shards are interleaved across workers:
+        - Worker 0: shards 0, N, 2N, ...
+        - Worker 1: shards 1, N+1, 2N+1, ...
+        - ...
+        where N = num_workers
+        """
+        if self._initialized:
             return
 
         with self._data_lock:
-            if self._raw_data is not None:
+            if self._initialized:
                 return
 
-            logger.info("Loading raw data into memory for streaming...")
+            logger.info("Initializing streaming dataset (step-based mode)...")
+            t0 = time.time()
 
-            # Pre-allocate list and use list extend for better performance
-            raw_data: list[Dict[str, Any]] = []
-            for shard_name in self.source.shard_names:
-                # Use list extend instead of individual appends
-                shard_data = list(self.source.open_shard(shard_name))
-                raw_data.extend(shard_data)
+            # Get worker ID and total worker count for distributed training
+            process_index = jax.process_index()  # 0-based worker ID
+            num_processes = jax.process_count()  # Total number of workers
 
-            self._raw_data = raw_data
-            self._length = len(raw_data)
+            # Get all shard names
+            all_shard_names = list(self.source.shard_names)
+            total_shards = len(all_shard_names)
+            logger.info(f"Found {total_shards} total shards in {time.time()-t0:.2f}s")
+
+            # Each worker only gets its assigned subset of shards (interleaved)
+            # This prevents all workers from loading the same shards simultaneously
+            if num_processes > 1:
+                self._shard_names = [
+                    name for i, name in enumerate(all_shard_names)
+                    if i % num_processes == process_index
+                ]
+                logger.info(
+                    f"Worker {process_index}/{num_processes}: assigned {len(self._shard_names)} shards "
+                    f"(indices {process_index}, {process_index + num_processes}, ...)"
+                )
+            else:
+                # Single process - use all shards
+                self._shard_names = all_shard_names
+
+            self._initialized = True
             self._data_loaded.set()
-            logger.info(f"Loaded {self._length} raw examples into memory")
+
+            # Load first shard
+            if self._shard_names:
+                self._load_current_shard()
 
             # Start background prefetch thread
             self._start_prefetch_thread()
 
+    def _load_shard(self, shard_idx: int):
+        """Load a specific shard into memory."""
+        if shard_idx >= len(self._shard_names):
+            return
+        if shard_idx in self._loaded_shards:
+            return
+
+        with self._shard_load_lock:
+            if shard_idx in self._loaded_shards:
+                return
+
+            shard_name = self._shard_names[shard_idx]
+            logger.info(f"Loading shard {shard_idx}: {shard_name}")
+
+            t0 = time.time()
+            shard_data = list(self.source.open_shard(shard_name))
+            self._loaded_shards[shard_idx] = shard_data
+            logger.info(f"Loaded shard {shard_idx} ({len(shard_data)} rows) in {time.time()-t0:.2f}s")
+
+            # Evict old shards to limit memory usage
+            self._evict_old_shards(keep_recent=2)
+
+    def _evict_old_shards(self, keep_recent: int = 2):
+        """Evict old shards, keeping only the most recent N shards."""
+        if len(self._loaded_shards) <= keep_recent:
+            return
+
+        loaded_indices = sorted(self._loaded_shards.keys())
+        for idx in loaded_indices[:-keep_recent]:
+            del self._loaded_shards[idx]
+            logger.debug(f"Evicted shard {idx}")
+
+    def _load_current_shard(self):
+        """Load the current shard into memory (step-based mode)."""
+        if self._current_shard_idx >= len(self._shard_names):
+            return
+
+        shard_name = self._shard_names[self._current_shard_idx]
+        logger.info(f"Loading shard {self._current_shard_idx}: {shard_name}")
+
+        t0 = time.time()
+        self._current_shard_data = list(self.source.open_shard(shard_name))
+        logger.info(f"Loaded shard {self._current_shard_idx} ({len(self._current_shard_data)} rows) in {time.time()-t0:.2f}s")
+
+        # Also store in _loaded_shards for compatibility
+        self._loaded_shards[self._current_shard_idx] = self._current_shard_data
+
+        # Evict old shards to limit memory usage
+        self._evict_old_shards(keep_recent=2)
+
+    def _get_next_item(self) -> Dict[str, Any]:
+        """Get next item using sequential iteration (step-based mode)."""
+        self._ensure_data_loaded()
+
+        with self._iteration_lock:
+            # Ensure current shard is loaded
+            if self._current_shard_data is None:
+                self._load_current_shard()
+
+            # If current shard is exhausted, move to next
+            while self._current_local_idx >= len(self._current_shard_data):
+                self._current_shard_idx += 1
+                if self._current_shard_idx >= len(self._shard_names):
+                    # Wrap around to first shard (for infinite iteration)
+                    self._current_shard_idx = 0
+                self._current_local_idx = 0
+                self._load_current_shard()
+
+                # Prefetch next shard in background
+                next_shard = self._current_shard_idx + 1
+                if next_shard < len(self._shard_names):
+                    self._prefetch_shard_async(next_shard)
+
+            item = self._current_shard_data[self._current_local_idx]
+            self._current_local_idx += 1
+            return item
+
+    def _prefetch_shard_async(self, shard_idx: int):
+        """Asynchronously prefetch a shard in background thread."""
+        if self._prefetch_shard_thread is not None and self._prefetch_shard_thread.is_alive():
+            return  # Already prefetching
+
+        def prefetch():
+            self._load_shard(shard_idx)
+
+        self._prefetch_shard_thread = threading.Thread(target=prefetch, daemon=True)
+        self._prefetch_shard_thread.start()
+
     def _start_prefetch_thread(self):
-        """Start background thread to prefetch data sequentially."""
+        """Start background thread to prefetch data sequentially (step-based mode)."""
         if self._prefetch_thread is not None:
             return
 
         def prefetch_worker():
-            """Background worker that prefetches data sequentially.
+            """Background worker that prefetches data sequentially (step-based mode).
 
-            Simple sequential prefetch - processes data from index 0 to end,
-            keeping the cache filled ahead of consumption.
+            Uses _get_next_item() for sequential iteration through shards.
             """
             batch_size = 32
-            next_idx = 0
 
             while not self._stop_prefetch.is_set():
-                if self._length is None or self._raw_data is None:
+                if not self._initialized:
                     self._stop_prefetch.wait(0.05)
                     continue
 
@@ -1518,100 +1753,81 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
                     self._stop_prefetch.wait(0.05)
                     continue
 
-                # Wrap around for epoch support
-                if next_idx >= self._length:
-                    next_idx = 0
-
-                # Find indices not in cache
-                end_idx = min(next_idx + batch_size, self._length)
-                with self._cache_lock:
-                    indices_to_prefetch = [i for i in range(next_idx, end_idx) if i not in self._processed_cache]
-
-                if not indices_to_prefetch:
-                    next_idx = end_idx
-                    continue
-
-                # Process batch
+                # Process batch using sequential iteration
                 try:
-                    raw_items = [self._raw_data[i] for i in indices_to_prefetch]
+                    raw_items = []
+                    for _ in range(min(batch_size, self.cache_size - cache_len)):
+                        raw_items.append(self._get_next_item())
+
+                    if not raw_items:
+                        continue
+
                     with self._processor_lock:
                         processed = self._batch_processor(raw_items)
 
                     with self._cache_lock:
-                        for idx, item in zip(indices_to_prefetch, processed):
-                            self._processed_cache[idx] = item
+                        for item in processed:
+                            cache_key = len(self._processed_cache)
+                            self._processed_cache[cache_key] = item
                         # Evict oldest entries if over limit
                         while len(self._processed_cache) > self.cache_size:
                             self._processed_cache.popitem(last=False)
                 except Exception as e:
-                    logger.warning(f"Prefetch failed for indices {indices_to_prefetch}: {e}")
-
-                next_idx = end_idx
+                    logger.warning(f"Prefetch failed: {e}")
+                    self._stop_prefetch.wait(0.1)
 
         self._prefetch_thread = threading.Thread(target=prefetch_worker, daemon=True)
         self._prefetch_thread.start()
-        logger.debug("Started sequential prefetch thread")
+        logger.debug("Started sequential prefetch thread (step-based mode)")
 
-    def _process_items(self, indices: Sequence[int]) -> List[ImageTextDict]:
-        """Process items - must be called with _processor_lock held."""
-        assert self._raw_data is not None, "Data not loaded"
-        raw_items = [self._raw_data[i] for i in indices]
+    def _process_items(self, count: int) -> List[ImageTextDict]:
+        """Process items using sequential iteration - must be called with _processor_lock held."""
+        raw_items = [self._get_next_item() for _ in range(count)]
         processed = self._batch_processor(raw_items)
         return list(processed)
 
     def _get_from_cache_or_process(self, indices: Sequence[int]) -> List[ImageTextDict]:
-        """Get items from cache or process them.
+        """Get items from cache or process them (step-based mode).
 
-        Strategy: Remove accessed items from cache immediately to free space for prefetch.
-        This ensures the background prefetch thread can always work ahead.
+        In step-based mode, indices are ignored - we just return batch_size items
+        in sequential order from the cache or by processing.
         """
         self._ensure_data_loaded()
+        batch_size = len(indices)
+        results: List[ImageTextDict] = []
 
-        results: List[Optional[ImageTextDict]] = [None] * len(indices)
-        indices_to_process: List[Tuple[int, int]] = []  # (result_idx, global_idx)
-
-        # Check cache and pop accessed items (they won't be needed again soon)
+        # Get items from cache first
         with self._cache_lock:
-            for result_idx, global_idx in enumerate(indices):
-                if global_idx in self._processed_cache:
-                    # Pop from cache - accessed data won't be reused in sequential access
-                    results[result_idx] = self._processed_cache.pop(global_idx)
-                else:
-                    indices_to_process.append((result_idx, global_idx))
+            sorted_keys = sorted(self._processed_cache.keys())
+            for key in sorted_keys[:batch_size]:
+                results.append(self._processed_cache.pop(key))
 
-        # Process missing items outside of cache lock
-        if indices_to_process:
-            global_indices = [gidx for _, gidx in indices_to_process]
-
-            # Get raw items without lock (read-only access to _raw_data)
-            assert self._raw_data is not None, "Data not loaded"
-            raw_items = [self._raw_data[i] for i in global_indices]
-
-            # Only hold processor lock during actual processing
+        # Process remaining items if needed
+        remaining = batch_size - len(results)
+        if remaining > 0:
+            raw_items = [self._get_next_item() for _ in range(remaining)]
             with self._processor_lock:
                 processed = self._batch_processor(raw_items)
+            results.extend(processed)
 
-            # Store results (no need to cache since we just processed on-demand)
-            for (result_idx, _), item in zip(indices_to_process, processed):
-                results[result_idx] = item
-
-        return results  # type: ignore
+        return results
 
     async def async_len(self) -> int:
+        """Return a large number for step-based mode (infinite dataset)."""
         self._ensure_data_loaded()
-        assert self._length is not None, "Data not loaded"
-        return self._length
+        return sys.maxsize
 
     async def final_length_is_known(self) -> bool:
-        self._ensure_data_loaded()
-        return True
+        """Return False for step-based mode - length is not known."""
+        return False
 
     def is_finite(self) -> bool:
-        return True
+        """Return False for step-based mode - dataset iterates infinitely."""
+        return False
 
     async def current_len(self) -> Optional[int]:
-        self._ensure_data_loaded()
-        return self._length
+        """Return None for step-based mode - current length is not tracked."""
+        return None
 
     async def get_batch(self, indices: Sequence[int]) -> Sequence[ImageTextDict]:
         """Get a batch of processed items."""
@@ -1619,11 +1835,24 @@ class StreamingImageDataset(AsyncDataset[ImageTextDict]):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._get_from_cache_or_process, indices)
 
-    def __del__(self):
-        """Clean up background thread."""
+    def close(self):
+        """Stop background threads and clean up resources."""
         self._stop_prefetch.set()
         if self._prefetch_thread is not None:
             self._prefetch_thread.join(timeout=1.0)
+        if self._prefetch_shard_thread is not None:
+            self._prefetch_shard_thread.join(timeout=1.0)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        """Clean up background thread."""
+        self.close()
 
     @staticmethod
     def build(
@@ -1889,6 +2118,12 @@ class ImageTextExample(eqx.Module):
     # Pre-computed indices to reorder features to HF's unpadded order
     # Shape: (num_image_tokens,) - maps HF position to Levanter index
     unpad_indices: Optional[NamedArray] = None
+    # Pre-computed validity mask for attention (1 for valid text/image, 0 for padding)
+    # Shape: (position,) int32 - computed on CPU during data preprocessing
+    combined_mask: Optional[NamedArray] = None
+    # Pre-computed position IDs (cumsum of combined_mask - 1, clamped to 0)
+    # Shape: (position,) int32 - computed on CPU during data preprocessing
+    position_ids: Optional[NamedArray] = None
 
     @staticmethod
     def init(
@@ -2805,6 +3040,12 @@ def create_custom_processor(model_name, do_pad=True, image_grid_pinpoints=None, 
     return processor
 
 
+# =====================================================================================
+# ImageDataLoader and ImageDataLoaderIterator
+# Note: JAX distributed should be initialized before importing this module
+# =====================================================================================
+
+
 class ImageDataLoader(DataLoader):
     """
     Data loader for image-text (VLM) data.
@@ -2920,6 +3161,25 @@ class ImageDataLoaderIterator(DataLoaderIterator):
             batch_name = hax.partitioning.physical_axis_name(self.dl.batch_axis_name, self.dl.axis_resources)
             return PartitionSpec(batch_name, *((None,) * (len(shape_spec.shape) - 1)))
 
+    def _pad_pixel_values_to_num_patches(self, pixel_values: numpy.ndarray, target_num_patches: int) -> numpy.ndarray:
+        """Pad pixel_values to target number of patches.
+
+        Args:
+            pixel_values: Image patches array of shape (actual_patches, C, H, W)
+            target_num_patches: Target number of patches
+
+        Returns:
+            Padded pixel_values of shape (target_num_patches, C, H, W)
+        """
+        actual_patches = pixel_values.shape[0]
+        if actual_patches >= target_num_patches:
+            return pixel_values[:target_num_patches]
+
+        # Pad to target size
+        pad_size = target_num_patches - actual_patches
+        padding = numpy.zeros((pad_size,) + pixel_values.shape[1:], dtype=pixel_values.dtype)
+        return numpy.concatenate([pixel_values, padding], axis=0)
+
     def _batchify_local_data(self, batch: _Batch[ImageTextDict]) -> ImageTextExample:
         """
         Stack individual ImageTextDict examples into a batched ImageTextExample.
@@ -2984,8 +3244,10 @@ class ImageDataLoaderIterator(DataLoaderIterator):
         pixel_shape = tuple(ax.size for ax in pixel_axes)
 
         def get_pixel_values(d: ImageTextDict) -> numpy.ndarray:
-            # Padding is done in BatchImageProcessor, so pixel_values already has fixed shape
-            return d["pixel_values"].astype(self.dl.pixel_dtype)
+            pv = d["pixel_values"]
+            if pv.ndim == 4 and target_num_patches > 1:
+                pv = self._pad_pixel_values_to_num_patches(pv, target_num_patches)
+            return pv.astype(self.dl.pixel_dtype)
 
         pixel_values = make_sharded_array(pixel_shape, pixel_axes, self.dl.pixel_dtype, get_pixel_values)
 
@@ -3009,8 +3271,24 @@ class ImageDataLoaderIterator(DataLoaderIterator):
         grid_mask_shape = (padded_batch_size, target_num_patches)
 
         def get_grid_mask(d: ImageTextDict) -> numpy.ndarray:
-            # grid_mask is pre-computed in BatchImageProcessor with fixed shape
-            return d["grid_mask"]
+            # Use cached grid_mask from BatchImageProcessor if available
+            cached_mask = d.get("grid_mask")
+            if cached_mask is not None:
+                # Pad or truncate to target size if needed
+                if len(cached_mask) > target_num_patches:
+                    logger.warning(f"Truncating grid_mask from {len(cached_mask)} to {target_num_patches}")
+                    return cached_mask[:target_num_patches]
+                if len(cached_mask) == target_num_patches:
+                    return cached_mask
+                mask = numpy.zeros(target_num_patches, dtype=numpy.bool_)
+                mask[: len(cached_mask)] = cached_mask
+                return mask
+            # Fallback: compute from pixel_values shape (for backwards compatibility)
+            pv = d["pixel_values"]
+            actual_patches = pv.shape[0] if pv.ndim == 4 else 1
+            mask = numpy.zeros(target_num_patches, dtype=numpy.bool_)
+            mask[:actual_patches] = True
+            return mask
 
         grid_mask = make_sharded_array(grid_mask_shape, grid_mask_axes, numpy.bool_, get_grid_mask)
 
@@ -3021,10 +3299,42 @@ class ImageDataLoaderIterator(DataLoaderIterator):
             unpad_shape = (padded_batch_size, self.dl.NumImageTokens.size)
 
             def get_unpad_indices(d: ImageTextDict) -> numpy.ndarray:
-                # unpad_indices is pre-computed in BatchImageProcessor with fixed shape
-                return d["unpad_indices"].astype(numpy.int32)
+                indices = d.get("unpad_indices")
+                if indices is not None:
+                    target_size = self.dl.NumImageTokens.size
+                    # Pad or truncate to target size
+                    if len(indices) < target_size:
+                        padded = numpy.zeros(target_size, dtype=numpy.int32)
+                        padded[: len(indices)] = indices
+                        return padded
+                    if len(indices) > target_size:
+                        logger.warning(f"Truncating unpad_indices from {len(indices)} to {target_size}")
+                    return indices[:target_size].astype(numpy.int32)
+                return numpy.zeros(self.dl.NumImageTokens.size, dtype=numpy.int32)
 
             unpad_indices = make_sharded_array(unpad_shape, unpad_axes, numpy.int32, get_unpad_indices)
+
+        # Create combined_mask NamedArray (precomputed validity mask)
+        def get_combined_mask(d: ImageTextDict) -> numpy.ndarray:
+            mask = d.get("combined_mask")
+            if mask is not None:
+                return mask.astype(numpy.int32)
+            # Fallback: create from attention_mask
+            return d["attention_mask"].astype(numpy.int32)
+
+        combined_mask = make_sharded_array(input_shape, input_axes, numpy.int32, get_combined_mask)
+
+        # Create position_ids NamedArray (precomputed position IDs)
+        def get_position_ids(d: ImageTextDict) -> numpy.ndarray:
+            pos_ids = d.get("position_ids")
+            if pos_ids is not None:
+                return pos_ids.astype(numpy.int32)
+            # Fallback: compute from attention_mask using cumsum
+            attn_mask = d["attention_mask"].astype(numpy.int32)
+            pos_ids = numpy.cumsum(attn_mask) - 1
+            return numpy.maximum(pos_ids, 0).astype(numpy.int32)
+
+        position_ids = make_sharded_array(input_shape, input_axes, numpy.int32, get_position_ids)
 
         return ImageTextExample(
             pixel_values=pixel_values,
@@ -3032,6 +3342,8 @@ class ImageDataLoaderIterator(DataLoaderIterator):
             loss_mask=loss_mask,
             grid_mask=grid_mask,
             unpad_indices=unpad_indices,
+            combined_mask=combined_mask,
+            position_ids=position_ids,
         )
 
     async def _do_retrieve_batch_of_batches(self, batch_specs: list[_Batch[None]]) -> list[_Batch[ImageTextDict]]:
@@ -3074,3 +3386,4 @@ class ImageDataLoaderIterator(DataLoaderIterator):
             out.append(dataclasses.replace(batch, data_by_local_index=local_index_to_example))
 
         return out
+

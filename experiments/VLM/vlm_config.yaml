@@ -1,0 +1,98 @@
+# Copyright 2025 The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# VLM Training Configuration for Local TPU VM
+#
+# Usage:
+#   python -m levanter.main.train_vlm --config_path experiments/VLM/vlm_config.yaml
+#
+# Data Format: LLaVA conversation format
+# {
+#     "messages": [
+#         {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "..."}]},
+#         {"role": "assistant", "content": [{"type": "text", "text": "..."}]}
+#     ],
+#     "images": ["path/to/image.jpg"]
+# }
+
+# Data configuration
+data:
+  cache_dir: cache/vlm_demo
+  processor: llava-hf/llava-onevision-qwen2-0.5b-ov-hf
+  max_length: 8192
+  configs:
+    train:
+      # >>> EDIT THIS PATH to point to your training data <<<
+      train_urls:
+        - "gs://marin-vlm/stage1_sharded/*.parquet"  # Use glob pattern for GCS
+      messages_key: messages
+      images_key: images
+  train_weights:
+    train: 1.0
+  use_cache: false  # Set to false for streaming mode (saves disk)
+
+# Model configuration
+model:
+  # Vision encoder: SigLIP2 (matches google/siglip2-so400m-patch16-384)
+  vision_config:
+    hidden_size: 1152
+    intermediate_size: 4304
+    num_hidden_layers: 27
+    num_attention_heads: 16
+    image_size: 384
+    patch_size: 16  # Must match vision_checkpoint (siglip2-so400m-patch16-384)
+  # Language model: Qwen3-1.7B
+  text_config:
+    max_seq_len: 8192
+    hidden_dim: 2048
+    intermediate_dim: 6144
+    num_heads: 16
+    num_kv_heads: 8
+    num_layers: 28
+    tie_word_embeddings: true
+    use_bias: false  # Qwen3 has attention_bias=false
+  text_model_type: qwen3  # Use Qwen3Config (converts text_config to Qwen3Config at runtime)
+  vision_encoder_type: siglip
+  vision_feature_select_strategy: full
+  vision_aspect_ratio: anyres_max_9
+
+# Trainer configuration
+trainer:
+  tracker:
+    type: wandb
+    project: marin-vlm
+    tags:
+      - vlm
+      - demo
+      - local-tpu
+      - qwen3-1.7b
+      - siglip
+  train_batch_size: 8
+  steps_per_eval: 500
+  mp: p=f32,c=bfloat16
+  checkpointer:
+    base_path: checkpoints/vlm-demo
+    save_interval: 10m
+    keep:
+      - every: 1000
+  # ray:
+  #   auto_start_cluster: true  # Disabled - using native JAX distributed
+  num_train_steps: 1000
+
+# Optimizer configuration
+optimizer:
+  learning_rate: 2e-4
+  warmup: 0.03
+  weight_decay: 0.0
+
+# Epoch control (top-level field of TrainVLMConfig, not TrainerConfig)
+# epoch: 1  # Disabled - using num_train_steps instead to avoid hang during dataset size calculation
+
+# VLM-specific options (uncomment to use)
+# Optional: Load pretrained weights from HuggingFace
+vision_checkpoint: google/siglip2-so400m-patch16-384
+llm_checkpoint: Qwen/Qwen3-1.7B
+
+# Optional: Freeze components during training
+freeze_vision_encoder: true  # Only train projector + LLM
+freeze_llm: true  # Only train projector + vision encoder

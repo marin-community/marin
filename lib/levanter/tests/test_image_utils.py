@@ -175,6 +175,8 @@ class LevProcessedData:
     grid_mask: np.ndarray  # (TOTAL_PATCHES,) - True for valid patches
     unpad_indices: Optional[np.ndarray]  # (num_image_tokens,) - for HF compatibility
     loss_mask: np.ndarray  # (seq_len,) float32 - 1.0 for compute loss, 0.0 for ignore
+    combined_mask: Optional[np.ndarray] = None  # (seq_len,) int32 - precomputed validity mask
+    position_ids: Optional[np.ndarray] = None  # (seq_len,) int32 - precomputed position IDs
 
 
 @dataclass
@@ -368,6 +370,8 @@ def prepare_test_data(
             grid_mask=lev_result["grid_mask"],
             unpad_indices=lev_result.get("unpad_indices"),
             loss_mask=lev_result["loss_mask"],
+            combined_mask=lev_result.get("combined_mask"),
+            position_ids=lev_result.get("position_ids"),
         )
 
         results.append(
@@ -479,6 +483,8 @@ def prepare_test_data_single(
         grid_mask=lev_result["grid_mask"],
         unpad_indices=lev_result.get("unpad_indices"),
         loss_mask=lev_result["loss_mask"],
+        combined_mask=lev_result.get("combined_mask"),
+        position_ids=lev_result.get("position_ids"),
     )
 
     return TestDataPair(
@@ -749,6 +755,8 @@ class LevJaxTensors:
     grid_mask: Any  # NamedArray (Batch, GridMask)
     unpad_indices: Optional[Any] = None  # NamedArray (Batch, NumImageTokens) - None for multi-image
     loss_mask: Any = None  # NamedArray (Batch, Position) - mask for loss computation
+    combined_mask: Optional[Any] = None  # NamedArray (Batch, Position) int32 - precomputed validity mask
+    position_ids: Optional[Any] = None  # NamedArray (Batch, Position) int32 - precomputed position IDs
     # Axes for reference
     Batch: Any = None
     Position: Any = None
@@ -840,12 +848,30 @@ def create_lev_jax_tensors(
     loss_mask_batched = jnp.tile(loss_mask_single, (batch_size, 1))
     loss_mask = hax.named(loss_mask_batched, (Batch, Position))
 
+    # Combined mask - replicate to batch_size (may be None)
+    if lev_data.combined_mask is not None:
+        cm_single = jnp.array(lev_data.combined_mask, dtype=jnp.int32).reshape(1, -1)
+        cm_batched = jnp.tile(cm_single, (batch_size, 1))
+        combined_mask = hax.named(cm_batched, (Batch, Position))
+    else:
+        combined_mask = None
+
+    # Position IDs - replicate to batch_size (may be None)
+    if lev_data.position_ids is not None:
+        pid_single = jnp.array(lev_data.position_ids, dtype=jnp.int32).reshape(1, -1)
+        pid_batched = jnp.tile(pid_single, (batch_size, 1))
+        position_ids = hax.named(pid_batched, (Batch, Position))
+    else:
+        position_ids = None
+
     return LevJaxTensors(
         input_ids=input_ids,
         pixel_values=pixel_values,
         grid_mask=grid_mask,
         unpad_indices=unpad_indices,
         loss_mask=loss_mask,
+        combined_mask=combined_mask,
+        position_ids=position_ids,
         Batch=Batch,
         Position=Position,
         NumPatches=NumPatches,

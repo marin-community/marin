@@ -17,7 +17,7 @@ from haliax.jax_utils import maybe_rng_split, named_call
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmConfig
-from levanter.models.qwen import QwenConfig, QwenLMHeadModel
+from levanter.models.qwen import QwenConfig, QwenLMHeadModel, Qwen3Config, Qwen3LMHeadModel
 from levanter.models.siglip import SiglipVisionConfig, SiglipVisionModel
 from levanter.models.siglip2 import Siglip2VisionConfig, Siglip2VisionModel
 from levanter.inference.engine import InferenceEngine, Request
@@ -58,8 +58,9 @@ class LlavaOnevisionConfig:
     """
 
     vision_config: Union[SiglipVisionConfig, Siglip2VisionConfig]
-    text_config: QwenConfig
+    text_config: QwenConfig  # QwenConfig base, use text_model_type to specify qwen3
     vision_encoder_type: str = "siglip"  # "siglip" or "siglip2"
+    text_model_type: str = "qwen"  # "qwen" for Qwen2, "qwen3" for Qwen3
 
     image_token_index: int = 151646
     video_token_index: int = 151647
@@ -79,6 +80,32 @@ class LlavaOnevisionConfig:
     def __post_init__(self):
         if self.vision_encoder_type not in ["siglip", "siglip2"]:
             raise ValueError(f"vision_encoder_type must be 'siglip' or 'siglip2', got {self.vision_encoder_type}")
+
+        if self.text_model_type not in ["qwen", "qwen3"]:
+            raise ValueError(f"text_model_type must be 'qwen' or 'qwen3', got {self.text_model_type}")
+
+        # Convert QwenConfig to Qwen3Config if text_model_type is "qwen3"
+        if self.text_model_type == "qwen3" and not isinstance(self.text_config, Qwen3Config):
+            # Create Qwen3Config from QwenConfig fields
+            qwen3_config = Qwen3Config(
+                max_seq_len=self.text_config.max_seq_len,
+                hidden_dim=self.text_config.hidden_dim,
+                intermediate_dim=self.text_config.intermediate_dim,
+                num_layers=self.text_config.num_layers,
+                num_heads=self.text_config.num_heads,
+                num_kv_heads=self.text_config.num_kv_heads,
+                activation_function=self.text_config.activation_function,
+                initializer_range=self.text_config.initializer_range,
+                layer_norm_epsilon=self.text_config.layer_norm_epsilon,
+                tie_word_embeddings=self.text_config.tie_word_embeddings,
+                rope=self.text_config.rope,
+                use_bias=self.text_config.use_bias,  # Qwen3 uses this for attention_bias
+                gradient_checkpointing=self.text_config.gradient_checkpointing,
+                scan_layers=self.text_config.scan_layers,
+                attn_backend=self.text_config.attn_backend,
+                flash_attention_block_size=self.text_config.flash_attention_block_size,
+            )
+            object.__setattr__(self, "text_config", qwen3_config)
 
         if self.vision_feature_select_strategy not in ["default", "full"]:
             raise ValueError(
@@ -561,6 +588,8 @@ class LlavaOnevisionModel(eqx.Module):
         grid_mask: Optional[NamedArray] = None,
         unpad_indices: Optional[NamedArray] = None,
         inputs_embeds: Optional[NamedArray] = None,
+        combined_mask: Optional[NamedArray] = None,
+        position_ids: Optional[NamedArray] = None,
         *,
         key=None,
     ) -> Tuple[NamedArray, NamedArray]:
@@ -579,6 +608,10 @@ class LlavaOnevisionModel(eqx.Module):
             unpad_indices: Pre-computed indices to reorder features to HF's unpadded order
                           (batch, num_image_tokens) - maps HF position to Levanter index
             inputs_embeds: Optional pre-computed embeddings (batch, seq_len, embed)
+            combined_mask: Optional precomputed validity mask from CPU data pipeline
+                          (batch, seq_len) int32 - if provided, skips GPU computation
+            position_ids: Optional precomputed position IDs from CPU data pipeline
+                          (batch, seq_len) int32 - if provided, skips GPU computation
             key: Optional PRNGKey
 
         Returns:
@@ -593,6 +626,8 @@ class LlavaOnevisionModel(eqx.Module):
             pixel_values=pixel_values,
             grid_mask=grid_mask,
             unpad_indices=unpad_indices,
+            precomputed_combined_mask=combined_mask,
+            precomputed_position_ids=position_ids,
             key=k_vision,
         )
 
@@ -621,6 +656,8 @@ class LlavaOnevisionModel(eqx.Module):
         grid_mask: Optional[NamedArray] = None,
         unpad_indices: Optional[NamedArray] = None,
         inputs_embeds: Optional[NamedArray] = None,
+        combined_mask: Optional[NamedArray] = None,
+        position_ids: Optional[NamedArray] = None,
         *,
         key=None,
     ) -> NamedArray:
@@ -636,6 +673,10 @@ class LlavaOnevisionModel(eqx.Module):
             unpad_indices: Pre-computed indices to reorder features to HF's unpadded order
                           (batch, num_image_tokens) - maps HF position to Levanter index
             inputs_embeds: Optional pre-computed embeddings (batch, seq_len, embed)
+            combined_mask: Optional precomputed validity mask from CPU data pipeline
+                          (batch, seq_len) int32 - if provided, skips GPU computation
+            position_ids: Optional precomputed position IDs from CPU data pipeline
+                          (batch, seq_len) int32 - if provided, skips GPU computation
             key: Optional PRNGKey
 
         Returns:
@@ -647,6 +688,8 @@ class LlavaOnevisionModel(eqx.Module):
             grid_mask=grid_mask,
             unpad_indices=unpad_indices,
             inputs_embeds=inputs_embeds,
+            combined_mask=combined_mask,
+            position_ids=position_ids,
             key=key,
         )
         return hax.dot(activations, lm_head, axis=self.config.TextEmbed)
@@ -659,6 +702,8 @@ class LlavaOnevisionModel(eqx.Module):
         grid_mask: Optional[NamedArray],
         unpad_indices: Optional[NamedArray] = None,
         *,
+        precomputed_combined_mask: Optional[NamedArray] = None,
+        precomputed_position_ids: Optional[NamedArray] = None,
         key=None,
     ) -> Tuple[NamedArray, NamedArray, NamedArray]:
         """
@@ -669,7 +714,7 @@ class LlavaOnevisionModel(eqx.Module):
         2. Flattens image features to (batch, TOTAL_PATCHES * features_per_patch, embed)
         3. If unpad_indices provided, reorders features to HF's unpadded spatial order
         4. Merges image features into text embeddings at placeholder positions
-        5. Computes compact position IDs that skip padding using cumsum
+        5. Computes compact position IDs that skip padding using cumsum (or uses precomputed values)
 
         Args:
             input_ids: Text token IDs (batch, seq_len) - used to derive text validity mask
@@ -678,6 +723,10 @@ class LlavaOnevisionModel(eqx.Module):
             grid_mask: Boolean mask for valid patches (batch, TOTAL_PATCHES)
             unpad_indices: Pre-computed indices to reorder features to HF's unpadded order
                           (batch, num_image_tokens) - if None, uses sequential ordering
+            precomputed_combined_mask: Optional precomputed validity mask from CPU data pipeline
+                          (batch, seq_len) int32 - if provided, skips GPU computation
+            precomputed_position_ids: Optional precomputed position IDs from CPU data pipeline
+                          (batch, seq_len) int32 - if provided, skips GPU computation
             key: Optional PRNGKey
 
         Returns:
@@ -756,20 +805,27 @@ class LlavaOnevisionModel(eqx.Module):
         merged_embeds = hax.named(merged, inputs_embeds.axes)
 
         # === POSITION ID COMPUTATION ===
-        # Combined validity mask: valid text OR valid image at placeholder positions
-        if unpad_indices is not None:
-            # When unpad_indices is provided, all image tokens are valid (they're the unpadded ones)
-            combined_mask = jnp.where(special_image_mask.array, 1, text_mask.array).astype(jnp.int32)
+        # Use precomputed values if available, otherwise compute on device
+        if precomputed_combined_mask is not None and precomputed_position_ids is not None:
+            # Use precomputed values from CPU data pipeline
+            combined_mask = precomputed_combined_mask.array
+            position_ids_array = precomputed_position_ids.array
         else:
-            # Need to check grid_mask validity for each placeholder position
-            grid_mask_expanded = jnp.repeat(grid_mask.array, features_per_patch, axis=1)
-            image_token_indices = jnp.cumsum(special_image_mask.array.astype(jnp.int32), axis=-1) - 1
-            image_token_indices = jnp.clip(image_token_indices, 0, total_image_tokens - 1)
-            image_validity = self._batch_gather(grid_mask_expanded, image_token_indices)
-            combined_mask = jnp.where(special_image_mask.array, image_validity, text_mask.array).astype(jnp.int32)
+            # Compute on device (fallback for inference or when not precomputed)
+            # Combined validity mask: valid text OR valid image at placeholder positions
+            if unpad_indices is not None:
+                # When unpad_indices is provided, all image tokens are valid (they're the unpadded ones)
+                combined_mask = jnp.where(special_image_mask.array, 1, text_mask.array).astype(jnp.int32)
+            else:
+                # Need to check grid_mask validity for each placeholder position
+                grid_mask_expanded = jnp.repeat(grid_mask.array, features_per_patch, axis=1)
+                image_token_indices = jnp.cumsum(special_image_mask.array.astype(jnp.int32), axis=-1) - 1
+                image_token_indices = jnp.clip(image_token_indices, 0, total_image_tokens - 1)
+                image_validity = self._batch_gather(grid_mask_expanded, image_token_indices)
+                combined_mask = jnp.where(special_image_mask.array, image_validity, text_mask.array).astype(jnp.int32)
 
-        # Compute compact position IDs
-        position_ids_array = self._compute_position_ids(combined_mask)
+            # Compute compact position IDs
+            position_ids_array = self._compute_position_ids(combined_mask)
 
         Pos = Axis("position", seq_ax.size)
         position_ids = hax.named(position_ids_array, (batch_ax, Pos))

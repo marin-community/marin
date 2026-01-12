@@ -424,22 +424,21 @@ class SiglipAttention(eqx.Module):
             PaddedSeqAxis = Axis(seq_axis_name, padded_seq_len)
             PaddedKeyAxis = Axis("key_position", padded_seq_len)
 
-            # Create attention mask to ignore padded positions using numpy for static mask
-            # This allows Splash Attention to use NumpyMask which requires static arrays
+            # Create attention mask to ignore padded positions using segment_ids
+            # This avoids explicit_mask which causes issues with splash attention tracing
             import numpy as np
 
-            q_indices = np.arange(padded_seq_len)
-            k_indices = np.arange(padded_seq_len)
-            # Create 2D mask: valid positions are where both q and k indices < orig_seq_len
-            pad_mask_np = (q_indices[:, None] < orig_seq_len) & (k_indices[None, :] < orig_seq_len)
-            # Wrap as NamedArray for AttentionMask
-            pad_mask = hax.named(pad_mask_np, (PaddedSeqAxis, PaddedKeyAxis))
+            # Use segment_ids: 1 for valid positions, 0 for padding
+            segment_ids_np = np.zeros(padded_seq_len, dtype=np.int32)
+            segment_ids_np[:orig_seq_len] = 1
+            segment_ids = hax.named(segment_ids_np, (PaddedSeqAxis,))
+            segment_ids_kv = hax.named(segment_ids_np, (PaddedKeyAxis,))
 
-            # Combine with existing mask if present
+            # Create mask with segment_ids (splash attention supports static segment_ids)
             if mask is not None:
-                combined_mask = AttentionMask.explicit(pad_mask) & mask
+                combined_mask = mask.with_segment_ids((segment_ids, segment_ids_kv))
             else:
-                combined_mask = AttentionMask.explicit(pad_mask)
+                combined_mask = AttentionMask(is_causal=False, segment_ids=(segment_ids, segment_ids_kv))
 
             # Rename k and v's sequence axis to key_position
             k = k.rename({seq_axis_name: "key_position"})
