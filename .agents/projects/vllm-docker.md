@@ -48,7 +48,7 @@ Open issues / known rough edges:
     - `https://github.com/vllm-project/tpu-inference/blob/main/docker/Dockerfile`
   - The plan below assumes we’ll take one of:
     - **Option A (fastest)**: “bring-your-own image”: run `vllm/vllm-tpu:<tag>` directly as the sidecar.
-    - **Option B (recommended for long-term)**: build/publish `marin/vllm_tpu_sidecar:<tag>` that is a thin wrapper around upstream (adds gcsfuse + minimal tooling + env defaults).
+    - **Option B (recommended for long-term)**: build/publish `marin/vllm_tpu_sidecar:<tag>` that is a thin wrapper around upstream (adds minimal tooling + env defaults).
 
 Pinned sidecar image (first milestone):
 
@@ -59,26 +59,12 @@ Pinned sidecar image (first milestone):
      - vLLM reads weights directly from object storage (`gs://...` / `s3://...`) using `load_format=runai_streamer` (defaulted for object-store paths).
    - HF repo IDs are also supported (vLLM downloads inside the sidecar container); decide where HF cache should live for resumability.
 
-### GCSFUSE mount strategy (important)
+### Storage strategy (no FUSE)
 
-This section is largely historical context. We no longer require gcsfuse to serve model weights, but if we choose to use gcsfuse for *HF cache persistence*, the notes below may still apply.
+We do not rely on gcsfuse for serving weights.
 
-Key Ray behavior that affects this:
-- `ray up` runs `initialization_commands` on the **host** before starting the Ray docker container, then runs `setup_commands` **inside** the container.
-- Avoid docker `-v host_path:container_path` binds where `host_path` might not be a directory yet; Docker will try to create it and can fail with “file exists”.
-
-What works reliably:
-- Mount gcsfuse on the host at `/tmp/gcsfuse_mount` in `initialization_commands`.
-- Enable FUSE `allow_other` so non-mounting UIDs (including inside containers) can traverse the mount:
-  - ensure `/etc/fuse.conf` contains `user_allow_other`
-  - pass `-o allow_other` plus permissive `--dir-mode`/`--file-mode` if needed
-- Don’t bind-mount `/tmp/gcsfuse_mount` directly into the Ray container; we already mount `-v /tmp:/tmp`.
-- Inside the Ray container, expose the conventional path via a symlink:
-  - `sudo ln -sfn /tmp/gcsfuse_mount /opt/gcsfuse_mount`
-
-For the vLLM sidecar container (started via the host Docker daemon through the mounted Docker socket):
-- Use host paths in volumes. The correct source is `/tmp/gcsfuse_mount` (host), mounted to `/opt/gcsfuse_mount` (sidecar).
-  - `-v /tmp/gcsfuse_mount:/opt/gcsfuse_mount`
+- For `gs://` / `s3://` checkpoints, prefer vLLM streaming (`load_format=runai_streamer`) so the sidecar reads directly from object storage.
+- For HF repo IDs, vLLM will download into the container; choose whether to persist HF cache (e.g. a dedicated disk, or a separate blob-store cache population process).
 
 3) **Do we need multi-tenant vLLM per VM?**
    - If multiple Ray jobs can land on the same TPU VM concurrently, we should allocate ports dynamically and use unique container names.
@@ -178,16 +164,13 @@ Plan:
 
 To keep resumability and avoid repeated downloads:
 
-- Mount the host gcsfuse mount into the sidecar container:
-  - `-v /tmp/gcsfuse_mount:/opt/gcsfuse_mount`
-- Decide one canonical cache root (examples):
-  - `HF_HOME=/opt/gcsfuse_mount/hf-cache`
-  - `TRANSFORMERS_CACHE=/opt/gcsfuse_mount/hf-cache`
-  - `HF_HUB_CACHE=/opt/gcsfuse_mount/hf-cache/hub`
-- Ensure the sidecar container runs as a user that can write there (current cluster images run as `ray`).
-
-If we keep staging models into gcsfuse, vLLM should read model paths like:
-- `/opt/gcsfuse_mount/models/<...>`
+- Always mount `/tmp` (host) into the sidecar (`-v /tmp:/tmp`) so we can use stable local paths for:
+  - compilation cache (`VLLM_XLA_CACHE_PATH`, `JAX_COMPILATION_CACHE_DIR`)
+  - any explicit staging we decide to do later
+- If we decide to persist HF cache across runs, mount a dedicated host path into the sidecar and set:
+  - `HF_HOME=...`
+  - `HF_HUB_CACHE=...`
+  - `TRANSFORMERS_CACHE=...`
 
 ### Step 5: Provide a generic “stand up a server” executor primitive
 
@@ -215,7 +198,6 @@ For now (per-step), the pattern is:
 - **Port collision**: if fixed port, detect and choose another; prefer dynamic.
 - **Container exits early**: surface `docker logs` tail in the exception.
 - **Model path not visible in container**: error should include the path and suggested mounts.
-- **gcsfuse permission denied in container**: mount gcsfuse with `-o allow_other` and ensure `user_allow_other` in `/etc/fuse.conf` on the host.
 - **TPU visibility**: if sidecar can’t see TPU devices, detect via vLLM logs and fail fast.
 
 ## Concrete code snippet (what we’d run)
@@ -249,7 +231,6 @@ Create something like `docker/vllm-tpu-sidecar/Dockerfile`:
 
 - Base: `FROM vllm/vllm-tpu:<tag>` (or build from `tpu-inference` upstream Dockerfile if we need a pinned build).
 - Add only what’s required for Marin’s execution environment:
-  - `gcsfuse` (if we rely on `/opt/gcsfuse_mount` inside the sidecar)
   - `curl` (optional, but useful for health/debug)
   - set sensible env defaults: `TOKENIZERS_PARALLELISM=false`, HF cache envs
 - Entrypoint remains `vllm` so the runner can pass `vllm serve ...` args.
