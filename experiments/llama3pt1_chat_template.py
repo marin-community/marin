@@ -15,6 +15,7 @@
 
 """
 Updated chat template for Llama3.1 that has {% generation %} tags inserted (required by Levanter).
+NOTE (moojink): Handling None content values by, for example, changing `message['content'] | trim` to `(message['content'] or '') | trim` to handle None content values.
 """
 
 LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
@@ -33,7 +34,7 @@ LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
 
 {#- This block extracts the system message, so we can slot it into the right place. #}
 {%- if messages[0]['role'] == 'system' %}
-    {%- set system_message = messages[0]['content']|trim %}
+    {%- set system_message = (messages[0]['content'] or '')|trim %}
     {%- set messages = messages[1:] %}
 {%- else %}
     {%- set system_message = "" %}
@@ -65,7 +66,7 @@ LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
 {%- if tools_in_user_message and not tools is none %}
     {#- Extract the first user message so we can plug it in here #}
     {%- if messages | length != 0 %}
-        {%- set first_user_message = messages[0]['content']|trim %}
+        {%- set first_user_message = (messages[0]['content'] or '')|trim %}
         {%- set messages = messages[1:] %}
     {%- else %}
         {{- raise_exception("Cannot put tools in the first user message when there's no first user message!") }}
@@ -83,13 +84,13 @@ LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
 {%- endif %}
 
 {%- for message in messages %}
-    {%- if not (message.role == 'ipython' or message.role == 'tool' or 'tool_calls' in message) %}
+    {%- if not (message.role == 'ipython' or message.role == 'tool' or ('tool_calls' in message and message.tool_calls is not none)) %}
         {%- if message.role == 'assistant' %}
-            {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' }}{% generation %}{{- message['content'] | trim + '<|eot_id|>' }}{% endgeneration %}
+            {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' }}{% generation %}{{- (message['content'] or '') | trim + '<|eot_id|>' }}{% endgeneration %}
         {%- else %}
-            {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' }}
+            {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ (message['content'] or '') | trim + '<|eot_id|>' }}
         {%- endif %}
-    {%- elif 'tool_calls' in message %}
+    {%- elif 'tool_calls' in message and message.tool_calls is not none %}
         {%- if not message.tool_calls|length == 1 %}
             {{- raise_exception("This model only supports single tool-calls at once!") }}
         {%- endif %}
@@ -119,14 +120,16 @@ LLAMA_3_1_CHAT_TEMPLATE = """{{- bos_token }}
         {%- endif %}
     {%- elif message.role == "tool" or message.role == "ipython" %}
         {{- "<|start_header_id|>ipython<|end_header_id|>\n\n" }}
-        {%- if message.content is mapping or message.content is iterable %}
-            {{- message.content | tojson }}
-        {%- else %}
-            {{- message.content }}
+        {%- if message.content is none %}                                                                                                                                                                                          
+            {{- '' }}                                                                                                                                                                                                              
+        {%- elif message.content is mapping or message.content is iterable %}                                                                                                                                                      
+            {{- message.content | tojson }}                                                                                                                                                                                        
+        {%- else %}                                                                                                                                                                                                                
+            {{- message.content }}                                                                                                                                                                                                 
         {%- endif %}
         {{- "<|eot_id|>" }}
     {%- endif %}
 {%- endfor %}
 {%- if add_generation_prompt %}
     {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' }}
-{%- endif %}
+{%- endif %}"""

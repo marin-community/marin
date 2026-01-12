@@ -20,10 +20,12 @@ import math
 import re
 
 from levanter.data.text import ChatLmDatasetFormat
+from levanter.layers.rotary import DefaultRotaryEmbeddingsConfig
 
 from experiments.defaults import default_sft, default_tokenize
 from experiments.evals.evals import default_sft_eval
 from experiments.qwen3 import qwen3_8b, qwen3_8b_tokenizer
+from experiments.qwen3_chat_template import QWEN_3_CHAT_TEMPLATE
 from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
     get_instruction_dataset,
@@ -56,7 +58,7 @@ def create_tokenization_step(dataset_identifier: str, short_name: str) -> Execut
         name=f"{short_name}_qwen3_8b_tokenizer",
         dataset=dataset / "**/*.jsonl.gz",
         tokenizer=qwen3_8b_tokenizer,
-        format=ChatLmDatasetFormat(),
+        format=ChatLmDatasetFormat(chat_template=QWEN_3_CHAT_TEMPLATE),
     )
 
 
@@ -70,11 +72,11 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 5
-TRAIN_BATCH_SIZE = 512  # Fits on 1 x TPU-v5p-64 (for v5p-64, batch size must be divisible by # devices which is 32)
+TRAIN_BATCH_SIZE = 512
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 mixture_sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v5p-64"),
+    resources=ResourceConfig.with_tpu("v5p-128"),
     tokenizer=qwen3_8b_tokenizer,
     model_name_or_path="Qwen/Qwen3-8B",
     train_batch_size=TRAIN_BATCH_SIZE,
@@ -82,26 +84,34 @@ mixture_sft_config = SimpleSFTConfig(
     learning_rate=8e-5,
     max_seq_len=16384,
     seed=0,
-    steps_per_checkpoint=1000,  # Around 2344 steps per epoch with batch size 512
+    steps_per_checkpoint=(total_examples/TRAIN_BATCH_SIZE)//4,  # Every quarter epoch
     lr_schedule="cosine",
     warmup=0.1,
     decay=0.9,
     weight_decay=0.0,
+    beta1=0.9,
+    beta2=0.999,
 )
 
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
     permutation_type="feistel",
-    shuffle=True,
+    shuffle=total_examples,  # IMPORTANT: Era shuffling (shuffle after every epoch). `shuffle=True` leads to same shuffle used in every epoch
     missing_weights_are_validation=True,
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )
 
+qwen3_8b_16k_tokens = dataclasses.replace(
+    qwen3_8b,
+    max_seq_len=16384,
+    rope=DefaultRotaryEmbeddingsConfig(theta=1_000_000.0),
+)
+
 exp2199c_sft_qwen3_8b_openthoughts3 = default_sft(
-    name="exp2199c_sft_qwen3_8b_openthoughts3_bsz512_lr8e_5",
+    name="exp2199c_sft_qwen3_8b_ot3_bsz512_lr8e_5",
     tokenized=mixture_config,
-    model_config=qwen3_8b,
+    model_config=qwen3_8b_16k_tokens,
     sft_config=mixture_sft_config,
     tags=["qwen", "openthoughts3", "sft"],
 )

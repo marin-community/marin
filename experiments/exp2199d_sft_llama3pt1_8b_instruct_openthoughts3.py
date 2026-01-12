@@ -20,10 +20,12 @@ import math
 import re
 
 from levanter.data.text import ChatLmDatasetFormat
+from levanter.layers.rotary import Llama3RotaryEmbeddingsConfig
 
 from experiments.defaults import default_sft, default_tokenize
 from experiments.evals.evals import default_sft_eval
 from experiments.llama import llama_3_1_8b_instruct, llama_3_1_8b_instruct_tokenizer
+from experiments.llama3pt1_chat_template import LLAMA_3_1_CHAT_TEMPLATE
 from experiments.qwen3 import qwen3_4b
 from experiments.posttrain.instruction_datasets import (
     INSTRUCTION_DATASET_NAME_TO_CONFIG,
@@ -57,7 +59,7 @@ def create_tokenization_step(dataset_identifier: str, short_name: str) -> Execut
         name=f"{short_name}_llama_3_1_8b_instruct_tokenizer",
         dataset=dataset / "**/*.jsonl.gz",
         tokenizer=llama_3_1_8b_instruct_tokenizer,
-        format=ChatLmDatasetFormat(mask_user_turns=False),  # NOTE: Set to False since couldn't get an updated Llama-3.1 chat template with {%generation%} tags working
+        format=ChatLmDatasetFormat(chat_template=LLAMA_3_1_CHAT_TEMPLATE),
     )
 
 
@@ -71,11 +73,11 @@ assert set(tokenized_datasets.keys()) == set(mixture_weights.keys())
 
 total_examples = sum(mixture_weights.values())
 TARGET_EPOCHS = 5
-TRAIN_BATCH_SIZE = 512  # Fits on 1 x TPU-v5p-64 (for v5p-64, batch size must be divisible by # devices which is 32)
+TRAIN_BATCH_SIZE = 512
 NUM_TRAIN_STEPS = math.ceil(TARGET_EPOCHS * total_examples / TRAIN_BATCH_SIZE)
 
 mixture_sft_config = SimpleSFTConfig(
-    resources=ResourceConfig.with_tpu("v5p-64"),
+    resources=ResourceConfig.with_tpu("v5p-128"),
     tokenizer=llama_3_1_8b_instruct_tokenizer,
     model_name_or_path="meta-llama/Llama-3.1-8B-Instruct",
     train_batch_size=TRAIN_BATCH_SIZE,
@@ -83,26 +85,34 @@ mixture_sft_config = SimpleSFTConfig(
     learning_rate=8e-5,
     max_seq_len=16384,
     seed=0,
-    steps_per_checkpoint=1000,  # Around 2344 steps per epoch with batch size 512
+    steps_per_checkpoint=(total_examples/TRAIN_BATCH_SIZE)//4,  # Every quarter epoch
     lr_schedule="cosine",
     warmup=0.1,
     decay=0.9,
     weight_decay=0.0,
+    beta1=0.9,
+    beta2=0.999,
 )
 
 mixture_config = lm_mixture_data_config(
     tokenized_datasets,
     mixture_weights,
     permutation_type="feistel",
-    shuffle=True,
+    shuffle=total_examples,  # IMPORTANT: Era shuffling (shuffle after every epoch). `shuffle=True` leads to same shuffle used in every epoch
     missing_weights_are_validation=True,
     mixture_block_size=12288,  # large block size to include the tiny datasets (namely s1k_1.1)
 )
 
+llama_3_1_8b_instruct_16k_tokens = dataclasses.replace(
+    llama_3_1_8b_instruct,
+    max_seq_len=16384,
+    rope=Llama3RotaryEmbeddingsConfig(theta=1_000_000),
+)
+
 exp2199d_sft_llama_3_1_8b_instruct_openthoughts3 = default_sft(
-    name="exp2199d_sft_llama_3_1_8b_instruct_openthoughts3_bsz512_lr8e_5",
+    name="exp2199d_sft_llama_3_1_8b_instruct_ot3_bsz512_lr8e_5",
     tokenized=mixture_config,
-    model_config=llama_3_1_8b_instruct,
+    model_config=llama_3_1_8b_instruct_16k_tokens,
     sft_config=mixture_sft_config,
     tags=["llama", "openthoughts3", "sft"],
 )
