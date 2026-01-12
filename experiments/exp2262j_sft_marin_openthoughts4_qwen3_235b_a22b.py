@@ -107,7 +107,7 @@ mixture_config = lm_mixture_data_config(
 )
 
 exp2262j_sft_marin_openthoughts4_qwen3_235b_a22b = default_sft(
-    name="exp2262j_longcontext_marin_ot4_math30k_qwen3_235b_a22b_bsz128_lr1e_5",
+    name="exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5",
     tokenized=mixture_config,
     model_config=llama_8b_64k,
     sft_config=mixture_sft_config,
