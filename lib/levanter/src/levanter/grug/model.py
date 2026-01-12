@@ -131,9 +131,20 @@ def _init_weight(key: PRNGKeyArray, shape: tuple[int, ...], std: float) -> Float
 @partial(jax.jit, static_argnames=("cfg",))
 def init_parameters(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> GrugModelParameters:
     head_dim = cfg.inferred_head_dim
-    keys = random.split(key, 3 + 7 * cfg.num_layers)
-    embed_key, out_key, final_norm_key, *rest = keys
-    layer_keys = [rest[i * 7 : (i + 1) * 7] for i in range(cfg.num_layers)]
+    # NOTE: Avoid brittle "magic number" key math like `(3 + 7 * num_layers)`.
+    # Hierarchical splitting is simpler and scales with architecture changes (e.g. adding a bias term
+    # or an extra gate) without needing to update global split counts.
+    #
+    # This is the intended pattern:
+    #
+    #   key, embed_key, out_key, final_norm_key = random.split(key, 4)
+    #   layer_keys = random.split(key, cfg.num_layers)
+    #   for i in range(cfg.num_layers):
+    #       k_q, k_k, k_v, k_o, k_gate, k_up, k_down = random.split(layer_keys[i], 7)
+    #
+    # TODO(grug): Add a brief note in the open PR explaining why we switched to hierarchical splitting.
+    key, embed_key, out_key, final_norm_key = random.split(key, 4)
+    layer_keys = random.split(key, cfg.num_layers)
 
     token_embed = reshard(_init_weight(embed_key, (cfg.vocab_size, cfg.hidden_dim), cfg.initializer_std), Pvocab)
     output_proj = reshard(_init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), Pvocab)
@@ -141,7 +152,7 @@ def init_parameters(cfg: GrugModelConfig, *, key: PRNGKeyArray) -> GrugModelPara
 
     blocks: list[GrugBlockParams] = []
     for i in range(cfg.num_layers):
-        k_q, k_k, k_v, k_o, k_gate, k_up, k_down = layer_keys[i]
+        k_q, k_k, k_v, k_o, k_gate, k_up, k_down = random.split(layer_keys[i], 7)
         # extract shape sizes for brevity and consistency
         D, N, M, H, I = cfg.hidden_dim, cfg.num_heads, cfg.num_kv_heads, head_dim, cfg.intermediate_dim
 

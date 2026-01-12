@@ -261,15 +261,29 @@ def _tpu_splash_attention(
     if mesh is None or getattr(mesh, "empty", False):
         raise RuntimeError("TPU splash attention requires a JAX mesh context.")
 
-    q_sharding = q_.sharding
-    k_sharding = k_.sharding
-    v_sharding = v_.sharding
-    if (
-        not isinstance(q_sharding, NamedSharding)
-        or not isinstance(k_sharding, NamedSharding)
-        or not isinstance(v_sharding, NamedSharding)
-    ):
-        raise TypeError("TPU splash attention expects NamedSharding on q/k/v under an explicit mesh.")
+    def _named_sharding_of(x: jax.Array, *, label: str) -> NamedSharding:
+        """Extract NamedSharding from a JAX value or tracer.
+
+        In JAX, `.sharding` is not available on tracers during staging; however the sharding
+        is still available on the underlying abstract value in many cases.
+        """
+        sharding = None
+        try:
+            sharding = x.sharding  # type: ignore[attr-defined]
+        except Exception:
+            sharding = None
+        if sharding is None:
+            aval = getattr(x, "aval", None)
+            sharding = getattr(aval, "sharding", None) if aval is not None else None
+        if not isinstance(sharding, NamedSharding):
+            raise TypeError(
+                f"TPU splash attention expects NamedSharding on {label} under an explicit mesh; got {sharding!r}."
+            )
+        return sharding
+
+    q_sharding = _named_sharding_of(q_, label="q")
+    k_sharding = _named_sharding_of(k_, label="k")
+    v_sharding = _named_sharding_of(v_, label="v")
 
     q_pspec = q_sharding.spec
     k_pspec = k_sharding.spec
@@ -310,10 +324,8 @@ def _tpu_splash_attention(
 
         if mask.segment_ids is not None:
             q_segment_ids, kv_segment_ids = mask.segment_ids
-            q_seg_sharding = q_segment_ids.sharding
-            kv_seg_sharding = kv_segment_ids.sharding
-            if not isinstance(q_seg_sharding, NamedSharding) or not isinstance(kv_seg_sharding, NamedSharding):
-                raise TypeError("TPU splash attention expects NamedSharding on segment_ids under an explicit mesh.")
+            q_seg_sharding = _named_sharding_of(q_segment_ids, label="segment_ids.q")
+            kv_seg_sharding = _named_sharding_of(kv_segment_ids, label="segment_ids.kv")
             segment_ids = SplashSegmentIds(q_segment_ids, kv_segment_ids)
             segment_ids_axes = SplashSegmentIds(
                 q_seg_sharding.spec,
