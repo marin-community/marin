@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import concurrent.futures
 import tempfile
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -221,6 +222,7 @@ class CodeR1Env(MarinEnv):
         train_dataset: Iterable[dict[str, Any]] | None = None,
         eval_dataset: Iterable[dict[str, Any]] | None = None,
         execution_timeout: int = CODE_EXECUTION_TIMEOUT,
+        max_workers: int = 32,
     ) -> None:
         """Initialize CodeR1 environment.
 
@@ -234,7 +236,9 @@ class CodeR1Env(MarinEnv):
             datasets_loader: Custom dataset loader function.
             train_dataset: Pre-loaded training dataset (overrides train_source).
             eval_dataset: Pre-loaded eval dataset (overrides eval_source).
+            eval_dataset: Pre-loaded eval dataset (overrides eval_source).
             execution_timeout: Timeout for code execution in seconds.
+            max_workers: Number of threads to use for parallel code execution.
         """
         self.train_source = train_source
         self.eval_source = eval_source
@@ -245,6 +249,7 @@ class CodeR1Env(MarinEnv):
         self._datasets_loader = datasets_loader or datasets.load_dataset
         self._rng = np.random.default_rng(seed)
         self.execution_timeout = execution_timeout
+        self.max_workers = max_workers
         self.system_prompt = CODE_R1_SYSTEM_PROMPT
 
         self.train_examples = self._prepare_split(
@@ -450,44 +455,90 @@ class CodeR1Env(MarinEnv):
         response_token_count = 0
         truncated_count = 0
 
-        for example, completion in zip(sampled_examples, completions, strict=True):
-            group_rollouts: list[Rollout] = []
+        # Prepare tasks for parallel execution
+        # We need to map back to the correct rollout group structure
+        # Structure: tasks[group_idx][choice_idx] = assignment_future
 
-            for choice in completion.choices:
+        # Helper to preserve order and context
+        @dataclass
+        class ScoringTask:
+            example: CodeExample
+            full_response: str
+            choice: Any
+            group_idx: int
+            choice_idx: int
+
+        scoring_tasks: list[ScoringTask] = []
+
+        # Intermediate structure to hold rollouts
+        # group_rollouts_map[group_idx] = [None] * n_choices
+        group_rollouts_map: list[list[Rollout | None]] = []
+
+        for group_idx, (example, completion) in enumerate(zip(sampled_examples, completions, strict=True)):
+            group_rollouts_map.append([None] * len(completion.choices))
+
+            for choice_idx, choice in enumerate(completion.choices):
                 # Prepend the prefill to the response content so the evaluator can parse it correctly
                 # (e.g. including the opening ```python block)
                 full_response = (prefill or "") + choice.message.content
 
-                score_result = self._score_choice(
-                    example=example,
-                    response_text=full_response,
+                scoring_tasks.append(
+                    ScoringTask(
+                        example=example,
+                        full_response=full_response,
+                        choice=choice,
+                        group_idx=group_idx,
+                        choice_idx=choice_idx,
+                    )
                 )
 
-                rollout = inference_ctx.create_rollout_from_choice(
-                    prompt=example.processed_prompt,
-                    choice=choice,
-                    env_name="code_r1",
-                    env_example_id=example.example_id,
-                    reward=score_result.reward,
-                    correctness_reward=score_result.is_correct,
-                    temperature=temperature,
-                    top_k=top_k,
-                    system_prompt=effective_system_prompt,
+        # Execute scoring in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # We map the _score_choice function over the tasks
+            # We wrap it to handle the unpacking
+            def score_task(task: ScoringTask) -> tuple[ScoringTask, ScoreResult]:
+                result = self._score_choice(
+                    example=task.example,
+                    response_text=task.full_response,
                 )
+                return task, result
 
-                group_rollouts.append(rollout)
-                total_choices += 1
-                reward_sum += score_result.reward
-                pass_sum += score_result.is_correct
-                code_extracted_sum += score_result.code_extracted
-                execution_time_sum += score_result.execution_time
-                response_token_count += rollout.response_tokens.size
+            results = executor.map(score_task, scoring_tasks)
 
-                if choice.finish_reason == "length":
-                    truncated_count += 1
+        # Process results and build rollouts
+        for task, score_result in results:
+            rollout = inference_ctx.create_rollout_from_choice(
+                prompt=task.example.processed_prompt,
+                choice=task.choice,
+                env_name="code_r1",
+                env_example_id=task.example.example_id,
+                reward=score_result.reward,
+                correctness_reward=score_result.is_correct,
+                temperature=temperature,
+                top_k=top_k,
+                system_prompt=effective_system_prompt,
+            )
 
+            # Place rollout in the correct position
+            group_rollouts_map[task.group_idx][task.choice_idx] = rollout
+
+            total_choices += 1
+            reward_sum += score_result.reward
+            pass_sum += score_result.is_correct
+            code_extracted_sum += score_result.code_extracted
+            execution_time_sum += score_result.execution_time
+            response_token_count += rollout.response_tokens.size
+
+            if task.choice.finish_reason == "length":
+                truncated_count += 1
+
+        # Construct final rollout groups
+        for group_rollouts in group_rollouts_map:  # type: ignore
             if group_rollouts:
-                rollout_groups.append(RolloutGroup(rollouts=group_rollouts))
+                # Filter out any Nones if something went wrong, though shouldn't happen
+                valid_rollouts = [r for r in group_rollouts if r is not None]
+                if valid_rollouts:
+                    rollout_groups.append(RolloutGroup(rollouts=valid_rollouts))
 
         if total_choices == 0:
             raise RuntimeError("Inference context returned no choices; cannot compute metrics")

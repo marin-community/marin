@@ -74,7 +74,7 @@ def create_code_curriculum(run_id: str, experiment_config: RLExperimentConfig) -
             lesson_id="code_r1",
             env_config=EnvConfig(
                 env_class="marin.rl.environments.code_r1_env.CodeR1Env",
-                env_args={"seed": 42},
+                env_args={"seed": 42, "max_workers": 64},
             ),
             dependencies=[],
             sampling_params=code_sampling,
