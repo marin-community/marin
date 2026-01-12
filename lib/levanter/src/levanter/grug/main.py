@@ -48,12 +48,22 @@ def dataloader_iterator(
         yield {"tokens": tokens[:, :-1], "labels": tokens[:, 1:]}
 
 
-def create_mesh() -> jax.sharding.Mesh:
+def create_mesh(*, global_batch_size: int | None = None) -> jax.sharding.Mesh:
     devices = jax.devices()
     if not devices:
         raise RuntimeError("No JAX devices available")
-    mesh = jax.make_mesh(
-        (1, 1, len(devices), 1),
+
+    # Grug uses explicit sharding. For data parallelism, sharding the batch requires the batch
+    # to be divisible by the data axis size. For the minimal trainer, prefer using all devices,
+    # but fall back to a smaller data axis if needed (e.g. tiny synthetic tests).
+    data_size = len(devices)
+    if global_batch_size is not None and global_batch_size > 0:
+        while data_size > 1 and global_batch_size % data_size != 0:
+            data_size -= 1
+
+    mesh_devices = np.array(devices[:data_size]).reshape(1, 1, data_size, 1)
+    mesh = jax.sharding.Mesh(
+        mesh_devices,
         axis_names=("replica_dcn", "replica", "data", "model"),
         axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
     )
@@ -92,7 +102,7 @@ def load_cache(cache_dir: str, *, seq_len: int) -> TreeCache[dict]:
 
 
 def run_training(train_cfg: GrugTrainingConfig, *, cache_dir: str | None = None) -> None:
-    mesh = create_mesh()
+    mesh = create_mesh(global_batch_size=train_cfg.global_batch_size)
 
     with jax.set_mesh(mesh):
         rng = jax.random.key(train_cfg.seed)

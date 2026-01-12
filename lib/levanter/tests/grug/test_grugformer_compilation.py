@@ -11,6 +11,7 @@ from jax._src import config as jax_config
 
 from levanter.grug.attention import AttentionMask
 from levanter.grug.model import GrugModelConfig
+from levanter.grug.sharding import Pbatch
 from levanter.grug.model import init_parameters, loss_fn
 
 
@@ -61,22 +62,15 @@ def test_grug_loss_can_lower_on_abstract_4_device_mesh(data: int, model: int):
 
         batch = 8
         seq = 256
-        pbatch = P(("replica_dcn", "replica", "data"), None)
-        token_ids = jax.ShapeDtypeStruct(
-            shape=(batch, seq),
-            dtype=jnp.int32,
-            sharding=NamedSharding(mesh, pbatch),
-        )
-        loss_weight = jax.ShapeDtypeStruct(
-            shape=(batch, seq),
-            dtype=jnp.float32,
-            sharding=NamedSharding(mesh, pbatch),
-        )
 
-        def f(p, toks, wts):
-            return loss_fn(p, toks, wts, cfg, mask=AttentionMask.causal(), reduction="mean")
+        def f(p):
+            token_ids = jnp.zeros((batch, seq), dtype=jnp.int32)
+            token_ids = jax.sharding.reshard(token_ids, Pbatch)
+            loss_weight = jnp.ones((batch, seq), dtype=jnp.float32)
+            loss_weight = jax.sharding.reshard(loss_weight, Pbatch)
+            return loss_fn(p, token_ids, loss_weight, cfg, mask=AttentionMask.causal(), reduction="mean")
 
         platform = jax.devices()[0].platform if jax.devices() else jax.default_backend()
-        lowered = jax.jit(f).trace(params, token_ids, loss_weight).lower(lowering_platforms=(platform,))
+        lowered = jax.jit(f).trace(params).lower(lowering_platforms=(platform,))
         # Lowering is the point of this test; don't force full compilation.
         assert lowered is not None

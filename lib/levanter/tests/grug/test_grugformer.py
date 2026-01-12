@@ -15,12 +15,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import jax
+
 from levanter.grug.config import GrugTrainingConfig
 from levanter.grug.model import GrugModelConfig
 from levanter.grug.main import run_training
 
 
 def test_synthetic_training_step_runs():
+    # On TPU, Grug uses Splash attention which requires KV sequence length to be a multiple of 128.
+    # `run_training` trains on tokens[:, :-1], so pick max_seq_len=129 -> token length 128.
+    max_seq_len = 129 if jax.default_backend() == "tpu" else 16
     cfg = GrugTrainingConfig(
         model=GrugModelConfig(
             vocab_size=257,
@@ -29,7 +34,7 @@ def test_synthetic_training_step_runs():
             num_layers=1,
             num_heads=4,
             num_kv_heads=4,
-            max_seq_len=16,
+            max_seq_len=max_seq_len,
         ),
         learning_rate=1e-3,
         weight_decay=0.01,

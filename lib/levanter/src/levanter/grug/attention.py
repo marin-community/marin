@@ -110,9 +110,14 @@ class AttentionMask:
             mask = allowed
 
         if self.sliding_window is not None:
+            if self.sliding_window <= 0:
+                raise ValueError(f"sliding_window must be positive, got {self.sliding_window}")
             q_idx = jnp.arange(q_len)[:, None]
             k_idx = jnp.arange(k_len)[None, :]
-            allowed = k_idx >= q_idx - self.sliding_window
+            # Standard sliding-window semantics: `sliding_window=W` means "keep the last W tokens,
+            # including self". Without causality, this is "don't look too far back":
+            #   k >= q - (W - 1)
+            allowed = k_idx >= q_idx - (self.sliding_window - 1)
             mask = allowed if mask is None else jnp.logical_and(mask, allowed)
 
         if self.segment_ids is not None:
@@ -314,8 +319,14 @@ def _tpu_splash_attention(
             base_mask = splash_attention_mask.FullMask(_shape=(Sq, Sk))
 
         if mask.sliding_window is not None:
+            if mask.sliding_window <= 0:
+                raise ValueError(f"sliding_window must be positive, got {mask.sliding_window}")
             local_mask = splash_attention_mask.LocalMask(
                 shape=(Sq, Sk),
+                # Grug's `sliding_window` matches the "lookback" semantics used in the
+                # reference mask materialization: allow attending to keys with
+                #   k >= q - (sliding_window - 1)
+                # (and optionally combine with causal).
                 window_size=(mask.sliding_window - 1, None),
                 offset=0,
                 shard_count=q_seq_shards,

@@ -38,6 +38,8 @@ def _full_next_token_loss(logits: jax.Array, token_ids: jax.Array, loss_weight: 
 
 
 def test_grug_model_loss_fn_matches_full_logits():
+    # On TPU, Grug uses Splash attention which requires KV sequence length to be a multiple of 128.
+    seq = 128 if jax.default_backend() == "tpu" else 9
     cfg = GrugModelConfig(
         vocab_size=23,
         hidden_dim=16,
@@ -45,15 +47,15 @@ def test_grug_model_loss_fn_matches_full_logits():
         num_layers=1,
         num_heads=4,
         num_kv_heads=4,
-        max_seq_len=16,
+        max_seq_len=seq,
         cross_entropy_block_size=8,
     )
 
     mesh = _make_grug_mesh()
     with jax.set_mesh(mesh):
         params = init_parameters(cfg, key=jax.random.key(0))
-        token_ids = jax.random.randint(jax.random.key(1), (2, 9), 0, cfg.vocab_size, dtype=jnp.int32)
-        loss_weight = jnp.ones((2, 9), dtype=jnp.float32).at[:, -1].set(0.0)
+        token_ids = jax.random.randint(jax.random.key(1), (2, seq), 0, cfg.vocab_size, dtype=jnp.int32)
+        loss_weight = jnp.ones((2, seq), dtype=jnp.float32).at[:, -1].set(0.0)
 
         hidden = activations(params, token_ids, cfg, mask=AttentionMask.causal())
         logits = hidden @ params.output_proj
@@ -65,6 +67,8 @@ def test_grug_model_loss_fn_matches_full_logits():
 
 
 def test_grug_wrapper_compute_next_token_loss_uses_grug_loss_fn():
+    # On TPU, Grug uses Splash attention which requires KV sequence length to be a multiple of 128.
+    seq = 128 if jax.default_backend() == "tpu" else 9
     cfg = GrugModelConfig(
         vocab_size=29,
         hidden_dim=16,
@@ -72,7 +76,7 @@ def test_grug_wrapper_compute_next_token_loss_uses_grug_loss_fn():
         num_layers=1,
         num_heads=4,
         num_kv_heads=4,
-        max_seq_len=16,
+        max_seq_len=seq,
         cross_entropy_block_size=8,
     )
 
@@ -82,7 +86,7 @@ def test_grug_wrapper_compute_next_token_loss_uses_grug_loss_fn():
         model = GrugWrapper.init(Vocab, cfg, key=jax.random.key(0))
 
         Batch = hax.Axis("batch", 2)
-        Pos = hax.Axis("position", 9)
+        Pos = hax.Axis("position", seq)
         token_ids = hax.random.randint(jax.random.key(1), (Batch, Pos), 0, cfg.vocab_size, dtype=jnp.int32)
         loss_weight = hax.ones((Batch, Pos), dtype=jnp.float32).at[Pos, Pos.size - 1].set(0.0)
         example = LmExample(tokens=token_ids, loss_weight=loss_weight, attn_mask=LevanterAttentionMask.causal())

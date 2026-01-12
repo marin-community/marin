@@ -16,6 +16,7 @@ from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 from .attention import AttentionMask, RotaryConfig, apply_rotary_embedding, attention
 from .loss import linear_softmax_cross_entropy_loss_and_logz
+from .sharding import Pbatch, Pvocab, unshard
 
 
 #### Conventions
@@ -34,15 +35,6 @@ from .loss import linear_softmax_cross_entropy_loss_and_logz
 # - M = num kv heads
 # - H = head dim
 # - I = intermediate dim
-
-#### PartitionSpecs and sharding
-
-# convenience shorthand for batch sharding.
-# if this were Haliax, we'd say {"batch": ("replica_dcn", "replica", "data")}
-Pbatch = P(
-    ("replica_dcn", "replica", "data"),
-)
-Pvocab = P(None, None)
 
 
 @dataclass(frozen=True)
@@ -89,10 +81,6 @@ class GrugModelConfig:
                 f"hidden_dim={self.hidden_dim} is not divisible by num_heads={self.num_heads}; set head_dim explicitly"
             )
         return self.hidden_dim // self.num_heads
-
-
-def unshard(x: jax.Array) -> jax.Array:
-    return reshard(x, P((None,)))
 
 
 @register_dataclass
