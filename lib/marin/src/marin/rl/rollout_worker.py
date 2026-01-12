@@ -585,7 +585,7 @@ class RolloutWorker:
         """Evaluate a single lesson and log metrics."""
         N_EVAL_GENERATIONS = 1
 
-        batch, _ = self._sample_batch(
+        batch, env_metrics = self._sample_batch(
             lesson_id=lesson_id,
             n_examples=n_examples,
             n_generations=N_EVAL_GENERATIONS,
@@ -603,6 +603,11 @@ class RolloutWorker:
             temperature=sampling_params.temperature,
             top_k=sampling_params.top_k,
         )
+
+        # Add environment-specific metrics (e.g. execution time)
+        if env_metrics:
+            metrics.update({f"inference.{eval_type}/env/{k}": v for k, v in env_metrics.items()})
+
         self.tracker.log(metrics, step=self._current_weight_step)
         logger.info("Eval metrics for lesson %s at step %d: %s", lesson_id, self._current_weight_step, metrics)
         # only update curriculum for full evals
