@@ -312,8 +312,10 @@ class VllmTpuEvaluator(Evaluator, ABC):
                 if response.status_code == 200:
                     break
             except requests.ConnectionError:
+                # Server not ready yet.
                 pass
             except requests.Timeout:
+                # Server not ready yet.
                 pass
 
             elapsed_time = time.time() - start_time
