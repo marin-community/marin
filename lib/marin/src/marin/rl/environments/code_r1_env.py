@@ -110,31 +110,31 @@ class CodeExample:
 LoadDatasetFn = Callable[..., Any]
 
 
+FORMAT_REWARD = 0.1
+ANSWER_REWARD = 1.0
+
+
+def validate_response_structure(response: str) -> bool:
+    """Check if the response follows the <think>...</think>...<answer>...</answer> format."""
+    pattern = re.compile(r"<think>.*</think>.*<answer>.*</answer>$", re.DOTALL)
+    return bool(pattern.match(response.strip()))
+
+
 def extract_python_code(response: str) -> str | None:
-    """Extract Python code from a response that may contain markdown code blocks.
+    """Extract Python code from a response.
 
-    Handles both ```python ... ``` and ``` ... ``` formats, as well as
-    code inside <answer>...</answer> tags.
+    Prioritizes extracting from <answer> tags if present, otherwise looks for markdown code blocks.
     """
-    # First try to extract from <answer> tags
-    answer_match = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL)
+    # Try to extract content inside <answer> tags
+    answer_match = re.findall(r"<answer>(.*?)</answer>", response, re.DOTALL)
     if answer_match:
-        response = answer_match.group(1)
+        # Use the last answer block if multiple
+        response = answer_match[-1].strip()
 
-    # Try to find Python code block
-    python_block = re.search(r"```python\s*(.*?)```", response, re.DOTALL)
-    if python_block:
-        return python_block.group(1).strip()
-
-    # Try generic code block
-    generic_block = re.search(r"```\s*(.*?)```", response, re.DOTALL)
-    if generic_block:
-        return generic_block.group(1).strip()
-
-    # If no code blocks, try to find code-like content (fallback)
-    # Look for def/class statements
-    if "def " in response or "class " in response:
-        return response.strip()
+    # Extract code blocks
+    code_blocks = re.findall(r"```(?:\w+)?\n(.*?)\n```", response, re.DOTALL)
+    if code_blocks:
+        return "\n".join(code_blocks).strip()
 
     return None
 
@@ -502,10 +502,12 @@ class CodeR1Env(MarinEnv):
             - passed: 1.0 if tests passed, 0.0 otherwise
             - code_extracted: 1.0 if code was successfully extracted, 0.0 otherwise
         """
-        code = extract_python_code(response_text)
+        if not validate_response_structure(response_text):
+            return (-ANSWER_REWARD - FORMAT_REWARD), 0.0, 0.0
 
-        if code is None:
-            return 0.0, 0.0, 0.0
+        code = extract_python_code(response_text)
+        if not code:
+            return (-ANSWER_REWARD - FORMAT_REWARD), 0.0, 0.0
 
         passed, error_msg = execute_code_with_tests(
             code,
@@ -515,10 +517,10 @@ class CodeR1Env(MarinEnv):
         )
 
         if passed:
-            return 1.0, 1.0, 1.0
+            return (FORMAT_REWARD + ANSWER_REWARD), 1.0, 1.0
         else:
             logger.debug(f"Code execution failed for {example.example_id}: {error_msg}")
-            return 0.0, 0.0, 1.0
+            return FORMAT_REWARD, 0.0, 1.0
 
     def training_data(self) -> Iterator[CodeExample]:
         """Stream training examples for debugging."""
