@@ -201,29 +201,49 @@ def test_llava_with_image_dataloader(processor, dataset):
         hf_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
         config = LlavaOnevisionConfig.from_hf_config(hf_config)
         vision_config_updated = dataclasses.replace(
-            config.vision_config, use_flash_attention=False, attn_backend=AttentionBackend.VANILLA, gradient_checkpointing=False
+            config.vision_config,
+            use_flash_attention=False,
+            attn_backend=AttentionBackend.VANILLA,
+            gradient_checkpointing=False,
         )
-        text_config_updated = dataclasses.replace(config.text_config, attn_backend=AttentionBackend.VANILLA, gradient_checkpointing=False)
-        config = dataclasses.replace(config, vision_config=vision_config_updated, text_config=text_config_updated, gradient_checkpointing=False)
+        text_config_updated = dataclasses.replace(
+            config.text_config, attn_backend=AttentionBackend.VANILLA, gradient_checkpointing=False
+        )
+        config = dataclasses.replace(
+            config, vision_config=vision_config_updated, text_config=text_config_updated, gradient_checkpointing=False
+        )
 
         trainer_config = TrainerConfig()
 
         with trainer_config.use_device_mesh(), hax.axis_mapping(trainer_config.compute_axis_mapping):
             converter = config.hf_checkpoint_converter(ref_checkpoint=model_name)
             lev_model = converter.load_pretrained(
-                LlavaOnevisionModel, ref=model_name, config=config,
-                axis_mapping=trainer_config.parameter_axis_mapping, dtype=jnp.float32, resize_vocab_to_match_tokenizer=False
+                LlavaOnevisionModel,
+                ref=model_name,
+                config=config,
+                axis_mapping=trainer_config.parameter_axis_mapping,
+                dtype=jnp.float32,
+                resize_vocab_to_match_tokenizer=False,
             )
 
             batch_size = min(4, cache_len)
             from jax._src.mesh import get_concrete_mesh
+
             mesh = get_concrete_mesh()
 
             loader = ImageDataLoader(
-                data=cache, batch_size=batch_size, Pos=Pos, NumPatches=NumPatches,
-                Channels=Channels, Height=Height, Width=Width,
-                axis_resources=trainer_config.compute_axis_mapping, mesh=mesh,
-                max_buffered_batches=0, allow_nondivisible_batch_size=True, NumImageTokens=NumImageTokens
+                data=cache,
+                batch_size=batch_size,
+                Pos=Pos,
+                NumPatches=NumPatches,
+                Channels=Channels,
+                Height=Height,
+                Width=Width,
+                axis_resources=trainer_config.compute_axis_mapping,
+                mesh=mesh,
+                max_buffered_batches=0,
+                allow_nondivisible_batch_size=True,
+                NumImageTokens=NumImageTokens,
             )
 
             batch = next(iter(loader))
@@ -263,19 +283,27 @@ def test_llava_with_image_dataloader(processor, dataset):
             # Levanter forward pass
             @eqx.filter_jit
             def compute_forward_single(model, input_ids, pixel_values, grid_mask, unpad_indices):
-                return model(input_ids, pixel_values=pixel_values, grid_mask=grid_mask, unpad_indices=unpad_indices, key=None)
+                return model(
+                    input_ids, pixel_values=pixel_values, grid_mask=grid_mask, unpad_indices=unpad_indices, key=None
+                )
 
             lev_logits_list = []
             for sample_idx in range(batch_size):
-                input_ids_np = batch_input_ids[sample_idx:sample_idx+1]
-                pixel_values_np = batch_pixel_values[sample_idx:sample_idx+1]
-                grid_mask_np = batch_grid_mask[sample_idx:sample_idx+1] if batch_grid_mask is not None else None
+                input_ids_np = batch_input_ids[sample_idx : sample_idx + 1]
+                pixel_values_np = batch_pixel_values[sample_idx : sample_idx + 1]
+                grid_mask_np = batch_grid_mask[sample_idx : sample_idx + 1] if batch_grid_mask is not None else None
                 has_image = grid_mask_np is not None and grid_mask_np[0].any()
 
                 Batch1 = hax.Axis("batch", 1)
                 input_ids_lev = hax.named(jnp.array(input_ids_np, dtype=jnp.int32), (Batch1, Pos))
-                pixel_values_lev = hax.named(jnp.array(pixel_values_np, dtype=jnp.float32), (Batch1, NumPatches, Channels, Height, Width))
-                grid_mask_lev = hax.named(jnp.array(grid_mask_np, dtype=jnp.bool_), (Batch1, NumPatches)) if grid_mask_np is not None else None
+                pixel_values_lev = hax.named(
+                    jnp.array(pixel_values_np, dtype=jnp.float32), (Batch1, NumPatches, Channels, Height, Width)
+                )
+                grid_mask_lev = (
+                    hax.named(jnp.array(grid_mask_np, dtype=jnp.bool_), (Batch1, NumPatches))
+                    if grid_mask_np is not None
+                    else None
+                )
 
                 if has_image:
                     hf_ids = hf_input_ids_list[sample_idx]
@@ -283,14 +311,21 @@ def test_llava_with_image_dataloader(processor, dataset):
                     hf_image_sizes = hf_image_sizes_list[sample_idx]
                     image_sizes_list = [hf_image_sizes[0].tolist()]
                     unpad_indices_np = padded_processor.compute_unpad_indices(
-                        image_sizes=image_sizes_list, height=patch_size, width=patch_size, max_num_features=int(num_hf_image_tokens)
+                        image_sizes=image_sizes_list,
+                        height=patch_size,
+                        width=patch_size,
+                        max_num_features=int(num_hf_image_tokens),
                     )
                     NumImageTokensSample = hax.Axis("num_image_tokens", int(num_hf_image_tokens))
-                    unpad_indices_lev = hax.named(jnp.array(unpad_indices_np, dtype=jnp.int32), (Batch1, NumImageTokensSample))
+                    unpad_indices_lev = hax.named(
+                        jnp.array(unpad_indices_np, dtype=jnp.int32), (Batch1, NumImageTokensSample)
+                    )
                 else:
                     unpad_indices_lev = None
 
-                lev_logits_sample = compute_forward_single(lev_model, input_ids_lev, pixel_values_lev, grid_mask_lev, unpad_indices_lev)
+                lev_logits_sample = compute_forward_single(
+                    lev_model, input_ids_lev, pixel_values_lev, grid_mask_lev, unpad_indices_lev
+                )
                 lev_logits_sample.array.block_until_ready()
                 lev_logits_list.append(np.array(lev_logits_sample.array)[0])
 
@@ -333,11 +368,13 @@ def test_cache_vs_streaming_data_consistency():
 
         cache_config = ImageMixtureDatasetConfig(
             cache_dir=f"{tmpdir}/cache",
-            configs={"train": ConversationDatasetSourceConfig(
-                train_urls=[f"file://{parquet_path}"],
-                validation_urls=[f"file://{parquet_path}"],
-                cache_dir=f"{tmpdir}/cache/train",
-            )},
+            configs={
+                "train": ConversationDatasetSourceConfig(
+                    train_urls=[f"file://{parquet_path}"],
+                    validation_urls=[f"file://{parquet_path}"],
+                    cache_dir=f"{tmpdir}/cache/train",
+                )
+            },
             train_weights={"train": 1.0},
             processor=model_name,
             max_length=8192,
@@ -350,11 +387,13 @@ def test_cache_vs_streaming_data_consistency():
 
         streaming_config = ImageMixtureDatasetConfig(
             cache_dir=f"{tmpdir}/streaming_cache",
-            configs={"train": ConversationDatasetSourceConfig(
-                train_urls=[f"file://{parquet_path}"],
-                validation_urls=[f"file://{parquet_path}"],
-                cache_dir=f"{tmpdir}/streaming_cache/train",
-            )},
+            configs={
+                "train": ConversationDatasetSourceConfig(
+                    train_urls=[f"file://{parquet_path}"],
+                    validation_urls=[f"file://{parquet_path}"],
+                    cache_dir=f"{tmpdir}/streaming_cache/train",
+                )
+            },
             train_weights={"train": 1.0},
             processor=model_name,
             max_length=8192,
@@ -395,11 +434,13 @@ def test_streaming_dataset_basic():
 
         config = ImageMixtureDatasetConfig(
             cache_dir=f"{tmpdir}/cache",
-            configs={"train": ConversationDatasetSourceConfig(
-                train_urls=[f"file://{parquet_path}"],
-                validation_urls=[f"file://{parquet_path}"],
-                cache_dir=f"{tmpdir}/cache/train",
-            )},
+            configs={
+                "train": ConversationDatasetSourceConfig(
+                    train_urls=[f"file://{parquet_path}"],
+                    validation_urls=[f"file://{parquet_path}"],
+                    cache_dir=f"{tmpdir}/cache/train",
+                )
+            },
             train_weights={"train": 1.0},
             processor=model_name,
             max_length=2048,

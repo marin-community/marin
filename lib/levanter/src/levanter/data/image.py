@@ -299,8 +299,7 @@ class CustomVLMProcessor(ProcessorMixin):
             old_id = old_tokenizer.convert_tokens_to_ids(token)
             new_id = new_tokenizer.convert_tokens_to_ids(token)
             assert old_id == new_id, (
-                f"Critical special token '{token}' ID mismatch: "
-                f"processor has {old_id}, new tokenizer has {new_id}"
+                f"Critical special token '{token}' ID mismatch: " f"processor has {old_id}, new tokenizer has {new_id}"
             )
 
         # Validate role tokens have the same IDs
@@ -308,8 +307,7 @@ class CustomVLMProcessor(ProcessorMixin):
             old_id = old_tokenizer.convert_tokens_to_ids(token)
             new_id = new_tokenizer.convert_tokens_to_ids(token)
             assert old_id == new_id, (
-                f"Critical role token '{token}' ID mismatch: "
-                f"processor has {old_id}, new tokenizer has {new_id}"
+                f"Critical role token '{token}' ID mismatch: " f"processor has {old_id}, new tokenizer has {new_id}"
             )
 
         # Validate eos_token_id matches
@@ -1107,10 +1105,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         if self.max_num_patches is not None:
             total_patches = self.max_num_patches + 1
             # Fixed-size pixel_values for cache schema
-            exemplar["pixel_values"] = np.zeros(
-                (total_patches, 3, self.patch_size, self.patch_size),
-                dtype=np.float32
-            )
+            exemplar["pixel_values"] = np.zeros((total_patches, 3, self.patch_size, self.patch_size), dtype=np.float32)
             exemplar["grid_mask"] = np.zeros((total_patches,), dtype=np.bool_)
             # Include sized unpad_indices when vision_feature_height is also configured
             if self.vision_feature_height is not None:
@@ -1302,7 +1297,9 @@ class ConversationDatasetSourceConfig:
                 }
         else:
             urls = self.urls_for_split(split)
-            for doc in ImageConversationUrlDataSource(urls, messages_key=self.messages_key, images_key=self.images_key):
+            for doc in ImageConversationUrlDataSource(
+                urls, messages_key=self.messages_key, images_key=self.images_key
+            ):
                 yield cast(ConversationDict, doc)
 
     def urls_for_split(self, split: str) -> List[str]:
@@ -2126,17 +2123,13 @@ class ImageMixtureDatasetConfig(ImageTaskConfig):
 
         return mixture
 
-    def training_sets(
-        self, max_num_patches: Optional[int] = None
-    ) -> Mapping[str, AsyncDataset[ImageTextDict]]:
+    def training_sets(self, max_num_patches: Optional[int] = None) -> Mapping[str, AsyncDataset[ImageTextDict]]:
         if self.use_cache:
             return self.build_caches("train")
         else:
             return self.build_streaming_datasets("train", max_num_patches=max_num_patches)
 
-    def validation_sets(
-        self, max_num_patches: Optional[int] = None
-    ) -> Mapping[str, AsyncDataset[ImageTextDict]]:
+    def validation_sets(self, max_num_patches: Optional[int] = None) -> Mapping[str, AsyncDataset[ImageTextDict]]:
         if self.use_cache:
             return self.build_caches("validation")
         else:
@@ -2895,13 +2888,13 @@ class ImageDataLoader(DataLoader):
 
     def _make_padding_example(self, ex: ImageTextDict) -> ImageTextDict:
         """Create a zero-padded example for padding incomplete batches."""
-        padding_dict: ImageTextDict = {}
+        padding_dict: dict[str, Any] = {}
         for key, value in ex.items():
             if value is None:
                 padding_dict[key] = None
             else:
                 padding_dict[key] = numpy.zeros_like(value)
-        return padding_dict
+        return cast(ImageTextDict, padding_dict)
 
     def iter_from_step(self, start_from_batch: int | None = None):
         start_from_batch = int(start_from_batch) if start_from_batch is not None else None
