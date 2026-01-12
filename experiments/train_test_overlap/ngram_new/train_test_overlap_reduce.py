@@ -32,6 +32,8 @@ from experiments.train_test_overlap.ngram_new.train_test_overlap_map import (
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+DEFAULT_WRITE_DETAILS = False
+
 
 def build_reduce_step(dataset_config, map_step: ExecutorStep) -> ExecutorStep:
     config = OverlapReduceConfig(
@@ -40,6 +42,7 @@ def build_reduce_step(dataset_config, map_step: ExecutorStep) -> ExecutorStep:
         eval_dataset_paths=EVAL_DATASET_STEPS,
         ngram_lengths=DEFAULT_NGRAM_LENGTHS,
         processes=DEFAULT_MAX_PARALLELISM,
+        write_details=True,
     )
 
     return ExecutorStep(

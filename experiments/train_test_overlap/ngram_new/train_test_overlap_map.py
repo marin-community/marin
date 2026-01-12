@@ -17,7 +17,7 @@
 Run Zephyr-based map stage for old-style train/test overlap detection.
 
 This map stage builds a test-side n-gram index and streams training data,
-emitting overlap records that include training provenance (file + doc id).
+emitting per-(eval row, train row, n-gram) overlap records with full provenance.
 """
 
 import logging
@@ -32,9 +32,10 @@ from experiments.train_test_overlap.ngram_new.overlap_map import OverlapMapConfi
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-DEFAULT_NGRAM_LENGTHS = [15]
-DEFAULT_MAX_PARALLELISM = 16
+DEFAULT_NGRAM_LENGTHS = [20]
+DEFAULT_MAX_PARALLELISM = 64
 DEFAULT_NUM_SHARDS = 64
+DEFAULT_TOKENIZER = "whitespace_lower"
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ def build_map_step(dataset_config: DatasetConfig) -> ExecutorStep:
         ngram_lengths=DEFAULT_NGRAM_LENGTHS,
         processes=DEFAULT_MAX_PARALLELISM,
         num_shards=dataset_config.num_shards,
+        tokenizer=DEFAULT_TOKENIZER,
         text_field=dataset_config.text_field,
     )
 

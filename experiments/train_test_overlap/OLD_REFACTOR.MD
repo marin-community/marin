@@ -5,6 +5,14 @@ train/test overlap behavior described in `experiments/train_test_overlap/OLD.md`
 while keeping the same external API shape as
 `experiments/train_test_overlap/train_test_proofpile.py`.
 
+**Current goal (Attempt 3):** extend the `ngram_new` map/reduce pipeline to
+emit *full overlap provenance* for every matching n-gram between eval and
+training data. This includes file paths, row numbers, the exact n-gram text,
+and character offsets in the original text for both sides.
+If a test row has fewer tokens than a configured `n`, the pipeline should emit
+the **largest possible n-gram** for that row using `min(n, token_count)`, and
+record the **effective** n-gram length in outputs.
+
 The core idea is a map-reduce pipeline:
 1) build an n-gram inventory of all test data
 2) map over training shards to compute overlaps
@@ -23,8 +31,8 @@ Confirmed assumptions:
    - `re.compile(rf"[\\s{re.escape(string.punctuation)}]+")` as the split pattern.
    - Return the raw `re.split(...)` result without filtering empty strings.
    The pipeline still exposes a pluggable tokenizer for alternate behaviors.
-3) We only need minimal outputs for now (aggregate overlap counts and instance
-   IDs). Intermediate artifacts are acceptable and should live on GCS.
+3) We need detailed overlap outputs (not just aggregated counts). Large
+   intermediate artifacts are acceptable and should live on GCS.
 
 4) Per-eval-dataset provenance is required, keyed only by dataset name
    (no subset/split).
@@ -41,7 +49,8 @@ Confirmed assumptions:
   aligned with `DeconConfig` (input_path, decontaminate_source, ngram list, etc).
 - Use Zephyr for all data processing (no ad-hoc Ray loops).
 - Preserve the old directionality: test n-grams indexed, training shards scanned.
-- Track training provenance for overlaps (file path + document id when present).
+- Track full overlap provenance for each eval instance, including eval file
+  path + row, training file path + row, n-gram text, and character offsets.
 - Keep the implementation simple but scalable (no monolithic in-memory index).
 
 ---
@@ -348,3 +357,54 @@ Tracking suggestion:
 - Write a small `progress_summary.json` after each stage with:
   `num_eval_files`, `num_train_files`, `num_shards`, `max_parallelism`,
   and any completed output paths for quick diagnosis on retries.
+
+---
+
+## ATTEMPT 3: Detailed overlap tracing (new goal)
+
+**Goal:** update `experiments/train_test_overlap/ngram_new/train_test_overlap_map.py`
+and `experiments/train_test_overlap/ngram_new/train_test_overlap_reduce.py` to
+emit *full per-overlap provenance* rather than only aggregated stats.
+
+### Required overlap record (per eval row, train row, n-gram)
+
+Each record must capture a single `(eval_row, train_row, ngram)` relationship
+and include lists of character offsets in the original text for both sides.
+The same eval row can match multiple train rows, and the same train row can
+match multiple different n-grams (each as its own record).
+
+**Eval-side fields:**
+- `eval_dataset` (dataset name)
+- `eval_path` (GCS link to the eval JSONL/JSON/parquet file)
+- `eval_row` (0-based row index within the eval file)
+- `eval_text` (full text for the eval row)
+- `ngram` (the exact n-gram string)
+- `eval_offsets` (list of `[start, end]` character offsets for this n-gram)
+- `n` (effective n-gram length after applying `min(n, token_count)` for short rows)
+
+**Train-side fields:**
+- `train_path` (GCS link to the training JSONL/JSON/parquet file)
+- `train_row` (0-based row index within the training file)
+- `train_text` (full text for the training row)
+- `train_ngram` (the exact n-gram string; should match `ngram`)
+- `train_offsets` (list of `[start, end]` character offsets for this n-gram)
+- `train_doc_id` (optional when present in the training record)
+
+### Output layout (attempt 3)
+
+Add a new detailed output file (large is fine):
+```
+<output_path>/
+  stats/overlap_details.jsonl.gz   # per (eval_row, train_row, ngram)
+```
+
+Keep existing aggregate outputs (`overlap_stats.jsonl`) unchanged.
+
+### Answered requirements (for continuity)
+
+1) Offsets are **character offsets** in the **original text** (not token offsets).
+2) Row numbers are **0-based** and refer to the row within each file (parquet/JSONL).
+3) Emit **one record per (eval row, train row, ngram)** with **lists of positions**
+   for each side.
+4) Output can be large; **use a new detailed output file**.
+5) Text fields are **configurable**; default to `text`.

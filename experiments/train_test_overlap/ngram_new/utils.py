@@ -16,6 +16,7 @@ import hashlib
 import os
 import re
 import string
+from collections import defaultdict
 from collections.abc import Iterator, Sequence
 
 import msgspec
@@ -23,6 +24,7 @@ import msgspec
 from marin.utils import fsspec_exists, fsspec_glob, fsspec_isdir
 
 _TOKENIZER_PATTERN = re.compile(rf"[\s{re.escape(string.punctuation)}]+")
+_WHITESPACE_PATTERN = re.compile(r"\S+")
 _EVAL_HASH_SUFFIX = re.compile(r"^(?P<name>.+)-[0-9a-f]{6}$")
 _EVAL_DOLMA_SUFFIX = "-dolma"
 _TRAINING_EXTENSIONS = (
@@ -34,6 +36,7 @@ _TRAINING_EXTENSIONS = (
     ".jsonl.zst",
     ".parquet",
 )
+_EVAL_EXTENSIONS = _TRAINING_EXTENSIONS
 
 
 class DefaultTokenizer:
@@ -80,6 +83,71 @@ def iter_ngrams(tokens: list[str], n: int, stride: int) -> Iterator[str]:
         yield " ".join(tokens[i : i + n])
 
 
+def tokenize_with_offsets(text: str, tokenizer_name: str) -> tuple[list[str], list[tuple[int, int]]]:
+    """Return tokens and (start, end) offsets for the selected tokenizer."""
+    tokens: list[str] = []
+    offsets: list[tuple[int, int]] = []
+
+    if tokenizer_name in {"default", "no_lowercase"}:
+        lowercase = tokenizer_name == "default"
+        last_end = 0
+        for match in _TOKENIZER_PATTERN.finditer(text):
+            token = text[last_end : match.start()]
+            if lowercase:
+                token = token.lower()
+            tokens.append(token)
+            offsets.append((last_end, match.start()))
+            last_end = match.end()
+        token = text[last_end:]
+        if lowercase:
+            token = token.lower()
+        tokens.append(token)
+        offsets.append((last_end, len(text)))
+        return tokens, offsets
+
+    if tokenizer_name in {"whitespace", "whitespace_lower"}:
+        lowercase = tokenizer_name == "whitespace_lower"
+        for match in _WHITESPACE_PATTERN.finditer(text):
+            token = match.group(0)
+            if lowercase:
+                token = token.lower()
+            tokens.append(token)
+            offsets.append((match.start(), match.end()))
+        return tokens, offsets
+
+    raise ValueError(f"Unknown tokenizer: {tokenizer_name}")
+
+
+def iter_ngrams_with_offsets(
+    tokens: list[str],
+    offsets: list[tuple[int, int]],
+    n: int,
+    stride: int,
+) -> Iterator[tuple[str, tuple[int, int]]]:
+    """Yield (ngram, (start, end)) where offsets refer to original text."""
+    if len(tokens) != len(offsets):
+        raise ValueError("tokens and offsets must have the same length")
+    step = stride + 1
+    for i in range(0, len(tokens) - n + 1, step):
+        ngram = " ".join(tokens[i : i + n])
+        start = offsets[i][0]
+        end = offsets[i + n - 1][1]
+        yield ngram, (start, end)
+
+
+def build_ngram_offsets(
+    tokens: list[str],
+    offsets: list[tuple[int, int]],
+    n: int,
+    stride: int,
+) -> dict[str, list[tuple[int, int]]]:
+    """Build mapping from n-gram to list of (start, end) offsets."""
+    result: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    for ngram, span in iter_ngrams_with_offsets(tokens, offsets, n, stride):
+        result[ngram].append(span)
+    return result
+
+
 def stable_hash(value: str | bytes) -> int:
     """Return a deterministic 64-bit hash using blake2b."""
     if isinstance(value, str):
@@ -99,7 +167,7 @@ def parse_eval_dataset_name(path: str) -> str:
     """Extract dataset name from an eval dataset output path."""
     cleaned = path.rstrip("/")
     basename = os.path.basename(cleaned)
-    if basename.endswith((".jsonl", ".jsonl.gz", ".jsonl.zst")):
+    if basename.endswith(_EVAL_EXTENSIONS):
         basename = os.path.basename(os.path.dirname(cleaned))
     match = _EVAL_HASH_SUFFIX.match(basename)
     if match:
@@ -141,8 +209,9 @@ def collect_eval_file_specs(eval_paths: str | Sequence[str]) -> list[dict]:
     specs: list[dict] = []
     for eval_path in _normalize_paths(eval_paths):
         eval_dataset = parse_eval_dataset_name(eval_path)
-        files = fsspec_glob(f"{eval_path.rstrip('/')}/**/*.jsonl*")
-        if not files and eval_path.endswith((".jsonl", ".jsonl.gz", ".jsonl.zst")):
+        extensions = ",".join(ext.lstrip(".") for ext in _EVAL_EXTENSIONS)
+        files = fsspec_glob(f"{eval_path.rstrip('/')}/**/*.{{{extensions}}}")
+        if not files and eval_path.endswith(_EVAL_EXTENSIONS):
             files = [eval_path]
         if not files:
             raise FileNotFoundError(f"No eval jsonl files found in path: {eval_path}")

@@ -20,7 +20,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import fsspec
-from zephyr import Backend, Dataset, load_jsonl
+import msgspec
+from zephyr import Backend, Dataset, load_file, load_jsonl
 
 from experiments.train_test_overlap.ngram_new.utils import collect_eval_file_specs, record_id
 
@@ -34,16 +35,21 @@ class OverlapReduceConfig:
     map_output_path: str
     output_path: str
     eval_dataset_paths: str | list[str] | None = None
+    eval_text_field: str = "text"
     ngram_lengths: list[int] = field(default_factory=list)
     processes: int = 32
     skip_existing: bool = True
+    write_details: bool = False
 
 
 def _reduce_overlap_group(key: tuple[str, int], items: Iterator[dict]) -> dict:
     eval_dataset, n_val = key
     instance_ids: set[str] = set()
     for item in items:
-        instance_ids.update(item["instance_ids"])
+        instance_id = item.get("eval_instance_id")
+        if instance_id is None:
+            instance_id = f"{item['eval_path']}:{item['eval_row']}"
+        instance_ids.add(instance_id)
     return {"eval_dataset": eval_dataset, "n": n_val, "instance_ids": sorted(instance_ids)}
 
 
@@ -52,7 +58,10 @@ def _reduce_overlap_by_train_path(key: tuple[str, int, str], items: Iterator[dic
     instance_ids: set[str] = set()
     doc_ids: set[str] = set()
     for item in items:
-        instance_ids.update(item["instance_ids"])
+        instance_id = item.get("eval_instance_id")
+        if instance_id is None:
+            instance_id = f"{item['eval_path']}:{item['eval_row']}"
+        instance_ids.add(instance_id)
         doc_id = item.get("train_doc_id")
         if doc_id:
             doc_ids.add(doc_id)
@@ -74,26 +83,26 @@ def _load_test_instance_counts(counts_path: str) -> dict[str, int]:
     return counts
 
 
-def _compute_test_instance_counts(eval_dataset_paths: str | list[str]) -> dict[str, int]:
+def _compute_test_instance_counts(eval_dataset_paths: str | list[str], text_field: str) -> dict[str, int]:
     counts: dict[str, set[str]] = defaultdict(set)
     eval_specs = collect_eval_file_specs(eval_dataset_paths)
     for spec in eval_specs:
         eval_dataset = spec["eval_dataset"]
-        for record in load_jsonl(spec["path"]):
-            text = record.get("text")
+        for record in load_file(spec["path"]):
+            text = record.get(text_field)
             if text is None:
                 continue
             counts[eval_dataset].add(record_id(record))
     return {dataset: len(instance_ids) for dataset, instance_ids in counts.items()}
 
 
-def _compute_test_instance_links(eval_dataset_paths: str | list[str]) -> dict[tuple[str, str], str]:
+def _compute_test_instance_links(eval_dataset_paths: str | list[str], text_field: str) -> dict[tuple[str, str], str]:
     links: dict[tuple[str, str], str] = {}
     eval_specs = collect_eval_file_specs(eval_dataset_paths)
     for spec in eval_specs:
         eval_dataset = spec["eval_dataset"]
-        for record in load_jsonl(spec["path"]):
-            text = record.get("text")
+        for record in load_file(spec["path"]):
+            text = record.get(text_field)
             if text is None:
                 continue
             instance_id = record_id(record)
@@ -107,6 +116,16 @@ def _attach_instance_links(
     return [link_map.get((eval_dataset, instance_id), instance_id) for instance_id in instance_ids]
 
 
+def _load_test_index_n_values(map_output_path: str) -> list[int]:
+    index_path = os.path.join(map_output_path, "tmp", "test_index.msgpack")
+    fs, fs_path = fsspec.core.url_to_fs(index_path)
+    if not fs.exists(fs_path):
+        return []
+    with fs.open(fs_path, "rb") as f:
+        index = msgspec.msgpack.decode(f.read())
+    return sorted(int(n) for n in index.keys())
+
+
 def run_overlap_reduce(config: OverlapReduceConfig) -> str:
     """Aggregate overlap events into per-dataset statistics."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -114,20 +133,34 @@ def run_overlap_reduce(config: OverlapReduceConfig) -> str:
     stats_dir = os.path.join(config.output_path, "stats")
     stats_path = os.path.join(stats_dir, "overlap_stats.jsonl")
     train_path_stats_path = os.path.join(stats_dir, "overlap_stats_by_train_path.jsonl")
+    details_path = os.path.join(stats_dir, "overlap_details.jsonl.gz")
     stats_fs, stats_fs_path = fsspec.core.url_to_fs(stats_path)
     train_fs, train_fs_path = fsspec.core.url_to_fs(train_path_stats_path)
+    details_fs, details_fs_path = fsspec.core.url_to_fs(details_path)
     stats_exists = stats_fs.exists(stats_fs_path)
     train_path_exists = train_fs.exists(train_fs_path)
-    if config.skip_existing and stats_exists and train_path_exists:
-        logger.info("Skipping reduce; outputs exist at %s and %s", stats_path, train_path_stats_path)
+    details_exists = details_fs.exists(details_fs_path) if config.write_details else True
+    if config.skip_existing and stats_exists and train_path_exists and details_exists:
+        logger.info(
+            "Skipping reduce; outputs exist at %s, %s, and %s",
+            stats_path,
+            train_path_stats_path,
+            details_path,
+        )
         return config.output_path
 
-    overlaps_pattern = os.path.join(config.map_output_path, "tmp", "overlap_instances-*.jsonl.gz")
+    overlaps_pattern = os.path.join(config.map_output_path, "tmp", "overlap_details-*.jsonl.gz")
     overlaps_dataset = Dataset.from_files(overlaps_pattern).flat_map(load_jsonl)
 
     link_map: dict[tuple[str, str], str] = {}
     if config.eval_dataset_paths is not None:
-        link_map = _compute_test_instance_links(config.eval_dataset_paths)
+        link_map = _compute_test_instance_links(config.eval_dataset_paths, config.eval_text_field)
+
+    if config.write_details and (not config.skip_existing or not details_exists):
+        details_fs.makedirs(os.path.dirname(details_fs_path), exist_ok=True)
+        with fsspec.open(details_path, "wt", compression="infer") as f:
+            for record in Backend.execute(overlaps_dataset, max_parallelism=config.processes):
+                f.write(json.dumps(record) + "\n")
 
     if not config.skip_existing or not train_path_exists:
         train_path_pipeline = overlaps_dataset.map(
@@ -136,7 +169,9 @@ def run_overlap_reduce(config: OverlapReduceConfig) -> str:
                 "n": r["n"],
                 "train_path": r["train_path"],
                 "train_doc_id": r.get("train_doc_id"),
-                "instance_ids": r["instance_ids"],
+                "eval_instance_id": r.get("eval_instance_id"),
+                "eval_path": r.get("eval_path"),
+                "eval_row": r.get("eval_row"),
             }
         ).group_by(
             key=lambda r: (r["eval_dataset"], r["n"], r["train_path"]),
@@ -153,7 +188,13 @@ def run_overlap_reduce(config: OverlapReduceConfig) -> str:
 
     if not config.skip_existing or not stats_exists:
         overlaps_pipeline = overlaps_dataset.map(
-            lambda r: {"eval_dataset": r["eval_dataset"], "n": r["n"], "instance_ids": r["instance_ids"]}
+            lambda r: {
+                "eval_dataset": r["eval_dataset"],
+                "n": r["n"],
+                "eval_instance_id": r.get("eval_instance_id"),
+                "eval_path": r.get("eval_path"),
+                "eval_row": r.get("eval_row"),
+            }
         ).group_by(key=lambda r: (r["eval_dataset"], r["n"]), reducer=_reduce_overlap_group, num_output_shards=1)
         overlap_records = list(Backend.execute(overlaps_pipeline, max_parallelism=config.processes))
 
@@ -164,7 +205,7 @@ def run_overlap_reduce(config: OverlapReduceConfig) -> str:
         else:
             if config.eval_dataset_paths is None:
                 raise ValueError("eval_dataset_paths is required when test_instance_counts.jsonl is missing")
-            counts = _compute_test_instance_counts(config.eval_dataset_paths)
+            counts = _compute_test_instance_counts(config.eval_dataset_paths, config.eval_text_field)
 
         n_values = (
             sorted(set(config.ngram_lengths))
@@ -204,4 +245,6 @@ def run_overlap_reduce(config: OverlapReduceConfig) -> str:
         f.write("")
 
     logger.info("Wrote overlap stats to %s", stats_path)
+    if config.write_details:
+        logger.info("Wrote overlap details to %s", details_path)
     return config.output_path
