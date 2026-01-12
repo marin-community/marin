@@ -326,3 +326,31 @@ def add(a, b):
         # Should contain the user template
         assert "Please solve the programming task below" in prompt
         assert "Test problem." in prompt
+
+    def test_metrics_include_execution_time(self):
+        """Test that execution time metrics are returned."""
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        code_response = """<think>T</think><answer>
+```python
+def add(a, b): return a + b
+```
+</answer>"""
+
+        inference_ctx = DummyInferenceContext(tokenizer, code_response)
+        train_data = [{"content": "Prob", "test": "assert add(1,1)==2", "python": "sol"}]
+        env = CodeR1Env(train_dataset=train_data, max_train_examples=1)
+        prng_key = jax.random.PRNGKey(42)
+
+        _, metrics = env.sample(
+            inference_ctx=inference_ctx,
+            n_examples=1,
+            n_generations=1,
+            temperature=0.7,
+            prng_key=prng_key,
+            mode="train",
+        )
+
+        assert "code_r1.train_mean_execution_time" in metrics
+        assert "code_r1.train_total_execution_time" in metrics
+        assert metrics["code_r1.train_mean_execution_time"] >= 0.0
+        assert metrics["code_r1.train_total_execution_time"] >= 0.0

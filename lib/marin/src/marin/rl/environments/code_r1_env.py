@@ -26,7 +26,8 @@ import subprocess
 import tempfile
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NamedTuple
+import time
 
 import datasets
 import jax
@@ -112,6 +113,15 @@ LoadDatasetFn = Callable[..., Any]
 
 FORMAT_REWARD = 0.1
 ANSWER_REWARD = 1.0
+
+
+class ScoreResult(NamedTuple):
+    """Result of scoring a generated code response."""
+
+    reward: float
+    is_correct: float
+    code_extracted: float
+    execution_time: float
 
 
 def validate_response_structure(response: str) -> bool:
@@ -436,6 +446,7 @@ class CodeR1Env(MarinEnv):
         reward_sum = 0.0
         pass_sum = 0.0
         code_extracted_sum = 0.0
+        execution_time_sum = 0.0
         response_token_count = 0
         truncated_count = 0
 
@@ -447,7 +458,7 @@ class CodeR1Env(MarinEnv):
                 # (e.g. including the opening ```python block)
                 full_response = (prefill or "") + choice.message.content
 
-                reward, passed, code_extracted = self._score_choice(
+                score_result = self._score_choice(
                     example=example,
                     response_text=full_response,
                 )
@@ -457,8 +468,8 @@ class CodeR1Env(MarinEnv):
                     choice=choice,
                     env_name="code_r1",
                     env_example_id=example.example_id,
-                    reward=reward,
-                    correctness_reward=passed,
+                    reward=score_result.reward,
+                    correctness_reward=score_result.is_correct,
                     temperature=temperature,
                     top_k=top_k,
                     system_prompt=effective_system_prompt,
@@ -466,9 +477,10 @@ class CodeR1Env(MarinEnv):
 
                 group_rollouts.append(rollout)
                 total_choices += 1
-                reward_sum += reward
-                pass_sum += passed
-                code_extracted_sum += code_extracted
+                reward_sum += score_result.reward
+                pass_sum += score_result.is_correct
+                code_extracted_sum += score_result.code_extracted
+                execution_time_sum += score_result.execution_time
                 response_token_count += rollout.response_tokens.size
 
                 if choice.finish_reason == "length":
@@ -486,6 +498,8 @@ class CodeR1Env(MarinEnv):
             f"{prefix}_pass_rate": pass_sum / total_choices,
             f"{prefix}_code_extracted_rate": code_extracted_sum / total_choices,
             f"{prefix}_mean_response_tokens": response_token_count / total_choices,
+            f"{prefix}_mean_execution_time": execution_time_sum / total_choices,
+            f"{prefix}_total_execution_time": execution_time_sum,
             f"{prefix}_total_responses": float(total_choices),
             f"{prefix}_sampled_examples": float(len(sampled_examples)),
             f"{prefix}_truncated_percentage": float(truncated_count) / total_choices,
@@ -493,25 +507,32 @@ class CodeR1Env(MarinEnv):
 
         return rollout_groups, metrics
 
-    def _score_choice(self, example: CodeExample, response_text: str) -> tuple[float, float, float]:
+    def _score_choice(self, example: CodeExample, response_text: str) -> ScoreResult:
         """Score a generated code response by executing it against test cases.
 
         Returns:
-            Tuple of (reward, passed, code_extracted).
-            - reward: 1.0 if all tests pass, 0.0 otherwise
-            - passed: 1.0 if tests passed, 0.0 otherwise
-            - code_extracted: 1.0 if code was successfully extracted, 0.0 otherwise
+            ScoreResult containing reward, correctness, code extraction status, and execution time.
         """
         is_humaneval = example.metadata.get("source") == HUMANEVAL_DATASET
 
         if not is_humaneval:
             # Strict format/reward shaping for training (LeetCode)
             if not validate_response_structure(response_text):
-                return (-ANSWER_REWARD - FORMAT_REWARD), 0.0, 0.0
+                return ScoreResult(
+                    reward=-ANSWER_REWARD - FORMAT_REWARD,
+                    is_correct=0.0,
+                    code_extracted=0.0,
+                    execution_time=0.0,
+                )
 
             code = extract_python_code(response_text)
             if not code:
-                return (-ANSWER_REWARD - FORMAT_REWARD), 0.0, 0.0
+                return ScoreResult(
+                    reward=-ANSWER_REWARD - FORMAT_REWARD,
+                    is_correct=0.0,
+                    code_extracted=0.0,
+                    execution_time=0.0,
+                )
         else:
             # Relaxed evaluation for HumanEval (EvalPlus mode)
             # EvalPlus prompts force python code generation directly, skipping tags.
@@ -523,24 +544,51 @@ class CodeR1Env(MarinEnv):
                 code = None
 
             if not code:
-                return 0.0, 0.0, 0.0
+                return ScoreResult(
+                    reward=0.0,
+                    is_correct=0.0,
+                    code_extracted=0.0,
+                    execution_time=0.0,
+                )
 
+        start_time = time.perf_counter()
         passed, error_msg = execute_code_with_tests(
             code,
             example.test_cases,
             self.execution_timeout,
             entry_point=example.entry_point,
         )
+        execution_time = time.perf_counter() - start_time
 
         if passed:
             if is_humaneval:
-                return 1.0, 1.0, 1.0
-            return (FORMAT_REWARD + ANSWER_REWARD), 1.0, 1.0
+                return ScoreResult(
+                    reward=1.0,
+                    is_correct=1.0,
+                    code_extracted=1.0,
+                    execution_time=execution_time,
+                )
+            return ScoreResult(
+                reward=FORMAT_REWARD + ANSWER_REWARD,
+                is_correct=1.0,
+                code_extracted=1.0,
+                execution_time=execution_time,
+            )
         else:
             logger.debug(f"Code execution failed for {example.example_id}: {error_msg}")
             if is_humaneval:
-                return 0.0, 0.0, 1.0
-            return FORMAT_REWARD, 0.0, 1.0
+                return ScoreResult(
+                    reward=0.0,
+                    is_correct=0.0,
+                    code_extracted=1.0,
+                    execution_time=execution_time,
+                )
+            return ScoreResult(
+                reward=FORMAT_REWARD,
+                is_correct=0.0,
+                code_extracted=1.0,
+                execution_time=execution_time,
+            )
 
     def training_data(self) -> Iterator[CodeExample]:
         """Stream training examples for debugging."""
