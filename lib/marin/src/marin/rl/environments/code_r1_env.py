@@ -300,7 +300,7 @@ class CodeR1Env(MarinEnv):
 
         cleaned_examples: list[CodeExample] = []
         for idx, item in enumerate(dataset):
-            example = self._clean_example(item, f"{split_name}_{idx}")
+            example = self._clean_example(item, f"{split_name}_{idx}", source)
             if example is not None:
                 cleaned_examples.append(example)
                 if limit is not None and len(cleaned_examples) >= limit:
@@ -308,7 +308,7 @@ class CodeR1Env(MarinEnv):
 
         return cleaned_examples
 
-    def _clean_example(self, item: dict[str, Any], example_id: str) -> CodeExample | None:
+    def _clean_example(self, item: dict[str, Any], example_id: str, source: str) -> CodeExample | None:
         """Convert a raw dataset item into a CodeExample."""
 
         # Detect dataset schema
@@ -365,7 +365,7 @@ class CodeR1Env(MarinEnv):
             example_id=example_id,
             difficulty=difficulty,
             entry_point=entry_point,
-            metadata={"source": self.train_source},
+            metadata={"source": source},
         )
 
     def sample(
@@ -502,12 +502,28 @@ class CodeR1Env(MarinEnv):
             - passed: 1.0 if tests passed, 0.0 otherwise
             - code_extracted: 1.0 if code was successfully extracted, 0.0 otherwise
         """
-        if not validate_response_structure(response_text):
-            return (-ANSWER_REWARD - FORMAT_REWARD), 0.0, 0.0
+        is_humaneval = example.metadata.get("source") == HUMANEVAL_DATASET
 
-        code = extract_python_code(response_text)
-        if not code:
-            return (-ANSWER_REWARD - FORMAT_REWARD), 0.0, 0.0
+        if not is_humaneval:
+            # Strict format/reward shaping for training (LeetCode)
+            if not validate_response_structure(response_text):
+                return (-ANSWER_REWARD - FORMAT_REWARD), 0.0, 0.0
+
+            code = extract_python_code(response_text)
+            if not code:
+                return (-ANSWER_REWARD - FORMAT_REWARD), 0.0, 0.0
+        else:
+            # Relaxed evaluation for HumanEval (EvalPlus mode)
+            # EvalPlus prompts force python code generation directly, skipping tags.
+            # Just extract the markdown block.
+            code_blocks = re.findall(r"```(?:\w+)?\n(.*?)\n```", response_text, re.DOTALL)
+            if code_blocks:
+                code = "\n".join(code_blocks).strip()
+            else:
+                code = None
+
+            if not code:
+                return 0.0, 0.0, 0.0
 
         passed, error_msg = execute_code_with_tests(
             code,
@@ -517,9 +533,13 @@ class CodeR1Env(MarinEnv):
         )
 
         if passed:
+            if is_humaneval:
+                return 1.0, 1.0, 1.0
             return (FORMAT_REWARD + ANSWER_REWARD), 1.0, 1.0
         else:
             logger.debug(f"Code execution failed for {example.example_id}: {error_msg}")
+            if is_humaneval:
+                return 0.0, 0.0, 1.0
             return FORMAT_REWARD, 0.0, 1.0
 
     def training_data(self) -> Iterator[CodeExample]:
