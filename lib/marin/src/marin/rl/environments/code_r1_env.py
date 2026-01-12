@@ -83,6 +83,9 @@ class CodeExample:
 
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    entry_point: str | None = None
+    """Function name to call for testing (HumanEval)."""
+
 
 LoadDatasetFn = Callable[..., Any]
 
@@ -116,13 +119,19 @@ def extract_python_code(response: str) -> str | None:
     return None
 
 
-def execute_code_with_tests(code: str, test_cases: str, timeout: int = CODE_EXECUTION_TIMEOUT) -> tuple[bool, str]:
+def execute_code_with_tests(
+    code: str,
+    test_cases: str,
+    timeout: int = CODE_EXECUTION_TIMEOUT,
+    entry_point: str | None = None,
+) -> tuple[bool, str]:
     """Execute Python code with test cases in a sandboxed subprocess.
 
     Args:
         code: The Python code to execute.
         test_cases: Test case code that should run after the main code.
         timeout: Maximum execution time in seconds.
+        entry_point: Optional function name to verify using check().
 
     Returns:
         Tuple of (success, error_message).
@@ -131,7 +140,12 @@ def execute_code_with_tests(code: str, test_cases: str, timeout: int = CODE_EXEC
         return False, "No code extracted"
 
     # Combine code and tests
-    full_code = f"{code}\n\n{test_cases}"
+    if entry_point:
+        # HumanEval style: append check(entry_point)
+        full_code = f"{code}\n\n{test_cases}\n\ncheck({entry_point})"
+    else:
+        # LeetCode style: tests are self-contained calls
+        full_code = f"{code}\n\n{test_cases}"
 
     try:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
@@ -283,6 +297,7 @@ class CodeR1Env(MarinEnv):
             test_cases = item["test"]
             solution = item["canonical_solution"]
             difficulty = None
+            entry_point = item.get("entry_point")
             # Use task_id as example_id if available
             example_id = item.get("task_id", example_id)
         elif "problem_description" in item:
@@ -291,6 +306,7 @@ class CodeR1Env(MarinEnv):
             test_cases = item["test"]
             solution = item.get("completion")
             difficulty = item.get("difficulty")
+            entry_point = None  # LeetCode usually self-contained in 'test'
             example_id = item.get("task_id", example_id)
         elif "content" in item:
             # LeetCodeDataset format (old schema/fallback)
@@ -298,6 +314,7 @@ class CodeR1Env(MarinEnv):
             test_cases = item.get("test", "")
             solution = item.get("python", None)
             difficulty = item.get("difficulty", None)
+            entry_point = None
         else:
             # Unknown format
             logger.warning(f"Unknown dataset format for example {example_id}. Keys: {item.keys()}")
@@ -326,6 +343,7 @@ class CodeR1Env(MarinEnv):
             processed_prompt=processed_prompt,
             example_id=example_id,
             difficulty=difficulty,
+            entry_point=entry_point,
             metadata={"source": self.train_source},
         )
 
@@ -468,7 +486,12 @@ class CodeR1Env(MarinEnv):
         if code is None:
             return 0.0, 0.0, 0.0
 
-        passed, error_msg = execute_code_with_tests(code, example.test_cases, self.execution_timeout)
+        passed, error_msg = execute_code_with_tests(
+            code,
+            example.test_cases,
+            self.execution_timeout,
+            entry_point=example.entry_point,
+        )
 
         if passed:
             return 1.0, 1.0, 1.0
