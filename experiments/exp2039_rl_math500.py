@@ -28,15 +28,18 @@ from marin.rl.rl_experiment_utils import (
     RLExperimentConfig,
     make_rl_step,
 )
+from marin.rl.environments.inference_ctx.vllm_utils import TOOTSIE_GIRAFFE_64K_PATH
 
 logger = logging.getLogger(__name__)
 
 
-llama_3_1_8b = ModelConfig(
-    name="meta-llama/Llama-3.1-8B-Instruct",
-    type="llama",
-    tokenizer="meta-llama/Llama-3.1-8B-Instruct",
-    checkpoint="meta-llama/Llama-3.1-8B-Instruct",
+# Long-context Marin 8B model (giraffe phase 3, 64k context, RoPE theta=5M)
+# Produced by experiments/tootsie/exp2062_long_context_8b.py
+marin_8b_giraffe_64k = ModelConfig(
+    name=TOOTSIE_GIRAFFE_64K_PATH,
+    type="llama",  # Uses Llama architecture, determines stop tokens
+    tokenizer=TOOTSIE_GIRAFFE_64K_PATH,  # Tokenizer is included in checkpoint
+    checkpoint=TOOTSIE_GIRAFFE_64K_PATH,  # Initial weights for trainer
     config_class=LlamaConfig,
 )
 
@@ -80,8 +83,9 @@ def main():
         logger.info("Skipping experiment execution on CI environment, needs HF access.")
         return
 
-    llama_8b = RLExperimentConfig(
-        model_config=llama_3_1_8b,
+    # Long-context Marin 8B giraffe model (64k context, RoPE theta=5M)
+    marin_giraffe_64k = RLExperimentConfig(
+        model_config=marin_8b_giraffe_64k,
         rl_loss=RLOOLoss(
             kl_coef=0.0,
             clip_epsilon_low=0.2,
@@ -90,21 +94,21 @@ def main():
             do_trainer_inference_mismatch_importance_sampling=True,
             tis_importance_sampling_ratio_max=2.0,
             do_overlong_filtering=True,
-            vocab_tile_size=32064,
+            vocab_tile_size=32064,  # Llama3 tokenizer vocab size alignment
         ),
-        experiment_name_suffix="math-lr=2e-6-bs=1024",
+        experiment_name_suffix="giraffe-64k-math-lr=2e-6-bs=1024",
         train_batch_size=1024,
         per_device_parallelism=16,
         learning_rate=2e-6,
-        max_input_tokens=1024,
-        max_output_tokens=1024,
+        max_input_tokens=1024,  # Can increase to leverage 64k context if needed
+        max_output_tokens=1024,  # Can increase to leverage 64k context if needed
         n_prompts=64,
         n_generations_per_prompt=16,
         inflight_weight_updates=True,
         max_rollout_step_delay=1,
     )
 
-    experiment_configs = [llama_8b]
+    experiment_configs = [marin_giraffe_64k]
     experiments = []
     datestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     for experiment_config in experiment_configs:

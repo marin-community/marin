@@ -15,15 +15,15 @@
 import dataclasses
 import datetime
 import logging
+
 import jmp
 from levanter.checkpoint import CheckpointerConfig
 from levanter.layers.attention import AttentionBackend
-from levanter.compat.hf_checkpoints import HFCompatConfig
+from levanter.compat.hf_checkpoints import HFCompatConfig, HFCheckpointConverter
 from levanter.distributed import RayConfig
 from levanter.optim import AdamConfig
 from levanter.tracker.wandb import WandbConfig
 from levanter.trainer import TrainerConfig
-from transformers import AutoConfig
 from levanter.utils.mesh import MeshConfig
 
 from marin.execution.executor import ExecutorStep, OutputName
@@ -124,8 +124,39 @@ def get_stop_tokens(model_type: str) -> list[str]:
         raise ValueError(f"Unknown model_type: {model_type}")
 
 
+# def load_hf_config(model_name_or_path: str):
+#     """Load HuggingFace config from either a HF Hub repo or a cloud storage path.
+
+#     Args:
+#         model_name_or_path: Either a HuggingFace Hub repo ID (e.g., "meta-llama/Llama-3.1-8B-Instruct")
+#                            or a cloud storage path (e.g., "gs://bucket/path/to/checkpoint/").
+
+#     Returns:
+#         A HuggingFace PretrainedConfig object.
+#     """
+#     # Check if it's a cloud storage path (gs://, s3://, etc.)
+#     if "://" in model_name_or_path:
+#         # Construct the config.json path by appending to the URL
+#         # Use string operations to avoid issues with os.path.join and URL encoding
+#         config_url = model_name_or_path.rstrip("/") + "/config.json"
+
+#         logger.info(f"Loading config from cloud storage: {config_url}")
+
+#         # Use fsspec to load config.json from cloud storage
+#         with fsspec.open(config_url, "r") as f:
+#             config_dict = json.load(f)
+
+#         # Use AutoConfig to instantiate the correct config class from the dict
+#         return AutoConfig.for_model(**config_dict)
+#     else:
+#         # Standard HuggingFace Hub path
+#         return AutoConfig.from_pretrained(model_name_or_path)
+
+
 def make_rl_step(name: str, config: RLExperimentConfig, curriculum: CurriculumConfig) -> ExecutorStep:
-    hf_config = AutoConfig.from_pretrained(config.model_config.name)
+    # hf_config = load_hf_config(config.model_config.name)
+    converter = HFCheckpointConverter.from_hf(config.model_config.name, trust_remote_code=True)
+    hf_config = converter.hf_config_from_hf_checkpoint()
     model_config_cls = config.model_config.config_class.from_hf_config(hf_config)
 
     model_config = dataclasses.replace(

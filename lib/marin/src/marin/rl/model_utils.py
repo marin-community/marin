@@ -34,15 +34,35 @@ logger = logging.getLogger(__name__)
 
 
 def is_hf_checkpoint(checkpoint: str) -> bool:
-    """Determine if checkpoint is a HuggingFace model or local path.
+    """Determine if checkpoint is a HuggingFace-format model.
 
-    Uses a simple heuristic: if the checkpoint looks like a path then
-    assume it is a local Levanter checkpoint; otherwise assume it is a
-    HuggingFace repository.
+    Uses heuristics to determine the checkpoint format:
+    - HuggingFace Hub repos (e.g., "meta-llama/Llama-3.1-8B-Instruct") -> True
+    - GCS/S3 paths with "/hf/" in the path (Marin's HF export convention) -> True
+    - Local paths starting with "/", "./", or "../" -> False (Levanter format)
+    - Other URL schemes -> False (Levanter format)
+
+    The "/hf/" convention is used by Marin's training pipeline when exporting
+    checkpoints in HuggingFace format (see experiments/tootsie/exp2062_long_context_8b.py).
     """
-    return not (
-        "://" in checkpoint or checkpoint.startswith("/") or checkpoint.startswith("./") or checkpoint.startswith("../")
-    )
+    # Check for cloud storage paths with HF-format exports
+    # Marin convention: HF exports are stored in paths containing "/hf/"
+    if checkpoint.startswith("gs://") or checkpoint.startswith("s3://"):
+        if "/hf/" in checkpoint:
+            return True
+        # Cloud path without /hf/ marker - assume Levanter format
+        return False
+
+    # Local paths are Levanter format
+    if checkpoint.startswith("/") or checkpoint.startswith("./") or checkpoint.startswith("../"):
+        return False
+
+    # Other URL schemes (e.g., http://, file://) are Levanter format
+    if "://" in checkpoint:
+        return False
+
+    # Otherwise, assume HuggingFace Hub repository
+    return True
 
 
 def load_model_from_checkpoint(

@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Long-context Marin 8B model (giraffe phase 3, 64k context, RoPE theta=5M)
+# Produced by experiments/tootsie/exp2062_long_context_8b.py
+TOOTSIE_GIRAFFE_64K_PATH = "gs://marin-us-central1/checkpoints/tootsie-8b-giraffe-phase3-64k-21219c/hf/step-2999/"
+
 
 def levanter_llama_to_vllm_mapping():
     return {
@@ -90,6 +94,7 @@ MODEL_MAPPINGS = {
     "meta-llama/Llama-3.1-8B-Instruct": levanter_llama_to_vllm_mapping(),
     "Qwen/Qwen3-8B": levanter_qwen_to_vllm_mapping(),
     "marin-community/marin-8b-instruct": levanter_llama_to_vllm_mapping(),
+    TOOTSIE_GIRAFFE_64K_PATH: levanter_llama_to_vllm_mapping(),
 }
 
 MODEL_TRANSPOSE_KEYS = {
@@ -100,4 +105,5 @@ MODEL_TRANSPOSE_KEYS = {
     "meta-llama/Llama-3.1-8B-Instruct": llama_transpose_keys,
     "Qwen/Qwen3-8B": llama_transpose_keys,
     "marin-community/marin-8b-instruct": llama_transpose_keys,
+    TOOTSIE_GIRAFFE_64K_PATH: llama_transpose_keys,
 }
