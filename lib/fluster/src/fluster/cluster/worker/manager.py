@@ -23,7 +23,7 @@ import uuid
 from pathlib import Path
 
 from fluster import cluster_pb2
-from .types import Job
+from .worker_types import Job
 from .bundle import BundleCache
 from .builder import VenvCache, ImageBuilder
 from .runtime import DockerRuntime, ContainerConfig
