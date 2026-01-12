@@ -591,3 +591,55 @@ async def test_job_to_proto_includes_status_message(job_manager):
 
     proto = job.to_proto()
     assert proto.status_message == "test message"
+
+
+@pytest.mark.asyncio
+async def test_fray_port_mapping_env_var(job_manager, mock_runtime):
+    """Test that FRAY_PORT_MAPPING environment variable is set with port mappings."""
+    request = create_run_job_request(ports=["web", "api", "metrics"])
+    job_id = await job_manager.submit_job(request)
+
+    job = job_manager.get_job(job_id)
+    await asyncio.wait_for(job.task, timeout=5.0)
+
+    # Verify runtime.run was called with correct environment
+    assert mock_runtime.run.called
+    call_args = mock_runtime.run.call_args
+    config = call_args[0][0]
+
+    # Check that FRAY_PORT_MAPPING is set
+    assert "FRAY_PORT_MAPPING" in config.env
+
+    # Parse the port mapping
+    port_mapping = config.env["FRAY_PORT_MAPPING"]
+    mappings = {}
+    for pair in port_mapping.split(","):
+        name, port = pair.split(":")
+        mappings[name] = int(port)
+
+    # Verify all ports are present
+    assert set(mappings.keys()) == {"web", "api", "metrics"}
+    assert len(set(mappings.values())) == 3  # All ports should be unique
+
+    # Verify individual FLUSTER_PORT_* variables are also set
+    assert "FLUSTER_PORT_WEB" in config.env
+    assert "FLUSTER_PORT_API" in config.env
+    assert "FLUSTER_PORT_METRICS" in config.env
+
+
+@pytest.mark.asyncio
+async def test_fray_port_mapping_not_set_when_no_ports(job_manager, mock_runtime):
+    """Test that FRAY_PORT_MAPPING is not set when no ports are requested."""
+    request = create_run_job_request(ports=[])
+    job_id = await job_manager.submit_job(request)
+
+    job = job_manager.get_job(job_id)
+    await asyncio.wait_for(job.task, timeout=5.0)
+
+    # Verify runtime.run was called
+    assert mock_runtime.run.called
+    call_args = mock_runtime.run.call_args
+    config = call_args[0][0]
+
+    # FRAY_PORT_MAPPING should not be set when there are no ports
+    assert "FRAY_PORT_MAPPING" not in config.env

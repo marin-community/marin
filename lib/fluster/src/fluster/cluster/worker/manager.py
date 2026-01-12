@@ -112,9 +112,10 @@ class JobManager:
 
         Returns job_id immediately, execution happens in background.
 
-        Note: FLUSTER_* environment variables are reserved and will be overwritten:
+        Note: FLUSTER_* and FRAY_* environment variables are reserved and will be overwritten:
         - FLUSTER_JOB_ID: Set to the job ID
         - FLUSTER_PORT_<NAME>: Set to allocated port numbers (e.g., FLUSTER_PORT_HTTP)
+        - FRAY_PORT_MAPPING: Comma-separated port mappings (e.g., "web:8080,api:8081")
         """
         job_id = request.job_id or str(uuid.uuid4())
 
@@ -188,6 +189,11 @@ class JobManager:
                 env["FLUSTER_JOB_ID"] = job.job_id
                 for name, port in job.ports.items():
                     env[f"FLUSTER_PORT_{name.upper()}"] = str(port)
+
+                # Add FRAY_PORT_MAPPING for communicating all port mappings as a single variable
+                if job.ports:
+                    port_mapping = ",".join(f"{name}:{port}" for name, port in job.ports.items())
+                    env["FRAY_PORT_MAPPING"] = port_mapping
 
                 config = ContainerConfig(
                     image=build_result.image_tag,
