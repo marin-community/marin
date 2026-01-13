@@ -68,8 +68,8 @@ EVAL_TASKS = [
 ]
 
 # Seeds for multiple evaluation runs to compute averaged results
-SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
-# SEEDS = [42, 43, 44]
+# SEEDS = [42, 43, 44, 45, 46, 47, 48, 49, 50, 51]
+SEEDS = [42, 43, 44]
 
 MODELS = [
     # {
@@ -190,18 +190,18 @@ MODELS = [
     # },
 
     # START exp2199
-    {
-        "name": "marin-8b-longcontext-finetuned-ot3-exp2199a2_redo2",
-        "path": "gs://marin-us-central2/checkpoints/exp2199a2_redo2_sft_longcontext_marin_8b_ot3_bsz512_lr8e_5-fe3bab/hf/step-11718/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 4,
-    },
-    {
-        "name": "qwen2.5-7b-instruct-finetuned-ot3-exp2199b_redo3",
-        "path": "gs://marin-us-central2/checkpoints/exp2199b_redo3_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-c05011/hf/step-11718/",
-        "apply_chat_template": True,
-        "tensor_parallel_size": 1,
-    },
+    # {
+    #     "name": "marin-8b-longcontext-finetuned-ot3-exp2199a2_redo2",
+    #     "path": "gs://marin-us-central2/checkpoints/exp2199a2_redo2_sft_longcontext_marin_8b_ot3_bsz512_lr8e_5-fe3bab/hf/step-11718/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 4,
+    # },
+    # {
+    #     "name": "qwen2.5-7b-instruct-finetuned-ot3-exp2199b_redo3",
+    #     "path": "gs://marin-us-central2/checkpoints/exp2199b_redo3_sft_qwen2pt5_7b_instruct_ot3_bsz512_lr8e_5-c05011/hf/step-11718/",
+    #     "apply_chat_template": True,
+    #     "tensor_parallel_size": 1,
+    # },
 
     # START exp2262
     # {
@@ -264,6 +264,30 @@ MODELS = [
     #     "apply_chat_template": True,
     #     "tensor_parallel_size": 1,
     # },
+    {
+        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
+        "path": "gs://marin-us-east5/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-500/",
+        "apply_chat_template": True,
+        "tensor_parallel_size": 4,
+    },
+    {
+        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
+        "path": "gs://marin-us-east5/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-500/",
+        "apply_chat_template": True,
+        "tensor_parallel_size": 4,
+    },
+    {
+        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-32b-exp2262i",
+        "path": "gs://marin-us-central1/checkpoints/exp2262i_longcontext_marin_ot4_math30k_qwen3_32b_bsz128_lr1e_5-e4da9a/hf/step-1000/",
+        "apply_chat_template": True,
+        "tensor_parallel_size": 4,
+    },
+    {
+        "name": "marin-8b-longcont-finetuned-ot4-math30k-qwen3-235b-a22b-exp2262j",
+        "path": "gs://marin-us-east5/checkpoints/exp2262j_longcont_marin_ot4_math30k_qwen3_235b_bsz128_lr1e_5-385ee7/hf/step-1000/",
+        "apply_chat_template": True,
+        "tensor_parallel_size": 4,
+    },
 ]
 
 
