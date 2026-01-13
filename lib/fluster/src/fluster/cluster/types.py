@@ -14,8 +14,13 @@
 
 """Core types for the fluster cluster layer.
 
-This module contains all cluster-level types with NO knowledge of actors.
-Types are ported from fray but simplified according to the fray-zero design.
+This module contains:
+- Type aliases for IDs (JobId, WorkerId, etc.)
+- Helper functions for working with proto types
+- TPU topology information for scheduling
+- Entrypoint dataclass for job execution
+
+Wire-format types (ResourceSpec, JobStatus, etc.) are defined in cluster.proto.
 """
 
 import os
@@ -29,7 +34,6 @@ from fluster import cluster_pb2
 JobId = NewType("JobId", str)
 Namespace = NewType("Namespace", str)
 WorkerId = NewType("WorkerId", str)
-VMId = NewType("VMId", str)
 EndpointId = NewType("EndpointId", str)
 
 
@@ -39,15 +43,15 @@ def is_job_finished(state: int) -> bool:
         cluster_pb2.JOB_STATE_SUCCEEDED,
         cluster_pb2.JOB_STATE_FAILED,
         cluster_pb2.JOB_STATE_KILLED,
+        cluster_pb2.JOB_STATE_WORKER_FAILED,
     )
 
 
-# Use proto enum directly
+# Re-export proto enum for convenience
 JobState = cluster_pb2.JobState
 
 
 # TPU Topology Information
-# Port from lib/fray/src/fray/cluster/base.py
 
 
 @dataclass(frozen=True)
@@ -134,206 +138,15 @@ def get_tpu_topology(tpu_type: str) -> TpuTopologyInfo:
     raise ValueError(f"Unknown TPU type: {tpu_type}")
 
 
-# Device Configurations
-
-
-@dataclass(frozen=True)
-class CpuConfig:
-    """CPU-only device configuration."""
-
-    kind: str = "cpu"
-    variant: str = "cpu"
-
-    def chip_count(self) -> int:
-        """CPU has no accelerator chips."""
-        return 0
-
-
-@dataclass(frozen=True)
-class GpuConfig:
-    """GPU device configuration.
-
-    Args:
-        variant: GPU type (e.g., "A100", "H100", "auto")
-        count: Number of GPUs
-    """
-
-    variant: str
-    kind: str = "gpu"
-    count: int = 1
-
-    def chip_count(self) -> int:
-        """Total number of GPU chips."""
-        return self.count
-
-
-@dataclass(frozen=True)
-class TpuConfig:
-    """TPU device configuration.
-
-    Args:
-        variant: TPU type (e.g., "v5litepod-16", "v4-8")
-        topology: Optional topology specification (e.g., "2x2x1")
-    """
-
-    variant: str
-    kind: str = "tpu"
-    topology: str | None = None
-
-    def chip_count(self) -> int:
-        """Total number of TPU chips."""
-        return get_tpu_topology(self.variant).chip_count
-
-    def vm_count(self) -> int:
-        """Number of VMs in the TPU pod."""
-        return get_tpu_topology(self.variant).vm_count
-
-
-DeviceConfig = CpuConfig | GpuConfig | TpuConfig
-
-
-@dataclass
-class ResourceConfig:
-    """Resource requirements for a job.
-
-    Args:
-        cpu: Number of CPU cores
-        ram: RAM requirement (e.g., "8g", "16g")
-        disk: Disk space requirement (e.g., "1g", "100g")
-        device: Device configuration (CPU, GPU, or TPU)
-        replicas: Number of replicas/slices (for multislice TPU training)
-        preemptible: Whether the job can be preempted
-        regions: Preferred cloud regions for job placement
-    """
-
-    cpu: int = 1
-    ram: str = "128m"
-    disk: str = "1g"
-    device: DeviceConfig = field(default_factory=CpuConfig)
-    replicas: int = 1
-    preemptible: bool = True
-    regions: Sequence[str] | None = None
-
-    def chip_count(self) -> int:
-        """Total accelerator chips across all replicas/slices."""
-        return self.device.chip_count() * self.replicas
-
-    @staticmethod
-    def with_tpu(tpu_type: str, slice_count: int = 1, **kwargs) -> "ResourceConfig":
-        """Factory method for TPU configuration.
-
-        Args:
-            tpu_type: TPU variant (e.g., "v5litepod-16", "v4-8")
-            slice_count: Number of TPU slices
-            **kwargs: Additional ResourceConfig fields
-
-        Returns:
-            ResourceConfig configured for TPU
-        """
-        device = TpuConfig(variant=tpu_type)
-        return ResourceConfig(device=device, replicas=slice_count, **kwargs)
-
-    @staticmethod
-    def with_gpu(gpu_type: str = "auto", count: int = 1, **kwargs) -> "ResourceConfig":
-        """Factory method for GPU configuration.
-
-        Args:
-            gpu_type: GPU variant (e.g., "A100", "H100")
-            count: Number of GPUs
-            **kwargs: Additional ResourceConfig fields
-
-        Returns:
-            ResourceConfig configured for GPU
-        """
-        device = GpuConfig(variant=gpu_type, count=count)
-        return ResourceConfig(device=device, **kwargs)
-
-    @staticmethod
-    def with_cpu(**kwargs) -> "ResourceConfig":
-        """Factory method for CPU-only configuration.
-
-        Args:
-            **kwargs: Additional ResourceConfig fields
-
-        Returns:
-            ResourceConfig configured for CPU only
-        """
-        return ResourceConfig(device=CpuConfig(), **kwargs)
-
-
-# Environment Configuration
-
-
-def create_environment(
-    workspace: str | None = None,
-    docker_image: str | None = None,
-    pip_packages: Sequence[str] | None = None,
-    env_vars: dict[str, str] | None = None,
-    extras: Sequence[str] | None = None,
-) -> cluster_pb2.EnvironmentConfig:
-    """Create an EnvironmentConfig with sensible defaults.
-
-    Default environment variables:
-    - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
-    - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
-    - HF_TOKEN: from os.environ (if set)
-    - WANDB_API_KEY: from os.environ (if set)
-
-    Args:
-        workspace: Path to workspace root (default: current directory)
-        docker_image: Docker image (mutually exclusive with workspace)
-        pip_packages: Additional pip packages to install
-        env_vars: Custom environment variables (merged with defaults)
-        extras: Extra dependency groups for uv
-
-    Returns:
-        EnvironmentConfig proto message with defaults applied
-
-    Raises:
-        ValueError: If both workspace and docker_image are specified, or if neither is specified
-    """
-    # Validation: exactly one of workspace or docker_image must be set
-    if workspace and docker_image:
-        raise ValueError("Cannot specify both workspace and docker_image")
-
-    if workspace is None and docker_image is None:
-        workspace = os.getcwd()
-
-    default_env_vars = {
-        "HF_DATASETS_TRUST_REMOTE_CODE": "1",
-        "TOKENIZERS_PARALLELISM": "false",
-        "HF_TOKEN": os.getenv("HF_TOKEN"),
-        "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
-    }
-
-    # Filter out None values
-    merged_env_vars = {k: v for k, v in {**default_env_vars, **(env_vars or {})}.items() if v is not None}
-
-    # Construct proto message
-    config = cluster_pb2.EnvironmentConfig(
-        pip_packages=list(pip_packages or []),
-        env_vars=merged_env_vars,
-        extras=list(extras or []),
-    )
-
-    # Set exactly one of workspace or docker_image using oneof
-    if workspace:
-        config.workspace = workspace
-    else:
-        config.docker_image = docker_image
-
-    return config
-
-
-# Job Specification
+# Job Entrypoint
 
 
 @dataclass
 class Entrypoint:
     """Job entrypoint specification.
 
-    Simplified from fray - just a callable with args/kwargs.
-    The callable must be picklable.
+    A callable with args/kwargs that will be executed by the worker.
+    The callable must be picklable (via cloudpickle).
 
     Args:
         callable: Python callable to execute
@@ -346,106 +159,50 @@ class Entrypoint:
     kwargs: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
-class JobRequest:
-    """Request to launch a job on the cluster.
+# Helper functions for creating proto messages
+
+
+def create_environment(
+    workspace: str | None = None,
+    pip_packages: Sequence[str] | None = None,
+    env_vars: dict[str, str] | None = None,
+    extras: Sequence[str] | None = None,
+) -> cluster_pb2.EnvironmentConfig:
+    """Create an EnvironmentConfig proto with sensible defaults.
+
+    Default environment variables:
+    - HF_DATASETS_TRUST_REMOTE_CODE: "1" (allows custom dataset code)
+    - TOKENIZERS_PARALLELISM: "false" (avoids tokenizer deadlocks)
+    - HF_TOKEN: from os.environ (if set)
+    - WANDB_API_KEY: from os.environ (if set)
 
     Args:
-        name: Human-readable job name (must not contain spaces)
-        entrypoint: Job entrypoint (callable with args/kwargs)
-        resources: Resource requirements for the job
-        environment: Environment configuration (dependencies, env vars)
-        max_retries_failure: Maximum retries on failure
-        max_retries_preemption: Maximum retries on preemption
+        workspace: Path to workspace root (default: current directory)
+        pip_packages: Additional pip packages to install
+        env_vars: Custom environment variables (merged with defaults)
+        extras: Extra dependency groups for uv
+
+    Returns:
+        EnvironmentConfig proto message with defaults applied
     """
+    if workspace is None:
+        workspace = os.getcwd()
 
-    name: str
-    entrypoint: Entrypoint
-    resources: ResourceConfig = field(default_factory=ResourceConfig)
-    environment: cluster_pb2.EnvironmentConfig | None = None
+    default_env_vars = {
+        "HF_DATASETS_TRUST_REMOTE_CODE": "1",
+        "TOKENIZERS_PARALLELISM": "false",
+        "HF_TOKEN": os.getenv("HF_TOKEN"),
+        "WANDB_API_KEY": os.getenv("WANDB_API_KEY"),
+    }
 
-    max_retries_failure: int = 0
-    max_retries_preemption: int = 100
+    # Filter out None values and merge with user-provided vars
+    merged_env_vars = {k: v for k, v in {**default_env_vars, **(env_vars or {})}.items() if v is not None}
 
-    def __post_init__(self):
-        if " " in self.name:
-            raise ValueError("Job name must not contain spaces")
+    config = cluster_pb2.EnvironmentConfig(
+        workspace=workspace,
+        pip_packages=list(pip_packages or []),
+        env_vars=merged_env_vars,
+        extras=list(extras or []),
+    )
 
-
-@dataclass
-class TaskStatus:
-    """Status of an individual task in a job.
-
-    Args:
-        state: Current state of the task
-        error_message: Error message if task failed
-    """
-
-    state: JobState
-    error_message: str | None = None
-
-
-@dataclass
-class JobInfo:
-    """Complete job state information.
-
-    Args:
-        job_id: Unique job identifier
-        state: Current job state
-        tasks: List of task statuses
-        name: Job name
-        error_message: Error message if job failed
-    """
-
-    job_id: JobId
-    state: JobState
-    tasks: list[TaskStatus]
-    name: str
-    error_message: str | None = None
-
-
-# Generic Endpoint Registry (NOT actor-specific)
-
-
-@dataclass
-class Endpoint:
-    """A registered endpoint in the cluster's registry.
-
-    This is a generic service discovery primitive. The actor layer
-    uses this to register actors, but the cluster doesn't know about actors.
-
-    Args:
-        endpoint_id: Unique endpoint identifier
-        name: Endpoint name for discovery
-        address: Network address (host:port)
-        job_id: Job that registered this endpoint
-        namespace: Namespace for scoping
-        metadata: Optional key-value metadata
-    """
-
-    endpoint_id: EndpointId
-    name: str
-    address: str
-    job_id: JobId
-    namespace: Namespace
-    metadata: dict[str, str] = field(default_factory=dict)
-
-
-# VM Information
-
-
-@dataclass
-class VMInfo:
-    """Information about a VM managed by the cluster.
-
-    Args:
-        vm_id: Unique VM identifier
-        address: Network address (IP or hostname)
-        status: VM status ("starting", "ready", "stopping", "stopped")
-        resources: Resource configuration for this VM
-    """
-
-    vm_id: VMId
-    address: str
-    status: str
-    resources: ResourceConfig
+    return config

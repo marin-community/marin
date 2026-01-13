@@ -17,6 +17,7 @@ class JobState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     JOB_STATE_SUCCEEDED: _ClassVar[JobState]
     JOB_STATE_FAILED: _ClassVar[JobState]
     JOB_STATE_KILLED: _ClassVar[JobState]
+    JOB_STATE_WORKER_FAILED: _ClassVar[JobState]
 JOB_STATE_UNSPECIFIED: JobState
 JOB_STATE_PENDING: JobState
 JOB_STATE_BUILDING: JobState
@@ -24,10 +25,72 @@ JOB_STATE_RUNNING: JobState
 JOB_STATE_SUCCEEDED: JobState
 JOB_STATE_FAILED: JobState
 JOB_STATE_KILLED: JobState
+JOB_STATE_WORKER_FAILED: JobState
 
 class Empty(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
+
+class ResourceUsage(_message.Message):
+    __slots__ = ("memory_mb", "disk_mb", "cpu_millicores", "memory_peak_mb", "cpu_percent", "process_count")
+    MEMORY_MB_FIELD_NUMBER: _ClassVar[int]
+    DISK_MB_FIELD_NUMBER: _ClassVar[int]
+    CPU_MILLICORES_FIELD_NUMBER: _ClassVar[int]
+    MEMORY_PEAK_MB_FIELD_NUMBER: _ClassVar[int]
+    CPU_PERCENT_FIELD_NUMBER: _ClassVar[int]
+    PROCESS_COUNT_FIELD_NUMBER: _ClassVar[int]
+    memory_mb: int
+    disk_mb: int
+    cpu_millicores: int
+    memory_peak_mb: int
+    cpu_percent: int
+    process_count: int
+    def __init__(self, memory_mb: _Optional[int] = ..., disk_mb: _Optional[int] = ..., cpu_millicores: _Optional[int] = ..., memory_peak_mb: _Optional[int] = ..., cpu_percent: _Optional[int] = ..., process_count: _Optional[int] = ...) -> None: ...
+
+class BuildMetrics(_message.Message):
+    __slots__ = ("build_started_ms", "build_finished_ms", "from_cache", "image_tag")
+    BUILD_STARTED_MS_FIELD_NUMBER: _ClassVar[int]
+    BUILD_FINISHED_MS_FIELD_NUMBER: _ClassVar[int]
+    FROM_CACHE_FIELD_NUMBER: _ClassVar[int]
+    IMAGE_TAG_FIELD_NUMBER: _ClassVar[int]
+    build_started_ms: int
+    build_finished_ms: int
+    from_cache: bool
+    image_tag: str
+    def __init__(self, build_started_ms: _Optional[int] = ..., build_finished_ms: _Optional[int] = ..., from_cache: _Optional[bool] = ..., image_tag: _Optional[str] = ...) -> None: ...
+
+class JobStatus(_message.Message):
+    __slots__ = ("job_id", "state", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "status_message", "build_metrics", "worker_id")
+    class PortsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: int
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+    JOB_ID_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    STARTED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    FINISHED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    PORTS_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_USAGE_FIELD_NUMBER: _ClassVar[int]
+    STATUS_MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    BUILD_METRICS_FIELD_NUMBER: _ClassVar[int]
+    WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    job_id: str
+    state: JobState
+    exit_code: int
+    error: str
+    started_at_ms: int
+    finished_at_ms: int
+    ports: _containers.ScalarMap[str, int]
+    resource_usage: ResourceUsage
+    status_message: str
+    build_metrics: BuildMetrics
+    worker_id: str
+    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., ports: _Optional[_Mapping[str, int]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., worker_id: _Optional[str] = ...) -> None: ...
 
 class DeviceConfig(_message.Message):
     __slots__ = ("cpu", "gpu", "tpu")
@@ -234,6 +297,76 @@ class ListEndpointsResponse(_message.Message):
     endpoints: _containers.RepeatedCompositeFieldContainer[Endpoint]
     def __init__(self, endpoints: _Optional[_Iterable[_Union[Endpoint, _Mapping]]] = ...) -> None: ...
 
+class WorkerInfo(_message.Message):
+    __slots__ = ("worker_id", "address", "resources", "registered_at_ms")
+    WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    RESOURCES_FIELD_NUMBER: _ClassVar[int]
+    REGISTERED_AT_MS_FIELD_NUMBER: _ClassVar[int]
+    worker_id: str
+    address: str
+    resources: ResourceSpec
+    registered_at_ms: int
+    def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ..., registered_at_ms: _Optional[int] = ...) -> None: ...
+
+class RegisterWorkerRequest(_message.Message):
+    __slots__ = ("worker_id", "address", "resources")
+    WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    RESOURCES_FIELD_NUMBER: _ClassVar[int]
+    worker_id: str
+    address: str
+    resources: ResourceSpec
+    def __init__(self, worker_id: _Optional[str] = ..., address: _Optional[str] = ..., resources: _Optional[_Union[ResourceSpec, _Mapping]] = ...) -> None: ...
+
+class RegisterWorkerResponse(_message.Message):
+    __slots__ = ("accepted", "controller_address")
+    ACCEPTED_FIELD_NUMBER: _ClassVar[int]
+    CONTROLLER_ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    accepted: bool
+    controller_address: str
+    def __init__(self, accepted: _Optional[bool] = ..., controller_address: _Optional[str] = ...) -> None: ...
+
+class HeartbeatRequest(_message.Message):
+    __slots__ = ("worker_id", "since_ms")
+    WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    SINCE_MS_FIELD_NUMBER: _ClassVar[int]
+    worker_id: str
+    since_ms: int
+    def __init__(self, worker_id: _Optional[str] = ..., since_ms: _Optional[int] = ...) -> None: ...
+
+class HeartbeatResponse(_message.Message):
+    __slots__ = ("jobs", "timestamp_ms")
+    JOBS_FIELD_NUMBER: _ClassVar[int]
+    TIMESTAMP_MS_FIELD_NUMBER: _ClassVar[int]
+    jobs: _containers.RepeatedCompositeFieldContainer[JobStatus]
+    timestamp_ms: int
+    def __init__(self, jobs: _Optional[_Iterable[_Union[JobStatus, _Mapping]]] = ..., timestamp_ms: _Optional[int] = ...) -> None: ...
+
+class WorkerHealthStatus(_message.Message):
+    __slots__ = ("worker_id", "healthy", "consecutive_failures", "last_heartbeat_ms", "running_job_ids")
+    WORKER_ID_FIELD_NUMBER: _ClassVar[int]
+    HEALTHY_FIELD_NUMBER: _ClassVar[int]
+    CONSECUTIVE_FAILURES_FIELD_NUMBER: _ClassVar[int]
+    LAST_HEARTBEAT_MS_FIELD_NUMBER: _ClassVar[int]
+    RUNNING_JOB_IDS_FIELD_NUMBER: _ClassVar[int]
+    worker_id: str
+    healthy: bool
+    consecutive_failures: int
+    last_heartbeat_ms: int
+    running_job_ids: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, worker_id: _Optional[str] = ..., healthy: _Optional[bool] = ..., consecutive_failures: _Optional[int] = ..., last_heartbeat_ms: _Optional[int] = ..., running_job_ids: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class ListWorkersRequest(_message.Message):
+    __slots__ = ()
+    def __init__(self) -> None: ...
+
+class ListWorkersResponse(_message.Message):
+    __slots__ = ("workers",)
+    WORKERS_FIELD_NUMBER: _ClassVar[int]
+    workers: _containers.RepeatedCompositeFieldContainer[WorkerHealthStatus]
+    def __init__(self, workers: _Optional[_Iterable[_Union[WorkerHealthStatus, _Mapping]]] = ...) -> None: ...
+
 class RunJobRequest(_message.Message):
     __slots__ = ("job_id", "serialized_entrypoint", "environment", "bundle_gcs_path", "resources", "timeout_seconds", "ports")
     JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -265,67 +398,6 @@ class GetStatusRequest(_message.Message):
     JOB_ID_FIELD_NUMBER: _ClassVar[int]
     job_id: str
     def __init__(self, job_id: _Optional[str] = ...) -> None: ...
-
-class ResourceUsage(_message.Message):
-    __slots__ = ("memory_mb", "disk_mb", "cpu_millicores", "memory_peak_mb", "cpu_percent", "process_count")
-    MEMORY_MB_FIELD_NUMBER: _ClassVar[int]
-    DISK_MB_FIELD_NUMBER: _ClassVar[int]
-    CPU_MILLICORES_FIELD_NUMBER: _ClassVar[int]
-    MEMORY_PEAK_MB_FIELD_NUMBER: _ClassVar[int]
-    CPU_PERCENT_FIELD_NUMBER: _ClassVar[int]
-    PROCESS_COUNT_FIELD_NUMBER: _ClassVar[int]
-    memory_mb: int
-    disk_mb: int
-    cpu_millicores: int
-    memory_peak_mb: int
-    cpu_percent: int
-    process_count: int
-    def __init__(self, memory_mb: _Optional[int] = ..., disk_mb: _Optional[int] = ..., cpu_millicores: _Optional[int] = ..., memory_peak_mb: _Optional[int] = ..., cpu_percent: _Optional[int] = ..., process_count: _Optional[int] = ...) -> None: ...
-
-class BuildMetrics(_message.Message):
-    __slots__ = ("build_started_ms", "build_finished_ms", "from_cache", "image_tag")
-    BUILD_STARTED_MS_FIELD_NUMBER: _ClassVar[int]
-    BUILD_FINISHED_MS_FIELD_NUMBER: _ClassVar[int]
-    FROM_CACHE_FIELD_NUMBER: _ClassVar[int]
-    IMAGE_TAG_FIELD_NUMBER: _ClassVar[int]
-    build_started_ms: int
-    build_finished_ms: int
-    from_cache: bool
-    image_tag: str
-    def __init__(self, build_started_ms: _Optional[int] = ..., build_finished_ms: _Optional[int] = ..., from_cache: _Optional[bool] = ..., image_tag: _Optional[str] = ...) -> None: ...
-
-class JobStatus(_message.Message):
-    __slots__ = ("job_id", "state", "exit_code", "error", "started_at_ms", "finished_at_ms", "ports", "resource_usage", "status_message", "build_metrics", "worker_id")
-    class PortsEntry(_message.Message):
-        __slots__ = ("key", "value")
-        KEY_FIELD_NUMBER: _ClassVar[int]
-        VALUE_FIELD_NUMBER: _ClassVar[int]
-        key: str
-        value: int
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
-    JOB_ID_FIELD_NUMBER: _ClassVar[int]
-    STATE_FIELD_NUMBER: _ClassVar[int]
-    EXIT_CODE_FIELD_NUMBER: _ClassVar[int]
-    ERROR_FIELD_NUMBER: _ClassVar[int]
-    STARTED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    FINISHED_AT_MS_FIELD_NUMBER: _ClassVar[int]
-    PORTS_FIELD_NUMBER: _ClassVar[int]
-    RESOURCE_USAGE_FIELD_NUMBER: _ClassVar[int]
-    STATUS_MESSAGE_FIELD_NUMBER: _ClassVar[int]
-    BUILD_METRICS_FIELD_NUMBER: _ClassVar[int]
-    WORKER_ID_FIELD_NUMBER: _ClassVar[int]
-    job_id: str
-    state: JobState
-    exit_code: int
-    error: str
-    started_at_ms: int
-    finished_at_ms: int
-    ports: _containers.ScalarMap[str, int]
-    resource_usage: ResourceUsage
-    status_message: str
-    build_metrics: BuildMetrics
-    worker_id: str
-    def __init__(self, job_id: _Optional[str] = ..., state: _Optional[_Union[JobState, str]] = ..., exit_code: _Optional[int] = ..., error: _Optional[str] = ..., started_at_ms: _Optional[int] = ..., finished_at_ms: _Optional[int] = ..., ports: _Optional[_Mapping[str, int]] = ..., resource_usage: _Optional[_Union[ResourceUsage, _Mapping]] = ..., status_message: _Optional[str] = ..., build_metrics: _Optional[_Union[BuildMetrics, _Mapping]] = ..., worker_id: _Optional[str] = ...) -> None: ...
 
 class LogEntry(_message.Message):
     __slots__ = ("timestamp_ms", "source", "data")

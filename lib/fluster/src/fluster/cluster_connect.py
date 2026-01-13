@@ -47,6 +47,21 @@ class ControllerService(Protocol):
     ) -> cluster__pb2.ListJobsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    async def register_worker(
+        self, request: cluster__pb2.RegisterWorkerRequest, ctx: RequestContext
+    ) -> cluster__pb2.RegisterWorkerResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def heartbeat(
+        self, request: cluster__pb2.HeartbeatRequest, ctx: RequestContext
+    ) -> cluster__pb2.HeartbeatResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def list_workers(
+        self, request: cluster__pb2.ListWorkersRequest, ctx: RequestContext
+    ) -> cluster__pb2.ListWorkersResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def register_endpoint(
         self, request: cluster__pb2.RegisterEndpointRequest, ctx: RequestContext
     ) -> cluster__pb2.RegisterEndpointResponse:
@@ -118,6 +133,36 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=svc.list_jobs,
+                ),
+                "/fluster.cluster.ControllerService/RegisterWorker": Endpoint.unary(
+                    method=MethodInfo(
+                        name="RegisterWorker",
+                        service_name="fluster.cluster.ControllerService",
+                        input=cluster__pb2.RegisterWorkerRequest,
+                        output=cluster__pb2.RegisterWorkerResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.register_worker,
+                ),
+                "/fluster.cluster.ControllerService/Heartbeat": Endpoint.unary(
+                    method=MethodInfo(
+                        name="Heartbeat",
+                        service_name="fluster.cluster.ControllerService",
+                        input=cluster__pb2.HeartbeatRequest,
+                        output=cluster__pb2.HeartbeatResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.heartbeat,
+                ),
+                "/fluster.cluster.ControllerService/ListWorkers": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ListWorkers",
+                        service_name="fluster.cluster.ControllerService",
+                        input=cluster__pb2.ListWorkersRequest,
+                        output=cluster__pb2.ListWorkersResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.list_workers,
                 ),
                 "/fluster.cluster.ControllerService/RegisterEndpoint": Endpoint.unary(
                     method=MethodInfo(
@@ -245,6 +290,66 @@ class ControllerServiceClient(ConnectClient):
                 service_name="fluster.cluster.ControllerService",
                 input=cluster__pb2.ListJobsRequest,
                 output=cluster__pb2.ListJobsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def register_worker(
+        self,
+        request: cluster__pb2.RegisterWorkerRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.RegisterWorkerResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="RegisterWorker",
+                service_name="fluster.cluster.ControllerService",
+                input=cluster__pb2.RegisterWorkerRequest,
+                output=cluster__pb2.RegisterWorkerResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def heartbeat(
+        self,
+        request: cluster__pb2.HeartbeatRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.HeartbeatResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="Heartbeat",
+                service_name="fluster.cluster.ControllerService",
+                input=cluster__pb2.HeartbeatRequest,
+                output=cluster__pb2.HeartbeatResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def list_workers(
+        self,
+        request: cluster__pb2.ListWorkersRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.ListWorkersResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListWorkers",
+                service_name="fluster.cluster.ControllerService",
+                input=cluster__pb2.ListWorkersRequest,
+                output=cluster__pb2.ListWorkersResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
@@ -577,6 +682,19 @@ class ControllerServiceSync(Protocol):
     def list_jobs(self, request: cluster__pb2.ListJobsRequest, ctx: RequestContext) -> cluster__pb2.ListJobsResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
+    def register_worker(
+        self, request: cluster__pb2.RegisterWorkerRequest, ctx: RequestContext
+    ) -> cluster__pb2.RegisterWorkerResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    def heartbeat(self, request: cluster__pb2.HeartbeatRequest, ctx: RequestContext) -> cluster__pb2.HeartbeatResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    def list_workers(
+        self, request: cluster__pb2.ListWorkersRequest, ctx: RequestContext
+    ) -> cluster__pb2.ListWorkersResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     def register_endpoint(
         self, request: cluster__pb2.RegisterEndpointRequest, ctx: RequestContext
     ) -> cluster__pb2.RegisterEndpointResponse:
@@ -646,6 +764,36 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
                         idempotency_level=IdempotencyLevel.UNKNOWN,
                     ),
                     function=service.list_jobs,
+                ),
+                "/fluster.cluster.ControllerService/RegisterWorker": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="RegisterWorker",
+                        service_name="fluster.cluster.ControllerService",
+                        input=cluster__pb2.RegisterWorkerRequest,
+                        output=cluster__pb2.RegisterWorkerResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.register_worker,
+                ),
+                "/fluster.cluster.ControllerService/Heartbeat": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="Heartbeat",
+                        service_name="fluster.cluster.ControllerService",
+                        input=cluster__pb2.HeartbeatRequest,
+                        output=cluster__pb2.HeartbeatResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.heartbeat,
+                ),
+                "/fluster.cluster.ControllerService/ListWorkers": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ListWorkers",
+                        service_name="fluster.cluster.ControllerService",
+                        input=cluster__pb2.ListWorkersRequest,
+                        output=cluster__pb2.ListWorkersResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.list_workers,
                 ),
                 "/fluster.cluster.ControllerService/RegisterEndpoint": EndpointSync.unary(
                     method=MethodInfo(
@@ -773,6 +921,66 @@ class ControllerServiceClientSync(ConnectClientSync):
                 service_name="fluster.cluster.ControllerService",
                 input=cluster__pb2.ListJobsRequest,
                 output=cluster__pb2.ListJobsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def register_worker(
+        self,
+        request: cluster__pb2.RegisterWorkerRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.RegisterWorkerResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="RegisterWorker",
+                service_name="fluster.cluster.ControllerService",
+                input=cluster__pb2.RegisterWorkerRequest,
+                output=cluster__pb2.RegisterWorkerResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def heartbeat(
+        self,
+        request: cluster__pb2.HeartbeatRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.HeartbeatResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="Heartbeat",
+                service_name="fluster.cluster.ControllerService",
+                input=cluster__pb2.HeartbeatRequest,
+                output=cluster__pb2.HeartbeatResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def list_workers(
+        self,
+        request: cluster__pb2.ListWorkersRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> cluster__pb2.ListWorkersResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ListWorkers",
+                service_name="fluster.cluster.ControllerService",
+                input=cluster__pb2.ListWorkersRequest,
+                output=cluster__pb2.ListWorkersResponse,
                 idempotency_level=IdempotencyLevel.UNKNOWN,
             ),
             headers=headers,
