@@ -101,7 +101,7 @@ def main():
     qwen25_code = RLExperimentConfig(
         model_config=qwen25_7b_instruct_1m,
         rl_loss=RLOOLoss(
-            kl_coef=0.0,  # Code-R1 uses kl_loss_coef=0.001 but we turn it off here as kl_coef > 0 is currently buggy
+            kl_coef=0.001,
             clip_epsilon_low=0.2,
             clip_epsilon_high=0.28,
             synchronous=True,
